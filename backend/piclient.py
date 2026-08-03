@@ -268,7 +268,9 @@ class PiSession:
                 # failed turn having said nothing, and putting a canned line
                 # here makes a dead leg look like an ordinary reply.
                 await self.close()
-                return Turn(text="", signals=signals, failed=True, error="the agent stopped responding")
+                return Turn(
+                    text="", signals=signals, failed=True, error="the agent stopped responding"
+                )
             except (asyncio.LimitOverrunError, ValueError) as exc:
                 # A single event exceeded STREAM_LIMIT. The line is unusable and
                 # the stream is mid-record, so this leg is finished.
