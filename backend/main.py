@@ -115,6 +115,7 @@ switchboard = Switchboard(
     model_swaps=MODEL_SWAPS,
     speak_url=f"{SELF_URL}/speak" if SELF_URL else "",
     state_url=f"{SELF_URL}/leg-state" if SELF_URL else "",
+    diagram_url=f"{SELF_URL}/diagram" if SELF_URL else "",
     env=dict(os.environ),
 )
 
@@ -162,9 +163,20 @@ connected_clients: set[WebSocket] = set()
 
 transcript_log = TranscriptLog(_env_int("SWITCHBOARD_HISTORY_LIMIT", 200))
 
+# The diagram currently on the caller's screen, replayed to a tab that connects
+# or reloads mid-call. Without it a refresh loses the picture and the caller has
+# no way to ask for it back. Newest replaces: there is no diagram history.
+last_diagram: dict | None = None
+
 
 class SpeakRequest(BaseModel):
     text: str
+
+
+class DiagramRequest(BaseModel):
+    source: str
+    title: str = ""
+    notes: str = ""
 
 
 class ConnectRequest(BaseModel):
@@ -361,6 +373,24 @@ async def speak(req: SpeakRequest):
     return {"delivered": True}
 
 
+@app.post("/diagram")
+async def diagram(req: DiagramRequest):
+    """Put a diagram on the caller's screen while the agent is still working.
+
+    Same shape as /speak and for the same reason: this has to land mid-turn, so
+    it goes over HTTP to the socket the browser is already holding rather than
+    waiting for the RPC stream to settle. The source is not validated here — the
+    page parses it before swapping anything in, which fails somewhere the caller
+    can actually see and leaves a good diagram up if a bad one arrives.
+    """
+    global last_diagram
+    message = {"type": "diagram", "source": req.source, "title": req.title, "notes": req.notes}
+    last_diagram = message
+    if await _broadcast_json(message) == 0:
+        return {"delivered": False, "reason": "no browser connected"}
+    return {"delivered": True}
+
+
 @app.websocket("/ws")
 async def voice_ws(websocket: WebSocket):
     await websocket.accept()
@@ -369,6 +399,8 @@ async def voice_ws(websocket: WebSocket):
     try:
         await websocket.send_json(switchboard.status())
         await websocket.send_json(transcript_log.payload())
+        if last_diagram is not None:
+            await websocket.send_json(last_diagram)
         while True:
             audio_bytes = await websocket.receive_bytes()
             log.info("received %d bytes of audio", len(audio_bytes))

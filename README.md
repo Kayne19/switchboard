@@ -51,6 +51,26 @@ definitions are expensive context; an adapter would add a config file, a
 process, and a per-host install. A tool already staged to every host the
 switchboard connects to has none of that.
 
+## Showing rather than saying
+
+Some answers are a shape, not a sentence. An architecture read out loud is a
+list of nouns; the same thing drawn is understood at a glance. So a project
+agent also gets `diagram`, which puts a Mermaid diagram on the caller's page
+while the agent is still working.
+
+It is `speak` with a different payload, for the same reason `speak` exists: it
+has to land *mid-turn*, so it POSTs to `/diagram` and the service broadcasts on
+the socket the browser is already holding, rather than waiting for the RPC
+stream to settle. Nothing in the routing layer knows it happened — a diagram
+changes neither the route nor whether a reply gets synthesized, so unlike a
+transfer it is not a signal.
+
+The page renders it: Mermaid 11 from a CDN, a dark neon theme, HTML labels on so
+an agent can put an image inside a node, and a staggered reveal on top. The
+source is parsed before anything is swapped in, so a malformed diagram fails on
+the screen that can show the error instead of blanking a good diagram already
+up. Details and the deliberate omissions are in `docs/diagram-tool.md`.
+
 ## Who decides where the caller goes
 
 The switchboard does — not the agents. An agent calling `transfer_to_project` or
@@ -188,13 +208,14 @@ test it manually and then fails with "command not found" for the switchboard.
 
 | file | what it is |
 |---|---|
-| `backend/main.py` | FastAPI app: the browser socket, `/speak`, `/healthz`, `/status`, `/hangup`, `/connect`, `/thinking`, `/leg-state` |
+| `backend/main.py` | FastAPI app: the browser socket, `/speak`, `/diagram`, `/healthz`, `/status`, `/hangup`, `/connect`, `/thinking`, `/leg-state` |
 | `backend/pbx.py` | the switchboard: routing state, transfers, session lifecycle |
 | `backend/piclient.py` | pi's RPC protocol — one turn in, text and signals out |
 | `backend/registry.py` | the project directory and spoken-name resolution |
 | `backend/models.py` | spoken model name to a `--model` argument, or a refusal |
 | `backend/audio.py` | whisper in, ElevenLabs out, and reply-length shaping |
-| `static/index.html` | tap-to-talk page (toggle, then Send or Discard): which leg, model and thinking level you are on, pickers for both, and the hang-up button |
+| `static/index.html` | tap-to-talk page (toggle, then Send or Discard): which leg, model and thinking level you are on, pickers for both, the hang-up button, and the diagram panel |
+| `docs/diagram-tool.md` | the `diagram` tool: payload, rendering, layout, and what was left out |
 | `tests/` | routing and parsing, no audio or network (`python -m unittest discover -s tests`) |
 
 ## Operating it

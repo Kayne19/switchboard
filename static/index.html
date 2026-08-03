@@ -36,7 +36,43 @@
   body {
     font-family: system-ui, sans-serif; max-width: 660px; margin: 0 auto;
     padding: 28px 16px 40px; background: var(--bg); color: var(--text);
+    transition: max-width 420ms cubic-bezier(.22,.61,.36,1);
   }
+  /* The page is a single column until a diagram arrives, then it widens and the
+     column slides right to make room. Nothing about the column itself changes. */
+  body.has-diagram { max-width: 1560px; }
+  #shell { display: grid; gap: 26px; grid-template-columns: minmax(0, 1fr); align-items: start; }
+  body.has-diagram #shell { grid-template-columns: minmax(0, 1.45fr) minmax(0, 660px); }
+  #stage { display: none; }
+  body.has-diagram #stage { display: block; }
+  @media (max-width: 1080px) {
+    /* Too narrow to sit side by side: the diagram takes the top instead. */
+    body.has-diagram #shell { grid-template-columns: minmax(0, 1fr); }
+  }
+  /* The diagram panel keeps its own dark palette in both colour schemes. The
+     neon the diagrams are drawn in is unreadable on a light surface, and half a
+     theme is worse than none. */
+  #stage {
+    position: sticky; top: 28px;
+    background: radial-gradient(120% 100% at 50% 0%, #0d1424 0%, #05070f 60%);
+    border: 1px solid #1d2b4d; border-radius: 14px; padding: 16px 18px 18px;
+    box-shadow: 0 0 0 1px rgba(0,255,242,0.05), 0 18px 50px -24px rgba(0,255,242,0.35);
+  }
+  #stageTitle {
+    font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.14em;
+    color: #4fe3d8; margin: 0 0 10px; font-weight: 600;
+  }
+  #stageNotes { font-size: 0.8rem; color: #7e8fb5; margin: 10px 0 0; }
+  #stageNotes:empty { display: none; }
+  /* The SVG is scaled to fit rather than scrolled: a diagram you have to pan
+     around is one the agent should have drawn smaller. */
+  #stageCanvas { min-height: 220px; display: flex; align-items: center; justify-content: center; }
+  #stageCanvas svg { max-width: 100%; height: auto; }
+  #stageError {
+    color: #ff7a9c; font-size: 0.8rem; margin: 10px 0 0; white-space: pre-wrap;
+    font-family: ui-monospace, monospace;
+  }
+  #stageError:empty { display: none; }
   h1 { font-size: 1.25rem; margin: 0 0 4px; letter-spacing: -0.01em; }
   .sub { color: var(--muted); font-size: 0.88rem; margin: 0 0 20px; }
   /* The one place colour carries meaning: which kind of leg you are on. A left
@@ -132,6 +168,18 @@
 </style>
 </head>
 <body>
+<div id="shell">
+
+  <!-- Left half, hidden until an agent draws something. Sits before the column
+       so that on a narrow screen it stacks on top rather than below the fold. -->
+  <section id="stage">
+    <p id="stageTitle">Diagram</p>
+    <div id="stageCanvas"></div>
+    <p id="stageNotes"></p>
+    <p id="stageError"></p>
+  </section>
+
+  <main id="column">
   <h1>Switchboard</h1>
   <p class="sub">Tap to talk. The operator connects you; the project agent hands you back.</p>
 
@@ -158,6 +206,119 @@
   <div class="box" id="log"></div>
 
   <audio id="player" controls></audio>
+  </main>
+</div>
+
+<!-- Kept separate from the main script because it needs to be a module, and
+     because a CDN that fails to load must cost the page its diagrams and
+     nothing else. window.renderDiagram stays undefined and the caller still
+     has a working phone. -->
+<script type="module">
+  const canvas = document.getElementById('stageCanvas');
+  const titleEl = document.getElementById('stageTitle');
+  const notesEl = document.getElementById('stageNotes');
+  const errorEl = document.getElementById('stageError');
+
+  const mermaid = (await import('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs')).default;
+
+  // Optional. The diagram renders without it; it just appears all at once.
+  let anime = null;
+  try { anime = await import('https://cdn.jsdelivr.net/npm/animejs@4/+esm'); } catch { /* no animation, still a diagram */ }
+
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: 'base',
+    // Unset variables are derived from primaryColor, which lands somewhere
+    // muddy. The ones that carry the look are set outright.
+    themeVariables: {
+      darkMode: true,
+      background: '#05070f',
+      primaryColor: '#0d1b2ae0',
+      primaryBorderColor: '#00fff2',
+      primaryTextColor: '#d7fbff',
+      secondaryColor: '#1a1035',
+      secondaryBorderColor: '#b967ff',
+      tertiaryColor: '#0a1a2e',
+      lineColor: '#00d5c8',
+      textColor: '#9fb6d9',
+      mainBkg: '#0d1b2a',
+      nodeBorder: '#00fff2',
+      clusterBkg: '#080f1cc0',
+      clusterBorder: '#2b3a67',
+      edgeLabelBackground: '#05070f',
+      fontFamily: 'ui-monospace, "JetBrains Mono", "SF Mono", monospace',
+      fontSize: '14px',
+    },
+    // Both of these are what make `<img>` inside a node label work. The source
+    // comes from our own agent over our own socket, so the sanitizer is not
+    // guarding a trust boundary here.
+    securityLevel: 'loose',
+    flowchart: { htmlLabels: true, curve: 'basis', useMaxWidth: true },
+  });
+
+  let seq = 0;
+
+  const reveal = (svg) => {
+    if (!anime) return;
+    const nodes = svg.querySelectorAll('.node, .actor, .statediagram-state');
+    if (nodes.length) {
+      nodes.forEach((n) => { n.style.transformBox = 'fill-box'; n.style.transformOrigin = 'center'; });
+      anime.animate(nodes, { opacity: [0, 1], scale: [0.88, 1], duration: 520, delay: anime.stagger(55), ease: 'outExpo' });
+    }
+    // Edges draw themselves. Done by hand rather than via the v4 svg helper so
+    // that a rename in anime does not silently cost the effect.
+    svg.querySelectorAll('path.flowchart-link, path.relation, .messageLine0').forEach((p, i) => {
+      const len = p.getTotalLength?.();
+      if (!len) return;
+      p.style.strokeDasharray = len;
+      p.style.strokeDashoffset = len;
+      anime.animate(p, { strokeDashoffset: [len, 0], duration: 700, delay: 200 + i * 45, ease: 'inOutQuad' });
+    });
+  };
+
+  window.renderDiagram = async (msg) => {
+    const src = (msg.source || '').trim();
+    if (!src) return;
+    titleEl.textContent = msg.title || 'Diagram';
+    notesEl.textContent = msg.notes || '';
+    document.body.classList.add('has-diagram');
+
+    // Mermaid measures text in the DOM, so the panel has to be visible and the
+    // fonts settled before rendering or the labels come out the wrong size.
+    await document.fonts.ready;
+
+    const id = 'dgm' + (++seq);
+    try {
+      // Parse first: a bad diagram then fails without blanking a good one that
+      // is already up, and without flashing mermaid's red error graphic.
+      if (!(await mermaid.parse(src, { suppressErrors: true }))) {
+        errorEl.textContent = 'That diagram did not parse. Previous one kept.';
+        return;
+      }
+      const { svg, bindFunctions } = await mermaid.render(id, src);
+      // Parsed to a node rather than assigned as innerHTML: the HTML parser is
+      // lenient about the unclosed tags mermaid's HTML labels can contain, and
+      // this keeps the swap to a single element rather than a markup string.
+      const el = new DOMParser().parseFromString(svg, 'text/html').querySelector('svg');
+      if (el) {
+        canvas.replaceChildren(el);
+        bindFunctions?.(canvas);
+        errorEl.textContent = '';
+        el.removeAttribute('style');
+        el.setAttribute('width', '100%');
+        el.removeAttribute('height');
+        el.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+        reveal(el);
+      }
+    } catch (err) {
+      errorEl.textContent = 'Render failed: ' + err;
+    } finally {
+      // A throw mid-render leaves mermaid's scratch node parented to the body.
+      document.getElementById('d' + id)?.remove();
+      document.getElementById(id)?.parentNode === document.body && document.getElementById(id)?.remove();
+    }
+  };
+</script>
 
   <script>
     const btn = document.getElementById('talkBtn');
@@ -418,7 +579,12 @@
 
       ws.onmessage = (event) => {
         if (typeof event.data === 'string') {
-          const msg = JSON.parse(event.data);
+          let msg;
+          try {
+            msg = JSON.parse(event.data);
+          } catch {
+            return;  // A frame we cannot read is not worth killing the handler over.
+          }
           if (msg.type === 'history') {
             renderHistory(msg.entries);
           } else if (msg.type === 'transcript') {
@@ -434,6 +600,10 @@
             statusEl.textContent = 'Synthesizing speech...';
           } else if (msg.type === 'status') {
             setRoute(msg);
+          } else if (msg.type === 'diagram') {
+            // Undefined if the CDN never loaded. The call is still worth
+            // noting in the transcript so the caller knows one was sent.
+            window.renderDiagram?.(msg);
           } else if (msg.type === 'error') {
             statusEl.textContent = 'Error: ' + msg.message;
             statusEl.classList.add('error');

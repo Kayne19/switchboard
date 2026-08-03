@@ -854,5 +854,41 @@ class PageDialTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("nonsense", reply.text)
 
 
+class AgentEnvTests(unittest.TestCase):
+    """The URLs an agent needs to reach back to this service.
+
+    An agent on another box cannot discover them; if one is not in its
+    environment the tool it belongs to is dead, and the only symptom is the
+    agent quietly telling the caller it cannot do the thing.
+    """
+
+    def _board(self, **urls):
+        return Switchboard(
+            Registry([GRAPES]),
+            pi_binary="pi",
+            operator_model=None,
+            operator_system_prompt="/dev/null",
+            operator_extension=None,
+            agent_extension_file=None,
+            **urls,
+        )
+
+    def test_reach_back_urls_are_handed_to_the_agent(self):
+        env = self._board(
+            speak_url="http://sb:8000/speak",
+            state_url="http://sb:8000/leg-state",
+            diagram_url="http://sb:8000/diagram",
+        )._agent_env()
+        self.assertEqual(env["SWITCHBOARD_SPEAK_URL"], "http://sb:8000/speak")
+        self.assertEqual(env["SWITCHBOARD_STATE_URL"], "http://sb:8000/leg-state")
+        self.assertEqual(env["SWITCHBOARD_DIAGRAM_URL"], "http://sb:8000/diagram")
+
+    def test_an_unset_url_is_left_out_rather_than_passed_empty(self):
+        # The extension checks for a falsy value to decide the tool cannot work.
+        # An empty string would pass that check and be fetched.
+        env = self._board()._agent_env()
+        self.assertEqual(env, {"SWITCHBOARD_SESSION": "1"})
+
+
 if __name__ == "__main__":
     unittest.main()

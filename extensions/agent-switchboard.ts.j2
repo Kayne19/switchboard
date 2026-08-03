@@ -33,6 +33,7 @@ import { Type } from "typebox";
 
 const SPEAK_URL = process.env.SWITCHBOARD_SPEAK_URL ?? "";
 const STATE_URL = process.env.SWITCHBOARD_STATE_URL ?? "";
+const DIAGRAM_URL = process.env.SWITCHBOARD_DIAGRAM_URL ?? "";
 
 export default function agentSwitchboard(pi: ExtensionAPI) {
 	// The switchboard asks for a thinking level on the command line, but the
@@ -122,6 +123,92 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 			} catch (err) {
 				return {
 					content: [{ type: "text", text: `Could not reach the switchboard to speak: ${err}` }],
+					details: {},
+					isError: true,
+				};
+			}
+		},
+	});
+
+	pi.registerTool({
+		name: "diagram",
+		label: "Diagram",
+		description:
+			"Draw a diagram on the caller's screen. This is a voice call, so use it whenever the answer is a shape rather than a sentence — an architecture, a call path, a state machine, a sequence, a comparison, a tree of options. Say the point out loud with `speak`; put the structure here. It renders immediately, mid-turn, so send one early and send another when the picture changes.\n\n" +
+			"`source` is Mermaid. Keep it readable: a dozen nodes is a diagram, forty is wallpaper. Labels are short phrases, not sentences.\n\n" +
+			"The page renders on a dark background with a neon palette already applied, so do not set a theme. Do colour individual nodes when colour carries meaning — `classDef hot fill:#2a0d1a,stroke:#ff2d78,color:#ffd9e6;` then `A:::hot` — and leave them alone when it does not.\n\n" +
+			"Images work. HTML labels are enabled, so `A[\"<img src='https://…' width='48'/><br/>label\"]` puts a picture in a node; any URL the caller's browser can reach is fine. Newer Mermaid image and icon shapes (`A@{ img: \"https://…\", label: \"…\" }`) also work where the renderer supports them.\n\n" +
+			"Each call replaces the diagram on screen. There is no history, so do not send a diagram you still need visible.",
+		parameters: Type.Object({
+			source: Type.String({
+				description:
+					"The Mermaid source, starting with its diagram type (`flowchart LR`, `sequenceDiagram`, `stateDiagram-v2`, `mindmap`, …). No fences, no surrounding prose.",
+			}),
+			title: Type.Optional(
+				Type.String({
+					description: "A few words naming what this shows, displayed above the diagram.",
+				}),
+			),
+			notes: Type.Optional(
+				Type.String({
+					description:
+						"One optional line under the diagram for what the picture cannot say — a caveat, a legend, what to look at first.",
+				}),
+			),
+		}),
+		async execute(_toolCallId, params) {
+			if (!DIAGRAM_URL) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: "No SWITCHBOARD_DIAGRAM_URL is set, so there is no screen to draw on. Describe the structure in words instead.",
+						},
+					],
+					details: {},
+					isError: true,
+				};
+			}
+			try {
+				const resp = await fetch(DIAGRAM_URL, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						source: params.source,
+						title: params.title ?? "",
+						notes: params.notes ?? "",
+					}),
+					signal: AbortSignal.timeout(30_000),
+				});
+				if (!resp.ok) {
+					return {
+						content: [
+							{ type: "text", text: `The switchboard refused that diagram (HTTP ${resp.status}).` },
+						],
+						details: {},
+						isError: true,
+					};
+				}
+				const data = (await resp.json()) as { delivered?: boolean; reason?: string };
+				if (data.delivered === false) {
+					// Not an error — nobody has the page open. The diagram is held and
+					// shown if they open one, so this is information, not a failure.
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Nobody is looking: ${data.reason ?? "no browser connected"}. It will be there if they open the page.`,
+							},
+						],
+						details: {},
+					};
+				}
+				// The page reports nothing back about whether Mermaid parsed it, so
+				// neither does this. Ask the caller if it looks right.
+				return { content: [{ type: "text", text: "On screen." }], details: {} };
+			} catch (err) {
+				return {
+					content: [{ type: "text", text: `Could not reach the switchboard to draw: ${err}` }],
 					details: {},
 					isError: true,
 				};

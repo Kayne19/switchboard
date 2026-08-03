@@ -196,6 +196,7 @@ class Switchboard:
         model_swaps: bool = True,
         speak_url: str = "",
         state_url: str = "",
+        diagram_url: str = "",
         env: dict[str, str] | None = None,
         on_route_change: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
@@ -222,6 +223,10 @@ class Switchboard:
         # Where a project agent reports what its session actually settled on —
         # the thinking level after the runtime clamped it to what the model has.
         self.state_url = state_url
+        # Where a project agent POSTs a diagram for the caller to look at. Same
+        # reachability constraint as speak_url, and over HTTP for the same
+        # reason: it has to land mid-turn, not when the turn settles.
+        self.diagram_url = diagram_url
         self.env = env
         # Fired the moment the line actually swings, so the page can relabel
         # itself then rather than when the whole turn finally settles — a
@@ -895,6 +900,8 @@ class Switchboard:
             env["SWITCHBOARD_SPEAK_URL"] = self.speak_url
         if self.state_url:
             env["SWITCHBOARD_STATE_URL"] = self.state_url
+        if self.diagram_url:
+            env["SWITCHBOARD_DIAGRAM_URL"] = self.diagram_url
         return env
 
     def _agent_brief(self, project: Project, has_tool: bool) -> str:
