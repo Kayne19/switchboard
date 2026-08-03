@@ -102,17 +102,45 @@
       #stageNotes:empty {
         display: none;
       }
-      /* The SVG is scaled to fit rather than scrolled: a diagram you have to pan
-     around is one the agent should have drawn smaller. */
+      /* Fits the panel width at zoom 1 and scrolls past it above that. Top-down
+     diagrams are tall by nature, so the canvas is a viewport, not a shrink-ray. */
       #stageCanvas {
         min-height: 220px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
+        max-height: calc(100vh - 230px);
+        overflow: auto;
+        overscroll-behavior: contain;
       }
       #stageCanvas svg {
-        max-width: 100%;
+        display: block;
+        width: calc(var(--zoom, 1) * 100%);
+        max-width: none;
         height: auto;
+      }
+      #stageZoom {
+        display: none;
+        gap: 6px;
+        align-items: center;
+        margin: 8px 0 0;
+        font-size: 0.72rem;
+        color: #4fe3d8;
+      }
+      body.has-diagram #stageZoom {
+        display: flex;
+      }
+      #stageZoom button {
+        background: #0d1b2a;
+        color: #d7fbff;
+        border: 1px solid #1d2b4d;
+        border-radius: 6px;
+        padding: 2px 9px;
+        font: inherit;
+        cursor: pointer;
+      }
+      /* The reveal animates this wrapper, never the group mermaid put a translate
+     on. fill-box makes scale happen about the node's own centre. */
+      #stageCanvas g.fx {
+        transform-box: fill-box;
+        transform-origin: 50% 50%;
       }
       /* The glow lives here rather than in the animation so it survives a render
      that happened before anime.js finished loading. */
@@ -434,6 +462,12 @@
       <section id="stage">
         <p id="stageTitle">Diagram</p>
         <div id="stageCanvas"></div>
+        <p id="stageZoom">
+          <button type="button" data-zoom="-">&minus;</button>
+          <button type="button" data-zoom="+">+</button>
+          <button type="button" data-zoom="0">fit</button>
+          <span id="stageZoomLabel">100%</span>
+        </p>
         <p id="stageNotes"></p>
         <p id="stageError"></p>
       </section>
@@ -552,21 +586,63 @@
       });
 
       let seq = 0;
+      let zoom = 1;
 
-      // The reveal reads left to right along the graph rather than in document
-      // order: a diagram that assembles the way you would draw it explains itself,
-      // one that flickers on in whatever order the renderer emitted does not.
+      const applyZoom = (z) => {
+        zoom = Math.min(4, Math.max(0.4, z));
+        canvas.style.setProperty("--zoom", zoom);
+        document.getElementById("stageZoomLabel").textContent =
+          Math.round(zoom * 100) + "%";
+      };
+      document.getElementById("stageZoom").addEventListener("click", (e) => {
+        const d = e.target.dataset?.zoom;
+        if (d) applyZoom(d === "0" ? 1 : zoom * (d === "+" ? 1.25 : 0.8));
+      });
+      // Ctrl/⌘ + wheel zooms, plain wheel scrolls — the same contract as a map.
+      canvas.addEventListener(
+        "wheel",
+        (e) => {
+          if (!e.ctrlKey && !e.metaKey) return;
+          e.preventDefault();
+          applyZoom(zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+        },
+        { passive: false },
+      );
+
+      // The reveal reads down the graph rather than in document order: a diagram
+      // that assembles the way you would draw it explains itself, one that flickers
+      // on in whatever order the renderer emitted does not. Top-down first, since
+      // that is the direction diagrams here are drawn in.
       const byPosition = (els) =>
         [...els]
           .map((el) => {
             const b = el.getBBox?.() ?? { x: 0, y: 0 };
-            return { el, rank: b.x + b.y * 0.35 };
+            return { el, rank: b.y + b.x * 0.35 };
           })
           .sort((a, b) => a.rank - b.rank)
           .map((e) => e.el);
 
+      // Mermaid positions every node group with its own `transform="translate(x,y)"`,
+      // and an animation that writes the `transform` property wipes that out — which
+      // is what dumped the whole graph in the top-left corner. So each node's
+      // contents are slipped into an untransformed inner group, and everything that
+      // moves or scales happens in there. The positioned group is never a target.
+      // `transform-box: fill-box` (in the CSS) makes the wrapper scale about the
+      // node's own centre rather than about the SVG origin.
+      const fxWrap = (g) => {
+        const existing = g.querySelector(":scope > g.fx");
+        if (existing) return existing;
+        const fx = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        fx.setAttribute("class", "fx");
+        fx.append(...g.childNodes);
+        g.append(fx);
+        return fx;
+      };
+
       const reveal = (svg) => {
         if (!anime) return;
+        // Motion is decoration; the diagram is the content.
+        if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
         const { animate, stagger } = anime;
         const edges = [
           ...svg.querySelectorAll(
@@ -581,11 +657,8 @@
         // Everything starts hidden in one pass, before anything animates. Setting
         // this per-group as each animation starts lets the first frame flash the
         // finished diagram.
-        // Opacity and blur only, no scale: mermaid positions these groups with a
-        // transform translate and anime writes the whole transform property, so
-        // animating scale here dumps every node in the top-left corner and leaves
-        // the edges pointing at where the nodes used to be.
-        nodes.forEach((n) => {
+        const shells = nodes.map(fxWrap);
+        shells.forEach((n) => {
           n.style.opacity = 0;
         });
         labels.forEach((l) => {
@@ -598,21 +671,29 @@
           return len;
         });
 
-        // The panel itself lifts in, so the diagram arrives as one object rather
-        // than as parts appearing on a static background.
-        animate(svg, {
+        // The panel lifts in, so the diagram arrives as one object rather than as
+        // parts appearing on a static background. The scrolling container is the
+        // target, not the SVG — the SVG carries the viewBox fit and the zoom width.
+        animate(canvas, {
           opacity: [0, 1],
-          translateY: [14, 0],
+          translateY: [16, 0],
           duration: 420,
           ease: "outQuad",
         });
 
-        // Nodes overshoot slightly and settle. The blur burning off is what sells
-        // it as arriving rather than fading up.
-        animate(nodes, {
+        // Nodes punch in past their final size and settle, blur burning off as they
+        // land. That overshoot is what reads as arriving rather than fading up, and
+        // it is safe now that it lands on the wrapper instead of on the group
+        // holding mermaid's translate.
+        animate(shells, {
           opacity: [0, 1],
-          filter: ["blur(6px)", "blur(0px)"],
-          duration: 600,
+          scale: [
+            { to: 0.78, duration: 0 },
+            { to: 1.06, duration: 420, ease: "outBack" },
+            { to: 1, duration: 240, ease: "outQuad" },
+          ],
+          filter: ["blur(7px)", "blur(0px)"],
+          duration: 660,
           delay: stagger(70),
         });
 
@@ -681,6 +762,8 @@
             titleEl.textContent = msg.title || "Diagram";
             notesEl.textContent = msg.notes || "";
             canvas.replaceChildren(el);
+            applyZoom(1);
+            canvas.scrollTo(0, 0);
             // Layout has to be real before getBBox and getTotalLength are read.
             el.getBoundingClientRect();
             bindFunctions?.(canvas);

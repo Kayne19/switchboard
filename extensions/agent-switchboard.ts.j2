@@ -136,13 +136,14 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 		description:
 			"Draw a diagram on the caller's screen. This is a voice call, so use it whenever the answer is a shape rather than a sentence — an architecture, a call path, a state machine, a sequence, a comparison, a tree of options. Say the point out loud with `speak`; put the structure here. It renders immediately, mid-turn, so send one early and send another when the picture changes.\n\n" +
 			"`source` is Mermaid. Keep it readable: a dozen nodes is a diagram, forty is wallpaper. Labels are short phrases, not sentences.\n\n" +
+			"Draw top-down (`flowchart TD`) unless the shape genuinely reads better sideways — the panel is a tall column the caller scrolls and zooms, so left-to-right graphs come out squeezed.\n\n" +
 			"The page renders on a dark background with a neon palette already applied, so do not set a theme. Do colour individual nodes when colour carries meaning — `classDef hot fill:#2a0d1a,stroke:#ff2d78,color:#ffd9e6;` then `A:::hot` — and leave them alone when it does not.\n\n" +
 			"Images work. HTML labels are enabled, so `A[\"<img src='https://…' width='48'/><br/>label\"]` puts a picture in a node; any URL the caller's browser can reach is fine. Newer Mermaid image and icon shapes (`A@{ img: \"https://…\", label: \"…\" }`) also work where the renderer supports them.\n\n" +
 			"Each call replaces the diagram on screen. There is no history, so do not send a diagram you still need visible.",
 		parameters: Type.Object({
 			source: Type.String({
 				description:
-					"The Mermaid source, starting with its diagram type (`flowchart LR`, `sequenceDiagram`, `stateDiagram-v2`, `mindmap`, …). No fences, no surrounding prose.",
+					"The Mermaid source, starting with its diagram type (`flowchart TD`, `sequenceDiagram`, `stateDiagram-v2`, `mindmap`, …). No fences, no surrounding prose.",
 			}),
 			title: Type.Optional(
 				Type.String({
