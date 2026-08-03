@@ -68,35 +68,25 @@
           grid-template-columns: minmax(0, 1fr);
         }
       }
-      /* The diagram panel keeps its own dark palette in both colour schemes. The
-     neon the diagrams are drawn in is unreadable on a light surface, and half a
-     theme is worse than none. */
+      /* No panel, no border, no drop shadow. A card would make the diagram a tile
+     laid on top of the page; it is meant to be part of the page, drawn in the
+     page's own palette and lit from the same direction as everything else. */
       #stage {
         position: sticky;
         top: 28px;
-        background: radial-gradient(
-          120% 100% at 50% 0%,
-          #0d1424 0%,
-          #05070f 60%
-        );
-        border: 1px solid #1d2b4d;
-        border-radius: 14px;
-        padding: 16px 18px 18px;
-        box-shadow:
-          0 0 0 1px rgba(0, 255, 242, 0.05),
-          0 18px 50px -24px rgba(0, 255, 242, 0.35);
+        padding: 0;
       }
       #stageTitle {
         font-size: 0.72rem;
         text-transform: uppercase;
         letter-spacing: 0.14em;
-        color: #4fe3d8;
+        color: var(--muted);
         margin: 0 0 10px;
         font-weight: 600;
       }
       #stageNotes {
         font-size: 0.8rem;
-        color: #7e8fb5;
+        color: var(--muted);
         margin: 10px 0 0;
       }
       #stageNotes:empty {
@@ -122,15 +112,15 @@
         align-items: center;
         margin: 8px 0 0;
         font-size: 0.72rem;
-        color: #4fe3d8;
+        color: var(--muted);
       }
       body.has-diagram #stageZoom {
         display: flex;
       }
       #stageZoom button {
-        background: #0d1b2a;
-        color: #d7fbff;
-        border: 1px solid #1d2b4d;
+        background: var(--surface-alt);
+        color: var(--text);
+        border: 1px solid var(--line);
         border-radius: 6px;
         padding: 2px 9px;
         font: inherit;
@@ -142,13 +132,18 @@
         transform-box: fill-box;
         transform-origin: 50% 50%;
       }
-      /* The glow lives here rather than in the animation so it survives a render
-     that happened before anime.js finished loading. */
+      /* Nodes sit a little proud of the page rather than glowing. The shadow is
+     the page's own light source, not a neon halo, and it lives here rather than
+     in the animation so it survives a render that happened before anime.js
+     finished loading. */
       #stageCanvas .node rect,
       #stageCanvas .node circle,
       #stageCanvas .node polygon,
       #stageCanvas .node path {
-        filter: drop-shadow(0 0 6px rgba(0, 255, 242, 0.35));
+        filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.16));
+      }
+      #stageError {
+        color: var(--danger);
       }
       @media (prefers-reduced-motion: reduce) {
         /* The reveal is decoration; the diagram is the content. */
@@ -158,7 +153,6 @@
         }
       }
       #stageError {
-        color: #ff7a9c;
         font-size: 0.8rem;
         margin: 10px 0 0;
         white-space: pre-wrap;
@@ -554,36 +548,49 @@
         /* no animation, still a diagram */
       }
 
-      mermaid.initialize({
-        startOnLoad: false,
-        theme: "base",
-        // Unset variables are derived from primaryColor, which lands somewhere
-        // muddy. The ones that carry the look are set outright.
-        themeVariables: {
-          darkMode: true,
-          background: "#05070f",
-          primaryColor: "#0d1b2ae0",
-          primaryBorderColor: "#00fff2",
-          primaryTextColor: "#d7fbff",
-          secondaryColor: "#1a1035",
-          secondaryBorderColor: "#b967ff",
-          tertiaryColor: "#0a1a2e",
-          lineColor: "#00d5c8",
-          textColor: "#9fb6d9",
-          mainBkg: "#0d1b2a",
-          nodeBorder: "#00fff2",
-          clusterBkg: "#080f1cc0",
-          clusterBorder: "#2b3a67",
-          edgeLabelBackground: "#05070f",
-          fontFamily: 'ui-monospace, "JetBrains Mono", "SF Mono", monospace',
-          fontSize: "14px",
-        },
-        // Both of these are what make `<img>` inside a node label work. The source
-        // comes from our own agent over our own socket, so the sanitizer is not
-        // guarding a trust boundary here.
-        securityLevel: "loose",
-        flowchart: { htmlLabels: true, curve: "basis", useMaxWidth: true },
-      });
+      // The diagram is drawn in the page's own colours, read from the same custom
+      // properties everything else uses, so it cannot drift from the rest of the UI
+      // and follows the light/dark switch for free. Re-read per render rather than
+      // once at load, because the scheme can change while the page is open.
+      const css = (name) =>
+        getComputedStyle(document.documentElement)
+          .getPropertyValue(name)
+          .trim();
+
+      const applyTheme = () => {
+        const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+        mermaid.initialize({
+          startOnLoad: false,
+          theme: "base",
+          // Unset variables are derived from primaryColor, which lands somewhere
+          // muddy. The ones that carry the look are set outright.
+          themeVariables: {
+            darkMode: dark,
+            background: css("--bg"),
+            primaryColor: css("--surface"),
+            primaryBorderColor: css("--line"),
+            primaryTextColor: css("--text"),
+            secondaryColor: css("--surface-alt"),
+            secondaryBorderColor: css("--line"),
+            tertiaryColor: css("--surface-alt"),
+            lineColor: css("--muted"),
+            textColor: css("--text"),
+            mainBkg: css("--surface"),
+            nodeBorder: css("--line"),
+            clusterBkg: css("--surface-alt"),
+            clusterBorder: css("--line"),
+            edgeLabelBackground: css("--bg"),
+            fontFamily: "system-ui, sans-serif",
+            fontSize: "14px",
+          },
+          // Both of these are what make `<img>` inside a node label work. The
+          // source comes from our own agent over our own socket, so the sanitizer
+          // is not guarding a trust boundary here.
+          securityLevel: "loose",
+          flowchart: { htmlLabels: true, curve: "basis", useMaxWidth: true },
+        });
+      };
+      applyTheme();
 
       let seq = 0;
       let zoom = 1;
@@ -609,18 +616,97 @@
         { passive: false },
       );
 
-      // The reveal reads down the graph rather than in document order: a diagram
-      // that assembles the way you would draw it explains itself, one that flickers
-      // on in whatever order the renderer emitted does not. Top-down first, since
-      // that is the direction diagrams here are drawn in.
-      const byPosition = (els) =>
-        [...els]
-          .map((el) => {
-            const b = el.getBBox?.() ?? { x: 0, y: 0 };
-            return { el, rank: b.y + b.x * 0.35 };
-          })
-          .sort((a, b) => a.rank - b.rank)
-          .map((e) => e.el);
+      // The reveal follows the graph, not document order: a source node arrives,
+      // its edges run out of it, and the nodes they land on arrive as they are
+      // reached. That is the diagram explaining itself in the order you would draw
+      // it, instead of a pile of parts fading up together.
+      //
+      // Mermaid tags each edge path with `LS-<source>` and `LE-<target>` classes
+      // and gives each node group an id of `flowchart-<key>-<n>`, which is enough
+      // to rebuild the graph from the rendered SVG. When those markers are missing
+      // (sequence and state diagrams, or a mermaid that renames them) rank falls
+      // back to geometry: top of the picture first.
+      const nodeKey = (g) =>
+        /^flowchart-(.+)-\d+$/.exec(g.id || "")?.[1] ?? null;
+      const edgeEnds = (p) => {
+        const of = (prefix) =>
+          [...p.classList]
+            .find((c) => c.startsWith(prefix))
+            ?.slice(prefix.length);
+        const from = of("LS-");
+        const to = of("LE-");
+        return from && to ? { from, to } : null;
+      };
+
+      const topOf = (el) => el.getBBox?.().y ?? 0;
+
+      // Breadth-first from every node nothing points at, so each wave is one hop
+      // further from a source. Anything the walk never reaches (a cycle with no
+      // entry, an unlinked node) is swept into a final wave rather than dropped.
+      const waves = (nodes, edges) => {
+        const keyed = new Map();
+        nodes.forEach((n) => {
+          const k = nodeKey(n);
+          if (k) keyed.set(k, n);
+        });
+        const links = edges.map(edgeEnds);
+        if (!keyed.size || !links.every(Boolean)) {
+          // Geometric fallback: rank by how far down the picture the node sits.
+          const sorted = [...nodes].sort((a, b) => topOf(a) - topOf(b));
+          return {
+            depth: new Map(sorted.map((n, i) => [n, i])),
+            edgeDepth: new Map(edges.map((p, i) => [p, i])),
+          };
+        }
+
+        const out = new Map();
+        const indegree = new Map([...keyed.keys()].map((k) => [k, 0]));
+        links.forEach(({ from, to }, i) => {
+          if (!out.has(from)) out.set(from, []);
+          out.get(from).push({ to, edge: edges[i] });
+          indegree.set(to, (indegree.get(to) ?? 0) + 1);
+        });
+
+        // Longest path from a source, not shortest — a node has to wait for every
+        // wire pointing at it, or a shortcut edge makes it appear before the wire
+        // running the long way round has even started drawing. Kahn's order, so a
+        // node is only placed once all of its incoming edges are accounted for.
+        const rank = new Map([...keyed.keys()].map((k) => [k, 0]));
+        const left = new Map(indegree);
+        const queue = [...keyed.keys()].filter((k) => !left.get(k));
+        // A graph that is all cycle has no source to start from, so one node is
+        // drafted as the entry rather than leaving the build with nothing to do.
+        if (!queue.length) queue.push([...keyed.keys()][0]);
+        const placed = new Set(queue);
+        for (let i = 0; i < queue.length; i++) {
+          const k = queue[i];
+          (out.get(k) ?? []).forEach(({ to }) => {
+            // An edge back into something already built cannot push it later; its
+            // rank is spent.
+            if (!placed.has(to))
+              rank.set(to, Math.max(rank.get(to) ?? 0, rank.get(k) + 1));
+            left.set(to, (left.get(to) ?? 1) - 1);
+            if (left.get(to) === 0 && !placed.has(to)) {
+              placed.add(to);
+              queue.push(to);
+            }
+          });
+        }
+
+        const depth = new Map();
+        const edgeDepth = new Map();
+        placed.forEach((k) => depth.set(keyed.get(k), rank.get(k)));
+        links.forEach(({ from }, i) => {
+          if (placed.has(from)) edgeDepth.set(edges[i], rank.get(from));
+        });
+        // Nodes inside a cycle are never placed by Kahn's, and an unlinked node is
+        // never reached at all. Both close out the build rather than never
+        // arriving — a diagram missing a box is worse than one built out of order.
+        const last = Math.max(0, ...depth.values());
+        nodes.forEach((n) => depth.has(n) || depth.set(n, last + 1));
+        edges.forEach((p) => edgeDepth.has(p) || edgeDepth.set(p, last + 1));
+        return { depth, edgeDepth };
+      };
 
       // Mermaid positions every node group with its own `transform="translate(x,y)"`,
       // and an animation that writes the `transform` property wipes that out — which
@@ -643,16 +729,24 @@
         if (!anime) return;
         // Motion is decoration; the diagram is the content.
         if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-        const { animate, stagger } = anime;
+        const { animate } = anime;
         const edges = [
           ...svg.querySelectorAll(
             "path.flowchart-link, path.relation, path.transition, .messageLine0, .messageLine1",
           ),
         ];
-        const nodes = byPosition(
-          svg.querySelectorAll(".node, .actor, .statediagram-state, .cluster"),
-        );
+        const nodes = [
+          ...svg.querySelectorAll(
+            ".node, .actor, .statediagram-state, .cluster",
+          ),
+        ];
         const labels = [...svg.querySelectorAll(".edgeLabel, .messageText")];
+        const { depth, edgeDepth } = waves(nodes, edges);
+        // One hop of the build. A node extrudes, then the wires leave it while it
+        // is still settling — overlapping the two is what makes it read as one
+        // continuous movement rather than a slideshow.
+        const STEP = 300;
+        const EDGE_LAG = 190;
 
         // Everything starts hidden in one pass, before anything animates. Setting
         // this per-group as each animation starts lets the first frame flash the
@@ -671,62 +765,62 @@
           return len;
         });
 
-        // The panel lifts in, so the diagram arrives as one object rather than as
-        // parts appearing on a static background. The scrolling container is the
-        // target, not the SVG — the SVG carries the viewBox fit and the zoom width.
-        animate(canvas, {
-          opacity: [0, 1],
-          translateY: [16, 0],
-          duration: 420,
-          ease: "outQuad",
+        // Each node pushes out of the page: it starts small, dark and out of
+        // focus, comes up past its final size and settles. No panel fades in around
+        // it — the diagram is built in place on the page rather than arriving as a
+        // finished tile laid over it.
+        shells.forEach((n, i) => {
+          const at = depth.get(nodes[i]) * STEP;
+          animate(n, {
+            opacity: [0, 1],
+            scale: [
+              { to: 0.86, duration: 0 },
+              { to: 1.05, duration: 300, ease: "outCubic" },
+              { to: 1, duration: 260, ease: "outBack" },
+            ],
+            filter: ["blur(9px)", "blur(0px)"],
+            duration: 560,
+            delay: at,
+          });
         });
 
-        // Nodes punch in past their final size and settle, blur burning off as they
-        // land. That overshoot is what reads as arriving rather than fading up, and
-        // it is safe now that it lands on the wrapper instead of on the group
-        // holding mermaid's translate.
-        animate(shells, {
-          opacity: [0, 1],
-          scale: [
-            { to: 0.78, duration: 0 },
-            { to: 1.06, duration: 420, ease: "outBack" },
-            { to: 1, duration: 240, ease: "outQuad" },
-          ],
-          filter: ["blur(7px)", "blur(0px)"],
-          duration: 660,
-          delay: stagger(70),
-        });
-
-        // Edges draw themselves once the node they leave has landed. Done by hand
-        // rather than through anime's SVG helper so that a rename in the library
-        // costs the effect and not the diagram.
+        // Edges leave the node that has just landed and reach for the next one, so
+        // the wire arrives before the thing on the end of it. Drawn by hand rather
+        // than through anime's SVG helper so that a rename in the library costs the
+        // effect and not the diagram.
         edges.forEach((p, i) => {
           if (!lengths[i]) return;
+          const at = edgeDepth.get(p) * STEP + EDGE_LAG;
           animate(p, {
             strokeDashoffset: [lengths[i], 0],
-            duration: 620,
-            delay: 260 + i * 60,
+            duration: 380,
+            delay: at,
             ease: "inOutQuad",
           });
-          // A pulse of light runs the wire as it is drawn, then leaves it at rest.
+          // The wire is brighter while current is running down it, then rests.
           animate(p, {
-            stroke: ["#00fff2", getComputedStyle(p).stroke || "#00d5c8"],
-            strokeWidth: [2.6, 1.4],
-            duration: 900,
-            delay: 260 + i * 60,
+            stroke: [
+              css("--accent"),
+              getComputedStyle(p).stroke || css("--muted"),
+            ],
+            strokeWidth: [2.4, 1.4],
+            duration: 640,
+            delay: at,
             ease: "outQuad",
           });
         });
 
-        // Edge labels last: they are annotation on a picture that now exists.
-        if (labels.length) {
-          animate(labels, {
+        // Each edge label rides in with its own edge rather than all of them at the
+        // end: the annotation belongs to the wire, not to the finished picture.
+        labels.forEach((l, i) => {
+          const near = edges[i] ? edgeDepth.get(edges[i]) : 0;
+          animate(l, {
             opacity: [0, 1],
-            duration: 300,
-            delay: stagger(40, { start: 520 }),
+            duration: 260,
+            delay: (near ?? 0) * STEP + EDGE_LAG + 200,
             ease: "outQuad",
           });
-        }
+        });
       };
 
       window.renderDiagram = async (msg) => {
