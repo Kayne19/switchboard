@@ -10,6 +10,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -24,15 +25,34 @@ from backend.piclient import (  # noqa: E402
 )
 
 
+def fake_proc(**attrs) -> Any:
+    """A stand-in for the `asyncio` Process a live leg would hold.
+
+    Returned as `Any` on purpose: these tests drive `_collect` and `close` over
+    a canned event stream precisely so that no `pi` process is ever spawned, and
+    a real `Process` cannot be constructed without spawning one.
+    """
+    return SimpleNamespace(**attrs)
+
+
 def text_end(content):
     return {
         "type": "message_update",
-        "assistantMessageEvent": {"type": "text_end", "contentIndex": 0, "content": content},
+        "assistantMessageEvent": {
+            "type": "text_end",
+            "contentIndex": 0,
+            "content": content,
+        },
     }
 
 
 def tool_start(name, args):
-    return {"type": "tool_execution_start", "toolCallId": "c1", "toolName": name, "args": args}
+    return {
+        "type": "tool_execution_start",
+        "toolCallId": "c1",
+        "toolName": name,
+        "args": args,
+    }
 
 
 def failed_message(error):
@@ -55,7 +75,7 @@ def failed_message(error):
     }
 
 
-async def collect_from(events, *, truncate=False):
+async def collect_from(events, *, truncate=False, on_activity=None):
     """Run the real _collect over a canned event stream."""
     reader = asyncio.StreamReader()
     payload = "".join(json.dumps(e) + "\n" for e in events)
@@ -64,8 +84,8 @@ async def collect_from(events, *, truncate=False):
         pass
     reader.feed_eof()
 
-    session = PiSession(["true"], label="test")
-    session._proc = SimpleNamespace(stdout=reader)
+    session = PiSession(["true"], label="test", on_activity=on_activity)
+    session._proc = fake_proc(stdout=reader)
     return await session._collect()
 
 
@@ -109,8 +129,8 @@ class CollectTests(unittest.IsolatedAsyncioTestCase):
             [
                 {"type": "agent_start"},
                 failed_message(
-                    'OAuth refresh failed for anthropic: Anthropic token refresh request '
-                    'failed. url=https://platform.claude.com/v1/oauth/token; details=Error: '
+                    "OAuth refresh failed for anthropic: Anthropic token refresh request "
+                    "failed. url=https://platform.claude.com/v1/oauth/token; details=Error: "
                     'HTTP request failed. status=400; body={"error": "invalid_grant"}'
                 ),
                 {"type": "agent_settled"},
@@ -149,7 +169,10 @@ class CollectTests(unittest.IsolatedAsyncioTestCase):
             [
                 {
                     "type": "message_end",
-                    "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "hi"}],
+                    },
                 },
                 text_end("Hello."),
                 {"type": "agent_settled"},
@@ -181,7 +204,9 @@ class CollectTests(unittest.IsolatedAsyncioTestCase):
         turn = await collect_from(
             [
                 text_end("One moment."),
-                tool_start(TRANSFER_TOOL, {"project": "grapes", "intent": "fix the masks"}),
+                tool_start(
+                    TRANSFER_TOOL, {"project": "grapes", "intent": "fix the masks"}
+                ),
                 {"type": "agent_settled"},
             ]
         )
@@ -231,10 +256,138 @@ class CollectTests(unittest.IsolatedAsyncioTestCase):
         reader.feed_data((json.dumps({"type": "agent_settled"}) + "\n").encode())
         reader.feed_eof()
         session = PiSession(["true"], label="test")
-        session._proc = SimpleNamespace(stdout=reader)
+        session._proc = fake_proc(stdout=reader)
         turn = await session._collect()
         self.assertEqual(turn.text, "Fine.")
         self.assertFalse(turn.failed)
+
+
+class ActivityTests(unittest.IsolatedAsyncioTestCase):
+    """What the caller can see while a turn is still running.
+
+    Without this the page shows "working..." and nothing else, so a four minute
+    turn doing real work and a leg whose process has died are the same picture.
+    Callers hang up on healthy turns and wait forever on dead ones.
+    """
+
+    async def _activity_for(self, events):
+        seen = []
+
+        async def record(item):
+            seen.append(item)
+
+        await collect_from(events, on_activity=record)
+        return seen
+
+    async def test_every_tool_is_reported_not_just_routing_ones(self):
+        """Ordinary work is the whole point: `read` is why the turn is slow."""
+        seen = await self._activity_for(
+            [
+                tool_start("read", {"path": "/srv/app/main.py"}),
+                tool_start("bash", {"command": "pytest -q"}),
+                {"type": "agent_settled"},
+            ]
+        )
+        starts = [i for i in seen if i["state"] == "start"]
+        self.assertEqual([i["tool"] for i in starts], ["read", "bash"])
+        self.assertEqual(starts[0]["detail"], "/srv/app/main.py")
+        self.assertEqual(starts[1]["detail"], "pytest -q")
+        self.assertTrue(all(i["label"] == "test" for i in starts))
+
+    async def test_routing_tools_are_reported_too(self):
+        """ "Transferring you" is the moment a caller most wants to see movement."""
+        seen = await self._activity_for(
+            [
+                tool_start(TRANSFER_TOOL, {"project": "grape-segmentation"}),
+                {"type": "agent_settled"},
+            ]
+        )
+        self.assertEqual(
+            [(i["tool"], i["detail"]) for i in seen if i["state"] == "start"],
+            [(TRANSFER_TOOL, "grape-segmentation")],
+        )
+
+    async def test_a_tool_with_nothing_worth_showing_still_reports(self):
+        """The tool name alone beats silence; a JSON blob would be worse."""
+        seen = await self._activity_for(
+            [tool_start("think", {"depth": 3}), {"type": "agent_settled"}]
+        )
+        starts = [i for i in seen if i["state"] == "start"]
+        self.assertEqual(starts[0]["tool"], "think")
+        self.assertEqual(starts[0]["detail"], "")
+
+    async def test_a_long_detail_is_cut_to_something_glanceable(self):
+        seen = await self._activity_for(
+            [tool_start("bash", {"command": "x" * 400}), {"type": "agent_settled"}]
+        )
+        detail = [i for i in seen if i["state"] == "start"][0]["detail"]
+        self.assertLess(len(detail), 100)
+        self.assertTrue(detail.endswith("\u2026"))
+
+    async def test_a_broken_listener_never_fails_the_turn(self):
+        """A status line that throws must not take down what it describes."""
+
+        async def explode(_item):
+            raise RuntimeError("the page went away")
+
+        turn = await collect_from(
+            [
+                tool_start("read", {"path": "/tmp/x"}),
+                text_end("done"),
+                {"type": "agent_settled"},
+            ],
+            on_activity=explode,
+        )
+        self.assertEqual(turn.text, "done")
+        self.assertFalse(turn.failed)
+
+    async def test_no_listener_is_not_an_error(self):
+        turn = await collect_from(
+            [tool_start("read", {"path": "/tmp/x"}), {"type": "agent_settled"}]
+        )
+        self.assertFalse(turn.failed)
+
+
+class OversizedEventTests(unittest.IsolatedAsyncioTestCase):
+    """An event too big to read leaves the pipe parked mid-record.
+
+    The leg used to survive it. That is worse than dropping it: every later turn
+    read the tail of the abandoned one and answered the previous question, and a
+    routing signal harvested before the overflow would carry the caller onward
+    on a desynchronised stream — which looks like it worked.
+    """
+
+    async def test_an_oversized_event_drops_the_leg(self):
+        session = PiSession(["true"], label="test")
+        killed = []
+
+        async def wait():
+            proc.returncode = -15
+
+        proc = fake_proc(
+            stdout=SimpleNamespace(),
+            returncode=None,
+            stdin=SimpleNamespace(is_closing=lambda: False, close=lambda: None),
+            terminate=lambda: killed.append("terminate"),
+            kill=lambda: killed.append("kill"),
+            wait=wait,
+        )
+
+        async def blow_up():
+            raise ValueError("Separator is not found, and chunk exceed the limit")
+
+        proc.stdout.readline = blow_up
+        session._proc = proc
+
+        turn = await session._collect()
+
+        self.assertTrue(turn.failed)
+        self.assertEqual(turn.text, "")
+        self.assertIn("too big", turn.error)
+        # The recovery path is guarded on a failed turn having said nothing, so
+        # an empty text here is load-bearing, and the process must actually go.
+        self.assertEqual(killed, ["terminate"])
+        self.assertIsNone(session._proc)
 
 
 class ArgvTests(unittest.TestCase):
@@ -319,7 +472,7 @@ class SilenceTests(unittest.IsolatedAsyncioTestCase):
         async def wait():
             proc.returncode = -15
 
-        proc = SimpleNamespace(
+        proc = fake_proc(
             stdout=reader,
             returncode=None,
             stdin=SimpleNamespace(is_closing=lambda: False, close=lambda: None),

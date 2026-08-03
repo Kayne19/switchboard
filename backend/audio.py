@@ -48,7 +48,11 @@ class Transcriber:
         # the model is; with them the same model gets them exactly right.
         self.hotwords = hotwords.strip() or None
         Path(download_root).mkdir(parents=True, exist_ok=True)
-        log.info("loading faster-whisper %r (int8, CPU, %d threads)...", model_size, cpu_threads)
+        log.info(
+            "loading faster-whisper %r (int8, CPU, %d threads)...",
+            model_size,
+            cpu_threads,
+        )
         self._model = WhisperModel(
             model_size,
             device="cpu",
@@ -151,8 +155,19 @@ class Speaker:
             "model_id": self.model_id,
             "voice_settings": self.voice_settings,
         }
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, headers=headers, json=payload)
+        # Every caller only knows how to handle TTSError. httpx raises its own
+        # tree (ConnectError, ReadTimeout, RemoteProtocolError...), and one of
+        # those escaping reached the `/ws` loop, was not WebSocketDisconnect,
+        # and killed the websocket handler — a single flaky ElevenLabs request
+        # took the whole page down until reload. Nothing above here should have
+        # to know what HTTP library speaks to the vendor.
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(url, headers=headers, json=payload)
+        except httpx.HTTPError as exc:
+            raise TTSError(f"could not reach ElevenLabs: {exc}") from exc
         if resp.status_code != 200:
-            raise TTSError(f"ElevenLabs TTS failed ({resp.status_code}): {resp.text[:500]}")
+            raise TTSError(
+                f"ElevenLabs TTS failed ({resp.status_code}): {resp.text[:500]}"
+            )
         return resp.content

@@ -22,10 +22,13 @@ Protocol notes that bite if ignored (docs/rpc.md in the pi package):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import shlex
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 log = logging.getLogger("switchboard.pi")
 
@@ -46,6 +49,26 @@ SET_MODEL_TOOL = "set_model"
 # on top of what was already said.
 SPEAK_TOOL = "speak"
 SIGNAL_TOOLS = {TRANSFER_TOOL, RETURN_TOOL, SET_MODEL_TOOL, SPEAK_TOOL}
+
+# One argument per tool worth putting on a page: the thing the caller would ask
+# "what is it doing that to?" about. Anything not named here shows the tool name
+# alone rather than a blob of JSON nobody can read at a glance.
+ACTIVITY_ARG_ORDER = (
+    "path",
+    "file_path",
+    "filePath",
+    "command",
+    "pattern",
+    "query",
+    "url",
+    "description",
+    "symbol",
+    "project",
+    "text",
+)
+# A detail line on a status strip, not a log record. Long enough to recognise a
+# path, short enough not to reflow the page.
+ACTIVITY_DETAIL_CHARS = 80
 
 # Text fallback for runtimes that cannot load the pi extension (a project host
 # without pi, a claude/codex session). Agents are told to emit this exact line;
@@ -71,6 +94,25 @@ class Signal:
 
     name: str
     args: dict = field(default_factory=dict)
+
+
+def _activity_detail(args: object) -> str:
+    """The one argument worth showing next to a tool name on the page.
+
+    A turn that takes four minutes is indistinguishable from a wedged one unless
+    the caller can see what it is doing, and "running a command" is only half an
+    answer — which command is the half that tells you whether to keep waiting.
+    """
+    if not isinstance(args, dict):
+        return ""
+    for key in ACTIVITY_ARG_ORDER:
+        value = args.get(key)
+        if isinstance(value, str) and value.strip():
+            detail = " ".join(value.split())
+            if len(detail) > ACTIVITY_DETAIL_CHARS:
+                detail = detail[:ACTIVITY_DETAIL_CHARS].rstrip() + "\u2026"
+            return detail
+    return ""
 
 
 @dataclass
@@ -125,11 +167,17 @@ class PiSession:
         cwd: str | None = None,
         env: dict[str, str] | None = None,
         turn_timeout: float = 600.0,
+        on_activity: Callable[[dict], Awaitable[None]] | None = None,
     ) -> None:
         self.argv = argv
         self.label = label
         self.cwd = cwd
         self.env = env
+        # Called with one small dict per tool the agent starts, while the turn
+        # is still running. Without it the caller stares at "working..." with no
+        # way to tell a long turn from a dead one, which is the single most
+        # common reason a call gets abandoned.
+        self.on_activity = on_activity
         # How long the agent may go *silent* — not how long a turn may take. A
         # turn still emitting events is working, however long it has been at it;
         # a turn that has said nothing for this long is wedged. Measuring total
@@ -213,11 +261,21 @@ class PiSession:
             pass
         try:
             await asyncio.wait_for(proc.wait(), timeout=10)
-        except (asyncio.TimeoutError, Exception):  # noqa: BLE001
-            try:
+        except asyncio.TimeoutError:
+            # SIGTERM was ignored (ssh with a wedged remote command is the usual
+            # one). Kill it and then *reap* it: without the second wait the
+            # child is left a zombie and the ssh connection it owns stays up on
+            # the far host for the life of this service.
+            with contextlib.suppress(ProcessLookupError, OSError):
                 proc.kill()
-            except Exception:  # noqa: BLE001
-                pass
+                await proc.wait()
+        except asyncio.CancelledError:
+            # Cancellation still cleans up before preserving its signal for the
+            # caller. Otherwise shutdown can leave the child running.
+            with contextlib.suppress(ProcessLookupError, OSError):
+                proc.kill()
+                await proc.wait()
+            raise
 
     # -- one turn ----------------------------------------------------------
 
@@ -240,6 +298,20 @@ class PiSession:
 
             return await self._collect()
 
+    async def _report_activity(self, item: dict) -> None:
+        """Tell whoever is watching what this turn is doing right now.
+
+        Never allowed to fail the turn: this exists to make a call legible, and
+        a status line that throws would take down the very thing it is
+        describing.
+        """
+        if self.on_activity is None:
+            return
+        try:
+            await self.on_activity({**item, "label": self.label})
+        except Exception:  # noqa: BLE001
+            log.exception("[%s] could not report activity", self.label)
+
     async def _collect(self) -> Turn:
         """Read events until the agent settles, harvesting text and signals."""
         assert self._proc is not None and self._proc.stdout is not None
@@ -258,9 +330,15 @@ class PiSession:
                 # writing, so the *next* prompt reads the previous turn's tail
                 # and every turn after it answers the wrong question. Timing out
                 # one readline leaves the stream between records instead.
-                raw = await asyncio.wait_for(stdout.readline(), timeout=self.turn_timeout)
+                raw = await asyncio.wait_for(
+                    stdout.readline(), timeout=self.turn_timeout
+                )
             except asyncio.TimeoutError:
-                log.warning("[%s] silent for %ss; dropping the leg", self.label, self.turn_timeout)
+                log.warning(
+                    "[%s] silent for %ss; dropping the leg",
+                    self.label,
+                    self.turn_timeout,
+                )
                 # The agent may still wake up and write, and there is no way to
                 # tell its future output from this turn's, so the process goes
                 # rather than being handed to the next prompt. Empty text is
@@ -269,13 +347,28 @@ class PiSession:
                 # here makes a dead leg look like an ordinary reply.
                 await self.close()
                 return Turn(
-                    text="", signals=signals, failed=True, error="the agent stopped responding"
+                    text="",
+                    signals=signals,
+                    failed=True,
+                    error="the agent stopped responding",
                 )
             except (asyncio.LimitOverrunError, ValueError) as exc:
                 # A single event exceeded STREAM_LIMIT. The line is unusable and
                 # the stream is mid-record, so this leg is finished.
                 log.error("[%s] oversized RPC event: %s", self.label, exc)
-                return Turn(text="", signals=signals, failed=True)
+                # Closed for the same reason the timeout path closes. Leaving it
+                # alive left the pipe parked mid-record: every later turn read
+                # the tail of this one and answered the previous question. And a
+                # `signals` list that happens to hold a routing tool sends the
+                # caller *onward* on a desynchronised stream, which is worse
+                # than a dropped leg because it looks like it worked.
+                await self.close()
+                return Turn(
+                    text="",
+                    signals=signals,
+                    failed=True,
+                    error="the agent sent something too big to read",
+                )
 
             if not raw:
                 log.warning("[%s] agent stream ended mid-turn", self.label)
@@ -313,14 +406,40 @@ class PiSession:
                     and message.get("stopReason") == ERROR_STOP_REASON
                 ):
                     error = _spoken_error(message.get("errorMessage"))
-                    log.error("[%s] model call failed: %s", self.label, message.get("errorMessage"))
+                    log.error(
+                        "[%s] model call failed: %s",
+                        self.label,
+                        message.get("errorMessage"),
+                    )
 
             elif kind == "tool_execution_start":
                 name = event.get("toolName")
+                args = event.get("args")
                 if name in SIGNAL_TOOLS:
-                    args = event.get("args")
-                    signals.append(Signal(name=name, args=args if isinstance(args, dict) else {}))
+                    signals.append(
+                        Signal(name=name, args=args if isinstance(args, dict) else {})
+                    )
                     log.info("[%s] signal: %s %s", self.label, name, args)
+                # Every tool, not just the routing ones: the point is to show
+                # that work is happening at all. Routing tools are included
+                # because "transferring you" is exactly the moment the caller
+                # most wants to see something move.
+                await self._report_activity(
+                    {
+                        "state": "start",
+                        "tool": name or "",
+                        "detail": _activity_detail(args),
+                    }
+                )
+
+            elif kind == "tool_execution_end":
+                await self._report_activity(
+                    {
+                        "state": "end",
+                        "tool": event.get("toolName") or "",
+                        "detail": "",
+                    }
+                )
 
             elif kind == "agent_settled":
                 break
@@ -423,7 +542,8 @@ def remote_argv(
     # the prefix form is not valid in front of `exec` — the shell would take the
     # assignment itself as the command to run.
     exports = "".join(
-        f"export {name}={shlex.quote(value)}; " for name, value in sorted((env or {}).items())
+        f"export {name}={shlex.quote(value)}; "
+        for name, value in sorted((env or {}).items())
     )
     # `set -e` so a bad cwd aborts instead of quietly starting the agent in the
     # ssh user's home directory — an agent in the wrong repo is worse than one
@@ -445,5 +565,7 @@ def remote_argv(
 
 
 def _read_text(path: str) -> str:
-    with open(path, encoding="utf-8") as fh:
-        return fh.read()
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise PiSessionError(f"could not read system prompt {path}: {exc}") from exc

@@ -16,6 +16,7 @@ does, and that something can hand you back.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -31,7 +32,9 @@ from .history import AGENT, CALLER, TranscriptLog
 from .pbx import Switchboard
 from .registry import Registry
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
+)
 log = logging.getLogger("switchboard")
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -61,7 +64,9 @@ def _env_int(name: str, default: int) -> int:
 STATE_DIR = Path(_env("SWITCHBOARD_STATE_DIR", "/var/lib/switchboard"))
 CONFIG_DIR = Path(_env("SWITCHBOARD_CONFIG_DIR", "/etc/switchboard"))
 PROJECTS_FILE = _env("SWITCHBOARD_PROJECTS_FILE", str(CONFIG_DIR / "projects.json"))
-OPERATOR_PROMPT = _env("SWITCHBOARD_OPERATOR_PROMPT", str(CONFIG_DIR / "operator.system.md"))
+OPERATOR_PROMPT = _env(
+    "SWITCHBOARD_OPERATOR_PROMPT", str(CONFIG_DIR / "operator.system.md")
+)
 OPERATOR_EXTENSION = _env("SWITCHBOARD_OPERATOR_EXTENSION") or None
 AGENT_EXTENSION = _env("SWITCHBOARD_AGENT_EXTENSION") or None
 PI_BINARY = _env("SWITCHBOARD_PI_BINARY", "pi")
@@ -153,13 +158,23 @@ async def lifespan(_app: FastAPI):
     yield
     if watchdog is not None:
         watchdog.cancel()
+        # Awaited, not just signalled: the watchdog can be mid-`_hangup` on a
+        # session that `shutdown` is about to close underneath it.
+        with contextlib.suppress(asyncio.CancelledError):
+            await watchdog
     await switchboard.shutdown()
 
 
 app = FastAPI(title="switchboard", lifespan=lifespan)
 
-# Single-user tool: realistically 0 or 1 browser tabs at a time.
-connected_clients: set[WebSocket] = set()
+# Single-user tool: realistically 0 or 1 browser tabs at a time. Each socket
+# carries its own send lock, because a single tab is now written to by three
+# different tasks — the turn loop, the receive loop acknowledging a queued clip,
+# and `/speak` or `/diagram` arriving mid-turn over HTTP. Two coroutines inside
+# `send`/`send_bytes` on one connection interleave frames or raise, which showed
+# up as corrupted audio during exactly the mid-turn narration the speak tool
+# exists for.
+connected_clients: dict[WebSocket, asyncio.Lock] = {}
 
 transcript_log = TranscriptLog(_env_int("SWITCHBOARD_HISTORY_LIMIT", 200))
 
@@ -192,19 +207,39 @@ class LegStateRequest(BaseModel):
     thinking: str = ""
 
 
+async def _send_json(client: WebSocket, message: dict) -> None:
+    """One JSON frame to one tab, never overlapping another write to it."""
+    lock = connected_clients.get(client)
+    if lock is None:
+        await client.send_json(message)
+        return
+    async with lock:
+        await client.send_json(message)
+
+
+async def _send_bytes(client: WebSocket, data: bytes) -> None:
+    """One binary frame to one tab, never overlapping another write to it."""
+    lock = connected_clients.get(client)
+    if lock is None:
+        await client.send_bytes(data)
+        return
+    async with lock:
+        await client.send_bytes(data)
+
+
 async def _broadcast_json(message: dict) -> int:
     """Send one JSON message to every live tab, dropping the dead ones."""
     delivered = 0
     dead = []
     for client in list(connected_clients):
         try:
-            await client.send_json(message)
+            await _send_json(client, message)
             delivered += 1
         except Exception:  # noqa: BLE001
             log.exception("failed to deliver a message to a client")
             dead.append(client)
     for client in dead:
-        connected_clients.discard(client)
+        connected_clients.pop(client, None)
     return delivered
 
 
@@ -215,7 +250,25 @@ async def _announce_route() -> None:
     an agent start and an intro prompt, and until this lands the page still
     names whoever the caller was talking to before.
     """
+    global last_diagram
+    # A diagram belongs to the leg that drew it. Kept across a route change it
+    # was replayed to every reconnecting tab long after that agent was gone,
+    # captioned as if it were current.
+    # ponytail: only stops the *replay*. A tab that is already open keeps the
+    # picture on screen until something replaces it — wiping it mid-call is more
+    # jarring than a stale one. Send a clear frame here if that changes.
+    last_diagram = None
     await _broadcast_json(switchboard.status())
+
+
+async def _announce_activity(item: dict) -> None:
+    """Put what a leg is doing right now on the page, mid-turn.
+
+    The whole reason this exists: a turn that takes four minutes of real work
+    and a turn whose agent has died look identical from the browser, so callers
+    hang up on healthy legs and wait forever on dead ones.
+    """
+    await _broadcast_json({"type": "activity", **item})
 
 
 async def _broadcast_audio(audio: bytes) -> int:
@@ -224,19 +277,20 @@ async def _broadcast_audio(audio: bytes) -> int:
     dead = []
     for client in list(connected_clients):
         try:
-            await client.send_bytes(audio)
+            await _send_bytes(client, audio)
             delivered += 1
         except Exception:  # noqa: BLE001
             log.exception("failed to deliver audio to a client")
             dead.append(client)
     for client in dead:
-        connected_clients.discard(client)
+        connected_clients.pop(client, None)
     return delivered
 
 
-# Assigned after construction: the callback needs the client set, which is
+# Assigned after construction: the callbacks need the client set, which is
 # defined alongside the app rather than the switchboard.
 switchboard.on_route_change = _announce_route
+switchboard.on_activity = _announce_activity
 
 
 @app.get("/healthz")
@@ -356,7 +410,9 @@ async def speak(req: SpeakRequest):
         audio = await speaker.synthesize(req.text)
     except TTSError as exc:
         log.exception("TTS failed for /speak")
-        raise HTTPException(status_code=502, detail=f"TTS synthesis failed: {exc}") from exc
+        raise HTTPException(
+            status_code=502, detail=f"TTS synthesis failed: {exc}"
+        ) from exc
 
     # Logged even with nobody listening: a caller who steps away and comes back
     # to a fresh tab should still be able to read what was said while they were
@@ -384,7 +440,12 @@ async def diagram(req: DiagramRequest):
     can actually see and leaves a good diagram up if a bad one arrives.
     """
     global last_diagram
-    message = {"type": "diagram", "source": req.source, "title": req.title, "notes": req.notes}
+    message = {
+        "type": "diagram",
+        "source": req.source,
+        "title": req.title,
+        "notes": req.notes,
+    }
     last_diagram = message
     if await _broadcast_json(message) == 0:
         return {"delivered": False, "reason": "no browser connected"}
@@ -394,74 +455,149 @@ async def diagram(req: DiagramRequest):
 @app.websocket("/ws")
 async def voice_ws(websocket: WebSocket):
     await websocket.accept()
-    connected_clients.add(websocket)
+    connected_clients[websocket] = asyncio.Lock()
     log.info("browser connected")
-    try:
-        await websocket.send_json(switchboard.status())
-        await websocket.send_json(transcript_log.payload())
-        if last_diagram is not None:
-            await websocket.send_json(last_diagram)
+
+    # Utterances the caller got in while an earlier turn was still running.
+    #
+    # This used to be one serial loop: receive, transcribe, run the whole turn,
+    # only then receive again. A second clip sent during a turn sat unread in
+    # the ASGI receive buffer with nothing acknowledging it, which from the page
+    # was indistinguishable from the message having been swallowed. Reading the
+    # socket continuously means every clip is transcribed and echoed the moment
+    # it lands; turns still run strictly one at a time, because a phone call is
+    # turn-taking and the switchboard's own lock enforces it anyway.
+    pending: asyncio.Queue[str] = asyncio.Queue()
+
+    async def receive_clips() -> None:
         while True:
-            audio_bytes = await websocket.receive_bytes()
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                raise WebSocketDisconnect(message.get("code", 1000))
+            audio_bytes = message.get("bytes")
+            if audio_bytes is None:
+                # A text frame. `receive_bytes` did `message["bytes"]` and
+                # raised KeyError on these, which is not WebSocketDisconnect, so
+                # one stray keepalive killed the handler and the page went dead.
+                continue
             log.info("received %d bytes of audio", len(audio_bytes))
 
             try:
                 transcript = await transcriber.transcribe(audio_bytes)
             except Exception as exc:  # noqa: BLE001
                 log.exception("transcription failed")
-                await websocket.send_json(
-                    {"type": "error", "message": f"Transcription failed: {exc}"}
+                await _send_json(
+                    websocket,
+                    {"type": "error", "message": f"Transcription failed: {exc}"},
                 )
                 continue
 
             log.info("transcript: %r", transcript)
-            transcript_log.add(CALLER, transcript)
-            await websocket.send_json({"type": "transcript", "text": transcript})
             if not transcript:
-                await websocket.send_json(
-                    {"type": "error", "message": "I didn't catch that — say it again."}
+                await _send_json(
+                    websocket,
+                    {"type": "error", "message": "I didn't catch that — say it again."},
                 )
                 continue
 
-            await websocket.send_json({"type": "thinking", "route": switchboard.route})
+            transcript_log.add(CALLER, transcript)
+            await _send_json(websocket, {"type": "transcript", "text": transcript})
+            await pending.put(transcript)
+            # Said out loud to the page so a caller who talked over a running
+            # turn knows their words landed and where they are in the line.
+            if pending.qsize() > 1 or _turn_in_flight:
+                await _send_json(
+                    websocket, {"type": "queued", "waiting": pending.qsize()}
+                )
+
+    async def run_turns() -> None:
+        nonlocal _turn_in_flight
+        while True:
+            transcript = await pending.get()
+            _turn_in_flight = True
             try:
-                reply = await switchboard.handle(transcript)
-            except Exception as exc:  # noqa: BLE001
-                log.exception("routing failed")
-                await websocket.send_json({"type": "error", "message": f"Switchboard error: {exc}"})
-                continue
+                await _run_one_turn(websocket, transcript, pending.qsize())
+            finally:
+                _turn_in_flight = False
 
-            # The written reply, which is what the page shows. Whatever the
-            # agent said through `speak` is separate content and is already in
-            # the log from that call, so neither one repeats the other.
-            transcript_log.add(AGENT, reply.text, route=reply.route)
-            await websocket.send_json(
-                {"type": "reply", "text": reply.text, "route": reply.route}
-            )
-            await websocket.send_json(switchboard.status())
-            if reply.error:
-                log.warning("route %s reported: %s", reply.route, reply.error)
+    _turn_in_flight = False
+    reader = None
+    runner = None
+    try:
+        # Sent before either task exists, so the page is never asked to render a
+        # transcript line for a call it has not been told the shape of yet.
+        await _send_json(websocket, switchboard.status())
+        await _send_json(websocket, transcript_log.payload())
+        if last_diagram is not None:
+            await _send_json(websocket, last_diagram)
 
-            # Only the lines nobody has voiced yet. A project agent says its own
-            # piece through the `speak` tool, which reaches the browser directly
-            # while it is still working — synthesizing its written reply on top
-            # would say the whole turn twice.
-            for utterance in reply.to_speak:
-                spoken = speaker.clip_for_speech(utterance)
-                if not spoken:
-                    continue
-                try:
-                    await websocket.send_bytes(await speaker.synthesize(spoken))
-                except TTSError as exc:
-                    log.exception("TTS failed")
-                    await websocket.send_json({"type": "error", "message": str(exc)})
-                    break
-
+        reader = asyncio.create_task(receive_clips())
+        runner = asyncio.create_task(run_turns())
+        # Whichever finishes first ends the call: the reader raises on
+        # disconnect, the runner only exits on an error worth surfacing.
+        done, _ = await asyncio.wait(
+            {reader, runner}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in done:
+            task.result()
     except WebSocketDisconnect:
         log.info("browser disconnected")
+    except Exception:  # noqa: BLE001
+        log.exception("the websocket loop failed")
     finally:
-        connected_clients.discard(websocket)
+        live = [t for t in (reader, runner) if t is not None]
+        for task in live:
+            task.cancel()
+        # Awaited so a cancelled turn is not still writing to a socket the next
+        # connection is about to replace.
+        await asyncio.gather(*live, return_exceptions=True)
+        connected_clients.pop(websocket, None)
+
+
+async def _run_one_turn(websocket: WebSocket, transcript: str, waiting: int) -> None:
+    """Route one utterance and deliver everything it produced to this tab."""
+    await _send_json(
+        websocket,
+        {"type": "thinking", "route": switchboard.route, "waiting": waiting},
+    )
+    try:
+        reply = await switchboard.handle(transcript)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("routing failed")
+        await _send_json(
+            websocket, {"type": "error", "message": f"Switchboard error: {exc}"}
+        )
+        return
+
+    # The written reply, which is what the page shows. Whatever the agent said
+    # through `speak` is separate content and is already in the log from that
+    # call, so neither one repeats the other.
+    transcript_log.add(AGENT, reply.text, route=reply.route)
+    await _send_json(
+        websocket, {"type": "reply", "text": reply.text, "route": reply.route}
+    )
+    await _send_json(websocket, switchboard.status())
+    if reply.error:
+        log.warning("route %s reported: %s", reply.route, reply.error)
+
+    # Only the lines nobody has voiced yet. A project agent says its own piece
+    # through the `speak` tool, which reaches the browser directly while it is
+    # still working — synthesizing its written reply on top would say the whole
+    # turn twice.
+    for utterance in reply.to_speak:
+        spoken = speaker.clip_for_speech(utterance)
+        if not spoken:
+            continue
+        try:
+            audio = await speaker.synthesize(spoken)
+        except TTSError as exc:
+            log.exception("TTS failed")
+            await _send_json(websocket, {"type": "error", "message": str(exc)})
+            break
+        await _send_bytes(websocket, audio)
 
 
 # Mounted last so it does not shadow /ws, /healthz, /status or /speak.
-app.mount("/", StaticFiles(directory=str(ROOT_DIR / "static"), html=True), name="static")
+app.mount(
+    "/", StaticFiles(directory=str(ROOT_DIR / "static"), html=True), name="static"
+)

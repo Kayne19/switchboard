@@ -21,6 +21,7 @@ line over, which means a confused agent cannot strand the caller.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import shlex
 import time
@@ -57,6 +58,22 @@ from .registry import Project, Registry
 log = logging.getLogger("switchboard.pbx")
 
 OPERATOR = "operator"
+
+
+async def _reap(proc) -> None:
+    """Kill and collect a child that outlived the deadline we gave it.
+
+    `asyncio.wait_for` cancels the *read*, never the process. Every timeout in
+    this module is around an ssh, so skipping this leaks a local ssh client and
+    whatever it started on the remote host, permanently and once per attempt.
+    """
+    if proc is None or proc.returncode is not None:
+        return
+    # Already gone is the good outcome, not an error worth reporting.
+    with contextlib.suppress(ProcessLookupError, OSError):
+        proc.kill()
+        await proc.wait()
+
 
 # Appended to every project agent's system prompt. It explains the medium (the
 # reply is spoken aloud, so length matters) and both ways back to the operator —
@@ -199,6 +216,7 @@ class Switchboard:
         diagram_url: str = "",
         env: dict[str, str] | None = None,
         on_route_change: Callable[[], Awaitable[None]] | None = None,
+        on_activity: Callable[[dict], Awaitable[None]] | None = None,
     ) -> None:
         self.registry = registry
         self.pi_binary = pi_binary
@@ -232,6 +250,10 @@ class Switchboard:
         # itself then rather than when the whole turn finally settles — a
         # transfer spends most of its time dialling the far end.
         self.on_route_change = on_route_change
+        # Fired for every tool a leg starts, mid-turn. A caller who cannot see
+        # that work is happening has no way to tell a four-minute turn from a
+        # dead one, and hangs up on a leg that was fine.
+        self.on_activity = on_activity
 
         self.route: str = OPERATOR
         self.project: Project | None = None
@@ -268,7 +290,9 @@ class Switchboard:
         return self.project.id if self.project else self.route
 
     def status(self) -> dict:
-        spec = (self.operator_model if self.route == OPERATOR else self._model_spec) or ""
+        spec = (
+            self.operator_model if self.route == OPERATOR else self._model_spec
+        ) or ""
         provider, model, thinking = parse_spec(spec)
         # What the leg reported beats what it was asked for, because the runtime
         # clamps levels a model does not expose. Never a word like "default":
@@ -322,6 +346,27 @@ class Switchboard:
                 if self.route == OPERATOR:
                     return await self._handle_operator(transcript)
                 return await self._handle_agent(transcript)
+            except PiSessionError as exc:
+                # A leg can die between the `alive` check and the write, or
+                # break the pipe during drain. This used to propagate out of
+                # `handle` to the websocket loop's generic handler, which sent a
+                # bare error frame and *no audio at all* — so the caller spoke,
+                # heard nothing whatsoever, and had to speak twice before the
+                # dead leg was recycled. Land them on the operator instead and
+                # say so out loud.
+                log.warning("the %s leg failed mid-prompt: %s", self.route, exc)
+                left = self.route_label
+                if self.route != OPERATOR:
+                    await self._hangup()
+                    self._operator_note = f"The call to {left} ended: {exc}"
+                else:
+                    await self._reset_operator()
+                return self._reply(
+                    [
+                        f"{left} dropped the line. Say that again and I'll pick it back up."
+                    ],
+                    error=str(exc),
+                )
             finally:
                 self._last_activity = time.monotonic()
 
@@ -340,7 +385,10 @@ class Switchboard:
         async with self._lock:
             # Re-checked under the lock: the caller may have spoken while we
             # were waiting for it.
-            if self.route == OPERATOR or time.monotonic() - self._last_activity < timeout:
+            if (
+                self.route == OPERATOR
+                or time.monotonic() - self._last_activity < timeout
+            ):
                 return None
             left = self.project.id if self.project else self.route
             minutes = int(timeout // 60)
@@ -360,7 +408,9 @@ class Switchboard:
             session = await self._ensure_operator()
         except (PiSessionError, OSError) as exc:
             log.exception("operator unavailable")
-            return self._reply([f"The operator is not answering: {exc}"], error=str(exc))
+            return self._reply(
+                [f"The operator is not answering: {exc}"], error=str(exc)
+            )
 
         message = transcript
         if self._operator_note:
@@ -372,7 +422,9 @@ class Switchboard:
             detail = turn.error or "operator turn failed"
             await self._reset_operator()
             return self._reply(
-                ["The operator dropped the line. Say that again and I'll pick it back up."],
+                [
+                    "The operator dropped the line. Say that again and I'll pick it back up."
+                ],
                 error=detail,
             )
 
@@ -408,7 +460,9 @@ class Switchboard:
         # produced belongs to a call that is already over; swinging the route
         # back on the strength of it would undo the rescue.
         if self._agent is not session:
-            log.info("discarding a turn from %s: that leg was already dropped", session.label)
+            log.info(
+                "discarding a turn from %s: that leg was already dropped", session.label
+            )
             return self._reply([])
 
         transfer = next((s for s in turn.signals if s.name == TRANSFER_TOOL), None)
@@ -420,7 +474,9 @@ class Switchboard:
             await self._hangup()
             self._operator_note = f"The call to {name} ended: {detail}"
             return self._reply(
-                [f"{name} stopped responding: {detail}. You're back with the operator."],
+                [
+                    f"{name} stopped responding: {detail}. You're back with the operator."
+                ],
                 error=detail,
             )
 
@@ -477,7 +533,9 @@ class Switchboard:
         except (PiSessionError, OSError) as exc:
             log.exception("operator unavailable on return")
             self._operator_note = note
-            return self._reply(lead + ["You're back with the operator."], error=str(exc))
+            return self._reply(
+                lead + ["You're back with the operator."], error=str(exc)
+            )
 
         turn = await session.prompt(f"[switchboard] {note}")
         if turn.failed and not turn.text:
@@ -523,7 +581,11 @@ class Switchboard:
             await self._hangup()
             self._operator_note = (
                 f"The transfer to {spoken!r} failed: no such project. Known projects: {known}."
-                + (f" The caller was on {referrer} when it was attempted." if referrer else "")
+                + (
+                    f" The caller was on {referrer} when it was attempted."
+                    if referrer
+                    else ""
+                )
             )
             return self._reply(
                 [handoff, f"I don't have a project called {spoken}. I know: {known}."],
@@ -543,7 +605,11 @@ class Switchboard:
                 chosen = await self._resolve_model(project, model, thinking)
             except ModelError as exc:
                 model_note = f"About the model: {exc}"
-                log.info("transfer to %s asked for a model I couldn't use: %s", project.id, exc)
+                log.info(
+                    "transfer to %s asked for a model I couldn't use: %s",
+                    project.id,
+                    exc,
+                )
 
         # Bring the working copy up to date before the agent sees it. Never
         # fatal: a stale checkout is worth far more than a dropped call.
@@ -585,7 +651,9 @@ class Switchboard:
                         else "They did not say what they want yet."
                     ),
                     workspace_line=(
-                        f"\nState of your working copy: {prepared}\n" if prepared else ""
+                        f"\nState of your working copy: {prepared}\n"
+                        if prepared
+                        else ""
                     ),
                 )
             )
@@ -604,7 +672,11 @@ class Switchboard:
             )
 
         return self._reply(
-            [handoff, model_note, Utterance(intro.text, synthesize=not intro.agent_spoke)]
+            [
+                handoff,
+                model_note,
+                Utterance(intro.text, synthesize=not intro.agent_spoke),
+            ]
         )
 
     async def dial(self, spoken: str, intent: str = "") -> Reply:
@@ -665,7 +737,12 @@ class Switchboard:
         )
 
     async def _redial(
-        self, *, model: str = "", thinking: str = "", intent: str = "", keep: bool = True
+        self,
+        *,
+        model: str = "",
+        thinking: str = "",
+        intent: str = "",
+        keep: bool = True,
     ) -> Reply:
         """Restart the live leg on a different model, keeping the conversation.
 
@@ -685,7 +762,9 @@ class Switchboard:
             return self._reply(["Model swapping is turned off on this switchboard."])
 
         try:
-            choice = await self._resolve_model(project, model or self._model_spec, thinking)
+            choice = await self._resolve_model(
+                project, model or self._model_spec, thinking
+            )
         except ModelError as exc:
             # Nothing has been torn down yet, so the caller stays exactly where
             # they are and simply hears why. This is the branch that stops an
@@ -706,10 +785,18 @@ class Switchboard:
         )
         if self._agent is not None:
             await self._agent.close()
+            # Cleared, not just closed. `_start_agent` below takes seconds (ssh,
+            # staging, process start) and `force_hangup` does not take the lock,
+            # so a hang-up landing in that window would otherwise find a closed
+            # session still attached and leave the caller pointed at a leg that
+            # no longer exists.
+            self._agent = None
         session_id = self._session_id if keep else uuid.uuid4().hex
 
         try:
-            session = await self._start_agent(project, model=spec, session_id=session_id)
+            session = await self._start_agent(
+                project, model=spec, session_id=session_id
+            )
         except PiSessionError as exc:
             log.exception("could not restart %s on %s", project.id, spec)
             await self._hangup()
@@ -721,6 +808,14 @@ class Switchboard:
                 [f"I couldn't bring {project.id} back up on {choice.spoken}: {exc}"],
                 error=str(exc),
             )
+
+        # The caller may have hung up while the replacement was coming up. That
+        # rescue wins: adopting this session now would silently put them back on
+        # a project they just walked away from.
+        if self.project is not project:
+            log.info("discarding the re-dialled %s leg: the caller left", project.id)
+            await session.close()
+            return self._reply([])
 
         self._agent = session
         self._session_id = session_id
@@ -754,7 +849,9 @@ class Switchboard:
         if turn.failed and not turn.text:
             detail = turn.error or session.stderr_tail() or "it never answered"
             await self._hangup()
-            self._operator_note = f"{project.id} did not come back up on {spec}: {detail}"
+            self._operator_note = (
+                f"{project.id} did not come back up on {spec}: {detail}"
+            )
             return self._reply(
                 [f"{project.id} didn't come back on {choice.spoken}: {detail}"],
                 error=detail,
@@ -762,10 +859,14 @@ class Switchboard:
 
         return self._reply([Utterance(turn.text, synthesize=not turn.agent_spoke)])
 
-    async def _resolve_model(self, project: Project, model: str, thinking: str) -> ModelChoice:
+    async def _resolve_model(
+        self, project: Project, model: str, thinking: str
+    ) -> ModelChoice:
         """Pin a spoken model name to one the target host will actually accept."""
         catalog = await self._host_catalog(project)
-        return catalog.resolve(model or project.model or self.agent_model or "", thinking)
+        return catalog.resolve(
+            model or project.model or self.agent_model or "", thinking
+        )
 
     def _spec_for(self, project: Project, chosen: ModelChoice | None) -> str:
         """The `--model` a leg starts on, always carrying a thinking level."""
@@ -807,6 +908,16 @@ class Switchboard:
         on the operator.
         """
         if self.route == OPERATOR:
+            # Not "nothing to do": the operator is the one leg with no other way
+            # out, so a wedged operator turn used to leave the caller with no
+            # escape at all — the button is hidden and this returned early. Drop
+            # the process; `_ensure_operator` builds a fresh one on the next
+            # utterance, and closing it unblocks whatever turn was stuck reading
+            # its stdout.
+            if self._operator is not None:
+                log.info("caller hung up a wedged operator turn from the page")
+                await self._reset_operator()
+                return OPERATOR
             return None
         left = self.project.id if self.project else self.route
         log.info("caller hung up the leg to %s from the page", left)
@@ -830,7 +941,9 @@ class Switchboard:
         if self._operator is not None and self._operator.alive:
             return self._operator
         if self._operator is not None:
-            log.warning("operator process died (%s); restarting", self._operator.stderr_tail())
+            log.warning(
+                "operator process died (%s); restarting", self._operator.stderr_tail()
+            )
             await self._operator.close()
 
         argv = local_argv(
@@ -842,7 +955,13 @@ class Switchboard:
             # Its only tools are the ones the extension registers.
             extra_args=["--no-builtin-tools", "--no-session"],
         )
-        session = PiSession(argv, label=OPERATOR, env=self.env, turn_timeout=180.0)
+        session = PiSession(
+            argv,
+            label=OPERATOR,
+            env=self.env,
+            turn_timeout=180.0,
+            on_activity=self.on_activity,
+        )
         await session.start()
         self._operator = session
         return session
@@ -851,7 +970,9 @@ class Switchboard:
         self, project: Project, *, model: str = "", session_id: str = ""
     ) -> PiSession:
         binary = project.runtime or "pi"
-        model = pin_thinking(model or project.model or self.agent_model or "", self.agent_thinking)
+        model = pin_thinking(
+            model or project.model or self.agent_model or "", self.agent_thinking
+        )
         if project.is_remote:
             extension = None
             if project.stage_extension:
@@ -877,13 +998,22 @@ class Switchboard:
                 argv += ["--session-id", session_id]
             if extension:
                 argv += ["-e", extension]
-            argv += ["--append-system-prompt", self._agent_brief(project, bool(extension))]
+            argv += [
+                "--append-system-prompt",
+                self._agent_brief(project, bool(extension)),
+            ]
             argv += project.extra_args
             cwd = project.cwd or None
 
         env = dict(self.env or {})
         env.update(self._agent_env())
-        session = PiSession(argv, label=project.id, cwd=cwd, env=env)
+        session = PiSession(
+            argv,
+            label=project.id,
+            cwd=cwd,
+            env=env,
+            on_activity=self.on_activity,
+        )
         await session.start()
         return session
 
@@ -928,7 +1058,9 @@ class Switchboard:
         others = [p for p in self.registry.projects if p.id != current.id]
         if not others:
             return ""
-        catalog = "\n".join(f"- {p.id} — {p.description or 'no description'}" for p in others)
+        catalog = "\n".join(
+            f"- {p.id} — {p.description or 'no description'}" for p in others
+        )
         return TRANSFER_BRIEF.format(transfer_tool=TRANSFER_TOOL, catalog=catalog)
 
     async def _run_prepare(self, project: Project) -> str:
@@ -956,6 +1088,7 @@ class Switchboard:
         else:
             argv = ["sh", "-c", project.prepare]
 
+        proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
@@ -967,12 +1100,19 @@ class Switchboard:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
         except (asyncio.TimeoutError, OSError) as exc:
             log.warning("prepare for %s failed: %s", project.id, exc)
+            # `wait_for` cancels the read; it does not touch the child. This is
+            # an ssh, so leaving it means an orphaned connection and a remote
+            # command still running on someone else's box, one per attempt, for
+            # the life of the service.
+            await _reap(proc)
             return ""
 
         report = stdout.decode("utf-8", "replace").strip()
         if proc.returncode != 0:
             detail = stderr.decode("utf-8", "replace").strip()[:300]
-            log.warning("prepare for %s exited %s: %s", project.id, proc.returncode, detail)
+            log.warning(
+                "prepare for %s exited %s: %s", project.id, proc.returncode, detail
+            )
             return report or f"could not be refreshed ({detail or 'unknown error'})"
         log.info("prepare for %s: %s", project.id, report)
         return report
@@ -1005,6 +1145,7 @@ class Switchboard:
             f'cat > "$HOME"/{shlex.quote(target)}; '
             f'printf %s "$HOME"/{shlex.quote(target)}'
         )
+        proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 "ssh",
@@ -1022,7 +1163,7 @@ class Switchboard:
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(source.read_bytes()), timeout=30
             )
-            if proc.returncode == 0 and stdout.strip():
+            if proc.returncode == 0 and stdout.strip():  # noqa: SIM102
                 result = stdout.decode("utf-8", "replace").strip()
                 log.info("staged switchboard tool on %s at %s", host, result)
             else:
@@ -1034,6 +1175,7 @@ class Switchboard:
                 )
         except (asyncio.TimeoutError, OSError) as exc:
             log.warning("staging the switchboard tool on %s failed: %s", host, exc)
+            await _reap(proc)
 
         self._staged[host] = result
         return result
@@ -1049,7 +1191,9 @@ class Switchboard:
             # Cosmetic: a label that failed to update must not drop a call.
             log.exception("could not announce the route change")
 
-    def _prepend(self, said: Utterance | None, reply: Reply, *, mute: bool = False) -> Reply:
+    def _prepend(
+        self, said: Utterance | None, reply: Reply, *, mute: bool = False
+    ) -> Reply:
         """Put a departing leg's last words in front of an already-built reply.
 
         `mute` on a transfer, for the same reason the operator's handoff line is

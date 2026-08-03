@@ -19,6 +19,7 @@ there, and cached for the life of the process.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 from dataclasses import dataclass
@@ -170,7 +171,7 @@ class ModelCatalog:
         return bool(self.entries)
 
     @classmethod
-    def parse(cls, table: str) -> "ModelCatalog":
+    def parse(cls, table: str) -> ModelCatalog:
         """Read `pi --list-models` output: a header row then whitespace columns."""
         entries: list[CatalogEntry] = []
         for line in (table or "").splitlines():
@@ -178,7 +179,9 @@ class ModelCatalog:
             if len(fields) < 5 or fields[0] == "provider":
                 continue
             entries.append(
-                CatalogEntry(provider=fields[0], model=fields[1], thinks=fields[4] == "yes")
+                CatalogEntry(
+                    provider=fields[0], model=fields[1], thinks=fields[4] == "yes"
+                )
             )
         return cls(entries)
 
@@ -221,26 +224,40 @@ class ModelCatalog:
         distinct = {(e.provider, e.model): e for e in matches}
         if len(distinct) > 1:
             names = ", ".join(f"{p}/{m}" for p, m in sorted(distinct))
-            raise ModelError(f"{want_model} is ambiguous here. It could be {names}. Which one?")
+            raise ModelError(
+                f"{want_model} is ambiguous here. It could be {names}. Which one?"
+            )
 
         entry = next(iter(distinct.values()))
         if level and level != "off" and not entry.thinks:
-            raise ModelError(f"{entry.model} has no thinking levels, so I can't set {level}")
+            raise ModelError(
+                f"{entry.model} has no thinking levels, so I can't set {level}"
+            )
         return ModelChoice(entry.provider, entry.model, level)
 
 
 async def fetch_catalog(argv: list[str]) -> ModelCatalog:
     """Ask one host's runtime what it can run. Never raises — an empty catalog
     is a degraded mode (provider-qualified specs only), not a dropped call."""
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             *argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=LIST_TIMEOUT)
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(), timeout=LIST_TIMEOUT
+        )
     except (asyncio.TimeoutError, OSError) as exc:
         log.warning("could not list models (%s): %s", " ".join(argv), exc)
+        # `wait_for` cancels the read, never the child, and this argv is usually
+        # an ssh. Left alone it holds a local client and a remote command open
+        # for the life of the service, one per attempt, with nothing to reap it.
+        if proc is not None and proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError, OSError):
+                proc.kill()
+                await proc.wait()
         return ModelCatalog([])
 
     if proc.returncode != 0:

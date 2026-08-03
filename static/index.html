@@ -1,776 +1,1313 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<title>Switchboard</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-  /* One accent, two surfaces, one text colour and a muted one. Every colour on
+  <head>
+    <meta charset="utf-8" />
+    <title>Switchboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      /* One accent, two surfaces, one text colour and a muted one. Every colour on
      the page comes from here, so light and dark cannot drift apart. */
-  :root {
-    color-scheme: light dark;
-    --bg: #fbfbfd;
-    --surface: #ffffff;
-    --surface-alt: #f3f4f6;
-    --line: #e4e4e7;
-    --text: #18181b;
-    --muted: #71717a;
-    --accent: #3f5bd9;
-    --accent-text: #ffffff;
-    --danger: #b3261e;
-    --radius: 10px;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #131316;
-      --surface: #1b1b1f;
-      --surface-alt: #212127;
-      --line: #2e2e35;
-      --text: #ececef;
-      --muted: #9b9ba4;
-      --accent: #6b83f0;
-      --accent-text: #10131f;
-      --danger: #e8817a;
-    }
-  }
-  body {
-    font-family: system-ui, sans-serif; max-width: 660px; margin: 0 auto;
-    padding: 28px 16px 40px; background: var(--bg); color: var(--text);
-    transition: max-width 420ms cubic-bezier(.22,.61,.36,1);
-  }
-  /* The page is a single column until a diagram arrives, then it widens and the
+      :root {
+        color-scheme: light dark;
+        --bg: #fbfbfd;
+        --surface: #ffffff;
+        --surface-alt: #f3f4f6;
+        --line: #e4e4e7;
+        --text: #18181b;
+        --muted: #71717a;
+        --accent: #3f5bd9;
+        --accent-text: #ffffff;
+        --danger: #b3261e;
+        --radius: 10px;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #131316;
+          --surface: #1b1b1f;
+          --surface-alt: #212127;
+          --line: #2e2e35;
+          --text: #ececef;
+          --muted: #9b9ba4;
+          --accent: #6b83f0;
+          --accent-text: #10131f;
+          --danger: #e8817a;
+        }
+      }
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 660px;
+        margin: 0 auto;
+        padding: 28px 16px 40px;
+        background: var(--bg);
+        color: var(--text);
+        transition: max-width 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
+      }
+      /* The page is a single column until a diagram arrives, then it widens and the
      column slides right to make room. Nothing about the column itself changes. */
-  body.has-diagram { max-width: 1560px; }
-  #shell { display: grid; gap: 26px; grid-template-columns: minmax(0, 1fr); align-items: start; }
-  body.has-diagram #shell { grid-template-columns: minmax(0, 1.45fr) minmax(0, 660px); }
-  #stage { display: none; }
-  body.has-diagram #stage { display: block; }
-  @media (max-width: 1080px) {
-    /* Too narrow to sit side by side: the diagram takes the top instead. */
-    body.has-diagram #shell { grid-template-columns: minmax(0, 1fr); }
-  }
-  /* The diagram panel keeps its own dark palette in both colour schemes. The
+      body.has-diagram {
+        max-width: 1560px;
+      }
+      #shell {
+        display: grid;
+        gap: 26px;
+        grid-template-columns: minmax(0, 1fr);
+        align-items: start;
+      }
+      body.has-diagram #shell {
+        grid-template-columns: minmax(0, 1.45fr) minmax(0, 660px);
+      }
+      #stage {
+        display: none;
+      }
+      body.has-diagram #stage {
+        display: block;
+      }
+      @media (max-width: 1080px) {
+        /* Too narrow to sit side by side: the diagram takes the top instead. */
+        body.has-diagram #shell {
+          grid-template-columns: minmax(0, 1fr);
+        }
+      }
+      /* The diagram panel keeps its own dark palette in both colour schemes. The
      neon the diagrams are drawn in is unreadable on a light surface, and half a
      theme is worse than none. */
-  #stage {
-    position: sticky; top: 28px;
-    background: radial-gradient(120% 100% at 50% 0%, #0d1424 0%, #05070f 60%);
-    border: 1px solid #1d2b4d; border-radius: 14px; padding: 16px 18px 18px;
-    box-shadow: 0 0 0 1px rgba(0,255,242,0.05), 0 18px 50px -24px rgba(0,255,242,0.35);
-  }
-  #stageTitle {
-    font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.14em;
-    color: #4fe3d8; margin: 0 0 10px; font-weight: 600;
-  }
-  #stageNotes { font-size: 0.8rem; color: #7e8fb5; margin: 10px 0 0; }
-  #stageNotes:empty { display: none; }
-  /* The SVG is scaled to fit rather than scrolled: a diagram you have to pan
+      #stage {
+        position: sticky;
+        top: 28px;
+        background: radial-gradient(
+          120% 100% at 50% 0%,
+          #0d1424 0%,
+          #05070f 60%
+        );
+        border: 1px solid #1d2b4d;
+        border-radius: 14px;
+        padding: 16px 18px 18px;
+        box-shadow:
+          0 0 0 1px rgba(0, 255, 242, 0.05),
+          0 18px 50px -24px rgba(0, 255, 242, 0.35);
+      }
+      #stageTitle {
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+        color: #4fe3d8;
+        margin: 0 0 10px;
+        font-weight: 600;
+      }
+      #stageNotes {
+        font-size: 0.8rem;
+        color: #7e8fb5;
+        margin: 10px 0 0;
+      }
+      #stageNotes:empty {
+        display: none;
+      }
+      /* The SVG is scaled to fit rather than scrolled: a diagram you have to pan
      around is one the agent should have drawn smaller. */
-  #stageCanvas { min-height: 220px; display: flex; align-items: center; justify-content: center; }
-  #stageCanvas svg { max-width: 100%; height: auto; }
-  /* The glow lives here rather than in the animation so it survives a render
+      #stageCanvas {
+        min-height: 220px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #stageCanvas svg {
+        max-width: 100%;
+        height: auto;
+      }
+      /* The glow lives here rather than in the animation so it survives a render
      that happened before anime.js finished loading. */
-  #stageCanvas .node rect, #stageCanvas .node circle, #stageCanvas .node polygon,
-  #stageCanvas .node path {
-    filter: drop-shadow(0 0 6px rgba(0, 255, 242, 0.35));
-  }
-  @media (prefers-reduced-motion: reduce) {
-    /* The reveal is decoration; the diagram is the content. */
-    #stageCanvas svg * { animation: none !important; transition: none !important; }
-  }
-  #stageError {
-    color: #ff7a9c; font-size: 0.8rem; margin: 10px 0 0; white-space: pre-wrap;
-    font-family: ui-monospace, monospace;
-  }
-  #stageError:empty { display: none; }
-  h1 { font-size: 1.25rem; margin: 0 0 4px; letter-spacing: -0.01em; }
-  .sub { color: var(--muted); font-size: 0.88rem; margin: 0 0 20px; }
-  /* The one place colour carries meaning: which kind of leg you are on. A left
+      #stageCanvas .node rect,
+      #stageCanvas .node circle,
+      #stageCanvas .node polygon,
+      #stageCanvas .node path {
+        filter: drop-shadow(0 0 6px rgba(0, 255, 242, 0.35));
+      }
+      @media (prefers-reduced-motion: reduce) {
+        /* The reveal is decoration; the diagram is the content. */
+        #stageCanvas svg * {
+          animation: none !important;
+          transition: none !important;
+        }
+      }
+      #stageError {
+        color: #ff7a9c;
+        font-size: 0.8rem;
+        margin: 10px 0 0;
+        white-space: pre-wrap;
+        font-family: ui-monospace, monospace;
+      }
+      #stageError:empty {
+        display: none;
+      }
+      h1 {
+        font-size: 1.25rem;
+        margin: 0 0 4px;
+        letter-spacing: -0.01em;
+      }
+      .sub {
+        color: var(--muted);
+        font-size: 0.88rem;
+        margin: 0 0 20px;
+      }
+      /* The one place colour carries meaning: which kind of leg you are on. A left
      edge rather than a filled panel, so it reads at a glance without shouting. */
-  #line {
-    padding: 14px 16px; border-radius: var(--radius);
-    background: var(--surface); border: 1px solid var(--line);
-    border-left: 3px solid var(--muted);
-  }
-  #line.project { border-left-color: var(--accent); }
-  #line .who { font-weight: 650; font-size: 1.05rem; }
-  #line .model {
-    display: block; margin-top: 3px; color: var(--muted); font-size: 0.78rem;
-    font-family: ui-monospace, monospace;
-  }
-  /* The line's own controls: where you are, how hard it thinks, and the way
+      #line {
+        padding: 14px 16px;
+        border-radius: var(--radius);
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-left: 3px solid var(--muted);
+      }
+      #line.project {
+        border-left-color: var(--accent);
+      }
+      #line .who {
+        font-weight: 650;
+        font-size: 1.05rem;
+      }
+      #line .model {
+        display: block;
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 0.78rem;
+        font-family: ui-monospace, monospace;
+      }
+      /* The line's own controls: where you are, how hard it thinks, and the way
      out. Grouped with the label they change rather than with Talk, which must
      never be crowded. */
-  #legControls {
-    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
-    margin-top: 12px;
-  }
-  select {
-    font: inherit; font-size: 0.85rem; padding: 6px 10px; color: var(--text);
-    background: var(--surface-alt); border: 1px solid var(--line);
-    border-radius: 8px; cursor: pointer;
-  }
-  select:disabled { color: var(--muted); cursor: not-allowed; }
-  /* Deliberately plain and always in the same place: this is the button you
+      #legControls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin-top: 12px;
+      }
+      select {
+        font: inherit;
+        font-size: 0.85rem;
+        padding: 6px 10px;
+        color: var(--text);
+        background: var(--surface-alt);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      select:disabled {
+        color: var(--muted);
+        cursor: not-allowed;
+      }
+      /* Deliberately plain and always in the same place: this is the button you
      reach for when the leg has stopped making sense, so it must not move or
      need reading. */
-  #hangupBtn {
-    font-size: 0.85rem; padding: 6px 12px; width: auto; background: none;
-    color: var(--danger); border: 1px solid var(--line); margin-left: auto;
-  }
-  button {
-    font-size: 1.1rem; padding: 15px 28px; border-radius: var(--radius);
-    border: 1px solid transparent; background: var(--accent);
-    color: var(--accent-text); cursor: pointer; user-select: none; width: 100%;
-  }
-  button:disabled { background: var(--surface-alt); color: var(--muted); cursor: not-allowed; }
-  #controls { display: flex; gap: 10px; margin-top: 16px; }
-  #cancelBtn {
-    background: none; color: var(--muted); border-color: var(--line);
-    flex: 0 0 30%;
-  }
-  #sendBtn { flex: 1; }
-  .hidden { display: none; }
-  .box {
-    margin-top: 8px; padding: 12px 16px; background: var(--surface);
-    border: 1px solid var(--line); border-radius: var(--radius);
-    min-height: 1.5em; white-space: pre-wrap;
-  }
-  /* Tall enough to hold a few turns, capped so the Talk button stays on
+      #hangupBtn {
+        font-size: 0.85rem;
+        padding: 6px 12px;
+        width: auto;
+        background: none;
+        color: var(--danger);
+        border: 1px solid var(--line);
+        margin-left: auto;
+      }
+      button {
+        font-size: 1.1rem;
+        padding: 15px 28px;
+        border-radius: var(--radius);
+        border: 1px solid transparent;
+        background: var(--accent);
+        color: var(--accent-text);
+        cursor: pointer;
+        user-select: none;
+        width: 100%;
+      }
+      button:disabled {
+        background: var(--surface-alt);
+        color: var(--muted);
+        cursor: not-allowed;
+      }
+      #controls {
+        display: flex;
+        gap: 10px;
+        margin-top: 16px;
+      }
+      #cancelBtn {
+        background: none;
+        color: var(--muted);
+        border-color: var(--line);
+        flex: 0 0 30%;
+      }
+      #sendBtn {
+        flex: 1;
+      }
+      .hidden {
+        display: none;
+      }
+      .box {
+        margin-top: 8px;
+        padding: 12px 16px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        min-height: 1.5em;
+        white-space: pre-wrap;
+      }
+      /* Tall enough to hold a few turns, capped so the Talk button stays on
      screen on a phone. Scrolls itself; the page does not. */
-  #log { max-height: 55vh; overflow-y: auto; white-space: normal; }
-  #log:empty::after { content: "Nothing said yet."; color: var(--muted); }
-  .turn { padding: 10px 0; border-top: 1px solid var(--line); }
-  .turn:first-child { border-top: none; padding-top: 0; }
-  .turn .meta {
-    font-weight: 600; font-size: 0.72rem; color: var(--muted); text-transform: uppercase;
-    letter-spacing: 0.04em; margin-bottom: 3px;
-  }
-  .turn .body { white-space: pre-wrap; }
-  .turn.caller .body { color: var(--muted); }
-  /* Markdown output only: the container keeps `pre-wrap` for the plain-text
+      #log {
+        max-height: 55vh;
+        overflow-y: auto;
+        white-space: normal;
+      }
+      #log:empty::after {
+        content: "Nothing said yet.";
+        color: var(--muted);
+      }
+      .turn {
+        padding: 10px 0;
+        border-top: 1px solid var(--line);
+      }
+      .turn:first-child {
+        border-top: none;
+        padding-top: 0;
+      }
+      .turn .meta {
+        font-weight: 600;
+        font-size: 0.72rem;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-bottom: 3px;
+      }
+      .turn .body {
+        white-space: pre-wrap;
+      }
+      .turn.caller .body {
+        color: var(--muted);
+      }
+      /* Markdown output only: the container keeps `pre-wrap` for the plain-text
      case, so rendered block elements have to reset it or they double-space. */
-  .md { white-space: normal; }
-  .md > *:first-child { margin-top: 0; }
-  .md > *:last-child { margin-bottom: 0; }
-  .md p, .md ul, .md ol, .md pre, .md blockquote { margin: 0.6em 0; }
-  .md ul, .md ol { padding-left: 1.4em; }
-  .md h1, .md h2, .md h3 { font-size: 1.05rem; margin: 0.8em 0 0.4em; }
-  .md code {
-    font-family: ui-monospace, monospace; font-size: 0.9em;
-    background: rgba(127, 127, 127, 0.18); padding: 0.1em 0.3em; border-radius: 4px;
-  }
-  .md pre {
-    background: rgba(127, 127, 127, 0.18); padding: 10px 12px; border-radius: 6px;
-    overflow-x: auto;
-  }
-  .md pre code { background: none; padding: 0; }
-  .md blockquote {
-    border-left: 3px solid var(--line); padding-left: 10px; color: var(--muted);
-  }
-  .label {
-    font-weight: 600; font-size: 0.75rem; color: var(--muted); text-transform: uppercase;
-    letter-spacing: 0.04em; margin: 20px 0 0;
-  }
-  #status { color: var(--muted); margin-top: 12px; font-size: 0.88rem; }
-  .error { color: var(--danger); }
-  audio { margin-top: 20px; width: 100%; }
-</style>
-</head>
-<body>
-<div id="shell">
-
-  <!-- Left half, hidden until an agent draws something. Sits before the column
+      .md {
+        white-space: normal;
+      }
+      .md > *:first-child {
+        margin-top: 0;
+      }
+      .md > *:last-child {
+        margin-bottom: 0;
+      }
+      .md p,
+      .md ul,
+      .md ol,
+      .md pre,
+      .md blockquote {
+        margin: 0.6em 0;
+      }
+      .md ul,
+      .md ol {
+        padding-left: 1.4em;
+      }
+      .md h1,
+      .md h2,
+      .md h3 {
+        font-size: 1.05rem;
+        margin: 0.8em 0 0.4em;
+      }
+      .md code {
+        font-family: ui-monospace, monospace;
+        font-size: 0.9em;
+        background: rgba(127, 127, 127, 0.18);
+        padding: 0.1em 0.3em;
+        border-radius: 4px;
+      }
+      .md pre {
+        background: rgba(127, 127, 127, 0.18);
+        padding: 10px 12px;
+        border-radius: 6px;
+        overflow-x: auto;
+      }
+      .md pre code {
+        background: none;
+        padding: 0;
+      }
+      .md blockquote {
+        border-left: 3px solid var(--line);
+        padding-left: 10px;
+        color: var(--muted);
+      }
+      .label {
+        font-weight: 600;
+        font-size: 0.75rem;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin: 20px 0 0;
+      }
+      #status {
+        color: var(--muted);
+        margin-top: 12px;
+        font-size: 0.88rem;
+      }
+      .error {
+        color: var(--danger);
+      }
+      /* The live view of a turn in progress. Deliberately quiet — it is there to
+         be glanced at while waiting, not read. */
+      #activity {
+        margin-top: 12px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface-alt);
+        padding: 10px 12px;
+      }
+      #activityHead {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+        font-weight: 600;
+      }
+      #activityClock {
+        margin-left: auto;
+        font-variant-numeric: tabular-nums;
+      }
+      #activitySpinner {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--accent);
+        animation: pulse 1.1s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 0.25;
+        }
+        50% {
+          opacity: 1;
+        }
+      }
+      /* Motion is the only thing signalling "still alive" here, so when the
+         caller has asked for less of it the dot stays solid rather than
+         disappearing. */
+      @media (prefers-reduced-motion: reduce) {
+        #activitySpinner {
+          animation: none;
+          opacity: 1;
+        }
+      }
+      #activityList {
+        list-style: none;
+        margin: 8px 0 0;
+        padding: 0;
+        max-height: 132px;
+        overflow-y: auto;
+        font-size: 0.82rem;
+      }
+      #activityList li {
+        display: flex;
+        gap: 8px;
+        padding: 2px 0;
+      }
+      #activityList .tool {
+        font-family: ui-monospace, monospace;
+        color: var(--accent);
+        flex: none;
+      }
+      #activityList .detail {
+        color: var(--muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      audio {
+        margin-top: 20px;
+        width: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="shell">
+      <!-- Left half, hidden until an agent draws something. Sits before the column
        so that on a narrow screen it stacks on top rather than below the fold. -->
-  <section id="stage">
-    <p id="stageTitle">Diagram</p>
-    <div id="stageCanvas"></div>
-    <p id="stageNotes"></p>
-    <p id="stageError"></p>
-  </section>
+      <section id="stage">
+        <p id="stageTitle">Diagram</p>
+        <div id="stageCanvas"></div>
+        <p id="stageNotes"></p>
+        <p id="stageError"></p>
+      </section>
 
-  <main id="column">
-  <h1>Switchboard</h1>
-  <p class="sub">Tap to talk. The operator connects you; the project agent hands you back.</p>
+      <main id="column">
+        <h1>Switchboard</h1>
+        <p class="sub">
+          Tap to talk. The operator connects you; the project agent hands you
+          back.
+        </p>
 
-  <div id="line">
-    <span class="who" id="who">—</span>
-    <span class="model" id="model"></span>
-    <div id="legControls">
-      <select id="routeSelect" title="Connect straight to a project, without asking the operator">
-        <option value="operator">Operator</option>
-      </select>
-      <select id="thinkingSelect" title="Thinking level for this leg and the ones after it"></select>
-      <button id="hangupBtn" class="hidden" title="Drop this leg and go back to the operator">Hang up</button>
+        <div id="line">
+          <span class="who" id="who">—</span>
+          <span class="model" id="model"></span>
+          <div id="legControls">
+            <select
+              id="routeSelect"
+              title="Connect straight to a project, without asking the operator"
+            >
+              <option value="operator">Operator</option>
+            </select>
+            <select
+              id="thinkingSelect"
+              title="Thinking level for this leg and the ones after it"
+            ></select>
+            <button
+              id="hangupBtn"
+              class="hidden"
+              title="Drop this leg and go back to the operator"
+            >
+              Hang up
+            </button>
+          </div>
+        </div>
+
+        <div id="controls">
+          <button id="talkBtn">Talk</button>
+          <button id="cancelBtn" class="hidden" title="Discard">
+            &#9632; Discard
+          </button>
+          <button id="sendBtn" class="hidden" title="Send">
+            &#10148; Send
+          </button>
+        </div>
+        <div id="status">Connecting...</div>
+
+        <!-- What the leg is doing right now. Hidden between turns: an empty
+         panel on an idle line is furniture, not information. -->
+        <div id="activity" class="hidden">
+          <div id="activityHead">
+            <span id="activitySpinner"></span>
+            <span id="activityWho">working</span>
+            <span id="activityClock">0s</span>
+          </div>
+          <ul id="activityList"></ul>
+        </div>
+
+        <p class="label">Transcript</p>
+        <div class="box" id="log"></div>
+
+        <audio id="player" controls></audio>
+      </main>
     </div>
-  </div>
 
-  <div id="controls">
-    <button id="talkBtn">Talk</button>
-    <button id="cancelBtn" class="hidden" title="Discard">&#9632; Discard</button>
-    <button id="sendBtn" class="hidden" title="Send">&#10148; Send</button>
-  </div>
-  <div id="status">Connecting...</div>
-
-  <p class="label">Transcript</p>
-  <div class="box" id="log"></div>
-
-  <audio id="player" controls></audio>
-  </main>
-</div>
-
-<!-- Kept separate from the main script because it needs to be a module, and
+    <!-- Kept separate from the main script because it needs to be a module, and
      because a CDN that fails to load must cost the page its diagrams and
      nothing else. window.renderDiagram stays undefined and the caller still
      has a working phone. -->
-<script type="module">
-  const canvas = document.getElementById('stageCanvas');
-  const titleEl = document.getElementById('stageTitle');
-  const notesEl = document.getElementById('stageNotes');
-  const errorEl = document.getElementById('stageError');
+    <script type="module">
+      const canvas = document.getElementById("stageCanvas");
+      const titleEl = document.getElementById("stageTitle");
+      const notesEl = document.getElementById("stageNotes");
+      const errorEl = document.getElementById("stageError");
 
-  const mermaid = (await import('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs')).default;
+      const mermaid = (
+        await import("https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs")
+      ).default;
 
-  // Optional. The diagram renders without it; it just appears all at once.
-  let anime = null;
-  try { anime = await import('https://cdn.jsdelivr.net/npm/animejs@4/+esm'); } catch { /* no animation, still a diagram */ }
-
-  mermaid.initialize({
-    startOnLoad: false,
-    theme: 'base',
-    // Unset variables are derived from primaryColor, which lands somewhere
-    // muddy. The ones that carry the look are set outright.
-    themeVariables: {
-      darkMode: true,
-      background: '#05070f',
-      primaryColor: '#0d1b2ae0',
-      primaryBorderColor: '#00fff2',
-      primaryTextColor: '#d7fbff',
-      secondaryColor: '#1a1035',
-      secondaryBorderColor: '#b967ff',
-      tertiaryColor: '#0a1a2e',
-      lineColor: '#00d5c8',
-      textColor: '#9fb6d9',
-      mainBkg: '#0d1b2a',
-      nodeBorder: '#00fff2',
-      clusterBkg: '#080f1cc0',
-      clusterBorder: '#2b3a67',
-      edgeLabelBackground: '#05070f',
-      fontFamily: 'ui-monospace, "JetBrains Mono", "SF Mono", monospace',
-      fontSize: '14px',
-    },
-    // Both of these are what make `<img>` inside a node label work. The source
-    // comes from our own agent over our own socket, so the sanitizer is not
-    // guarding a trust boundary here.
-    securityLevel: 'loose',
-    flowchart: { htmlLabels: true, curve: 'basis', useMaxWidth: true },
-  });
-
-  let seq = 0;
-
-  // The reveal reads left to right along the graph rather than in document
-  // order: a diagram that assembles the way you would draw it explains itself,
-  // one that flickers on in whatever order the renderer emitted does not.
-  const byPosition = (els) =>
-    [...els].map((el) => {
-      const b = el.getBBox?.() ?? { x: 0, y: 0 };
-      return { el, rank: b.x + b.y * 0.35 };
-    }).sort((a, b) => a.rank - b.rank).map((e) => e.el);
-
-  const reveal = (svg) => {
-    if (!anime) return;
-    const { animate, stagger } = anime;
-    const edges = [...svg.querySelectorAll('path.flowchart-link, path.relation, path.transition, .messageLine0, .messageLine1')];
-    const nodes = byPosition(svg.querySelectorAll('.node, .actor, .statediagram-state, .cluster'));
-    const labels = [...svg.querySelectorAll('.edgeLabel, .messageText')];
-
-    // Everything starts hidden in one pass, before anything animates. Setting
-    // this per-group as each animation starts lets the first frame flash the
-    // finished diagram.
-    nodes.forEach((n) => {
-      n.style.transformBox = 'fill-box';
-      n.style.transformOrigin = 'center';
-      n.style.opacity = 0;
-    });
-    labels.forEach((l) => { l.style.opacity = 0; });
-    const lengths = edges.map((p) => {
-      const len = p.getTotalLength?.() || 0;
-      p.style.strokeDasharray = len;
-      p.style.strokeDashoffset = len;
-      return len;
-    });
-
-    // The panel itself lifts in, so the diagram arrives as one object rather
-    // than as parts appearing on a static background.
-    animate(svg, { opacity: [0, 1], translateY: [14, 0], duration: 420, ease: 'outQuad' });
-
-    // Nodes overshoot slightly and settle. The blur burning off is what sells
-    // it as arriving rather than fading up.
-    animate(nodes, {
-      opacity: [0, 1],
-      scale: [{ to: 1.06, duration: 260, ease: 'outExpo' }, { to: 1, duration: 340, ease: 'outElastic(1, .6)' }],
-      filter: ['blur(6px)', 'blur(0px)'],
-      duration: 600,
-      delay: stagger(70),
-    });
-
-    // Edges draw themselves once the node they leave has landed. Done by hand
-    // rather than through anime's SVG helper so that a rename in the library
-    // costs the effect and not the diagram.
-    edges.forEach((p, i) => {
-      if (!lengths[i]) return;
-      animate(p, {
-        strokeDashoffset: [lengths[i], 0],
-        duration: 620,
-        delay: 260 + i * 60,
-        ease: 'inOutQuad',
-      });
-      // A pulse of light runs the wire as it is drawn, then leaves it at rest.
-      animate(p, {
-        stroke: ['#00fff2', getComputedStyle(p).stroke || '#00d5c8'],
-        strokeWidth: [2.6, 1.4],
-        duration: 900,
-        delay: 260 + i * 60,
-        ease: 'outQuad',
-      });
-    });
-
-    // Edge labels last: they are annotation on a picture that now exists.
-    if (labels.length) {
-      animate(labels, { opacity: [0, 1], duration: 300, delay: stagger(40, { start: 520 }), ease: 'outQuad' });
-    }
-  };
-
-  window.renderDiagram = async (msg) => {
-    const src = (msg.source || '').trim();
-    if (!src) return;
-    titleEl.textContent = msg.title || 'Diagram';
-    notesEl.textContent = msg.notes || '';
-    document.body.classList.add('has-diagram');
-
-    // Mermaid measures text in the DOM, so the panel has to be visible and the
-    // fonts settled before rendering or the labels come out the wrong size.
-    await document.fonts.ready;
-
-    const id = 'dgm' + (++seq);
-    try {
-      // Parse first: a bad diagram then fails without blanking a good one that
-      // is already up, and without flashing mermaid's red error graphic.
-      if (!(await mermaid.parse(src, { suppressErrors: true }))) {
-        errorEl.textContent = 'That diagram did not parse. Previous one kept.';
-        return;
-      }
-      const { svg, bindFunctions } = await mermaid.render(id, src);
-      // Parsed to a node rather than assigned as innerHTML: the HTML parser is
-      // lenient about the unclosed tags mermaid's HTML labels can contain, and
-      // this keeps the swap to a single element rather than a markup string.
-      const el = new DOMParser().parseFromString(svg, 'text/html').querySelector('svg');
-      if (el) {
-        canvas.replaceChildren(el);
-        // Layout has to be real before getBBox and getTotalLength are read.
-        el.getBoundingClientRect();
-        bindFunctions?.(canvas);
-        errorEl.textContent = '';
-        el.removeAttribute('style');
-        el.setAttribute('width', '100%');
-        el.removeAttribute('height');
-        el.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-        reveal(el);
-      }
-    } catch (err) {
-      errorEl.textContent = 'Render failed: ' + err;
-    } finally {
-      // A throw mid-render leaves mermaid's scratch node parented to the body.
-      document.getElementById('d' + id)?.remove();
-      document.getElementById(id)?.parentNode === document.body && document.getElementById(id)?.remove();
-    }
-  };
-</script>
-
-  <script>
-    const btn = document.getElementById('talkBtn');
-    const cancelBtn = document.getElementById('cancelBtn');
-    const sendBtn = document.getElementById('sendBtn');
-    const statusEl = document.getElementById('status');
-    const logEl = document.getElementById('log');
-    const lineEl = document.getElementById('line');
-    const whoEl = document.getElementById('who');
-    const modelEl = document.getElementById('model');
-    const routeSelect = document.getElementById('routeSelect');
-    const thinkingSelect = document.getElementById('thinkingSelect');
-    const hangupBtn = document.getElementById('hangupBtn');
-    const player = document.getElementById('player');
-
-    let ws;
-    let mediaRecorder;
-    let chunks = [];
-    let audioQueue = [];
-    let isPlaying = false;
-    let discard = false;
-    let idleText = 'Connected. Tap Talk and speak.';
-
-    // Enough markdown for what an agent actually says back: fences, headings,
-    // lists, quotes, and inline emphasis. Everything is HTML-escaped up front,
-    // so no reply text can inject markup.
-    function renderMarkdown(src) {
-      const esc = (s) => s.replace(/[&<>"]/g, (c) => (
-        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]
-      ));
-      const inline = (s) => esc(s)
-        .replace(/`([^`]+)`/g, '<code>$1</code>')
-        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-        .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
-        .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" rel="noopener">$1</a>');
-
-      const out = [];
-      const lines = src.replace(/\r\n/g, '\n').split('\n');
-      let list = null;      // 'ul' | 'ol' while one is open
-      let para = [];
-      let fence = null;     // buffered code-block lines while inside ```
-
-      const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
-      const closePara = () => {
-        if (para.length) { out.push('<p>' + inline(para.join(' ')) + '</p>'); para = []; }
-      };
-      const openList = (kind) => {
-        if (list !== kind) { closeList(); out.push(`<${kind}>`); list = kind; }
-      };
-
-      for (const line of lines) {
-        if (/^\s*```/.test(line)) {
-          if (fence === null) { closePara(); closeList(); fence = []; }
-          else { out.push('<pre><code>' + esc(fence.join('\n')) + '</code></pre>'); fence = null; }
-          continue;
-        }
-        if (fence !== null) { fence.push(line); continue; }
-
-        if (!line.trim()) { closePara(); closeList(); continue; }
-
-        let m;
-        if ((m = line.match(/^(#{1,6})\s+(.*)$/))) {
-          closePara(); closeList();
-          const level = Math.min(m[1].length, 3);
-          out.push(`<h${level}>${inline(m[2])}</h${level}>`);
-        } else if ((m = line.match(/^\s*[-*+]\s+(.*)$/))) {
-          closePara(); openList('ul');
-          out.push('<li>' + inline(m[1]) + '</li>');
-        } else if ((m = line.match(/^\s*\d+[.)]\s+(.*)$/))) {
-          closePara(); openList('ol');
-          out.push('<li>' + inline(m[1]) + '</li>');
-        } else if ((m = line.match(/^\s*>\s?(.*)$/))) {
-          closePara(); closeList();
-          out.push('<blockquote>' + inline(m[1]) + '</blockquote>');
-        } else {
-          closeList();
-          para.push(line.trim());
-        }
-      }
-      if (fence !== null) out.push('<pre><code>' + esc(fence.join('\n')) + '</code></pre>');
-      closePara(); closeList();
-      return out.join('\n');
-    }
-
-    // The route label is only known for the live line; replayed history carries
-    // its own route string, which may name a project that is no longer on the
-    // line. Fall back to something readable either way.
-    function speakerName(role, route) {
-      if (role === 'caller') return 'You';
-      if (!route || route === 'operator') return 'Operator';
-      return route;
-    }
-
-    function clockTime(ts) {
-      if (!ts) return '';
-      return new Date(ts * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    }
-
-    function appendTurn(entry) {
-      const turn = document.createElement('div');
-      turn.className = 'turn ' + (entry.role === 'caller' ? 'caller' : 'agent');
-
-      const meta = document.createElement('div');
-      meta.className = 'meta';
-      const time = clockTime(entry.ts);
-      meta.textContent = speakerName(entry.role, entry.route) + (time ? ' · ' + time : '');
-      turn.appendChild(meta);
-
-      const body = document.createElement('div');
-      body.className = 'body';
-      if (entry.role === 'caller') {
-        body.textContent = entry.text;
-      } else {
-        body.classList.add('md');
-        body.innerHTML = renderMarkdown(entry.text);
-      }
-      turn.appendChild(body);
-
-      // Pin to the newest line only when the reader is already at the bottom,
-      // so scrolling back through the call does not get yanked forward.
-      const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
-      logEl.appendChild(turn);
-      if (atBottom) logEl.scrollTop = logEl.scrollHeight;
-    }
-
-    function renderHistory(entries) {
-      logEl.textContent = '';
-      (entries || []).forEach(appendTurn);
-      logEl.scrollTop = logEl.scrollHeight;
-    }
-
-    function playNext() {
-      if (audioQueue.length === 0) {
-        isPlaying = false;
-        statusEl.textContent = idleText;
-        statusEl.classList.remove('error');
-        return;
-      }
-      isPlaying = true;
-      const blob = audioQueue.shift();
-      player.src = URL.createObjectURL(blob);
-      player.play().catch((err) => {
-        statusEl.textContent = 'Audio blocked by the browser — click anywhere on this page once, then it will play (' + err.name + ').';
-        statusEl.classList.add('error');
-        isPlaying = false;
-      });
-    }
-
-    player.addEventListener('ended', playNext);
-
-    // Rebuilt only when the set of options actually changes, so a select the
-    // caller has open does not collapse under them on a routine status update.
-    function fillSelect(select, values, current) {
-      const wanted = values.map((v) => v.value).join('\u0000');
-      if (select.dataset.filled !== wanted) {
-        select.textContent = '';
-        for (const v of values) {
-          const option = document.createElement('option');
-          option.value = v.value;
-          option.textContent = v.label;
-          select.appendChild(option);
-        }
-        select.dataset.filled = wanted;
-      }
-      if (current && select.value !== current) select.value = current;
-    }
-
-    function setRoute(msg) {
-      const onProject = Boolean(msg.route && msg.route !== 'operator');
-      whoEl.textContent = msg.label || 'Operator';
-      // Every leg runs at a level somebody chose, so there is always a level to
-      // name. A leg that has not reported back yet is marked as asked-for
-      // rather than stated as fact — the runtime may still clamp it.
-      const name = msg.model_name || msg.model || '';
-      const level = msg.thinking
-        ? 'thinking ' + msg.thinking + (msg.thinking_confirmed ? '' : ' (requested)')
-        : '';
-      modelEl.textContent = [name, level].filter(Boolean).join(' · ');
-      lineEl.classList.toggle('project', onProject);
-
-      fillSelect(
-        routeSelect,
-        [{ value: 'operator', label: 'Operator' }].concat(
-          (msg.projects || []).map((id) => ({ value: id, label: id }))
-        ),
-        msg.route || 'operator'
-      );
-      fillSelect(
-        thinkingSelect,
-        (msg.levels || []).map((l) => ({ value: l, label: 'thinking: ' + l })),
-        msg.thinking || msg.thinking_default || ''
-      );
-      thinkingSelect.disabled = onProject && msg.model_swaps === false;
-
-      // Only offered on a project leg: the operator is where hanging up puts
-      // you, so there is nowhere for it to go from there.
-      hangupBtn.classList.toggle('hidden', !onProject);
-    }
-
-    // Both selects act immediately and both can take a while — connecting dials
-    // ssh and starts an agent, changing the level restarts the live leg. Lock
-    // them while that happens so a second pick cannot race the first.
-    async function post(url, body, control) {
-      control.disabled = true;
-      statusEl.classList.remove('error');
+      // Optional. The diagram renders without it; it just appears all at once.
+      let anime = null;
       try {
-        const resp = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
+        anime = await import("https://cdn.jsdelivr.net/npm/animejs@4/+esm");
+      } catch {
+        /* no animation, still a diagram */
+      }
+
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: "base",
+        // Unset variables are derived from primaryColor, which lands somewhere
+        // muddy. The ones that carry the look are set outright.
+        themeVariables: {
+          darkMode: true,
+          background: "#05070f",
+          primaryColor: "#0d1b2ae0",
+          primaryBorderColor: "#00fff2",
+          primaryTextColor: "#d7fbff",
+          secondaryColor: "#1a1035",
+          secondaryBorderColor: "#b967ff",
+          tertiaryColor: "#0a1a2e",
+          lineColor: "#00d5c8",
+          textColor: "#9fb6d9",
+          mainBkg: "#0d1b2a",
+          nodeBorder: "#00fff2",
+          clusterBkg: "#080f1cc0",
+          clusterBorder: "#2b3a67",
+          edgeLabelBackground: "#05070f",
+          fontFamily: 'ui-monospace, "JetBrains Mono", "SF Mono", monospace',
+          fontSize: "14px",
+        },
+        // Both of these are what make `<img>` inside a node label work. The source
+        // comes from our own agent over our own socket, so the sanitizer is not
+        // guarding a trust boundary here.
+        securityLevel: "loose",
+        flowchart: { htmlLabels: true, curve: "basis", useMaxWidth: true },
+      });
+
+      let seq = 0;
+
+      // The reveal reads left to right along the graph rather than in document
+      // order: a diagram that assembles the way you would draw it explains itself,
+      // one that flickers on in whatever order the renderer emitted does not.
+      const byPosition = (els) =>
+        [...els]
+          .map((el) => {
+            const b = el.getBBox?.() ?? { x: 0, y: 0 };
+            return { el, rank: b.x + b.y * 0.35 };
+          })
+          .sort((a, b) => a.rank - b.rank)
+          .map((e) => e.el);
+
+      const reveal = (svg) => {
+        if (!anime) return;
+        const { animate, stagger } = anime;
+        const edges = [
+          ...svg.querySelectorAll(
+            "path.flowchart-link, path.relation, path.transition, .messageLine0, .messageLine1",
+          ),
+        ];
+        const nodes = byPosition(
+          svg.querySelectorAll(".node, .actor, .statediagram-state, .cluster"),
+        );
+        const labels = [...svg.querySelectorAll(".edgeLabel, .messageText")];
+
+        // Everything starts hidden in one pass, before anything animates. Setting
+        // this per-group as each animation starts lets the first frame flash the
+        // finished diagram.
+        // Opacity and blur only, no scale: mermaid positions these groups with a
+        // transform translate and anime writes the whole transform property, so
+        // animating scale here dumps every node in the top-left corner and leaves
+        // the edges pointing at where the nodes used to be.
+        nodes.forEach((n) => {
+          n.style.opacity = 0;
         });
-        if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      } catch (err) {
-        statusEl.textContent = 'That did not go through: ' + err;
-        statusEl.classList.add('error');
-      } finally {
-        control.disabled = false;
-      }
-    }
+        labels.forEach((l) => {
+          l.style.opacity = 0;
+        });
+        const lengths = edges.map((p) => {
+          const len = p.getTotalLength?.() || 0;
+          p.style.strokeDasharray = len;
+          p.style.strokeDashoffset = len;
+          return len;
+        });
 
-    // Goes straight to the backend rather than through the agent on the line,
-    // which is the whole point — it has to work when that agent is the problem,
-    // including while it is still mid-turn.
-    async function hangup() {
-      hangupBtn.disabled = true;
-      try {
-        await fetch('/hangup', { method: 'POST' });
-      } catch (err) {
-        statusEl.textContent = 'Could not hang up: ' + err;
-        statusEl.classList.add('error');
-      } finally {
-        hangupBtn.disabled = false;
-      }
-    }
+        // The panel itself lifts in, so the diagram arrives as one object rather
+        // than as parts appearing on a static background.
+        animate(svg, {
+          opacity: [0, 1],
+          translateY: [14, 0],
+          duration: 420,
+          ease: "outQuad",
+        });
 
-    function connect() {
-      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      ws = new WebSocket(`${proto}://${location.host}/ws`);
-      ws.binaryType = 'arraybuffer';
+        // Nodes overshoot slightly and settle. The blur burning off is what sells
+        // it as arriving rather than fading up.
+        animate(nodes, {
+          opacity: [0, 1],
+          filter: ["blur(6px)", "blur(0px)"],
+          duration: 600,
+          delay: stagger(70),
+        });
 
-      ws.onopen = () => {
-        statusEl.textContent = idleText;
-        statusEl.classList.remove('error');
-        btn.disabled = false;
-      };
+        // Edges draw themselves once the node they leave has landed. Done by hand
+        // rather than through anime's SVG helper so that a rename in the library
+        // costs the effect and not the diagram.
+        edges.forEach((p, i) => {
+          if (!lengths[i]) return;
+          animate(p, {
+            strokeDashoffset: [lengths[i], 0],
+            duration: 620,
+            delay: 260 + i * 60,
+            ease: "inOutQuad",
+          });
+          // A pulse of light runs the wire as it is drawn, then leaves it at rest.
+          animate(p, {
+            stroke: ["#00fff2", getComputedStyle(p).stroke || "#00d5c8"],
+            strokeWidth: [2.6, 1.4],
+            duration: 900,
+            delay: 260 + i * 60,
+            ease: "outQuad",
+          });
+        });
 
-      ws.onclose = () => {
-        if (isRecording()) stopRecording(false);
-        statusEl.textContent = 'Disconnected. Reconnecting...';
-        btn.disabled = true;
-        setTimeout(connect, 1500);
-      };
-
-      ws.onerror = () => {
-        statusEl.textContent = 'Connection error.';
-        statusEl.classList.add('error');
-      };
-
-      ws.onmessage = (event) => {
-        if (typeof event.data === 'string') {
-          let msg;
-          try {
-            msg = JSON.parse(event.data);
-          } catch {
-            return;  // A frame we cannot read is not worth killing the handler over.
-          }
-          if (msg.type === 'history') {
-            renderHistory(msg.entries);
-          } else if (msg.type === 'transcript') {
-            if (msg.text) appendTurn({ role: 'caller', text: msg.text, ts: Date.now() / 1000 });
-          } else if (msg.type === 'spoken') {
-            if (msg.entry) appendTurn(msg.entry);
-          } else if (msg.type === 'thinking') {
-            statusEl.textContent = msg.route === 'operator'
-              ? 'Operator is listening...'
-              : `${whoEl.textContent} is working...`;
-          } else if (msg.type === 'reply') {
-            appendTurn({ role: 'agent', text: msg.text || '(nothing said)', route: msg.route, ts: Date.now() / 1000 });
-            statusEl.textContent = 'Synthesizing speech...';
-          } else if (msg.type === 'status') {
-            setRoute(msg);
-          } else if (msg.type === 'diagram') {
-            // Undefined if the CDN never loaded. The call is still worth
-            // noting in the transcript so the caller knows one was sent.
-            window.renderDiagram?.(msg);
-          } else if (msg.type === 'error') {
-            statusEl.textContent = 'Error: ' + msg.message;
-            statusEl.classList.add('error');
-          }
-        } else {
-          // Binary frame: mp3. Queue so a turn that owes several lines (an
-          // agent's own `speak` clips, then whatever the switchboard voices)
-          // plays back-to-back.
-          audioQueue.push(new Blob([event.data], { type: 'audio/mpeg' }));
-          if (!isPlaying) {
-            playNext();
-          } else {
-            statusEl.textContent = `Queued (${audioQueue.length} waiting)...`;
-          }
+        // Edge labels last: they are annotation on a picture that now exists.
+        if (labels.length) {
+          animate(labels, {
+            opacity: [0, 1],
+            duration: 300,
+            delay: stagger(40, { start: 520 }),
+            ease: "outQuad",
+          });
         }
       };
-    }
 
-    function setRecordingUI(on) {
-      btn.classList.toggle('hidden', on);
-      cancelBtn.classList.toggle('hidden', !on);
-      sendBtn.classList.toggle('hidden', !on);
-    }
+      window.renderDiagram = async (msg) => {
+        const src = (msg.source || "").trim();
+        if (!src) return;
+        document.body.classList.add("has-diagram");
 
-    async function startRecording() {
-      let stream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch (err) {
-        statusEl.textContent = 'Microphone unavailable (' + err.name + ').';
-        statusEl.classList.add('error');
-        return;
+        // Mermaid measures text in the DOM, so the panel has to be visible and the
+        // fonts settled before rendering or the labels come out the wrong size.
+        await document.fonts.ready;
+
+        const id = "dgm" + ++seq;
+        try {
+          // Parse first: a bad diagram then fails without blanking a good one that
+          // is already up, and without flashing mermaid's red error graphic.
+          if (!(await mermaid.parse(src, { suppressErrors: true }))) {
+            errorEl.textContent =
+              "That diagram did not parse. Previous one kept.";
+            return;
+          }
+          const { svg, bindFunctions } = await mermaid.render(id, src);
+          // Parsed to a node rather than assigned as innerHTML: the HTML parser is
+          // lenient about the unclosed tags mermaid's HTML labels can contain, and
+          // this keeps the swap to a single element rather than a markup string.
+          const el = new DOMParser()
+            .parseFromString(svg, "text/html")
+            .querySelector("svg");
+          if (el) {
+            // Caption swapped only once the new diagram has actually parsed and
+            // rendered. Applied up front, a diagram that failed to parse left the
+            // previous picture on screen wearing the new one's title — "Previous
+            // one kept" captioned as something else entirely.
+            titleEl.textContent = msg.title || "Diagram";
+            notesEl.textContent = msg.notes || "";
+            canvas.replaceChildren(el);
+            // Layout has to be real before getBBox and getTotalLength are read.
+            el.getBoundingClientRect();
+            bindFunctions?.(canvas);
+            errorEl.textContent = "";
+            el.removeAttribute("style");
+            el.setAttribute("width", "100%");
+            el.removeAttribute("height");
+            el.setAttribute("preserveAspectRatio", "xMidYMid meet");
+            reveal(el);
+          }
+        } catch (err) {
+          errorEl.textContent = "Render failed: " + err;
+        } finally {
+          // A throw mid-render leaves mermaid's scratch node parented to the body.
+          document.getElementById("d" + id)?.remove();
+          document.getElementById(id)?.parentNode === document.body &&
+            document.getElementById(id)?.remove();
+        }
+      };
+    </script>
+
+    <script>
+      const btn = document.getElementById("talkBtn");
+      const cancelBtn = document.getElementById("cancelBtn");
+      const sendBtn = document.getElementById("sendBtn");
+      const statusEl = document.getElementById("status");
+      const logEl = document.getElementById("log");
+      const lineEl = document.getElementById("line");
+      const whoEl = document.getElementById("who");
+      const modelEl = document.getElementById("model");
+      const routeSelect = document.getElementById("routeSelect");
+      const thinkingSelect = document.getElementById("thinkingSelect");
+      const hangupBtn = document.getElementById("hangupBtn");
+      const player = document.getElementById("player");
+
+      let ws;
+      let mediaRecorder;
+      let chunks = [];
+      let audioQueue = [];
+      let isPlaying = false;
+      let discard = false;
+      let idleText = "Connected. Tap Talk and speak.";
+      // True from the moment getUserMedia is asked for until the recorder is
+      // actually running. Without it a second click (or Space) lands inside the
+      // permission await, spawns a second stream and recorder, orphans the
+      // first one with its mic light stuck on, and garbles the clip because
+      // both write into the same chunks array.
+      let starting = false;
+      let startCancelled = false;
+      // The object URL currently loaded into the player, revoked when it is
+      // replaced. Every reply used to leak one for the life of the tab.
+      let currentUrl = null;
+      let turnStarted = 0;
+      let clockTimer = null;
+
+      const activityEl = document.getElementById("activity");
+      const activityList = document.getElementById("activityList");
+      const activityWho = document.getElementById("activityWho");
+      const activityClock = document.getElementById("activityClock");
+
+      // A turn is a black box otherwise: four minutes of real work and a leg
+      // that died look exactly the same from here, so callers hang up on
+      // healthy turns and wait forever on dead ones. The elapsed clock runs
+      // even when no tool has fired, because "thinking, 90s" is still an answer.
+      function startActivity(label) {
+        activityWho.textContent = label || "working";
+        activityList.textContent = "";
+        activityEl.classList.remove("hidden");
+        turnStarted = Date.now();
+        clearInterval(clockTimer);
+        const tick = () => {
+          const secs = Math.round((Date.now() - turnStarted) / 1000);
+          activityClock.textContent =
+            secs < 60
+              ? secs + "s"
+              : Math.floor(secs / 60) + "m " + (secs % 60) + "s";
+        };
+        tick();
+        clockTimer = setInterval(tick, 1000);
       }
-      chunks = [];
-      discard = false;
-      mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
-      mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
-      mediaRecorder.onstop = () => {
-        stream.getTracks().forEach((t) => t.stop());
-        if (discard) {
+
+      function stopActivity() {
+        clearInterval(clockTimer);
+        clockTimer = null;
+        activityEl.classList.add("hidden");
+      }
+
+      function addActivity(msg) {
+        if (msg.state !== "start" || !msg.tool) return;
+        // The strip is a live view, not a log; the transcript is the log. Ten
+        // rows is about what fits without pushing the transcript off screen.
+        while (activityList.children.length >= 10) {
+          activityList.removeChild(activityList.firstChild);
+        }
+        const row = document.createElement("li");
+        const name = document.createElement("span");
+        name.className = "tool";
+        name.textContent = msg.tool;
+        row.appendChild(name);
+        if (msg.detail) {
+          const detail = document.createElement("span");
+          detail.className = "detail";
+          detail.textContent = msg.detail;
+          row.appendChild(detail);
+        }
+        activityList.appendChild(row);
+        activityList.scrollTop = activityList.scrollHeight;
+      }
+
+      // Enough markdown for what an agent actually says back: fences, headings,
+      // lists, quotes, and inline emphasis. Everything is HTML-escaped up front,
+      // so no reply text can inject markup.
+      function renderMarkdown(src) {
+        // One malformed entry used to throw inside renderHistory's forEach and
+        // silently drop every remaining turn, truncating the transcript.
+        if (typeof src !== "string") src = String(src ?? "");
+        const esc = (s) =>
+          s.replace(
+            /[&<>"]/g,
+            (c) =>
+              ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c],
+          );
+        const inline = (s) =>
+          esc(s)
+            .replace(/`([^`]+)`/g, "<code>$1</code>")
+            .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+            .replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>")
+            .replace(
+              /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+              '<a href="$2" rel="noopener">$1</a>',
+            );
+
+        const out = [];
+        const lines = src.replace(/\r\n/g, "\n").split("\n");
+        let list = null; // 'ul' | 'ol' while one is open
+        let para = [];
+        let fence = null; // buffered code-block lines while inside ```
+
+        const closeList = () => {
+          if (list) {
+            out.push(`</${list}>`);
+            list = null;
+          }
+        };
+        const closePara = () => {
+          if (para.length) {
+            out.push("<p>" + inline(para.join(" ")) + "</p>");
+            para = [];
+          }
+        };
+        const openList = (kind) => {
+          if (list !== kind) {
+            closeList();
+            out.push(`<${kind}>`);
+            list = kind;
+          }
+        };
+
+        for (const line of lines) {
+          if (/^\s*```/.test(line)) {
+            if (fence === null) {
+              closePara();
+              closeList();
+              fence = [];
+            } else {
+              out.push("<pre><code>" + esc(fence.join("\n")) + "</code></pre>");
+              fence = null;
+            }
+            continue;
+          }
+          if (fence !== null) {
+            fence.push(line);
+            continue;
+          }
+
+          if (!line.trim()) {
+            closePara();
+            closeList();
+            continue;
+          }
+
+          let m;
+          if ((m = line.match(/^(#{1,6})\s+(.*)$/))) {
+            closePara();
+            closeList();
+            const level = Math.min(m[1].length, 3);
+            out.push(`<h${level}>${inline(m[2])}</h${level}>`);
+          } else if ((m = line.match(/^\s*[-*+]\s+(.*)$/))) {
+            closePara();
+            openList("ul");
+            out.push("<li>" + inline(m[1]) + "</li>");
+          } else if ((m = line.match(/^\s*\d+[.)]\s+(.*)$/))) {
+            closePara();
+            openList("ol");
+            out.push("<li>" + inline(m[1]) + "</li>");
+          } else if ((m = line.match(/^\s*>\s?(.*)$/))) {
+            closePara();
+            closeList();
+            out.push("<blockquote>" + inline(m[1]) + "</blockquote>");
+          } else {
+            closeList();
+            para.push(line.trim());
+          }
+        }
+        if (fence !== null)
+          out.push("<pre><code>" + esc(fence.join("\n")) + "</code></pre>");
+        closePara();
+        closeList();
+        return out.join("\n");
+      }
+
+      // The route label is only known for the live line; replayed history carries
+      // its own route string, which may name a project that is no longer on the
+      // line. Fall back to something readable either way.
+      function speakerName(role, route) {
+        if (role === "caller") return "You";
+        if (!route || route === "operator") return "Operator";
+        return route;
+      }
+
+      function clockTime(ts) {
+        if (!ts) return "";
+        return new Date(ts * 1000).toLocaleTimeString([], {
+          hour: "numeric",
+          minute: "2-digit",
+        });
+      }
+
+      function appendTurn(entry) {
+        const turn = document.createElement("div");
+        turn.className =
+          "turn " + (entry.role === "caller" ? "caller" : "agent");
+
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        const time = clockTime(entry.ts);
+        meta.textContent =
+          speakerName(entry.role, entry.route) + (time ? " · " + time : "");
+        turn.appendChild(meta);
+
+        const body = document.createElement("div");
+        body.className = "body";
+        if (entry.role === "caller") {
+          body.textContent = entry.text;
+        } else {
+          body.classList.add("md");
+          // renderMarkdown escapes input before generating its small, known tag
+          // set. Parse the result off-DOM and adopt the nodes instead of using
+          // innerHTML on the live page.
+          const parsed = new DOMParser().parseFromString(
+            renderMarkdown(entry.text),
+            "text/html",
+          );
+          body.replaceChildren(...parsed.body.childNodes);
+        }
+        turn.appendChild(body);
+
+        // Pin to the newest line only when the reader is already at the bottom,
+        // so scrolling back through the call does not get yanked forward.
+        const atBottom =
+          logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
+        logEl.appendChild(turn);
+        if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      function renderHistory(entries) {
+        logEl.textContent = "";
+        (entries || []).forEach(appendTurn);
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      function playNext() {
+        if (currentUrl) {
+          URL.revokeObjectURL(currentUrl);
+          currentUrl = null;
+        }
+        if (audioQueue.length === 0) {
+          isPlaying = false;
           statusEl.textContent = idleText;
+          statusEl.classList.remove("error");
           return;
         }
-        const blob = new Blob(chunks, { type: 'audio/webm' });
-        blob.arrayBuffer().then((buf) => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(buf);
-            statusEl.textContent = 'Transcribing...';
-          } else {
-            statusEl.textContent = 'Disconnected before that could be sent.';
-            statusEl.classList.add('error');
-          }
+        isPlaying = true;
+        const blob = audioQueue.shift();
+        currentUrl = URL.createObjectURL(blob);
+        player.src = currentUrl;
+        player.play().catch((err) => {
+          statusEl.textContent =
+            "Audio blocked by the browser — click anywhere on this page once, then it will play (" +
+            err.name +
+            ").";
+          statusEl.classList.add("error");
+          isPlaying = false;
+          // Keep draining. Leaving isPlaying false without advancing meant the
+          // clip was dropped and every later one queued behind a queue that
+          // nothing would ever restart.
+          if (audioQueue.length) setTimeout(playNext, 0);
         });
-      };
-      mediaRecorder.start();
-      setRecordingUI(true);
-      statusEl.textContent = 'Recording... Send when you are done, Discard to throw it away.';
-      statusEl.classList.remove('error');
-    }
-
-    function stopRecording(send) {
-      discard = !send;
-      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-        mediaRecorder.stop();
       }
-      setRecordingUI(false);
-    }
 
-    function isRecording() {
-      return mediaRecorder && mediaRecorder.state === 'recording';
-    }
+      player.addEventListener("ended", playNext);
+      // `ended` used to be the only thing that advanced the queue, so a single
+      // clip that failed to decode — or the caller pressing pause on the
+      // exposed controls — wedged playback permanently at "Queued (N waiting)".
+      player.addEventListener("error", () => {
+        if (isPlaying) playNext();
+      });
 
-    btn.addEventListener('click', () => { if (!isRecording()) startRecording(); });
-    hangupBtn.addEventListener('click', hangup);
-    routeSelect.addEventListener('change', () => {
-      statusEl.textContent = routeSelect.value === 'operator'
-        ? 'Going back to the operator...'
-        : 'Connecting to ' + routeSelect.value + '...';
-      post('/connect', { project: routeSelect.value }, routeSelect);
-    });
-    thinkingSelect.addEventListener('change', () => {
-      statusEl.textContent = 'Setting thinking to ' + thinkingSelect.value + '...';
-      post('/thinking', { level: thinkingSelect.value }, thinkingSelect);
-    });
-    sendBtn.addEventListener('click', () => stopRecording(true));
-    cancelBtn.addEventListener('click', () => stopRecording(false));
-
-    // Space toggles talk/send, Escape discards — but not while typing anywhere.
-    document.addEventListener('keydown', (e) => {
-      if (e.target.matches('input, textarea')) return;
-      if (e.code === 'Space' && !btn.disabled) {
-        e.preventDefault();
-        isRecording() ? stopRecording(true) : startRecording();
-      } else if (e.code === 'Escape' && isRecording()) {
-        stopRecording(false);
+      // Rebuilt only when the set of options actually changes, so a select the
+      // caller has open does not collapse under them on a routine status update.
+      function fillSelect(select, values, current) {
+        const wanted = values.map((v) => v.value).join("\u0000");
+        if (select.dataset.filled !== wanted) {
+          select.textContent = "";
+          for (const v of values) {
+            const option = document.createElement("option");
+            option.value = v.value;
+            option.textContent = v.label;
+            select.appendChild(option);
+          }
+          select.dataset.filled = wanted;
+        }
+        if (current && select.value !== current) select.value = current;
       }
-    });
 
-    btn.disabled = true;
-    connect();
-  </script>
-</body>
+      function setRoute(msg) {
+        const onProject = Boolean(msg.route && msg.route !== "operator");
+        whoEl.textContent = msg.label || "Operator";
+        // Every leg runs at a level somebody chose, so there is always a level to
+        // name. A leg that has not reported back yet is marked as asked-for
+        // rather than stated as fact — the runtime may still clamp it.
+        const name = msg.model_name || msg.model || "";
+        const level = msg.thinking
+          ? "thinking " +
+            msg.thinking +
+            (msg.thinking_confirmed ? "" : " (requested)")
+          : "";
+        modelEl.textContent = [name, level].filter(Boolean).join(" · ");
+        lineEl.classList.toggle("project", onProject);
+
+        fillSelect(
+          routeSelect,
+          [{ value: "operator", label: "Operator" }].concat(
+            (msg.projects || []).map((id) => ({ value: id, label: id })),
+          ),
+          msg.route || "operator",
+        );
+        fillSelect(
+          thinkingSelect,
+          (msg.levels || []).map((l) => ({
+            value: l,
+            label: "thinking: " + l,
+          })),
+          msg.thinking || msg.thinking_default || "",
+        );
+        thinkingSelect.disabled = onProject && msg.model_swaps === false;
+
+        // Only offered on a project leg: the operator is where hanging up puts
+        // you, so there is nowhere for it to go from there.
+        hangupBtn.classList.toggle("hidden", !onProject);
+      }
+
+      // Both selects act immediately and both can take a while — connecting dials
+      // ssh and starts an agent, changing the level restarts the live leg. Lock
+      // them while that happens so a second pick cannot race the first.
+      async function post(url, body, control) {
+        control.disabled = true;
+        statusEl.classList.remove("error");
+        try {
+          const resp = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          if (!resp.ok) throw new Error("HTTP " + resp.status);
+        } catch (err) {
+          statusEl.textContent = "That did not go through: " + err;
+          statusEl.classList.add("error");
+        } finally {
+          control.disabled = false;
+        }
+      }
+
+      // Goes straight to the backend rather than through the agent on the line,
+      // which is the whole point — it has to work when that agent is the problem,
+      // including while it is still mid-turn.
+      async function hangup() {
+        hangupBtn.disabled = true;
+        try {
+          await fetch("/hangup", { method: "POST" });
+        } catch (err) {
+          statusEl.textContent = "Could not hang up: " + err;
+          statusEl.classList.add("error");
+        } finally {
+          hangupBtn.disabled = false;
+        }
+      }
+
+      function connect() {
+        const proto = location.protocol === "https:" ? "wss" : "ws";
+        ws = new WebSocket(`${proto}://${location.host}/ws`);
+        ws.binaryType = "arraybuffer";
+
+        ws.onopen = () => {
+          statusEl.textContent = idleText;
+          statusEl.classList.remove("error");
+          btn.disabled = false;
+        };
+
+        ws.onclose = () => {
+          if (isRecording() || starting) stopRecording(false);
+          statusEl.textContent = "Disconnected. Reconnecting...";
+          btn.disabled = true;
+          setTimeout(connect, 1500);
+        };
+
+        ws.onerror = () => {
+          statusEl.textContent = "Connection error.";
+          statusEl.classList.add("error");
+        };
+
+        ws.onmessage = (event) => {
+          if (typeof event.data === "string") {
+            let msg;
+            try {
+              msg = JSON.parse(event.data);
+            } catch {
+              return; // A frame we cannot read is not worth killing the handler over.
+            }
+            if (msg.type === "history") {
+              renderHistory(msg.entries);
+            } else if (msg.type === "transcript") {
+              if (msg.text)
+                appendTurn({
+                  role: "caller",
+                  text: msg.text,
+                  ts: Date.now() / 1000,
+                });
+            } else if (msg.type === "spoken") {
+              if (msg.entry) appendTurn(msg.entry);
+            } else if (msg.type === "thinking") {
+              statusEl.textContent =
+                msg.route === "operator"
+                  ? "Operator is listening..."
+                  : `${whoEl.textContent} is working...`;
+              startActivity(
+                msg.route === "operator" ? "Operator" : whoEl.textContent,
+              );
+            } else if (msg.type === "activity") {
+              addActivity(msg);
+            } else if (msg.type === "queued") {
+              // The clip was heard and is in line behind a turn already running.
+              // Silence here is what made a second message look swallowed.
+              statusEl.textContent =
+                msg.waiting > 1
+                  ? `Got it — ${msg.waiting} waiting their turn.`
+                  : "Got it — you're next, once this turn finishes.";
+              statusEl.classList.remove("error");
+            } else if (msg.type === "reply") {
+              stopActivity();
+              statusEl.textContent = idleText;
+              appendTurn({
+                role: "agent",
+                text: msg.text || "(nothing said)",
+                route: msg.route,
+                ts: Date.now() / 1000,
+              });
+            } else if (msg.type === "status") {
+              setRoute(msg);
+            } else if (msg.type === "diagram") {
+              // Undefined if the CDN never loaded. The call is still worth
+              // noting in the transcript so the caller knows one was sent.
+              window.renderDiagram?.(msg);
+            } else if (msg.type === "error") {
+              stopActivity();
+              statusEl.textContent = "Error: " + msg.message;
+              statusEl.classList.add("error");
+            }
+          } else {
+            // Binary frame: mp3. Queue so a turn that owes several lines (an
+            // agent's own `speak` clips, then whatever the switchboard voices)
+            // plays back-to-back.
+            audioQueue.push(new Blob([event.data], { type: "audio/mpeg" }));
+            if (!isPlaying) {
+              statusEl.textContent = "Playing speech...";
+              playNext();
+            } else {
+              statusEl.textContent = `Queued (${audioQueue.length} waiting)...`;
+            }
+          }
+        };
+      }
+
+      function setRecordingUI(on) {
+        btn.classList.toggle("hidden", on);
+        cancelBtn.classList.toggle("hidden", !on);
+        sendBtn.classList.toggle("hidden", !on);
+      }
+
+      async function startRecording() {
+        if (starting || isRecording()) return;
+        starting = true;
+        startCancelled = false;
+        let stream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (err) {
+          starting = false;
+          statusEl.textContent = "Microphone unavailable (" + err.name + ").";
+          statusEl.classList.add("error");
+          return;
+        }
+        // Discard/Send pressed during the permission await: honour it instead of
+        // starting a recording the caller already cancelled.
+        if (startCancelled) {
+          starting = false;
+          stream.getTracks().forEach((t) => t.stop());
+          discard = false;
+          statusEl.textContent = idleText;
+          setRecordingUI(false);
+          return;
+        }
+        discard = false;
+        chunks = [];
+        try {
+          // Only getUserMedia was guarded before. Safari/iOS does not support
+          // this mimeType and the constructor throws NotSupportedError, which
+          // escaped as an unhandled rejection from an un-awaited caller: Talk
+          // did nothing, no error appeared, and the mic light stayed on forever
+          // because the tracks were never stopped.
+          const mime = "audio/webm;codecs=opus";
+          mediaRecorder = window.MediaRecorder?.isTypeSupported?.(mime)
+            ? new MediaRecorder(stream, { mimeType: mime })
+            : new MediaRecorder(stream);
+        } catch (err) {
+          starting = false;
+          stream.getTracks().forEach((t) => t.stop());
+          setRecordingUI(false);
+          statusEl.textContent =
+            "This browser cannot record audio (" + err.name + ").";
+          statusEl.classList.add("error");
+          return;
+        }
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data.size > 0) chunks.push(e.data);
+        };
+        mediaRecorder.onstop = () => {
+          stream.getTracks().forEach((t) => t.stop());
+          if (discard) {
+            statusEl.textContent = idleText;
+            return;
+          }
+          const blob = new Blob(chunks, {
+            type: mediaRecorder.mimeType || "audio/webm",
+          });
+          blob.arrayBuffer().then((buf) => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(buf);
+              statusEl.textContent = "Transcribing...";
+            } else {
+              statusEl.textContent = "Disconnected before that could be sent.";
+              statusEl.classList.add("error");
+            }
+          });
+        };
+        mediaRecorder.start();
+        starting = false;
+        setRecordingUI(true);
+        statusEl.textContent =
+          "Recording... Send when you are done, Discard to throw it away.";
+        statusEl.classList.remove("error");
+      }
+
+      function stopRecording(send) {
+        // Set before the state check so a press landing inside the getUserMedia
+        // await is still honoured once the permission resolves.
+        discard = !send;
+        if (starting) {
+          startCancelled = true;
+          setRecordingUI(false);
+          return;
+        }
+        if (mediaRecorder && mediaRecorder.state !== "inactive") {
+          mediaRecorder.stop();
+        }
+        setRecordingUI(false);
+      }
+
+      function isRecording() {
+        return mediaRecorder && mediaRecorder.state === "recording";
+      }
+
+      btn.addEventListener("click", () => {
+        startRecording();
+      });
+      hangupBtn.addEventListener("click", hangup);
+      routeSelect.addEventListener("change", () => {
+        statusEl.textContent =
+          routeSelect.value === "operator"
+            ? "Going back to the operator..."
+            : "Connecting to " + routeSelect.value + "...";
+        post("/connect", { project: routeSelect.value }, routeSelect);
+      });
+      thinkingSelect.addEventListener("change", () => {
+        statusEl.textContent =
+          "Setting thinking to " + thinkingSelect.value + "...";
+        post("/thinking", { level: thinkingSelect.value }, thinkingSelect);
+      });
+      sendBtn.addEventListener("click", () => stopRecording(true));
+      cancelBtn.addEventListener("click", () => stopRecording(false));
+
+      // Space toggles talk/send, Escape discards — but not while typing anywhere.
+      document.addEventListener("keydown", (e) => {
+        // `select` and `button` included: after picking a route the select keeps
+        // focus, and Space then started a recording instead of opening the
+        // dropdown.
+        if (e.target.matches("input, textarea, select, button")) return;
+        if (e.code === "Space" && !btn.disabled) {
+          e.preventDefault();
+          isRecording() || starting ? stopRecording(true) : startRecording();
+        } else if (e.code === "Escape" && (isRecording() || starting)) {
+          stopRecording(false);
+        }
+      });
+
+      btn.disabled = true;
+      connect();
+    </script>
+  </body>
 </html>
