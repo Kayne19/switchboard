@@ -130,6 +130,11 @@ class PiSession:
         self.label = label
         self.cwd = cwd
         self.env = env
+        # How long the agent may go *silent* — not how long a turn may take. A
+        # turn still emitting events is working, however long it has been at it;
+        # a turn that has said nothing for this long is wedged. Measuring total
+        # duration instead kills healthy long turns, which is the common case on
+        # anything that involves real work.
         self.turn_timeout = turn_timeout
         self._proc: asyncio.subprocess.Process | None = None
         self._stderr_tail: list[str] = []
@@ -233,14 +238,7 @@ class PiSession:
             except (BrokenPipeError, ConnectionResetError) as exc:
                 raise PiSessionError(f"agent process closed its input: {exc}") from exc
 
-            try:
-                return await asyncio.wait_for(self._collect(), timeout=self.turn_timeout)
-            except asyncio.TimeoutError:
-                log.warning("[%s] turn timed out after %ss", self.label, self.turn_timeout)
-                return Turn(
-                    text="That is taking longer than a phone call should. I have stopped waiting.",
-                    failed=True,
-                )
+            return await self._collect()
 
     async def _collect(self) -> Turn:
         """Read events until the agent settles, harvesting text and signals."""
@@ -253,7 +251,24 @@ class PiSession:
 
         while True:
             try:
-                raw = await stdout.readline()
+                # The deadline is per event, not per turn, and it is applied
+                # here rather than around the whole of _collect for a reason:
+                # cancelling this coroutine mid-turn leaves the pipe positioned
+                # inside the abandoned turn's output while the agent keeps
+                # writing, so the *next* prompt reads the previous turn's tail
+                # and every turn after it answers the wrong question. Timing out
+                # one readline leaves the stream between records instead.
+                raw = await asyncio.wait_for(stdout.readline(), timeout=self.turn_timeout)
+            except asyncio.TimeoutError:
+                log.warning("[%s] silent for %ss; dropping the leg", self.label, self.turn_timeout)
+                # The agent may still wake up and write, and there is no way to
+                # tell its future output from this turn's, so the process goes
+                # rather than being handed to the next prompt. Empty text is
+                # load-bearing: the switchboard's recovery path is guarded on a
+                # failed turn having said nothing, and putting a canned line
+                # here makes a dead leg look like an ordinary reply.
+                await self.close()
+                return Turn(text="", signals=signals, failed=True, error="the agent stopped responding")
             except (asyncio.LimitOverrunError, ValueError) as exc:
                 # A single event exceeded STREAM_LIMIT. The line is unusable and
                 # the stream is mid-record, so this leg is finished.

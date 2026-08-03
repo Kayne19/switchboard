@@ -298,5 +298,80 @@ class ArgvTests(unittest.TestCase):
         self.assertIn("'/tmp/a b; rm -rf /'", argv[-1])
 
 
+class SilenceTests(unittest.IsolatedAsyncioTestCase):
+    """What happens when an agent stops talking mid-turn.
+
+    This is the failure that used to strand a caller for the rest of the call:
+    the deadline was on the whole turn, so a healthy turn that took a while was
+    killed; killing it cancelled the reader mid-stream while the agent kept
+    writing, so every later prompt read the previous turn's tail; and the timed
+    out turn carried a canned line as its text, which is exactly what the
+    switchboard's recovery path checks for the absence of. Nothing recovered.
+    """
+
+    def _session(self, timeout):
+        reader = asyncio.StreamReader()
+        session = PiSession(["true"], label="test", turn_timeout=timeout)
+        # Enough of a process for close() to run against, since the timeout path
+        # now tears the leg down. A bare stub hides whether that path works.
+        killed = []
+
+        async def wait():
+            proc.returncode = -15
+
+        proc = SimpleNamespace(
+            stdout=reader,
+            returncode=None,
+            stdin=SimpleNamespace(is_closing=lambda: False, close=lambda: None),
+            terminate=lambda: killed.append("terminate"),
+            kill=lambda: killed.append("kill"),
+            wait=wait,
+        )
+        session._proc = proc
+        return session, reader, killed
+
+    async def test_a_turn_that_keeps_talking_is_never_cut_off(self):
+        """The deadline measures silence, so slow-but-alive must survive it."""
+        session, reader, _ = self._session(0.15)
+
+        async def dribble():
+            # Four gaps, each under the deadline, adding to well over it. Under
+            # a whole-turn deadline this turn dies; under an idle one it lives.
+            for word in ("still", "here", "and", "working"):
+                await asyncio.sleep(0.1)
+                reader.feed_data((json.dumps(text_end(word)) + "\n").encode())
+            reader.feed_data((json.dumps({"type": "agent_settled"}) + "\n").encode())
+
+        feeder = asyncio.create_task(dribble())
+        turn = await session._collect()
+        await feeder
+        self.assertFalse(turn.failed)
+        self.assertEqual(turn.text, "still\nhere\nand\nworking")
+
+    async def test_going_quiet_fails_the_turn_with_nothing_said(self):
+        """Empty text is the contract: pbx only recovers a failed *silent* turn.
+
+        A canned apology here reads to the switchboard as an ordinary reply, so
+        the caller keeps the dead leg. That is the bug, not the wording.
+        """
+        session, _, _ = self._session(0.05)
+        turn = await session._collect()
+        self.assertTrue(turn.failed)
+        self.assertEqual(turn.text, "")
+        self.assertIn("responding", turn.error)
+
+    async def test_the_leg_is_dropped_rather_than_reused(self):
+        """A silent agent may still wake up and write.
+
+        Its output would be indistinguishable from the next turn's, so the
+        process has to go. Leaving it up is what desynced the pipe.
+        """
+        session, _, killed = self._session(0.05)
+        await session._collect()
+        self.assertIsNone(session._proc)
+        self.assertFalse(session.alive)
+        self.assertIn("terminate", killed)
+
+
 if __name__ == "__main__":
     unittest.main()

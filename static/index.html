@@ -68,6 +68,16 @@
      around is one the agent should have drawn smaller. */
   #stageCanvas { min-height: 220px; display: flex; align-items: center; justify-content: center; }
   #stageCanvas svg { max-width: 100%; height: auto; }
+  /* The glow lives here rather than in the animation so it survives a render
+     that happened before anime.js finished loading. */
+  #stageCanvas .node rect, #stageCanvas .node circle, #stageCanvas .node polygon,
+  #stageCanvas .node path {
+    filter: drop-shadow(0 0 6px rgba(0, 255, 242, 0.35));
+  }
+  @media (prefers-reduced-motion: reduce) {
+    /* The reveal is decoration; the diagram is the content. */
+    #stageCanvas svg * { animation: none !important; transition: none !important; }
+  }
   #stageError {
     color: #ff7a9c; font-size: 0.8rem; margin: 10px 0 0; white-space: pre-wrap;
     font-family: ui-monospace, monospace;
@@ -258,22 +268,77 @@
 
   let seq = 0;
 
+  // The reveal reads left to right along the graph rather than in document
+  // order: a diagram that assembles the way you would draw it explains itself,
+  // one that flickers on in whatever order the renderer emitted does not.
+  const byPosition = (els) =>
+    [...els].map((el) => {
+      const b = el.getBBox?.() ?? { x: 0, y: 0 };
+      return { el, rank: b.x + b.y * 0.35 };
+    }).sort((a, b) => a.rank - b.rank).map((e) => e.el);
+
   const reveal = (svg) => {
     if (!anime) return;
-    const nodes = svg.querySelectorAll('.node, .actor, .statediagram-state');
-    if (nodes.length) {
-      nodes.forEach((n) => { n.style.transformBox = 'fill-box'; n.style.transformOrigin = 'center'; });
-      anime.animate(nodes, { opacity: [0, 1], scale: [0.88, 1], duration: 520, delay: anime.stagger(55), ease: 'outExpo' });
-    }
-    // Edges draw themselves. Done by hand rather than via the v4 svg helper so
-    // that a rename in anime does not silently cost the effect.
-    svg.querySelectorAll('path.flowchart-link, path.relation, .messageLine0').forEach((p, i) => {
-      const len = p.getTotalLength?.();
-      if (!len) return;
+    const { animate, stagger } = anime;
+    const edges = [...svg.querySelectorAll('path.flowchart-link, path.relation, path.transition, .messageLine0, .messageLine1')];
+    const nodes = byPosition(svg.querySelectorAll('.node, .actor, .statediagram-state, .cluster'));
+    const labels = [...svg.querySelectorAll('.edgeLabel, .messageText')];
+
+    // Everything starts hidden in one pass, before anything animates. Setting
+    // this per-group as each animation starts lets the first frame flash the
+    // finished diagram.
+    nodes.forEach((n) => {
+      n.style.transformBox = 'fill-box';
+      n.style.transformOrigin = 'center';
+      n.style.opacity = 0;
+    });
+    labels.forEach((l) => { l.style.opacity = 0; });
+    const lengths = edges.map((p) => {
+      const len = p.getTotalLength?.() || 0;
       p.style.strokeDasharray = len;
       p.style.strokeDashoffset = len;
-      anime.animate(p, { strokeDashoffset: [len, 0], duration: 700, delay: 200 + i * 45, ease: 'inOutQuad' });
+      return len;
     });
+
+    // The panel itself lifts in, so the diagram arrives as one object rather
+    // than as parts appearing on a static background.
+    animate(svg, { opacity: [0, 1], translateY: [14, 0], duration: 420, ease: 'outQuad' });
+
+    // Nodes overshoot slightly and settle. The blur burning off is what sells
+    // it as arriving rather than fading up.
+    animate(nodes, {
+      opacity: [0, 1],
+      scale: [{ to: 1.06, duration: 260, ease: 'outExpo' }, { to: 1, duration: 340, ease: 'outElastic(1, .6)' }],
+      filter: ['blur(6px)', 'blur(0px)'],
+      duration: 600,
+      delay: stagger(70),
+    });
+
+    // Edges draw themselves once the node they leave has landed. Done by hand
+    // rather than through anime's SVG helper so that a rename in the library
+    // costs the effect and not the diagram.
+    edges.forEach((p, i) => {
+      if (!lengths[i]) return;
+      animate(p, {
+        strokeDashoffset: [lengths[i], 0],
+        duration: 620,
+        delay: 260 + i * 60,
+        ease: 'inOutQuad',
+      });
+      // A pulse of light runs the wire as it is drawn, then leaves it at rest.
+      animate(p, {
+        stroke: ['#00fff2', getComputedStyle(p).stroke || '#00d5c8'],
+        strokeWidth: [2.6, 1.4],
+        duration: 900,
+        delay: 260 + i * 60,
+        ease: 'outQuad',
+      });
+    });
+
+    // Edge labels last: they are annotation on a picture that now exists.
+    if (labels.length) {
+      animate(labels, { opacity: [0, 1], duration: 300, delay: stagger(40, { start: 520 }), ease: 'outQuad' });
+    }
   };
 
   window.renderDiagram = async (msg) => {
@@ -302,6 +367,8 @@
       const el = new DOMParser().parseFromString(svg, 'text/html').querySelector('svg');
       if (el) {
         canvas.replaceChildren(el);
+        // Layout has to be real before getBBox and getTotalLength are read.
+        el.getBoundingClientRect();
         bindFunctions?.(canvas);
         errorEl.textContent = '';
         el.removeAttribute('style');
