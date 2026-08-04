@@ -27,9 +27,13 @@ jobs:
           cache: npm
 
       - name: Install Rust toolchain
+        # Version and components come from rust-toolchain.toml, so this run and
+        # a local one reach the same verdict instead of drifting apart as
+        # stable moves. Bumping the toolchain is a reviewable change to that
+        # file, not a surprise on an unrelated pull request.
         run: |
-          rustup toolchain install stable --profile minimal --component clippy,rustfmt
-          rustup default stable
+          rustup show active-toolchain
+          cargo --version
 
       - name: Install browser build dependencies
         run: npm ci

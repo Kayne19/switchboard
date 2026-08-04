@@ -1,0 +1,8 @@
+# Pinned so a local run and CI reach the same verdict. Clippy gains lints
+# between releases and CI denies warnings, so a floating toolchain turns an
+# upgrade into a surprise failure on code nobody touched -- which is exactly
+# how the first CI run here broke. Bumping this is a deliberate, reviewable
+# change; see docs/concurrency-and-test-hazards.md.
+[toolchain]
+channel = "1.97.0"
+components = ["clippy", "rustfmt"]
