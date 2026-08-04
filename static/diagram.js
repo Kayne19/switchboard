@@ -68,6 +68,7 @@ const applyTheme = () => {
 };
 applyTheme();
 let seq = 0;
+let renderGeneration = 0;
 // Zoom is an absolute scale on the diagram's own dimensions rather than a
 // fraction of the panel, so 1 means the size mermaid drew it at with its
 // text at full height. --dgm-w/--dgm-h carry the viewBox's intrinsic size
@@ -521,19 +522,28 @@ window.renderDiagram = async (msg) => {
     const src = (msg.source || "").trim();
     if (!src)
         return;
+    const generation = ++renderGeneration;
+    const current = () => generation === renderGeneration;
     document.body.classList.add("has-diagram");
     // Mermaid measures text in the DOM, so the panel has to be visible and the
     // fonts settled before rendering or the labels come out the wrong size.
     await document.fonts.ready;
+    if (!current())
+        return;
     const id = "dgm" + ++seq;
     try {
         // Parse first: a bad diagram then fails without blanking a good one that
         // is already up, and without flashing mermaid's red error graphic.
-        if (!(await mermaid.parse(src, { suppressErrors: true }))) {
+        const parsed = await mermaid.parse(src, { suppressErrors: true });
+        if (!current())
+            return;
+        if (!parsed) {
             errorEl.textContent = "That diagram did not parse. Previous one kept.";
             return;
         }
         const { svg, bindFunctions } = await mermaid.render(id, src);
+        if (!current())
+            return;
         // Parsed to a node rather than assigned as innerHTML: the HTML parser is
         // lenient about the unclosed tags mermaid's HTML labels can contain, and
         // this keeps the swap to a single element rather than a markup string.
@@ -570,7 +580,8 @@ window.renderDiagram = async (msg) => {
         }
     }
     catch (err) {
-        errorEl.textContent = "Render failed: " + err;
+        if (current())
+            errorEl.textContent = "Render failed: " + err;
     }
     finally {
         // A throw mid-render leaves mermaid's scratch node parented to the body.

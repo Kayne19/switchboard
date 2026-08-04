@@ -54,10 +54,20 @@ render a graph is a bad trade.
 
 ## Layout
 
-The page is a single 660px column. When a diagram arrives the shell widens and
-splits: diagram left (the larger half), the existing column right, unchanged.
-When there is no diagram the page is exactly what it was. Below 1000px they
-stack, diagram on top.
+The page is a single 660px column until a diagram arrives. Then it expands to the
+available width and splits: diagram left (the larger half), the existing column
+right, unchanged. On narrower screens they stack, diagram on top. Outside
+theater mode the diagram stage is sticky while the page scrolls; it has its own
+scrollable canvas for pictures that do not fit.
+
+The canvas supports drag-to-pan, pinch zoom, and Ctrl/⌘-wheel zoom. `+` and `−`
+zoom around the panel centre. `fit` alternates between containing the whole
+diagram and filling the available width; resizing re-fits only an automatic fit,
+not a zoom chosen by the caller.
+
+The `theater` button (or `T`) hides the voice column and gives the diagram the
+full viewport; `T` or Escape exits. The preference survives reloads and can be
+armed before the first diagram arrives.
 
 Newest diagram replaces the previous one. No history strip — if flipping back
 through diagrams turns out to matter, the payloads are small and keeping the
@@ -71,10 +81,6 @@ loses the picture with no way to ask for it back.
 
 - No persistence across a service restart. `history.py` is the place for that
   if it is ever wanted.
-- No pan/zoom. The SVG is scaled to fit. If diagrams get big enough that this
-  hurts, Cytoscape.js is the fallback the research named — it does images on
-  nodes natively and pans, at the cost of the agent emitting a JSON graph
-  instead of a line of Mermaid.
 - The extension copy in `extensions/` is a reference copy. The deployed
   authority is still the homelab Ansible template (see `AGENTS.md`), so this
   ships to damocles only through a homelab PR.

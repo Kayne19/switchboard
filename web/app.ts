@@ -65,6 +65,7 @@ let mediaRecorder: MediaRecorder | null = null;
 let chunks: Blob[] = [];
 const audioQueue: Blob[] = [];
 let isPlaying = false;
+let playPending = false;
 let discard = false;
 const idleText = "Connected. Tap Talk and speak.";
 // True from the moment getUserMedia is asked for until the recorder is
@@ -88,6 +89,7 @@ let pendingPong: string | null = null;
 // The object URL currently loaded into the player, revoked when it is
 // replaced. Every reply used to leak one for the life of the tab.
 let currentUrl: string | null = null;
+let currentBlob: Blob | null = null;
 let turnStarted = 0;
 let clockTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -356,6 +358,7 @@ function playNext() {
 		currentUrl = null;
 	}
 	if (audioQueue.length === 0) {
+		currentBlob = null;
 		isPlaying = false;
 		statusEl.textContent = idleText;
 		statusEl.classList.remove("error");
@@ -364,28 +367,59 @@ function playNext() {
 	isPlaying = true;
 	const blob = audioQueue.shift();
 	if (!blob) return;
+	currentBlob = blob;
 	currentUrl = URL.createObjectURL(blob);
+	playPending = true;
 	player.src = currentUrl;
-	player.play().catch((err) => {
-		statusEl.textContent =
-			"Audio blocked by the browser — click anywhere on this page once, then it will play (" +
-			errorName(err) +
-			").";
-		statusEl.classList.add("error");
-		isPlaying = false;
-		// Keep draining. Leaving isPlaying false without advancing meant the
-		// clip was dropped and every later one queued behind a queue that
-		// nothing would ever restart.
-		if (audioQueue.length) setTimeout(playNext, 0);
-	});
+	player.play().then(
+		() => {
+			playPending = false;
+		},
+		(err) => {
+			playPending = false;
+			currentBlob = null;
+			// Autoplay rejection is recoverable: keep this clip at the front so
+			// the next user gesture retries it instead of silently losing it.
+			audioQueue.unshift(blob);
+			statusEl.textContent =
+				"Audio blocked by the browser — click anywhere on this page once, then it will play (" +
+				errorName(err) +
+				").";
+			statusEl.classList.add("error");
+			isPlaying = false;
+		},
+	);
 }
 
-player.addEventListener("ended", playNext);
+player.addEventListener("ended", () => {
+	currentBlob = null;
+	playNext();
+});
+// A pause from the exposed controls otherwise leaves isPlaying true forever.
+// Requeue the current clip so a later click resumes without skipping it.
+player.addEventListener("pause", () => {
+	if (!isPlaying || playPending || player.ended) return;
+	isPlaying = false;
+	if (currentBlob) {
+		audioQueue.unshift(currentBlob);
+		currentBlob = null;
+	}
+	statusEl.textContent =
+		"Audio paused — click anywhere on this page to resume.";
+});
 // `ended` used to be the only thing that advanced the queue, so a single
 // clip that failed to decode — or the caller pressing pause on the
 // exposed controls — wedged playback permanently at "Queued (N waiting)".
 player.addEventListener("error", () => {
-	if (isPlaying) playNext();
+	if (isPlaying) {
+		currentBlob = null;
+		playNext();
+	}
+});
+// The status message promises that a page interaction resumes blocked audio.
+// Keep that gesture path here rather than relying on a later clip to arrive.
+document.addEventListener("click", () => {
+	if (!isPlaying && audioQueue.length) playNext();
 });
 
 // Rebuilt only when the set of options actually changes, so a select the

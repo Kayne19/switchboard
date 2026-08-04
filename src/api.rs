@@ -1,7 +1,7 @@
 //! HTTP, WebSocket and application workers.
 use crate::audio::{Speaker, SttAdapter};
 use crate::history::{TranscriptLog, AGENT, CALLER};
-use crate::pbx::Switchboard;
+use crate::pbx::{RouteCallback, Switchboard};
 use crate::pi_client::{Activity, ActivityCallback, PiSession};
 use axum::extract::ws::{Message, WebSocket};
 use axum::{
@@ -35,9 +35,10 @@ pub struct AppInner {
     pub turns: mpsc::Sender<(String, String)>,
     turn_rx: Mutex<Option<mpsc::Receiver<(String, String)>>>,
     pub accepted_clips: Mutex<(HashSet<String>, VecDeque<String>)>,
-    pub last_diagram: Mutex<Option<Value>>,
+    pub last_diagram: Arc<Mutex<Option<Value>>>,
     pub active_session: Arc<Mutex<Option<PiSession>>>,
     pub turn_generation: AtomicU64,
+    pub queued_turns: AtomicU64,
 }
 #[derive(Clone, Debug)]
 pub enum Event {
@@ -74,9 +75,21 @@ impl AppState {
                 })));
             })
         });
+        let last_diagram = Arc::new(Mutex::new(None));
+        let route_events = events.clone();
+        let route_diagram = last_diagram.clone();
+        let route_callback: RouteCallback = Arc::new(move |status| {
+            let events = route_events.clone();
+            let diagram = route_diagram.clone();
+            Box::pin(async move {
+                *diagram.lock().await = None;
+                let _ = events.send(Event::Json(status));
+            })
+        });
         let active_session = switchboard.session_control();
         let mut switchboard = switchboard;
         switchboard.set_activity_callback(Some(activity_callback));
+        switchboard.set_route_callback(Some(route_callback));
         Self(Arc::new(AppInner {
             switchboard: Mutex::new(switchboard),
             transcript_log: Mutex::new(transcript_log),
@@ -88,9 +101,10 @@ impl AppState {
             turns,
             turn_rx: Mutex::new(Some(turn_rx)),
             accepted_clips: Mutex::new((HashSet::new(), VecDeque::new())),
-            last_diagram: Mutex::new(None),
+            last_diagram,
             active_session,
             turn_generation: AtomicU64::new(0),
+            queued_turns: AtomicU64::new(0),
         }))
     }
     pub fn router(self, static_dir: Option<ServeDir>) -> Router {
@@ -176,13 +190,12 @@ async fn process_clips(state: AppState) {
             continue;
         }
         let route = state.0.switchboard.lock().await.route().to_owned();
-        if let Some(entry) = state
-            .0
-            .transcript_log
-            .lock()
-            .await
-            .add(CALLER, &transcript, route)
-        {
+        if let Some(entry) = state.0.transcript_log.lock().await.add_with_id(
+            CALLER,
+            &transcript,
+            route,
+            Some(clip.id.clone()),
+        ) {
             let object = serde_json::to_value(&entry).unwrap_or_default();
             emit_json(
                 &state,
@@ -194,29 +207,47 @@ async fn process_clips(state: AppState) {
                 json!({"type":"transcript", "id":clip.id, "text":transcript}),
             );
         }
-        let steered = state
-            .0
-            .switchboard
-            .lock()
-            .await
-            .steer_if_busy(&transcript)
-            .await;
+        // Steering is deliberately performed through the shared session handle,
+        // not while holding the PBX mutex. The turn worker keeps that mutex for
+        // the duration of handle(), so awaiting here would deadlock it.
+        let steered = {
+            // Hold the session-control guard across the write so a hangup or
+            // redial cannot replace the child between the identity check and
+            // the steer. The PBX mutex is intentionally not held here.
+            let active = state.0.active_session.lock().await;
+            match active.as_ref().cloned() {
+                None => false,
+                Some(session) if !session.busy() || !session.alive().await => false,
+                Some(session) => {
+                    session.steer(&transcript).await.is_ok()
+                        && active
+                            .as_ref()
+                            .is_some_and(|current| current.same_session(&session))
+                }
+            }
+        };
         if steered {
+            state.0.switchboard.lock().await.touch_activity();
             emit_json(
                 &state,
                 json!({"type":"queued", "id":clip.id, "waiting":0, "steered":true}),
             );
-        } else if state
-            .0
-            .turns
-            .send((clip.id.clone(), transcript))
-            .await
-            .is_ok()
-        {
-            emit_json(
-                &state,
-                json!({"type":"queued", "id":clip.id, "waiting":0, "steered":false}),
-            );
+        } else {
+            let waiting = state.0.queued_turns.fetch_add(1, Ordering::AcqRel) + 1;
+            if state
+                .0
+                .turns
+                .send((clip.id.clone(), transcript))
+                .await
+                .is_ok()
+            {
+                emit_json(
+                    &state,
+                    json!({"type":"queued", "id":clip.id, "waiting":waiting, "steered":false}),
+                );
+            } else {
+                state.0.queued_turns.fetch_sub(1, Ordering::AcqRel);
+            }
         }
     }
 }
@@ -229,9 +260,14 @@ async fn process_turns(state: AppState) {
         .take()
         .expect("turn worker started once");
     while let Some((_id, transcript)) = receiver.recv().await {
+        state.0.queued_turns.fetch_sub(1, Ordering::AcqRel);
         let generation = state.0.turn_generation.load(Ordering::Acquire);
         let status = state.0.switchboard.lock().await.status();
-        emit_json(&state, json!({"type":"thinking", "route":status["route"]}));
+        let waiting = state.0.queued_turns.load(Ordering::Acquire);
+        emit_json(
+            &state,
+            json!({"type":"thinking", "route":status["route"], "waiting":waiting}),
+        );
         let reply = state.0.switchboard.lock().await.handle(&transcript).await;
         if generation != state.0.turn_generation.load(Ordering::Acquire) {
             continue;
@@ -258,7 +294,8 @@ async fn process_turns(state: AppState) {
             let _ = match state.0.speaker.synthesize(&spoken).await {
                 Ok(audio) => emit(&state, Event::Audio(audio)),
                 Err(error) => {
-                    emit_json(&state, json!({"type":"error", "message":error.to_string()}))
+                    emit_json(&state, json!({"type":"error", "message":error.to_string()}));
+                    break;
                 }
             };
         }
@@ -484,6 +521,7 @@ async fn handle_text_frame(
     pending_header: &mut Option<(String, String)>,
     text: &str,
 ) -> Result<(), axum::Error> {
+    pending_header.take();
     let command: Value = match serde_json::from_str(text) {
         Ok(value) => value,
         Err(_) => {

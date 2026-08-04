@@ -12,6 +12,8 @@ pub struct TranscriptEntry {
     pub text: String,
     pub route: String,
     pub ts: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -45,6 +47,16 @@ impl TranscriptLog {
         text: &str,
         route: impl Into<String>,
     ) -> Option<TranscriptEntry> {
+        self.add_with_id(role, text, route, None)
+    }
+
+    pub fn add_with_id(
+        &mut self,
+        role: impl Into<String>,
+        text: &str,
+        route: impl Into<String>,
+        id: Option<String>,
+    ) -> Option<TranscriptEntry> {
         let text = text.trim();
         if text.is_empty() || self.limit == 0 {
             return None;
@@ -57,6 +69,7 @@ impl TranscriptLog {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs_f64(),
+            id,
         };
         if self.entries.len() == self.limit {
             self.entries.pop_front();
@@ -103,6 +116,20 @@ mod tests {
         assert!(log.add(CALLER, "  hello  ", "").is_some());
         assert!(log.add(CALLER, "   ", "").is_none());
         assert_eq!(log.entries()[0].text, "hello");
+    }
+
+    #[test]
+    fn caller_ids_round_trip_and_old_entries_still_load() {
+        let mut log = TranscriptLog::new(DEFAULT_LIMIT);
+        let entry = log
+            .add_with_id(CALLER, "hello", "operator", Some("clip-1".into()))
+            .unwrap();
+        assert_eq!(entry.id.as_deref(), Some("clip-1"));
+        let encoded = serde_json::to_string(&log.payload()).unwrap();
+        assert!(encoded.contains("clip-1"));
+        let old = r#"{"type":"history","entries":[{"role":"caller","text":"old","route":"operator","ts":1.0}]}"#;
+        let payload: HistoryPayload = serde_json::from_str(old).unwrap();
+        assert_eq!(payload.entries[0].id, None);
     }
 
     #[test]

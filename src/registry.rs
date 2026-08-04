@@ -131,6 +131,13 @@ impl Registry {
     pub fn catalog(&self) -> Vec<serde_json::Value> {
         self.projects.iter().map(Project::public).collect()
     }
+
+    pub fn ids(&self) -> Vec<String> {
+        self.projects
+            .iter()
+            .map(|project| project.id.clone())
+            .collect()
+    }
 }
 
 #[cfg(test)]

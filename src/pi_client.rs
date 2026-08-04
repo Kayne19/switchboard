@@ -154,6 +154,9 @@ impl PiSession {
     pub fn busy(&self) -> bool {
         self.inner.busy.load(Ordering::Acquire)
     }
+    pub fn same_session(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
     pub async fn alive(&self) -> bool {
         let mut child = self.inner.child.lock().await;
         child
@@ -406,8 +409,12 @@ fn activity_detail(args: Option<&Value>) -> String {
             .filter(|value| !value.trim().is_empty())
         {
             let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
-            if value.len() > ACTIVITY_DETAIL_CHARS {
-                return format!("{}…", value[..ACTIVITY_DETAIL_CHARS].trim_end());
+            if value.chars().count() > ACTIVITY_DETAIL_CHARS {
+                let clipped = value
+                    .chars()
+                    .take(ACTIVITY_DETAIL_CHARS)
+                    .collect::<String>();
+                return format!("{}…", clipped.trim_end());
             }
             return value;
         }
@@ -429,8 +436,8 @@ fn spoken_error(detail: Option<&Value>) -> String {
             first.truncate(index);
         }
     }
-    if first.len() > ERROR_DETAIL_CHARS {
-        first.truncate(ERROR_DETAIL_CHARS);
+    if first.chars().count() > ERROR_DETAIL_CHARS {
+        first = first.chars().take(ERROR_DETAIL_CHARS).collect();
         first.push('…');
     }
     if first.trim().is_empty() {
@@ -580,6 +587,9 @@ mod tests {
             activity_detail(Some(&json!({"command":"x".repeat(100)}))).len(),
             83
         );
+        let unicode = "é".repeat(100);
+        let detail = activity_detail(Some(&json!({"command": unicode})));
+        assert!(detail.chars().count() <= ACTIVITY_DETAIL_CHARS + 1);
     }
     #[test]
     fn spoken_error_removes_diagnostics() {
@@ -589,6 +599,8 @@ mod tests {
             ))),
             "OAuth failed"
         );
+        let unicode = spoken_error(Some(&json!("é".repeat(ERROR_DETAIL_CHARS + 10))));
+        assert!(unicode.chars().count() <= ERROR_DETAIL_CHARS + 1);
         assert_eq!(spoken_error(None), "the model call failed");
     }
 
