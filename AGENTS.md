@@ -30,24 +30,34 @@ does it should say so.
 
 ## `extensions/`
 
-`agent-switchboard.ts.j2` and `operator-switchboard.ts.j2` are copies for
-reference. The authoritative versions are still Ansible templates in homelab,
-because the persona is a Jinja variable rendered into them. `docs/extraction-
-plan.md` covers the fix — move the persona to an environment variable, then
-these become plain TypeScript and move here for real. Do not edit them in place
-expecting a deploy; edit the homelab templates until that is done.
+`agent-switchboard.ts` and `operator-switchboard.ts` are plain TypeScript and
+authoritative here. The persona is no longer rendered into them: it arrives as
+`SWITCHBOARD_PERSONA`, read in `src/main.rs` and passed to the agent process in
+`src/pbx.rs`, which is the fix `docs/extraction-plan.md` asked for first. The
+stale `.ts.j2` copies have been removed; homelab still renders its own until the
+cutover, so until then a change here reaches a project host only through the
+extension staging path, not through a deploy.
 
 ## Working here
 
-- Python 3, FastAPI plus uvicorn, dependencies pinned in `requirements.txt`.
-- Compatibility tests live in `legacy/tests/` and run with
-  `python3 -m unittest discover -s legacy/tests`; browser tests stay in `tests/`.
+- The service is Rust (`src/`), the browser client is TypeScript (`web/`,
+  compiled to the committed `static/`). The Python tree in `legacy/` is the
+  compatibility baseline, not the running service.
+- The Rust toolchain is pinned in `rust-toolchain.toml` so a local run and CI
+  agree. Bump it deliberately; do not work around it.
+- Every gate CI runs: `cargo fmt --all -- --check`, `cargo test --locked`,
+  `cargo clippy --locked --all-targets -- -D warnings`,
+  `python3 -m unittest discover -s legacy/tests`, and `npm test` followed by
+  `git diff --exit-code -- static` — the compiled browser output is committed,
+  so rebuild it in the same change.
+- Compatibility tests live in `legacy/tests/`; browser tests stay in `tests/`.
   They are the reason this repo exists — keep them passing on every commit.
 - No network, no ElevenLabs, no whisper model downloads in tests. Stub them.
 - Read `docs/concurrency-and-test-hazards.md` before touching turn dispatch, page
   rescue, or any test that writes a fake executable. It records why the turn
   epoch is stamped where it is, why fake executables must go through
-  `write_executable_script`, and one related bug that is still open.
+  `write_executable_script`, and why a broken pipe is never the error worth
+  reporting.
 - Keep the legacy module layout: one concern per file in `legacy/backend/`, no
   new package layers until something concrete needs one.
 - Secrets never land in this tree. The app reads them from the environment.
