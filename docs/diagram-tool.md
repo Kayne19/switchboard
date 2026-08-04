@@ -81,6 +81,9 @@ loses the picture with no way to ask for it back.
 
 - No persistence across a service restart. `history.py` is the place for that
   if it is ever wanted.
+- `docs/visual-channel.md` collects what else this channel could carry — other
+  Mermaid forms, a live plan, a diff view, a history strip — with a ranking and
+  the one idea worth refusing. Proposals, not decisions.
 - The extension copy in `extensions/` is a reference copy. The deployed
   authority is still the homelab Ansible template (see `AGENTS.md`), so this
   ships to damocles only through a homelab PR.
