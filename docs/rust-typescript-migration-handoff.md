@@ -51,7 +51,7 @@ Important current modules:
 | `legacy/backend/models.py` | Rust model catalog and ambiguity checks |
 | `legacy/backend/history.py` | Rust history store |
 | `static/index.html` | HTML shell plus compiled TypeScript client |
-| `extensions/*.ts.j2` | Plain TypeScript pi extensions after persona cleanup |
+| `extensions/*.ts` | Plain TypeScript pi extensions; persona arrives as `SWITCHBOARD_PERSONA` |
 | `legacy/tests/` | Python compatibility tests |
 | `tests/` | browser/extension tests |
 | `web/` | TypeScript browser protocol, client, and diagram sources |
@@ -325,13 +325,18 @@ behavior. No test calls ElevenLabs, downloads a speech model, or reaches a
 project host.
 
 Speech captured before a page transfer is epoch-tagged so it cannot act on the
-leg that replaced it. The epoch is stamped when a clip is accepted rather than
-when its transcript returns, because the STT sidecar round trip is itself wide
-enough for a transfer to land inside it; both the queued-turn path and the
-steering path are covered. The remaining window is narrower than this repository
-can close alone: a clip recorded in the browser before a transfer but uploaded
-after it still arrives tagged with the new epoch, which needs a capture-time
-epoch in the browser protocol.
+leg that replaced it, across the queued-turn path and the steering path alike.
+The epoch is stamped when recording starts: the server announces it on every
+change and in the WebSocket snapshot, and the browser puts it on the clip header.
+Neither transcription nor upload is early enough to be safe, since a transfer can
+land inside either. A client that sends no epoch falls back to arrival time and
+behaves as it did before.
+
+The browser half of that has no automated coverage — `web/app.ts` reads the DOM
+at module load and there is no harness for it, so the wire format lives in
+`web/protocol.ts` where `tests/test_protocol.mjs` can reach it. That the recorder
+stamps the right value is currently established by reading the code, and belongs
+on the live hardware checklist.
 
 The following acceptance gates deliberately remain outside this repository:
 

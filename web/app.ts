@@ -1,10 +1,11 @@
-import { decodeServerMessage, postJson } from "./protocol.js";
+import { clipHeader, decodeServerMessage, postJson } from "./protocol.js";
 
 interface Clip {
 	id: string;
 	audio: Blob;
 	mime: string;
 	created: number;
+	epoch: number;
 	sent: boolean;
 	accepted?: boolean;
 }
@@ -80,6 +81,12 @@ let startCancelled = false;
 // clears it and safely retransmits because the backend deduplicates ids.
 let outbox: Clip[] = [];
 let clipSequence = 0;
+// The server's turn epoch, as last announced. A clip is stamped with whatever
+// this held when its recording started, so speech begun before a transfer is
+// discarded rather than delivered to the leg that replaced it. Recording start
+// is the earliest knowable moment; the server cannot see it, because upload and
+// transcription both happen afterwards.
+let turnEpoch = 0;
 let socketGeneration = 0;
 let heartbeatSequence = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -536,7 +543,7 @@ function flushOutbox() {
 		return;
 	}
 	try {
-		ws.send(JSON.stringify({ type: "clip", id: clip.id, mime: clip.mime }));
+		ws.send(clipHeader(clip));
 		ws.send(clip.audio);
 		clip.sent = true;
 		statusEl.textContent = "Waiting for the server to accept your clip...";
@@ -658,7 +665,12 @@ function connect() {
 		if (typeof event.data === "string") {
 			const msg = decodeServerMessage(event.data);
 			if (!msg) return;
-			if (msg.type === "pong") {
+			if (msg.type === "epoch") {
+				// Adopt the server's epoch immediately, so a clip whose
+				// recording starts after this point is stamped with the new
+				// one rather than the epoch being retired.
+				if (typeof msg.generation === "number") turnEpoch = msg.generation;
+			} else if (msg.type === "pong") {
 				if (msg.nonce === pendingPong) {
 					pendingPong = null;
 					clearTimeoutSafe(pongDeadlineTimer);
@@ -811,6 +823,7 @@ async function startRecording() {
 	recorder.ondataavailable = (e) => {
 		if (e.data.size > 0) chunks.push(e.data);
 	};
+	let recordingEpoch = turnEpoch;
 	recorder.onstop = () => {
 		stream.getTracks().forEach((t) => t.stop());
 		if (discard) {
@@ -828,6 +841,7 @@ async function startRecording() {
 			audio: blob,
 			mime: blob.type,
 			created: Date.now(),
+			epoch: recordingEpoch,
 			sent: false,
 		};
 		// Local echo does not wait for a network round trip or Whisper. The
@@ -836,6 +850,10 @@ async function startRecording() {
 		appendTurn(pendingEntry(clip));
 		flushOutbox();
 	};
+	// Sampled here, as recording actually begins, because that is what the
+	// clip is stamped with. Nothing later -- upload, transcription -- is
+	// early enough to be safe.
+	recordingEpoch = turnEpoch;
 	recorder.start();
 	starting = false;
 	setRecordingUI(true);

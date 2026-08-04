@@ -29,6 +29,7 @@ interface BrowserMessage {
 	entry?: TranscriptEntry;
 	waiting?: number;
 	steered?: boolean;
+	generation?: number;
 	[key: string]: unknown;
 }
 

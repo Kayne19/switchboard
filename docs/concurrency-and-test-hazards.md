@@ -40,10 +40,27 @@ Two properties are load-bearing and easy to break by accident:
 The turn worker re-checks the epoch again before dispatching. That is deliberate
 redundancy, not duplication.
 
-**Known residual gap.** A clip recorded in the browser before a transfer but
-uploaded after it is stamped on arrival and so looks current. Closing that
-requires the browser to stamp the epoch when recording starts, which is a change
-to the WebSocket protocol rather than to the server.
+**The stamp now comes from the browser.** Arrival is still later than capture:
+a clip recorded before a transfer but uploaded after it would be stamped on
+arrival and look current. So the server announces the epoch — as an
+`{"type":"epoch"}` event whenever `cancel_active_operations` bumps it, and in the
+WebSocket snapshot so a reconnecting tab is not left holding a retired value —
+and the browser stamps each clip with whatever it held when *recording started*.
+`clipHeader` in `web/protocol.ts` puts it on the wire; the server prefers it and
+falls back to arrival time for a client that sends none, so an older tab keeps
+working exactly as before.
+
+A client cannot use this to reach a leg it should not: the epoch is only ever
+learned from the server, and any value that does not match the current one gets
+the clip dropped. A wrong number can discard speech, never misroute it.
+
+What this trades away: an utterance begun after a transfer but before the browser
+learns the new epoch is discarded, and the caller has to repeat it. That window
+is one message delivery, and every bump is browser-initiated — `/hangup`,
+`/connect`, and `/thinking` off the operator leg — so the tab is already awake
+and waiting on that exchange when it happens. An agent-initiated
+`transfer_to_project` does not bump the epoch at all. Losing a word to a race the
+caller just started is much cheaper than running it against the wrong project.
 
 ## `ETXTBSY` when tests write their own executables
 

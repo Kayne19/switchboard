@@ -13,7 +13,7 @@ const compiled = ts.transpileModule(source, {
 });
 assert.deepEqual(compiled.diagnostics ?? [], []);
 const encoded = Buffer.from(compiled.outputText).toString("base64");
-const { decodeServerMessage, postJson } = await import(
+const { clipHeader, decodeServerMessage, postJson } = await import(
 	`data:text/javascript;base64,${encoded}`
 );
 
@@ -42,5 +42,19 @@ try {
 } finally {
 	globalThis.fetch = previousFetch;
 }
+
+// The clip header carries the epoch the recording started under. The server
+// drops the clip when that epoch has moved on, which is what stops speech begun
+// before a page transfer from reaching the leg that replaced it -- so the field
+// has to survive changes to this frame.
+assert.deepEqual(
+	JSON.parse(clipHeader({ id: "abc", mime: "audio/webm", epoch: 4 })),
+	{ type: "clip", id: "abc", mime: "audio/webm", generation: 4 },
+);
+// Zero is a real epoch, not an absent one; it must still be sent.
+assert.equal(
+	JSON.parse(clipHeader({ id: "abc", mime: "", epoch: 0 })).generation,
+	0,
+);
 
 console.log("ok — browser protocol parsing and POST failures");

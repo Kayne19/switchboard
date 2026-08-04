@@ -449,7 +449,10 @@ async fn interrupt_active_turn(state: &AppState) -> Option<String> {
     cancel_active_operations(state).await
 }
 async fn cancel_active_operations(state: &AppState) -> Option<String> {
-    state.0.turn_generation.fetch_add(1, Ordering::AcqRel);
+    let generation = state.0.turn_generation.fetch_add(1, Ordering::AcqRel) + 1;
+    // Tell the browser at once, so speech it starts recording after this point
+    // is stamped with the new epoch rather than the one being retired.
+    emit_json(state, json!({"type":"epoch", "generation":generation}));
     let operations = std::mem::take(&mut *state.0.active_operations.lock().await);
     for operation in operations.into_values() {
         operation.abort();
@@ -777,7 +780,7 @@ async fn websocket(mut socket: WebSocket, state: AppState) {
         return;
     }
 
-    let mut pending_header: Option<(String, String)> = None;
+    let mut pending_header: Option<ClipHeader> = None;
     loop {
         tokio::select! {
             changed = shutdown.changed() => {
@@ -827,6 +830,11 @@ async fn websocket(mut socket: WebSocket, state: AppState) {
 
 async fn send_snapshot(socket: &mut WebSocket, state: &AppState) -> Result<(), axum::Error> {
     let initial = [
+        // First, so a reconnecting tab stamps clips against the live epoch
+        // instead of whatever it held before it dropped.
+        Event::Json(
+            json!({"type":"epoch", "generation":state.0.turn_generation.load(Ordering::Acquire)}),
+        ),
         Event::Json(current_status(state)),
         Event::Json(
             serde_json::to_value(state.0.transcript_log.lock().await.payload()).unwrap_or_default(),
@@ -841,9 +849,35 @@ async fn send_snapshot(socket: &mut WebSocket, state: &AppState) -> Result<(), a
     Ok(())
 }
 
+/// A clip header: its id, its mime type, and the turn epoch the browser held
+/// when it began recording.
+///
+/// The epoch is optional because a browser that predates it must keep working;
+/// such a clip falls back to being stamped on arrival, which is what every
+/// client did before. A value the browser cannot have learned yet simply fails
+/// the equality check later and the clip is dropped, so a wrong number can only
+/// discard speech, never route it somewhere it does not belong.
+type ClipHeader = (String, String, Option<u64>);
+
+fn parse_clip_header(command: &serde_json::Map<String, Value>) -> Option<ClipHeader> {
+    let id = command
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty() && id.chars().count() <= 128)?;
+    let mime = command
+        .get("mime")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .chars()
+        .take(100)
+        .collect();
+    let generation = command.get("generation").and_then(Value::as_u64);
+    Some((id.to_owned(), mime, generation))
+}
+
 async fn handle_text_frame(
     socket: &mut WebSocket,
-    pending_header: &mut Option<(String, String)>,
+    pending_header: &mut Option<ClipHeader>,
     text: &str,
 ) -> Result<(), axum::Error> {
     let command: Value = match serde_json::from_str(text) {
@@ -873,11 +907,7 @@ async fn handle_text_frame(
             .await
         }
         Some("clip") => {
-            let Some(id) = command
-                .get("id")
-                .and_then(Value::as_str)
-                .filter(|id| !id.is_empty() && id.chars().count() <= 128)
-            else {
+            let Some(header) = parse_clip_header(command) else {
                 pending_header.take();
                 return send_json(
                     socket,
@@ -885,14 +915,7 @@ async fn handle_text_frame(
                 )
                 .await;
             };
-            let mime = command
-                .get("mime")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .chars()
-                .take(100)
-                .collect();
-            *pending_header = Some((id.to_owned(), mime));
+            *pending_header = Some(header);
             Ok(())
         }
         _ => {
@@ -908,10 +931,10 @@ async fn handle_text_frame(
 async fn handle_audio_frame(
     socket: &mut WebSocket,
     state: &AppState,
-    pending_header: &mut Option<(String, String)>,
+    pending_header: &mut Option<ClipHeader>,
     audio: Vec<u8>,
 ) -> Result<(), axum::Error> {
-    let Some((id, mime)) = pending_header.take() else {
+    let Some((id, mime, generation)) = pending_header.take() else {
         return send_json(
             socket,
             json!({"type":"error", "message":"Audio arrived without a clip header."}),
@@ -946,7 +969,12 @@ async fn handle_audio_frame(
                 id: id.clone(),
                 audio,
                 _mime: mime,
-                generation: state.0.turn_generation.load(Ordering::Acquire),
+                // The browser's stamp is taken when recording starts, which is
+                // earlier than anything this side can observe and therefore
+                // closes the upload window too. Arrival time is the fallback
+                // for clients that do not send one.
+                generation: generation
+                    .unwrap_or_else(|| state.0.turn_generation.load(Ordering::Acquire)),
             })
             .await
             .is_err()
@@ -1321,6 +1349,40 @@ mod tests {
         ));
         worker.abort();
         assert!(worker.await.unwrap_err().is_cancelled());
+    }
+
+    #[test]
+    fn clip_headers_carry_an_optional_capture_epoch() {
+        let header = |value: Value| parse_clip_header(value.as_object().unwrap());
+
+        assert_eq!(
+            header(json!({"type":"clip", "id":"a", "mime":"audio/webm", "generation":3})),
+            Some(("a".into(), "audio/webm".into(), Some(3)))
+        );
+        // A browser that predates the epoch still works; the clip is stamped on
+        // arrival instead, which is what every client used to do.
+        assert_eq!(
+            header(json!({"type":"clip", "id":"a", "mime":"audio/webm"})),
+            Some(("a".into(), "audio/webm".into(), None))
+        );
+        // Anything that is not a plain count is ignored rather than trusted.
+        assert_eq!(
+            header(json!({"type":"clip", "id":"a", "generation":-1})),
+            Some(("a".into(), String::new(), None))
+        );
+        assert_eq!(
+            header(json!({"type":"clip", "id":"a", "generation":"7"})),
+            Some(("a".into(), String::new(), None))
+        );
+
+        assert_eq!(header(json!({"type":"clip", "id":""})), None);
+        assert_eq!(
+            header(json!({"type":"clip", "id":"x".repeat(129)})),
+            None,
+            "an oversized id is still refused"
+        );
+        let long_mime = header(json!({"type":"clip", "id":"a", "mime":"m".repeat(400)}));
+        assert_eq!(long_mime.unwrap().1.chars().count(), 100);
     }
 
     #[tokio::test]
