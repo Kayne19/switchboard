@@ -4,7 +4,7 @@ The voice front door for the lab: a caller reaches an operator agent, the
 operator patches them through to a project's coding agent running in that
 project's own directory, and that agent hands them back when they are done.
 `README.md` explains the call path and the design; read it before changing
-anything in `backend/`.
+anything in `legacy/backend/`.
 
 This tree was extracted from the homelab repo, where it lived inside
 `ansible/roles/damocles/files/switchboard/`. It is now the place the code is
@@ -40,9 +40,14 @@ expecting a deploy; edit the homelab templates until that is done.
 ## Working here
 
 - Python 3, FastAPI plus uvicorn, dependencies pinned in `requirements.txt`.
-- Tests live in `tests/` and run with `python -m pytest`. They are the reason
-  this repo exists — keep them passing on every commit.
+- Compatibility tests live in `legacy/tests/` and run with
+  `python3 -m unittest discover -s legacy/tests`; browser tests stay in `tests/`.
+  They are the reason this repo exists — keep them passing on every commit.
 - No network, no ElevenLabs, no whisper model downloads in tests. Stub them.
-- Keep the module layout: one concern per file in `backend/`, no new package
-  layers until something concrete needs one.
+- Read `docs/concurrency-and-test-hazards.md` before touching turn dispatch, page
+  rescue, or any test that writes a fake executable. It records why the turn
+  epoch is stamped where it is, why fake executables must go through
+  `write_executable_script`, and one related bug that is still open.
+- Keep the legacy module layout: one concern per file in `legacy/backend/`, no
+  new package layers until something concrete needs one.
 - Secrets never land in this tree. The app reads them from the environment.

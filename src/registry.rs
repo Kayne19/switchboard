@@ -70,7 +70,26 @@ fn normalize(text: &str) -> String {
 }
 
 impl Registry {
-    pub fn new(projects: Vec<Project>) -> Self {
+    pub fn new(mut projects: Vec<Project>) -> Self {
+        for project in &mut projects {
+            if project.runtime.trim().is_empty() {
+                project.runtime = default_runtime();
+            }
+            if project
+                .host
+                .as_ref()
+                .is_some_and(|host| host.trim().is_empty())
+            {
+                project.host = None;
+            }
+            if project
+                .model
+                .as_ref()
+                .is_some_and(|model| model.trim().is_empty())
+            {
+                project.model = None;
+            }
+        }
         let mut by_key = HashMap::new();
         for (index, project) in projects.iter().enumerate() {
             for key in std::iter::once(project.id.as_str())
@@ -205,5 +224,21 @@ mod tests {
         let _ = fs::remove_file(path);
         assert_eq!(registry.projects.len(), 1);
         assert!(Registry::load("/no/such/projects.json").projects.is_empty());
+    }
+
+    #[test]
+    fn blank_optional_values_use_the_registry_defaults() {
+        let registry = Registry::new(vec![Project {
+            id: "local".into(),
+            host: Some("  ".into()),
+            runtime: String::new(),
+            model: Some(String::new()),
+            ..Project::default_for_test()
+        }]);
+        let project = &registry.projects[0];
+        assert_eq!(project.host, None);
+        assert_eq!(project.runtime, "pi");
+        assert_eq!(project.model, None);
+        assert_eq!(project.public()["location"], "damocles:");
     }
 }

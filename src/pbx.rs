@@ -8,14 +8,16 @@ use crate::pi_client::{
     RETURN_TOOL, SET_MODEL_TOOL, TRANSFER_TOOL,
 };
 use crate::registry::{Project, Registry};
+use futures_util::FutureExt;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 use std::time::Instant;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
@@ -23,11 +25,93 @@ use tokio::time::{timeout, Duration};
 pub const OPERATOR: &str = "operator";
 pub type RouteCallback =
     Arc<dyn Fn(serde_json::Value) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+
+#[derive(Clone, Debug)]
+pub struct ActivityClock(Arc<StdMutex<Instant>>);
+impl ActivityClock {
+    fn new() -> Self {
+        Self(Arc::new(StdMutex::new(Instant::now())))
+    }
+
+    pub fn touch(&self) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Instant::now();
+    }
+
+    fn elapsed(&self) -> f64 {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .elapsed()
+            .as_secs_f64()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct LiveLegState(Arc<StdRwLock<LiveLegSnapshot>>);
+#[derive(Debug)]
+struct LiveLegSnapshot {
+    route: String,
+    effective_thinking: String,
+}
+impl LiveLegState {
+    fn new() -> Self {
+        Self(Arc::new(StdRwLock::new(LiveLegSnapshot {
+            route: OPERATOR.to_owned(),
+            effective_thinking: String::new(),
+        })))
+    }
+
+    pub fn route(&self) -> String {
+        self.0
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .route
+            .clone()
+    }
+
+    fn set_route(&self, route: &str) {
+        let mut state = self
+            .0
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.route = route.to_owned();
+        state.effective_thinking.clear();
+    }
+
+    fn effective_thinking(&self) -> String {
+        self.0
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .effective_thinking
+            .clone()
+    }
+
+    pub fn report_thinking(&self, thinking: &str) -> bool {
+        if !THINKING_LEVELS.contains(&thinking) {
+            return false;
+        }
+        let mut state = self
+            .0
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.route == OPERATOR || state.effective_thinking == thinking {
+            return false;
+        }
+        state.effective_thinking = thinking.to_owned();
+        true
+    }
+}
 const RETURN_SENTINEL: &str = "[[SWITCHBOARD:RETURN]]";
 const AGENT_BRIEF_HEADER: &str =
     "You are on a voice call in the {project} project, in its own directory.\n\n";
 const SPEAK_BRIEF: &str = "Use the configured speak tool for spoken updates; written output is kept for the caller's screen and is not read aloud.";
 const FALLBACK_BRIEF: &str = "No speak extension is available on this host. Write a short spoken reply; the switchboard reads it aloud once your turn settles.";
+const PREPARE_OUTPUT_LIMIT: usize = 64 * 1024;
+const CHILD_ERROR_LIMIT: usize = 64 * 1024;
+const STAGE_OUTPUT_LIMIT: usize = 64 * 1024;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Utterance {
@@ -90,10 +174,11 @@ pub struct Switchboard {
     agent: Option<PiSession>,
     model_spec: String,
     session_id: String,
-    effective_thinking: String,
+    live_leg: LiveLegState,
     catalogs: HashMap<String, ModelCatalog>,
+    staged_extensions: Mutex<HashMap<String, Option<String>>>,
     operator_note: Option<String>,
-    last_activity: Instant,
+    last_activity: ActivityClock,
 }
 impl Switchboard {
     #[allow(clippy::too_many_arguments)]
@@ -139,10 +224,11 @@ impl Switchboard {
             agent: None,
             model_spec: String::new(),
             session_id: String::new(),
-            effective_thinking: String::new(),
+            live_leg: LiveLegState::new(),
             catalogs: HashMap::new(),
+            staged_extensions: Mutex::new(HashMap::new()),
             operator_note: None,
-            last_activity: Instant::now(),
+            last_activity: ActivityClock::new(),
         }
     }
     pub fn set_activity_callback(&mut self, callback: Option<ActivityCallback>) {
@@ -155,7 +241,15 @@ impl Switchboard {
 
     async fn announce_route(&self) {
         if let Some(callback) = &self.route_callback {
-            callback(self.status()).await;
+            let callback = Arc::clone(callback);
+            let status = self.status();
+            if AssertUnwindSafe(callback(status))
+                .catch_unwind()
+                .await
+                .is_err()
+            {
+                tracing::warn!("route callback failed");
+            }
         }
     }
 
@@ -170,8 +264,14 @@ impl Switchboard {
     pub fn route(&self) -> &str {
         &self.route
     }
-    pub fn touch_activity(&mut self) {
-        self.last_activity = Instant::now();
+    pub fn activity_clock(&self) -> ActivityClock {
+        self.last_activity.clone()
+    }
+    pub fn live_leg_state(&self) -> LiveLegState {
+        self.live_leg.clone()
+    }
+    pub fn touch_activity(&self) {
+        self.last_activity.touch();
     }
     pub fn status(&self) -> serde_json::Value {
         let spec = if self.route == OPERATOR {
@@ -185,7 +285,8 @@ impl Switchboard {
         } else {
             format!("{provider}/{model}")
         };
-        serde_json::json!({"type":"status", "route":self.route, "label":self.route_label(), "model":spec, "model_name":model_name, "thinking":if self.effective_thinking.is_empty() { requested.clone() } else { self.effective_thinking.clone() }, "thinking_requested":requested, "thinking_confirmed":!self.effective_thinking.is_empty(), "thinking_default":self.agent_thinking, "levels":THINKING_LEVELS, "model_swaps":self.model_swaps, "projects":self.registry.ids()})
+        let effective = self.live_leg.effective_thinking();
+        serde_json::json!({"type":"status", "route":self.route, "label":self.route_label(), "model":spec, "model_name":model_name, "thinking":if effective.is_empty() { requested.clone() } else { effective.clone() }, "thinking_requested":requested, "thinking_confirmed":!effective.is_empty(), "thinking_default":self.agent_thinking, "levels":THINKING_LEVELS, "model_swaps":self.model_swaps, "projects":self.registry.ids()})
     }
     pub fn route_label(&self) -> String {
         if self.route == OPERATOR {
@@ -197,15 +298,8 @@ impl Switchboard {
                 .unwrap_or_else(|| self.route.clone())
         }
     }
-    pub fn report_leg_state(&mut self, thinking: &str) -> bool {
-        if self.route == OPERATOR
-            || !THINKING_LEVELS.contains(&thinking)
-            || thinking == self.effective_thinking
-        {
-            return false;
-        }
-        self.effective_thinking = thinking.into();
-        true
+    pub fn report_leg_state(&self, thinking: &str) -> bool {
+        self.live_leg.report_thinking(thinking)
     }
     pub async fn shutdown(&mut self) {
         if let Some(session) = self.agent.take() {
@@ -225,12 +319,16 @@ impl Switchboard {
     }
 
     pub async fn handle(&mut self, text: &str) -> Reply {
-        self.last_activity = Instant::now();
-        if self.route == OPERATOR {
+        self.touch_activity();
+        let reply = if self.route == OPERATOR {
             self.handle_operator(text).await
         } else {
             self.handle_agent(text).await
-        }
+        };
+        // A long healthy turn is activity too. Without this final touch, the
+        // idle worker can drop the leg immediately after a multi-minute reply.
+        self.touch_activity();
+        reply
     }
     pub async fn steer_if_busy(&self, text: &str) -> bool {
         let Some(session) = self.active() else {
@@ -240,7 +338,9 @@ impl Switchboard {
             return false;
         }
         let steered = session.steer(text).await.is_ok();
-        if steered { /* a steered utterance is caller activity */ }
+        if steered {
+            self.touch_activity();
+        }
         steered
     }
     async fn ensure_operator(&mut self) -> Result<&PiSession, PiSessionError> {
@@ -249,7 +349,9 @@ impl Switchboard {
             None => false,
         };
         if !alive {
-            self.operator = None;
+            if let Some(session) = self.operator.take() {
+                session.close().await;
+            }
         }
         if self.operator.is_none() {
             let argv = local_argv(
@@ -276,15 +378,8 @@ impl Switchboard {
             .ok_or_else(|| PiSessionError("operator session was not created".into()))
     }
     async fn handle_operator(&mut self, text: &str) -> Reply {
-        let message = self.operator_note.take().map_or_else(
-            || text.to_owned(),
-            |note| format!("[switchboard] {note}\n\n{text}"),
-        );
-        let turn = match self.ensure_operator().await {
-            Ok(s) => match s.prompt(&message).await {
-                Ok(t) => t,
-                Err(e) => return self.recover_operator(e.to_string()).await,
-            },
+        let session = match self.ensure_operator().await {
+            Ok(session) => session.clone(),
             Err(e) => {
                 return self.reply(
                     [format!("The operator is not answering: {e}")],
@@ -292,8 +387,26 @@ impl Switchboard {
                 )
             }
         };
+        let message = self.operator_note.take().map_or_else(
+            || text.to_owned(),
+            |note| format!("[switchboard] {note}\n\n{text}"),
+        );
+        let turn = match session.prompt(&message).await {
+            Ok(turn) => turn,
+            Err(error) => return self.recover_operator(error.to_string()).await,
+        };
         if turn.failed && turn.text.is_empty() {
-            return self.recover_operator(turn.error).await;
+            let error = if turn.error.is_empty() {
+                let tail = session.stderr_tail(5);
+                if tail.is_empty() {
+                    "operator turn failed".to_owned()
+                } else {
+                    tail
+                }
+            } else {
+                turn.error
+            };
+            return self.recover_operator(error).await;
         }
         if let Some(signal) = turn.signals.iter().find(|s| s.name == TRANSFER_TOOL) {
             return self
@@ -362,16 +475,24 @@ impl Switchboard {
                 .await;
             return self.prepend(turn, onward);
         }
-        if let Some(signal) = turn.signals.iter().find(|s| s.name == SET_MODEL_TOOL) {
-            if self.model_swaps {
-                return self
-                    .redial(
+        if !returning {
+            if let Some(signal) = turn.signals.iter().find(|s| s.name == SET_MODEL_TOOL) {
+                let mut reply = if self.model_swaps {
+                    self.redial(
                         &arg(signal, "model"),
                         &arg(signal, "thinking"),
                         &arg(signal, "intent"),
                         arg_bool(signal, "keep_context", true),
                     )
-                    .await;
+                    .await
+                } else {
+                    self.reply(["Model swapping is turned off on this switchboard."], None)
+                };
+                // A model-control tool is a signal, so any adjacent written text is
+                // transcript-only. The replacement leg (or this refusal) owns the
+                // spoken response.
+                self.prepend_utterance(&turn.text, false, &mut reply);
+                return reply;
             }
         }
         if returning {
@@ -391,7 +512,7 @@ impl Switchboard {
                     self.route_label()
                 ))
                 .await;
-            self.prepend_utterance(&text, synthesize, &mut reply);
+            self.prepend_utterance(&text, synthesize && reply.route == OPERATOR, &mut reply);
             return reply;
         }
         self.reply_with_turn(turn)
@@ -420,55 +541,39 @@ impl Switchboard {
                 from.map(|name| format!(" The caller was on {name}."))
                     .unwrap_or_default()
             ));
-            return self.reply(
-                [
-                    handoff,
-                    format!("I don't have a project called {spoken}. I know: {known_text}."),
-                ],
+            return self.reply_transfer_error(
+                handoff,
+                format!("I don't have a project called {spoken}. I know: {known_text}."),
                 Some(format!("unknown project {spoken:?}")),
             );
         };
         self.drop_agent().await;
-        let fallback_model = pin_thinking(
-            project
-                .model
-                .as_deref()
-                .or(self.agent_model.as_deref())
-                .unwrap_or(""),
-            &self.agent_thinking,
-        );
-        let (model, model_note) = match self
-            .resolve_model(&project, requested_model, requested_thinking)
-            .await
-        {
-            Ok(choice) => (choice.spec(), String::new()),
-            Err(error) if !requested_model.is_empty() || !requested_thinking.is_empty() => {
-                (fallback_model.clone(), format!("About the model: {error}"))
-            }
-            Err(_) => (fallback_model, String::new()),
-        };
+        let (model, model_note) = self
+            .select_transfer_model(&project, requested_model, requested_thinking)
+            .await;
         let prepared = self.run_prepare(&project).await;
         let session_id = uuid_like();
         let session = match self.start_agent(&project, &model, &session_id).await {
             Ok(s) => s,
             Err(e) => {
                 self.operator_note = Some(format!("Transfer to {} failed: {e}", project.id));
-                return self.reply(
-                    [
-                        handoff,
-                        format!("I couldn't get {} on the line: {e}", project.id),
-                    ],
+                return self.reply_transfer_error(
+                    handoff,
+                    format!("I couldn't get {} on the line: {e}", project.id),
                     Some(e.to_string()),
                 );
             }
         };
         self.agent = Some(session);
-        self.set_active_session(self.agent.clone()).await;
         self.project = Some(project.clone());
         self.route = project.id.clone();
+        self.live_leg.set_route(&self.route);
         self.model_spec = model;
         self.session_id = session_id;
-        self.effective_thinking.clear();
+        // Publish a self-consistent PBX state before the await. A page rescue
+        // can cancel this transfer at any suspension point; once `agent` is
+        // owned here, the route must identify it so force_hangup will reap it.
+        self.set_active_session(self.agent.clone()).await;
         self.announce_route().await;
         let workspace = if prepared.is_empty() {
             String::new()
@@ -477,8 +582,9 @@ impl Switchboard {
         };
         let intro = format!("The switchboard has just connected a caller to you.\nThey asked for: {}\n{workspace}Greet them in one short sentence and start if appropriate.", if intent.is_empty() { "nothing specific" } else { intent });
         let Some(session) = self.agent.as_ref() else {
-            return self.reply(
-                [handoff, format!("{} did not come up.", project.id)],
+            return self.reply_transfer_error(
+                handoff,
+                format!("{} did not come up.", project.id),
                 Some("project session was not created".into()),
             );
         };
@@ -492,19 +598,25 @@ impl Switchboard {
             },
         };
         if turn.failed && turn.text.is_empty() {
+            let detail = if !turn.error.trim().is_empty() {
+                turn.error
+            } else {
+                let tail = session.stderr_tail(5);
+                if tail.is_empty() {
+                    "the agent never answered".to_owned()
+                } else {
+                    tail
+                }
+            };
             self.drop_agent().await;
-            self.operator_note = Some(format!("{} did not answer", project.id));
-            return self.reply(
-                [handoff, format!("{} didn't pick up.", project.id)],
-                Some(turn.error),
+            self.operator_note = Some(format!("The transfer to {} failed: {detail}", project.id));
+            return self.reply_transfer_error(
+                handoff,
+                format!("{} didn't pick up: {detail}", project.id),
+                Some(detail),
             );
         }
-        let prefix = [handoff, model_note]
-            .into_iter()
-            .filter(|text| !text.trim().is_empty())
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        self.reply_with_turn_prefixed(turn, prefix)
+        self.reply_with_transfer_turn(turn, handoff, model_note)
     }
     async fn start_agent(
         &self,
@@ -568,7 +680,7 @@ impl Switchboard {
                 .then(|| project.cwd.clone())
                 .filter(|p| !p.is_empty()),
             Some(env),
-            Duration::from_secs(300),
+            Duration::from_secs(600),
             self.activity_callback.clone(),
         )
         .await
@@ -655,8 +767,8 @@ impl Switchboard {
             .envs(&self.env)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true);
+            .stderr(std::process::Stdio::piped());
+        crate::pi_client::isolate_process(&mut command);
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
@@ -664,48 +776,48 @@ impl Switchboard {
                 return String::new();
             }
         };
+        let process_guard = crate::pi_client::ProcessTreeGuard::new(&child);
         let stdout_task = child.stdout.take().map(|mut output| {
             tokio::spawn(async move {
-                let mut bytes = Vec::new();
-                let _ = output.read_to_end(&mut bytes).await;
-                bytes
+                crate::pi_client::drain_bounded(&mut output, PREPARE_OUTPUT_LIMIT).await
             })
         });
         let stderr_task = child.stderr.take().map(|mut output| {
             tokio::spawn(async move {
-                let mut bytes = Vec::new();
-                let _ = output.read_to_end(&mut bytes).await;
-                bytes
+                crate::pi_client::drain_bounded(&mut output, CHILD_ERROR_LIMIT).await
             })
         });
         let status = match timeout(Duration::from_secs(120), child.wait()).await {
-            Ok(Ok(status)) => status,
+            Ok(Ok(status)) => {
+                process_guard.disarm();
+                status
+            }
             Ok(Err(error)) => {
                 tracing::warn!(project = %project.id, %error, "prepare failed");
-                let _ = child.kill().await;
-                let _ = child.wait().await;
+                crate::pi_client::terminate_process(&mut child).await;
+                process_guard.disarm();
+                abort_output(stdout_task);
+                abort_output(stderr_task);
                 return String::new();
             }
             Err(_) => {
                 tracing::warn!(project = %project.id, "prepare timed out");
-                let _ = child.kill().await;
-                let _ = child.wait().await;
+                crate::pi_client::terminate_process(&mut child).await;
+                process_guard.disarm();
+                abort_output(stdout_task);
+                abort_output(stderr_task);
                 return String::new();
             }
         };
-        let stdout = stdout_task.map(|task| async { task.await.ok().unwrap_or_default() });
-        let stderr = stderr_task.map(|task| async { task.await.ok().unwrap_or_default() });
-        let stdout = match stdout {
-            Some(task) => task.await,
-            None => Vec::new(),
-        };
-        let stderr = match stderr {
-            Some(task) => task.await,
-            None => Vec::new(),
-        };
-        let report = String::from_utf8_lossy(&stdout).trim().to_owned();
+        let stdout = join_output(stdout_task).await;
+        let stderr = join_output(stderr_task).await;
+        if stdout.truncated {
+            tracing::warn!(project = %project.id, "prepare output exceeded the size limit");
+            return "workspace refresh output was too large".into();
+        }
+        let report = String::from_utf8_lossy(&stdout.bytes).trim().to_owned();
         if !status.success() {
-            let detail = String::from_utf8_lossy(&stderr)
+            let detail = String::from_utf8_lossy(&stderr.bytes)
                 .trim()
                 .chars()
                 .take(300)
@@ -728,6 +840,22 @@ impl Switchboard {
     }
 
     async fn stage_extension(&self, host: &str) -> Option<String> {
+        if let Some(staged) = self.staged_extensions.lock().await.get(host).cloned() {
+            return staged;
+        }
+        let staged = self.upload_extension(host).await;
+        self.staged_extensions
+            .lock()
+            .await
+            .insert(host.to_owned(), staged.clone());
+        staged
+    }
+
+    async fn upload_extension(&self, host: &str) -> Option<String> {
+        self.upload_extension_with("ssh", host).await
+    }
+
+    async fn upload_extension_with(&self, ssh_program: &str, host: &str) -> Option<String> {
         let source = self.agent_extension_file.as_deref()?;
         let contents = match tokio::fs::read(source).await {
             Ok(contents) => contents,
@@ -752,7 +880,8 @@ impl Switchboard {
         let command = format!(
             "set -e; mkdir -p {cache_path}; cat > {target_path}; printf '%s' {target_path}"
         );
-        let mut child = match Command::new("ssh")
+        let mut stage_command = Command::new(ssh_program);
+        stage_command
             .args([
                 "-T",
                 "-o",
@@ -764,27 +893,45 @@ impl Switchboard {
             ])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-        {
+            .stderr(std::process::Stdio::piped());
+        crate::pi_client::isolate_process(&mut stage_command);
+        let mut child = match stage_command.spawn() {
             Ok(child) => child,
             Err(error) => {
                 tracing::warn!(%error, host, "could not stage project extension; using sentinel fallback");
                 return None;
             }
         };
-        if let Some(mut stdin) = child.stdin.take() {
-            if let Err(error) = stdin.write_all(&contents).await {
-                tracing::warn!(%error, host, "could not upload project extension; using sentinel fallback");
-                let _ = child.kill().await;
-                return None;
+        let process_guard = crate::pi_client::ProcessTreeGuard::new(&child);
+        let mut stdin = child.stdin.take();
+        let stdout_task = child.stdout.take().map(|mut output| {
+            tokio::spawn(async move {
+                crate::pi_client::drain_bounded(&mut output, STAGE_OUTPUT_LIMIT).await
+            })
+        });
+        let stderr_task = child.stderr.take().map(|mut output| {
+            tokio::spawn(async move {
+                crate::pi_client::drain_bounded(&mut output, CHILD_ERROR_LIMIT).await
+            })
+        });
+        let interaction = async {
+            if let Some(mut input) = stdin.take() {
+                input.write_all(&contents).await?;
+                drop(input);
             }
-        }
-        let output = match timeout(Duration::from_secs(30), child.wait_with_output()).await {
-            Ok(Ok(output)) => output,
+            child.wait().await
+        };
+        let status = match timeout(Duration::from_secs(30), interaction).await {
+            Ok(Ok(status)) => {
+                process_guard.disarm();
+                status
+            }
             Ok(Err(error)) => {
                 tracing::warn!(%error, host, "remote extension staging failed; using sentinel fallback");
+                crate::pi_client::terminate_process(&mut child).await;
+                process_guard.disarm();
+                abort_output(stdout_task);
+                abort_output(stderr_task);
                 return None;
             }
             Err(_) => {
@@ -792,11 +939,17 @@ impl Switchboard {
                     host,
                     "remote extension staging timed out; using sentinel fallback"
                 );
+                crate::pi_client::terminate_process(&mut child).await;
+                process_guard.disarm();
+                abort_output(stdout_task);
+                abort_output(stderr_task);
                 return None;
             }
         };
-        if !output.status.success() {
-            let detail = String::from_utf8_lossy(&output.stderr)
+        let stdout = join_output(stdout_task).await;
+        let stderr = join_output(stderr_task).await;
+        if !status.success() || stdout.truncated {
+            let detail = String::from_utf8_lossy(&stderr.bytes)
                 .trim()
                 .chars()
                 .take(300)
@@ -808,7 +961,7 @@ impl Switchboard {
             );
             return None;
         }
-        let staged = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        let staged = String::from_utf8_lossy(&stdout.bytes).trim().to_owned();
         (!staged.is_empty()).then_some(staged)
     }
 
@@ -860,6 +1013,38 @@ impl Switchboard {
             .resolve(requested, thinking)
     }
 
+    async fn select_transfer_model(
+        &mut self,
+        project: &Project,
+        requested_model: &str,
+        requested_thinking: &str,
+    ) -> (String, String) {
+        let fallback = pin_thinking(
+            project
+                .model
+                .as_deref()
+                .or(self.agent_model.as_deref())
+                .unwrap_or(""),
+            &self.agent_thinking,
+        );
+        if !self.model_swaps
+            || (requested_model.trim().is_empty() && requested_thinking.trim().is_empty())
+        {
+            return (fallback, String::new());
+        }
+
+        match self
+            .resolve_model(project, requested_model, requested_thinking)
+            .await
+        {
+            Ok(choice) => (
+                pin_thinking(&choice.spec(), &self.agent_thinking),
+                String::new(),
+            ),
+            Err(error) => (fallback, format!("About the model: {error}")),
+        }
+    }
+
     async fn redial(
         &mut self,
         model: &str,
@@ -870,6 +1055,9 @@ impl Switchboard {
         let Some(project) = self.project.clone() else {
             return self.reply(["There is no project on the line."], None);
         };
+        if !self.model_swaps {
+            return self.reply(["Model swapping is turned off on this switchboard."], None);
+        }
         let requested_model = if model.is_empty() && !self.model_spec.is_empty() {
             self.model_spec.clone()
         } else {
@@ -911,12 +1099,14 @@ impl Switchboard {
             Ok(session) => {
                 let project_name = project.id.clone();
                 self.agent = Some(session);
-                self.set_active_session(self.agent.clone()).await;
                 self.route = project.id.clone();
+                self.live_leg.set_route(&self.route);
                 self.project = Some(project);
                 self.session_id = session_id;
                 self.model_spec = spec.clone();
-                self.effective_thinking.clear();
+                // Keep route ownership coherent if a forced page action aborts
+                // the redial while its session handle is being published.
+                self.set_active_session(self.agent.clone()).await;
                 self.announce_route().await;
                 let prompt = if keep_context {
                     format!(
@@ -993,7 +1183,7 @@ impl Switchboard {
         // Prompt the operator immediately so an onward destination in the note
         // is acted on now, not stapled onto the caller's next utterance.
         let note = note.to_owned();
-        let reply = self.handle_operator(&note).await;
+        let reply = self.handle_operator(&format!("[switchboard] {note}")).await;
         if reply.error.is_some() {
             self.operator_note = Some(note);
         }
@@ -1021,9 +1211,9 @@ impl Switchboard {
         self.set_active_session(self.operator.clone()).await;
         self.project = None;
         self.route = OPERATOR.into();
+        self.live_leg.set_route(OPERATOR);
         self.model_spec.clear();
         self.session_id.clear();
-        self.effective_thinking.clear();
         if was != OPERATOR {
             self.announce_route().await;
         }
@@ -1060,14 +1250,39 @@ impl Switchboard {
             failed.then_some(error),
         )
     }
-    fn reply_with_turn_prefixed(&self, turn: Turn, prefix: String) -> Reply {
+    fn reply_transfer_error(
+        &self,
+        handoff: String,
+        message: String,
+        error: Option<String>,
+    ) -> Reply {
+        Reply::new(
+            &self.route,
+            &self.route_label(),
+            vec![
+                Utterance {
+                    text: handoff,
+                    synthesize: false,
+                },
+                Utterance {
+                    text: message,
+                    synthesize: true,
+                },
+            ],
+            error,
+        )
+    }
+
+    fn reply_with_transfer_turn(&self, turn: Turn, handoff: String, model_note: String) -> Reply {
         let mut texts = Vec::new();
-        if !prefix.trim().is_empty() {
-            texts.push(Utterance {
-                text: prefix,
-                synthesize: false,
-            });
-        }
+        texts.push(Utterance {
+            text: handoff,
+            synthesize: false,
+        });
+        texts.push(Utterance {
+            text: model_note,
+            synthesize: true,
+        });
         let spoke = turn.agent_spoke();
         let failed = turn.failed;
         let error = turn.error;
@@ -1109,7 +1324,7 @@ impl Switchboard {
         self.transfer(project, intent, String::new(), "", "").await
     }
     pub async fn force_hangup(&mut self) -> Option<String> {
-        self.last_activity = Instant::now();
+        self.touch_activity();
         if self.route == OPERATOR {
             if let Some(session) = self.operator.take() {
                 session.close().await;
@@ -1124,10 +1339,7 @@ impl Switchboard {
         Some(left)
     }
     pub async fn return_if_idle(&mut self, seconds: f64) -> Option<String> {
-        if seconds <= 0.0
-            || self.route == OPERATOR
-            || self.last_activity.elapsed().as_secs_f64() < seconds
-        {
+        if seconds <= 0.0 || self.route == OPERATOR || self.last_activity.elapsed() < seconds {
             return None;
         }
         let left = self.route.clone();
@@ -1135,7 +1347,7 @@ impl Switchboard {
         self.operator_note = Some(format!(
             "The caller went quiet, so the line to {left} was dropped."
         ));
-        self.last_activity = Instant::now();
+        self.touch_activity();
         Some(left)
     }
     pub async fn set_thinking(&mut self, level: &str) -> Reply {
@@ -1155,6 +1367,21 @@ impl Switchboard {
             Ok(_) => self.reply(["Name a thinking level and I'll set it."], None),
             Err(e) => self.reply([e.to_string()], Some(e.to_string())),
         }
+    }
+}
+
+fn abort_output(task: Option<tokio::task::JoinHandle<crate::pi_client::BoundedOutput>>) {
+    if let Some(task) = task {
+        task.abort();
+    }
+}
+
+async fn join_output(
+    task: Option<tokio::task::JoinHandle<crate::pi_client::BoundedOutput>>,
+) -> crate::pi_client::BoundedOutput {
+    match task {
+        Some(task) => task.await.unwrap_or_default(),
+        None => crate::pi_client::BoundedOutput::default(),
     }
 }
 
@@ -1187,6 +1414,70 @@ fn uuid_like() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn fake_runtime() -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "switchboard-fake-pi-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let runtime = root.join("fake-pi");
+        crate::pi_client::write_executable_script(
+            &runtime,
+            r##"operator=0
+for arg in "$@"; do
+    if [ "$arg" = "--no-builtin-tools" ]; then operator=1; fi
+done
+count=0
+while IFS= read -r line; do
+    count=$((count + 1))
+    if [ "$operator" -eq 1 ]; then
+        if [ "$count" -eq 1 ]; then
+            printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Connecting now."}}'
+            printf '%s\n' '{"type":"tool_execution_start","toolName":"transfer_to_project","args":{"project":"alpha","intent":"inspect it"}}'
+        else
+            printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Operator has you again."}}'
+        fi
+    else
+        if [ "$count" -eq 1 ]; then
+            printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Alpha is ready."}}'
+        else
+            printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Alpha finished."}}'
+            printf '%s\n' '{"type":"tool_execution_start","toolName":"return_to_operator","args":{"summary":"work complete"}}'
+        fi
+    fi
+    printf '%s\n' '{"type":"agent_settled"}'
+done
+"##,
+        );
+        (root, runtime)
+    }
+
+    fn board_with(projects: Vec<Project>, model_swaps: bool) -> Switchboard {
+        Switchboard::new(
+            Registry::new(projects),
+            "pi".into(),
+            None,
+            "".into(),
+            None,
+            None,
+            None,
+            "medium".into(),
+            ".cache".into(),
+            model_swaps,
+            "".into(),
+            "".into(),
+            "".into(),
+            "".into(),
+            HashMap::new(),
+        )
+    }
+
     #[test]
     fn status_exposes_project_ids() {
         let project = Project {
@@ -1201,46 +1492,193 @@ mod tests {
             extra_args: vec![],
             prepare: String::new(),
         };
-        let board = Switchboard::new(
-            Registry::new(vec![project]),
-            "pi".into(),
-            None,
-            "".into(),
-            None,
-            None,
-            None,
-            "medium".into(),
-            ".cache".into(),
-            true,
-            "".into(),
-            "".into(),
-            "".into(),
-            "".into(),
-            HashMap::new(),
-        );
+        let board = board_with(vec![project], true);
         assert_eq!(board.status()["projects"], serde_json::json!(["alpha"]));
     }
 
     #[test]
     fn state_starts_on_operator() {
-        let board = Switchboard::new(
-            Registry::new(vec![]),
-            "pi".into(),
+        let board = board_with(vec![], true);
+        assert_eq!(board.route(), OPERATOR);
+        assert_eq!(board.status()["route"], OPERATOR);
+    }
+
+    #[tokio::test]
+    async fn transfer_model_requests_obey_the_swap_gate_and_pin_defaults() {
+        let project = Project {
+            id: "alpha".into(),
+            description: String::new(),
+            aliases: vec![],
+            host: None,
+            cwd: String::new(),
+            runtime: "definitely-missing-pi".into(),
+            model: Some("anthropic/default".into()),
+            stage_extension: true,
+            extra_args: vec![],
+            prepare: String::new(),
+        };
+
+        let mut disabled = board_with(vec![project.clone()], false);
+        let (model, note) = disabled
+            .select_transfer_model(&project, "other/requested", "high")
+            .await;
+        assert_eq!(model, "anthropic/default:medium");
+        assert!(note.is_empty());
+
+        let mut enabled = board_with(vec![project.clone()], true);
+        let (model, note) = enabled
+            .select_transfer_model(&project, "other/requested", "")
+            .await;
+        assert_eq!(model, "other/requested:medium");
+        assert!(note.is_empty());
+
+        let (model, note) = enabled.select_transfer_model(&project, "", "").await;
+        assert_eq!(model, "anthropic/default:medium");
+        assert!(note.is_empty());
+    }
+
+    #[tokio::test]
+    async fn missing_extension_is_cached_per_host() {
+        let board = board_with(vec![], true);
+        assert_eq!(board.stage_extension("host-a").await, None);
+        assert_eq!(board.stage_extension("host-a").await, None);
+        assert_eq!(board.staged_extensions.lock().await.len(), 1);
+    }
+
+    #[test]
+    fn transfer_handoff_is_silent_but_model_notes_and_failures_are_spoken() {
+        let board = board_with(vec![], true);
+        let reply = board.reply_with_transfer_turn(
+            Turn {
+                text: "Ready.".into(),
+                signals: vec![],
+                failed: false,
+                error: String::new(),
+            },
+            "Putting you through.".into(),
+            "About the model: that name was ambiguous.".into(),
+        );
+        assert_eq!(
+            reply.to_speak,
+            ["About the model: that name was ambiguous.", "Ready."]
+        );
+
+        let failed = board.reply_transfer_error(
+            "Putting you through.".into(),
+            "The project did not answer.".into(),
+            Some("failed".into()),
+        );
+        assert_eq!(failed.to_speak, ["The project did not answer."]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fake_pi_process_completes_transfer_and_return_lifecycle() {
+        let (root, runtime) = fake_runtime();
+        let project = Project {
+            id: "alpha".into(),
+            description: "test project".into(),
+            aliases: vec!["alpha project".into()],
+            host: None,
+            cwd: root.to_string_lossy().into_owned(),
+            runtime: runtime.to_string_lossy().into_owned(),
+            model: None,
+            stage_extension: false,
+            extra_args: Vec::new(),
+            prepare: String::new(),
+        };
+        let mut board = Switchboard::new(
+            Registry::new(vec![project]),
+            runtime.to_string_lossy().into_owned(),
             None,
-            "".into(),
+            String::new(),
             None,
             None,
             None,
             "medium".into(),
-            ".cache".into(),
+            ".cache/switchboard".into(),
             true,
-            "".into(),
-            "".into(),
-            "".into(),
-            "".into(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
             HashMap::new(),
         );
+        board.set_route_callback(Some(Arc::new(|_| {
+            Box::pin(async move {
+                panic!("browser disappeared");
+            })
+        })));
+
+        let connected = board.handle("put me through").await;
+        assert_eq!(connected.route, "alpha");
+        assert!(connected.text.contains("Connecting now."));
+        assert!(connected.text.contains("Alpha is ready."));
+        assert_eq!(board.route(), "alpha");
+
+        let returned = board.handle("we are done").await;
+        assert_eq!(returned.route, OPERATOR);
+        assert!(returned.text.contains("Alpha finished."));
+        assert!(returned.text.contains("Operator has you again."));
         assert_eq!(board.route(), OPERATOR);
-        assert_eq!(board.status()["route"], OPERATOR);
+
+        board.shutdown().await;
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fake_ssh_stages_the_extension_and_returns_its_remote_path() {
+        let root = std::env::temp_dir().join(format!(
+            "switchboard-stage-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let extension = root.join("agent.ts");
+        std::fs::write(&extension, "export default 'staged';\n").unwrap();
+        let ssh = root.join("fake-ssh");
+        crate::pi_client::write_executable_script(
+            &ssh,
+            &format!(
+                "HOME={}; export HOME\nfor arg in \"$@\"; do command=$arg; done\nexec sh -c \"$command\"\n",
+                crate::pi_client::shell_quote(&home.to_string_lossy())
+            ),
+        );
+
+        let board = Switchboard::new(
+            Registry::new(Vec::new()),
+            "pi".into(),
+            None,
+            String::new(),
+            None,
+            Some(extension.to_string_lossy().into_owned()),
+            None,
+            "medium".into(),
+            ".cache/switchboard".into(),
+            true,
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            HashMap::new(),
+        );
+        let staged = board
+            .upload_extension_with(&ssh.to_string_lossy(), "fake-host")
+            .await
+            .unwrap();
+        assert_eq!(
+            staged,
+            home.join(".cache/switchboard/agent.ts").to_string_lossy()
+        );
+        assert_eq!(
+            std::fs::read_to_string(&staged).unwrap(),
+            "export default 'staged';\n"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

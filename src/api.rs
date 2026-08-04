@@ -1,7 +1,7 @@
 //! HTTP, WebSocket and application workers.
 use crate::audio::{Speaker, SttAdapter};
 use crate::history::{TranscriptLog, AGENT, CALLER};
-use crate::pbx::{RouteCallback, Switchboard};
+use crate::pbx::{ActivityClock, LiveLegState, RouteCallback, Switchboard};
 use crate::pi_client::{Activity, ActivityCallback, PiSession};
 use axum::extract::ws::{Message, WebSocket};
 use axum::{
@@ -13,14 +13,18 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
+    future::Future,
     sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, RwLock as StdRwLock,
     },
 };
-use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::sync::{broadcast, mpsc, watch, Mutex};
+use tokio::task::{AbortHandle, Id as TaskId, JoinHandle};
 use tower_http::services::ServeDir;
+
+const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct AppState(pub Arc<AppInner>);
@@ -30,15 +34,24 @@ pub struct AppInner {
     pub speaker: Speaker,
     pub stt: SttAdapter,
     pub events: broadcast::Sender<Event>,
+    status_snapshot: Arc<StdRwLock<Value>>,
+    speech: mpsc::Sender<String>,
+    speech_rx: Mutex<Option<mpsc::Receiver<String>>>,
     clips: mpsc::Sender<Clip>,
     clip_rx: Mutex<Option<mpsc::Receiver<Clip>>>,
-    pub turns: mpsc::Sender<(String, String)>,
-    turn_rx: Mutex<Option<mpsc::Receiver<(String, String)>>>,
+    pub turns: mpsc::Sender<(String, String, u64)>,
+    turn_rx: Mutex<Option<mpsc::Receiver<(String, String, u64)>>>,
     pub accepted_clips: Mutex<(HashSet<String>, VecDeque<String>)>,
     pub last_diagram: Arc<Mutex<Option<Value>>>,
     pub active_session: Arc<Mutex<Option<PiSession>>>,
+    activity_clock: ActivityClock,
+    live_leg: LiveLegState,
+    operation_transition: Mutex<()>,
+    active_operations: Mutex<HashMap<TaskId, AbortHandle>>,
     pub turn_generation: AtomicU64,
     pub queued_turns: AtomicU64,
+    pub turn_in_flight: AtomicBool,
+    shutdown: watch::Sender<bool>,
 }
 #[derive(Clone, Debug)]
 pub enum Event {
@@ -50,6 +63,11 @@ pub struct Clip {
     id: String,
     audio: Vec<u8>,
     _mime: String,
+    // Stamped when the clip is accepted, not when its transcript comes back.
+    // Transcription is a sidecar round trip, and a page transfer can land
+    // inside it; without this the reply epoch would be read after the rescue
+    // and pre-rescue speech would count as current.
+    generation: u64,
 }
 
 impl AppState {
@@ -60,8 +78,14 @@ impl AppState {
         stt: SttAdapter,
     ) -> Self {
         let (events, _) = broadcast::channel(256);
-        let (clips, clip_rx) = mpsc::channel(64);
+        let (speech, speech_rx) = mpsc::channel(64);
+        // Audio frames may be up to the WebSocket limit. A small bounded queue
+        // prevents a stalled decoder from retaining roughly a gigabyte of
+        // accepted clips while still leaving ample room for one caller's
+        // retransmit/burst behavior.
+        let (clips, clip_rx) = mpsc::channel(8);
         let (turns, turn_rx) = mpsc::channel(64);
+        let (shutdown, _) = watch::channel(false);
         let activity_events = events.clone();
         let activity_callback: ActivityCallback = Arc::new(move |activity: Activity| {
             let events = activity_events.clone();
@@ -76,17 +100,25 @@ impl AppState {
             })
         });
         let last_diagram = Arc::new(Mutex::new(None));
+        let status_snapshot = Arc::new(StdRwLock::new(switchboard.status()));
         let route_events = events.clone();
         let route_diagram = last_diagram.clone();
+        let route_status = status_snapshot.clone();
         let route_callback: RouteCallback = Arc::new(move |status| {
             let events = route_events.clone();
             let diagram = route_diagram.clone();
+            let status_snapshot = route_status.clone();
             Box::pin(async move {
+                *status_snapshot
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = status.clone();
                 *diagram.lock().await = None;
                 let _ = events.send(Event::Json(status));
             })
         });
         let active_session = switchboard.session_control();
+        let activity_clock = switchboard.activity_clock();
+        let live_leg = switchboard.live_leg_state();
         let mut switchboard = switchboard;
         switchboard.set_activity_callback(Some(activity_callback));
         switchboard.set_route_callback(Some(route_callback));
@@ -96,6 +128,9 @@ impl AppState {
             speaker,
             stt,
             events,
+            status_snapshot,
+            speech,
+            speech_rx: Mutex::new(Some(speech_rx)),
             clips,
             clip_rx: Mutex::new(Some(clip_rx)),
             turns,
@@ -103,8 +138,14 @@ impl AppState {
             accepted_clips: Mutex::new((HashSet::new(), VecDeque::new())),
             last_diagram,
             active_session,
+            activity_clock,
+            live_leg,
+            operation_transition: Mutex::new(()),
+            active_operations: Mutex::new(HashMap::new()),
             turn_generation: AtomicU64::new(0),
             queued_turns: AtomicU64::new(0),
+            turn_in_flight: AtomicBool::new(false),
+            shutdown,
         }))
     }
     pub fn router(self, static_dir: Option<ServeDir>) -> Router {
@@ -128,6 +169,10 @@ impl AppState {
 }
 
 pub fn spawn_workers(state: AppState) {
+    let speech_state = state.clone();
+    tokio::spawn(async move {
+        process_speech(speech_state).await;
+    });
     let clip_state = state.clone();
     tokio::spawn(async move {
         process_clips(clip_state).await;
@@ -136,22 +181,39 @@ pub fn spawn_workers(state: AppState) {
         process_turns(state).await;
     });
 }
+pub async fn shutdown(state: &AppState) {
+    // Close upgraded WebSockets as well as the PBX children. Axum's graceful
+    // shutdown waits for upgraded connections, so merely stopping the listener
+    // can otherwise leave systemd waiting on a browser tab indefinitely.
+    state.0.shutdown.send_replace(true);
+    interrupt_active_turn(state).await;
+    state.0.switchboard.lock().await.shutdown().await;
+}
 pub fn spawn_idle_worker(state: AppState, idle_timeout: f64, poll_seconds: f64) {
     if idle_timeout <= 0.0 {
         return;
     }
     tokio::spawn(async move {
         let poll = tokio::time::Duration::from_secs_f64(poll_seconds.max(1.0));
+        let mut shutdown = state.0.shutdown.subscribe();
         loop {
-            tokio::time::sleep(poll).await;
+            tokio::select! {
+                _ = tokio::time::sleep(poll) => {}
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        return;
+                    }
+                    continue;
+                }
+            }
             let mut board = state.0.switchboard.lock().await;
             if let Some(left) = board.return_if_idle(idle_timeout).await {
                 let route = board.route().to_owned();
                 drop(board);
-                if let Some(entry) = state.0.transcript_log.lock().await.add(AGENT, &format!("Nothing was said for {idle_timeout:.0} seconds, so the line to {left} was dropped. You're back with the operator."), route) {
+                let minutes = (idle_timeout / 60.0).floor() as u64;
+                if let Some(entry) = state.0.transcript_log.lock().await.add(AGENT, &format!("Nothing was said for {minutes} minutes, so the line to {left} was dropped. You're back with the operator."), route) {
                     emit_json(&state, json!({"type":"spoken", "entry":entry}));
                 }
-                emit_json(&state, state.0.switchboard.lock().await.status());
             }
         }
     });
@@ -161,6 +223,69 @@ fn emit(state: &AppState, event: Event) -> bool {
 }
 fn emit_json(state: &AppState, value: Value) -> bool {
     emit(state, Event::Json(value))
+}
+fn current_status(state: &AppState) -> Value {
+    state
+        .0
+        .status_snapshot
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+fn publish_status(state: &AppState, status: Value) {
+    *state
+        .0
+        .status_snapshot
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = status.clone();
+    emit_json(state, status);
+}
+async fn spawn_active_operation<F, T>(state: &AppState, future: F) -> (JoinHandle<T>, TaskId, u64)
+where
+    F: Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    let _transition = state.0.operation_transition.lock().await;
+    let generation = state.0.turn_generation.load(Ordering::Acquire);
+    let (task, id) = spawn_registered_operation(state, future).await;
+    (task, id, generation)
+}
+async fn spawn_registered_operation<F, T>(state: &AppState, future: F) -> (JoinHandle<T>, TaskId)
+where
+    F: Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    // Acquire the registry before spawning. A rescue cannot observe a task
+    // that owns (or is about to own) the PBX lock without its abort handle.
+    let mut active = state.0.active_operations.lock().await;
+    let task = tokio::spawn(future);
+    let abort = task.abort_handle();
+    let id = abort.id();
+    active.insert(id, abort);
+    (task, id)
+}
+async fn clear_active_operation(state: &AppState, id: TaskId) {
+    state.0.active_operations.lock().await.remove(&id);
+}
+
+async fn process_speech(state: AppState) {
+    let mut receiver = state
+        .0
+        .speech_rx
+        .lock()
+        .await
+        .take()
+        .expect("speech worker started once");
+    while let Some(text) = receiver.recv().await {
+        match state.0.speaker.synthesize(&text).await {
+            Ok(audio) => {
+                emit(&state, Event::Audio(audio));
+            }
+            Err(error) => {
+                emit_json(&state, json!({"type":"error", "message":error.to_string()}));
+            }
+        }
+    }
 }
 
 async fn process_clips(state: AppState) {
@@ -189,24 +314,17 @@ async fn process_clips(state: AppState) {
             );
             continue;
         }
-        let route = state.0.switchboard.lock().await.route().to_owned();
-        if let Some(entry) = state.0.transcript_log.lock().await.add_with_id(
+        let route = state.0.live_leg.route();
+        state.0.transcript_log.lock().await.add_with_id(
             CALLER,
             &transcript,
             route,
             Some(clip.id.clone()),
-        ) {
-            let object = serde_json::to_value(&entry).unwrap_or_default();
-            emit_json(
-                &state,
-                json!({"type":"transcript", "id":clip.id, "entry":object, "text":transcript}),
-            );
-        } else {
-            emit_json(
-                &state,
-                json!({"type":"transcript", "id":clip.id, "text":transcript}),
-            );
-        }
+        );
+        emit_json(
+            &state,
+            json!({"type":"transcript", "id":clip.id, "text":transcript}),
+        );
         // Steering is deliberately performed through the shared session handle,
         // not while holding the PBX mutex. The turn worker keeps that mutex for
         // the duration of handle(), so awaiting here would deadlock it.
@@ -215,6 +333,13 @@ async fn process_clips(state: AppState) {
             // redial cannot replace the child between the identity check and
             // the steer. The PBX mutex is intentionally not held here.
             let active = state.0.active_session.lock().await;
+            // Speech captured before a page rescue is discarded rather than
+            // acted on. Checked under the session guard because a rescue bumps
+            // the generation before it closes the session, so a steer that wins
+            // this lock still observes the new epoch.
+            if clip.generation != state.0.turn_generation.load(Ordering::Acquire) {
+                continue;
+            }
             match active.as_ref().cloned() {
                 None => false,
                 Some(session) if !session.busy() || !session.alive().await => false,
@@ -227,7 +352,7 @@ async fn process_clips(state: AppState) {
             }
         };
         if steered {
-            state.0.switchboard.lock().await.touch_activity();
+            state.0.activity_clock.touch();
             emit_json(
                 &state,
                 json!({"type":"queued", "id":clip.id, "waiting":0, "steered":true}),
@@ -237,14 +362,16 @@ async fn process_clips(state: AppState) {
             if state
                 .0
                 .turns
-                .send((clip.id.clone(), transcript))
+                .send((clip.id.clone(), transcript, clip.generation))
                 .await
                 .is_ok()
             {
-                emit_json(
-                    &state,
-                    json!({"type":"queued", "id":clip.id, "waiting":waiting, "steered":false}),
-                );
+                if waiting > 1 || state.0.turn_in_flight.load(Ordering::Acquire) {
+                    emit_json(
+                        &state,
+                        json!({"type":"queued", "id":clip.id, "waiting":waiting, "steered":false}),
+                    );
+                }
             } else {
                 state.0.queued_turns.fetch_sub(1, Ordering::AcqRel);
             }
@@ -259,67 +386,99 @@ async fn process_turns(state: AppState) {
         .await
         .take()
         .expect("turn worker started once");
-    while let Some((_id, transcript)) = receiver.recv().await {
+    while let Some((_id, transcript, generation)) = receiver.recv().await {
         state.0.queued_turns.fetch_sub(1, Ordering::AcqRel);
-        let generation = state.0.turn_generation.load(Ordering::Acquire);
-        let status = state.0.switchboard.lock().await.status();
-        let waiting = state.0.queued_turns.load(Ordering::Acquire);
-        emit_json(
-            &state,
-            json!({"type":"thinking", "route":status["route"], "waiting":waiting}),
-        );
-        let reply = state.0.switchboard.lock().await.handle(&transcript).await;
-        if generation != state.0.turn_generation.load(Ordering::Acquire) {
-            continue;
-        }
-        if !reply.text.is_empty() {
-            let route = reply.route.clone();
-            state
-                .0
-                .transcript_log
-                .lock()
-                .await
-                .add(AGENT, &reply.text, route);
-        }
-        emit_json(
-            &state,
-            json!({"type":"reply", "text":reply.text, "route":reply.route, "error":reply.error}),
-        );
-        emit_json(&state, state.0.switchboard.lock().await.status());
-        for text in reply.to_speak {
-            let spoken = state.0.speaker.clip_for_speech(&text);
-            if spoken.is_empty() {
+        let turn_state = state.clone();
+        // Register the abort handle before awaiting the task. Page-level rescue
+        // endpoints can now cancel work even while transfer setup has no
+        // PiSession yet.
+        let (task, task_id) = {
+            let _transition = state.0.operation_transition.lock().await;
+            if generation != state.0.turn_generation.load(Ordering::Acquire) {
                 continue;
             }
-            let _ = match state.0.speaker.synthesize(&spoken).await {
-                Ok(audio) => emit(&state, Event::Audio(audio)),
-                Err(error) => {
-                    emit_json(&state, json!({"type":"error", "message":error.to_string()}));
-                    break;
-                }
-            };
-        }
+            state.0.turn_in_flight.store(true, Ordering::Release);
+            let status = current_status(&state);
+            let waiting = state.0.queued_turns.load(Ordering::Acquire);
+            emit_json(
+                &state,
+                json!({"type":"thinking", "route":status["route"], "waiting":waiting}),
+            );
+            spawn_registered_operation(&state, async move {
+                let mut board = turn_state.0.switchboard.lock().await;
+                let reply = board.handle(&transcript).await;
+                let status = board.status();
+                (reply, status)
+            })
+            .await
+        };
+        let (reply, status) = match task.await {
+            Ok(result) => result,
+            Err(error) if error.is_cancelled() => {
+                clear_active_operation(&state, task_id).await;
+                state.0.turn_in_flight.store(false, Ordering::Release);
+                continue;
+            }
+            Err(error) => {
+                clear_active_operation(&state, task_id).await;
+                state.0.turn_in_flight.store(false, Ordering::Release);
+                emit_json(
+                    &state,
+                    json!({"type":"error", "message":format!("The call worker failed on that turn: {error}")}),
+                );
+                continue;
+            }
+        };
+        clear_active_operation(&state, task_id).await;
+        deliver_turn_if_current(&state, &reply, status, generation).await;
+        state.0.turn_in_flight.store(false, Ordering::Release);
     }
 }
 
 async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
-    let board = state.0.switchboard.lock().await;
-    let status = board.status();
+    let status = current_status(&state);
     Json(
         json!({"status":"ok", "whisper_model":"sidecar", "stt_configured":state.0.stt.command.is_some(), "stt_adapter":"sidecar", "elevenlabs_configured":state.0.speaker.configured(), "route":status["route"], "model":status["model"], "thinking":status["thinking"], "model_swaps":status["model_swaps"], "projects":status["projects"]}),
     )
 }
 async fn status(State(state): State<AppState>) -> impl IntoResponse {
-    Json(state.0.switchboard.lock().await.status())
+    Json(current_status(&state))
 }
-async fn hangup(State(state): State<AppState>) -> impl IntoResponse {
+async fn interrupt_active_turn(state: &AppState) -> Option<String> {
+    let _transition = state.0.operation_transition.lock().await;
+    cancel_active_operations(state).await
+}
+async fn cancel_active_operations(state: &AppState) -> Option<String> {
     state.0.turn_generation.fetch_add(1, Ordering::AcqRel);
+    let operations = std::mem::take(&mut *state.0.active_operations.lock().await);
+    for operation in operations.into_values() {
+        operation.abort();
+    }
     let active = state.0.active_session.lock().await.clone();
+    let label = active.as_ref().map(|session| session.label().to_owned());
     if let Some(session) = active {
         session.close().await;
     }
+    label
+}
+async fn spawn_replacing_operation<F, T>(
+    state: &AppState,
+    future: F,
+) -> (JoinHandle<T>, TaskId, u64)
+where
+    F: Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    let _transition = state.0.operation_transition.lock().await;
+    cancel_active_operations(state).await;
+    let generation = state.0.turn_generation.load(Ordering::Acquire);
+    let (task, id) = spawn_registered_operation(state, future).await;
+    (task, id, generation)
+}
+async fn hangup(State(state): State<AppState>) -> impl IntoResponse {
+    let interrupted = interrupt_active_turn(&state).await;
     let mut board = state.0.switchboard.lock().await;
-    let left = board.force_hangup().await;
+    let left = board.force_hangup().await.or(interrupted);
     let status = board.status();
     drop(board);
     if let Some(left) = &left {
@@ -330,11 +489,12 @@ async fn hangup(State(state): State<AppState>) -> impl IntoResponse {
         ) {
             emit_json(&state, json!({"type":"spoken", "entry":entry}));
         }
-        emit_json(&state, status);
+        publish_status(&state, status);
     }
-    Json(
-        json!({"hungup":left.is_some(), "left":left, "reason":if left.is_none() { Some("already on the operator") } else { None }}),
-    )
+    match left {
+        Some(left) => Json(json!({"hungup":true, "left":left})),
+        None => Json(json!({"hungup":false, "reason":"already on the operator"})),
+    }
 }
 #[derive(Deserialize)]
 struct Connect {
@@ -342,33 +502,94 @@ struct Connect {
     #[serde(default)]
     intent: String,
 }
-async fn connect(State(state): State<AppState>, Json(req): Json<Connect>) -> impl IntoResponse {
-    let reply = state
-        .0
-        .switchboard
-        .lock()
-        .await
-        .dial(&req.project, &req.intent)
-        .await;
-    deliver_reply(&state, &reply).await;
-    Json(json!({"route":reply.route, "error":reply.error.clone()}))
+async fn connect(State(state): State<AppState>, Json(req): Json<Connect>) -> Response {
+    // The picker is also an escape hatch. Cancel setup or a wedged live turn
+    // before taking the PBX lock; otherwise a direct connection can wait for
+    // the very leg the caller is trying to leave.
+    let operation_state = state.clone();
+    let (task, task_id, generation) = spawn_replacing_operation(&state, async move {
+        let mut board = operation_state.0.switchboard.lock().await;
+        let reply = board.dial(&req.project, &req.intent).await;
+        let status = board.status();
+        (reply, status)
+    })
+    .await;
+    let (reply, status) = match task.await {
+        Ok(result) => result,
+        Err(error) if error.is_cancelled() => {
+            clear_active_operation(&state, task_id).await;
+            return (
+                axum::http::StatusCode::CONFLICT,
+                Json(json!({"detail":"connection attempt was cancelled"})),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            clear_active_operation(&state, task_id).await;
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail":format!("connection attempt failed: {error}")})),
+            )
+                .into_response();
+        }
+    };
+    clear_active_operation(&state, task_id).await;
+    if !deliver_page_reply_if_current(&state, &reply, status, generation).await {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({"detail":"connection attempt was superseded"})),
+        )
+            .into_response();
+    }
+    Json(json!({"route":reply.route, "error":reply.error.clone()})).into_response()
 }
 #[derive(Deserialize)]
 struct Thinking {
     level: String,
 }
-async fn thinking(State(state): State<AppState>, Json(req): Json<Thinking>) -> impl IntoResponse {
-    let reply = state
-        .0
-        .switchboard
-        .lock()
-        .await
-        .set_thinking(&req.level)
-        .await;
-    deliver_reply(&state, &reply).await;
-    Json(
-        json!({"thinking":state.0.switchboard.lock().await.status()["thinking"], "error":reply.error.clone()}),
-    )
+async fn thinking(State(state): State<AppState>, Json(req): Json<Thinking>) -> Response {
+    let operation_state = state.clone();
+    let operation = async move {
+        let mut board = operation_state.0.switchboard.lock().await;
+        let reply = board.set_thinking(&req.level).await;
+        let status = board.status();
+        (reply, status)
+    };
+    let (task, task_id, generation) = if state.0.live_leg.route() == crate::pbx::OPERATOR {
+        let (task, task_id, generation) = spawn_active_operation(&state, operation).await;
+        (task, task_id, generation)
+    } else {
+        spawn_replacing_operation(&state, operation).await
+    };
+    let (reply, status) = match task.await {
+        Ok(result) => result,
+        Err(error) if error.is_cancelled() => {
+            clear_active_operation(&state, task_id).await;
+            return (
+                axum::http::StatusCode::CONFLICT,
+                Json(json!({"detail":"thinking change was cancelled"})),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            clear_active_operation(&state, task_id).await;
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail":format!("thinking change failed: {error}")})),
+            )
+                .into_response();
+        }
+    };
+    clear_active_operation(&state, task_id).await;
+    if !deliver_page_reply_if_current(&state, &reply, status, generation).await {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({"detail":"thinking change was superseded"})),
+        )
+            .into_response();
+    }
+    Json(json!({"thinking":current_status(&state)["thinking"], "error":reply.error.clone()}))
+        .into_response()
 }
 #[derive(Deserialize)]
 struct LegState {
@@ -376,14 +597,12 @@ struct LegState {
     thinking: String,
 }
 async fn leg_state(State(state): State<AppState>, Json(req): Json<LegState>) -> impl IntoResponse {
-    let accepted = state
-        .0
-        .switchboard
-        .lock()
-        .await
-        .report_leg_state(&req.thinking);
+    let accepted = state.0.live_leg.report_thinking(&req.thinking);
     if accepted {
-        emit_json(&state, state.0.switchboard.lock().await.status());
+        let mut status = current_status(&state);
+        status["thinking"] = Value::String(req.thinking.clone());
+        status["thinking_confirmed"] = Value::Bool(true);
+        publish_status(&state, status);
     }
     Json(json!({"accepted":accepted}))
 }
@@ -392,17 +611,38 @@ struct Speak {
     text: String,
 }
 async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Response {
-    let audio = match state.0.speaker.synthesize(&req.text).await {
-        Ok(a) => a,
-        Err(e) => {
-            return (
-                axum::http::StatusCode::BAD_GATEWAY,
-                Json(json!({"detail":e.to_string()})),
-            )
-                .into_response()
+    if req.text.trim().is_empty() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({"detail":"text must not be empty"})),
+        )
+            .into_response();
+    }
+    if !state.0.speaker.configured() {
+        return (
+            axum::http::StatusCode::BAD_GATEWAY,
+            Json(json!({"detail":"ELEVENLABS_API_KEY is not set"})),
+        )
+            .into_response();
+    }
+
+    let spoken = state.0.speaker.clip_for_speech(&req.text);
+    let speech_permit = if spoken.is_empty() {
+        None
+    } else {
+        match state.0.speech.try_reserve() {
+            Ok(permit) => Some(permit),
+            Err(_) => {
+                return (
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({"detail":"speech worker is unavailable or busy"})),
+                )
+                    .into_response()
+            }
         }
     };
-    let route = state.0.switchboard.lock().await.route().to_owned();
+
+    let route = state.0.live_leg.route();
     if let Some(entry) = state
         .0
         .transcript_log
@@ -412,12 +652,13 @@ async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Respons
     {
         emit_json(&state, json!({"type":"spoken", "entry":entry}));
     }
-    if state.0.events.receiver_count() == 0 {
-        return Json(json!({"delivered":false, "reason":"no browser connected"})).into_response();
+
+    let delivered = state.0.events.receiver_count() > 0;
+    if let Some(permit) = speech_permit {
+        permit.send(spoken);
     }
-    let delivered = emit(&state, Event::Audio(audio));
-    Json(json!({"delivered":delivered, "reason":(!delivered).then_some("no browser connected")}))
-        .into_response()
+
+    Json(delivery_response(delivered)).into_response()
 }
 #[derive(Deserialize)]
 struct Diagram {
@@ -432,9 +673,25 @@ async fn diagram(State(state): State<AppState>, Json(req): Json<Diagram>) -> imp
         json!({"type":"diagram", "source":req.source, "title":req.title, "notes":req.notes});
     *state.0.last_diagram.lock().await = Some(value.clone());
     let delivered = emit_json(&state, value);
-    Json(json!({"delivered":delivered, "reason":(!delivered).then_some("no browser connected")}))
+    Json(delivery_response(delivered))
 }
-async fn deliver_reply(state: &AppState, reply: &crate::pbx::Reply) {
+fn delivery_response(delivered: bool) -> Value {
+    if delivered {
+        json!({"delivered":true})
+    } else {
+        json!({"delivered":false, "reason":"no browser connected"})
+    }
+}
+async fn deliver_page_reply_if_current(
+    state: &AppState,
+    reply: &crate::pbx::Reply,
+    status: Value,
+    generation: u64,
+) -> bool {
+    let _transition = state.0.operation_transition.lock().await;
+    if generation != state.0.turn_generation.load(Ordering::Acquire) {
+        return false;
+    }
     if !reply.text.is_empty() {
         if let Some(entry) =
             state
@@ -447,13 +704,54 @@ async fn deliver_reply(state: &AppState, reply: &crate::pbx::Reply) {
             emit_json(state, json!({"type":"spoken", "entry":entry}));
         }
     }
-    emit_json(state, state.0.switchboard.lock().await.status());
-    for text in &reply.to_speak {
+    publish_status(state, status);
+    drop(_transition);
+    synthesize_reply_if_current(state, &reply.to_speak, generation).await
+}
+
+async fn deliver_turn_if_current(
+    state: &AppState,
+    reply: &crate::pbx::Reply,
+    status: Value,
+    generation: u64,
+) -> bool {
+    let _transition = state.0.operation_transition.lock().await;
+    if generation != state.0.turn_generation.load(Ordering::Acquire) {
+        return false;
+    }
+    if !reply.text.is_empty() {
+        state
+            .0
+            .transcript_log
+            .lock()
+            .await
+            .add(AGENT, &reply.text, reply.route.clone());
+    }
+    emit_json(
+        state,
+        json!({"type":"reply", "text":reply.text, "route":reply.route}),
+    );
+    publish_status(state, status);
+    drop(_transition);
+    synthesize_reply_if_current(state, &reply.to_speak, generation).await
+}
+
+async fn synthesize_reply_if_current(
+    state: &AppState,
+    utterances: &[String],
+    generation: u64,
+) -> bool {
+    for text in utterances {
         let spoken = state.0.speaker.clip_for_speech(text);
         if spoken.is_empty() {
             continue;
         }
-        match state.0.speaker.synthesize(&spoken).await {
+        let synthesized = state.0.speaker.synthesize(&spoken).await;
+        let _transition = state.0.operation_transition.lock().await;
+        if generation != state.0.turn_generation.load(Ordering::Acquire) {
+            return false;
+        }
+        match synthesized {
             Ok(audio) => {
                 emit(state, Event::Audio(audio));
             }
@@ -463,33 +761,30 @@ async fn deliver_reply(state: &AppState, reply: &crate::pbx::Reply) {
             }
         }
     }
+    generation == state.0.turn_generation.load(Ordering::Acquire)
 }
 
 async fn ws(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> impl IntoResponse {
-    upgrade.on_upgrade(move |socket| websocket(socket, state))
+    upgrade
+        .max_message_size(MAX_WEBSOCKET_MESSAGE_BYTES)
+        .max_frame_size(MAX_WEBSOCKET_MESSAGE_BYTES)
+        .on_upgrade(move |socket| websocket(socket, state))
 }
 async fn websocket(mut socket: WebSocket, state: AppState) {
     let mut events = state.0.events.subscribe();
-    let initial = [
-        Event::Json(state.0.switchboard.lock().await.status()),
-        Event::Json(
-            serde_json::to_value(state.0.transcript_log.lock().await.payload()).unwrap_or_default(),
-        ),
-    ];
-    for event in initial {
-        if send_event(&mut socket, event).await.is_err() {
-            return;
-        }
-    }
-    if let Some(diagram) = state.0.last_diagram.lock().await.clone() {
-        if send_event(&mut socket, Event::Json(diagram)).await.is_err() {
-            return;
-        }
+    let mut shutdown = state.0.shutdown.subscribe();
+    if send_snapshot(&mut socket, &state).await.is_err() {
+        return;
     }
 
     let mut pending_header: Option<(String, String)> = None;
     loop {
         tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return;
+                }
+            }
             received = socket.recv() => match received {
                 Some(Ok(Message::Text(text))) => {
                     if handle_text_frame(&mut socket, &mut pending_header, text.as_ref()).await.is_err() {
@@ -501,7 +796,13 @@ async fn websocket(mut socket: WebSocket, state: AppState) {
                         return;
                     }
                 }
-                _ => return,
+                Some(Ok(Message::Ping(bytes))) => {
+                    if socket.send(Message::Pong(bytes)).await.is_err() {
+                        return;
+                    }
+                }
+                Some(Ok(Message::Pong(_))) => {}
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return,
             },
             event = events.recv() => match event {
                 Ok(event) => {
@@ -509,11 +810,35 @@ async fn websocket(mut socket: WebSocket, state: AppState) {
                         return;
                     }
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    // Drop the retained stale tail and rebuild from durable
+                    // state. History/status/diagram are authoritative; activity
+                    // and already-missed audio are intentionally ephemeral.
+                    events = state.0.events.subscribe();
+                    if send_snapshot(&mut socket, &state).await.is_err() {
+                        return;
+                    }
+                }
                 Err(_) => return,
             },
         }
     }
+}
+
+async fn send_snapshot(socket: &mut WebSocket, state: &AppState) -> Result<(), axum::Error> {
+    let initial = [
+        Event::Json(current_status(state)),
+        Event::Json(
+            serde_json::to_value(state.0.transcript_log.lock().await.payload()).unwrap_or_default(),
+        ),
+    ];
+    for event in initial {
+        send_event(socket, event).await?;
+    }
+    if let Some(diagram) = state.0.last_diagram.lock().await.clone() {
+        send_event(socket, Event::Json(diagram)).await?;
+    }
+    Ok(())
 }
 
 async fn handle_text_frame(
@@ -521,7 +846,6 @@ async fn handle_text_frame(
     pending_header: &mut Option<(String, String)>,
     text: &str,
 ) -> Result<(), axum::Error> {
-    pending_header.take();
     let command: Value = match serde_json::from_str(text) {
         Ok(value) => value,
         Err(_) => {
@@ -552,8 +876,9 @@ async fn handle_text_frame(
             let Some(id) = command
                 .get("id")
                 .and_then(Value::as_str)
-                .filter(|id| !id.is_empty() && id.len() <= 128)
+                .filter(|id| !id.is_empty() && id.chars().count() <= 128)
             else {
+                pending_header.take();
                 return send_json(
                     socket,
                     json!({"type":"error", "message":"Invalid clip id."}),
@@ -604,19 +929,38 @@ async fn handle_audio_frame(
                     accepted.0.remove(&old);
                 }
             }
+        } else {
+            // A reconnect retransmits the oldest unacknowledged clip first.
+            // Keep that id recent just like the Python OrderedDict baseline so
+            // a live retry cannot fall out of the bounded idempotency window.
+            accepted.1.retain(|accepted_id| accepted_id != &id);
+            accepted.1.push_back(id.clone());
         }
         fresh
     };
-    if fresh {
-        let _ = state
+    if fresh
+        && state
             .0
             .clips
             .send(Clip {
                 id: id.clone(),
                 audio,
                 _mime: mime,
+                generation: state.0.turn_generation.load(Ordering::Acquire),
             })
-            .await;
+            .await
+            .is_err()
+    {
+        // Do not acknowledge ownership the application did not actually take.
+        // A reconnect must be allowed to retry this id.
+        let mut accepted = state.0.accepted_clips.lock().await;
+        accepted.0.remove(&id);
+        accepted.1.retain(|accepted_id| accepted_id != &id);
+        return send_json(
+            socket,
+            json!({"type":"error", "id":id, "message":"The call worker is unavailable."}),
+        )
+        .await;
     }
     send_json(socket, json!({"type":"accepted", "id":id})).await
 }
@@ -628,5 +972,419 @@ async fn send_event(socket: &mut WebSocket, event: Event) -> Result<(), axum::Er
     match event {
         Event::Json(value) => socket.send(Message::Text(value.to_string().into())).await,
         Event::Audio(audio) => socket.send(Message::Binary(audio.into())).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pbx::OPERATOR;
+    use crate::registry::Registry;
+    use axum::body::Body;
+    use axum::http::{Method, Request, StatusCode};
+    use http_body_util::BodyExt;
+    use std::collections::HashMap;
+    use std::future::pending;
+    use tokio::sync::oneshot;
+    use tokio::time::{timeout, Duration};
+    use tower::ServiceExt;
+
+    fn state() -> AppState {
+        state_with_stt(None)
+    }
+
+    fn state_with_stt(stt: Option<String>) -> AppState {
+        let board = Switchboard::new(
+            Registry::new(vec![]),
+            "pi".into(),
+            None,
+            "".into(),
+            None,
+            None,
+            None,
+            "medium".into(),
+            ".cache".into(),
+            true,
+            "".into(),
+            "".into(),
+            "".into(),
+            "".into(),
+            HashMap::new(),
+        );
+        AppState::new(
+            board,
+            TranscriptLog::new(10),
+            Speaker::from_values(
+                100,
+                &HashMap::from([("ELEVENLABS_API_KEY".into(), "test-key".into())]),
+            ),
+            SttAdapter::from_command(stt),
+        )
+    }
+
+    async fn request_json(
+        state: &AppState,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
+        let mut request = Request::builder().method(method).uri(path);
+        let body = match body {
+            Some(value) => {
+                request = request.header("content-type", "application/json");
+                Body::from(value.to_string())
+            }
+            None => Body::empty(),
+        };
+        let response = state
+            .clone()
+            .router(None)
+            .oneshot(request.body(body).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let value = serde_json::from_slice(&bytes).unwrap();
+        (status, value)
+    }
+
+    #[tokio::test]
+    async fn http_contract_exposes_status_health_and_page_controls() {
+        let state = state();
+        let (code, status) = request_json(&state, Method::GET, "/status", None).await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(status["type"], "status");
+        assert_eq!(status["route"], OPERATOR);
+        assert_eq!(
+            status["levels"],
+            serde_json::json!(crate::models::THINKING_LEVELS)
+        );
+
+        let (code, health) = request_json(&state, Method::GET, "/healthz", None).await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(health["status"], "ok");
+        assert_eq!(health["stt_adapter"], "sidecar");
+        assert_eq!(health["stt_configured"], false);
+
+        let (code, connected) = request_json(
+            &state,
+            Method::POST,
+            "/connect",
+            Some(json!({"project":"operator"})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(connected, json!({"route":"operator", "error":null}));
+
+        let (code, thinking) = request_json(
+            &state,
+            Method::POST,
+            "/thinking",
+            Some(json!({"level":"high"})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(thinking, json!({"thinking":"", "error":null}));
+        assert_eq!(
+            state.0.switchboard.lock().await.status()["thinking_default"],
+            "high"
+        );
+
+        let (code, leg) = request_json(
+            &state,
+            Method::POST,
+            "/leg-state",
+            Some(json!({"thinking":"high"})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(leg, json!({"accepted":false}));
+    }
+
+    #[tokio::test]
+    async fn diagram_contract_is_live_and_replayed() {
+        let state = state();
+        let mut events = state.0.events.subscribe();
+        let payload = json!({
+            "source":"flowchart TD; A-->B",
+            "title":"Path",
+            "notes":"One hop"
+        });
+        let (code, response) =
+            request_json(&state, Method::POST, "/diagram", Some(payload.clone())).await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(response, json!({"delivered":true}));
+        let Event::Json(event) = events.recv().await.unwrap() else {
+            panic!("diagram should be a JSON event")
+        };
+        assert_eq!(
+            event,
+            json!({"type":"diagram", "source":"flowchart TD; A-->B", "title":"Path", "notes":"One hop"})
+        );
+        assert_eq!(*state.0.last_diagram.lock().await, Some(event));
+    }
+
+    #[tokio::test]
+    async fn speak_rejects_blank_text_without_logging_it() {
+        let state = state();
+        let (code, body) =
+            request_json(&state, Method::POST, "/speak", Some(json!({"text":"   "}))).await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert_eq!(body, json!({"detail":"text must not be empty"}));
+        assert!(state.0.transcript_log.lock().await.entries().is_empty());
+    }
+
+    #[tokio::test]
+    async fn agent_callbacks_do_not_wait_for_the_turn_lock() {
+        let state = state();
+        let _events = state.0.events.subscribe();
+        let (locked_tx, locked_rx) = oneshot::channel();
+        let turn_state = state.clone();
+        let turn = tokio::spawn(async move {
+            let _board = turn_state.0.switchboard.lock().await;
+            let _ = locked_tx.send(());
+            pending::<()>().await;
+        });
+        locked_rx.await.unwrap();
+
+        let (code, spoken) = timeout(
+            Duration::from_secs(1),
+            request_json(
+                &state,
+                Method::POST,
+                "/speak",
+                Some(json!({"text":"Still working."})),
+            ),
+        )
+        .await
+        .expect("speak must stay live during an agent turn");
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(spoken, json!({"delivered":true}));
+
+        let (code, leg) = timeout(
+            Duration::from_secs(1),
+            request_json(
+                &state,
+                Method::POST,
+                "/leg-state",
+                Some(json!({"thinking":"high"})),
+            ),
+        )
+        .await
+        .expect("leg-state must stay live during session startup");
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(leg, json!({"accepted":false}));
+
+        let (code, status) = timeout(
+            Duration::from_secs(1),
+            request_json(&state, Method::GET, "/status", None),
+        )
+        .await
+        .expect("status must stay live during an agent turn");
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(status["route"], OPERATOR);
+
+        let (code, health) = timeout(
+            Duration::from_secs(1),
+            request_json(&state, Method::GET, "/healthz", None),
+        )
+        .await
+        .expect("health must stay live during an agent turn");
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(health["status"], "ok");
+
+        turn.abort();
+        assert!(turn.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn page_rescue_aborts_work_before_waiting_for_the_pbx_lock() {
+        let state = state();
+        let session = PiSession::start(
+            vec!["sh".into(), "-c".into(), "sleep 60".into()],
+            OPERATOR,
+            None,
+            None,
+            Duration::from_secs(60),
+            None,
+        )
+        .await
+        .unwrap();
+        *state.0.active_session.lock().await = Some(session.clone());
+
+        let (locked_tx, locked_rx) = oneshot::channel();
+        let turn_state = state.clone();
+        let turn = tokio::spawn(async move {
+            let _board = turn_state.0.switchboard.lock().await;
+            let _ = locked_tx.send(());
+            pending::<()>().await;
+        });
+        let abort = turn.abort_handle();
+        state
+            .0
+            .active_operations
+            .lock()
+            .await
+            .insert(abort.id(), abort);
+        locked_rx.await.unwrap();
+
+        let interrupted = timeout(Duration::from_secs(1), interrupt_active_turn(&state))
+            .await
+            .expect("rescue should not wait for the wedged turn");
+        assert_eq!(interrupted.as_deref(), Some(OPERATOR));
+        assert!(turn.await.unwrap_err().is_cancelled());
+        assert!(!session.alive().await);
+        assert!(timeout(Duration::from_secs(1), state.0.switchboard.lock())
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn newer_page_control_supersedes_setup_before_a_session_exists() {
+        let state = state();
+        let first_state = state.clone();
+        let (first, first_id, _) = spawn_active_operation(&state, async move {
+            let _board = first_state.0.switchboard.lock().await;
+            pending::<()>().await;
+        })
+        .await;
+
+        let second_state = state.clone();
+        let (second, second_id, _generation) = spawn_replacing_operation(&state, async move {
+            let _board = second_state.0.switchboard.lock().await;
+            7
+        })
+        .await;
+
+        assert!(first.await.unwrap_err().is_cancelled());
+        clear_active_operation(&state, first_id).await;
+        assert_eq!(
+            timeout(Duration::from_secs(1), second)
+                .await
+                .unwrap()
+                .unwrap(),
+            7
+        );
+        clear_active_operation(&state, second_id).await;
+        assert!(state.0.active_operations.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn superseded_reply_is_not_logged_or_broadcast() {
+        let state = state();
+        let mut events = state.0.events.subscribe();
+        let generation = state.0.turn_generation.load(Ordering::Acquire);
+        state.0.turn_generation.fetch_add(1, Ordering::AcqRel);
+        let reply = crate::pbx::Reply {
+            text: "stale result".into(),
+            route: OPERATOR.into(),
+            route_label: "Operator".into(),
+            error: None,
+            to_speak: Vec::new(),
+        };
+
+        assert!(
+            !deliver_page_reply_if_current(&state, &reply, current_status(&state), generation)
+                .await
+        );
+        assert!(state.0.transcript_log.lock().await.entries().is_empty());
+        assert!(matches!(
+            events.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    async fn queued_turn_from_before_page_rescue_never_reaches_the_new_leg() {
+        let state = state();
+        let mut events = state.0.events.subscribe();
+        let old_generation = state.0.turn_generation.load(Ordering::Acquire);
+        state.0.turn_generation.fetch_add(1, Ordering::AcqRel);
+        state.0.queued_turns.store(1, Ordering::Release);
+        let worker_state = state.clone();
+        let worker = tokio::spawn(async move { process_turns(worker_state).await });
+        state
+            .0
+            .turns
+            .send(("old-clip".into(), "stale words".into(), old_generation))
+            .await
+            .unwrap();
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+
+        assert!(!state.0.turn_in_flight.load(Ordering::Acquire));
+        assert!(state.0.active_operations.lock().await.is_empty());
+        assert!(matches!(
+            events.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        worker.abort();
+        assert!(worker.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn clip_accepted_before_a_page_rescue_is_dropped_after_transcription() {
+        let state = state_with_stt(Some("printf 'stale words'".into()));
+        let mut events = state.0.events.subscribe();
+        state
+            .0
+            .clips
+            .send(Clip {
+                id: "old-clip".into(),
+                audio: vec![0],
+                _mime: "audio/webm".into(),
+                generation: state.0.turn_generation.load(Ordering::Acquire),
+            })
+            .await
+            .unwrap();
+        // The transfer lands while the clip is still inside the sidecar.
+        state.0.turn_generation.fetch_add(1, Ordering::AcqRel);
+        let worker_state = state.clone();
+        let worker = tokio::spawn(async move { process_clips(worker_state).await });
+
+        // The transcript still lands. That is what keeps the assertions below
+        // from passing vacuously: it proves the worker really ran this clip.
+        // Only a safety net so a regression fails instead of hanging. The happy
+        // path returns as soon as the sidecar does, but process spawning can be
+        // slow on a loaded CI box, so the bound is generous.
+        let transcript = timeout(Duration::from_secs(60), async {
+            loop {
+                if let Ok(Event::Json(value)) = events.recv().await {
+                    if value["type"] == "transcript" {
+                        return value;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("the clip worker transcribed the clip");
+        assert_eq!(transcript["text"], "stale words");
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+
+        assert_eq!(state.0.queued_turns.load(Ordering::Acquire), 0);
+        let mut turns = state.0.turn_rx.lock().await.take().unwrap();
+        assert!(matches!(
+            turns.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        worker.abort();
+        assert!(worker.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn shutdown_notifies_upgraded_connections_before_reaping_the_pbx() {
+        let state = state();
+        let mut shutdown_notice = state.0.shutdown.subscribe();
+        timeout(Duration::from_secs(1), shutdown(&state))
+            .await
+            .expect("shutdown should finish without a live leg");
+        timeout(Duration::from_secs(1), shutdown_notice.changed())
+            .await
+            .expect("websocket shutdown notice should be immediate")
+            .unwrap();
+        assert!(*shutdown_notice.borrow());
     }
 }

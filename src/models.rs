@@ -5,6 +5,8 @@ use tokio::time::{timeout, Duration};
 
 pub const THINKING_LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const LIST_TIMEOUT: Duration = Duration::from_secs(30);
+const CATALOG_OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
+const CATALOG_ERROR_LIMIT: usize = 64 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModelChoice {
@@ -111,8 +113,20 @@ pub fn parse_spec(text: &str) -> (String, String, String) {
     (provider.to_owned(), model.to_owned(), thinking.to_owned())
 }
 
+fn thinking_alias(value: &str) -> Option<&'static str> {
+    match value {
+        "none" | "no thinking" | "without thinking" => Some("off"),
+        "lowest" | "min" => Some("minimal"),
+        "mid" | "normal" => Some("medium"),
+        "extra high" | "x high" | "very high" => Some("xhigh"),
+        "maximum" | "highest" => Some("max"),
+        "default" => Some(""),
+        _ => None,
+    }
+}
+
 pub fn normalize_thinking(text: &str) -> Result<String, ModelError> {
-    let mut level = text
+    let level = text
         .to_ascii_lowercase()
         .chars()
         .map(|c| {
@@ -122,30 +136,36 @@ pub fn normalize_thinking(text: &str) -> Result<String, ModelError> {
                 ' '
             }
         })
-        .collect::<String>();
-    for word in ["reasoning", "thinking", "effort", "level", "set", "to"] {
-        level = level.replace(word, " ");
-    }
-    let level = level.split_whitespace().collect::<Vec<_>>().join(" ");
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     if level.is_empty() {
         return Ok(String::new());
     }
-    let value = match level.as_str() {
-        "none" | "no thinking" | "without thinking" => "off",
-        "lowest" | "min" => "minimal",
-        "mid" | "normal" => "medium",
-        "extra high" | "x high" | "very high" => "xhigh",
-        "maximum" | "highest" => "max",
-        "default" => "",
-        other if THINKING_LEVELS.contains(&other) => other,
-        _ => {
-            return Err(ModelError(format!(
-                "{text:?} is not a thinking level. The levels are {}.",
-                THINKING_LEVELS.join(", ")
-            )))
-        }
-    };
-    Ok(value.to_owned())
+    if let Some(alias) = thinking_alias(&level) {
+        return Ok(alias.to_owned());
+    }
+    if THINKING_LEVELS.contains(&level.as_str()) {
+        return Ok(level);
+    }
+
+    let filtered = level
+        .split_whitespace()
+        .filter(|word| !["reasoning", "thinking", "effort", "level", "set", "to"].contains(word))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let collapsed = filtered.replace(' ', "");
+    if let Some(alias) = thinking_alias(&filtered) {
+        return Ok(alias.to_owned());
+    }
+    if THINKING_LEVELS.contains(&collapsed.as_str()) {
+        return Ok(collapsed);
+    }
+    Err(ModelError(format!(
+        "{text:?} is not a thinking level. The levels are {}.",
+        THINKING_LEVELS.join(", ")
+    )))
 }
 
 pub fn pin_thinking(spec: &str, level: &str) -> String {
@@ -279,22 +299,59 @@ pub async fn fetch_catalog(argv: &[String]) -> ModelCatalog {
     command
         .args(argv.iter().skip(1))
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    let output = match timeout(LIST_TIMEOUT, command.output()).await {
-        Ok(Ok(output)) => output,
-        _ => {
+        .stderr(Stdio::piped());
+    crate::pi_client::isolate_process(&mut command);
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(_) => {
             return ModelCatalog {
                 entries: Vec::new(),
             }
         }
     };
-    if !output.status.success() {
+    let process_guard = crate::pi_client::ProcessTreeGuard::new(&child);
+    let stdout_task = child.stdout.take().map(|mut output| {
+        tokio::spawn(async move {
+            crate::pi_client::drain_bounded(&mut output, CATALOG_OUTPUT_LIMIT).await
+        })
+    });
+    let stderr_task = child.stderr.take().map(|mut output| {
+        tokio::spawn(async move {
+            crate::pi_client::drain_bounded(&mut output, CATALOG_ERROR_LIMIT).await
+        })
+    });
+    let status = match timeout(LIST_TIMEOUT, child.wait()).await {
+        Ok(Ok(status)) => {
+            process_guard.disarm();
+            status
+        }
+        _ => {
+            crate::pi_client::terminate_process(&mut child).await;
+            process_guard.disarm();
+            if let Some(task) = stdout_task {
+                task.abort();
+            }
+            if let Some(task) = stderr_task {
+                task.abort();
+            }
+            return ModelCatalog {
+                entries: Vec::new(),
+            };
+        }
+    };
+    let stdout = match stdout_task {
+        Some(task) => task.await.unwrap_or_default(),
+        None => crate::pi_client::BoundedOutput::default(),
+    };
+    if let Some(task) = stderr_task {
+        let _ = task.await;
+    }
+    if !status.success() || stdout.truncated {
         return ModelCatalog {
             entries: Vec::new(),
         };
     }
-    ModelCatalog::parse(&String::from_utf8_lossy(&output.stdout))
+    ModelCatalog::parse(&String::from_utf8_lossy(&stdout.bytes))
 }
 
 #[cfg(test)]
@@ -333,6 +390,12 @@ mod tests {
             "medium"
         );
         assert_eq!(normalize_thinking("maximum").unwrap(), "max");
+        assert_eq!(normalize_thinking("no thinking").unwrap(), "off");
+        assert_eq!(normalize_thinking("without thinking").unwrap(), "off");
+        assert_eq!(
+            normalize_thinking("thinking level x high").unwrap(),
+            "xhigh"
+        );
         assert!(normalize_thinking("ludicrous").is_err());
         assert_eq!(
             pin_thinking("anthropic/opus", "medium"),
@@ -351,5 +414,17 @@ mod tests {
             catalog.resolve("anthropic/opus", "high").unwrap().spec(),
             "anthropic/opus:high"
         );
+    }
+
+    #[tokio::test]
+    async fn catalog_command_success_and_failure_are_degraded_safely() {
+        let table = "printf 'provider model context max-out thinking images\\nanthropic opus 1M 128K yes yes\\n'";
+        let catalog = fetch_catalog(&["sh".into(), "-c".into(), table.into()]).await;
+        assert_eq!(catalog.entries.len(), 1);
+        assert_eq!(catalog.entries[0].provider, "anthropic");
+
+        let failed =
+            fetch_catalog(&["sh".into(), "-c".into(), "printf broken >&2; exit 9".into()]).await;
+        assert!(failed.entries.is_empty());
     }
 }

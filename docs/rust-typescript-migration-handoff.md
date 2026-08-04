@@ -1,6 +1,6 @@
 # Switchboard Rust + TypeScript migration handoff
 
-**Status:** browser/extensions and Rust service slices implemented; deployment cutover and STT replacement remain
+**Status:** in-repository browser/extensions/Rust implementation and automated hardening complete; tagged deployment cutover and live hardware validation remain
 **Target:** TypeScript browser/extensions, Rust service backend
 **Primary constraint:** preserve call behavior while changing runtimes
 
@@ -43,16 +43,17 @@ Important current modules:
 
 | Current file | Rust/TypeScript destination |
 | --- | --- |---|
-| `backend/main.py` | Rust API, WebSocket, workers, lifecycle |
-| `backend/pbx.py` | Rust routing state and leg lifecycle |
-| `backend/piclient.py` | Rust JSONL pi session supervisor |
-| `backend/audio.py` | Rust STT/TTS adapters, or temporary STT sidecar |
-| `backend/registry.py` | Rust registry loader and spoken-name resolver |
-| `backend/models.py` | Rust model catalog and ambiguity checks |
-| `backend/history.py` | Rust history store |
+| `legacy/backend/main.py` | Rust API, WebSocket, workers, lifecycle |
+| `legacy/backend/pbx.py` | Rust routing state and leg lifecycle |
+| `legacy/backend/piclient.py` | Rust JSONL pi session supervisor |
+| `legacy/backend/audio.py` | Rust STT/TTS adapters, or temporary STT sidecar |
+| `legacy/backend/registry.py` | Rust registry loader and spoken-name resolver |
+| `legacy/backend/models.py` | Rust model catalog and ambiguity checks |
+| `legacy/backend/history.py` | Rust history store |
 | `static/index.html` | HTML shell plus compiled TypeScript client |
 | `extensions/*.ts.j2` | Plain TypeScript pi extensions after persona cleanup |
-| `tests/` | Rust protocol/integration tests plus browser/extension tests |
+| `legacy/tests/` | Python compatibility tests |
+| `tests/` | browser/extension tests |
 | `web/` | TypeScript browser protocol, client, and diagram sources |
 | `src/` | Rust service modules and tests |
 | `static/*.js` | committed deterministic browser build output |
@@ -298,7 +299,8 @@ operator.
 
 Before each phase is considered complete:
 
-- `python -m pytest` remains green until Python is removed.
+- `python3 -m unittest discover -s legacy/tests` remains green until Python is
+  removed.
 - The existing Node diagram test remains green.
 - TypeScript has a clean type-check and deterministic build.
 - Rust unit tests cover parsing and state transitions without network/audio.
@@ -309,6 +311,42 @@ Before each phase is considered complete:
 - Failure tests cover dead pi, dead SSH, malformed registry, missing model
   catalog, extension failure, TTS failure, WebSocket disconnect, timeout,
   forced hangup, and process restart.
+
+## Current verification boundary (2026-08-04)
+
+The repository now has a CI workflow for the Python compatibility suite, the
+deterministic TypeScript build, browser/extension tests, Rust formatting, Rust
+tests, and Clippy. Rust tests use local doubles for pi RPC, SSH command
+construction/execution, ElevenLabs transport, and the STT sidecar. They also
+exercise forced rescue during a wedged PBX operation, superseded-result
+suppression, graceful shutdown notification, model/catalog degradation,
+bounded process output, remote extension staging, and transfer/return lifecycle
+behavior. No test calls ElevenLabs, downloads a speech model, or reaches a
+project host.
+
+Speech captured before a page transfer is epoch-tagged so it cannot act on the
+leg that replaced it. The epoch is stamped when a clip is accepted rather than
+when its transcript returns, because the STT sidecar round trip is itself wide
+enough for a transfer to land inside it; both the queued-turn path and the
+steering path are covered. The remaining window is narrower than this repository
+can close alone: a clip recorded in the browser before a transfer but uploaded
+after it still arrives tagged with the new epoch, which needs a capture-time
+epoch in the browser protocol.
+
+The following acceptance gates deliberately remain outside this repository:
+
+- establish and publish the release tag/checksum used by deployment (this
+  repository currently has no tag that can serve as the pinned cutover);
+- merge the separate homelab change that pins that release, moves the rendered
+  persona contract, updates the unit, and retains a one-change Python rollback;
+- benchmark the configured STT sidecar or Rust Whisper candidate against the
+  deployed faster-whisper model on damocles;
+- run the live microphone/WebM, browser playback, local operator, remote SSH
+  project, model-swap, hangup, restart, and rollback checks on actual hardware.
+
+Those are not optional completion claims: automated doubles establish software
+behavior, but cannot establish credentials, codecs, model quality, device
+permissions, network reachability, or production rollback.
 
 ## Handoff rules
 

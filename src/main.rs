@@ -96,8 +96,8 @@ impl Config {
                 .to_owned(),
             idle_timeout: number(values, "SWITCHBOARD_IDLE_TIMEOUT", 3600.0),
             idle_poll: number(values, "SWITCHBOARD_IDLE_POLL", 30.0),
-            max_spoken_chars: number(values, "SWITCHBOARD_MAX_SPOKEN_CHARS", 700.0) as usize,
-            history_limit: number(values, "SWITCHBOARD_HISTORY_LIMIT", 200.0) as usize,
+            max_spoken_chars: usize_value(values, "SWITCHBOARD_MAX_SPOKEN_CHARS", 700, false),
+            history_limit: usize_value(values, "SWITCHBOARD_HISTORY_LIMIT", 200, true),
             session: get(values, "SWITCHBOARD_SESSION", ""),
             speak_url: get(values, "SWITCHBOARD_SPEAK_URL", ""),
             state_url: get(values, "SWITCHBOARD_STATE_URL", ""),
@@ -122,7 +122,20 @@ fn optional(values: &HashMap<String, String>, name: &str) -> Option<String> {
 fn number(values: &HashMap<String, String>, name: &str, default: f64) -> f64 {
     values
         .get(name)
-        .and_then(|value| value.trim().parse().ok())
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite())
+        .unwrap_or(default)
+}
+fn usize_value(
+    values: &HashMap<String, String>,
+    name: &str,
+    default: usize,
+    allow_zero: bool,
+) -> usize {
+    values
+        .get(name)
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| allow_zero || *value > 0)
         .unwrap_or(default)
 }
 
@@ -139,11 +152,63 @@ fn load_env_file(path: &PathBuf) -> HashMap<String, String> {
         let Some((name, value)) = line.split_once('=') else {
             continue;
         };
-        let name = name.trim();
-        let value = value.trim().trim_matches(|c| c == '"' || c == '\'');
-        result.insert(name.to_owned(), value.to_owned());
+        let name = name.trim().strip_prefix("export ").unwrap_or(name.trim());
+        if name.is_empty()
+            || !name.chars().enumerate().all(|(index, character)| {
+                character == '_'
+                    || character.is_ascii_alphanumeric()
+                        && (index > 0 || !character.is_ascii_digit())
+            })
+        {
+            continue;
+        }
+        result.insert(name.to_owned(), parse_env_value(value));
     }
     result
+}
+
+fn parse_env_value(value: &str) -> String {
+    let value = value.trim();
+    if let Some(quoted) = value.strip_prefix('\'') {
+        return quoted
+            .rfind('\'')
+            .map_or(quoted, |end| &quoted[..end])
+            .to_owned();
+    }
+    if let Some(quoted) = value.strip_prefix('"') {
+        let quoted = quoted.rfind('"').map_or(quoted, |end| &quoted[..end]);
+        let mut parsed = String::with_capacity(quoted.len());
+        let mut chars = quoted.chars();
+        while let Some(character) = chars.next() {
+            if character == '\\' {
+                match chars.next() {
+                    Some('n') => parsed.push('\n'),
+                    Some('r') => parsed.push('\r'),
+                    Some('t') => parsed.push('\t'),
+                    Some(next @ ('\\' | '"')) => parsed.push(next),
+                    Some(next) => {
+                        parsed.push('\\');
+                        parsed.push(next);
+                    }
+                    None => parsed.push('\\'),
+                }
+            } else {
+                parsed.push(character);
+            }
+        }
+        return parsed;
+    }
+    let comment = value.char_indices().find_map(|(index, character)| {
+        (character == '#'
+            && value[..index]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_whitespace))
+        .then_some(index)
+    });
+    value[..comment.unwrap_or(value.len())]
+        .trim_end()
+        .to_owned()
 }
 
 fn value(name: &str, default: &str) -> String {
@@ -195,14 +260,45 @@ async fn main() {
         .await
         .expect("bind switchboard listener");
     tracing::info!(%bind, "switchboard listening");
-    if let Err(error) = axum::serve(
+    let server = axum::serve(
         listener,
-        state.router(Some(tower_http::services::ServeDir::new("static"))),
+        state
+            .clone()
+            .router(Some(tower_http::services::ServeDir::new("static"))),
     )
-    .await
-    {
+    .with_graceful_shutdown(shutdown_signal(state.clone()));
+    let result = server.await;
+    // Also covers listener/server failures that did not arrive through the
+    // signal future. Shutdown is intentionally idempotent.
+    api::shutdown(&state).await;
+    if let Err(error) = result {
         tracing::error!(%error, "switchboard server stopped");
     }
+}
+
+async fn shutdown_signal(state: api::AppState) {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("install SIGTERM handler");
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => {
+                if let Err(error) = result {
+                    tracing::warn!(%error, "Ctrl-C handler failed");
+                }
+            }
+            _ = terminate.recv() => {}
+        }
+    }
+
+    #[cfg(not(unix))]
+    if let Err(error) = tokio::signal::ctrl_c().await {
+        tracing::warn!(%error, "Ctrl-C handler failed");
+    }
+
+    tracing::info!("shutdown requested");
+    api::shutdown(&state).await;
 }
 
 #[cfg(test)]
@@ -230,11 +326,26 @@ mod tests {
     }
 
     #[test]
+    fn non_finite_numeric_configuration_falls_back_safely() {
+        let values = HashMap::from([
+            ("SWITCHBOARD_IDLE_TIMEOUT".into(), "NaN".into()),
+            ("SWITCHBOARD_IDLE_POLL".into(), "inf".into()),
+            ("SWITCHBOARD_MAX_SPOKEN_CHARS".into(), "-inf".into()),
+            ("SWITCHBOARD_HISTORY_LIMIT".into(), "12.5".into()),
+        ]);
+        let config = Config::from_values(&values, PathBuf::from("/tmp/env"));
+        assert_eq!(config.idle_timeout, 3600.0);
+        assert_eq!(config.idle_poll, 30.0);
+        assert_eq!(config.max_spoken_chars, 700);
+        assert_eq!(config.history_limit, 200);
+    }
+
+    #[test]
     fn env_file_parser_keeps_audio_secrets_available() {
         let path = std::env::temp_dir().join(format!("switchboard-env-{}", std::process::id()));
         fs::write(
             &path,
-            "ELEVENLABS_API_KEY='secret'\nSWITCHBOARD_PI_BINARY='pi-custom'\n",
+            "export ELEVENLABS_API_KEY='secret#value'\nSWITCHBOARD_PI_BINARY=pi-custom # deployed binary\nQUOTED=\"line\\nvalue\"\nUNCHANGED=a#b\n9INVALID=no\n",
         )
         .unwrap();
         let values = load_env_file(&path);
@@ -243,6 +354,12 @@ mod tests {
             values.get("SWITCHBOARD_PI_BINARY"),
             Some(&"pi-custom".to_owned())
         );
-        assert_eq!(values.get("ELEVENLABS_API_KEY"), Some(&"secret".to_owned()));
+        assert_eq!(
+            values.get("ELEVENLABS_API_KEY"),
+            Some(&"secret#value".to_owned())
+        );
+        assert_eq!(values.get("QUOTED"), Some(&"line\nvalue".to_owned()));
+        assert_eq!(values.get("UNCHANGED"), Some(&"a#b".to_owned()));
+        assert!(!values.contains_key("9INVALID"));
     }
 }

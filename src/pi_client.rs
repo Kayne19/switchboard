@@ -1,12 +1,14 @@
+use futures_util::FutureExt;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, Command};
 use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
@@ -20,6 +22,7 @@ pub const RETURN_SENTINEL: &str = "[[SWITCHBOARD:RETURN]]";
 const ERROR_STOP_REASON: &str = "error";
 const ERROR_DETAIL_CHARS: usize = 160;
 const ACTIVITY_DETAIL_CHARS: usize = 80;
+const STDERR_LINE_LIMIT: usize = 16 * 1024;
 const ACTIVITY_ARG_ORDER: [&str; 11] = [
     "path",
     "file_path",
@@ -83,6 +86,7 @@ struct SessionInner {
     turn_timeout: Duration,
     on_activity: Option<ActivityCallback>,
     stderr_task: StdMutex<Option<tokio::task::JoinHandle<()>>>,
+    process_guard: ProcessTreeGuard,
 }
 
 #[derive(Clone)]
@@ -109,8 +113,8 @@ impl PiSession {
             .args(argv.iter().skip(1))
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true);
+            .stderr(std::process::Stdio::piped());
+        isolate_process(&mut command);
         if let Some(cwd) = &cwd {
             command.current_dir(cwd);
         }
@@ -120,6 +124,7 @@ impl PiSession {
         let mut child = command
             .spawn()
             .map_err(|error| PiSessionError(format!("could not start {}: {error}", argv[0])))?;
+        let process_guard = ProcessTreeGuard::new(&child);
         let stdin = child
             .stdin
             .take()
@@ -147,12 +152,16 @@ impl PiSession {
             turn_timeout,
             on_activity,
             stderr_task: StdMutex::new(Some(stderr_task)),
+            process_guard,
         });
         Ok(Self { inner, argv, cwd })
     }
 
     pub fn busy(&self) -> bool {
         self.inner.busy.load(Ordering::Acquire)
+    }
+    pub fn label(&self) -> &str {
+        &self.inner.label
     }
     pub fn same_session(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
@@ -161,7 +170,7 @@ impl PiSession {
         let mut child = self.inner.child.lock().await;
         child
             .as_mut()
-            .is_some_and(|child| child.try_wait().ok().flatten().is_none())
+            .is_some_and(|child| matches!(child.try_wait(), Ok(None)))
     }
     pub fn stderr_tail(&self, limit: usize) -> String {
         self.inner
@@ -183,9 +192,9 @@ impl PiSession {
         self.inner.busy.store(false, Ordering::Release);
         self.inner.stdin.lock().await.take();
         if let Some(mut child) = self.inner.child.lock().await.take() {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+            terminate_process(&mut child).await;
         }
+        self.inner.process_guard.disarm();
         if let Ok(mut task) = self.inner.stderr_task.lock() {
             if let Some(task) = task.take() {
                 task.abort();
@@ -246,13 +255,33 @@ impl PiSession {
         let mut signals = Vec::new();
         let mut error = String::new();
         loop {
-            let mut line = String::new();
             let read = {
                 let mut stdout = self.inner.stdout.lock().await;
-                timeout(self.inner.turn_timeout, stdout.read_line(&mut line)).await
+                timeout(
+                    self.inner.turn_timeout,
+                    read_limited_line(&mut *stdout, STREAM_LIMIT),
+                )
+                .await
             };
-            let size = match read {
-                Ok(Ok(size)) => size,
+            let line = match read {
+                Ok(Ok(LimitedLine::Line(line))) => line,
+                Ok(Ok(LimitedLine::Eof)) => {
+                    return Ok(Turn {
+                        text: chunks.join("\n"),
+                        signals,
+                        failed: true,
+                        error,
+                    })
+                }
+                Ok(Ok(LimitedLine::TooLong)) => {
+                    self.close().await;
+                    return Ok(Turn {
+                        text: String::new(),
+                        signals,
+                        failed: true,
+                        error: "the agent sent something too big to read".into(),
+                    });
+                }
                 Ok(Err(error)) => {
                     return Err(PiSessionError(format!(
                         "could not read agent output: {error}"
@@ -268,23 +297,7 @@ impl PiSession {
                     });
                 }
             };
-            if size == 0 {
-                return Ok(Turn {
-                    text: chunks.join("\n"),
-                    signals,
-                    failed: true,
-                    error,
-                });
-            }
-            if line.len() > STREAM_LIMIT {
-                self.close().await;
-                return Ok(Turn {
-                    text: String::new(),
-                    signals,
-                    failed: true,
-                    error: "the agent sent something too big to read".into(),
-                });
-            }
+            let line = String::from_utf8_lossy(&line);
             let line = line.trim_end_matches(['\r', '\n']);
             if line.is_empty() {
                 continue;
@@ -305,6 +318,16 @@ impl PiSession {
                             .and_then(Value::as_str)
                             .filter(|content| !content.trim().is_empty())
                         {
+                            let collected = chunks.iter().map(String::len).sum::<usize>();
+                            if collected.saturating_add(content.len()) > STREAM_LIMIT {
+                                self.close().await;
+                                return Ok(Turn {
+                                    text: String::new(),
+                                    signals,
+                                    failed: true,
+                                    error: "the agent produced too much text in one turn".into(),
+                                });
+                            }
                             chunks.push(content.trim().to_owned());
                         }
                     }
@@ -347,6 +370,13 @@ impl PiSession {
                     )
                     .await
                 }
+                Some("extension_error") => {
+                    tracing::error!(
+                        label = %self.inner.label,
+                        error = ?event.get("error"),
+                        "agent extension error"
+                    );
+                }
                 Some("agent_settled") => break,
                 _ => {}
             }
@@ -371,31 +401,206 @@ impl PiSession {
 
     async fn report_activity(&self, state: &str, tool: &str, detail: String) {
         if let Some(callback) = &self.inner.on_activity {
-            callback(Activity {
+            let callback = Arc::clone(callback);
+            let activity = Activity {
                 state: state.into(),
                 tool: tool.into(),
                 detail,
                 label: self.inner.label.clone(),
-            })
-            .await;
+            };
+            if AssertUnwindSafe(callback(activity))
+                .catch_unwind()
+                .await
+                .is_err()
+            {
+                tracing::warn!(label = %self.inner.label, "activity callback failed");
+            }
+        }
+    }
+}
+
+/// Put a supervised command in its own process group where the platform
+/// supports it. Pi and SSH may launch helpers; cancellation must reap the whole
+/// local tree rather than only its top-level shell/client.
+pub(crate) fn isolate_process(command: &mut Command) {
+    command.kill_on_drop(true);
+    #[cfg(unix)]
+    command.process_group(0);
+}
+
+/// Synchronous cancellation backstop for async operations that own child
+/// process trees. `kill_on_drop` only targets the immediate process; this guard
+/// also terminates helpers launched by a shell or runtime if the future is
+/// aborted before it can run its async cleanup path.
+pub(crate) struct ProcessTreeGuard(StdMutex<Option<i32>>);
+
+impl ProcessTreeGuard {
+    pub(crate) fn new(child: &Child) -> Self {
+        #[cfg(unix)]
+        let pid = child.id().map(|pid| pid as i32);
+        #[cfg(not(unix))]
+        let pid = None;
+        Self(StdMutex::new(pid))
+    }
+
+    pub(crate) fn disarm(&self) {
+        if let Ok(mut pid) = self.0.lock() {
+            pid.take();
+        }
+    }
+}
+
+impl Drop for ProcessTreeGuard {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Ok(pid) = self.0.get_mut() {
+            if let Some(pid) = pid.take() {
+                unsafe {
+                    libc::kill(-pid, libc::SIGKILL);
+                }
+            }
+        }
+    }
+}
+
+pub(crate) async fn terminate_process(child: &mut Child) {
+    match child.try_wait() {
+        Ok(Some(_)) => return,
+        Ok(None) => {}
+        Err(_) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return;
+        }
+    }
+    #[cfg(unix)]
+    if let Some(pid) = child.id() {
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum LimitedLine {
+    Eof,
+    Line(Vec<u8>),
+    TooLong,
+}
+
+/// Read one JSONL record without allowing a missing newline to grow memory
+/// without bound. `AsyncBufReadExt::read_line` only reports the length after it
+/// has allocated the whole record, which defeats `STREAM_LIMIT` for a wedged or
+/// hostile child process.
+async fn read_limited_line<R>(reader: &mut R, limit: usize) -> std::io::Result<LimitedLine>
+where
+    R: AsyncBufRead + Unpin,
+{
+    let mut line = Vec::with_capacity(limit.min(8 * 1024));
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            return Ok(if line.is_empty() {
+                LimitedLine::Eof
+            } else {
+                LimitedLine::Line(line)
+            });
+        }
+
+        let take = available
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(available.len(), |position| position + 1);
+        if line.len().saturating_add(take) > limit {
+            return Ok(LimitedLine::TooLong);
+        }
+        line.extend_from_slice(&available[..take]);
+        reader.consume(take);
+        if line.last() == Some(&b'\n') {
+            return Ok(LimitedLine::Line(line));
         }
     }
 }
 
 async fn drain_stderr(stderr: ChildStderr, tail: Arc<StdMutex<Vec<String>>>) {
-    let mut lines = BufReader::new(stderr).lines();
-    while let Ok(Some(line)) = lines.next_line().await {
-        if line.trim().is_empty() {
-            continue;
-        }
-        if let Ok(mut tail) = tail.lock() {
-            tail.push(line);
-            if tail.len() > 20 {
-                let remove = tail.len() - 20;
-                tail.drain(..remove);
+    let mut stderr = BufReader::new(stderr);
+    let mut chunk = [0_u8; 8192];
+    let mut line = Vec::new();
+    let mut oversized = false;
+    loop {
+        let read = match stderr.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(read) => read,
+        };
+        for byte in &chunk[..read] {
+            if *byte == b'\n' {
+                if oversized {
+                    push_stderr(&tail, "[oversized stderr line]".into());
+                } else {
+                    let value = String::from_utf8_lossy(&line)
+                        .trim_end_matches('\r')
+                        .to_owned();
+                    if !value.trim().is_empty() {
+                        push_stderr(&tail, value);
+                    }
+                }
+                line.clear();
+                oversized = false;
+            } else if line.len() < STDERR_LINE_LIMIT {
+                line.push(*byte);
+            } else {
+                oversized = true;
             }
         }
     }
+    if oversized {
+        push_stderr(&tail, "[oversized stderr line]".into());
+    } else if !line.is_empty() {
+        let value = String::from_utf8_lossy(&line).trim().to_owned();
+        if !value.is_empty() {
+            push_stderr(&tail, value);
+        }
+    }
+}
+
+fn push_stderr(tail: &StdMutex<Vec<String>>, line: String) {
+    if let Ok(mut tail) = tail.lock() {
+        tail.push(line);
+        if tail.len() > 20 {
+            let remove = tail.len() - 20;
+            tail.drain(..remove);
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct BoundedOutput {
+    pub bytes: Vec<u8>,
+    pub truncated: bool,
+}
+
+pub(crate) async fn drain_bounded<R>(mut reader: R, limit: usize) -> BoundedOutput
+where
+    R: AsyncRead + Unpin,
+{
+    let mut bytes = Vec::with_capacity(limit.min(8192));
+    let mut chunk = [0_u8; 8192];
+    let mut truncated = false;
+    loop {
+        match reader.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(read) => {
+                let available = limit.saturating_sub(bytes.len());
+                let keep = available.min(read);
+                bytes.extend_from_slice(&chunk[..keep]);
+                truncated |= keep < read;
+            }
+        }
+    }
+    BoundedOutput { bytes, truncated }
 }
 
 fn activity_detail(args: Option<&Value>) -> String {
@@ -517,8 +722,10 @@ pub fn remote_argv(
         remote.extend(["--append-system-prompt".into(), prompt.into()]);
     }
     remote.extend(extra_args.iter().cloned());
-    let exports = env
-        .iter()
+    let mut environment = env.iter().collect::<Vec<_>>();
+    environment.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    let exports = environment
+        .into_iter()
         .map(|(name, value)| format!("export {name}={}; ", shell_quote(value)))
         .collect::<Vec<_>>()
         .join("");
@@ -544,9 +751,69 @@ pub fn remote_argv(
     ]
 }
 
+/// Writes `body` as a `/bin/sh` script, marks it executable, and does not return
+/// until the kernel will actually run it.
+///
+/// Tests run on many threads inside one process. Spawning a child forks, and the
+/// fork duplicates every open descriptor, so a child forked while this file is
+/// still being written inherits a writable descriptor to it and keeps that copy
+/// until it execs. Linux refuses to execute a file any process holds open for
+/// writing, so callers would otherwise fail intermittently with `ETXTBSY`.
+///
+/// Draining that window here — rather than retrying the operation under test —
+/// is what keeps a real failure legible: the file is never rewritten after the
+/// probe succeeds, so it stays runnable, and the code under test still executes
+/// exactly once with its own errors surfacing unchanged.
+#[cfg(all(test, unix))]
+pub(crate) fn write_executable_script(path: &Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    const PROBE: &str = "--switchboard-exec-probe";
+
+    std::fs::write(
+        path,
+        format!("#!/bin/sh\nif [ \"$1\" = \"{PROBE}\" ]; then exit 0; fi\n{body}"),
+    )
+    .unwrap_or_else(|error| panic!("could not write {}: {error}", path.display()));
+    let mut permissions = std::fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(path, permissions).unwrap();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        match std::process::Command::new(path).arg(PROBE).output() {
+            Ok(probe) => {
+                assert!(
+                    probe.status.success(),
+                    "{} did not survive its exec probe: {probe:?}",
+                    path.display()
+                );
+                return;
+            }
+            // Only ETXTBSY is the transient fork/exec window. Every other spawn
+            // failure is a real defect and is reported now instead of retried.
+            Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) => {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "{} was still held open for writing after 30s",
+                    path.display()
+                );
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(error) => panic!("{} could not start: {error}", path.display()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn executable(root: &Path, name: &str, source: &str) -> std::path::PathBuf {
+        let path = root.join(name);
+        write_executable_script(&path, source);
+        path
+    }
     #[test]
     fn quotes_shell_values_and_builds_remote_commands() {
         assert_eq!(shell_quote("a b; rm -rf /"), "'a b; rm -rf /'");
@@ -605,6 +872,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn limited_line_reader_caps_records_before_allocating_the_tail() {
+        let mut reader = BufReader::with_capacity(3, &b"abcdef\nnext\n"[..]);
+        assert_eq!(
+            read_limited_line(&mut reader, 5).await.unwrap(),
+            LimitedLine::TooLong
+        );
+
+        let mut exact = BufReader::with_capacity(2, &b"four\n"[..]);
+        assert_eq!(
+            read_limited_line(&mut exact, 5).await.unwrap(),
+            LimitedLine::Line(b"four\n".to_vec())
+        );
+        assert_eq!(
+            read_limited_line(&mut exact, 5).await.unwrap(),
+            LimitedLine::Eof
+        );
+
+        let bounded = drain_bounded(&b"abcdefgh"[..], 5).await;
+        assert_eq!(bounded.bytes, b"abcde");
+        assert!(bounded.truncated);
+    }
+
+    #[tokio::test]
     async fn steer_writes_into_the_running_process() {
         let script = "read first; read second; printf '%s\\n' '{\"type\":\"agent_settled\"}'";
         let session = Arc::new(
@@ -650,5 +940,79 @@ mod tests {
         assert_eq!(turn.text, "All done.");
         assert_eq!(turn.signals[0].name, RETURN_TOOL);
         session.close().await;
+    }
+
+    #[tokio::test]
+    async fn broken_activity_callback_does_not_fail_the_turn() {
+        let callback: ActivityCallback = Arc::new(|_| {
+            Box::pin(async move {
+                panic!("browser disappeared");
+            })
+        });
+        let script = "read line; printf '%s\\n' '{\"type\":\"tool_execution_start\",\"toolName\":\"read\",\"args\":{\"path\":\"/tmp/x\"}}' '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_end\",\"content\":\"done\"}}' '{\"type\":\"agent_settled\"}'";
+        let session = PiSession::start(
+            vec!["sh".into(), "-c".into(), script.into()],
+            "test",
+            None,
+            None,
+            Duration::from_secs(1),
+            Some(callback),
+        )
+        .await
+        .unwrap();
+        let turn = session.prompt("hello").await.unwrap();
+        assert_eq!(turn.text, "done");
+        assert!(!turn.failed);
+        session.close().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fake_ssh_executes_remote_rpc_command_with_callback_environment() {
+        let root = std::env::temp_dir().join(format!(
+            "switchboard-fake-ssh-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let runtime = executable(
+            &root,
+            "fake pi",
+            "read line\nprintf '%s\\n' \"{\\\"type\\\":\\\"message_update\\\",\\\"assistantMessageEvent\\\":{\\\"type\\\":\\\"text_end\\\",\\\"content\\\":\\\"$SWITCHBOARD_SESSION\\\"}}\" '{\"type\":\"agent_settled\"}'\n",
+        );
+        let ssh = executable(
+            &root,
+            "fake-ssh",
+            "for arg in \"$@\"; do command=$arg; done\nexec sh -c \"$command\"\n",
+        );
+        let mut argv = remote_argv(
+            "fake-host",
+            &root.to_string_lossy(),
+            &runtime.to_string_lossy(),
+            None,
+            None,
+            None,
+            Some("session-a"),
+            &[],
+            &HashMap::from([("SWITCHBOARD_SESSION".into(), "remote-test".into())]),
+        );
+        argv[0] = ssh.to_string_lossy().into_owned();
+        let session = PiSession::start(
+            argv,
+            "remote-test",
+            None,
+            None,
+            Duration::from_secs(1),
+            None,
+        )
+        .await
+        .unwrap();
+        let turn = session.prompt("hello").await.unwrap();
+        assert_eq!(turn.text, "remote-test");
+        session.close().await;
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
