@@ -33,19 +33,27 @@
           --danger: #e8817a;
         }
       }
+      /* One gutter value, quoted twice: the padding that draws it and the max-width
+     that has to subtract it back off. Keeping them derived from the same custom
+     property is what stops the page overflowing sideways when the gutter grows. */
       body {
+        --gutter: 16px;
         font-family: system-ui, sans-serif;
         max-width: 660px;
         margin: 0 auto;
-        padding: 28px 16px 40px;
+        padding: 28px var(--gutter) 40px;
         background: var(--bg);
         color: var(--text);
         transition: max-width 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
       }
-      /* The page is a single column until a diagram arrives, then it widens and the
-     column slides right to make room. Nothing about the column itself changes. */
+      /* The page is a single column until a diagram arrives, then it gives up its
+     reading width entirely and takes the whole viewport. A fixed cap here used
+     to mean an ultrawide monitor drew a 3440px page and still squeezed the
+     diagram into the middle 840px of it. The gutter widens with the screen so
+     that "full width" does not mean "jammed against the bezel". */
       body.has-diagram {
-        max-width: 1560px;
+        --gutter: clamp(16px, 1.6vw, 40px);
+        max-width: calc(100% - 2 * var(--gutter));
       }
       #shell {
         display: grid;
@@ -53,28 +61,57 @@
         grid-template-columns: minmax(0, 1fr);
         align-items: start;
       }
+      /* The voice column is the thing with a natural size, so it is the thing that
+     gets measured; the diagram is `1fr` and absorbs every pixel left over. The
+     clamp floor keeps Talk and the transcript usable on a laptop, the ceiling
+     stops the column growing past what is comfortable to read. */
       body.has-diagram #shell {
-        grid-template-columns: minmax(0, 1.45fr) minmax(0, 660px);
+        grid-template-columns: minmax(0, 1fr) clamp(320px, 30vw, 560px);
+      }
+      /* Past ultrawide there is so much surplus that holding the voice column at
+     560px is miserliness rather than restraint: it goes to its full reading
+     width and the diagram still takes the overwhelming majority of the rest. */
+      @media (min-width: 2200px) {
+        body.has-diagram #shell {
+          grid-template-columns: minmax(0, 1fr) 660px;
+        }
       }
       #stage {
         display: none;
       }
       body.has-diagram #stage {
-        display: block;
+        display: flex;
       }
       @media (max-width: 1080px) {
         /* Too narrow to sit side by side: the diagram takes the top instead. */
         body.has-diagram #shell {
           grid-template-columns: minmax(0, 1fr);
         }
+        /* Stacked, the stage is competing with Talk for the fold rather than
+       sitting beside it, so it keeps to two thirds of the screen. Theater mode
+       is how you give the diagram the other third, and all the rest of it. */
+        body:not(.theater) #stage {
+          max-height: 68vh;
+          max-height: 68dvh;
+        }
       }
       /* No panel, no border, no drop shadow. A card would make the diagram a tile
      laid on top of the page; it is meant to be part of the page, drawn in the
-     page's own palette and lit from the same direction as everything else. */
+     page's own palette and lit from the same direction as everything else.
+
+     It is a flex column so that the canvas can be handed whatever the caption,
+     the zoom bar and the notes have not already spent. The height the diagram
+     gets is then derived from the real chrome around it rather than from a
+     magic pixel subtraction that goes stale the moment anything moves. `dvh`
+     first, `vh` underneath it for browsers that never learned it — on iPad
+     Safari `100vh` counts a URL bar that is not on screen. */
       #stage {
         position: sticky;
         top: 28px;
         padding: 0;
+        flex-direction: column;
+        max-height: calc(100vh - 56px);
+        max-height: calc(100dvh - 56px);
       }
       #stageTitle {
         font-size: 0.72rem;
@@ -92,19 +129,56 @@
       #stageNotes:empty {
         display: none;
       }
-      /* Fits the panel width at zoom 1 and scrolls past it above that. Top-down
-     diagrams are tall by nature, so the canvas is a viewport, not a shrink-ray. */
+      /* Chrome keeps its natural height when the stage runs out of room; the canvas
+     is the only thing allowed to give ground, because it is the only thing that
+     can scroll what it loses. */
+      #stageTitle,
+      #stageZoom,
+      #stageNotes,
+      #stageError {
+        flex: none;
+      }
+      /* A window onto the diagram, never a frame squeezing it: what does not fit
+     is scrolled to. Top-down diagrams are tall by nature, so the canvas is a
+     viewport, not a shrink-ray.
+
+     `touch-action: none` is what makes a two-finger pinch reach the script at
+     all — Safari otherwise claims the gesture and never reports the second
+     pointer. The price is that the browser stops scrolling this box for us, so
+     the pointer handlers pan it by hand, and hand the leftover to the page so a
+     swipe on a diagram that fits still scrolls the phone. `overscroll-behavior`
+     already stopped that chaining happening natively, so nothing is lost. */
       #stageCanvas {
         min-height: 220px;
-        max-height: calc(100vh - 230px);
+        flex: 1 1 auto;
         overflow: auto;
         overscroll-behavior: contain;
+        touch-action: none;
       }
+      /* The diagram is drawn at its own size times a scale, never at a percentage
+     of the panel. A percentage is what made the labels microscopic in a narrow
+     column: the whole picture had to fit whatever room it was given, so the text
+     shrank with the column and no amount of zooming could make text bigger
+     relative to the diagram. Sizing off the viewBox's own dimensions instead
+     makes zoom 1 mean "as mermaid drew it", 16px text rendered at 16px, and fit
+     a computed scale away from that rather than the fixed baseline.
+
+     Centred with an auto margin rather than by flex or grid: auto margins are
+     the one centring that does not clip the near edge out of reach when the
+     content is wider than the scroll container. */
       #stageCanvas svg {
         display: block;
-        width: calc(var(--zoom, 1) * 100%);
+        margin: 0 auto;
+        width: calc(var(--dgm-w, 100) * var(--zoom, 1) * 1px);
+        height: calc(var(--dgm-h, 100) * var(--zoom, 1) * 1px);
         max-width: none;
-        height: auto;
+        /* Drag-to-pan and text selection cannot both own a press. The diagram is a
+       picture rather than a document, so the drag wins and the cursor says so. */
+        user-select: none;
+        cursor: grab;
+      }
+      #stageCanvas.panning svg {
+        cursor: grabbing;
       }
       #stageZoom {
         display: none;
@@ -125,6 +199,76 @@
         padding: 2px 9px;
         font: inherit;
         cursor: pointer;
+      }
+      /* Pushed to the far end of the bar, because it is not one of the three
+     buttons next to it: those adjust the diagram, this one replaces the page. */
+      #stageZoom button[data-stage] {
+        margin-left: auto;
+      }
+      /* Theater mode: the voice interface steps out of the way and the diagram
+     takes the screen. Nothing is detached — the socket is still open, the
+     recorder still records, the player still plays — the column is simply not
+     drawn, which is the only version of hiding it that has no consequences. */
+      body.theater {
+        --gutter: 0px;
+        max-width: 100%;
+        padding: 0;
+      }
+      body.theater #shell {
+        display: block;
+      }
+      body.theater #column {
+        display: none;
+      }
+      /* Static rather than sticky: there is nothing left to stick to. A definite
+     height rather than a cap, because that is what lets the canvas flex out to
+     meet the bottom of the screen instead of stopping at its content. */
+      body.theater #stage {
+        position: static;
+        box-sizing: border-box;
+        padding: 12px clamp(12px, 1.5vw, 28px);
+        height: 100vh;
+        height: 100dvh;
+        max-height: none;
+      }
+      /* The way out. Always drawn and never behind a hover — the iPad this mode
+     exists for has no pointer to hover with — so it is a full 44px of target
+     wearing a mark quiet enough to forget while reading the diagram. Fixed to
+     the body rather than the stage so that it cannot be hidden by the very
+     thing it is there to undo. */
+      #theaterExit {
+        display: none;
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        z-index: 20;
+        width: 44px;
+        height: 44px;
+        padding: 0;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.05rem;
+        line-height: 1;
+        border-radius: 50%;
+        background: var(--surface);
+        color: var(--muted);
+        border: 1px solid var(--line);
+        opacity: 0.4;
+        transition: opacity 160ms ease;
+      }
+      body.theater #theaterExit {
+        display: flex;
+      }
+      #theaterExit:hover,
+      #theaterExit:focus-visible {
+        opacity: 1;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        /* The widening page and the fading escape hatch are both decoration. */
+        body,
+        #theaterExit {
+          transition: none;
+        }
       }
       /* The reveal animates this wrapper, never the group mermaid put a translate
      on. fill-box makes scale happen about the node's own centre. */
@@ -459,8 +603,25 @@
         <p id="stageZoom">
           <button type="button" data-zoom="-">&minus;</button>
           <button type="button" data-zoom="+">+</button>
-          <button type="button" data-zoom="0">fit</button>
+          <!-- Two answers, one button: a wide diagram wants containing and a tall
+           one wants the width, so pressing it again asks for the other. -->
+          <button
+            type="button"
+            data-zoom="0"
+            title="Fit the whole diagram; press again to fill the width"
+          >
+            fit
+          </button>
           <span id="stageZoomLabel">100%</span>
+          <!-- Its own attribute rather than a fourth data-zoom value: this does not
+           zoom anything, and the zoom handler should not have to know it. -->
+          <button
+            type="button"
+            data-stage="theater"
+            title="Give the diagram the whole screen (T)"
+          >
+            theater
+          </button>
         </p>
         <p id="stageNotes"></p>
         <p id="stageError"></p>
@@ -526,12 +687,25 @@
       </main>
     </div>
 
+    <!-- Outside #shell on purpose. #stage is hidden without a diagram and #column
+     is hidden in theater mode, so the one control that has to survive both of
+     those states cannot live inside either of them. -->
+    <button
+      id="theaterExit"
+      type="button"
+      title="Bring the call back (T or Escape)"
+      aria-label="Leave theater mode"
+    >
+      &#10005;
+    </button>
+
     <!-- Kept separate from the main script because it needs to be a module, and
      because a CDN that fails to load must cost the page its diagrams and
      nothing else. window.renderDiagram stays undefined and the caller still
      has a working phone. -->
     <script type="module">
       const canvas = document.getElementById("stageCanvas");
+      const stage = document.getElementById("stage");
       const titleEl = document.getElementById("stageTitle");
       const notesEl = document.getElementById("stageNotes");
       const errorEl = document.getElementById("stageError");
@@ -580,8 +754,16 @@
             clusterBkg: css("--surface-alt"),
             clusterBorder: css("--line"),
             edgeLabelBackground: css("--bg"),
+            // The page's own font, so a node label and a transcript line are set
+            // in the same type. 16px rather than 14: the diagram has a whole
+            // ultrawide to spread into now and a legibility floor holding it up on
+            // a phone, and 14px was chosen back when the picture was squeezed into
+            // a 660px column and every pixel of width was worth a pixel of text.
+            // It is one value for both schemes — only the colours are conditional
+            // — so a re-initialise on a light/dark switch cannot resize the type
+            // out from under a fit.
             fontFamily: "system-ui, sans-serif",
-            fontSize: "14px",
+            fontSize: "16px",
           },
           // Both of these are what make `<img>` inside a node label work. The
           // source comes from our own agent over our own socket, so the sanitizer
@@ -593,28 +775,277 @@
       applyTheme();
 
       let seq = 0;
+
+      // Zoom is an absolute scale on the diagram's own dimensions rather than a
+      // fraction of the panel, so 1 means the size mermaid drew it at with its
+      // text at full height. --dgm-w/--dgm-h carry the viewBox's intrinsic size
+      // over to the stylesheet; everything here is arithmetic in real pixels.
+      const BASE_FONT_PX = 16;
+      // Under this the labels stop being readable and a diagram that cannot be
+      // read is not information, so an automatic fit will not go there. It would
+      // rather overflow a legible picture into a canvas you can scroll than shrink
+      // an illegible whole one into view.
+      const LEGIBLE_FONT_PX = 14;
+      const FIT_FLOOR = LEGIBLE_FONT_PX / BASE_FONT_PX;
+      // The floor is a default, not a wall: somebody who wants the overview of a
+      // forty-node graph asks for it by hand, with the buttons or with a pinch.
+      const ZOOM_MIN = 0.4;
+      const ZOOM_MAX = 4;
+
       let zoom = 1;
+      // "contain" shows the whole picture, "width" fills the panel across and lets
+      // the diagram run off the bottom. Neither answer suits both shapes — a wide
+      // left-to-right flowchart wants containing, a tall top-down one wants the
+      // width and a scroll — so fit is a cycle rather than a setting. It survives
+      // a new diagram, because it is a preference about how you read.
+      let fitMode = "contain";
+      // Whether the zoom on screen is one the caller chose. A resize re-fits only
+      // when it is not: a deliberate 200% has to survive rotating the iPad.
+      let userZoomed = false;
+
+      const zoomLabel = document.getElementById("stageZoomLabel");
 
       const applyZoom = (z) => {
-        zoom = Math.min(4, Math.max(0.4, z));
+        zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
         canvas.style.setProperty("--zoom", zoom);
-        document.getElementById("stageZoomLabel").textContent =
-          Math.round(zoom * 100) + "%";
+        zoomLabel.textContent = Math.round(zoom * 100) + "%";
       };
+
+      // The viewBox is the only honest source of intrinsic size: the width/height
+      // attributes are stripped after render, and getBBox measures the ink rather
+      // than the box the diagram was laid out in. The fallback is there so that a
+      // renderer that ever stops emitting one costs the fit, not the diagram.
+      const intrinsic = () => {
+        const el = canvas.querySelector("svg");
+        if (!el) return null;
+        const box = (el.getAttribute("viewBox") || "")
+          .split(/[\s,]+/)
+          .filter(Boolean)
+          .map(Number);
+        if (box.length === 4 && box[2] > 0 && box[3] > 0)
+          return { el, w: box[2], h: box[3] };
+        const bbox = el.getBBox?.();
+        return bbox?.width > 0 ? { el, w: bbox.width, h: bbox.height } : null;
+      };
+
+      // Publishes the intrinsic size to the stylesheet. Read once per render — a
+      // diagram's own dimensions do not change while it is on screen, only the
+      // scale does.
+      const measureDiagram = () => {
+        const size = intrinsic();
+        if (!size) return null;
+        canvas.style.setProperty("--dgm-w", size.w);
+        canvas.style.setProperty("--dgm-h", size.h);
+        return size;
+      };
+
+      // How much height the panel could give the diagram, not merely how much it
+      // is giving it now. The stage is only as tall as its contents until it meets
+      // its cap, so a small diagram sits in a short canvas, and measuring that
+      // would make "fit" mean "stay exactly the size you already are". The slack
+      // between the stage's current height and its cap is the room the canvas
+      // would take if the diagram asked for it. In theater mode the stage has a
+      // definite height and no cap, so there is no slack and none is wanted.
+      const roomForDiagram = () => {
+        const cap = parseFloat(getComputedStyle(stage).maxHeight);
+        const slack = Number.isFinite(cap)
+          ? Math.max(0, cap - stage.getBoundingClientRect().height)
+          : 0;
+        // clientWidth rather than the border box: this is the room actually left
+        // over, with any scrollbar already deducted.
+        return { w: canvas.clientWidth, h: canvas.clientHeight + slack };
+      };
+
+      const scaleToFit = (mode) => {
+        const size = intrinsic();
+        const room = roomForDiagram();
+        if (!size || room.w <= 0 || room.h <= 0) return null;
+        const byWidth = room.w / size.w;
+        const raw =
+          mode === "width" ? byWidth : Math.min(byWidth, room.h / size.h);
+        return Math.min(ZOOM_MAX, Math.max(FIT_FLOOR, raw));
+      };
+
+      const fitDiagram = (mode, { toTop = false } = {}) => {
+        const scale = scaleToFit(mode);
+        if (scale === null) return false;
+        fitMode = mode;
+        userZoomed = false;
+        applyZoom(scale);
+        if (toTop) canvas.scrollTo(0, 0);
+        return true;
+      };
+
+      // Zoom about a point rather than about the corner: what is under the cursor,
+      // or between the fingers, is the thing being looked at, and it should still
+      // be there afterwards. The anchor is measured off the SVG's own rect, which
+      // already accounts for the centring margin, so the sums hold whether the
+      // diagram overflows the panel or floats in the middle of it.
+      const zoomAbout = (z, clientX, clientY) => {
+        const el = canvas.querySelector("svg");
+        userZoomed = true;
+        if (!el) return applyZoom(z);
+        const before = el.getBoundingClientRect();
+        const ax = before.width ? (clientX - before.left) / before.width : 0.5;
+        const ay = before.height ? (clientY - before.top) / before.height : 0.5;
+        applyZoom(z);
+        // Forces the new layout, so the correction below is against real numbers.
+        const after = el.getBoundingClientRect();
+        canvas.scrollLeft += after.left + ax * after.width - clientX;
+        canvas.scrollTop += after.top + ay * after.height - clientY;
+      };
+
+      // The buttons have no cursor to anchor to, so they hold the middle of the
+      // panel still — which is where you were reading.
+      const canvasCentre = () => {
+        const r = canvas.getBoundingClientRect();
+        return [r.left + r.width / 2, r.top + r.height / 2];
+      };
+
       document.getElementById("stageZoom").addEventListener("click", (e) => {
         const d = e.target.dataset?.zoom;
-        if (d) applyZoom(d === "0" ? 1 : zoom * (d === "+" ? 1.25 : 0.8));
+        if (!d) return;
+        if (d === "0") {
+          // The first press after a hand-set zoom puts the fit back; a press from
+          // a fit moves to the other one. So the button always means "show me the
+          // sensible thing", and only becomes a cycle once you are already there.
+          const next = userZoomed
+            ? fitMode
+            : fitMode === "contain"
+              ? "width"
+              : "contain";
+          fitDiagram(next, { toTop: true });
+          return;
+        }
+        zoomAbout(zoom * (d === "+" ? 1.25 : 0.8), ...canvasCentre());
       });
+
       // Ctrl/⌘ + wheel zooms, plain wheel scrolls — the same contract as a map.
       canvas.addEventListener(
         "wheel",
         (e) => {
           if (!e.ctrlKey && !e.metaKey) return;
           e.preventDefault();
-          applyZoom(zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+          zoomAbout(
+            zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1),
+            e.clientX,
+            e.clientY,
+          );
         },
         { passive: false },
       );
+
+      // Touch, by way of pointer events rather than touch events, so that a mouse
+      // drag pans for free and there is one code path to be wrong in rather than
+      // two. Two live pointers is a pinch, one is a pan.
+      const pointers = new Map();
+      let pinch = null;
+
+      const pointerPair = () => [...pointers.values()];
+      const spread = () => {
+        const [a, b] = pointerPair();
+        return Math.hypot(a.x - b.x, a.y - b.y);
+      };
+      const midpoint = () => {
+        const [a, b] = pointerPair();
+        return [(a.x + b.x) / 2, (a.y + b.y) / 2];
+      };
+      const setPanning = () =>
+        canvas.classList.toggle("panning", pointers.size === 1);
+
+      // The canvas is `touch-action: none`, so nothing scrolls unless it is
+      // scrolled here. Whatever the canvas cannot spend is handed to the page:
+      // otherwise a swipe across a diagram that already fits its panel would
+      // vanish into nothing on a phone, with the rest of the page below it.
+      const panBy = (dx, dy, type) => {
+        canvas.scrollLeft -= dx;
+        const before = canvas.scrollTop;
+        canvas.scrollTop -= dy;
+        const unused = dy - (before - canvas.scrollTop);
+        if (unused && type === "touch") window.scrollBy(0, -unused);
+      };
+
+      // Far enough that it is a drag and not a tap with a shaky hand.
+      const DRAG_SLOP = 6;
+
+      canvas.addEventListener("pointerdown", (e) => {
+        if (!canvas.querySelector("svg")) return;
+        pointers.set(e.pointerId, {
+          x: e.clientX,
+          y: e.clientY,
+          fromX: e.clientX,
+          fromY: e.clientY,
+          type: e.pointerType,
+          held: false,
+        });
+        // The pinch is measured from where it started, never from the last frame:
+        // accumulated per-frame ratios drift, and a pinch that returns to where it
+        // began has to bring the zoom back with it.
+        if (pointers.size === 2) pinch = { dist: spread(), zoom };
+        setPanning();
+      });
+
+      canvas.addEventListener("pointermove", (e) => {
+        const prev = pointers.get(e.pointerId);
+        if (!prev) return;
+        // Capture is taken on the first real movement rather than on the press.
+        // A captured pointer retargets its click to the capturing element, and
+        // taking it up front would mean mermaid's clickable nodes never saw a tap
+        // again. Taken here, a drag still keeps driving the pan after the finger
+        // has left the panel, and a tap is left alone.
+        const held =
+          prev.held ||
+          Math.hypot(e.clientX - prev.fromX, e.clientY - prev.fromY) >
+            DRAG_SLOP;
+        if (held && !prev.held) canvas.setPointerCapture?.(e.pointerId);
+        pointers.set(e.pointerId, {
+          ...prev,
+          x: e.clientX,
+          y: e.clientY,
+          held,
+        });
+        if (pinch && pointers.size === 2) {
+          const dist = spread();
+          if (dist > 0)
+            zoomAbout(pinch.zoom * (dist / pinch.dist), ...midpoint());
+          return;
+        }
+        if (pointers.size === 1)
+          panBy(e.clientX - prev.x, e.clientY - prev.y, prev.type);
+      });
+
+      const endPointer = (e) => {
+        pointers.delete(e.pointerId);
+        // A pinch with a finger lifted becomes a pan from wherever the survivor
+        // now is, which is why the pan works off the last recorded position rather
+        // than off the gesture's start: there is no jump to make.
+        if (pointers.size < 2) pinch = null;
+        setPanning();
+      };
+      canvas.addEventListener("pointerup", endPointer);
+      canvas.addEventListener("pointercancel", endPointer);
+
+      // The panel changes size for reasons that have nothing to do with the
+      // diagram: a window dragged, an iPad rotated, the voice column reflowing,
+      // theater mode handing over the whole screen. An absolute zoom needs no
+      // re-applying when that happens — that is half the point of it — but a fit
+      // was computed against a box that no longer exists, so it is worked out
+      // again. Only when the caller has not since set the zoom themselves.
+      let refitPending = 0;
+      new ResizeObserver(() => {
+        // ResizeObserver fires per frame and this callback changes the size of the
+        // thing inside the box it watches, so the work is coalesced to one pass a
+        // frame and skipped when the answer has not moved — a scrollbar appearing
+        // and disappearing is otherwise a loop with no end to it.
+        if (refitPending) return;
+        refitPending = requestAnimationFrame(() => {
+          refitPending = 0;
+          if (userZoomed) return;
+          const scale = scaleToFit(fitMode);
+          if (scale !== null && Math.abs(scale - zoom) > 0.005)
+            applyZoom(scale);
+        });
+      }).observe(canvas);
 
       // The reveal follows the graph, not document order: a source node arrives,
       // its edges run out of it, and the nodes they land on arrive as they are
@@ -856,16 +1287,24 @@
             titleEl.textContent = msg.title || "Diagram";
             notesEl.textContent = msg.notes || "";
             canvas.replaceChildren(el);
-            applyZoom(1);
-            canvas.scrollTo(0, 0);
-            // Layout has to be real before getBBox and getTotalLength are read.
-            el.getBoundingClientRect();
             bindFunctions?.(canvas);
             errorEl.textContent = "";
+            // Mermaid's own sizing comes off first: the inline `max-width` that
+            // `useMaxWidth` emits, and the width and height attributes with it.
+            // The box is the stylesheet's business now, driven by --dgm-w/--dgm-h
+            // and --zoom. The viewBox is left exactly as it arrived, because it is
+            // what those first two are read from.
             el.removeAttribute("style");
-            el.setAttribute("width", "100%");
+            el.removeAttribute("width");
             el.removeAttribute("height");
             el.setAttribute("preserveAspectRatio", "xMidYMid meet");
+            measureDiagram();
+            // Layout has to be real before anything is measured: before getBBox
+            // and getTotalLength for the reveal, and before the fit, which would
+            // otherwise be measuring the diagram that was on screen a moment ago
+            // against a panel that is still the shape it was for it.
+            el.getBoundingClientRect();
+            fitDiagram(fitMode, { toTop: true });
             reveal(el);
           }
         } catch (err) {
@@ -907,6 +1346,14 @@
       // both write into the same chunks array.
       let starting = false;
       let startCancelled = false;
+      // Recorded clips that have not made it onto the wire yet, oldest first. A
+      // clip finished while the socket was down used to be dropped on the floor
+      // with nothing but a status line to show for it, so a caller who spoke
+      // across a reconnect lost the whole utterance.
+      let outbox = [];
+      // Handle for the keepalive interval, cleared on close so that repeated
+      // reconnects do not stack up one live interval per attempt.
+      let keepaliveTimer = null;
       // The object URL currently loaded into the player, revoked when it is
       // replaced. Every reply used to leak one for the life of the tab.
       let currentUrl = null;
@@ -1256,6 +1703,33 @@
         }
       }
 
+      // Drains the outbox in FIFO order, and is called both when a clip is
+      // finished and from ws.onopen so that anything buffered while the page was
+      // disconnected goes out as soon as the socket comes back.
+      function flushOutbox() {
+        if (outbox.length === 0) return;
+        while (outbox.length > 0 && ws && ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send(outbox[0]);
+          } catch {
+            // The socket died between the readyState check and the send. Leave
+            // the clip at the head of the queue so the next flush retries it
+            // instead of destroying it.
+            break;
+          }
+          outbox.shift();
+        }
+        if (outbox.length > 0) {
+          // A caller's own turn only ever renders from the server transcript, so
+          // without this a buffered clip was completely invisible.
+          statusEl.textContent = `Waiting to send ${outbox.length} clip(s)...`;
+          statusEl.classList.add("error");
+          return;
+        }
+        statusEl.textContent = "Transcribing...";
+        statusEl.classList.remove("error");
+      }
+
       function connect() {
         const proto = location.protocol === "https:" ? "wss" : "ws";
         ws = new WebSocket(`${proto}://${location.host}/ws`);
@@ -1265,10 +1739,23 @@
           statusEl.textContent = idleText;
           statusEl.classList.remove("error");
           btn.disabled = false;
+          // Idle proxies and mobile NAT tables quietly drop a socket that has
+          // said nothing for a minute, and the page only discovered the corpse
+          // when a caller sent a clip into it. The backend ignores stray text
+          // frames, so a bare "ping" is enough to keep the path warm.
+          clearInterval(keepaliveTimer);
+          keepaliveTimer = setInterval(() => {
+            if (ws && ws.readyState === WebSocket.OPEN) ws.send("ping");
+          }, 20000);
+          flushOutbox();
         };
 
         ws.onclose = () => {
-          if (isRecording() || starting) stopRecording(false);
+          // Finalise the in-flight recording into the outbox rather than
+          // discarding it: this used to pass false, so a caller who was
+          // mid-sentence when the socket dropped lost that clip entirely.
+          if (isRecording() || starting) stopRecording(true);
+          clearInterval(keepaliveTimer);
           statusEl.textContent = "Disconnected. Reconnecting...";
           btn.disabled = true;
           setTimeout(connect, 1500);
@@ -1414,13 +1901,11 @@
             type: mediaRecorder.mimeType || "audio/webm",
           });
           blob.arrayBuffer().then((buf) => {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-              ws.send(buf);
-              statusEl.textContent = "Transcribing...";
-            } else {
-              statusEl.textContent = "Disconnected before that could be sent.";
-              statusEl.classList.add("error");
-            }
+            // Always queue first and let the flush decide: sending inline here
+            // meant a clip recorded while the socket was closed was garbage
+            // collected on the spot.
+            outbox.push(buf);
+            flushOutbox();
           });
         };
         mediaRecorder.start();
@@ -1469,6 +1954,74 @@
       sendBtn.addEventListener("click", () => stopRecording(true));
       cancelBtn.addEventListener("click", () => stopRecording(false));
 
+      // Theater mode hides the entire voice interface and gives the screen to the
+      // diagram. One rule keeps it safe: the wish and the state are separate, and
+      // the state is only ever entered when there is a diagram to look at. Without
+      // one #stage is display:none, so hiding the column too would leave a blank
+      // page with nothing on it to press. Asking for theater early — by shortcut on
+      // an empty page, or by a stored preference on a cold load — arms it instead,
+      // and the next diagram arrives in theater.
+      const THEATER_KEY = "switchboard.theater";
+      const theaterExit = document.getElementById("theaterExit");
+      let wantsTheater = false;
+      // Where the transcript was parked on the way in. A display:none ancestor
+      // reports a scrollHeight of zero, so every scroll-to-bottom that ran while
+      // the column was hidden was a no-op and the log would come back pinned to
+      // the top of the call.
+      let logWasAtBottom = true;
+
+      const hasDiagram = () => document.body.classList.contains("has-diagram");
+      const inTheater = () => document.body.classList.contains("theater");
+
+      function applyTheater() {
+        const active = wantsTheater && hasDiagram();
+        if (active === inTheater()) return;
+        if (active) {
+          logWasAtBottom =
+            logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
+        }
+        document.body.classList.toggle("theater", active);
+        if (!active && logWasAtBottom) logEl.scrollTop = logEl.scrollHeight;
+        // Nothing to say to the diagram from here. The canvas has just changed
+        // size by most of a screen, but the SVG is sized absolutely — off its own
+        // viewBox rather than off the panel — so the zoom is still the zoom, and
+        // the ResizeObserver in the module script is what re-fits it. Which is
+        // also what keeps the two scripts uncoupled: with the CDN down there is no
+        // diagram to fit and nothing on this side goes looking for one.
+      }
+
+      function setTheater(on) {
+        wantsTheater = on;
+        try {
+          localStorage.setItem(THEATER_KEY, on ? "1" : "0");
+        } catch {
+          /* Private-mode Safari throws on write. The mode still works, it just
+             does not survive a reload. */
+        }
+        applyTheater();
+      }
+
+      // renderDiagram lives in the other script and owns has-diagram; watching the
+      // class is how this side hears about a diagram without reaching into it.
+      // Re-entrant by nature — applyTheater writes a class too — which the
+      // no-change guard above turns into a cheap no-op.
+      new MutationObserver(applyTheater).observe(document.body, {
+        attributes: true,
+        attributeFilter: ["class"],
+      });
+
+      document.getElementById("stageZoom").addEventListener("click", (e) => {
+        if (e.target.dataset?.stage === "theater") setTheater(true);
+      });
+      theaterExit.addEventListener("click", () => setTheater(false));
+
+      try {
+        wantsTheater = localStorage.getItem(THEATER_KEY) === "1";
+      } catch {
+        /* Reading it throws in the same places writing it does. */
+      }
+      applyTheater();
+
       // Space toggles talk/send, Escape discards — but not while typing anywhere.
       document.addEventListener("keydown", (e) => {
         // `select` and `button` included: after picking a route the select keeps
@@ -1480,6 +2033,16 @@
           isRecording() || starting ? stopRecording(true) : startRecording();
         } else if (e.code === "Escape" && (isRecording() || starting)) {
           stopRecording(false);
+        } else if (e.code === "KeyT" && !isRecording() && !starting) {
+          // Not mid-recording: pulling Send and Discard off the screen while the
+          // caller is holding a clip is the one thing this must never do. The
+          // wish is what toggles, not the state, so a second press cancels an
+          // arming that has not had a diagram to act on yet.
+          setTheater(!wantsTheater);
+        } else if (e.code === "Escape" && inTheater()) {
+          // Only once discard has had its refusal: Escape is the universal way out
+          // of a full-screen anything, but it belongs to the recording first.
+          setTheater(false);
         }
       });
 
