@@ -111,6 +111,19 @@ which guarantees the broken pipe rather than leaving it to chance.
 The general rule: when a downstream write fails because an upstream process
 already failed, report the upstream failure. The write error is a symptom.
 
+### Clippy passing locally does not mean it passes in CI
+
+CI installs whatever `stable` currently is, so it can be several releases ahead
+of the toolchain on a development box. Clippy gains lints in that gap, and
+`-D warnings` turns each new one into a build failure on code nobody touched.
+The first CI run here failed exactly that way — `unnecessary_sort_by` in
+`remote_argv`, flagged by clippy 1.97 and unknown to the 1.92 that had just
+passed locally.
+
+Check `cargo clippy --version` against the CI log before concluding a local run
+proves anything. Pinning the toolchain in `rust-toolchain.toml` would make the
+two agree and turn upgrades into a deliberate change; that has not been done.
+
 **Still open.** `upload_extension` in `src/pbx.rs` has the same pattern — it
 propagates the stdin write error while the remote command's stderr is discarded,
 so the warning logs a broken pipe rather than the actual remote error such as a

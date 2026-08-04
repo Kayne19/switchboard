@@ -723,7 +723,7 @@ pub fn remote_argv(
     }
     remote.extend(extra_args.iter().cloned());
     let mut environment = env.iter().collect::<Vec<_>>();
-    environment.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    environment.sort_unstable_by_key(|(left, _)| *left);
     let exports = environment
         .into_iter()
         .map(|(name, value)| format!("export {name}={}; ", shell_quote(value)))
