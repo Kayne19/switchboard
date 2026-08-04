@@ -1,0 +1,13 @@
+{
+  "name": "switchboard-browser",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit --project tsconfig.json",
+    "build": "tsc --project tsconfig.json",
+    "test": "npm run build && node tests/test_diagram_waves.mjs"
+  },
+  "devDependencies": {
+    "typescript": "5.7.2"
+  }
+}

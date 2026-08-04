@@ -1,6 +1,6 @@
 # Switchboard Rust + TypeScript migration handoff
 
-**Status:** implementation handoff; migration not started
+**Status:** browser/extensions and Rust service slices implemented; deployment cutover and STT replacement remain
 **Target:** TypeScript browser/extensions, Rust service backend
 **Primary constraint:** preserve call behavior while changing runtimes
 
@@ -53,6 +53,9 @@ Important current modules:
 | `static/index.html` | HTML shell plus compiled TypeScript client |
 | `extensions/*.ts.j2` | Plain TypeScript pi extensions after persona cleanup |
 | `tests/` | Rust protocol/integration tests plus browser/extension tests |
+| `web/` | TypeScript browser protocol, client, and diagram sources |
+| `src/` | Rust service modules and tests |
+| `static/*.js` | committed deterministic browser build output |
 
 The deployment half remains in the homelab repository. Its systemd unit,
 registry, SSH configuration, prompts, persona, environment file, and secrets
@@ -109,6 +112,7 @@ change explicitly renames them:
 
 ```text
 SWITCHBOARD_ENV_FILE
+SWITCHBOARD_BIND
 SWITCHBOARD_STATE_DIR
 SWITCHBOARD_CONFIG_DIR
 SWITCHBOARD_PROJECTS_FILE
@@ -119,6 +123,7 @@ SWITCHBOARD_PI_BINARY
 SWITCHBOARD_OPERATOR_MODEL
 SWITCHBOARD_AGENT_MODEL
 SWITCHBOARD_AGENT_THINKING
+SWITCHBOARD_PERSONA
 SWITCHBOARD_REMOTE_CACHE_DIR
 SWITCHBOARD_MODEL_SWAPS
 SWITCHBOARD_SELF_URL
@@ -130,7 +135,13 @@ SWITCHBOARD_SESSION
 SWITCHBOARD_SPEAK_URL
 SWITCHBOARD_STATE_URL
 SWITCHBOARD_DIAGRAM_URL
+SWITCHBOARD_STT_COMMAND
 ```
+
+`SWITCHBOARD_STT_COMMAND` is transitional: it receives WebM/Opus bytes on stdin
+and must write the transcript to stdout. The Rust service reports this adapter
+in `/healthz`; it is not a claim that Rust Whisper matches the deployed
+faster-whisper model yet.
 
 `SWITCHBOARD_SESSION`, `SWITCHBOARD_SPEAK_URL`,
 `SWITCHBOARD_STATE_URL`, and `SWITCHBOARD_DIAGRAM_URL` are passed to project

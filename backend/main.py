@@ -71,6 +71,7 @@ OPERATOR_PROMPT = _env(
 )
 OPERATOR_EXTENSION = _env("SWITCHBOARD_OPERATOR_EXTENSION") or None
 AGENT_EXTENSION = _env("SWITCHBOARD_AGENT_EXTENSION") or None
+AGENT_PERSONA = _env("SWITCHBOARD_PERSONA")
 PI_BINARY = _env("SWITCHBOARD_PI_BINARY", "pi")
 OPERATOR_MODEL = _env("SWITCHBOARD_OPERATOR_MODEL") or None
 AGENT_MODEL = _env("SWITCHBOARD_AGENT_MODEL") or None
@@ -123,6 +124,7 @@ switchboard = Switchboard(
     speak_url=f"{SELF_URL}/speak" if SELF_URL else "",
     state_url=f"{SELF_URL}/leg-state" if SELF_URL else "",
     diagram_url=f"{SELF_URL}/diagram" if SELF_URL else "",
+    persona=AGENT_PERSONA,
     env=dict(os.environ),
 )
 

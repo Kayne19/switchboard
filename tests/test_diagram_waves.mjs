@@ -8,17 +8,16 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-const html = readFileSync(
-	new URL("../static/index.html", import.meta.url),
+const diagram = readFileSync(
+	new URL("../static/diagram.js", import.meta.url),
 	"utf8",
 );
 const lift = (name) => {
-	const start = html.indexOf(`      const ${name} = `);
-	assert.notEqual(start, -1, `${name} is no longer in static/index.html`);
-	// Each of these is declared at one indent level, so the next line at that
-	// indent ends it.
-	const end = html.indexOf("\n      const ", start + 1);
-	return html.slice(start, end);
+	const start = diagram.indexOf(`const ${name} = `);
+	assert.notEqual(start, -1, `${name} is no longer in static/diagram.js`);
+	// The compiled module keeps these helpers as top-level const declarations.
+	const end = diagram.indexOf("\nconst ", start + 1);
+	return diagram.slice(start, end);
 };
 
 const { waves } = await import(

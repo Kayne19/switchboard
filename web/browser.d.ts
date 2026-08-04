@@ -1,0 +1,37 @@
+interface TranscriptEntry {
+	role: string;
+	text: string;
+	id?: string;
+	route?: string;
+	ts?: number;
+	pending?: boolean;
+}
+
+interface BrowserMessage {
+	type?: string;
+	id?: string;
+	source?: string;
+	title?: string;
+	notes?: string;
+	text?: string;
+	message?: string;
+	route?: string;
+	label?: string;
+	model?: string;
+	model_name?: string;
+	thinking?: string;
+	thinking_default?: string;
+	thinking_confirmed?: boolean;
+	model_swaps?: boolean;
+	projects?: string[];
+	levels?: string[];
+	entries?: TranscriptEntry[];
+	entry?: TranscriptEntry;
+	waiting?: number;
+	steered?: boolean;
+	[key: string]: unknown;
+}
+
+interface Window {
+	renderDiagram?: (message: BrowserMessage) => Promise<void>;
+}

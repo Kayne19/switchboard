@@ -1084,9 +1084,13 @@ class AgentEnvTests(unittest.TestCase):
         self.assertEqual(env["SWITCHBOARD_STATE_URL"], "http://sb:8000/leg-state")
         self.assertEqual(env["SWITCHBOARD_DIAGRAM_URL"], "http://sb:8000/diagram")
 
-    def test_an_unset_url_is_left_out_rather_than_passed_empty(self):
-        # The extension checks for a falsy value to decide the tool cannot work.
-        # An empty string would pass that check and be fetched.
+    def test_persona_is_handed_to_the_agent(self):
+        env = self._board(persona="Be warm and concise.")._agent_env()
+        self.assertEqual(env["SWITCHBOARD_PERSONA"], "Be warm and concise.")
+
+    def test_an_unset_url_and_persona_are_left_out(self):
+        # The extensions check for falsy values to decide whether callbacks or
+        # persona guidance are available; do not pass empty environment values.
         env = self._board()._agent_env()
         self.assertEqual(env, {"SWITCHBOARD_SESSION": "1"})
 

@@ -214,6 +214,7 @@ class Switchboard:
         speak_url: str = "",
         state_url: str = "",
         diagram_url: str = "",
+        persona: str = "",
         env: dict[str, str] | None = None,
         on_route_change: Callable[[], Awaitable[None]] | None = None,
         on_activity: Callable[[dict], Awaitable[None]] | None = None,
@@ -245,6 +246,10 @@ class Switchboard:
         # reachability constraint as speak_url, and over HTTP for the same
         # reason: it has to land mid-turn, not when the turn settles.
         self.diagram_url = diagram_url
+        # Shared voice guidance for the agent's speak tool. This comes from the
+        # homelab environment rather than the extension source so the plain
+        # TypeScript copy does not need deployment-time templating.
+        self.persona = persona
         self.env = env
         # Fired the moment the line actually swings, so the page can relabel
         # itself then rather than when the whole turn finally settles — a
@@ -1064,6 +1069,8 @@ class Switchboard:
             env["SWITCHBOARD_STATE_URL"] = self.state_url
         if self.diagram_url:
             env["SWITCHBOARD_DIAGRAM_URL"] = self.diagram_url
+        if self.persona:
+            env["SWITCHBOARD_PERSONA"] = self.persona
         return env
 
     def _agent_brief(self, project: Project, has_tool: bool) -> str:

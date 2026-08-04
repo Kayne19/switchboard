@@ -214,9 +214,41 @@ test it manually and then fails with "command not found" for the switchboard.
 | `backend/registry.py` | the project directory and spoken-name resolution |
 | `backend/models.py` | spoken model name to a `--model` argument, or a refusal |
 | `backend/audio.py` | whisper in, ElevenLabs out, and reply-length shaping |
-| `static/index.html` | tap-to-talk page (toggle, then Send or Discard): which leg, model and thinking level you are on, pickers for both, the hang-up button, and the diagram panel |
+| `static/index.html` | HTML shell for the tap-to-talk page |
+| `web/` | TypeScript browser protocol, client, and diagram sources |
+| `static/*.js` | committed deterministic browser build output |
+| `src/` | Rust service: API, routing, pi sessions, registry, models, history, audio |
+| `extensions/*.ts` | plain TypeScript pi extensions; homelab templates remain authoritative until cutover |
 | `docs/diagram-tool.md` | the `diagram` tool: payload, rendering, layout, and what was left out |
-| `tests/` | routing and parsing, no audio or network (`python -m unittest discover -s tests`) |
+| `tests/` | Python compatibility and Node diagram tests (`python3 -m unittest discover -s tests`) |
+
+## Agent persona deployment contract
+
+The plain project-agent extension reads `SWITCHBOARD_PERSONA` at runtime and the
+switchboard passes it through to each agent's environment. The homelab env file
+and its deployment template must provide this variable before deploying; the
+persona is no longer rendered into the extension source. Keep the authoritative
+Jinja deployment copies in homelab until that migration is complete.
+
+The Rust service keeps STT behind the transitional `SWITCHBOARD_STT_COMMAND`
+sidecar contract: WebM bytes go to stdin and transcript text comes from stdout.
+The Rust Whisper path is intentionally not declared production-equivalent until
+it is benchmarked against the deployed faster-whisper model.
+
+## Building the migrated slices
+
+```bash
+npm ci
+npm run build
+node tests/test_diagram_waves.mjs
+cargo test --offline
+```
+
+The Python service remains the compatibility baseline until homelab cuts over
+to the pinned Rust binary. Do not remove its audio path before the STT sidecar
+or a benchmarked Rust Whisper adapter is validated on the deployment host.
+The Rust slice currently serializes PBX mutation through one state lock; verify
+cancellation-safe forced hangup under a live turn before production cutover.
 
 ## Operating it
 
