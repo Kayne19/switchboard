@@ -124,11 +124,14 @@ Check `cargo clippy --version` against the CI log before concluding a local run
 proves anything. Pinning the toolchain in `rust-toolchain.toml` would make the
 two agree and turn upgrades into a deliberate change; that has not been done.
 
-**Still open.** `upload_extension` in `src/pbx.rs` has the same pattern — it
-propagates the stdin write error while the remote command's stderr is discarded,
-so the warning logs a broken pipe rather than the actual remote error such as a
-permission denial or a missing directory. It was left alone deliberately: nothing
-fails because of it, the path already degrades to the sentinel fallback, and
-changing it means altering behaviour in a path with no test covering it.
-Extension files are also small enough that the write usually completes. Fixing it
-should come with coverage.
+`upload_extension` in `src/pbx.rs` had the same pattern and now behaves the same
+way. It used to propagate the stdin write error while the remote command's stderr
+was discarded, so the warning logged a broken pipe instead of the actual remote
+error — a permission denial, a missing directory. The exit status and stderr are
+now what decide.
+
+That one has a second consequence worth knowing, because it is not only about
+log quality: a remote that stops reading early but *succeeds* was being reported
+as a staging failure and fell back to the sentinel. The regression test covers
+exactly that, by sending a megabyte to a remote that reads sixteen bytes and
+exits zero.

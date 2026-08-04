@@ -916,7 +916,16 @@ impl Switchboard {
         });
         let interaction = async {
             if let Some(mut input) = stdin.take() {
-                input.write_all(&contents).await?;
+                match input.write_all(&contents).await {
+                    Ok(()) => {}
+                    // The remote stopped reading, which normally means the
+                    // staging command already failed. Its exit status and
+                    // stderr name the real cause -- a missing directory, a
+                    // permission denial -- and that is what the warning below
+                    // should carry, not the broken pipe it caused.
+                    Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {}
+                    Err(error) => return Err(error),
+                }
                 drop(input);
             }
             child.wait().await
@@ -1678,6 +1687,77 @@ done
         assert_eq!(
             std::fs::read_to_string(&staged).unwrap(),
             "export default 'staged';\n"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn staging_survives_a_remote_that_stops_reading_before_the_extension_ends() {
+        let root = std::env::temp_dir().join(format!(
+            "switchboard-earlyclose-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        // Far larger than a pipe buffer, so a remote that stops reading early
+        // is guaranteed to break the write rather than merely maybe breaking it.
+        let extension = root.join("agent.ts");
+        std::fs::write(&extension, "x".repeat(1 << 20)).unwrap();
+
+        // Succeeds, reports the staged path, but consumes only the first bytes.
+        let succeeds = root.join("fake-ssh-ok");
+        crate::pi_client::write_executable_script(
+            &succeeds,
+            "head -c 16 > /dev/null\nprintf '%s' /remote/agent.ts\nexit 0\n",
+        );
+        // Fails the way a missing directory or denied permission would.
+        let fails = root.join("fake-ssh-fail");
+        crate::pi_client::write_executable_script(
+            &fails,
+            "printf 'mkdir: permission denied\\n' >&2\nexit 1\n",
+        );
+
+        let board = || {
+            Switchboard::new(
+                Registry::new(Vec::new()),
+                "pi".into(),
+                None,
+                String::new(),
+                None,
+                Some(extension.to_string_lossy().into_owned()),
+                None,
+                "medium".into(),
+                ".cache/switchboard".into(),
+                true,
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                HashMap::new(),
+            )
+        };
+
+        // The broken pipe is the remote's choice, not a staging failure. Before
+        // this was fixed the write error short-circuited and the caller was told
+        // staging had failed.
+        assert_eq!(
+            board()
+                .upload_extension_with(&succeeds.to_string_lossy(), "fake-host")
+                .await
+                .as_deref(),
+            Some("/remote/agent.ts")
+        );
+        // A remote that genuinely fails still falls back to the sentinel, and
+        // now does so on the strength of its exit status rather than the write.
+        assert_eq!(
+            board()
+                .upload_extension_with(&fails.to_string_lossy(), "fake-host")
+                .await,
+            None
         );
         std::fs::remove_dir_all(root).unwrap();
     }
