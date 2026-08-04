@@ -512,6 +512,19 @@
         margin-top: 12px;
         font-size: 0.88rem;
       }
+      #retryBtn {
+        width: auto;
+        margin-top: 8px;
+        padding: 6px 12px;
+        font-size: 0.82rem;
+        background: none;
+        color: var(--danger);
+        border-color: var(--line);
+      }
+      .turn.pending .body {
+        font-style: italic;
+        color: var(--muted);
+      }
       .error {
         color: var(--danger);
       }
@@ -668,6 +681,14 @@
           </button>
         </div>
         <div id="status">Connecting...</div>
+        <button
+          id="retryBtn"
+          class="hidden"
+          type="button"
+          title="Replace a stale connection and retransmit every unacknowledged clip"
+        >
+          Retry now / Force send
+        </button>
 
         <!-- What the leg is doing right now. Hidden between turns: an empty
          panel on an idle line is furniture, not information. -->
@@ -1330,6 +1351,7 @@
       const routeSelect = document.getElementById("routeSelect");
       const thinkingSelect = document.getElementById("thinkingSelect");
       const hangupBtn = document.getElementById("hangupBtn");
+      const retryBtn = document.getElementById("retryBtn");
       const player = document.getElementById("player");
 
       let ws;
@@ -1346,14 +1368,15 @@
       // both write into the same chunks array.
       let starting = false;
       let startCancelled = false;
-      // Recorded clips that have not made it onto the wire yet, oldest first. A
-      // clip finished while the socket was down used to be dropped on the floor
-      // with nothing but a status line to show for it, so a caller who spoke
-      // across a reconnect lost the whole utterance.
+      // Completed clips remain here, oldest first, until the backend explicitly
+      // accepts their id. `sent` means only "attempted on this socket"; reconnect
+      // clears it and safely retransmits because the backend deduplicates ids.
       let outbox = [];
-      // Handle for the keepalive interval, cleared on close so that repeated
-      // reconnects do not stack up one live interval per attempt.
-      let keepaliveTimer = null;
+      let socketGeneration = 0;
+      let reconnectTimer = null;
+      let heartbeatTimer = null;
+      let pongDeadlineTimer = null;
+      let pendingPong = null;
       // The object URL currently loaded into the player, revoked when it is
       // replaced. Every reply used to leak one for the life of the tab.
       let currentUrl = null;
@@ -1533,10 +1556,28 @@
         });
       }
 
+      function turnForClip(id) {
+        if (!id) return null;
+        return (
+          [...logEl.children].find((el) => el.dataset.clipId === id) || null
+        );
+      }
+
       function appendTurn(entry) {
+        // A completed recording is drawn immediately with its id.  Whisper's
+        // transcript updates that same node rather than appending a second copy.
+        const existing = turnForClip(entry.id);
+        if (existing) {
+          existing.classList.toggle("pending", Boolean(entry.pending));
+          existing.querySelector(".body").textContent = entry.text;
+          return existing;
+        }
+
         const turn = document.createElement("div");
         turn.className =
           "turn " + (entry.role === "caller" ? "caller" : "agent");
+        turn.classList.toggle("pending", Boolean(entry.pending));
+        if (entry.id) turn.dataset.clipId = entry.id;
 
         const meta = document.createElement("div");
         meta.className = "meta";
@@ -1568,11 +1609,34 @@
           logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
         logEl.appendChild(turn);
         if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+        return turn;
+      }
+
+      function pendingEntry(clip) {
+        return {
+          role: "caller",
+          id: clip.id,
+          text: "Voice clip pending transcription…",
+          pending: true,
+          ts: clip.created / 1000,
+        };
       }
 
       function renderHistory(entries) {
+        const history = entries || [];
+        const completed = new Set(
+          history.map((entry) => entry.id).filter(Boolean),
+        );
+        // A transcript in history is the durable completion acknowledgement.
+        // Drop its retained audio even if the live transcript frame was lost.
+        outbox = outbox.filter((clip) => !completed.has(clip.id));
+        updateOutboxUI();
         logEl.textContent = "";
-        (entries || []).forEach(appendTurn);
+        history.forEach(appendTurn);
+        // Preserve optimistic bubbles for clips accepted but not transcribed.
+        outbox.forEach((clip) => {
+          if (!turnForClip(clip.id)) appendTurn(pendingEntry(clip));
+        });
         logEl.scrollTop = logEl.scrollHeight;
       }
 
@@ -1703,70 +1767,151 @@
         }
       }
 
-      // Drains the outbox in FIFO order, and is called both when a clip is
-      // finished and from ws.onopen so that anything buffered while the page was
-      // disconnected goes out as soon as the socket comes back.
+      function updateOutboxUI() {
+        retryBtn.classList.toggle("hidden", outbox.length === 0);
+      }
+
+      // Send one unsent clip at a time. Accepted clips stay here until their
+      // transcript arrives, so a backend restart cannot destroy the only copy.
       function flushOutbox() {
+        updateOutboxUI();
         if (outbox.length === 0) return;
-        while (outbox.length > 0 && ws && ws.readyState === WebSocket.OPEN) {
-          try {
-            ws.send(outbox[0]);
-          } catch {
-            // The socket died between the readyState check and the send. Leave
-            // the clip at the head of the queue so the next flush retries it
-            // instead of destroying it.
-            break;
-          }
-          outbox.shift();
+        const clip = outbox.find((entry) => !entry.sent);
+        if (!clip) {
+          statusEl.textContent = `Transcribing ${outbox.length} voice clip(s)...`;
+          statusEl.classList.remove("error");
+          return;
         }
-        if (outbox.length > 0) {
-          // A caller's own turn only ever renders from the server transcript, so
-          // without this a buffered clip was completely invisible.
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
           statusEl.textContent = `Waiting to send ${outbox.length} clip(s)...`;
           statusEl.classList.add("error");
           return;
         }
-        statusEl.textContent = "Transcribing...";
-        statusEl.classList.remove("error");
+        try {
+          ws.send(
+            JSON.stringify({ type: "clip", id: clip.id, mime: clip.mime }),
+          );
+          ws.send(clip.audio);
+          clip.sent = true;
+          statusEl.textContent =
+            "Waiting for the server to accept your clip...";
+          statusEl.classList.remove("error");
+        } catch {
+          // The socket died between frames. The same id and bytes are retried on
+          // the next generation; the backend either never saw them or dedupes.
+          clip.sent = false;
+          ws.close();
+        }
+      }
+
+      function stopHeartbeat() {
+        clearTimeout(heartbeatTimer);
+        clearTimeout(pongDeadlineTimer);
+        heartbeatTimer = null;
+        pongDeadlineTimer = null;
+        pendingPong = null;
+      }
+
+      function startHeartbeat(socket, generation) {
+        const schedule = () => {
+          clearTimeout(heartbeatTimer);
+          heartbeatTimer = setTimeout(ping, 20000);
+        };
+        const ping = () => {
+          if (
+            generation !== socketGeneration ||
+            socket !== ws ||
+            socket.readyState !== WebSocket.OPEN
+          )
+            return;
+          const nonce = `${generation}:${Date.now()}:${Math.random()}`;
+          pendingPong = nonce;
+          try {
+            socket.send(
+              JSON.stringify({ type: "ping", nonce, time: Date.now() }),
+            );
+          } catch {
+            socket.close();
+            connect();
+            return;
+          }
+          clearTimeout(pongDeadlineTimer);
+          pongDeadlineTimer = setTimeout(() => {
+            if (
+              generation === socketGeneration &&
+              socket === ws &&
+              pendingPong === nonce
+            ) {
+              statusEl.textContent = "Keepalive missed. Reconnecting...";
+              statusEl.classList.add("error");
+              socket.close();
+              connect();
+            }
+          }, 8000);
+        };
+        schedule();
       }
 
       function connect() {
-        const proto = location.protocol === "https:" ? "wss" : "ws";
-        ws = new WebSocket(`${proto}://${location.host}/ws`);
-        ws.binaryType = "arraybuffer";
+        const generation = ++socketGeneration;
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+        stopHeartbeat();
 
-        ws.onopen = () => {
+        // Incrementing the generation first makes every callback from the old
+        // socket a no-op, including its close callback. This is what prevents a
+        // manual force-send from stacking another reconnect timer behind itself.
+        const previous = ws;
+        ws = null;
+        if (
+          previous &&
+          (previous.readyState === WebSocket.OPEN ||
+            previous.readyState === WebSocket.CONNECTING)
+        )
+          previous.close();
+
+        const proto = location.protocol === "https:" ? "wss" : "ws";
+        const socket = new WebSocket(`${proto}://${location.host}/ws`);
+        ws = socket;
+        socket.binaryType = "arraybuffer";
+        const current = () => generation === socketGeneration && socket === ws;
+
+        socket.onopen = () => {
+          if (!current()) return;
           statusEl.textContent = idleText;
           statusEl.classList.remove("error");
           btn.disabled = false;
-          // Idle proxies and mobile NAT tables quietly drop a socket that has
-          // said nothing for a minute, and the page only discovered the corpse
-          // when a caller sent a clip into it. The backend ignores stray text
-          // frames, so a bare "ping" is enough to keep the path warm.
-          clearInterval(keepaliveTimer);
-          keepaliveTimer = setInterval(() => {
-            if (ws && ws.readyState === WebSocket.OPEN) ws.send("ping");
-          }, 20000);
+          outbox.forEach((clip) => (clip.sent = false));
+          startHeartbeat(socket, generation);
           flushOutbox();
         };
 
-        ws.onclose = () => {
+        socket.onclose = () => {
+          if (!current()) return;
           // Finalise the in-flight recording into the outbox rather than
-          // discarding it: this used to pass false, so a caller who was
-          // mid-sentence when the socket dropped lost that clip entirely.
+          // discarding it. Accepted work is already server-owned; unaccepted
+          // work remains locally retryable under the same id.
           if (isRecording() || starting) stopRecording(true);
-          clearInterval(keepaliveTimer);
+          stopHeartbeat();
+          outbox.forEach((clip) => (clip.sent = false));
+          updateOutboxUI();
           statusEl.textContent = "Disconnected. Reconnecting...";
+          statusEl.classList.add("error");
           btn.disabled = true;
-          setTimeout(connect, 1500);
+          clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(() => {
+            if (generation === socketGeneration) connect();
+          }, 1500);
         };
 
-        ws.onerror = () => {
+        socket.onerror = () => {
+          if (!current()) return;
           statusEl.textContent = "Connection error.";
           statusEl.classList.add("error");
         };
 
-        ws.onmessage = (event) => {
+        socket.onmessage = (event) => {
+          if (!current()) return;
           if (typeof event.data === "string") {
             let msg;
             try {
@@ -1774,15 +1919,36 @@
             } catch {
               return; // A frame we cannot read is not worth killing the handler over.
             }
-            if (msg.type === "history") {
+            if (msg.type === "pong") {
+              if (msg.nonce === pendingPong) {
+                pendingPong = null;
+                clearTimeout(pongDeadlineTimer);
+                pongDeadlineTimer = null;
+                clearTimeout(heartbeatTimer);
+                startHeartbeat(socket, generation);
+              }
+            } else if (msg.type === "accepted") {
+              const clip = outbox.find((entry) => entry.id === msg.id);
+              if (clip) {
+                clip.accepted = true;
+                statusEl.textContent = "Transcribing...";
+                statusEl.classList.remove("error");
+                flushOutbox();
+              }
+            } else if (msg.type === "history") {
               renderHistory(msg.entries);
             } else if (msg.type === "transcript") {
-              if (msg.text)
+              if (msg.text) {
+                outbox = outbox.filter((clip) => clip.id !== msg.id);
+                updateOutboxUI();
                 appendTurn({
                   role: "caller",
+                  id: msg.id,
                   text: msg.text,
                   ts: Date.now() / 1000,
                 });
+                flushOutbox();
+              }
             } else if (msg.type === "spoken") {
               if (msg.entry) appendTurn(msg.entry);
             } else if (msg.type === "thinking") {
@@ -1796,10 +1962,9 @@
             } else if (msg.type === "activity") {
               addActivity(msg);
             } else if (msg.type === "queued") {
-              // The clip was heard and is in line behind a turn already running.
-              // Silence here is what made a second message look swallowed.
-              statusEl.textContent =
-                msg.waiting > 1
+              statusEl.textContent = msg.steered
+                ? "Added that to the turn already in progress."
+                : msg.waiting > 1
                   ? `Got it — ${msg.waiting} waiting their turn.`
                   : "Got it — you're next, once this turn finishes.";
               statusEl.classList.remove("error");
@@ -1820,6 +1985,14 @@
               window.renderDiagram?.(msg);
             } else if (msg.type === "error") {
               stopActivity();
+              const pending = turnForClip(msg.id);
+              if (pending) {
+                outbox = outbox.filter((clip) => clip.id !== msg.id);
+                updateOutboxUI();
+                pending.classList.remove("pending");
+                pending.querySelector(".body").textContent =
+                  "Voice clip failed: " + msg.message;
+              }
               statusEl.textContent = "Error: " + msg.message;
               statusEl.classList.add("error");
             }
@@ -1900,13 +2073,21 @@
           const blob = new Blob(chunks, {
             type: mediaRecorder.mimeType || "audio/webm",
           });
-          blob.arrayBuffer().then((buf) => {
-            // Always queue first and let the flush decide: sending inline here
-            // meant a clip recorded while the socket was closed was garbage
-            // collected on the spot.
-            outbox.push(buf);
-            flushOutbox();
-          });
+          const id = globalThis.crypto?.randomUUID
+            ? globalThis.crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          const clip = {
+            id,
+            audio: blob,
+            mime: blob.type,
+            created: Date.now(),
+            sent: false,
+          };
+          // Local echo does not wait for a network round trip or Whisper. The
+          // transcript carrying this id will replace the bubble in place.
+          outbox.push(clip);
+          appendTurn(pendingEntry(clip));
+          flushOutbox();
         };
         mediaRecorder.start();
         starting = false;
@@ -1953,6 +2134,12 @@
       });
       sendBtn.addEventListener("click", () => stopRecording(true));
       cancelBtn.addEventListener("click", () => stopRecording(false));
+      retryBtn.addEventListener("click", () => {
+        outbox.forEach((clip) => (clip.sent = false));
+        statusEl.textContent = "Forcing a fresh connection and retrying...";
+        statusEl.classList.remove("error");
+        connect();
+      });
 
       // Theater mode hides the entire voice interface and gives the screen to the
       // diagram. One rule keeps it safe: the wish and the state are separate, and

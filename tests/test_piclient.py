@@ -20,6 +20,7 @@ from backend.piclient import (  # noqa: E402
     SPEAK_TOOL,
     TRANSFER_TOOL,
     PiSession,
+    PiSessionError,
     local_argv,
     remote_argv,
 )
@@ -87,6 +88,51 @@ async def collect_from(events, *, truncate=False, on_activity=None):
     session = PiSession(["true"], label="test", on_activity=on_activity)
     session._proc = fake_proc(stdout=reader)
     return await session._collect()
+
+
+class SessionCommandTests(unittest.IsolatedAsyncioTestCase):
+    def _session(self):
+        writes = []
+
+        class Stdin:
+            def write(self, payload):
+                writes.append(payload)
+
+            async def drain(self):
+                return None
+
+        session = PiSession(["true"], label="test")
+        session._proc = fake_proc(stdin=Stdin(), returncode=None)
+        return session, writes
+
+    async def test_steer_writes_the_rpc_command(self):
+        session, writes = self._session()
+        session.busy = True
+        await session.steer("also check the docs")
+        self.assertEqual(
+            writes,
+            [b'{"type": "steer", "message": "also check the docs"}\n'],
+        )
+
+    async def test_steer_refuses_a_turn_that_already_settled(self):
+        session, writes = self._session()
+        with self.assertRaisesRegex(PiSessionError, "no longer running"):
+            await session.steer("too late")
+        self.assertEqual(writes, [])
+
+    async def test_busy_is_true_only_while_collecting_a_prompt(self):
+        session, _ = self._session()
+        seen = []
+
+        async def collect():
+            seen.append(session.busy)
+            raise RuntimeError("stream failed")
+
+        session._collect = collect
+        with self.assertRaises(RuntimeError):
+            await session.prompt("hello")
+        self.assertEqual(seen, [True])
+        self.assertFalse(session.busy)
 
 
 class CollectTests(unittest.IsolatedAsyncioTestCase):

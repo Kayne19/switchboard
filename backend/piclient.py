@@ -191,6 +191,13 @@ class PiSession:
         # the agent is streaming unless a streamingBehavior is given, and a
         # phone call is strictly turn-taking anyway.
         self._lock = asyncio.Lock()
+        # Guards stdin only. `steer` deliberately does not take `_lock` — the
+        # turn it is steering is holding it — so without this a steer frame can
+        # interleave with a prompt frame mid-drain and corrupt both.
+        self._write_lock = asyncio.Lock()
+        # True while a turn is streaming. The one thing that decides whether a
+        # new utterance is a prompt or a steer.
+        self.busy = False
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -289,14 +296,48 @@ class PiSession:
             assert self._proc is not None
             assert self._proc.stdin is not None
 
-            payload = json.dumps({"type": "prompt", "message": message}) + "\n"
+            await self._write({"type": "prompt", "message": message})
+            self.busy = True
+            try:
+                return await self._collect()
+            finally:
+                # Serialize this transition with steer writes. Otherwise a
+                # steer can observe True as agent_settled arrives, then write
+                # after this turn has stopped consuming commands.
+                async with self._write_lock:
+                    self.busy = False
+
+    async def steer(self, message: str) -> None:
+        """Push a message into the turn that is already running.
+
+        Delivered by the runtime after the current assistant turn finishes its
+        tool calls and before the next model call, so the agent acts on it
+        without the caller waiting for the whole turn to settle. Anything it
+        produces comes back on the *running* turn's event stream, which is why
+        this returns nothing: there is no second reply to collect.
+
+        Not guarded by `_lock`, on purpose. The turn being steered holds it.
+        """
+        if not self.alive:
+            raise PiSessionError(
+                f"agent process is not running ({self.stderr_tail() or 'no output'})"
+            )
+        await self._write({"type": "steer", "message": message}, require_busy=True)
+        log.info("[%s] steered: %.80s", self.label, message)
+
+    async def _write(self, command: dict, *, require_busy: bool = False) -> None:
+        """One JSONL command on stdin, never interleaved with another."""
+        if self._proc is None or self._proc.stdin is None:
+            raise PiSessionError("agent process has no input to write to")
+        payload = json.dumps(command) + "\n"
+        async with self._write_lock:
+            if require_busy and not self.busy:
+                raise PiSessionError("agent turn is no longer running")
             try:
                 self._proc.stdin.write(payload.encode())
                 await self._proc.stdin.drain()
             except (BrokenPipeError, ConnectionResetError) as exc:
                 raise PiSessionError(f"agent process closed its input: {exc}") from exc
-
-            return await self._collect()
 
     async def _report_activity(self, item: dict) -> None:
         """Tell whoever is watching what this turn is doing right now.

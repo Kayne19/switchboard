@@ -5,6 +5,9 @@ switchboard's own decisions — which is the part that must not get this wrong. 
 caller stranded on a dead leg cannot ask for help.
 """
 
+# Pyright cannot model the scripted fake sessions and method replacements below.
+# pyright: reportAttributeAccessIssue=false
+
 import asyncio
 import sys
 import unittest
@@ -46,6 +49,8 @@ class FakeSession:
         self._alive = alive
         self._stderr = stderr
         self.prompts = []
+        self.steers = []
+        self.busy = False
         self.closed = False
 
     @property
@@ -63,6 +68,11 @@ class FakeSession:
         if isinstance(turn, Exception):
             raise turn
         return turn
+
+    async def steer(self, message):
+        if not self.alive:
+            raise PiSessionError("session closed")
+        self.steers.append(message)
 
     async def close(self):
         self.closed = True
@@ -111,7 +121,9 @@ def build(
         return operator
 
     async def start_agent(project, *, model="", session_id=""):
-        started.append({"project": project.id, "model": model, "session_id": session_id})
+        started.append(
+            {"project": project.id, "model": model, "session_id": session_id}
+        )
         if agent_error is not None:
             raise agent_error
         # Every leg is its own process in production; reusing one fake across a
@@ -156,7 +168,11 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
             [
                 Turn(
                     text="Putting you through.",
-                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes", "intent": "fix masks"})],
+                    signals=[
+                        Signal(
+                            TRANSFER_TOOL, {"project": "grapes", "intent": "fix masks"}
+                        )
+                    ],
                 )
             ],
             [Turn(text="Ready on grapes.")],
@@ -174,7 +190,12 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_transfer_without_intent_still_connects(self):
         board, _, agent = build(
-            [Turn(text="One moment.", signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})])],
+            [
+                Turn(
+                    text="One moment.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})],
+                )
+            ],
             [Turn(text="Standing by.")],
         )
         await board.handle("grapes please")
@@ -183,7 +204,12 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_utterances_go_to_the_agent_once_connected(self):
         board, operator, agent = build(
-            [Turn(text="Through you go.", signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})])],
+            [
+                Turn(
+                    text="Through you go.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})],
+                )
+            ],
             [Turn(text="Ready."), Turn(text="Fixed it.")],
         )
         await board.handle("grapes")
@@ -196,7 +222,12 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unknown_project_keeps_the_caller_with_the_operator(self):
         board, _, _ = build(
-            [Turn(text="Sure.", signals=[Signal(TRANSFER_TOOL, {"project": "tomatoes"})])]
+            [
+                Turn(
+                    text="Sure.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "tomatoes"})],
+                )
+            ]
         )
         reply = await board.handle("put me in tomatoes")
 
@@ -210,7 +241,12 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_connection_hands_the_caller_back(self):
         board, _, _ = build(
-            [Turn(text="Connecting.", signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})])],
+            [
+                Turn(
+                    text="Connecting.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})],
+                )
+            ],
             agent_error=PiSessionError("ssh: permission denied"),
         )
         reply = await board.handle("grapes")
@@ -222,7 +258,12 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         # The process starts (ssh connects) but the far end dies — a wrong cwd or
         # a missing binary. The caller must land back on the operator.
         board, _, _ = build(
-            [Turn(text="Connecting.", signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})])],
+            [
+                Turn(
+                    text="Connecting.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})],
+                )
+            ],
             [Turn(text="", failed=True)],
         )
         reply = await board.handle("grapes")
@@ -232,12 +273,61 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("didn't pick up", reply.text)
 
 
+class SteeringTests(unittest.IsolatedAsyncioTestCase):
+    async def test_busy_live_agent_is_steered_without_waiting_for_turn_lock(self):
+        board, _, agent = build(
+            [
+                Turn(
+                    text="Through.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})],
+                )
+            ],
+            [Turn(text="Ready.")],
+        )
+        await board.handle("grapes")
+        agent.busy = True
+
+        self.assertTrue(await board.steer_if_busy("also update the docs"))
+        self.assertEqual(agent.steers, ["also update the docs"])
+        self.assertEqual(len(agent.prompts), 1)
+
+    async def test_idle_session_is_left_for_the_regular_prompt_queue(self):
+        board, operator, _ = build([Turn(text="Ready.")])
+        self.assertFalse(await board.steer_if_busy("hello"))
+        self.assertEqual(operator.steers, [])
+
+    async def test_session_replaced_during_steer_is_not_reported_delivered(self):
+        board, _, agent = build(
+            [
+                Turn(
+                    text="Through.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})],
+                )
+            ],
+            [Turn(text="Ready.")],
+        )
+        await board.handle("grapes")
+        agent.busy = True
+
+        async def detached_steer(message):
+            agent.steers.append(message)
+            board._agent = None
+
+        agent.steer = detached_steer
+        self.assertFalse(await board.steer_if_busy("do not lose this"))
+
+
 class PrepareTests(unittest.IsolatedAsyncioTestCase):
     async def test_workspace_state_is_handed_to_the_agent(self):
         # The agent has to know whether it opened on a fresh tree or someone's
         # half-finished branch — it changes what it is safe to do.
         board, _, agent = build(
-            [Turn(text="Through.", signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})])],
+            [
+                Turn(
+                    text="Through.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})],
+                )
+            ],
             [Turn(text="Ready.")],
             prepare_report="clean, on master at abc1234",
         )
@@ -246,7 +336,12 @@ class PrepareTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_no_prepare_leaves_the_intro_unchanged(self):
         board, _, agent = build(
-            [Turn(text="Through.", signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})])],
+            [
+                Turn(
+                    text="Through.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})],
+                )
+            ],
             [Turn(text="Ready.")],
         )
         await board.handle("grapes")
@@ -254,7 +349,12 @@ class PrepareTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_dirty_checkout_is_reported_not_hidden(self):
         board, _, agent = build(
-            [Turn(text="Through.", signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})])],
+            [
+                Turn(
+                    text="Through.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})],
+                )
+            ],
             [Turn(text="Ready.")],
             prepare_report="left on branch wip/foo with uncommitted changes, which were not touched",
         )
@@ -266,7 +366,10 @@ class ReturnTests(unittest.IsolatedAsyncioTestCase):
     async def _connected(self, agent_turns):
         board, operator, agent = build(
             [
-                Turn(text="Through.", signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})]),
+                Turn(
+                    text="Through.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})],
+                ),
                 Turn(text="Welcome back."),
             ],
             [Turn(text="Ready."), *agent_turns],
@@ -276,7 +379,12 @@ class ReturnTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_return_tool_ends_the_session_and_restores_the_operator(self):
         board, _, agent = await self._connected(
-            [Turn(text="Talk later.", signals=[Signal(RETURN_TOOL, {"summary": "masks fixed"})])]
+            [
+                Turn(
+                    text="Talk later.",
+                    signals=[Signal(RETURN_TOOL, {"summary": "masks fixed"})],
+                )
+            ]
         )
         reply = await board.handle("send me back")
 
@@ -290,7 +398,12 @@ class ReturnTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_the_operator_is_told_what_happened_immediately(self):
         board, operator, _ = await self._connected(
-            [Turn(text="Bye.", signals=[Signal(RETURN_TOOL, {"summary": "masks fixed"})])]
+            [
+                Turn(
+                    text="Bye.",
+                    signals=[Signal(RETURN_TOOL, {"summary": "masks fixed"})],
+                )
+            ]
         )
         await board.handle("send me back")
 
@@ -321,8 +434,10 @@ class ReturnTests(unittest.IsolatedAsyncioTestCase):
             [
                 Turn(
                     text="Talk later.",
-                    signals=[Signal(SPEAK_TOOL, {"text": "Talk later."}),
-                             Signal(RETURN_TOOL, {})],
+                    signals=[
+                        Signal(SPEAK_TOOL, {"text": "Talk later."}),
+                        Signal(RETURN_TOOL, {}),
+                    ],
                 )
             ]
         )
@@ -344,7 +459,12 @@ class DirectTransferTests(unittest.IsolatedAsyncioTestCase):
 
     async def _on_grapes(self, agent_turns, onward_turns=None):
         board, operator, agent = build(
-            [Turn(text="Through.", signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})])],
+            [
+                Turn(
+                    text="Through.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})],
+                )
+            ],
             [Turn(text="Ready."), *agent_turns],
             projects=(GRAPES, HOMELAB),
             onward_turns=onward_turns,
@@ -357,7 +477,11 @@ class DirectTransferTests(unittest.IsolatedAsyncioTestCase):
             [
                 Turn(
                     text="Sending you over.",
-                    signals=[Signal(TRANSFER_TOOL, {"project": "the lab", "intent": "check dns"})],
+                    signals=[
+                        Signal(
+                            TRANSFER_TOOL, {"project": "the lab", "intent": "check dns"}
+                        )
+                    ],
                 )
             ],
             onward_turns={"homelab": [Turn(text="Homelab here.")]},
@@ -375,7 +499,12 @@ class DirectTransferTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_transfer_to_nowhere_leaves_the_caller_on_the_operator(self):
         board, _, _ = await self._on_grapes(
-            [Turn(text="Off you go.", signals=[Signal(TRANSFER_TOOL, {"project": "tomatoes"})])]
+            [
+                Turn(
+                    text="Off you go.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "tomatoes"})],
+                )
+            ]
         )
         reply = await board.handle("send me to tomatoes")
 
@@ -387,14 +516,19 @@ class ForwardedIntentTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_operator_acts_on_a_handoff_note_without_being_asked_again(self):
         board, operator, _ = build(
             [
-                Turn(text="Through.", signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})]),
+                Turn(
+                    text="Through.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})],
+                ),
                 Turn(text="", signals=[Signal(TRANSFER_TOOL, {"project": "homelab"})]),
             ],
             [
                 Turn(text="Ready."),
                 Turn(
                     text="Bye.",
-                    signals=[Signal(RETURN_TOOL, {"summary": "they want the homelab next"})],
+                    signals=[
+                        Signal(RETURN_TOOL, {"summary": "they want the homelab next"})
+                    ],
                 ),
             ],
             projects=(GRAPES, HOMELAB),
@@ -415,7 +549,10 @@ class ModelSwapTests(unittest.IsolatedAsyncioTestCase):
     async def _on_grapes(self, agent_turns, onward_turns=None):
         board, operator, agent = build(
             [
-                Turn(text="Through.", signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})]),
+                Turn(
+                    text="Through.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})],
+                ),
                 Turn(text="Welcome back."),
             ],
             [Turn(text="Ready."), *agent_turns],
@@ -455,7 +592,9 @@ class ModelSwapTests(unittest.IsolatedAsyncioTestCase):
                 Turn(
                     text="",
                     signals=[
-                        Signal(SET_MODEL_TOOL, {"model": "opus 5", "keep_context": False})
+                        Signal(
+                            SET_MODEL_TOOL, {"model": "opus 5", "keep_context": False}
+                        )
                     ],
                 )
             ],
@@ -482,7 +621,12 @@ class ModelSwapTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_thinking_level_alone_keeps_the_current_model(self):
         board, _, _ = await self._on_grapes(
-            [Turn(text="", signals=[Signal(SET_MODEL_TOOL, {"thinking": "reasoning max"})])],
+            [
+                Turn(
+                    text="",
+                    signals=[Signal(SET_MODEL_TOOL, {"thinking": "reasoning max"})],
+                )
+            ],
             onward_turns={"grape-segmentation": [Turn(text="Thinking harder.")]},
         )
         await board.handle("think harder")
@@ -493,7 +637,9 @@ class ModelSwapTests(unittest.IsolatedAsyncioTestCase):
             [
                 Turn(
                     text="",
-                    signals=[Signal(SET_MODEL_TOOL, {"model": "anthropic/claude-sonnet-5"})],
+                    signals=[
+                        Signal(SET_MODEL_TOOL, {"model": "anthropic/claude-sonnet-5"})
+                    ],
                 )
             ]
         )
@@ -506,7 +652,10 @@ class ModelSwapTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_leg_that_will_not_come_back_up_lands_on_the_operator(self):
         board, operator, _ = build(
             [
-                Turn(text="Through.", signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})]),
+                Turn(
+                    text="Through.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})],
+                ),
                 Turn(text="Welcome back."),
             ],
             [
@@ -541,7 +690,11 @@ class ModelSwapTests(unittest.IsolatedAsyncioTestCase):
                     signals=[
                         Signal(
                             TRANSFER_TOOL,
-                            {"project": "grapes", "model": "opus 5", "thinking": "high"},
+                            {
+                                "project": "grapes",
+                                "model": "opus 5",
+                                "thinking": "high",
+                            },
                         )
                     ],
                 )
@@ -559,7 +712,11 @@ class ModelSwapTests(unittest.IsolatedAsyncioTestCase):
             [
                 Turn(
                     text="Through.",
-                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes", "model": "sonnet 5"})],
+                    signals=[
+                        Signal(
+                            TRANSFER_TOOL, {"project": "grapes", "model": "sonnet 5"}
+                        )
+                    ],
                 )
             ],
             [Turn(text="Ready.")],
@@ -579,7 +736,10 @@ class ForcedHangupTests(unittest.IsolatedAsyncioTestCase):
     async def _connected(self, agent_turns=()):
         board, operator, agent = build(
             [
-                Turn(text="Through.", signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})]),
+                Turn(
+                    text="Through.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})],
+                ),
                 Turn(text="Where to?"),
             ],
             [Turn(text="Ready."), *agent_turns],
@@ -635,7 +795,12 @@ class ForcedHangupTests(unittest.IsolatedAsyncioTestCase):
 class IdleTests(unittest.IsolatedAsyncioTestCase):
     async def _connected(self):
         board, operator, agent = build(
-            [Turn(text="Through.", signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})])],
+            [
+                Turn(
+                    text="Through.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})],
+                )
+            ],
             [Turn(text="Ready.")],
         )
         await board.handle("grapes")
@@ -675,7 +840,12 @@ class RouteAnnouncementTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_line_is_announced_before_the_new_agent_speaks(self):
         seen = []
         board, _, _ = build(
-            [Turn(text="Through.", signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})])],
+            [
+                Turn(
+                    text="Through.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})],
+                )
+            ],
             [Turn(text="Ready.")],
         )
 
@@ -692,7 +862,12 @@ class RouteAnnouncementTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_hangup_announces_the_operator(self):
         seen = []
         board, _, _ = build(
-            [Turn(text="Through.", signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})])],
+            [
+                Turn(
+                    text="Through.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})],
+                )
+            ],
             [Turn(text="Ready."), Turn(text="Bye.", signals=[Signal(RETURN_TOOL, {})])],
         )
 
@@ -709,7 +884,12 @@ class RouteAnnouncementTests(unittest.IsolatedAsyncioTestCase):
             raise RuntimeError("no browser")
 
         board, _, _ = build(
-            [Turn(text="Through.", signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})])],
+            [
+                Turn(
+                    text="Through.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})],
+                )
+            ],
             [Turn(text="Ready.")],
             on_route_change=announce,
         )
@@ -721,7 +901,12 @@ class RouteAnnouncementTests(unittest.IsolatedAsyncioTestCase):
 class StatusTests(unittest.IsolatedAsyncioTestCase):
     async def test_status_reports_the_current_leg(self):
         board, _, _ = build(
-            [Turn(text="Through.", signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})])],
+            [
+                Turn(
+                    text="Through.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})],
+                )
+            ],
             [Turn(text="Ready.")],
         )
         self.assertEqual(board.status()["label"], "Operator")
@@ -738,7 +923,11 @@ class StatusTests(unittest.IsolatedAsyncioTestCase):
                     signals=[
                         Signal(
                             TRANSFER_TOOL,
-                            {"project": "grapes", "model": "opus 5", "thinking": "high"},
+                            {
+                                "project": "grapes",
+                                "model": "opus 5",
+                                "thinking": "high",
+                            },
                         )
                     ],
                 )
@@ -757,7 +946,12 @@ class ThinkingLevelTests(unittest.IsolatedAsyncioTestCase):
 
     async def _connected(self, **kwargs):
         board, _, agent = build(
-            [Turn(text="Through.", signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})])],
+            [
+                Turn(
+                    text="Through.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})],
+                )
+            ],
             [Turn(text="Ready.")],
             **kwargs,
         )
@@ -816,7 +1010,9 @@ class ThinkingLevelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(board.route, "grape-segmentation")
         self.assertEqual(board.started[-1]["model"], "anthropic/claude-sonnet-5:low")
         # Same session file: the conversation survives the restart.
-        self.assertEqual(board.started[-1]["session_id"], board.started[0]["session_id"])
+        self.assertEqual(
+            board.started[-1]["session_id"], board.started[0]["session_id"]
+        )
         self.assertTrue(agent.closed)
 
     async def test_an_unknown_level_changes_nothing(self):
@@ -839,7 +1035,12 @@ class PageDialTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_dialling_the_operator_drops_the_project_leg(self):
         board, _, agent = build(
-            [Turn(text="Through.", signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})])],
+            [
+                Turn(
+                    text="Through.",
+                    signals=[Signal(TRANSFER_TOOL, {"project": "grapes"})],
+                )
+            ],
             [Turn(text="Ready.")],
         )
         await board.handle("grapes")

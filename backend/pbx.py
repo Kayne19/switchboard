@@ -338,6 +338,38 @@ class Switchboard:
         self._agent = None
         self._operator = None
 
+    def _live_session(self) -> PiSession | None:
+        """Return the session that owns the line at this instant."""
+        return self._operator if self.route == OPERATOR else self._agent
+
+    async def steer_if_busy(self, transcript: str) -> bool:
+        """Add an utterance to the live turn, without waiting for its turn lock.
+
+        A running prompt holds ``_lock``, so taking it here would turn this into
+        an ordinary queued prompt.  Session identity is checked on both sides of
+        the write: a force-hangup may replace the leg concurrently, and in that
+        case the caller's words must be queued for the new live leg instead of
+        being considered delivered to the old one.
+        """
+        session = self._live_session()
+        if session is None or not session.alive or not session.busy:
+            return False
+        # The route can move between the reads above.  Do not steer a session
+        # that is already detached even if its process has not finished closing.
+        if session is not self._live_session():
+            return False
+        try:
+            await session.steer(transcript)
+        except PiSessionError:
+            # A force-hangup closing stdin is a normal race here.  Returning
+            # false hands the utterance to the regular prompt queue.
+            log.info("could not steer %s; queueing the utterance", session.label)
+            return False
+        if session is not self._live_session():
+            return False
+        self._last_activity = time.monotonic()
+        return True
+
     async def handle(self, transcript: str) -> Reply:
         """Route one spoken utterance and produce what the caller hears back."""
         async with self._lock:
