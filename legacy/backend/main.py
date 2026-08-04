@@ -39,7 +39,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("switchboard")
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
+ROOT_DIR = Path(__file__).resolve().parents[2]
 load_dotenv(os.getenv("SWITCHBOARD_ENV_FILE", "/etc/switchboard/switchboard.env"))
 
 
@@ -145,7 +145,10 @@ async def _watch_for_silence() -> None:
             continue
         if left is None:
             continue
-        minutes = int(IDLE_TIMEOUT // 60)
+        try:
+            minutes = int(IDLE_TIMEOUT // 60)
+        except (OverflowError, ValueError):
+            minutes = 0
         note = (
             f"Nothing was said for {minutes} minutes, so the line to {left} was "
             "dropped. You're back with the operator."

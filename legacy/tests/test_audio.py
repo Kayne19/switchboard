@@ -15,16 +15,20 @@ def speaker(max_chars=100):
 
 class ClipTests(unittest.TestCase):
     def test_short_replies_pass_through_untouched(self):
-        self.assertEqual(speaker().clip_for_speech("Ready on grapes."), "Ready on grapes.")
+        self.assertEqual(
+            speaker().clip_for_speech("Ready on grapes."), "Ready on grapes."
+        )
 
     def test_whitespace_is_collapsed(self):
         # Markdown-shaped replies arrive full of newlines; TTS should not pause
         # on them.
-        self.assertEqual(speaker().clip_for_speech("Line one.\n\n  Line two."), "Line one. Line two.")
+        self.assertEqual(
+            speaker().clip_for_speech("Line one.\n\n  Line two."), "Line one. Line two."
+        )
 
     def test_none_and_empty_are_safe(self):
         self.assertEqual(speaker().clip_for_speech(""), "")
-        self.assertEqual(speaker().clip_for_speech(None), "")
+        self.assertEqual(speaker().clip_for_speech(None), "")  # type: ignore[arg-type]
 
     def test_long_replies_are_cut_and_say_so(self):
         text = "word " * 200

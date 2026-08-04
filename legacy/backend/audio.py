@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import tempfile
+from contextlib import suppress
 from pathlib import Path
 
 import httpx
@@ -80,10 +81,8 @@ class Transcriber:
         try:
             return await asyncio.to_thread(self._transcribe_file, tmp_path)
         finally:
-            try:
+            with suppress(OSError):
                 os.unlink(tmp_path)
-            except OSError:
-                pass
 
 
 class Speaker:
@@ -116,7 +115,7 @@ class Speaker:
     def configured(self) -> bool:
         return bool(self.api_key)
 
-    def clip_for_speech(self, text: str) -> str:
+    def clip_for_speech(self, text: str | None) -> str:
         """Trim a reply to something worth listening to.
 
         Cuts on a sentence boundary when there is one in range so the spoken line

@@ -1,6 +1,10 @@
+import sys
 import unittest
+from pathlib import Path
 
-from backend.history import AGENT, CALLER, TranscriptLog
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from backend.history import AGENT, CALLER, TranscriptLog  # noqa: E402
 
 
 class TranscriptLogTest(unittest.TestCase):
@@ -23,6 +27,7 @@ class TranscriptLogTest(unittest.TestCase):
     def test_text_is_stripped(self):
         log = TranscriptLog()
         entry = log.add(CALLER, "  hello  ")
+        assert entry is not None
         self.assertEqual(entry["text"], "hello")
 
     def test_oldest_entries_fall_off_at_the_limit(self):

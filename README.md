@@ -116,7 +116,7 @@ was writing and picks the call up mid-sentence. Preserving is the default;
 was cleared on purpose so it does not try to recall it.
 
 What the caller says goes through whisper and then through a model's guess, so
-`backend/models.py` refuses rather than guesses. A name is resolved against
+`legacy/backend/models.py` refuses rather than guesses. A name is resolved against
 `pi --list-models` **on the host the leg runs on** — providers are configured
 per box, so asking damocles would answer for the wrong machine — and a phrase
 matching two entries comes back as an error naming both. That is the case worth
@@ -170,6 +170,10 @@ the thing it is rescuing you from is not a rescue. A turn still in flight when
 the button is pressed has its result discarded, because acting on it would swing
 the route straight back.
 
+The operator route remains the home base. If a page control reaches the service
+while the operator process itself is wedged, that process is discarded and
+recreated on the next utterance; the route still remains `operator`.
+
 ## When nobody says anything
 
 `SWITCHBOARD_IDLE_TIMEOUT` (an hour by default, `switchboard_idle_timeout` in
@@ -208,19 +212,20 @@ test it manually and then fails with "command not found" for the switchboard.
 
 | file | what it is |
 |---|---|
-| `backend/main.py` | FastAPI app: the browser socket, `/speak`, `/diagram`, `/healthz`, `/status`, `/hangup`, `/connect`, `/thinking`, `/leg-state` |
-| `backend/pbx.py` | the switchboard: routing state, transfers, session lifecycle |
-| `backend/piclient.py` | pi's RPC protocol — one turn in, text and signals out |
-| `backend/registry.py` | the project directory and spoken-name resolution |
-| `backend/models.py` | spoken model name to a `--model` argument, or a refusal |
-| `backend/audio.py` | whisper in, ElevenLabs out, and reply-length shaping |
+| `legacy/backend/main.py` | compatibility FastAPI app; not the active service |
+| `legacy/backend/pbx.py` | legacy routing state, transfers, session lifecycle |
+| `legacy/backend/piclient.py` | legacy pi RPC protocol — one turn in, text and signals out |
+| `legacy/backend/registry.py` | legacy project directory and spoken-name resolution |
+| `legacy/backend/models.py` | legacy spoken model name resolution |
+| `legacy/backend/audio.py` | legacy whisper in, ElevenLabs out, and reply-length shaping |
 | `static/index.html` | HTML shell for the tap-to-talk page |
 | `web/` | TypeScript browser protocol, client, and diagram sources |
 | `static/*.js` | committed deterministic browser build output |
 | `src/` | Rust service: API, routing, pi sessions, registry, models, history, audio |
 | `extensions/*.ts` | plain TypeScript pi extensions; homelab templates remain authoritative until cutover |
 | `docs/diagram-tool.md` | the `diagram` tool: payload, rendering, layout, and what was left out |
-| `tests/` | Python compatibility and Node diagram tests (`python3 -m unittest discover -s tests`) |
+| `legacy/tests/` | Python compatibility tests (`python3 -m unittest discover -s legacy/tests`) |
+| `tests/` | Node browser/diagram and pi-extension tests |
 
 ## Agent persona deployment contract
 
@@ -239,16 +244,23 @@ it is benchmarked against the deployed faster-whisper model.
 
 ```bash
 npm ci
-npm run build
-node tests/test_diagram_waves.mjs
+npm test
+python3 -m unittest discover -s legacy/tests
+cargo fmt --all -- --check
 cargo test --offline
+cargo clippy --offline --all-targets -- -D warnings
 ```
 
-The Python service remains the compatibility baseline until homelab cuts over
-to the pinned Rust binary. Do not remove its audio path before the STT sidecar
+The legacy Python service in `legacy/backend/` remains the compatibility
+baseline until homelab cuts over to the pinned Rust binary. Do not remove its audio path before the STT sidecar
 or a benchmarked Rust Whisper adapter is validated on the deployment host.
-The Rust slice currently serializes PBX mutation through one state lock; verify
-cancellation-safe forced hangup under a live turn before production cutover.
+PBX mutation remains serialized, while live status, agent callbacks, steering,
+and forced page rescue bypass that lock through bounded shared controls. The
+forced-rescue path is covered under a deliberately wedged turn in the Rust
+tests. Fake pi, SSH, TTS, and STT paths are also exercised without network
+access. Repeat those boundaries on the deployment host as part of the live
+cutover check; unit tests cannot establish microphone, model, or remote-host
+behavior.
 
 ## Operating it
 

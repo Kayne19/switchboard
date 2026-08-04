@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+
+      - name: Install browser build dependencies
+        run: npm ci
+
+      - name: Install Python compatibility dependencies
+        run: python3 -m pip install -r requirements.txt
+
+      - name: Python compatibility tests
+        run: python3 -m unittest discover -s legacy/tests
+
+      - name: TypeScript build and browser/extension tests
+        run: |
+          npm test
+          git diff --exit-code -- static
+
+      - name: Rust format
+        run: cargo fmt --all -- --check
+
+      - name: Rust tests
+        run: cargo test --locked
+
+      - name: Rust lint
+        run: cargo clippy --locked --all-targets -- -D warnings

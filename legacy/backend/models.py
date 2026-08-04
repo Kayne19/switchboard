@@ -138,6 +138,11 @@ def normalize_thinking(text: str) -> str:
     level = re.sub(r"\s+", " ", level)
     if not level:
         return ""
+    # Check whole-phrase aliases before removing filler words. Otherwise the
+    # documented phrases "no thinking" and "without thinking" become the
+    # unrecognised fragments "no" and "without".
+    if level in THINKING_ALIASES:
+        return THINKING_ALIASES[level]
     # "reasoning high", "high reasoning", "thinking level high" all reduce to
     # the level itself; the model asking for this rarely says the bare word.
     level = re.sub(r"\b(reasoning|thinking|effort|level|set|to)\b", " ", level).strip()

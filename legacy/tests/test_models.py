@@ -31,7 +31,10 @@ groq       llama-4-fast                128K     8K       no        no
 
 class SpecTests(unittest.TestCase):
     def test_a_full_spec_splits_into_its_three_parts(self):
-        self.assertEqual(parse_spec("anthropic/claude-opus-5:high"), ("anthropic", "claude-opus-5", "high"))
+        self.assertEqual(
+            parse_spec("anthropic/claude-opus-5:high"),
+            ("anthropic", "claude-opus-5", "high"),
+        )
 
     def test_a_bare_model_has_no_provider(self):
         self.assertEqual(parse_spec("claude-opus-5"), ("", "claude-opus-5", ""))
@@ -50,6 +53,8 @@ class ThinkingTests(unittest.TestCase):
         self.assertEqual(normalize_thinking("maximum"), "max")
         self.assertEqual(normalize_thinking("extra high"), "xhigh")
         self.assertEqual(normalize_thinking("none"), "off")
+        self.assertEqual(normalize_thinking("no thinking"), "off")
+        self.assertEqual(normalize_thinking("without thinking"), "off")
 
     def test_an_empty_level_means_leave_it_alone(self):
         self.assertEqual(normalize_thinking(""), "")
@@ -74,7 +79,9 @@ class ResolveTests(unittest.TestCase):
         self.assertEqual(self.catalog.resolve("opus 5").spec, "anthropic/claude-opus-5")
 
     def test_spoken_digits_and_separators_do_not_matter(self):
-        self.assertEqual(self.catalog.resolve("claude opus five").spec, "anthropic/claude-opus-5")
+        self.assertEqual(
+            self.catalog.resolve("claude opus five").spec, "anthropic/claude-opus-5"
+        )
 
     def test_one_model_on_two_providers_is_refused_with_both(self):
         # The exact case that leaves a caller stuck: pick wrong and they are on
@@ -86,7 +93,9 @@ class ResolveTests(unittest.TestCase):
         self.assertIn("openai/claude-sonnet-5", message)
 
     def test_naming_the_provider_settles_it(self):
-        self.assertEqual(self.catalog.resolve("openai/sonnet 5").spec, "openai/claude-sonnet-5")
+        self.assertEqual(
+            self.catalog.resolve("openai/sonnet 5").spec, "openai/claude-sonnet-5"
+        )
 
     def test_an_exact_id_beats_the_models_it_is_a_prefix_of(self):
         # "claude-sonnet-4-5" is a substring of nothing else here, but the rule
@@ -151,17 +160,21 @@ class PinThinkingTests(unittest.TestCase):
 
     def test_a_spec_without_a_level_gets_the_configured_one(self):
         self.assertEqual(
-            pin_thinking("anthropic/claude-opus-5", "medium"), "anthropic/claude-opus-5:medium"
+            pin_thinking("anthropic/claude-opus-5", "medium"),
+            "anthropic/claude-opus-5:medium",
         )
 
     def test_a_level_already_on_the_spec_wins(self):
         self.assertEqual(
-            pin_thinking("anthropic/claude-opus-5:max", "medium"), "anthropic/claude-opus-5:max"
+            pin_thinking("anthropic/claude-opus-5:max", "medium"),
+            "anthropic/claude-opus-5:max",
         )
 
     def test_nothing_is_invented_when_there_is_no_model_or_no_level(self):
         self.assertEqual(pin_thinking("", "medium"), "")
-        self.assertEqual(pin_thinking("anthropic/claude-opus-5", ""), "anthropic/claude-opus-5")
+        self.assertEqual(
+            pin_thinking("anthropic/claude-opus-5", ""), "anthropic/claude-opus-5"
+        )
 
 
 if __name__ == "__main__":

@@ -29,21 +29,30 @@ class ResolveTests(unittest.TestCase):
         self.registry = build([GRAPES, LEDGER])
 
     def test_exact_id(self):
-        self.assertEqual(self.registry.resolve("grape-segmentation").id, "grape-segmentation")
+        project = self.registry.resolve("grape-segmentation")
+        assert project is not None
+        self.assertEqual(project.id, "grape-segmentation")
 
     def test_alias(self):
-        self.assertEqual(self.registry.resolve("grapes").id, "grape-segmentation")
+        project = self.registry.resolve("grapes")
+        assert project is not None
+        self.assertEqual(project.id, "grape-segmentation")
 
     def test_punctuation_and_case_are_ignored(self):
         # Whisper punctuates and capitalizes; the registry does not care.
-        self.assertEqual(self.registry.resolve("Grape Segmentation.").id, "grape-segmentation")
+        project = self.registry.resolve("Grape Segmentation.")
+        assert project is not None
+        self.assertEqual(project.id, "grape-segmentation")
 
     def test_caller_said_more_than_the_alias(self):
-        got = self.registry.resolve("put me into the grape segmentation project")
-        self.assertEqual(got.id, "grape-segmentation")
+        project = self.registry.resolve("put me into the grape segmentation project")
+        assert project is not None
+        self.assertEqual(project.id, "grape-segmentation")
 
     def test_caller_said_less_than_the_alias(self):
-        self.assertEqual(self.registry.resolve("grape").id, "grape-segmentation")
+        project = self.registry.resolve("grape")
+        assert project is not None
+        self.assertEqual(project.id, "grape-segmentation")
 
     def test_unknown_project(self):
         self.assertIsNone(self.registry.resolve("the tomato thing"))
@@ -54,22 +63,31 @@ class ResolveTests(unittest.TestCase):
 
     def test_ambiguous_match_refuses_to_guess(self):
         # Both projects contain "the", so a bare "the" must not silently pick one.
-        registry = build([{"id": "alpha", "aliases": ["the thing"]}, {"id": "beta", "aliases": ["the other"]}])
+        registry = build(
+            [
+                {"id": "alpha", "aliases": ["the thing"]},
+                {"id": "beta", "aliases": ["the other"]},
+            ]
+        )
         self.assertIsNone(registry.resolve("the"))
 
     def test_duplicate_alias_keeps_the_first_project(self):
         registry = build(
-            [{"id": "alpha", "aliases": ["shared"]}, {"id": "beta", "aliases": ["shared"]}]
+            [
+                {"id": "alpha", "aliases": ["shared"]},
+                {"id": "beta", "aliases": ["shared"]},
+            ]
         )
-        self.assertEqual(registry.resolve("shared").id, "alpha")
+        project = registry.resolve("shared")
+        assert project is not None
+        self.assertEqual(project.id, "alpha")
 
 
 class LoadTests(unittest.TestCase):
     def _write(self, payload):
-        tmp = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
-        json.dump(payload, tmp)
-        tmp.close()
-        return tmp.name
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tmp:
+            json.dump(payload, tmp)
+            return tmp.name
 
     def test_loads_the_rendered_shape(self):
         path = self._write({"projects": [GRAPES]})
@@ -96,10 +114,10 @@ class LoadTests(unittest.TestCase):
         self.assertEqual(len(registry.projects), 1)
 
     def test_broken_json_is_survivable(self):
-        tmp = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
-        tmp.write("{not json")
-        tmp.close()
-        self.assertEqual(Registry.load(tmp.name).projects, [])
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tmp:
+            tmp.write("{not json")
+            path = tmp.name
+        self.assertEqual(Registry.load(path).projects, [])
 
     def test_local_project_is_not_remote(self):
         path = self._write({"projects": [LEDGER]})
