@@ -301,12 +301,18 @@ pub async fn fetch_catalog(argv: &[String]) -> ModelCatalog {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     crate::pi_client::isolate_process(&mut command);
+    // An empty catalog is not an error the caller ever hears about — it just
+    // narrows what models may be requested. Without these lines, "the model I
+    // asked for was refused" and "listing models never worked on that host"
+    // look identical from outside.
+    let listing = argv.join(" ");
     let mut child = match command.spawn() {
         Ok(child) => child,
-        Err(_) => {
+        Err(error) => {
+            tracing::warn!(command = %listing, %error, "could not list models");
             return ModelCatalog {
                 entries: Vec::new(),
-            }
+            };
         }
     };
     let process_guard = crate::pi_client::ProcessTreeGuard::new(&child);
@@ -325,7 +331,17 @@ pub async fn fetch_catalog(argv: &[String]) -> ModelCatalog {
             process_guard.disarm();
             status
         }
-        _ => {
+        outcome => {
+            match outcome {
+                Ok(Err(error)) => {
+                    tracing::warn!(command = %listing, %error, "listing models failed")
+                }
+                _ => tracing::warn!(
+                    command = %listing,
+                    timeout = ?LIST_TIMEOUT,
+                    "listing models timed out"
+                ),
+            }
             crate::pi_client::terminate_process(&mut child).await;
             process_guard.disarm();
             if let Some(task) = stdout_task {

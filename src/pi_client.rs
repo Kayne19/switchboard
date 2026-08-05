@@ -121,9 +121,16 @@ impl PiSession {
         if let Some(env) = &env {
             command.envs(env);
         }
-        let mut child = command
-            .spawn()
-            .map_err(|error| PiSessionError(format!("could not start {}: {error}", argv[0])))?;
+        let label = label.into();
+        // The exact command is the first thing anyone needs when a leg will not
+        // come up: it carries the ssh host, the model, the extension path and
+        // the working directory, all of which come from deployment config this
+        // repository cannot see.
+        tracing::info!(%label, argv = %argv.join(" "), cwd = cwd.as_deref().unwrap_or(""), "starting agent leg");
+        let mut child = command.spawn().map_err(|error| {
+            tracing::error!(%label, program = %argv[0], %error, "could not start agent leg");
+            PiSessionError(format!("could not start {}: {error}", argv[0]))
+        })?;
         let process_guard = ProcessTreeGuard::new(&child);
         let stdin = child
             .stdin
@@ -139,8 +146,7 @@ impl PiSession {
             .ok_or_else(|| PiSessionError("agent process has no stderr".into()))?;
         let stderr_tail = Arc::new(StdMutex::new(Vec::new()));
         let tail = Arc::clone(&stderr_tail);
-        let label = label.into();
-        let stderr_task = tokio::spawn(drain_stderr(stderr, tail));
+        let stderr_task = tokio::spawn(drain_stderr(stderr, tail, label.clone()));
         let inner = Arc::new(SessionInner {
             child: Mutex::new(Some(child)),
             stdin: Mutex::new(Some(stdin)),
@@ -192,6 +198,10 @@ impl PiSession {
         self.inner.busy.store(false, Ordering::Release);
         self.inner.stdin.lock().await.take();
         if let Some(mut child) = self.inner.child.lock().await.take() {
+            // Only when a child was actually still there. `close` is
+            // idempotent and called on every teardown path, so logging
+            // unconditionally would report tear-downs that did nothing.
+            tracing::info!(label = %self.inner.label, "closing agent leg");
             terminate_process(&mut child).await;
         }
         self.inner.process_guard.disarm();
@@ -225,8 +235,22 @@ impl PiSession {
                 self.stderr_tail(5)
             )));
         }
-        self.write(json!({"type":"steer", "message":message}), true)
-            .await
+        let result = self
+            .write(json!({"type":"steer", "message":message}), true)
+            .await;
+        match &result {
+            Ok(()) => tracing::info!(
+                label = %self.inner.label,
+                chars = message.chars().count(),
+                "steered the running turn"
+            ),
+            Err(error) => tracing::info!(
+                label = %self.inner.label,
+                %error,
+                "could not steer the running turn"
+            ),
+        }
+        result
     }
 
     async fn write(&self, command: Value, require_busy: bool) -> Result<(), PiSessionError> {
@@ -263,17 +287,24 @@ impl PiSession {
                 )
                 .await
             };
+            let label = &self.inner.label;
             let line = match read {
                 Ok(Ok(LimitedLine::Line(line))) => line,
                 Ok(Ok(LimitedLine::Eof)) => {
+                    tracing::warn!(
+                        %label,
+                        stderr_lines = self.stderr_tail(5).lines().count(),
+                        "agent stream ended mid-turn"
+                    );
                     return Ok(Turn {
                         text: chunks.join("\n"),
                         signals,
                         failed: true,
                         error,
-                    })
+                    });
                 }
                 Ok(Ok(LimitedLine::TooLong)) => {
+                    tracing::error!(%label, limit = STREAM_LIMIT, "oversized RPC event; dropping the leg");
                     self.close().await;
                     return Ok(Turn {
                         text: String::new(),
@@ -283,11 +314,20 @@ impl PiSession {
                     });
                 }
                 Ok(Err(error)) => {
+                    tracing::error!(%label, %error, "could not read agent output");
                     return Err(PiSessionError(format!(
                         "could not read agent output: {error}"
-                    )))
+                    )));
                 }
                 Err(_) => {
+                    // The most common wedged-agent symptom in production, and
+                    // until now the one that left the least behind.
+                    tracing::warn!(
+                        %label,
+                        timeout = ?self.inner.turn_timeout,
+                        stderr_lines = self.stderr_tail(5).lines().count(),
+                        "agent went silent past the turn deadline; dropping the leg"
+                    );
                     self.close().await;
                     return Ok(Turn {
                         text: String::new(),
@@ -304,7 +344,17 @@ impl PiSession {
             }
             let event: Value = match serde_json::from_str(line) {
                 Ok(event) => event,
-                Err(_) => continue,
+                // Skipping is right — a runtime that prints a banner must not
+                // fail the call — but the skipped line is worth keeping.
+                Err(error) => {
+                    tracing::debug!(
+                        %label,
+                        %error,
+                        bytes = line.len(),
+                        "skipping a non-JSON line from the agent"
+                    );
+                    continue;
+                }
             };
             match event.get("type").and_then(Value::as_str) {
                 Some("message_update") => {
@@ -320,6 +370,12 @@ impl PiSession {
                         {
                             let collected = chunks.iter().map(String::len).sum::<usize>();
                             if collected.saturating_add(content.len()) > STREAM_LIMIT {
+                                tracing::error!(
+                                    %label,
+                                    collected,
+                                    limit = STREAM_LIMIT,
+                                    "agent produced too much text in one turn; dropping the leg"
+                                );
                                 self.close().await;
                                 return Ok(Turn {
                                     text: String::new(),
@@ -343,20 +399,37 @@ impl PiSession {
                             .and_then(Value::as_str)
                             == Some(ERROR_STOP_REASON)
                     {
-                        error =
-                            spoken_error(message.and_then(|message| message.get("errorMessage")));
+                        let raw = message.and_then(|message| message.get("errorMessage"));
+                        // Keep the same sanitized detail that the caller hears;
+                        // raw provider errors can contain prompts or credentials.
+                        let sanitized = spoken_error(raw);
+                        tracing::error!(
+                            %label,
+                            error = %sanitized,
+                            "the agent's model call failed"
+                        );
+                        error = sanitized;
                     }
                 }
                 Some("tool_execution_start") => {
                     let name = event.get("toolName").and_then(Value::as_str).unwrap_or("");
                     if [TRANSFER_TOOL, RETURN_TOOL, SET_MODEL_TOOL, SPEAK_TOOL].contains(&name) {
+                        let args = event
+                            .get("args")
+                            .and_then(Value::as_object)
+                            .cloned()
+                            .unwrap_or_default();
+                        // The signal name and argument count are enough to
+                        // trace routing without writing speech or model content.
+                        tracing::info!(
+                            %label,
+                            signal = name,
+                            arg_count = args.len(),
+                            "agent raised a routing signal"
+                        );
                         signals.push(Signal {
                             name: name.into(),
-                            args: event
-                                .get("args")
-                                .and_then(Value::as_object)
-                                .cloned()
-                                .unwrap_or_default(),
+                            args,
                         });
                     }
                     self.report_activity("start", name, activity_detail(event.get("args")))
@@ -408,12 +481,13 @@ impl PiSession {
                 detail,
                 label: self.inner.label.clone(),
             };
-            if AssertUnwindSafe(callback(activity))
-                .catch_unwind()
-                .await
-                .is_err()
-            {
-                tracing::warn!(label = %self.inner.label, "activity callback failed");
+            if let Err(panic) = AssertUnwindSafe(callback(activity)).catch_unwind().await {
+                tracing::error!(
+                    label = %self.inner.label,
+                    tool,
+                    panic = %panic_message(&panic),
+                    "activity callback panicked"
+                );
             }
         }
     }
@@ -525,14 +599,20 @@ where
     }
 }
 
-async fn drain_stderr(stderr: ChildStderr, tail: Arc<StdMutex<Vec<String>>>) {
+async fn drain_stderr(stderr: ChildStderr, tail: Arc<StdMutex<Vec<String>>>, label: String) {
     let mut stderr = BufReader::new(stderr);
     let mut chunk = [0_u8; 8192];
     let mut line = Vec::new();
     let mut oversized = false;
     loop {
         let read = match stderr.read(&mut chunk).await {
-            Ok(0) | Err(_) => break,
+            Ok(0) => break,
+            // A pipe that fails is not the same as a process that finished
+            // talking, and only one of the two is worth investigating.
+            Err(error) => {
+                tracing::error!(%label, %error, "agent stderr drain failed");
+                break;
+            }
             Ok(read) => read,
         };
         for byte in &chunk[..read] {
@@ -544,6 +624,7 @@ async fn drain_stderr(stderr: ChildStderr, tail: Arc<StdMutex<Vec<String>>>) {
                         .trim_end_matches('\r')
                         .to_owned();
                     if !value.trim().is_empty() {
+                        tracing::debug!(%label, bytes = value.len(), "agent wrote to stderr");
                         push_stderr(&tail, value);
                     }
                 }
@@ -564,6 +645,20 @@ async fn drain_stderr(stderr: ChildStderr, tail: Arc<StdMutex<Vec<String>>>) {
             push_stderr(&tail, value);
         }
     }
+}
+
+/// The message a caught panic carried.
+///
+/// `catch_unwind` hands back a boxed `Any`, and reporting only that a callback
+/// "failed" throws away the one part of it worth reading. `panic!` produces
+/// either a `&'static str` or a `String`; anything else is named rather than
+/// silently rendered as nothing.
+pub(crate) fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
+    panic
+        .downcast_ref::<&'static str>()
+        .map(|text| (*text).to_owned())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "<non-string panic payload>".to_owned())
 }
 
 fn push_stderr(tail: &StdMutex<Vec<String>>, line: String) {

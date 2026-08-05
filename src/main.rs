@@ -45,6 +45,17 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Self {
+        let (values, env_file) = Self::values_from_env();
+        Self::from_values(&values, env_file)
+    }
+
+    /// The deployment env file merged under the inherited process environment.
+    ///
+    /// Separated from `from_values` so the log subscriber can be installed from
+    /// these values *before* any setting is parsed. Parsing warns about values
+    /// it had to reject, and those warnings are worth nothing if they are
+    /// emitted before a subscriber exists to record them.
+    pub fn values_from_env() -> (HashMap<String, String>, PathBuf) {
         let env_file = PathBuf::from(value(
             "SWITCHBOARD_ENV_FILE",
             "/etc/switchboard/switchboard.env",
@@ -53,7 +64,7 @@ impl Config {
         for (key, value) in env::vars() {
             values.insert(key, value);
         }
-        Self::from_values(&values, env_file)
+        (values, env_file)
     }
 
     fn from_values(values: &HashMap<String, String>, env_file: PathBuf) -> Self {
@@ -120,11 +131,22 @@ fn optional(values: &HashMap<String, String>, name: &str) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 fn number(values: &HashMap<String, String>, name: &str, default: f64) -> f64 {
-    values
-        .get(name)
-        .and_then(|value| value.trim().parse::<f64>().ok())
-        .filter(|value| value.is_finite())
-        .unwrap_or(default)
+    let Some(raw) = values.get(name).map(|value| value.trim()) else {
+        return default;
+    };
+    if raw.is_empty() {
+        return default;
+    }
+    match raw.parse::<f64>() {
+        Ok(parsed) if parsed.is_finite() => parsed,
+        // A deployment that misspells a duration gets the default silently
+        // otherwise, and the symptom (a leg that never times out, or one that
+        // drops instantly) looks nothing like its cause.
+        _ => {
+            tracing::warn!(setting = name, value = raw, %default, "setting is not a number; using the default");
+            default
+        }
+    }
 }
 fn usize_value(
     values: &HashMap<String, String>,
@@ -132,11 +154,19 @@ fn usize_value(
     default: usize,
     allow_zero: bool,
 ) -> usize {
-    values
-        .get(name)
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .filter(|value| allow_zero || *value > 0)
-        .unwrap_or(default)
+    let Some(raw) = values.get(name).map(|value| value.trim()) else {
+        return default;
+    };
+    if raw.is_empty() {
+        return default;
+    }
+    match raw.parse::<usize>() {
+        Ok(parsed) if allow_zero || parsed > 0 => parsed,
+        _ => {
+            tracing::warn!(setting = name, value = raw, %default, "setting is not a whole number; using the default");
+            default
+        }
+    }
 }
 
 fn load_env_file(path: &PathBuf) -> HashMap<String, String> {
@@ -218,10 +248,96 @@ fn value(name: &str, default: &str) -> String {
         .to_owned()
 }
 
+/// What the service logs when nothing asks for anything else.
+///
+/// Deliberately not `RUST_LOG`'s own default. `tracing_subscriber::fmt::init()`
+/// builds its filter with `EnvFilter::from_default_env()`, whose default
+/// directive is `error` — and this service has almost no `error!` sites, so an
+/// unset `RUST_LOG` produced a process that ran an entire call, dropped legs,
+/// failed to stage extensions, and said nothing at all. The deployment env file
+/// is owned by homelab and cannot be assumed to set anything, so the useful
+/// level has to be the one you get for free.
+const DEFAULT_LOG_FILTER: &str = "switchboard=info,warn";
+
+/// Install the log subscriber, reading its filter from the deployment env file
+/// as well as the process environment.
+///
+/// `SWITCHBOARD_LOG` takes precedence over `RUST_LOG` because the env file is
+/// the only configuration surface this repository shares with the deployment,
+/// and `RUST_LOG` cannot be set there without leaking into every other process
+/// the unit starts. Returns a description of what it installed so the caller
+/// can log it once the subscriber is live.
+fn init_tracing(values: &HashMap<String, String>) -> (String, Option<String>) {
+    let requested = values
+        .get("SWITCHBOARD_LOG")
+        .or_else(|| values.get("RUST_LOG"))
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let (filter, rejected) = match &requested {
+        None => (tracing_subscriber::EnvFilter::new(DEFAULT_LOG_FILTER), None),
+        Some(requested) => match tracing_subscriber::EnvFilter::builder().parse(requested) {
+            Ok(filter) => (filter, None),
+            // A typo in a filter directive must not cost the operator every
+            // log line the service would otherwise have written.
+            Err(error) => (
+                tracing_subscriber::EnvFilter::new(DEFAULT_LOG_FILTER),
+                Some(format!("{requested:?}: {error}")),
+            ),
+        },
+    };
+    let describe = requested
+        .filter(|_| rejected.is_none())
+        .unwrap_or_else(|| DEFAULT_LOG_FILTER.to_owned());
+    let json = matches!(
+        get(values, "SWITCHBOARD_LOG_FORMAT", "text")
+            .to_ascii_lowercase()
+            .as_str(),
+        "json"
+    );
+    let builder = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(true);
+    if json {
+        builder.json().flatten_event(true).init();
+    } else {
+        builder.init();
+    }
+    (describe, rejected)
+}
+
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
-    let config = Config::from_env();
+    let (values, env_file) = Config::values_from_env();
+    let (filter, rejected_filter) = init_tracing(&values);
+    if let Some(rejected) = rejected_filter {
+        tracing::warn!(%rejected, default = DEFAULT_LOG_FILTER, "log filter could not be parsed; using the default");
+    }
+    let config = Config::from_values(&values, env_file);
+    // The first thing worth knowing about a running switchboard is what it was
+    // configured to be. Secrets are reported as configured-or-not, never
+    // echoed: this line goes to the journal, which is not where the
+    // ElevenLabs key belongs.
+    tracing::info!(
+        env_file = %config.env_file.display(),
+        projects_file = %config.projects_file.display(),
+        operator_prompt = %config.operator_prompt.display(),
+        pi_binary = %config.pi_binary,
+        operator_model = config.operator_model.as_deref().unwrap_or("<runtime default>"),
+        agent_model = config.agent_model.as_deref().unwrap_or("<runtime default>"),
+        agent_thinking = %config.agent_thinking,
+        model_swaps = config.model_swaps,
+        stt_configured = config.stt_command.is_some(),
+        persona_configured = !config.persona.is_empty(),
+        operator_extension = config.operator_extension.as_deref().unwrap_or("<none>"),
+        agent_extension = config.agent_extension.as_deref().unwrap_or("<none>"),
+        self_url = %config.self_url,
+        idle_timeout = config.idle_timeout,
+        idle_poll = config.idle_poll,
+        max_spoken_chars = config.max_spoken_chars,
+        history_limit = config.history_limit,
+        log_filter = %filter,
+        "switchboard configuration"
+    );
     let registry = registry::Registry::load(&config.projects_file);
     let callback_url = |configured: &str, path: &str| {
         if configured.is_empty() && !config.self_url.is_empty() {

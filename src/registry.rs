@@ -26,6 +26,22 @@ pub struct Project {
     pub prepare: String,
 }
 
+/// Every key a registry entry may carry. Kept beside the struct because serde
+/// silently drops anything else, and a dropped key is a project that quietly
+/// does the wrong thing.
+const PROJECT_FIELDS: [&str; 10] = [
+    "id",
+    "description",
+    "aliases",
+    "host",
+    "cwd",
+    "runtime",
+    "model",
+    "stage_extension",
+    "extra_args",
+    "prepare",
+];
+
 fn default_runtime() -> String {
     "pi".to_owned()
 }
@@ -90,14 +106,31 @@ impl Registry {
                 project.model = None;
             }
         }
-        let mut by_key = HashMap::new();
+        let mut by_key: HashMap<String, usize> = HashMap::new();
         for (index, project) in projects.iter().enumerate() {
             for key in std::iter::once(project.id.as_str())
                 .chain(project.aliases.iter().map(String::as_str))
             {
-                let key = normalize(key);
-                if !key.is_empty() {
-                    by_key.entry(key).or_insert(index);
+                let normalized = normalize(key);
+                if normalized.is_empty() {
+                    continue;
+                }
+                match by_key.get(&normalized) {
+                    // Two projects claiming one alias is a registry authoring
+                    // mistake that silently sends every caller who says that
+                    // word to whichever entry happens to be first.
+                    Some(&first) if first != index => {
+                        tracing::warn!(
+                            alias = key,
+                            kept = %projects[first].id,
+                            ignored = %project.id,
+                            "alias maps to two projects; keeping the first"
+                        );
+                    }
+                    Some(_) => {}
+                    None => {
+                        by_key.insert(normalized, index);
+                    }
                 }
             }
         }
@@ -105,25 +138,89 @@ impl Registry {
     }
 
     pub fn load(path: impl AsRef<Path>) -> Self {
+        let path = path.as_ref();
         let raw = match fs::read_to_string(path) {
             Ok(raw) => raw,
-            Err(_) => return Self::new(Vec::new()),
+            Err(error) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    %error,
+                    "no project registry; the operator has nowhere to send anyone"
+                );
+                return Self::new(Vec::new());
+            }
         };
         let value: serde_json::Value = match serde_json::from_str(&raw) {
             Ok(value) => value,
-            Err(_) => return Self::new(Vec::new()),
+            Err(error) => {
+                tracing::error!(
+                    path = %path.display(),
+                    %error,
+                    "could not parse the project registry; the operator has nowhere to send anyone"
+                );
+                return Self::new(Vec::new());
+            }
         };
         let entries = value.get("projects").cloned().unwrap_or(value);
         let entries = match entries.as_array() {
             Some(entries) => entries,
-            None => return Self::new(Vec::new()),
+            None => {
+                tracing::error!(
+                    path = %path.display(),
+                    "the project registry is neither a list nor an object with a projects list"
+                );
+                return Self::new(Vec::new());
+            }
         };
-        let projects = entries
-            .iter()
-            .filter_map(|entry| serde_json::from_value::<Project>(entry.clone()).ok())
-            .filter(|project| !project.id.trim().is_empty())
-            .collect();
+        let projects: Vec<Project> = entries.iter().filter_map(Self::parse_entry).collect();
+        tracing::info!(
+            path = %path.display(),
+            count = projects.len(),
+            projects = %projects.iter().map(|project| project.id.as_str()).collect::<Vec<_>>().join(", "),
+            "loaded the project registry"
+        );
         Self::new(projects)
+    }
+
+    /// Parse one registry entry, reporting why it was dropped rather than
+    /// letting a deployment discover a missing project by placing a call.
+    fn parse_entry(entry: &serde_json::Value) -> Option<Project> {
+        let project = match serde_json::from_value::<Project>(entry.clone()) {
+            Ok(project) => project,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    entry_kind = if entry.is_object() { "object" } else { "other" },
+                    "skipping malformed registry entry"
+                );
+                return None;
+            }
+        };
+        if project.id.trim().is_empty() {
+            tracing::warn!(
+                entry_kind = if entry.is_object() { "object" } else { "other" },
+                "skipping registry entry with a blank id"
+            );
+            return None;
+        }
+        // Serde ignores unknown fields, so a template that renders `working_dir`
+        // instead of `cwd` produces a project that runs in the wrong directory
+        // and reports nothing. Name the keys that had no effect.
+        if let Some(object) = entry.as_object() {
+            let unknown: Vec<&str> = object
+                .keys()
+                .map(String::as_str)
+                .filter(|key| !PROJECT_FIELDS.contains(key))
+                .collect();
+            if !unknown.is_empty() {
+                tracing::warn!(
+                    project = %project.id,
+                    unknown = %unknown.join(", "),
+                    "registry entry has keys the switchboard does not understand"
+                );
+            }
+        }
+        Some(project)
     }
 
     pub fn resolve(&self, spoken: &str) -> Option<&Project> {
@@ -140,10 +237,28 @@ impl Registry {
                 matches.push(*index);
             }
         }
-        if matches.len() == 1 {
-            self.projects.get(matches[0])
-        } else {
-            None
+        match matches.len() {
+            1 => self.projects.get(matches[0]),
+            // "Nothing matched" and "too many things matched" send the caller
+            // the same refusal but need opposite fixes: a typo versus two
+            // projects whose aliases overlap.
+            0 => {
+                tracing::info!(
+                    chars = spoken.chars().count(),
+                    "no project matched the spoken phrase"
+                );
+                None
+            }
+            _ => {
+                let candidates = matches
+                    .iter()
+                    .filter_map(|index| self.projects.get(*index))
+                    .map(|project| project.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                tracing::info!(chars = spoken.chars().count(), %candidates, "ambiguous project phrase");
+                None
+            }
         }
     }
 

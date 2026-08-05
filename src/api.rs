@@ -277,15 +277,26 @@ async fn process_speech(state: AppState) {
         .take()
         .expect("speech worker started once");
     while let Some(text) = receiver.recv().await {
+        let started = std::time::Instant::now();
         match state.0.speaker.synthesize(&text).await {
             Ok(audio) => {
+                tracing::info!(
+                    chars = text.chars().count(),
+                    bytes = audio.len(),
+                    elapsed = ?started.elapsed(),
+                    "synthesized a mid-turn line"
+                );
                 emit(&state, Event::Audio(audio));
             }
             Err(error) => {
+                // The caller hears nothing at all when this fails, so it must
+                // never be inferable only from the absence of audio.
+                tracing::error!(%error, chars = text.chars().count(), "synthesis failed for an agent-spoken line");
                 emit_json(&state, json!({"type":"error", "message":error.to_string()}));
             }
         }
     }
+    tracing::warn!("the speech worker stopped; agent-spoken lines will not be voiced");
 }
 
 async fn process_clips(state: AppState) {
@@ -297,9 +308,16 @@ async fn process_clips(state: AppState) {
         .take()
         .expect("clip worker started once");
     while let Some(clip) = receiver.recv().await {
+        // The clip id is the one identifier that spans the whole call path —
+        // the browser minted it, the transcript carries it, and every error
+        // frame quotes it. Logging it at each stage is what makes a caller's
+        // "it broke when I said X" answerable from the journal.
+        let started = std::time::Instant::now();
+        tracing::info!(clip = %clip.id, bytes = clip.audio.len(), "transcribing clip");
         let transcript = match state.0.stt.transcribe(&clip.audio).await {
             Ok(text) => text,
             Err(error) => {
+                tracing::error!(clip = %clip.id, bytes = clip.audio.len(), %error, "transcription failed");
                 emit_json(
                     &state,
                     json!({"type":"error", "id":clip.id, "message":format!("Transcription failed: {error}")}),
@@ -308,6 +326,7 @@ async fn process_clips(state: AppState) {
             }
         };
         if transcript.trim().is_empty() {
+            tracing::info!(clip = %clip.id, elapsed = ?started.elapsed(), "transcription returned nothing");
             emit_json(
                 &state,
                 json!({"type":"error", "id":clip.id, "message":"I didn't catch that — say it again."}),
@@ -315,10 +334,17 @@ async fn process_clips(state: AppState) {
             continue;
         }
         let route = state.0.live_leg.route();
+        tracing::info!(
+            clip = %clip.id,
+            %route,
+            chars = transcript.chars().count(),
+            elapsed = ?started.elapsed(),
+            "transcribed clip"
+        );
         state.0.transcript_log.lock().await.add_with_id(
             CALLER,
             &transcript,
-            route,
+            route.clone(),
             Some(clip.id.clone()),
         );
         emit_json(
@@ -337,21 +363,40 @@ async fn process_clips(state: AppState) {
             // acted on. Checked under the session guard because a rescue bumps
             // the generation before it closes the session, so a steer that wins
             // this lock still observes the new epoch.
-            if clip.generation != state.0.turn_generation.load(Ordering::Acquire) {
+            let current = state.0.turn_generation.load(Ordering::Acquire);
+            if clip.generation != current {
+                tracing::info!(
+                    clip = %clip.id,
+                    stamped = clip.generation,
+                    %current,
+                    "discarding speech captured before a page rescue"
+                );
                 continue;
             }
             match active.as_ref().cloned() {
                 None => false,
                 Some(session) if !session.busy() || !session.alive().await => false,
-                Some(session) => {
-                    session.steer(&transcript).await.is_ok()
-                        && active
+                Some(session) => match session.steer(&transcript).await {
+                    Ok(()) => {
+                        // A session swapped out under us means the steer landed
+                        // in a leg the caller has already left.
+                        let same = active
                             .as_ref()
-                            .is_some_and(|current| current.same_session(&session))
-                }
+                            .is_some_and(|current| current.same_session(&session));
+                        if !same {
+                            tracing::warn!(clip = %clip.id, "the leg was replaced mid-steer; queueing the utterance");
+                        }
+                        same
+                    }
+                    Err(error) => {
+                        tracing::warn!(clip = %clip.id, %error, "steering failed; queueing the utterance");
+                        false
+                    }
+                },
             }
         };
         if steered {
+            tracing::info!(clip = %clip.id, %route, "steered the live turn");
             state.0.activity_clock.touch();
             emit_json(
                 &state,
@@ -373,10 +418,12 @@ async fn process_clips(state: AppState) {
                     );
                 }
             } else {
+                tracing::error!(clip = %clip.id, "the turn worker is gone; the utterance was dropped");
                 state.0.queued_turns.fetch_sub(1, Ordering::AcqRel);
             }
         }
     }
+    tracing::warn!("the clip worker stopped; no further speech will be transcribed");
 }
 async fn process_turns(state: AppState) {
     let mut receiver = state
@@ -386,20 +433,24 @@ async fn process_turns(state: AppState) {
         .await
         .take()
         .expect("turn worker started once");
-    while let Some((_id, transcript, generation)) = receiver.recv().await {
+    while let Some((id, transcript, generation)) = receiver.recv().await {
         state.0.queued_turns.fetch_sub(1, Ordering::AcqRel);
         let turn_state = state.clone();
+        let started = std::time::Instant::now();
         // Register the abort handle before awaiting the task. Page-level rescue
         // endpoints can now cancel work even while transfer setup has no
         // PiSession yet.
         let (task, task_id) = {
             let _transition = state.0.operation_transition.lock().await;
-            if generation != state.0.turn_generation.load(Ordering::Acquire) {
+            let current = state.0.turn_generation.load(Ordering::Acquire);
+            if generation != current {
+                tracing::info!(clip = %id, stamped = generation, %current, "dropping a queued turn from before a page rescue");
                 continue;
             }
             state.0.turn_in_flight.store(true, Ordering::Release);
             let status = current_status(&state);
             let waiting = state.0.queued_turns.load(Ordering::Acquire);
+            tracing::info!(clip = %id, route = %status["route"], waiting, "dispatching a turn");
             emit_json(
                 &state,
                 json!({"type":"thinking", "route":status["route"], "waiting":waiting}),
@@ -415,11 +466,15 @@ async fn process_turns(state: AppState) {
         let (reply, status) = match task.await {
             Ok(result) => result,
             Err(error) if error.is_cancelled() => {
+                tracing::info!(clip = %id, elapsed = ?started.elapsed(), "the turn was cancelled by a page rescue");
                 clear_active_operation(&state, task_id).await;
                 state.0.turn_in_flight.store(false, Ordering::Release);
                 continue;
             }
             Err(error) => {
+                // A panic inside `handle()` arrives here. Without this line the
+                // caller hears a generic apology and the journal holds nothing.
+                tracing::error!(clip = %id, %error, elapsed = ?started.elapsed(), "the turn worker failed");
                 clear_active_operation(&state, task_id).await;
                 state.0.turn_in_flight.store(false, Ordering::Release);
                 emit_json(
@@ -430,9 +485,16 @@ async fn process_turns(state: AppState) {
             }
         };
         clear_active_operation(&state, task_id).await;
+        if let Some(error) = &reply.error {
+            // The caller was answered and recovered, so this is not an error
+            // level — but a turn that carried a failure is worth an audit trail.
+            tracing::warn!(clip = %id, route = %reply.route, %error, "the turn reported a failure");
+        }
+        tracing::info!(clip = %id, route = %reply.route, elapsed = ?started.elapsed(), "turn settled");
         deliver_turn_if_current(&state, &reply, status, generation).await;
         state.0.turn_in_flight.store(false, Ordering::Release);
     }
+    tracing::warn!("the turn worker stopped; no further turns will be dispatched");
 }
 
 async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
@@ -749,16 +811,28 @@ async fn synthesize_reply_if_current(
         if spoken.is_empty() {
             continue;
         }
+        let started = std::time::Instant::now();
         let synthesized = state.0.speaker.synthesize(&spoken).await;
         let _transition = state.0.operation_transition.lock().await;
         if generation != state.0.turn_generation.load(Ordering::Acquire) {
+            tracing::info!(
+                generation,
+                "discarding synthesized audio for a superseded turn"
+            );
             return false;
         }
         match synthesized {
             Ok(audio) => {
+                tracing::info!(
+                    chars = spoken.chars().count(),
+                    bytes = audio.len(),
+                    elapsed = ?started.elapsed(),
+                    "synthesized a reply"
+                );
                 emit(state, Event::Audio(audio));
             }
             Err(error) => {
+                tracing::error!(%error, chars = spoken.chars().count(), "synthesis failed; the caller hears nothing for this reply");
                 emit_json(state, json!({"type":"error", "message":error.to_string()}));
                 break;
             }
@@ -776,7 +850,10 @@ async fn ws(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> impl In
 async fn websocket(mut socket: WebSocket, state: AppState) {
     let mut events = state.0.events.subscribe();
     let mut shutdown = state.0.shutdown.subscribe();
-    if send_snapshot(&mut socket, &state).await.is_err() {
+    let listeners = state.0.events.receiver_count();
+    tracing::info!(listeners, "browser connected");
+    if let Err(error) = send_snapshot(&mut socket, &state).await {
+        tracing::warn!(%error, "browser dropped before it received the opening snapshot");
         return;
     }
 
@@ -805,15 +882,31 @@ async fn websocket(mut socket: WebSocket, state: AppState) {
                     }
                 }
                 Some(Ok(Message::Pong(_))) => {}
-                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return,
+                // A clean close and a protocol/IO failure are the same event to
+                // the caller — the page goes quiet — and opposite events to
+                // whoever has to work out why.
+                Some(Ok(Message::Close(frame))) => {
+                    tracing::info!(code = ?frame.as_ref().map(|frame| frame.code), "browser disconnected");
+                    return;
+                }
+                Some(Err(error)) => {
+                    tracing::warn!(%error, "the websocket reader failed");
+                    return;
+                }
+                None => {
+                    tracing::info!("browser disconnected without a close frame");
+                    return;
+                }
             },
             event = events.recv() => match event {
                 Ok(event) => {
-                    if send_event(&mut socket, event).await.is_err() {
+                    if let Err(error) = send_event(&mut socket, event).await {
+                        tracing::warn!(%error, "could not deliver an event to the browser");
                         return;
                     }
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => {
+                Err(broadcast::error::RecvError::Lagged(missed)) => {
+                    tracing::warn!(missed, "the browser fell behind the event stream; resending the snapshot");
                     // Drop the retained stale tail and rebuild from durable
                     // state. History/status/diagram are authoritative; activity
                     // and already-missed audio are intentionally ephemeral.
@@ -935,6 +1028,7 @@ async fn handle_audio_frame(
     audio: Vec<u8>,
 ) -> Result<(), axum::Error> {
     let Some((id, mime, generation)) = pending_header.take() else {
+        tracing::warn!(bytes = audio.len(), "audio arrived without a clip header");
         return send_json(
             socket,
             json!({"type":"error", "message":"Audio arrived without a clip header."}),

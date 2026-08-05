@@ -243,12 +243,12 @@ impl Switchboard {
         if let Some(callback) = &self.route_callback {
             let callback = Arc::clone(callback);
             let status = self.status();
-            if AssertUnwindSafe(callback(status))
-                .catch_unwind()
-                .await
-                .is_err()
-            {
-                tracing::warn!("route callback failed");
+            if let Err(panic) = AssertUnwindSafe(callback(status)).catch_unwind().await {
+                tracing::error!(
+                    route = %self.route,
+                    panic = %crate::pi_client::panic_message(&panic),
+                    "route callback panicked; the page may show a stale leg"
+                );
             }
         }
     }
@@ -337,7 +337,13 @@ impl Switchboard {
         if !session.busy() || !session.alive().await {
             return false;
         }
-        let steered = session.steer(text).await.is_ok();
+        let steered = match session.steer(text).await {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::info!(route = %self.route, %error, "could not steer; queueing the utterance");
+                false
+            }
+        };
         if steered {
             self.touch_activity();
         }
@@ -350,6 +356,13 @@ impl Switchboard {
         };
         if !alive {
             if let Some(session) = self.operator.take() {
+                // The operator is the home base and is meant to outlive every
+                // project leg, so it dying between calls is worth a line even
+                // though the restart below hides it from the caller.
+                tracing::warn!(
+                    stderr_lines = session.stderr_tail(5).lines().count(),
+                    "operator process died; restarting"
+                );
                 session.close().await;
             }
         }
@@ -381,10 +394,13 @@ impl Switchboard {
         let session = match self.ensure_operator().await {
             Ok(session) => session.clone(),
             Err(e) => {
+                // Nothing downstream of here can recover: the operator is the
+                // fallback every other failure path returns to.
+                tracing::error!(error = %e, "operator unavailable");
                 return self.reply(
                     [format!("The operator is not answering: {e}")],
                     Some(e.to_string()),
-                )
+                );
             }
         };
         let message = self.operator_note.take().map_or_else(
@@ -393,7 +409,10 @@ impl Switchboard {
         );
         let turn = match session.prompt(&message).await {
             Ok(turn) => turn,
-            Err(error) => return self.recover_operator(error.to_string()).await,
+            Err(error) => {
+                tracing::warn!(route = %self.route, %error, "the operator leg failed mid-prompt");
+                return self.recover_operator(error.to_string()).await;
+            }
         };
         if turn.failed && turn.text.is_empty() {
             let error = if turn.error.is_empty() {
@@ -423,6 +442,7 @@ impl Switchboard {
     }
     async fn handle_agent(&mut self, text: &str) -> Reply {
         let Some(session) = self.agent.clone() else {
+            tracing::warn!(route = %self.route, "the project leg is gone; returning to the operator");
             return self.return_operator("project session is gone").await;
         };
         let turn = match session.prompt(text).await {
@@ -430,6 +450,7 @@ impl Switchboard {
             Err(error) => {
                 let detail = error.to_string();
                 let name = self.route_label();
+                tracing::warn!(route = %self.route, %error, "the project leg failed mid-prompt; returning to the operator");
                 self.drop_agent().await;
                 self.operator_note = Some(format!("The call to {name} ended: {detail}"));
                 return self.reply(
@@ -454,6 +475,7 @@ impl Switchboard {
                 detail
             };
             let name = self.route_label();
+            tracing::warn!(route = %self.route, %detail, "the project leg failed its turn; returning to the operator");
             self.drop_agent().await;
             self.operator_note = Some(format!("The call to {name} ended: {detail}"));
             return self.reply(
@@ -526,6 +548,7 @@ impl Switchboard {
         requested_thinking: &str,
     ) -> Reply {
         let Some(project) = self.registry.resolve(spoken).cloned() else {
+            tracing::warn!(from = %self.route, requested = spoken, "transfer to an unknown project");
             let known = self.registry.ids();
             let known_text = if known.is_empty() {
                 "nothing yet".to_owned()
@@ -547,6 +570,14 @@ impl Switchboard {
                 Some(format!("unknown project {spoken:?}")),
             );
         };
+        tracing::info!(
+            from = %self.route,
+            to = %project.id,
+            host = project.host.as_deref().unwrap_or("<local>"),
+            cwd = %project.cwd,
+            intent,
+            "transferring the caller"
+        );
         self.drop_agent().await;
         let (model, model_note) = self
             .select_transfer_model(&project, requested_model, requested_thinking)
@@ -556,6 +587,12 @@ impl Switchboard {
         let session = match self.start_agent(&project, &model, &session_id).await {
             Ok(s) => s,
             Err(e) => {
+                tracing::error!(
+                    project = %project.id,
+                    host = project.host.as_deref().unwrap_or("<local>"),
+                    error = %e,
+                    "could not connect to the project"
+                );
                 self.operator_note = Some(format!("Transfer to {} failed: {e}", project.id));
                 return self.reply_transfer_error(
                     handoff,
@@ -590,12 +627,15 @@ impl Switchboard {
         };
         let turn = match session.prompt(&intro).await {
             Ok(t) => t,
-            Err(e) => Turn {
-                text: String::new(),
-                signals: vec![],
-                failed: true,
-                error: e.to_string(),
-            },
+            Err(e) => {
+                tracing::warn!(project = %project.id, error = %e, "intro prompt to the project failed");
+                Turn {
+                    text: String::new(),
+                    signals: vec![],
+                    failed: true,
+                    error: e.to_string(),
+                }
+            }
         };
         if turn.failed && turn.text.is_empty() {
             let detail = if !turn.error.trim().is_empty() {
@@ -608,6 +648,7 @@ impl Switchboard {
                     tail
                 }
             };
+            tracing::error!(project = %project.id, %detail, "the project never answered its intro; returning to the operator");
             self.drop_agent().await;
             self.operator_note = Some(format!("The transfer to {} failed: {detail}", project.id));
             return self.reply_transfer_error(
@@ -836,6 +877,9 @@ impl Switchboard {
                 report
             };
         }
+        if !report.is_empty() {
+            tracing::info!(project = %project.id, %report, "prepare reported the state of the working copy");
+        }
         report
     }
 
@@ -856,7 +900,16 @@ impl Switchboard {
     }
 
     async fn upload_extension_with(&self, ssh_program: &str, host: &str) -> Option<String> {
-        let source = self.agent_extension_file.as_deref()?;
+        // Silently returning None here costs the agent its `speak` and
+        // `diagram` tools and quietly rewrites its system prompt to use the
+        // sentinel instead — a large behavior change from one unset path.
+        let Some(source) = self.agent_extension_file.as_deref() else {
+            tracing::warn!(
+                host,
+                "no agent extension file to stage; using sentinel fallback"
+            );
+            return None;
+        };
         let contents = match tokio::fs::read(source).await {
             Ok(contents) => contents,
             Err(error) => {
@@ -966,12 +1019,22 @@ impl Switchboard {
             tracing::warn!(
                 ?detail,
                 host,
+                code = ?status.code(),
+                truncated = stdout.truncated,
                 "remote extension staging failed; using sentinel fallback"
             );
             return None;
         }
         let staged = String::from_utf8_lossy(&stdout.bytes).trim().to_owned();
-        (!staged.is_empty()).then_some(staged)
+        if staged.is_empty() {
+            tracing::warn!(
+                host,
+                "remote extension staging reported no path; using sentinel fallback"
+            );
+            return None;
+        }
+        tracing::info!(host, path = %staged, "staged the switchboard tool");
+        Some(staged)
     }
 
     fn agent_env(&self) -> HashMap<String, String> {
@@ -1088,10 +1151,13 @@ impl Switchboard {
         let choice = match self.resolve_model(&project, &requested_model, &level).await {
             Ok(choice) => choice,
             Err(error) => {
+                // Refusing is the safe outcome — the live leg keeps running —
+                // but it looks identical to a swap that never happened.
+                tracing::info!(project = %project.id, requested = %requested_model, %error, "refusing a model swap");
                 return self.reply(
                     [format!("I didn't switch: {error}")],
                     Some(error.to_string()),
-                )
+                );
             }
         };
         let spec = choice.spec();
@@ -1103,6 +1169,13 @@ impl Switchboard {
         } else {
             uuid_like()
         };
+        tracing::info!(
+            project = %project.id,
+            from = %self.model_spec,
+            to = %spec,
+            context = if keep_context { "kept" } else { "cleared" },
+            "swapping the model on the live leg"
+        );
         self.drop_agent().await;
         match self.start_agent(&project, &spec, &session_id).await {
             Ok(session) => {
@@ -1161,6 +1234,7 @@ impl Switchboard {
                     } else {
                         detail
                     };
+                    tracing::error!(project = %project_name, %spec, %detail, "the swapped leg never answered");
                     self.drop_agent().await;
                     self.operator_note = Some(format!(
                         "{project_name} could not be restarted on {spec}: {detail}"
@@ -1175,6 +1249,7 @@ impl Switchboard {
                 self.reply_with_turn(turn)
             }
             Err(error) => {
+                tracing::error!(project = %project.id, %spec, %error, "could not restart the leg on the new model");
                 let note = format!("{} could not be restarted on {}: {error}", project.id, spec);
                 self.operator_note = Some(note);
                 self.reply(
@@ -1203,6 +1278,7 @@ impl Switchboard {
         }
     }
     async fn recover_operator(&mut self, error: String) -> Reply {
+        tracing::warn!(%error, "dropping and rebuilding the operator leg");
         if let Some(s) = self.operator.take() {
             s.close().await;
         }
@@ -1336,6 +1412,7 @@ impl Switchboard {
         self.touch_activity();
         if self.route == OPERATOR {
             if let Some(session) = self.operator.take() {
+                tracing::info!("caller hung up a wedged operator turn from the page");
                 session.close().await;
                 self.set_active_session(None).await;
                 return Some(OPERATOR.into());
@@ -1343,6 +1420,7 @@ impl Switchboard {
             return None;
         }
         let left = self.route.clone();
+        tracing::info!(%left, "caller hung up the project leg from the page");
         self.drop_agent().await;
         self.operator_note = Some(format!("The caller dropped the line to {left}."));
         Some(left)
@@ -1352,6 +1430,7 @@ impl Switchboard {
             return None;
         }
         let left = self.route.clone();
+        tracing::info!(%left, idle_seconds = self.last_activity.elapsed(), "dropping the idle leg");
         self.drop_agent().await;
         self.operator_note = Some(format!(
             "The caller went quiet, so the line to {left} was dropped."
