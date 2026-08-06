@@ -25,6 +25,7 @@ interface BrowserMessage {
 	model_swaps?: boolean;
 	projects?: string[];
 	levels?: string[];
+	models?: Array<{ provider: string; model: string; thinks: boolean }>;
 	entries?: TranscriptEntry[];
 	entry?: TranscriptEntry;
 	waiting?: number;

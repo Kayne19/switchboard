@@ -286,7 +286,34 @@ impl Switchboard {
             format!("{provider}/{model}")
         };
         let effective = self.live_leg.effective_thinking();
-        serde_json::json!({"type":"status", "route":self.route, "label":self.route_label(), "model":spec, "model_name":model_name, "thinking":if effective.is_empty() { requested.clone() } else { effective.clone() }, "thinking_requested":requested, "thinking_confirmed":!effective.is_empty(), "thinking_default":self.agent_thinking, "levels":THINKING_LEVELS, "model_swaps":self.model_swaps, "projects":self.registry.ids()})
+        let models = if self.route == OPERATOR {
+            Vec::new()
+        } else if let Some(project) = &self.project {
+            let key = format!(
+                "{}\0{}",
+                project.host.as_deref().unwrap_or(""),
+                project.runtime
+            );
+            self.catalogs
+                .get(&key)
+                .map(|catalog| {
+                    catalog
+                        .entries
+                        .iter()
+                        .map(|entry| {
+                            serde_json::json!({
+                                "provider": entry.provider,
+                                "model": entry.model,
+                                "thinks": entry.thinks,
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        serde_json::json!({"type":"status", "route":self.route, "label":self.route_label(), "model":spec, "model_name":model_name, "thinking":if effective.is_empty() { requested.clone() } else { effective.clone() }, "thinking_requested":requested, "thinking_confirmed":!effective.is_empty(), "thinking_default":self.agent_thinking, "levels":THINKING_LEVELS, "models":models, "model_swaps":self.model_swaps, "projects":self.registry.ids()})
     }
     pub fn route_label(&self) -> String {
         if self.route == OPERATOR {
@@ -1135,10 +1162,10 @@ impl Switchboard {
         } else {
             model.to_owned()
         };
-        let (_, _, requested_thinking) = crate::models::parse_spec(&requested_model);
+        let (_, _, current_thinking) = crate::models::parse_spec(&self.model_spec);
         let level = if thinking.is_empty() {
-            if model.is_empty() && !requested_thinking.is_empty() {
-                requested_thinking
+            if !current_thinking.is_empty() {
+                current_thinking
             } else {
                 self.agent_thinking.clone()
             }
@@ -1438,6 +1465,16 @@ impl Switchboard {
         self.touch_activity();
         Some(left)
     }
+    pub async fn set_model(&mut self, model: &str) -> Reply {
+        if self.route == OPERATOR {
+            return self.reply(
+                ["Model changes are only available on a project leg."],
+                Some("Model changes are only available on a project leg.".into()),
+            );
+        }
+        self.redial(model, "", "", true).await
+    }
+
     pub async fn set_thinking(&mut self, level: &str) -> Reply {
         match normalize_thinking(level) {
             Ok(value) if !value.is_empty() => {
@@ -1589,6 +1626,41 @@ done
         let board = board_with(vec![], true);
         assert_eq!(board.route(), OPERATOR);
         assert_eq!(board.status()["route"], OPERATOR);
+        assert_eq!(board.status()["models"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn status_exposes_cached_models_for_the_current_project() {
+        let project = Project {
+            id: "alpha".into(),
+            description: String::new(),
+            aliases: vec![],
+            host: None,
+            cwd: String::new(),
+            runtime: "pi".into(),
+            model: None,
+            stage_extension: true,
+            extra_args: vec![],
+            prepare: String::new(),
+        };
+        let mut board = board_with(vec![project.clone()], true);
+        board.route = project.id.clone();
+        board.project = Some(project);
+        board.model_spec = "anthropic/current:high".into();
+        board.catalogs.insert(
+            "\0pi".into(),
+            ModelCatalog {
+                entries: vec![crate::models::CatalogEntry {
+                    provider: "anthropic".into(),
+                    model: "current".into(),
+                    thinks: true,
+                }],
+            },
+        );
+        assert_eq!(
+            board.status()["models"],
+            serde_json::json!([{"provider":"anthropic","model":"current","thinks":true}])
+        );
     }
 
     #[tokio::test]
@@ -1657,6 +1729,70 @@ done
             Some("failed".into()),
         );
         assert_eq!(failed.to_speak, ["The project did not answer."]);
+    }
+
+    #[tokio::test]
+    async fn model_swap_refuses_unknown_catalog_model_without_replacing_live_spec() {
+        let project = Project {
+            id: "alpha".into(),
+            description: String::new(),
+            aliases: vec![],
+            host: None,
+            cwd: String::new(),
+            runtime: "pi".into(),
+            model: None,
+            stage_extension: false,
+            extra_args: Vec::new(),
+            prepare: String::new(),
+        };
+        let mut board = board_with(vec![project.clone()], true);
+        board.project = Some(project);
+        board.route = "alpha".into();
+        board.model_spec = "anthropic/current:high".into();
+        board.catalogs.insert(
+            "\0pi".into(),
+            ModelCatalog {
+                entries: vec![crate::models::CatalogEntry {
+                    provider: "anthropic".into(),
+                    model: "current".into(),
+                    thinks: true,
+                }],
+            },
+        );
+
+        let reply = board.set_model("anthropic/missing").await;
+
+        assert!(reply.error.is_some());
+        assert_eq!(board.model_spec, "anthropic/current:high");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn page_model_swap_preserves_requested_thinking() {
+        let (root, runtime) = fake_runtime();
+        let project = Project {
+            id: "alpha".into(),
+            description: String::new(),
+            aliases: vec![],
+            host: None,
+            cwd: root.to_string_lossy().into_owned(),
+            runtime: runtime.to_string_lossy().into_owned(),
+            model: None,
+            stage_extension: false,
+            extra_args: Vec::new(),
+            prepare: String::new(),
+        };
+        let mut board = board_with(vec![project.clone()], true);
+        board.project = Some(project);
+        board.route = "alpha".into();
+        board.model_spec = "anthropic/current:high".into();
+
+        let reply = board.set_model("anthropic/next").await;
+
+        assert!(reply.error.is_none());
+        assert_eq!(board.status()["model"], "anthropic/next:high");
+        board.shutdown().await;
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(unix)]

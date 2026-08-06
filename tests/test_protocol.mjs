@@ -29,13 +29,22 @@ const previousFetch = globalThis.fetch;
 const requests = [];
 globalThis.fetch = async (url, options) => {
 	requests.push({ url, options });
-	return { ok: true, status: 200 };
+	return { ok: true, status: 200, json: async () => ({ error: null }) };
 };
 try {
 	await postJson("/thinking", { level: "high" });
 	assert.equal(requests[0].url, "/thinking");
 	assert.equal(requests[0].options.method, "POST");
 	assert.deepEqual(JSON.parse(requests[0].options.body), { level: "high" });
+
+	globalThis.fetch = async () => ({
+		ok: true,
+		status: 200,
+		json: async () => ({ error: "not available" }),
+	});
+	assert.deepEqual(await postJson("/model", { model: "provider/model" }), {
+		error: "not available",
+	});
 
 	globalThis.fetch = async () => ({ ok: false, status: 503 });
 	await assert.rejects(postJson("/connect", { project: "alpha" }), /HTTP 503/);

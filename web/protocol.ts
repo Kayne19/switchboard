@@ -32,11 +32,12 @@ export function clipHeader(clip: {
 export async function postJson(
 	url: string,
 	body: Record<string, unknown>,
-): Promise<void> {
+): Promise<Record<string, unknown>> {
 	const response = await fetch(url, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body),
 	});
 	if (!response.ok) throw new Error(`HTTP ${response.status}`);
+	return (await response.json()) as Record<string, unknown>;
 }

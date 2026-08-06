@@ -34,6 +34,7 @@ const lineEl = getElement("line");
 const whoEl = getElement("who");
 const modelEl = getElement("model");
 const routeSelect = getElement("routeSelect");
+const modelSelect = getElement("modelSelect");
 const thinkingSelect = getElement("thinkingSelect");
 const hangupBtn = getElement("hangupBtn");
 const retryBtn = getElement("retryBtn");
@@ -409,6 +410,17 @@ function setRoute(msg) {
     modelEl.textContent = [name, level].filter(Boolean).join(" · ");
     lineEl.classList.toggle("project", onProject);
     fillSelect(routeSelect, [{ value: "operator", label: "Operator" }].concat((msg.projects || []).map((id) => ({ value: id, label: id }))), msg.route || "operator");
+    const currentModel = msg.model_name || "";
+    const modelValues = (msg.models || []).map((entry) => ({
+        value: entry.provider + "/" + entry.model,
+        label: entry.provider + "/" + entry.model,
+    }));
+    if (currentModel &&
+        !modelValues.some((entry) => entry.value === currentModel)) {
+        modelValues.push({ value: currentModel, label: currentModel });
+    }
+    fillSelect(modelSelect, modelValues, currentModel);
+    modelSelect.disabled = !onProject || msg.model_swaps === false;
     fillSelect(thinkingSelect, (msg.levels || []).map((l) => ({
         value: l,
         label: "thinking: " + l,
@@ -425,7 +437,10 @@ async function post(url, body, control) {
     control.disabled = true;
     statusEl.classList.remove("error");
     try {
-        await postJson(url, body);
+        const response = await postJson(url, body);
+        if (response.error !== null && response.error !== undefined) {
+            throw new Error(String(response.error));
+        }
     }
     catch (err) {
         statusEl.textContent = "That did not go through: " + errorText(err);
@@ -830,6 +845,10 @@ routeSelect.addEventListener("change", () => {
             ? "Going back to the operator..."
             : "Connecting to " + routeSelect.value + "...";
     post("/connect", { project: routeSelect.value }, routeSelect);
+});
+modelSelect.addEventListener("change", () => {
+    statusEl.textContent = "Switching to " + modelSelect.value + "...";
+    post("/model", { model: modelSelect.value }, modelSelect);
 });
 thinkingSelect.addEventListener("change", () => {
     statusEl.textContent = "Setting thinking to " + thinkingSelect.value + "...";

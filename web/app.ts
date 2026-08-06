@@ -56,6 +56,7 @@ const lineEl = getElement<HTMLElement>("line");
 const whoEl = getElement<HTMLElement>("who");
 const modelEl = getElement<HTMLElement>("model");
 const routeSelect = getElement<HTMLSelectElement>("routeSelect");
+const modelSelect = getElement<HTMLSelectElement>("modelSelect");
 const thinkingSelect = getElement<HTMLSelectElement>("thinkingSelect");
 const hangupBtn = getElement<HTMLButtonElement>("hangupBtn");
 const retryBtn = getElement<HTMLButtonElement>("retryBtn");
@@ -472,6 +473,20 @@ function setRoute(msg: BrowserMessage): void {
 		),
 		msg.route || "operator",
 	);
+	const currentModel = msg.model_name || "";
+	const modelValues = (msg.models || []).map((entry) => ({
+		value: entry.provider + "/" + entry.model,
+		label: entry.provider + "/" + entry.model,
+	}));
+	if (
+		currentModel &&
+		!modelValues.some((entry) => entry.value === currentModel)
+	) {
+		modelValues.push({ value: currentModel, label: currentModel });
+	}
+	fillSelect(modelSelect, modelValues, currentModel);
+	modelSelect.disabled = !onProject || msg.model_swaps === false;
+
 	fillSelect(
 		thinkingSelect,
 		(msg.levels || []).map((l) => ({
@@ -498,7 +513,10 @@ async function post(
 	control.disabled = true;
 	statusEl.classList.remove("error");
 	try {
-		await postJson(url, body);
+		const response = await postJson(url, body);
+		if (response.error !== null && response.error !== undefined) {
+			throw new Error(String(response.error));
+		}
 	} catch (err) {
 		statusEl.textContent = "That did not go through: " + errorText(err);
 		statusEl.classList.add("error");
@@ -891,6 +909,10 @@ routeSelect.addEventListener("change", () => {
 			? "Going back to the operator..."
 			: "Connecting to " + routeSelect.value + "...";
 	post("/connect", { project: routeSelect.value }, routeSelect);
+});
+modelSelect.addEventListener("change", () => {
+	statusEl.textContent = "Switching to " + modelSelect.value + "...";
+	post("/model", { model: modelSelect.value }, modelSelect);
 });
 thinkingSelect.addEventListener("change", () => {
 	statusEl.textContent = "Setting thinking to " + thinkingSelect.value + "...";

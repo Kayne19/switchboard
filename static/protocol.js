@@ -32,4 +32,5 @@ export async function postJson(url, body) {
     });
     if (!response.ok)
         throw new Error(`HTTP ${response.status}`);
+    return (await response.json());
 }

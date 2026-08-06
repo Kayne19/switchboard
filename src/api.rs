@@ -155,6 +155,7 @@ impl AppState {
             .route("/hangup", post(hangup))
             .route("/connect", post(connect))
             .route("/thinking", post(thinking))
+            .route("/model", post(model))
             .route("/leg-state", post(leg_state))
             .route("/speak", post(speak))
             .route("/diagram", post(diagram))
@@ -654,6 +655,54 @@ async fn thinking(State(state): State<AppState>, Json(req): Json<Thinking>) -> R
             .into_response();
     }
     Json(json!({"thinking":current_status(&state)["thinking"], "error":reply.error.clone()}))
+        .into_response()
+}
+#[derive(Deserialize)]
+struct Model {
+    model: String,
+}
+async fn model(State(state): State<AppState>, Json(req): Json<Model>) -> Response {
+    let operation_state = state.clone();
+    let operation = async move {
+        let mut board = operation_state.0.switchboard.lock().await;
+        let reply = board.set_model(&req.model).await;
+        let status = board.status();
+        (reply, status)
+    };
+    let (task, task_id, generation) = if state.0.live_leg.route() == crate::pbx::OPERATOR {
+        let (task, task_id, generation) = spawn_active_operation(&state, operation).await;
+        (task, task_id, generation)
+    } else {
+        spawn_replacing_operation(&state, operation).await
+    };
+    let (reply, status) = match task.await {
+        Ok(result) => result,
+        Err(error) if error.is_cancelled() => {
+            clear_active_operation(&state, task_id).await;
+            return (
+                axum::http::StatusCode::CONFLICT,
+                Json(json!({"detail":"model change was cancelled"})),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            clear_active_operation(&state, task_id).await;
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail":format!("model change failed: {error}")})),
+            )
+                .into_response();
+        }
+    };
+    clear_active_operation(&state, task_id).await;
+    if !deliver_page_reply_if_current(&state, &reply, status, generation).await {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({"detail":"model change was superseded"})),
+        )
+            .into_response();
+    }
+    Json(json!({"model":current_status(&state)["model_name"], "error":reply.error.clone()}))
         .into_response()
 }
 #[derive(Deserialize)]
@@ -1211,6 +1260,17 @@ mod tests {
             state.0.switchboard.lock().await.status()["thinking_default"],
             "high"
         );
+
+        let (code, model) = request_json(
+            &state,
+            Method::POST,
+            "/model",
+            Some(json!({"model":"anthropic/next"})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(model["model"], "");
+        assert!(model["error"].as_str().unwrap().contains("project leg"));
 
         let (code, leg) = request_json(
             &state,
