@@ -13,7 +13,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     future::Future,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -35,8 +35,8 @@ pub struct AppInner {
     pub stt: SttAdapter,
     pub events: broadcast::Sender<Event>,
     status_snapshot: Arc<StdRwLock<Value>>,
-    speech: mpsc::Sender<String>,
-    speech_rx: Mutex<Option<mpsc::Receiver<String>>>,
+    speech: mpsc::Sender<SpeechRequest>,
+    speech_rx: Mutex<Option<mpsc::Receiver<SpeechRequest>>>,
     clips: mpsc::Sender<Clip>,
     clip_rx: Mutex<Option<mpsc::Receiver<Clip>>>,
     pub turns: mpsc::Sender<(String, String, u64)>,
@@ -52,12 +52,85 @@ pub struct AppInner {
     pub queued_turns: AtomicU64,
     pub turn_in_flight: AtomicBool,
     shutdown: watch::Sender<bool>,
+    audio: Mutex<AudioQueue>,
 }
 #[derive(Clone, Debug)]
 pub enum Event {
     Json(Value),
-    Audio(Vec<u8>),
+    Audio {
+        audio: Vec<u8>,
+        generation: u64,
+        sequence: u64,
+    },
 }
+struct SpeechRequest {
+    text: String,
+    generation: u64,
+    sequence: u64,
+}
+struct AudioSlot {
+    generation: u64,
+    audio: Option<Vec<u8>>,
+}
+struct AudioQueue {
+    next: u64,
+    emit: u64,
+    slots: BTreeMap<u64, AudioSlot>,
+}
+impl AudioQueue {
+    fn new() -> Self {
+        Self {
+            next: 0,
+            emit: 0,
+            slots: BTreeMap::new(),
+        }
+    }
+    fn reserve(&mut self, generation: u64) -> u64 {
+        let sequence = self.next;
+        self.next += 1;
+        self.slots.insert(
+            sequence,
+            AudioSlot {
+                generation,
+                audio: None,
+            },
+        );
+        sequence
+    }
+    fn finish(&mut self, sequence: u64, generation: u64, audio: Vec<u8>) -> Vec<Event> {
+        let Some(slot) = self.slots.get_mut(&sequence) else {
+            return Vec::new();
+        };
+        if slot.generation == generation {
+            slot.audio = Some(audio);
+        } else {
+            slot.audio = Some(Vec::new());
+        }
+        let mut ready = Vec::new();
+        while let Some(slot) = self.slots.get(&self.emit) {
+            if slot.audio.is_none() {
+                break;
+            }
+            let slot = self.slots.remove(&self.emit).expect("audio slot exists");
+            if let Some(audio) = slot.audio {
+                if !audio.is_empty() {
+                    ready.push(Event::Audio {
+                        audio,
+                        generation: slot.generation,
+                        sequence: self.emit,
+                    });
+                }
+            }
+            self.emit += 1;
+        }
+        ready
+    }
+    fn clear(&mut self) {
+        self.slots.clear();
+        self.emit = self.next;
+    }
+}
+
 #[derive(Debug)]
 pub struct Clip {
     id: String,
@@ -146,6 +219,7 @@ impl AppState {
             queued_turns: AtomicU64::new(0),
             turn_in_flight: AtomicBool::new(false),
             shutdown,
+            audio: Mutex::new(AudioQueue::new()),
         }))
     }
     pub fn router(self, static_dir: Option<ServeDir>) -> Router {
@@ -269,6 +343,23 @@ async fn clear_active_operation(state: &AppState, id: TaskId) {
     state.0.active_operations.lock().await.remove(&id);
 }
 
+async fn reserve_audio(state: &AppState, generation: u64) -> Option<u64> {
+    let mut audio = state.0.audio.lock().await;
+    if generation != state.0.turn_generation.load(Ordering::Acquire) {
+        return None;
+    }
+    Some(audio.reserve(generation))
+}
+async fn finish_audio(state: &AppState, sequence: u64, generation: u64, bytes: Vec<u8>) {
+    let mut audio = state.0.audio.lock().await;
+    if generation != state.0.turn_generation.load(Ordering::Acquire) {
+        return;
+    }
+    for event in audio.finish(sequence, generation, bytes) {
+        emit(state, event);
+    }
+}
+
 async fn process_speech(state: AppState) {
     let mut receiver = state
         .0
@@ -277,7 +368,12 @@ async fn process_speech(state: AppState) {
         .await
         .take()
         .expect("speech worker started once");
-    while let Some(text) = receiver.recv().await {
+    while let Some(request) = receiver.recv().await {
+        let SpeechRequest {
+            text,
+            generation,
+            sequence,
+        } = request;
         let started = std::time::Instant::now();
         match state.0.speaker.synthesize(&text).await {
             Ok(audio) => {
@@ -287,9 +383,10 @@ async fn process_speech(state: AppState) {
                     elapsed = ?started.elapsed(),
                     "synthesized a mid-turn line"
                 );
-                emit(&state, Event::Audio(audio));
+                finish_audio(&state, sequence, generation, audio).await;
             }
             Err(error) => {
+                finish_audio(&state, sequence, generation, Vec::new()).await;
                 // The caller hears nothing at all when this fails, so it must
                 // never be inferable only from the absence of audio.
                 tracing::error!(%error, chars = text.chars().count(), "synthesis failed for an agent-spoken line");
@@ -334,6 +431,11 @@ async fn process_clips(state: AppState) {
             );
             continue;
         }
+        let _transition = state.0.operation_transition.lock().await;
+        if clip.generation != state.0.turn_generation.load(Ordering::Acquire) {
+            tracing::info!(clip = %clip.id, "discarding stale transcript before persistence");
+            continue;
+        }
         let route = state.0.live_leg.route();
         tracing::info!(
             clip = %clip.id,
@@ -352,6 +454,7 @@ async fn process_clips(state: AppState) {
             &state,
             json!({"type":"transcript", "id":clip.id, "text":transcript}),
         );
+        drop(_transition);
         // Steering is deliberately performed through the shared session handle,
         // not while holding the PBX mutex. The turn worker keeps that mutex for
         // the duration of handle(), so awaiting here would deadlock it.
@@ -513,6 +616,7 @@ async fn interrupt_active_turn(state: &AppState) -> Option<String> {
 }
 async fn cancel_active_operations(state: &AppState) -> Option<String> {
     let generation = state.0.turn_generation.fetch_add(1, Ordering::AcqRel) + 1;
+    state.0.audio.lock().await.clear();
     // Tell the browser at once, so speech it starts recording after this point
     // is stamped with the new epoch rather than the one being retired.
     emit_json(state, json!({"type":"epoch", "generation":generation}));
@@ -709,9 +813,11 @@ async fn model(State(state): State<AppState>, Json(req): Json<Model>) -> Respons
 struct LegState {
     #[serde(default)]
     thinking: String,
+    #[serde(default)]
+    token: String,
 }
 async fn leg_state(State(state): State<AppState>, Json(req): Json<LegState>) -> impl IntoResponse {
-    let accepted = state.0.live_leg.report_thinking(&req.thinking);
+    let accepted = state.0.live_leg.report_thinking(&req.token, &req.thinking);
     if accepted {
         let mut status = current_status(&state);
         status["thinking"] = Value::String(req.thinking.clone());
@@ -769,7 +875,16 @@ async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Respons
 
     let delivered = state.0.events.receiver_count() > 0;
     if let Some(permit) = speech_permit {
-        permit.send(spoken);
+        let generation = state.0.turn_generation.load(Ordering::Acquire);
+        let sequence = match reserve_audio(&state, generation).await {
+            Some(sequence) => sequence,
+            None => return Json(delivery_response(false)).into_response(),
+        };
+        permit.send(SpeechRequest {
+            text: spoken,
+            generation,
+            sequence,
+        });
     }
 
     Json(delivery_response(delivered)).into_response()
@@ -860,6 +975,9 @@ async fn synthesize_reply_if_current(
         if spoken.is_empty() {
             continue;
         }
+        let Some(sequence) = reserve_audio(state, generation).await else {
+            return false;
+        };
         let started = std::time::Instant::now();
         let synthesized = state.0.speaker.synthesize(&spoken).await;
         let _transition = state.0.operation_transition.lock().await;
@@ -878,9 +996,10 @@ async fn synthesize_reply_if_current(
                     elapsed = ?started.elapsed(),
                     "synthesized a reply"
                 );
-                emit(state, Event::Audio(audio));
+                finish_audio(state, sequence, generation, audio).await;
             }
             Err(error) => {
+                finish_audio(state, sequence, generation, Vec::new()).await;
                 tracing::error!(%error, chars = spoken.chars().count(), "synthesis failed; the caller hears nothing for this reply");
                 emit_json(state, json!({"type":"error", "message":error.to_string()}));
                 break;
@@ -1142,7 +1261,20 @@ async fn send_json(socket: &mut WebSocket, value: Value) -> Result<(), axum::Err
 async fn send_event(socket: &mut WebSocket, event: Event) -> Result<(), axum::Error> {
     match event {
         Event::Json(value) => socket.send(Message::Text(value.to_string().into())).await,
-        Event::Audio(audio) => socket.send(Message::Binary(audio.into())).await,
+        Event::Audio {
+            audio,
+            generation,
+            sequence,
+        } => {
+            socket
+                .send(Message::Text(
+                    json!({"type":"audio", "generation":generation, "sequence":sequence})
+                        .to_string()
+                        .into(),
+                ))
+                .await?;
+            socket.send(Message::Binary(audio.into())).await
+        }
     }
 }
 
@@ -1304,6 +1436,25 @@ mod tests {
             json!({"type":"diagram", "source":"flowchart TD; A-->B", "title":"Path", "notes":"One hop"})
         );
         assert_eq!(*state.0.last_diagram.lock().await, Some(event));
+    }
+
+    #[test]
+    fn audio_queue_emits_reserved_sequences_in_order_and_drops_on_clear() {
+        let mut queue = AudioQueue::new();
+        let first = queue.reserve(3);
+        let second = queue.reserve(3);
+        assert!(queue.finish(second, 3, vec![2]).is_empty());
+        let events = queue.finish(first, 3, vec![1]);
+        assert!(matches!(
+            events.as_slice(),
+            [
+                Event::Audio { sequence: 0, .. },
+                Event::Audio { sequence: 1, .. }
+            ]
+        ));
+        let stale = queue.reserve(3);
+        queue.clear();
+        assert!(queue.finish(stale, 3, vec![9]).is_empty());
     }
 
     #[tokio::test]
@@ -1559,27 +1710,14 @@ mod tests {
         let worker_state = state.clone();
         let worker = tokio::spawn(async move { process_clips(worker_state).await });
 
-        // The transcript still lands. That is what keeps the assertions below
-        // from passing vacuously: it proves the worker really ran this clip.
-        // Only a safety net so a regression fails instead of hanging. The happy
-        // path returns as soon as the sidecar does, but process spawning can be
-        // slow on a loaded CI box, so the bound is generous.
-        let transcript = timeout(Duration::from_secs(60), async {
-            loop {
-                if let Ok(Event::Json(value)) = events.recv().await {
-                    if value["type"] == "transcript" {
-                        return value;
-                    }
-                }
-            }
-        })
-        .await
-        .expect("the clip worker transcribed the clip");
-        assert_eq!(transcript["text"], "stale words");
-        for _ in 0..10 {
-            tokio::task::yield_now().await;
-        }
-
+        // The worker may finish transcription, but stale history and live
+        // transcript events must be suppressed before either side effect.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(state.0.transcript_log.lock().await.entries().is_empty());
+        assert!(matches!(
+            events.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
         assert_eq!(state.0.queued_turns.load(Ordering::Acquire), 0);
         let mut turns = state.0.turn_rx.lock().await.take().unwrap();
         assert!(matches!(

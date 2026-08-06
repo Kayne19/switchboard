@@ -41,11 +41,13 @@ const retryBtn = getElement("retryBtn");
 const player = getElement("player");
 let ws = null;
 let mediaRecorder = null;
-let chunks = [];
+let activeRecording = null;
 const audioQueue = [];
 let isPlaying = false;
 let playPending = false;
-let discard = false;
+let playbackGeneration = 0;
+let pendingAudioGeneration = null;
+let audioEpoch = 0;
 const idleText = "Connected. Tap Talk and speak.";
 // True from the moment getUserMedia is asked for until the recorder is
 // actually running. Without it a second click (or Space) lands inside the
@@ -310,11 +312,13 @@ function renderHistory(entries = []) {
     logEl.scrollTop = logEl.scrollHeight;
 }
 function playNext() {
+    const generation = ++playbackGeneration;
     if (currentUrl) {
         URL.revokeObjectURL(currentUrl);
         currentUrl = null;
     }
-    if (audioQueue.length === 0) {
+    const blob = currentBlob || audioQueue.shift();
+    if (!blob) {
         currentBlob = null;
         isPlaying = false;
         statusEl.textContent = idleText;
@@ -322,16 +326,17 @@ function playNext() {
         return;
     }
     isPlaying = true;
-    const blob = audioQueue.shift();
-    if (!blob)
-        return;
     currentBlob = blob;
     currentUrl = URL.createObjectURL(blob);
     playPending = true;
     player.src = currentUrl;
     player.play().then(() => {
+        if (generation !== playbackGeneration || currentBlob !== blob)
+            return;
         playPending = false;
     }, (err) => {
+        if (generation !== playbackGeneration || currentBlob !== blob)
+            return;
         playPending = false;
         currentBlob = null;
         // Autoplay rejection is recoverable: keep this clip at the front so
@@ -346,19 +351,21 @@ function playNext() {
     });
 }
 player.addEventListener("ended", () => {
+    if (playPending || !currentBlob || player.ended === false)
+        return;
+    // Browsers can emit pause immediately before ended when playback is
+    // skipped to the end. The current clip stays separate from the queue until
+    // ended confirms that it is finished, so this advances exactly once.
     currentBlob = null;
     playNext();
 });
 // A pause from the exposed controls otherwise leaves isPlaying true forever.
-// Requeue the current clip so a later click resumes without skipping it.
+// Keep the current clip in place: a later click resumes it, while a following
+// ended event clears it and advances without replaying it from the queue.
 player.addEventListener("pause", () => {
-    if (!isPlaying || playPending || player.ended)
+    if (!isPlaying || playPending || player.ended || player.paused === false)
         return;
     isPlaying = false;
-    if (currentBlob) {
-        audioQueue.unshift(currentBlob);
-        currentBlob = null;
-    }
     statusEl.textContent =
         "Audio paused — click anywhere on this page to resume.";
 });
@@ -366,16 +373,30 @@ player.addEventListener("pause", () => {
 // clip that failed to decode — or the caller pressing pause on the
 // exposed controls — wedged playback permanently at "Queued (N waiting)".
 player.addEventListener("error", () => {
-    if (isPlaying) {
-        currentBlob = null;
-        playNext();
-    }
+    if (!isPlaying || playPending || !currentBlob || !player.error)
+        return;
+    currentBlob = null;
+    playNext();
 });
 // The status message promises that a page interaction resumes blocked audio.
 // Keep that gesture path here rather than relying on a later clip to arrive.
 document.addEventListener("click", () => {
-    if (!isPlaying && audioQueue.length)
-        playNext();
+    if (isPlaying || !currentBlob) {
+        if (!isPlaying && audioQueue.length)
+            playNext();
+        return;
+    }
+    const generation = playbackGeneration;
+    playPending = true;
+    player.play().then(() => {
+        if (generation === playbackGeneration && currentBlob) {
+            playPending = false;
+            isPlaying = true;
+        }
+    }, () => {
+        if (generation === playbackGeneration && currentBlob)
+            playPending = false;
+    });
 });
 // Rebuilt only when the set of options actually changes, so a select the
 // caller has open does not collapse under them on a routine status update.
@@ -410,6 +431,9 @@ function setRoute(msg) {
     modelEl.textContent = [name, level].filter(Boolean).join(" · ");
     lineEl.classList.toggle("project", onProject);
     fillSelect(routeSelect, [{ value: "operator", label: "Operator" }].concat((msg.projects || []).map((id) => ({ value: id, label: id }))), msg.route || "operator");
+    invalidatePicker(routeSelect);
+    invalidatePicker(modelSelect);
+    invalidatePicker(thinkingSelect);
     const currentModel = msg.model_name || "";
     const modelValues = (msg.models || []).map((entry) => ({
         value: entry.provider + "/" + entry.model,
@@ -420,35 +444,85 @@ function setRoute(msg) {
         modelValues.push({ value: currentModel, label: currentModel });
     }
     fillSelect(modelSelect, modelValues, currentModel);
-    modelSelect.disabled = !onProject || msg.model_swaps === false;
+    pickerOnProject = onProject;
+    pickerModelSwaps = msg.model_swaps !== false;
+    pickerModelsAvailable = msg.models_available !== false;
+    pickerDiagnostic = msg.models_diagnostic || "";
+    applyPickerDisabled();
     fillSelect(thinkingSelect, (msg.levels || []).map((l) => ({
         value: l,
         label: "thinking: " + l,
     })), msg.thinking || msg.thinking_default || "");
-    thinkingSelect.disabled = onProject && msg.model_swaps === false;
+    applyPickerDisabled();
     // Only offered on a project leg: the operator is where hanging up puts
     // you, so there is nowhere for it to go from there.
     hangupBtn.classList.toggle("hidden", !onProject);
+}
+const pickerRequests = new WeakMap();
+let pickerBusy = false;
+let pickerOnProject = false;
+let pickerModelSwaps = true;
+let pickerModelsAvailable = true;
+let pickerDiagnostic = "";
+let pickerOperation = null;
+function invalidatePicker(control) {
+    pickerRequests.set(control, (pickerRequests.get(control) || 0) + 1);
+}
+function applyPickerDisabled() {
+    routeSelect.disabled = pickerBusy;
+    modelSelect.disabled =
+        pickerBusy ||
+            !pickerOnProject ||
+            !pickerModelSwaps ||
+            !pickerModelsAvailable;
+    thinkingSelect.disabled =
+        pickerBusy || (pickerOnProject && !pickerModelSwaps);
+    modelSelect.title = !pickerModelsAvailable
+        ? pickerDiagnostic || "Model catalog unavailable"
+        : "";
 }
 // Both selects act immediately and both can take a while — connecting dials
 // ssh and starts an agent, changing the level restarts the live leg. Lock
 // them while that happens so a second pick cannot race the first.
 async function post(url, body, control) {
+    const request = (pickerRequests.get(control) || 0) + 1;
+    pickerRequests.set(control, request);
     control.disabled = true;
-    statusEl.classList.remove("error");
-    try {
-        const response = await postJson(url, body);
-        if (response.error !== null && response.error !== undefined) {
-            throw new Error(String(response.error));
+    const execute = async () => {
+        pickerBusy = true;
+        if (typeof document !== "undefined")
+            applyPickerDisabled();
+        statusEl.classList.remove("error");
+        try {
+            const response = await postJson(url, body);
+            if (response.error !== null && response.error !== undefined) {
+                throw new Error(String(response.error));
+            }
         }
-    }
-    catch (err) {
-        statusEl.textContent = "That did not go through: " + errorText(err);
-        statusEl.classList.add("error");
-    }
-    finally {
-        control.disabled = false;
-    }
+        catch (err) {
+            if (pickerRequests.get(control) === request) {
+                statusEl.textContent = "That did not go through: " + errorText(err);
+                statusEl.classList.add("error");
+            }
+        }
+        finally {
+            pickerBusy = false;
+            if (pickerRequests.get(control) === request)
+                control.disabled = false;
+            if (typeof document !== "undefined")
+                applyPickerDisabled();
+        }
+    };
+    const run = pickerOperation ? pickerOperation.then(execute, execute) : execute();
+    pickerOperation = run;
+    run.then(() => {
+        if (pickerOperation === run)
+            pickerOperation = null;
+    }, () => {
+        if (pickerOperation === run)
+            pickerOperation = null;
+    });
+    await run;
 }
 // Goes straight to the backend rather than through the agent on the line,
 // which is the whole point — it has to work when that agent is the problem,
@@ -604,11 +678,28 @@ function connect() {
             if (!msg)
                 return;
             if (msg.type === "epoch") {
-                // Adopt the server's epoch immediately, so a clip whose
-                // recording starts after this point is stamped with the new
-                // one rather than the epoch being retired.
-                if (typeof msg.generation === "number")
+                // Adopt the server's epoch immediately and retire every queued or
+                // currently playing clip from the old leg.
+                if (typeof msg.generation === "number") {
                     turnEpoch = msg.generation;
+                    audioEpoch = msg.generation;
+                    audioQueue.length = 0;
+                    pendingAudioGeneration = null;
+                    playbackGeneration++;
+                    player.pause();
+                    currentBlob = null;
+                    isPlaying = false;
+                    playPending = false;
+                    if (currentUrl)
+                        URL.revokeObjectURL(currentUrl);
+                    currentUrl = null;
+                    player.removeAttribute("src");
+                    player.load();
+                }
+            }
+            else if (msg.type === "audio") {
+                pendingAudioGeneration =
+                    typeof msg.generation === "number" ? msg.generation : null;
             }
             else if (msg.type === "pong") {
                 if (msg.nonce === pendingPong) {
@@ -707,11 +798,16 @@ function connect() {
             }
         }
         else {
-            // Binary frame: mp3. Queue so a turn that owes several lines (an
-            // agent's own `speak` clips, then whatever the switchboard voices)
-            // plays back-to-back.
+            // Binary frame: mp3. Its preceding metadata frame identifies the
+            // generation, so stale queued audio cannot survive a rescue.
+            if (pendingAudioGeneration !== null &&
+                pendingAudioGeneration !== audioEpoch) {
+                pendingAudioGeneration = null;
+                return;
+            }
             audioQueue.push(new Blob([event.data], { type: "audio/mpeg" }));
-            if (!isPlaying) {
+            pendingAudioGeneration = null;
+            if (!isPlaying && !currentBlob) {
                 statusEl.textContent = "Playing speech...";
                 playNext();
             }
@@ -727,7 +823,7 @@ function setRecordingUI(on) {
     sendBtn.classList.toggle("hidden", !on);
 }
 async function startRecording() {
-    if (starting || isRecording())
+    if (starting || activeRecording || isRecording())
         return;
     starting = true;
     startCancelled = false;
@@ -746,13 +842,10 @@ async function startRecording() {
     if (startCancelled) {
         starting = false;
         stream.getTracks().forEach((t) => t.stop());
-        discard = false;
         statusEl.textContent = idleText;
         setRecordingUI(false);
         return;
     }
-    discard = false;
-    chunks = [];
     try {
         // Only getUserMedia was guarded before. Safari/iOS does not support
         // this mimeType and the constructor throws NotSupportedError, which
@@ -774,16 +867,36 @@ async function startRecording() {
         return;
     }
     const recorder = mediaRecorder;
-    if (!recorder)
+    if (!recorder) {
+        starting = false;
+        stream.getTracks().forEach((t) => t.stop());
         return;
+    }
+    const chunks = [];
+    let streamReleased = false;
+    const releaseStream = () => {
+        if (streamReleased)
+            return;
+        streamReleased = true;
+        stream.getTracks().forEach((t) => t.stop());
+    };
+    let recorderFailed = false;
+    const recording = { recorder, discard: false };
+    activeRecording = recording;
     recorder.ondataavailable = (e) => {
         if (e.data.size > 0)
             chunks.push(e.data);
     };
     let recordingEpoch = turnEpoch;
     recorder.onstop = () => {
-        stream.getTracks().forEach((t) => t.stop());
-        if (discard) {
+        releaseStream();
+        if (activeRecording?.recorder === recorder)
+            activeRecording = null;
+        if (mediaRecorder === recorder)
+            mediaRecorder = null;
+        if (recorderFailed)
+            return;
+        if (recording.discard) {
             statusEl.textContent = idleText;
             return;
         }
@@ -807,11 +920,40 @@ async function startRecording() {
         appendTurn(pendingEntry(clip));
         flushOutbox();
     };
+    recorder.onerror = (event) => {
+        if (recorderFailed)
+            return;
+        recorderFailed = true;
+        if (activeRecording?.recorder === recorder)
+            activeRecording = null;
+        if (mediaRecorder === recorder)
+            mediaRecorder = null;
+        starting = false;
+        releaseStream();
+        setRecordingUI(false);
+        statusEl.textContent = "Recording failed (" + errorName(event.error) + ").";
+        statusEl.classList.add("error");
+    };
     // Sampled here, as recording actually begins, because that is what the
     // clip is stamped with. Nothing later -- upload, transcription -- is
     // early enough to be safe.
     recordingEpoch = turnEpoch;
-    recorder.start();
+    try {
+        recorder.start();
+    }
+    catch (err) {
+        recorderFailed = true;
+        if (activeRecording?.recorder === recorder)
+            activeRecording = null;
+        releaseStream();
+        mediaRecorder = null;
+        starting = false;
+        setRecordingUI(false);
+        statusEl.textContent =
+            "This browser cannot record audio (" + errorName(err) + ").";
+        statusEl.classList.add("error");
+        return;
+    }
     starting = false;
     setRecordingUI(true);
     statusEl.textContent =
@@ -821,14 +963,14 @@ async function startRecording() {
 function stopRecording(send) {
     // Set before the state check so a press landing inside the getUserMedia
     // await is still honoured once the permission resolves.
-    discard = !send;
     if (starting) {
         startCancelled = true;
         setRecordingUI(false);
         return;
     }
-    if (mediaRecorder && mediaRecorder.state !== "inactive") {
-        mediaRecorder.stop();
+    if (activeRecording && activeRecording.recorder.state !== "inactive") {
+        activeRecording.discard = !send;
+        activeRecording.recorder.stop();
     }
     setRecordingUI(false);
 }

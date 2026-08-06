@@ -54,12 +54,14 @@ pub struct LiveLegState(Arc<StdRwLock<LiveLegSnapshot>>);
 #[derive(Debug)]
 struct LiveLegSnapshot {
     route: String,
+    session_token: String,
     effective_thinking: String,
 }
 impl LiveLegState {
     fn new() -> Self {
         Self(Arc::new(StdRwLock::new(LiveLegSnapshot {
             route: OPERATOR.to_owned(),
+            session_token: String::new(),
             effective_thinking: String::new(),
         })))
     }
@@ -72,13 +74,18 @@ impl LiveLegState {
             .clone()
     }
 
-    fn set_route(&self, route: &str) {
+    fn set_session(&self, route: &str, token: &str) {
         let mut state = self
             .0
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         state.route = route.to_owned();
+        state.session_token = token.to_owned();
         state.effective_thinking.clear();
+    }
+
+    fn set_route(&self, route: &str) {
+        self.set_session(route, "");
     }
 
     fn effective_thinking(&self) -> String {
@@ -89,7 +96,7 @@ impl LiveLegState {
             .clone()
     }
 
-    pub fn report_thinking(&self, thinking: &str) -> bool {
+    pub fn report_thinking(&self, token: &str, thinking: &str) -> bool {
         if !THINKING_LEVELS.contains(&thinking) {
             return false;
         }
@@ -97,7 +104,11 @@ impl LiveLegState {
             .0
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if state.route == OPERATOR || state.effective_thinking == thinking {
+        if state.route == OPERATOR
+            || state.session_token.is_empty()
+            || state.session_token != token
+            || state.effective_thinking == thinking
+        {
             return false;
         }
         state.effective_thinking = thinking.to_owned();
@@ -286,8 +297,8 @@ impl Switchboard {
             format!("{provider}/{model}")
         };
         let effective = self.live_leg.effective_thinking();
-        let models = if self.route == OPERATOR {
-            Vec::new()
+        let (models, models_available, models_diagnostic) = if self.route == OPERATOR {
+            (Vec::new(), true, None)
         } else if let Some(project) = &self.project {
             let key = format!(
                 "{}\0{}",
@@ -297,23 +308,33 @@ impl Switchboard {
             self.catalogs
                 .get(&key)
                 .map(|catalog| {
-                    catalog
-                        .entries
-                        .iter()
-                        .map(|entry| {
-                            serde_json::json!({
-                                "provider": entry.provider,
-                                "model": entry.model,
-                                "thinks": entry.thinks,
+                    (
+                        catalog
+                            .entries
+                            .iter()
+                            .map(|entry| {
+                                serde_json::json!({
+                                    "provider": entry.provider,
+                                    "model": entry.model,
+                                    "thinks": entry.thinks,
+                                })
                             })
-                        })
-                        .collect::<Vec<_>>()
+                            .collect::<Vec<_>>(),
+                        catalog.available,
+                        catalog.diagnostic.clone(),
+                    )
                 })
-                .unwrap_or_default()
+                .unwrap_or_else(|| {
+                    (
+                        Vec::new(),
+                        false,
+                        Some("model catalog has not been loaded".into()),
+                    )
+                })
         } else {
-            Vec::new()
+            (Vec::new(), false, Some("no project is connected".into()))
         };
-        serde_json::json!({"type":"status", "route":self.route, "label":self.route_label(), "model":spec, "model_name":model_name, "thinking":if effective.is_empty() { requested.clone() } else { effective.clone() }, "thinking_requested":requested, "thinking_confirmed":!effective.is_empty(), "thinking_default":self.agent_thinking, "levels":THINKING_LEVELS, "models":models, "model_swaps":self.model_swaps, "projects":self.registry.ids()})
+        serde_json::json!({"type":"status", "route":self.route, "label":self.route_label(), "model":spec, "model_name":model_name, "thinking":if effective.is_empty() { requested.clone() } else { effective.clone() }, "thinking_requested":requested, "thinking_confirmed":!effective.is_empty(), "thinking_default":self.agent_thinking, "levels":THINKING_LEVELS, "models":models, "models_available":models_available, "models_diagnostic":models_diagnostic, "model_swaps":self.model_swaps, "projects":self.registry.ids()})
     }
     pub fn route_label(&self) -> String {
         if self.route == OPERATOR {
@@ -325,8 +346,8 @@ impl Switchboard {
                 .unwrap_or_else(|| self.route.clone())
         }
     }
-    pub fn report_leg_state(&self, thinking: &str) -> bool {
-        self.live_leg.report_thinking(thinking)
+    pub fn report_leg_state(&self, token: &str, thinking: &str) -> bool {
+        self.live_leg.report_thinking(token, thinking)
     }
     pub async fn shutdown(&mut self) {
         if let Some(session) = self.agent.take() {
@@ -611,6 +632,11 @@ impl Switchboard {
             .await;
         let prepared = self.run_prepare(&project).await;
         let session_id = uuid_like();
+        self.project = Some(project.clone());
+        self.route = project.id.clone();
+        self.live_leg.set_session(&self.route, &session_id);
+        self.model_spec = model.clone();
+        self.session_id = session_id.clone();
         let session = match self.start_agent(&project, &model, &session_id).await {
             Ok(s) => s,
             Err(e) => {
@@ -620,6 +646,7 @@ impl Switchboard {
                     error = %e,
                     "could not connect to the project"
                 );
+                self.drop_agent().await;
                 self.operator_note = Some(format!("Transfer to {} failed: {e}", project.id));
                 return self.reply_transfer_error(
                     handoff,
@@ -629,11 +656,6 @@ impl Switchboard {
             }
         };
         self.agent = Some(session);
-        self.project = Some(project.clone());
-        self.route = project.id.clone();
-        self.live_leg.set_route(&self.route);
-        self.model_spec = model;
-        self.session_id = session_id;
         // Publish a self-consistent PBX state before the await. A page rescue
         // can cancel this transfer at any suspension point; once `agent` is
         // owned here, the route must identify it so force_hangup will reap it.
@@ -693,7 +715,7 @@ impl Switchboard {
         session_id: &str,
     ) -> Result<PiSession, PiSessionError> {
         let mut env = self.env.clone();
-        let agent_env = self.agent_env();
+        let agent_env = self.agent_env(session_id);
         env.extend(agent_env.clone());
         let extension = if project.is_remote() {
             if project.stage_extension {
@@ -1064,8 +1086,14 @@ impl Switchboard {
         Some(staged)
     }
 
-    fn agent_env(&self) -> HashMap<String, String> {
-        let mut e = HashMap::from([(String::from("SWITCHBOARD_SESSION"), String::from("1"))]);
+    fn agent_env(&self, session_token: &str) -> HashMap<String, String> {
+        let mut e = HashMap::from([
+            (String::from("SWITCHBOARD_SESSION"), String::from("1")),
+            (
+                String::from("SWITCHBOARD_SESSION_TOKEN"),
+                session_token.to_owned(),
+            ),
+        ]);
         for (key, value) in [
             ("SWITCHBOARD_SPEAK_URL", &self.speak_url),
             ("SWITCHBOARD_STATE_URL", &self.state_url),
@@ -1078,6 +1106,22 @@ impl Switchboard {
         }
         e
     }
+    async fn load_catalog(&mut self, project: &Project) {
+        let key = format!(
+            "{}\0{}",
+            project.host.as_deref().unwrap_or(""),
+            project.runtime
+        );
+        if let std::collections::hash_map::Entry::Vacant(e) = self.catalogs.entry(key) {
+            let catalog = fetch_catalog(&crate::pi_client::list_models_argv(
+                &project.runtime,
+                project.host.as_deref().unwrap_or(""),
+            ))
+            .await;
+            e.insert(catalog);
+        }
+    }
+
     async fn resolve_model(
         &mut self,
         project: &Project,
@@ -1090,26 +1134,20 @@ impl Switchboard {
                 .as_deref()
                 .or(self.agent_model.as_deref())
                 .unwrap_or("")
+                .to_owned()
         } else {
-            model
+            model.to_owned()
         };
+        self.load_catalog(project).await;
         let key = format!(
             "{}\0{}",
             project.host.as_deref().unwrap_or(""),
             project.runtime
         );
-        if !self.catalogs.contains_key(&key) {
-            let catalog = fetch_catalog(&crate::pi_client::list_models_argv(
-                &project.runtime,
-                project.host.as_deref().unwrap_or(""),
-            ))
-            .await;
-            self.catalogs.insert(key.clone(), catalog);
-        }
         self.catalogs
             .get(&key)
             .ok_or_else(|| ModelError("the model catalog was unavailable".into()))?
-            .resolve(requested, thinking)
+            .resolve(&requested, thinking)
     }
 
     async fn select_transfer_model(
@@ -1126,9 +1164,11 @@ impl Switchboard {
                 .unwrap_or(""),
             &self.agent_thinking,
         );
-        if !self.model_swaps
-            || (requested_model.trim().is_empty() && requested_thinking.trim().is_empty())
-        {
+        if !self.model_swaps {
+            return (fallback, String::new());
+        }
+        if requested_model.trim().is_empty() {
+            self.load_catalog(project).await;
             return (fallback, String::new());
         }
 
@@ -1204,12 +1244,17 @@ impl Switchboard {
             "swapping the model on the live leg"
         );
         self.drop_agent().await;
+        self.project = Some(project.clone());
+        self.route = project.id.clone();
+        self.live_leg.set_session(&self.route, &session_id);
+        self.session_id = session_id.clone();
+        self.model_spec = spec.clone();
         match self.start_agent(&project, &spec, &session_id).await {
             Ok(session) => {
                 let project_name = project.id.clone();
                 self.agent = Some(session);
                 self.route = project.id.clone();
-                self.live_leg.set_route(&self.route);
+                self.live_leg.set_session(&self.route, &session_id);
                 self.project = Some(project);
                 self.session_id = session_id;
                 self.model_spec = spec.clone();
@@ -1277,6 +1322,7 @@ impl Switchboard {
             }
             Err(error) => {
                 tracing::error!(project = %project.id, %spec, %error, "could not restart the leg on the new model");
+                self.drop_agent().await;
                 let note = format!("{} could not be restarted on {}: {error}", project.id, spec);
                 self.operator_note = Some(note);
                 self.reply(
@@ -1604,6 +1650,14 @@ done
     }
 
     #[test]
+    fn leg_state_rejects_stale_session_tokens() {
+        let leg = LiveLegState::new();
+        leg.set_session("alpha", "new-session");
+        assert!(!leg.report_thinking("old-session", "high"));
+        assert!(leg.report_thinking("new-session", "high"));
+    }
+
+    #[test]
     fn status_exposes_project_ids() {
         let project = Project {
             id: "alpha".into(),
@@ -1655,6 +1709,8 @@ done
                     model: "current".into(),
                     thinks: true,
                 }],
+                available: true,
+                diagnostic: None,
             },
         );
         assert_eq!(
@@ -1686,15 +1742,16 @@ done
         assert!(note.is_empty());
 
         let mut enabled = board_with(vec![project.clone()], true);
-        let (model, note) = enabled
-            .select_transfer_model(&project, "other/requested", "")
-            .await;
-        assert_eq!(model, "other/requested:medium");
-        assert!(note.is_empty());
-
         let (model, note) = enabled.select_transfer_model(&project, "", "").await;
         assert_eq!(model, "anthropic/default:medium");
         assert!(note.is_empty());
+        assert!(enabled.catalogs.contains_key("\0definitely-missing-pi"));
+
+        let (model, note) = enabled
+            .select_transfer_model(&project, "other/requested", "")
+            .await;
+        assert_eq!(model, "anthropic/default:medium");
+        assert!(note.contains("verify models"));
     }
 
     #[tokio::test]
@@ -1757,6 +1814,8 @@ done
                     model: "current".into(),
                     thinks: true,
                 }],
+                available: true,
+                diagnostic: None,
             },
         );
 
@@ -1783,9 +1842,28 @@ done
             prepare: String::new(),
         };
         let mut board = board_with(vec![project.clone()], true);
-        board.project = Some(project);
+        board.project = Some(project.clone());
         board.route = "alpha".into();
         board.model_spec = "anthropic/current:high".into();
+        board.catalogs.insert(
+            format!("\0{}", project.runtime),
+            ModelCatalog {
+                entries: vec![
+                    crate::models::CatalogEntry {
+                        provider: "anthropic".into(),
+                        model: "current".into(),
+                        thinks: true,
+                    },
+                    crate::models::CatalogEntry {
+                        provider: "anthropic".into(),
+                        model: "next".into(),
+                        thinks: true,
+                    },
+                ],
+                available: true,
+                diagnostic: None,
+            },
+        );
 
         let reply = board.set_model("anthropic/next").await;
 
@@ -1828,9 +1906,12 @@ done
             String::new(),
             HashMap::new(),
         );
-        board.set_route_callback(Some(Arc::new(|_| {
+        let statuses = Arc::new(StdMutex::new(Vec::new()));
+        let statuses_for_callback = Arc::clone(&statuses);
+        board.set_route_callback(Some(Arc::new(move |status| {
+            let statuses = Arc::clone(&statuses_for_callback);
             Box::pin(async move {
-                panic!("browser disappeared");
+                statuses.lock().unwrap().push(status);
             })
         })));
 
@@ -1839,6 +1920,17 @@ done
         assert!(connected.text.contains("Connecting now."));
         assert!(connected.text.contains("Alpha is ready."));
         assert_eq!(board.route(), "alpha");
+        let first_project_status = statuses
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|status| status["route"] == "alpha")
+            .cloned()
+            .expect("project status should be announced");
+        assert_ne!(
+            first_project_status["models_diagnostic"],
+            "model catalog has not been loaded"
+        );
 
         let returned = board.handle("we are done").await;
         assert_eq!(returned.route, OPERATOR);

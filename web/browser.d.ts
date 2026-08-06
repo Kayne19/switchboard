@@ -23,6 +23,8 @@ interface BrowserMessage {
 	thinking_default?: string;
 	thinking_confirmed?: boolean;
 	model_swaps?: boolean;
+	models_available?: boolean;
+	models_diagnostic?: string;
 	projects?: string[];
 	levels?: string[];
 	models?: Array<{ provider: string; model: string; thinks: boolean }>;

@@ -28,12 +28,17 @@
  * the caller to are named in its system prompt instead.
  */
 
+// @ts-expect-error Pi supplies these modules on the project host, not in this app's npm tree.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+// @ts-expect-error Pi supplies these modules on the project host, not in this app's npm tree.
 import { Type } from "typebox";
+
+declare const process: { env: Record<string, string | undefined> };
 
 const SPEAK_URL = process.env.SWITCHBOARD_SPEAK_URL ?? "";
 const STATE_URL = process.env.SWITCHBOARD_STATE_URL ?? "";
 const DIAGRAM_URL = process.env.SWITCHBOARD_DIAGRAM_URL ?? "";
+const SESSION_TOKEN = process.env.SWITCHBOARD_SESSION_TOKEN ?? "";
 
 export default function agentSwitchboard(pi: ExtensionAPI) {
 	// The switchboard asks for a thinking level on the command line, but the
@@ -47,7 +52,10 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 			await fetch(STATE_URL, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ thinking: pi.getThinkingLevel() }),
+				body: JSON.stringify({
+					thinking: pi.getThinkingLevel(),
+					...(SESSION_TOKEN ? { token: SESSION_TOKEN } : {}),
+				}),
 				signal: AbortSignal.timeout(10_000),
 			});
 		} catch {
@@ -70,7 +78,8 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 			(process.env.SWITCHBOARD_PERSONA ?? ""),
 		parameters: Type.Object({
 			text: Type.String({
-				description: "What to say, written the way a person would say it out loud.",
+				description:
+					"What to say, written the way a person would say it out loud.",
 			}),
 		}),
 		async execute(_toolCallId, params) {
@@ -105,7 +114,10 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 						isError: true,
 					};
 				}
-				const data = (await resp.json()) as { delivered?: boolean; reason?: string };
+				const data = (await resp.json()) as {
+					delivered?: boolean;
+					reason?: string;
+				};
 				if (data.delivered === false) {
 					// Not an error — nobody has the page open. Worth telling the model so
 					// it stops narrating to an empty room.
@@ -122,7 +134,12 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 				return { content: [{ type: "text", text: "Spoken." }], details: {} };
 			} catch (err) {
 				return {
-					content: [{ type: "text", text: `Could not reach the switchboard to speak: ${err}` }],
+					content: [
+						{
+							type: "text",
+							text: `Could not reach the switchboard to speak: ${err}`,
+						},
+					],
 					details: {},
 					isError: true,
 				};
@@ -138,7 +155,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 			"`source` is Mermaid. Keep it readable: a dozen nodes is a diagram, forty is wallpaper. Labels are short phrases, not sentences.\n\n" +
 			"Draw top-down (`flowchart TD`) unless the shape genuinely reads better sideways — the panel is a tall column the caller scrolls and zooms, so left-to-right graphs come out squeezed.\n\n" +
 			"The page renders on a dark background with a neon palette already applied, so do not set a theme. Do colour individual nodes when colour carries meaning — `classDef hot fill:#2a0d1a,stroke:#ff2d78,color:#ffd9e6;` then `A:::hot` — and leave them alone when it does not.\n\n" +
-			"Images work. HTML labels are enabled, so `A[\"<img src='https://…' width='48'/><br/>label\"]` puts a picture in a node; any URL the caller's browser can reach is fine. Newer Mermaid image and icon shapes (`A@{ img: \"https://…\", label: \"…\" }`) also work where the renderer supports them.\n\n" +
+			'Images work. HTML labels are enabled, so `A["<img src=\'https://…\' width=\'48\'/><br/>label"]` puts a picture in a node; any URL the caller\'s browser can reach is fine. Newer Mermaid image and icon shapes (`A@{ img: "https://…", label: "…" }`) also work where the renderer supports them.\n\n' +
 			"Each call replaces the diagram on screen. There is no history, so do not send a diagram you still need visible.",
 		parameters: Type.Object({
 			source: Type.String({
@@ -147,7 +164,8 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 			}),
 			title: Type.Optional(
 				Type.String({
-					description: "A few words naming what this shows, displayed above the diagram.",
+					description:
+						"A few words naming what this shows, displayed above the diagram.",
 				}),
 			),
 			notes: Type.Optional(
@@ -184,13 +202,19 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 				if (!resp.ok) {
 					return {
 						content: [
-							{ type: "text", text: `The switchboard refused that diagram (HTTP ${resp.status}).` },
+							{
+								type: "text",
+								text: `The switchboard refused that diagram (HTTP ${resp.status}).`,
+							},
 						],
 						details: {},
 						isError: true,
 					};
 				}
-				const data = (await resp.json()) as { delivered?: boolean; reason?: string };
+				const data = (await resp.json()) as {
+					delivered?: boolean;
+					reason?: string;
+				};
 				if (data.delivered === false) {
 					// Not an error — nobody has the page open. The diagram is held and
 					// shown if they open one, so this is information, not a failure.
@@ -209,7 +233,12 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 				return { content: [{ type: "text", text: "On screen." }], details: {} };
 			} catch (err) {
 				return {
-					content: [{ type: "text", text: `Could not reach the switchboard to draw: ${err}` }],
+					content: [
+						{
+							type: "text",
+							text: `Could not reach the switchboard to draw: ${err}`,
+						},
+					],
 					details: {},
 					isError: true,
 				};
@@ -250,7 +279,8 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 			"Put the caller straight through to another project's agent, without going back through the operator. Call this when they ask to be sent somewhere else and name a project you were told exists \u2014 the connection happens the moment you call it, and the next voice they hear is that agent, so say nothing alongside this call. Pass what they want done as `intent`. If you are not sure the project exists, use `return_to_operator` instead.",
 		parameters: Type.Object({
 			project: Type.String({
-				description: "Which project to connect them to, by the id you were given.",
+				description:
+					"Which project to connect them to, by the id you were given.",
 			}),
 			intent: Type.Optional(
 				Type.String({
@@ -260,7 +290,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 			model: Type.Optional(
 				Type.String({
 					description:
-						"Only if the caller asked for a specific model over there. Provider first when you know it, e.g. \"anthropic/claude-sonnet-5\". Omit to use that project's usual model.",
+						'Only if the caller asked for a specific model over there. Provider first when you know it, e.g. "anthropic/claude-sonnet-5". Omit to use that project\'s usual model.',
 				}),
 			),
 			thinking: Type.Optional(
@@ -292,7 +322,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 			model: Type.Optional(
 				Type.String({
 					description:
-						"The model to run on, provider first when you know it, e.g. \"anthropic/claude-opus-5\". Omit when only the thinking level is changing.",
+						'The model to run on, provider first when you know it, e.g. "anthropic/claude-opus-5". Omit when only the thinking level is changing.',
 				}),
 			),
 			thinking: Type.Optional(

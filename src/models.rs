@@ -59,6 +59,17 @@ pub struct CatalogEntry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModelCatalog {
     pub entries: Vec<CatalogEntry>,
+    pub available: bool,
+    pub diagnostic: Option<String>,
+}
+impl ModelCatalog {
+    fn unavailable(diagnostic: impl Into<String>) -> Self {
+        Self {
+            entries: Vec::new(),
+            available: false,
+            diagnostic: Some(diagnostic.into()),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -181,21 +192,31 @@ pub fn pin_thinking(spec: &str, level: &str) -> String {
 
 impl ModelCatalog {
     pub fn parse(table: &str) -> Self {
-        let entries = table
-            .lines()
-            .filter_map(|line| {
-                let fields = line.split_whitespace().collect::<Vec<_>>();
-                if fields.len() < 5 || fields[0] == "provider" {
-                    return None;
-                }
-                Some(CatalogEntry {
-                    provider: fields[0].into(),
-                    model: fields[1].into(),
-                    thinks: fields[4] == "yes",
-                })
-            })
-            .collect();
-        Self { entries }
+        let mut lines = table.lines().filter(|line| !line.trim().is_empty());
+        let Some(header) = lines.next() else {
+            return Self::unavailable("model listing was empty");
+        };
+        let header = header.split_whitespace().collect::<Vec<_>>();
+        if header.len() < 5 || header[0] != "provider" || header[1] != "model" {
+            return Self::unavailable("model listing had an invalid header");
+        }
+        let mut entries = Vec::new();
+        for line in lines {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            if fields.len() < 5 {
+                return Self::unavailable("model listing had a malformed row");
+            }
+            entries.push(CatalogEntry {
+                provider: fields[0].into(),
+                model: fields[1].into(),
+                thinks: fields[4] == "yes",
+            });
+        }
+        Self {
+            entries,
+            available: true,
+            diagnostic: None,
+        }
     }
 
     pub fn resolve(&self, model: &str, thinking: &str) -> Result<ModelChoice, ModelError> {
@@ -208,18 +229,13 @@ impl ModelCatalog {
         if wanted_model.is_empty() {
             return Err(ModelError("no model was named".into()));
         }
-        if self.entries.is_empty() {
-            if wanted_provider.is_empty() {
-                return Err(ModelError(format!(
-                    "I can't check which provider serves {}. Say it as provider slash model.",
-                    wanted_model
-                )));
-            }
-            return Ok(ModelChoice {
-                provider: wanted_provider,
-                model: wanted_model,
-                thinking: level,
-            });
+        if !self.available {
+            return Err(ModelError(format!(
+                "I can't verify models right now: {}",
+                self.diagnostic
+                    .as_deref()
+                    .unwrap_or("the model catalog is unavailable")
+            )));
         }
         let key = normalize(&wanted_model);
         let pool = self
@@ -310,9 +326,7 @@ pub async fn fetch_catalog(argv: &[String]) -> ModelCatalog {
         Ok(child) => child,
         Err(error) => {
             tracing::warn!(command = %listing, %error, "could not list models");
-            return ModelCatalog {
-                entries: Vec::new(),
-            };
+            return ModelCatalog::unavailable(format!("could not run model listing: {error}"));
         }
     };
     let process_guard = crate::pi_client::ProcessTreeGuard::new(&child);
@@ -350,9 +364,7 @@ pub async fn fetch_catalog(argv: &[String]) -> ModelCatalog {
             if let Some(task) = stderr_task {
                 task.abort();
             }
-            return ModelCatalog {
-                entries: Vec::new(),
-            };
+            return ModelCatalog::unavailable("model listing failed or timed out");
         }
     };
     let stdout = match stdout_task {
@@ -363,11 +375,13 @@ pub async fn fetch_catalog(argv: &[String]) -> ModelCatalog {
         let _ = task.await;
     }
     if !status.success() || stdout.truncated {
-        return ModelCatalog {
-            entries: Vec::new(),
-        };
+        return ModelCatalog::unavailable("model listing failed or exceeded its output limit");
     }
-    ModelCatalog::parse(&String::from_utf8_lossy(&stdout.bytes))
+    let table = match String::from_utf8(stdout.bytes) {
+        Ok(table) => table,
+        Err(_) => return ModelCatalog::unavailable("model listing was not valid UTF-8"),
+    };
+    ModelCatalog::parse(&table)
 }
 
 #[cfg(test)]
@@ -382,6 +396,27 @@ mod tests {
         );
         assert_eq!(parse_spec("  "), ("".into(), "".into(), "".into()));
     }
+    #[test]
+    fn catalog_exposes_provider_models_with_decimal_and_short_names() {
+        let catalog = ModelCatalog::parse(
+            "provider model context max-out thinking images\nopenai gpt-5.6 1M 128K yes yes\nmoonshot luna 1M 128K yes yes\nopenai sol 1M 128K no no\n",
+        );
+        assert_eq!(catalog.entries.len(), 3);
+        assert_eq!(
+            catalog.resolve("GPT 5.6", "").unwrap().spec(),
+            "openai/gpt-5.6"
+        );
+        assert_eq!(
+            catalog.resolve("moonshot/luna", "high").unwrap().spec(),
+            "moonshot/luna:high"
+        );
+        assert_eq!(
+            catalog.resolve("openai/sol", "").unwrap().spec(),
+            "openai/sol"
+        );
+        assert!(catalog.resolve("openai/sol", "high").is_err());
+    }
+
     #[test]
     fn resolves_digits_and_rejects_ambiguity() {
         let catalog = ModelCatalog::parse(TABLE);
@@ -423,13 +458,33 @@ mod tests {
         );
     }
     #[test]
-    fn empty_catalog_only_accepts_qualified_models() {
-        let catalog = ModelCatalog { entries: vec![] };
+    fn valid_empty_catalog_rejects_unlisted_models() {
+        let catalog = ModelCatalog {
+            entries: vec![],
+            available: true,
+            diagnostic: None,
+        };
         assert!(catalog.resolve("opus five", "").is_err());
-        assert_eq!(
-            catalog.resolve("anthropic/opus", "high").unwrap().spec(),
-            "anthropic/opus:high"
-        );
+        assert!(catalog.resolve("anthropic/opus", "high").is_err());
+    }
+
+    #[test]
+    fn malformed_catalog_is_unavailable() {
+        let catalog = ModelCatalog::parse("provider model\nanthropic");
+        assert!(!catalog.available);
+        assert!(catalog.diagnostic.is_some());
+    }
+
+    #[test]
+    fn unavailable_catalog_reports_diagnostic_and_rejects_explicit_model() {
+        let catalog = ModelCatalog::unavailable("ssh failed");
+        assert!(!catalog.available);
+        assert_eq!(catalog.diagnostic.as_deref(), Some("ssh failed"));
+        assert!(catalog
+            .resolve("anthropic/opus", "")
+            .unwrap_err()
+            .to_string()
+            .contains("ssh failed"));
     }
 
     #[tokio::test]
@@ -442,5 +497,7 @@ mod tests {
         let failed =
             fetch_catalog(&["sh".into(), "-c".into(), "printf broken >&2; exit 9".into()]).await;
         assert!(failed.entries.is_empty());
+        assert!(!failed.available);
+        assert!(failed.diagnostic.is_some());
     }
 }
