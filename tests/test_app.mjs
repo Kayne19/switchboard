@@ -22,25 +22,69 @@ function eventsNode() {
 	return {
 		listeners,
 		addEventListener(name, handler) {
-			listeners.set(name, handler);
+			if (!listeners.has(name)) listeners.set(name, new Set());
+			listeners.get(name).add(handler);
+		},
+		removeEventListener(name, handler) {
+			listeners.get(name)?.delete(handler);
+		},
+		emit(name) {
+			for (const handler of [...(listeners.get(name) || [])]) handler();
 		},
 		classList: { toggle() {}, add() {}, remove() {} },
 	};
 }
 
 async function audioPlaybackRegressions() {
-	const start = source.indexOf("function playNext()");
+	const start = source.indexOf("function cleanupOwner(");
 	const end = source.indexOf("// Rebuilt only when the set of options", start);
 	assert.ok(start >= 0 && end > start, "audio playback section is present");
 
 	const player = eventsNode();
 	player.playCalls = [];
+	player.playPromises = [];
+	player.paused = false;
+	player.ended = false;
+	player.duration = 10;
+	player.currentTime = 1;
+	player.error = null;
+	player.pauseCalls = 0;
+	player.loadCalls = 0;
+	player.activeSources = new Set();
+	let currentSource = "";
+	Object.defineProperty(player, "src", {
+		configurable: true,
+		get: () => currentSource,
+		set: (value) => {
+			currentSource = value;
+			if (value) player.ended = false;
+		},
+	});
 	player.play = () => {
 		player.playCalls.push(player.src);
-		return Promise.resolve();
+		player.activeSources.add(player.src);
+		let resolve;
+		let reject;
+		const promise = new Promise((res, rej) => {
+			resolve = res;
+			reject = rej;
+		});
+		player.playPromises.push({ resolve, reject });
+		return promise;
 	};
-	player.ended = false;
+	player.pause = () => {
+		player.pauseCalls += 1;
+		player.paused = true;
+		if (player.src) player.activeSources.delete(player.src);
+	};
+	player.removeAttribute = (name) => {
+		if (name === "src") player.src = "";
+	};
+	player.load = () => {
+		player.loadCalls += 1;
+	};
 	const urls = new Map();
+	const revoked = [];
 	const previousUrl = globalThis.URL;
 	const previousDocument = globalThis.document;
 	let clickHandler;
@@ -55,7 +99,9 @@ async function audioPlaybackRegressions() {
 			urls.set(url, blob);
 			return url;
 		},
-		revokeObjectURL() {},
+		revokeObjectURL(url) {
+			revoked.push(url);
+		},
 	};
 	try {
 		globalThis.__player = player;
@@ -63,10 +109,9 @@ async function audioPlaybackRegressions() {
 			compile(
 				`const audioQueue = [];
 let isPlaying = false;
-let playPending = false;
-let playbackGeneration = 0;
-let currentUrl = null;
-let currentBlob = null;
+let playbackOwner = null;
+let playbackToken = 0;
+let playAttemptToken = 0;
 const idleText = "idle";
 const statusEl = { textContent: "", classList: { add() {}, remove() {} } };
 function errorName(error) { return error instanceof Error ? error.name : "unknown error"; }
@@ -81,39 +126,254 @@ export { audioQueue, player, playNext };`,
 		);
 		const first = new Blob(["first"]);
 		const second = new Blob(["second"]);
-		loaded.audioQueue.push(first, second);
+		const third = new Blob(["third"]);
+		loaded.audioQueue.push(first, second, third);
 		loaded.playNext();
-		await Promise.resolve();
+		const staleFirstHandlers = new Map(
+			[...player.listeners].map(([name, handlers]) => [name, [...handlers]]),
+		);
 		assert.equal(urls.get(player.src), first);
 		assert.equal(player.playCalls.length, 1);
-
-		// Browsers can report pause immediately before ended when the caller
-		// drags to the end. That pair must advance once, not requeue the clip and
-		// replay it as the next item.
-		player.ended = false;
-		player.listeners.get("pause")();
-		clickHandler();
+		assert.equal(player.activeSources.size, 1, "one clip owns playback");
+		player.playPromises[0].resolve();
 		await Promise.resolve();
-		assert.equal(
-			player.playCalls.length,
-			2,
-			"a page click resumes a paused clip",
+
+		// A pause retains A and queued B. Repeated clicks while play() is
+		// unresolved must not issue duplicate resume attempts.
+		player.paused = true;
+		player.emit("pause");
+		assert.equal(loaded.audioQueue.length, 2);
+		clickHandler();
+		clickHandler();
+		assert.equal(player.playCalls.length, 2);
+		player.paused = false;
+		player.playPromises[1].resolve();
+		await Promise.resolve();
+
+		// Both event orders and duplicate events consume exactly once.
+		player.paused = true;
+		player.emit("pause");
+		player.ended = true;
+		player.emit("ended");
+		player.emit("ended");
+		await Promise.resolve();
+		assert.equal(urls.get(player.src), second);
+		assert.equal(loaded.audioQueue.length, 1);
+		assert.equal(player.pauseCalls, 1);
+		assert.equal(player.loadCalls, 1);
+		assert.equal(player.activeSources.size, 1, "A is not audible beside B");
+		assert.deepEqual(revoked, ["blob:0"]);
+
+		player.playPromises[2].resolve();
+		await Promise.resolve();
+		const staleSecondHandlers = new Map(
+			[...player.listeners].map(([name, handlers]) => [name, [...handlers]]),
 		);
 		player.ended = true;
-		player.listeners.get("ended")();
+		const playsBeforeNaturalEnd = player.playCalls.length;
+		player.emit("ended");
+		player.emit("ended");
+		player.emit("pause");
+		assert.equal(urls.get(player.src), third);
+		assert.equal(player.playCalls.length, playsBeforeNaturalEnd + 1);
+		assert.equal(player.activeSources.size, 1, "natural end leaves one owner");
+		assert.equal(loaded.audioQueue.length, 0);
+		player.playPromises[3].resolve();
 		await Promise.resolve();
-		assert.equal(urls.get(player.src), second);
-		assert.deepEqual(
-			player.playCalls.map((url) => urls.get(url)),
-			[first, first, second],
-		);
+
+		// Retained A/B callbacks cannot mutate the newer owner.
+		for (const handler of staleFirstHandlers.get("pause")) handler();
+		for (const handler of staleFirstHandlers.get("ended")) handler();
+		for (const handler of staleSecondHandlers.get("pause")) handler();
+		assert.equal(urls.get(player.src), third);
 		assert.equal(loaded.audioQueue.length, 0);
 
-		// A stale pause after ended must not alter the new clip or enqueue the
-		// already-finished one.
-		player.listeners.get("pause")();
-		assert.equal(urls.get(player.src), second);
+		// A reverse seek resets the guard, and NaN duration must never become
+		// terminal by accident.
+		player.ended = false;
+		player.paused = true;
+		player.currentTime = player.duration;
+		player.emit("seeking");
+		player.emit("pause");
+		clickHandler();
+		assert.equal(player.playCalls.length, 4);
+		player.currentTime = 2;
+		player.emit("seeking");
+		clickHandler();
+		assert.equal(player.playCalls.length, 5);
+		player.playPromises[4].resolve();
+		await Promise.resolve();
+
+		// Error duplicates consume once.
+		player.error = new Error("decode");
+		player.emit("error");
+		player.emit("error");
 		assert.equal(loaded.audioQueue.length, 0);
+
+		// Rejecting A after ownership has moved to B cannot requeue A. A fresh
+		// rejection while still owner does requeue exactly once.
+		player.error = null;
+		const fourth = new Blob(["fourth"]);
+		const fifth = new Blob(["fifth"]);
+		loaded.audioQueue.push(fourth, fifth);
+		loaded.playNext();
+		const staleReject = player.playPromises[5].reject;
+		loaded.playNext();
+		assert.equal(urls.get(player.src), fifth);
+		staleReject(new Error("autoplay"));
+		await Promise.resolve();
+		assert.equal(loaded.audioQueue.length, 0);
+		player.playPromises[6].resolve();
+		await Promise.resolve();
+		player.ended = true;
+		player.emit("ended");
+		const sixth = new Blob(["sixth"]);
+		loaded.audioQueue.push(sixth);
+		loaded.playNext();
+		player.playPromises[7].reject(new Error("blocked"));
+		await Promise.resolve();
+		assert.equal(loaded.audioQueue.length, 1);
+		clickHandler();
+		clickHandler();
+		assert.equal(player.playCalls.length, 9);
+		player.playPromises[8].resolve();
+		await Promise.resolve();
+		player.ended = true;
+		player.emit("ended");
+		assert.deepEqual(revoked, [
+			"blob:0",
+			"blob:1",
+			"blob:2",
+			"blob:3",
+			"blob:4",
+			"blob:5",
+			"blob:6",
+		]);
+
+		// A terminal seek consumes once in either event order and never starts
+		// the current clip again. The source tracker also proves replacement
+		// pauses A before B becomes audible.
+		const seekFirst = new Blob(["seek-first"]);
+		const seekSecond = new Blob(["seek-second"]);
+		const seekThird = new Blob(["seek-third"]);
+		loaded.audioQueue.push(seekFirst, seekSecond, seekThird);
+		loaded.playNext();
+		const seekFirstUrl = player.src;
+		assert.equal(player.activeSources.size, 1);
+		player.playPromises[9].resolve();
+		await Promise.resolve();
+		player.paused = true;
+		player.currentTime = player.duration;
+		player.ended = false;
+		player.emit("seeking");
+		player.emit("pause");
+		const playsBeforeTerminalEnd = player.playCalls.length;
+		clickHandler();
+		assert.equal(
+			player.playCalls.length,
+			playsBeforeTerminalEnd,
+			"terminal pause is not resumed",
+		);
+		player.ended = true;
+		player.emit("ended");
+		player.emit("ended");
+		assert.equal(urls.get(player.src), seekSecond);
+		assert.equal(player.playCalls.length, playsBeforeTerminalEnd + 1);
+		assert.equal(player.activeSources.has(seekFirstUrl), false);
+		assert.equal(player.activeSources.size, 1);
+
+		player.playPromises[10].resolve();
+		await Promise.resolve();
+		const staleSeekPause = [...(player.listeners.get("pause") || [])];
+		player.currentTime = player.duration;
+		player.ended = true;
+		player.emit("ended");
+		for (const handler of staleSeekPause) handler();
+		assert.equal(urls.get(player.src), seekThird);
+		assert.equal(player.playCalls.length, playsBeforeTerminalEnd + 2);
+		assert.equal(player.activeSources.size, 1);
+		player.playPromises[11].resolve();
+		await Promise.resolve();
+		player.ended = true;
+		player.emit("ended");
+		player.emit("ended");
+		assert.equal(player.activeSources.size, 0);
+		assert.deepEqual(revoked, [
+			"blob:0",
+			"blob:1",
+			"blob:2",
+			"blob:3",
+			"blob:4",
+			"blob:5",
+			"blob:6",
+			"blob:7",
+			"blob:8",
+			"blob:9",
+		]);
+
+		// Terminal seek events must consume even while play() is pending, in
+		// either event order. A pause at duration without a seek remains resumable.
+		const raceFirst = new Blob(["race-first"]);
+		const raceSecond = new Blob(["race-second"]);
+		const raceThird = new Blob(["race-third"]);
+		loaded.audioQueue.push(raceFirst, raceSecond, raceThird);
+		loaded.playNext();
+		player.paused = true;
+		player.currentTime = player.duration;
+		player.ended = false;
+		player.emit("seeking");
+		player.emit("pause");
+		const raceFirstUrl = player.src;
+		player.ended = true;
+		player.emit("ended");
+		assert.equal(urls.get(player.src), raceSecond);
+		assert.equal(player.activeSources.has(raceFirstUrl), false);
+
+		const raceSecondHandlers = new Map(
+			[...player.listeners].map(([name, handlers]) => [name, [...handlers]]),
+		);
+		player.ended = true;
+		for (const handler of raceSecondHandlers.get("ended")) handler();
+		for (const handler of raceSecondHandlers.get("pause")) handler();
+		assert.equal(urls.get(player.src), raceThird);
+
+		player.playPromises[12].resolve();
+		player.playPromises[13].resolve();
+		await Promise.resolve();
+		player.playPromises[14].resolve();
+		await Promise.resolve();
+		player.paused = true;
+		player.ended = false;
+		player.currentTime = player.duration;
+		player.emit("pause");
+		const playsBeforeNativeClick = player.playCalls.length;
+		clickHandler({ target: player });
+		assert.equal(
+			player.playCalls.length,
+			playsBeforeNativeClick,
+			"native player controls do not resume audio",
+		);
+		clickHandler({ target: null });
+		assert.equal(player.playCalls.length, playsBeforeNativeClick + 1);
+		player.playPromises[15].resolve();
+		await Promise.resolve();
+		player.ended = true;
+		player.emit("ended");
+		assert.deepEqual(revoked, [
+			"blob:0",
+			"blob:1",
+			"blob:2",
+			"blob:3",
+			"blob:4",
+			"blob:5",
+			"blob:6",
+			"blob:7",
+			"blob:8",
+			"blob:9",
+			"blob:10",
+			"blob:11",
+			"blob:12",
+		]);
 	} finally {
 		globalThis.URL = previousUrl;
 		if (previousDocument === undefined) delete globalThis.document;

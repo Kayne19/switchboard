@@ -44,8 +44,6 @@ let mediaRecorder = null;
 let activeRecording = null;
 const audioQueue = [];
 let isPlaying = false;
-let playPending = false;
-let playbackGeneration = 0;
 let pendingAudioGeneration = null;
 let audioEpoch = 0;
 const idleText = "Connected. Tap Talk and speak.";
@@ -73,10 +71,9 @@ let reconnectTimer = null;
 let heartbeatTimer = null;
 let pongDeadlineTimer = null;
 let pendingPong = null;
-// The object URL currently loaded into the player, revoked when it is
-// replaced. Every reply used to leak one for the life of the tab.
-let currentUrl = null;
-let currentBlob = null;
+let playbackOwner = null;
+let playbackToken = 0;
+let playAttemptToken = 0;
 let turnStarted = 0;
 let clockTimer = null;
 const activityEl = getElement("activity");
@@ -311,92 +308,167 @@ function renderHistory(entries = []) {
     });
     logEl.scrollTop = logEl.scrollHeight;
 }
-function playNext() {
-    const generation = ++playbackGeneration;
-    if (currentUrl) {
-        URL.revokeObjectURL(currentUrl);
-        currentUrl = null;
+function cleanupOwner(owner) {
+    if (playbackOwner === owner)
+        playbackOwner = null;
+    owner.pendingAttempt = null;
+    for (const [name, handler] of owner.handlers) {
+        player.removeEventListener(name, handler);
     }
-    const blob = currentBlob || audioQueue.shift();
+    owner.handlers = [];
+    player.pause();
+    player.removeAttribute("src");
+    player.load();
+    URL.revokeObjectURL(owner.url);
+    isPlaying = false;
+}
+function consumeOwner(owner) {
+    if (playbackOwner !== owner || owner.consumed)
+        return;
+    owner.consumed = true;
+    cleanupOwner(owner);
+    playNext();
+}
+function playFailed(owner, attempt, error) {
+    if (playbackOwner !== owner ||
+        owner.consumed ||
+        owner.pendingAttempt !== attempt ||
+        owner.requeued)
+        return;
+    owner.pendingAttempt = null;
+    owner.requeued = true;
+    cleanupOwner(owner);
+    // Autoplay rejection is recoverable: keep this clip at the front so the
+    // next user gesture retries it instead of silently losing it.
+    audioQueue.unshift(owner.blob);
+    statusEl.textContent =
+        "Audio blocked by the browser — click anywhere on this page once, then it will play (" +
+            errorName(error) +
+            ").";
+    statusEl.classList.add("error");
+}
+function attemptPlay(owner) {
+    if (playbackOwner !== owner ||
+        owner.consumed ||
+        owner.pendingAttempt !== null)
+        return;
+    owner.paused = false;
+    owner.seeked = false;
+    isPlaying = true;
+    const attempt = ++playAttemptToken;
+    owner.pendingAttempt = attempt;
+    let result;
+    try {
+        result = player.play();
+    }
+    catch (error) {
+        playFailed(owner, attempt, error);
+        return;
+    }
+    Promise.resolve(result).then(() => {
+        if (playbackOwner !== owner ||
+            owner.consumed ||
+            owner.pendingAttempt !== attempt)
+            return;
+        owner.pendingAttempt = null;
+        isPlaying = !owner.paused;
+    }, (error) => playFailed(owner, attempt, error));
+}
+function terminalSeek() {
+    return (Number.isFinite(player.duration) &&
+        player.duration > 0 &&
+        Number.isFinite(player.currentTime) &&
+        player.currentTime >= player.duration);
+}
+function playNext() {
+    if (playbackOwner)
+        cleanupOwner(playbackOwner);
+    const blob = audioQueue.shift();
     if (!blob) {
-        currentBlob = null;
         isPlaying = false;
         statusEl.textContent = idleText;
         statusEl.classList.remove("error");
         return;
     }
-    isPlaying = true;
-    currentBlob = blob;
-    currentUrl = URL.createObjectURL(blob);
-    playPending = true;
-    player.src = currentUrl;
-    player.play().then(() => {
-        if (generation !== playbackGeneration || currentBlob !== blob)
+    const owner = {
+        blob,
+        url: URL.createObjectURL(blob),
+        token: ++playbackToken,
+        consumed: false,
+        requeued: false,
+        paused: false,
+        seeked: false,
+        awaitingEnded: false,
+        pendingAttempt: null,
+        handlers: [],
+    };
+    playbackOwner = owner;
+    const ended = () => {
+        if (playbackOwner !== owner || owner.consumed || player.ended === false)
             return;
-        playPending = false;
-    }, (err) => {
-        if (generation !== playbackGeneration || currentBlob !== blob)
+        consumeOwner(owner);
+    };
+    const pause = () => {
+        if (playbackOwner !== owner ||
+            owner.consumed ||
+            player.ended ||
+            player.paused === false)
             return;
-        playPending = false;
-        currentBlob = null;
-        // Autoplay rejection is recoverable: keep this clip at the front so
-        // the next user gesture retries it instead of silently losing it.
-        audioQueue.unshift(blob);
-        statusEl.textContent =
-            "Audio blocked by the browser — click anywhere on this page once, then it will play (" +
-                errorName(err) +
-                ").";
-        statusEl.classList.add("error");
+        owner.paused = true;
+        owner.awaitingEnded = owner.seeked && terminalSeek();
         isPlaying = false;
-    });
+        statusEl.textContent = owner.awaitingEnded
+            ? "Audio finishing — click anywhere on this page to continue."
+            : "Audio paused — click anywhere on this page to resume.";
+    };
+    const error = () => {
+        if (playbackOwner !== owner || owner.consumed || !player.error)
+            return;
+        consumeOwner(owner);
+    };
+    const resetTerminal = () => {
+        if (playbackOwner === owner &&
+            (!Number.isFinite(player.duration) ||
+                !Number.isFinite(player.currentTime) ||
+                player.currentTime < player.duration)) {
+            owner.awaitingEnded = false;
+            owner.seeked = false;
+        }
+    };
+    owner.handlers = [
+        ["ended", ended],
+        ["pause", pause],
+        ["error", error],
+        [
+            "seeking",
+            () => {
+                owner.seeked = true;
+                resetTerminal();
+            },
+        ],
+        ["seeked", resetTerminal],
+        ["timeupdate", resetTerminal],
+    ];
+    for (const [name, handler] of owner.handlers) {
+        player.addEventListener(name, handler);
+    }
+    player.src = owner.url;
+    attemptPlay(owner);
 }
-player.addEventListener("ended", () => {
-    if (playPending || !currentBlob || player.ended === false)
-        return;
-    // Browsers can emit pause immediately before ended when playback is
-    // skipped to the end. The current clip stays separate from the queue until
-    // ended confirms that it is finished, so this advances exactly once.
-    currentBlob = null;
-    playNext();
-});
-// A pause from the exposed controls otherwise leaves isPlaying true forever.
-// Keep the current clip in place: a later click resumes it, while a following
-// ended event clears it and advances without replaying it from the queue.
-player.addEventListener("pause", () => {
-    if (!isPlaying || playPending || player.ended || player.paused === false)
-        return;
-    isPlaying = false;
-    statusEl.textContent =
-        "Audio paused — click anywhere on this page to resume.";
-});
-// `ended` used to be the only thing that advanced the queue, so a single
-// clip that failed to decode — or the caller pressing pause on the
-// exposed controls — wedged playback permanently at "Queued (N waiting)".
-player.addEventListener("error", () => {
-    if (!isPlaying || playPending || !currentBlob || !player.error)
-        return;
-    currentBlob = null;
-    playNext();
-});
 // The status message promises that a page interaction resumes blocked audio.
 // Keep that gesture path here rather than relying on a later clip to arrive.
-document.addEventListener("click", () => {
-    if (isPlaying || !currentBlob) {
-        if (!isPlaying && audioQueue.length)
+document.addEventListener("click", (event) => {
+    if (event?.target === player)
+        return;
+    const owner = playbackOwner;
+    if (!owner) {
+        if (audioQueue.length)
             playNext();
         return;
     }
-    const generation = playbackGeneration;
-    playPending = true;
-    player.play().then(() => {
-        if (generation === playbackGeneration && currentBlob) {
-            playPending = false;
-            isPlaying = true;
-        }
-    }, () => {
-        if (generation === playbackGeneration && currentBlob)
-            playPending = false;
-    });
+    if (isPlaying || owner.awaitingEnded || owner.pendingAttempt !== null)
+        return;
+    attemptPlay(owner);
 });
 // Rebuilt only when the set of options actually changes, so a select the
 // caller has open does not collapse under them on a routine status update.
@@ -687,16 +759,9 @@ function connect() {
                     audioEpoch = msg.generation;
                     audioQueue.length = 0;
                     pendingAudioGeneration = null;
-                    playbackGeneration++;
-                    player.pause();
-                    currentBlob = null;
+                    if (playbackOwner)
+                        cleanupOwner(playbackOwner);
                     isPlaying = false;
-                    playPending = false;
-                    if (currentUrl)
-                        URL.revokeObjectURL(currentUrl);
-                    currentUrl = null;
-                    player.removeAttribute("src");
-                    player.load();
                 }
             }
             else if (msg.type === "audio") {
@@ -809,7 +874,7 @@ function connect() {
             }
             audioQueue.push(new Blob([event.data], { type: "audio/mpeg" }));
             pendingAudioGeneration = null;
-            if (!isPlaying && !currentBlob) {
+            if (!isPlaying && !playbackOwner) {
                 statusEl.textContent = "Playing speech...";
                 playNext();
             }
