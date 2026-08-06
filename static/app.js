@@ -513,7 +513,9 @@ async function post(url, body, control) {
                 applyPickerDisabled();
         }
     };
-    const run = pickerOperation ? pickerOperation.then(execute, execute) : execute();
+    const run = pickerOperation
+        ? pickerOperation.then(execute, execute)
+        : execute();
     pickerOperation = run;
     run.then(() => {
         if (pickerOperation === run)

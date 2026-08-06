@@ -588,7 +588,9 @@ async function post(
 			if (typeof document !== "undefined") applyPickerDisabled();
 		}
 	};
-	const run = pickerOperation ? pickerOperation.then(execute, execute) : execute();
+	const run = pickerOperation
+		? pickerOperation.then(execute, execute)
+		: execute();
 	pickerOperation = run;
 	run.then(
 		() => {
