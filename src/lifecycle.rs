@@ -544,6 +544,9 @@ impl Coordinator {
         thinking: &str,
     ) -> Result<(), LifecycleError> {
         self.linearize(|state| {
+            if !crate::models::THINKING_LEVELS.contains(&thinking) {
+                return Err(LifecycleError::WrongPhase);
+            }
             let candidate = state
                 .candidate
                 .as_mut()
@@ -552,9 +555,6 @@ impl Coordinator {
                 return Err(LifecycleError::CandidateTokenMismatch);
             }
             if !matches!(state.phase, Phase::Starting | Phase::Intro) {
-                return Err(LifecycleError::WrongPhase);
-            }
-            if !crate::models::THINKING_LEVELS.contains(&thinking) {
                 return Err(LifecycleError::WrongPhase);
             }
             candidate.startup_thinking = thinking.to_owned();
@@ -599,8 +599,13 @@ impl Coordinator {
             state.leg = identity.clone();
             state.phase = Phase::Active;
             state.model = candidate.model;
-            state.thinking_requested = candidate.thinking;
-            state.thinking_effective = candidate.startup_thinking;
+            state.thinking_requested = candidate.thinking.clone();
+            state.thinking_effective =
+                if crate::models::THINKING_LEVELS.contains(&candidate.startup_thinking.as_str()) {
+                    candidate.startup_thinking
+                } else {
+                    candidate.thinking
+                };
             state.operation = None;
             state.terminal_reason = None;
             state.catalog = candidate.catalog.map(|catalog| CatalogPublication {
@@ -735,6 +740,20 @@ mod tests {
             .begin_prompt(&coordinator.current_identity())
             .unwrap();
         assert_eq!(operation.leg.generation, old.generation + 1);
+    }
+
+    #[test]
+    fn invalid_startup_thinking_is_rejected() {
+        let coordinator = coordinator();
+        let candidate =
+            CandidateLeg::new("alpha", "alpha", "session", "candidate", "model", "medium");
+        coordinator.begin_candidate(candidate).unwrap();
+        assert_eq!(
+            coordinator.accept_startup_thinking("candidate", "invalid_level"),
+            Err(LifecycleError::WrongPhase)
+        );
+        coordinator.adopt_candidate().unwrap();
+        assert_eq!(coordinator.status_json()["thinking"], "medium");
     }
 
     #[test]

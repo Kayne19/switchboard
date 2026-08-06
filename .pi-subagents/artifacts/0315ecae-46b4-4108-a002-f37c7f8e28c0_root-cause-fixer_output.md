@@ -1,9 +1,3 @@
-# Handoff Output: fix_impl
-Status: success
-Verdict: (none)
-Timestamp: 1786014336
-
-## Content
 # Root Cause Fix Implementation Report
 
 ## Summary of Fixes

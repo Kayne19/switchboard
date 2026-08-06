@@ -333,10 +333,11 @@ pub async fn fetch_catalog(argv: &[String]) -> ModelCatalog {
     // asked for was refused" and "listing models never worked on that host"
     // look identical from outside.
     let program = argv.first().map(String::as_str).unwrap_or("<missing>");
+    let argc = argv.len();
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
-            tracing::warn!(%program, %error, "could not list models");
+            tracing::warn!(%program, argc, %error, "could not list models");
             return ModelCatalog::unavailable(format!("could not run model listing: {error}"));
         }
     };
@@ -359,10 +360,11 @@ pub async fn fetch_catalog(argv: &[String]) -> ModelCatalog {
         outcome => {
             match outcome {
                 Ok(Err(error)) => {
-                    tracing::warn!(%program, %error, "listing models failed")
+                    tracing::warn!(%program, argc, %error, "listing models failed")
                 }
                 _ => tracing::warn!(
                     %program,
+                    argc,
                     timeout = ?LIST_TIMEOUT,
                     "listing models timed out"
                 ),

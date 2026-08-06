@@ -265,11 +265,17 @@ impl Switchboard {
         persona: String,
         env: HashMap<String, String>,
     ) -> Self {
-        let speech_deadline_ms = env
-            .get("SWITCHBOARD_SPEECH_DEADLINE_MS")
-            .and_then(|value| value.trim().parse::<u64>().ok())
-            .filter(|value| (1..=120_000).contains(value))
-            .unwrap_or(25_000);
+        let speech_deadline_ms = match env.get("SWITCHBOARD_SPEECH_DEADLINE_MS") {
+            None => 25_000,
+            Some(raw) => raw
+                .trim()
+                .parse::<u64>()
+                .ok()
+                .filter(|value| (1..=120_000).contains(value))
+                .unwrap_or_else(|| {
+                    panic!("SWITCHBOARD_SPEECH_DEADLINE_MS must be a positive integer from 1 to 120000 ms")
+                }),
+        };
         Self {
             registry,
             pi_binary,
@@ -740,8 +746,11 @@ impl Switchboard {
                     "could not connect to the project"
                 );
                 if project.is_remote() {
-                    self.rollback_staged_extension(project.host.as_deref().unwrap_or_default())
-                        .await;
+                    self.rollback_staged_extension(
+                        project.host.as_deref().unwrap_or_default(),
+                        &leg_token,
+                    )
+                    .await;
                 }
                 if let Some(coordinator) = &self.coordinator {
                     coordinator.rollback_candidate(format!("startup failed: {e}"));
@@ -790,8 +799,11 @@ impl Switchboard {
             tracing::error!(project = %project.id, %detail, "the project never answered its intro; returning to the operator");
             session.close().await;
             if project.is_remote() {
-                self.rollback_staged_extension(project.host.as_deref().unwrap_or_default())
-                    .await;
+                self.rollback_staged_extension(
+                    project.host.as_deref().unwrap_or_default(),
+                    &leg_token,
+                )
+                .await;
             }
             self.set_active_session(previous_agent.clone()).await;
             if let Some(coordinator) = &self.coordinator {
@@ -809,8 +821,11 @@ impl Switchboard {
                 session.close().await;
                 self.set_active_session(previous_agent.clone()).await;
                 if project.is_remote() {
-                    self.rollback_staged_extension(project.host.as_deref().unwrap_or_default())
-                        .await;
+                    self.rollback_staged_extension(
+                        project.host.as_deref().unwrap_or_default(),
+                        &leg_token,
+                    )
+                    .await;
                 }
                 coordinator.rollback_candidate(format!("adoption failed: {error}"));
                 return self.reply_transfer_error(
@@ -821,7 +836,7 @@ impl Switchboard {
             }
         }
         if project.is_remote() {
-            self.commit_staged_extension(project.host.as_deref().unwrap_or_default())
+            self.commit_staged_extension(project.host.as_deref().unwrap_or_default(), &leg_token)
                 .await;
         }
         self.drop_agent().await;
@@ -1055,7 +1070,7 @@ impl Switchboard {
             };
         }
         if !report.is_empty() {
-            tracing::info!(project = %project.id, %report, "prepare reported the state of the working copy");
+            tracing::info!(project = %project.id, bytes = report.len(), "prepare reported the state of the working copy");
         }
         report
     }
@@ -1077,16 +1092,8 @@ impl Switchboard {
         self.upload_extension_with_key("ssh", key, host).await
     }
 
-    async fn commit_staged_extension(&self, host: &str) {
-        let key = {
-            self.staged_extensions
-                .lock()
-                .await
-                .keys()
-                .find(|key| key.starts_with(&format!("{host}\0")))
-                .cloned()
-        };
-        let Some(key) = key else { return };
+    async fn commit_staged_extension(&self, host: &str, candidate_token: &str) {
+        let key = format!("{host}\0{candidate_token}");
         let path = self.staged_extensions.lock().await.remove(&key).flatten();
         let Some(path) = path else { return };
         let Ok(target) = ValidatedSshTarget::new(host) else {
@@ -1095,19 +1102,9 @@ impl Switchboard {
         ExtensionStageTxn::new("ssh", target, path).commit();
     }
 
-    async fn rollback_staged_extension(&self, host: &str) {
-        let key = {
-            self.staged_extensions
-                .lock()
-                .await
-                .keys()
-                .find(|key| key.starts_with(&format!("{host}\0")))
-                .cloned()
-        };
-        let path = match key {
-            Some(key) => self.staged_extensions.lock().await.remove(&key).flatten(),
-            None => None,
-        };
+    async fn rollback_staged_extension(&self, host: &str, candidate_token: &str) {
+        let key = format!("{host}\0{candidate_token}");
+        let path = self.staged_extensions.lock().await.remove(&key).flatten();
         let Some(path) = path else { return };
         let Ok(target) = ValidatedSshTarget::new(host) else {
             return;
@@ -1452,11 +1449,151 @@ impl Switchboard {
             "swapping the model on the live leg"
         );
         let leg_token = uuid_like();
+        let _previous_agent = self.agent.clone();
         if let Some(coordinator) = &self.coordinator {
-            // Redial owns a new process token too. Rotate it under the same
-            // lifecycle authority before the old process is torn down, so
-            // delayed callbacks from the old leg cannot reach the new one.
-            coordinator.rotate_leg_token(leg_token.clone());
+            let catalog_key = format!(
+                "{}\0{}",
+                project.host.as_deref().unwrap_or(""),
+                project.runtime
+            );
+            let candidate = CandidateLeg::new(
+                project.id.clone(),
+                project.id.clone(),
+                session_id.clone(),
+                leg_token.clone(),
+                spec.clone(),
+                level.clone(),
+            );
+            let candidate = match self.catalogs.get(&catalog_key).cloned() {
+                Some(catalog) => candidate.with_catalog(catalog),
+                None => candidate,
+            };
+            if let Err(error) = coordinator.begin_candidate(candidate) {
+                tracing::warn!(project = %project.id, %error, "candidate startup for redial was refused");
+                return self.reply(
+                    [format!("I couldn't restart {}: {error}", project.id)],
+                    Some(error.to_string()),
+                );
+            }
+        }
+        let session = match self
+            .start_agent(&project, &spec, &session_id, &leg_token)
+            .await
+        {
+            Ok(session) => session,
+            Err(error) => {
+                tracing::error!(project = %project.id, %spec, %error, "could not restart the leg on the new model");
+                if project.is_remote() {
+                    self.rollback_staged_extension(
+                        project.host.as_deref().unwrap_or_default(),
+                        &leg_token,
+                    )
+                    .await;
+                }
+                if let Some(coordinator) = &self.coordinator {
+                    coordinator.rollback_candidate(format!("startup failed: {error}"));
+                }
+                self.drop_agent().await;
+                let note = format!("{} could not be restarted on {}: {error}", project.id, spec);
+                self.operator_note = Some(note);
+                return self.reply(
+                    [format!(
+                        "I couldn't bring {} back on {}: {error}",
+                        project.id, spec
+                    )],
+                    Some(error.to_string()),
+                );
+            }
+        };
+
+        self.set_active_session(Some(session.clone())).await;
+        let prompt = if keep_context {
+            format!(
+                "You are now running on {spec}. Continue the conversation.{}",
+                if intent.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(" The caller also asked: {}.", intent.trim())
+                }
+            )
+        } else {
+            format!(
+                "You are now running on {spec}. The earlier conversation was deliberately cleared; start fresh.{}",
+                if intent.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(" The caller asked: {}.", intent.trim())
+                }
+            )
+        };
+
+        let turn = match session.prompt(&prompt).await {
+            Ok(turn) => turn,
+            Err(error) => Turn {
+                text: String::new(),
+                signals: vec![],
+                failed: true,
+                error: error.to_string(),
+            },
+        };
+        if turn.failed && turn.text.is_empty() {
+            let detail = if turn.error.is_empty() {
+                session.stderr_tail(5)
+            } else {
+                turn.error.clone()
+            };
+            let detail = if detail.is_empty() {
+                "the agent never answered".to_owned()
+            } else {
+                detail
+            };
+            tracing::error!(project = %project.id, %spec, %detail, "the swapped leg never answered");
+            session.close().await;
+            if project.is_remote() {
+                self.rollback_staged_extension(
+                    project.host.as_deref().unwrap_or_default(),
+                    &leg_token,
+                )
+                .await;
+            }
+            if let Some(coordinator) = &self.coordinator {
+                coordinator.rollback_candidate(format!("prompt failed: {detail}"));
+            }
+            self.drop_agent().await;
+            self.operator_note = Some(format!(
+                "{} could not be restarted on {spec}: {detail}",
+                project.id
+            ));
+            return self.reply(
+                [format!(
+                    "{} didn't come back on {spec}: {detail}",
+                    project.id
+                )],
+                Some(detail),
+            );
+        }
+
+        if let Some(coordinator) = &self.coordinator {
+            if let Err(error) = coordinator.adopt_candidate() {
+                session.close().await;
+                if project.is_remote() {
+                    self.rollback_staged_extension(
+                        project.host.as_deref().unwrap_or_default(),
+                        &leg_token,
+                    )
+                    .await;
+                }
+                coordinator.rollback_candidate(format!("adoption failed: {error}"));
+                self.drop_agent().await;
+                return self.reply(
+                    [format!("{} did not come up.", project.id)],
+                    Some(error.to_string()),
+                );
+            }
+        }
+        if project.is_remote() {
+            self.commit_staged_extension(project.host.as_deref().unwrap_or_default(), &leg_token)
+                .await;
         }
         self.drop_agent().await;
         self.project = Some(project.clone());
@@ -1464,94 +1601,10 @@ impl Switchboard {
         self.live_leg.set_session(&self.route, &leg_token);
         self.session_id = session_id.clone();
         self.model_spec = spec.clone();
-        match self
-            .start_agent(&project, &spec, &session_id, &leg_token)
-            .await
-        {
-            Ok(session) => {
-                let project_name = project.id.clone();
-                self.agent = Some(session);
-                self.route = project.id.clone();
-                self.live_leg.set_session(&self.route, &leg_token);
-                self.project = Some(project);
-                self.session_id = session_id;
-                self.model_spec = spec.clone();
-                // Keep route ownership coherent if a forced page action aborts
-                // the redial while its session handle is being published.
-                self.set_active_session(self.agent.clone()).await;
-                self.announce_route().await;
-                let prompt = if keep_context {
-                    format!(
-                        "You are now running on {spec}. Continue the conversation.{}",
-                        if intent.trim().is_empty() {
-                            String::new()
-                        } else {
-                            format!(" The caller also asked: {}.", intent.trim())
-                        }
-                    )
-                } else {
-                    format!(
-                        "You are now running on {spec}. The earlier conversation was deliberately cleared; start fresh.{}",
-                        if intent.trim().is_empty() {
-                            String::new()
-                        } else {
-                            format!(" The caller asked: {}.", intent.trim())
-                        }
-                    )
-                };
-                let Some(session) = self.agent.clone() else {
-                    return self
-                        .return_operator("project session disappeared during redial")
-                        .await;
-                };
-                let turn = match session.prompt(&prompt).await {
-                    Ok(turn) => turn,
-                    Err(error) => Turn {
-                        text: String::new(),
-                        signals: vec![],
-                        failed: true,
-                        error: error.to_string(),
-                    },
-                };
-                if turn.failed && turn.text.is_empty() {
-                    let detail = if turn.error.is_empty() {
-                        session.stderr_tail(5)
-                    } else {
-                        turn.error.clone()
-                    };
-                    let detail = if detail.is_empty() {
-                        "the agent never answered".to_owned()
-                    } else {
-                        detail
-                    };
-                    tracing::error!(project = %project_name, %spec, %detail, "the swapped leg never answered");
-                    self.drop_agent().await;
-                    self.operator_note = Some(format!(
-                        "{project_name} could not be restarted on {spec}: {detail}"
-                    ));
-                    return self.reply(
-                        [format!(
-                            "{project_name} didn't come back on {spec}: {detail}"
-                        )],
-                        Some(detail),
-                    );
-                }
-                self.reply_with_turn(turn)
-            }
-            Err(error) => {
-                tracing::error!(project = %project.id, %spec, %error, "could not restart the leg on the new model");
-                self.drop_agent().await;
-                let note = format!("{} could not be restarted on {}: {error}", project.id, spec);
-                self.operator_note = Some(note);
-                self.reply(
-                    [format!(
-                        "I couldn't bring {} back on {}: {error}",
-                        project.id, spec
-                    )],
-                    Some(error.to_string()),
-                )
-            }
-        }
+        self.agent = Some(session);
+        self.set_active_session(self.agent.clone()).await;
+        self.announce_route().await;
+        self.reply_with_turn(turn)
     }
     async fn return_operator(&mut self, note: &str) -> Reply {
         self.drop_agent().await;
@@ -2004,6 +2057,32 @@ done
             Some("failed".into()),
         );
         assert_eq!(failed.to_speak, ["The project did not answer."]);
+    }
+
+    #[test]
+    #[should_panic(expected = "SWITCHBOARD_SPEECH_DEADLINE_MS must be a positive integer")]
+    fn invalid_speech_deadline_panics() {
+        let env = HashMap::from([(
+            "SWITCHBOARD_SPEECH_DEADLINE_MS".to_owned(),
+            "invalid".to_owned(),
+        )]);
+        Switchboard::new(
+            Registry::new(vec![]),
+            "pi".into(),
+            None,
+            String::new(),
+            None,
+            None,
+            None,
+            "medium".into(),
+            ".cache".into(),
+            true,
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            env,
+        );
     }
 
     #[tokio::test]

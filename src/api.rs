@@ -427,37 +427,39 @@ fn publish_status(state: &AppState, status: Value) {
     state.0.coordinator.publish_status(status.clone());
     emit_json(state, status);
 }
-async fn spawn_active_operation<F, T>(state: &AppState, future: F) -> (JoinHandle<T>, TaskId, u64)
+async fn spawn_active_operation<F, T>(
+    state: &AppState,
+    future: F,
+) -> Option<(JoinHandle<T>, TaskId, u64)>
 where
     F: Future<Output = T> + Send + 'static,
     T: Send + 'static,
 {
     let generation = state.0.coordinator.generation();
-    let (task, id) = spawn_registered_operation(state, generation, future).await;
-    (task, id, generation)
+    let (task, id) = spawn_registered_operation(state, generation, future).await?;
+    Some((task, id, generation))
 }
 async fn spawn_registered_operation<F, T>(
     state: &AppState,
     generation: u64,
     future: F,
-) -> (JoinHandle<T>, TaskId)
+) -> Option<(JoinHandle<T>, TaskId)>
 where
     F: Future<Output = T> + Send + 'static,
     T: Send + 'static,
 {
     // The generation check and registry insertion share the registry lock. A
-    // rescue that bumps the generation before this point rejects the task;
+    // rescue that bumps the generation before this point rejects spawning;
     // one that races after the check waits for the inserted abort handle.
     let mut active = state.0.active_operations.lock().await;
+    if state.0.coordinator.generation() != generation {
+        return None;
+    }
     let task = tokio::spawn(future);
     let abort = task.abort_handle();
     let id = abort.id();
-    if state.0.coordinator.generation() == generation {
-        active.insert(id, abort);
-    } else {
-        task.abort();
-    }
-    (task, id)
+    active.insert(id, abort);
+    Some((task, id))
 }
 async fn clear_active_operation(state: &AppState, id: TaskId) {
     state.0.active_operations.lock().await.remove(&id);
@@ -518,11 +520,19 @@ async fn process_speech(state: AppState) {
                     "synthesized a mid-turn line"
                 );
                 let delivered = finish_audio(&state, sequence, generation, audio).await;
-                let _ = result.send(if delivered {
-                    Ok(())
+                if delivered {
+                    let route = state.0.live_leg.route();
+                    if let Some(entry) =
+                        state.0.transcript_log.lock().await.add(AGENT, &text, route)
+                    {
+                        emit_json(&state, json!({"type":"spoken", "entry":entry}));
+                    }
+                    let _ = result.send(Ok(()));
                 } else {
-                    Err("no browser connected or the writer rejected audio".into())
-                });
+                    let _ = result.send(Err(
+                        "no browser connected or the writer rejected audio".into()
+                    ));
+                }
             }
             Err(error) => {
                 finish_audio(&state, sequence, generation, Vec::new()).await;
@@ -734,13 +744,21 @@ async fn process_turns(state: AppState) {
                 .ok();
             (operation, status)
         };
-        let (task, task_id) = spawn_registered_operation(&state, generation, async move {
+        let Some((task, task_id)) = spawn_registered_operation(&state, generation, async move {
             let mut board = turn_state.0.switchboard.lock().await;
             let reply = board.handle(&transcript).await;
             let status = board.status();
             (reply, status)
         })
-        .await;
+        .await
+        else {
+            tracing::info!(clip = %id, stamped = generation, "dropping turn because rescue occurred before registration");
+            if let Some(operation) = &operation {
+                state.0.coordinator.finish_operation(operation);
+            }
+            state.0.turn_in_flight.store(false, Ordering::Release);
+            continue;
+        };
         let (reply, status) = match task.await {
             Ok(result) => result,
             Err(error) if error.is_cancelled() => {
@@ -820,15 +838,15 @@ async fn cancel_active_operations(state: &AppState) -> Option<String> {
 async fn spawn_replacing_operation<F, T>(
     state: &AppState,
     future: F,
-) -> (JoinHandle<T>, TaskId, u64)
+) -> Option<(JoinHandle<T>, TaskId, u64)>
 where
     F: Future<Output = T> + Send + 'static,
     T: Send + 'static,
 {
     cancel_active_operations(state).await;
     let generation = state.0.coordinator.generation();
-    let (task, id) = spawn_registered_operation(state, generation, future).await;
-    (task, id, generation)
+    let (task, id) = spawn_registered_operation(state, generation, future).await?;
+    Some((task, id, generation))
 }
 async fn hangup(State(state): State<AppState>) -> impl IntoResponse {
     let interrupted = interrupt_active_turn(&state).await;
@@ -862,13 +880,20 @@ async fn connect(State(state): State<AppState>, Json(req): Json<Connect>) -> Res
     // before taking the PBX lock; otherwise a direct connection can wait for
     // the very leg the caller is trying to leave.
     let operation_state = state.clone();
-    let (task, task_id, generation) = spawn_replacing_operation(&state, async move {
+    let Some((task, task_id, generation)) = spawn_replacing_operation(&state, async move {
         let mut board = operation_state.0.switchboard.lock().await;
         let reply = board.dial(&req.project, &req.intent).await;
         let status = board.status();
         (reply, status)
     })
-    .await;
+    .await
+    else {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({"detail":"connection attempt was cancelled"})),
+        )
+            .into_response();
+    };
     let (reply, status) = match task.await {
         Ok(result) => result,
         Err(error) if error.is_cancelled() => {
@@ -910,11 +935,16 @@ async fn thinking(State(state): State<AppState>, Json(req): Json<Thinking>) -> R
         let status = board.status();
         (reply, status)
     };
-    let (task, task_id, generation) = if state.0.live_leg.route() == crate::pbx::OPERATOR {
-        let (task, task_id, generation) = spawn_active_operation(&state, operation).await;
-        (task, task_id, generation)
+    let Some((task, task_id, generation)) = (if state.0.live_leg.route() == crate::pbx::OPERATOR {
+        spawn_active_operation(&state, operation).await
     } else {
         spawn_replacing_operation(&state, operation).await
+    }) else {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({"detail":"thinking change was cancelled"})),
+        )
+            .into_response();
     };
     let (reply, status) = match task.await {
         Ok(result) => result,
@@ -958,11 +988,16 @@ async fn model(State(state): State<AppState>, Json(req): Json<Model>) -> Respons
         let status = board.status();
         (reply, status)
     };
-    let (task, task_id, generation) = if state.0.live_leg.route() == crate::pbx::OPERATOR {
-        let (task, task_id, generation) = spawn_active_operation(&state, operation).await;
-        (task, task_id, generation)
+    let Some((task, task_id, generation)) = (if state.0.live_leg.route() == crate::pbx::OPERATOR {
+        spawn_active_operation(&state, operation).await
     } else {
         spawn_replacing_operation(&state, operation).await
+    }) else {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({"detail":"model change was cancelled"})),
+        )
+            .into_response();
     };
     let (reply, status) = match task.await {
         Ok(result) => result,
@@ -1055,7 +1090,7 @@ async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Respons
     if !state.0.delivery.connected() {
         return (
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"delivered":false, "detail":"no browser connected"})),
+            Json(json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})),
         )
             .into_response();
     }
@@ -1069,36 +1104,25 @@ async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Respons
 
     let spoken = state.0.speaker.clip_for_speech(&req.text);
     let speech_permit = if spoken.is_empty() {
-        None
+        return Json(json!({"delivered":false, "reason":"text contained no speakable audio", "detail":"text contained no speakable audio"})).into_response();
     } else {
         match state.0.speech.try_reserve() {
             Ok(permit) => Some(permit),
             Err(_) => {
                 return (
                     axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                    Json(json!({"detail":"speech worker is unavailable or busy"})),
+                    Json(json!({"delivered":false, "reason":"speech worker is unavailable or busy", "detail":"speech worker is unavailable or busy"})),
                 )
                     .into_response()
             }
         }
     };
 
-    let route = state.0.live_leg.route();
-    if let Some(entry) = state
-        .0
-        .transcript_log
-        .lock()
-        .await
-        .add(AGENT, &req.text, route)
-    {
-        emit_json(&state, json!({"type":"spoken", "entry":entry}));
-    }
-
     if let Some(permit) = speech_permit {
         let generation = state.0.coordinator.generation();
         let sequence = match reserve_audio(&state, generation).await {
             Some(sequence) => sequence,
-            None => return Json(delivery_response(false)).into_response(),
+            None => return Json(json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})).into_response(),
         };
         let (result_tx, result_rx) = oneshot::channel();
         permit.send(SpeechRequest {
@@ -1113,21 +1137,21 @@ async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Respons
             Ok(Err(detail)) => {
                 return (
                     axum::http::StatusCode::BAD_GATEWAY,
-                    Json(json!({"delivered":false, "detail":detail})),
+                    Json(json!({"delivered":false, "reason":detail.clone(), "detail":detail})),
                 )
                     .into_response();
             }
             Err(_) => {
                 return (
                     axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                    Json(json!({"delivered":false, "detail":"speech worker stopped"})),
+                    Json(json!({"delivered":false, "reason":"speech worker stopped", "detail":"speech worker stopped"})),
                 )
                     .into_response();
             }
         }
     }
 
-    Json(delivery_response(false)).into_response()
+    Json(json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})).into_response()
 }
 #[derive(Deserialize)]
 struct Diagram {
@@ -1796,7 +1820,7 @@ mod tests {
         assert_eq!(code, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
             spoken,
-            json!({"delivered":false, "detail":"no browser connected"})
+            json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})
         );
 
         let (code, leg) = timeout(
@@ -1878,6 +1902,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn speak_reports_failure_and_does_not_log_transcript_when_delivery_fails() {
+        let state = state();
+        let (code, spoken) = request_json(
+            &state,
+            Method::POST,
+            "/speak",
+            Some(json!({"text":"Hello world."})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(spoken["delivered"], false);
+        assert_eq!(spoken["reason"], "no browser connected");
+        assert!(state.0.transcript_log.lock().await.entries().is_empty());
+    }
+
+    #[tokio::test]
+    async fn generation_mismatch_prevents_turn_spawn() {
+        let state = state();
+        let current = state.0.coordinator.generation();
+        state.0.coordinator.begin_rescue("test bump");
+        let result = spawn_registered_operation(&state, current, async move { 42 }).await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
     async fn newer_page_control_supersedes_setup_before_a_session_exists() {
         let state = state();
         let first_state = state.clone();
@@ -1885,14 +1934,16 @@ mod tests {
             let _board = first_state.0.switchboard.lock().await;
             pending::<()>().await;
         })
-        .await;
+        .await
+        .unwrap();
 
         let second_state = state.clone();
         let (second, second_id, _generation) = spawn_replacing_operation(&state, async move {
             let _board = second_state.0.switchboard.lock().await;
             7
         })
-        .await;
+        .await
+        .unwrap();
 
         assert!(first.await.unwrap_err().is_cancelled());
         clear_active_operation(&state, first_id).await;
