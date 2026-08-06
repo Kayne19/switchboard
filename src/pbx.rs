@@ -1151,9 +1151,22 @@ impl Switchboard {
                 return None;
             }
         };
-        let name = Path::new(source).file_name()?.to_string_lossy();
+        let source_path = Path::new(source);
+        let key_safe = key.replace('\0', "-");
         let cache = self.remote_cache_dir.trim_end_matches('/');
-        let target = format!("{cache}/{name}.{}", key.replace('\0', "-"));
+        let target = match (source_path.file_stem(), source_path.extension()) {
+            (Some(stem), Some(ext)) if !ext.is_empty() => {
+                format!(
+                    "{cache}/{}.{key_safe}.{}",
+                    stem.to_string_lossy(),
+                    ext.to_string_lossy()
+                )
+            }
+            _ => {
+                let name = source_path.file_name()?.to_string_lossy();
+                format!("{cache}/{name}.{key_safe}")
+            }
+        };
         let cache_path = if cache.starts_with('/') {
             crate::pi_client::shell_quote(cache)
         } else {
@@ -2286,7 +2299,7 @@ done
             .unwrap();
         assert_eq!(
             staged,
-            home.join(".cache/switchboard/agent.ts.fake-host")
+            home.join(".cache/switchboard/agent.fake-host.ts")
                 .to_string_lossy()
         );
         assert_eq!(
