@@ -16,11 +16,13 @@ aborts in-flight work and swaps the live leg. If speech captured before the
 rescue is acted on after it, the caller's words run against a project they were
 never addressed to. That is the failure this design exists to prevent.
 
-`turn_generation` in `src/api.rs` is the guard. Every rescue bumps it, and work
+The coordinator's leg generation is the guard. Every rescue bumps it, and work
 carrying a stale value is discarded rather than acted on. The bump happens in
-`cancel_active_operations` under `operation_transition`, and every consumer
-re-checks under that same guard: turn dispatch, `deliver_turn_if_current`,
-`deliver_page_reply_if_current`, and `synthesize_reply_if_current`.
+`Coordinator::begin_rescue`, while resource cancellation and delivery commit
+re-check it at their short linearization points: turn dispatch,
+`deliver_turn_if_current`, `deliver_page_reply_if_current`, and
+`synthesize_reply_if_current`. `operation_transition` still protects the
+async resource handoff; it is not a second lifecycle authority.
 
 Two properties are load-bearing and easy to break by accident:
 
@@ -61,6 +63,26 @@ is one message delivery, and every bump is browser-initiated — `/hangup`,
 and waiting on that exchange when it happens. An agent-initiated
 `transfer_to_project` does not bump the epoch at all. Losing a word to a race the
 caller just started is much cheaper than running it against the wrong project.
+
+## Delivery and picker ordering
+
+WebSocket registration happens before the snapshot is read. A single writer owns
+the sink and sends `epoch`, `status`, `history`, and the optional diagram before
+releasing live events queued during that read. Reader replies such as pong,
+accepted/error frames, and audio metadata use that same writer, so a reconnect
+cannot interleave a live frame into its snapshot. A bounded connection queue
+retires a lagging socket rather than blocking the call.
+
+Audio reservations are generation-stamped and sequenced across mid-turn speech
+and settled replies. Cancellation releases a slot so a stale TTS result cannot
+wedge later speech. The browser drops queued/playing audio and outbox clips on a
+new epoch. A stale clip receives an ID-bearing `stale_epoch` error and is removed
+from the outbox rather than retried forever.
+
+The route/model/thinking pickers serialize their HTTP operations. A failed picker
+request restores the value that was selected before that request, unless a newer
+status snapshot has already invalidated it; this prevents late failures from
+rewriting a newer leg selection.
 
 ## `ETXTBSY` when tests write their own executables
 

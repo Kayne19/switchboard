@@ -41,6 +41,8 @@ const ACTIVITY_ARG_ORDER: [&str; 11] = [
 pub struct Signal {
     pub name: String,
     pub args: Map<String, Value>,
+    pub tool_call_id: Option<String>,
+    pub successful_end: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -52,7 +54,9 @@ pub struct Turn {
 }
 impl Turn {
     pub fn agent_spoke(&self) -> bool {
-        self.signals.iter().any(|signal| signal.name == SPEAK_TOOL)
+        self.signals
+            .iter()
+            .any(|signal| signal.name == SPEAK_TOOL && signal.successful_end)
     }
 }
 
@@ -122,11 +126,9 @@ impl PiSession {
             command.envs(env);
         }
         let label = label.into();
-        // The exact command is the first thing anyone needs when a leg will not
-        // come up: it carries the ssh host, the model, the extension path and
-        // the working directory, all of which come from deployment config this
-        // repository cannot see.
-        tracing::info!(%label, argv = %argv.join(" "), cwd = cwd.as_deref().unwrap_or(""), "starting agent leg");
+        // Keep process diagnostics bounded and avoid recording prompts, paths,
+        // hosts, or other deployment values from the command line.
+        tracing::info!(%label, program = %argv[0], argc = argv.len(), "starting agent leg");
         let mut child = command.spawn().map_err(|error| {
             tracing::error!(%label, program = %argv[0], %error, "could not start agent leg");
             PiSessionError(format!("could not start {}: {error}", argv[0]))
@@ -430,18 +432,32 @@ impl PiSession {
                         signals.push(Signal {
                             name: name.into(),
                             args,
+                            tool_call_id: event
+                                .get("toolCallId")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned),
+                            successful_end: false,
                         });
                     }
                     self.report_activity("start", name, activity_detail(event.get("args")))
                         .await;
                 }
                 Some("tool_execution_end") => {
-                    self.report_activity(
-                        "end",
-                        event.get("toolName").and_then(Value::as_str).unwrap_or(""),
-                        String::new(),
-                    )
-                    .await
+                    let name = event.get("toolName").and_then(Value::as_str).unwrap_or("");
+                    let call_id = event.get("toolCallId").and_then(Value::as_str);
+                    if name == SPEAK_TOOL {
+                        if let Some(signal) = signals.iter_mut().rev().find(|signal| {
+                            call_id.is_some()
+                                && signal.name == SPEAK_TOOL
+                                && signal.tool_call_id.as_deref() == call_id
+                        }) {
+                            signal.successful_end = event
+                                .get("isError")
+                                .and_then(Value::as_bool)
+                                .is_some_and(|is_error| !is_error);
+                        }
+                    }
+                    self.report_activity("end", name, String::new()).await
                 }
                 Some("extension_error") => {
                     tracing::error!(
@@ -461,6 +477,8 @@ impl PiSession {
                 signals.push(Signal {
                     name: RETURN_TOOL.into(),
                     args: Map::from_iter([(String::from("via"), Value::String("sentinel".into()))]),
+                    tool_call_id: None,
+                    successful_end: true,
                 });
             }
         }
@@ -750,10 +768,52 @@ fn spoken_error(detail: Option<&Value>) -> String {
 pub fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
+
+/// An SSH destination that has passed the one-argument boundary. Keeping this
+/// validation here means every SSH caller applies the same fail-closed rules.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValidatedSshTarget(String);
+
+impl ValidatedSshTarget {
+    pub fn new(raw: &str) -> Result<Self, PiSessionError> {
+        let value = raw.trim();
+        if value.is_empty() {
+            return Err(PiSessionError("SSH target is empty".into()));
+        }
+        if value.len() > 255 || value.starts_with('-') {
+            return Err(PiSessionError("SSH target is invalid".into()));
+        }
+        if value.chars().any(|character| {
+            character.is_control()
+                || character.is_whitespace()
+                || matches!(
+                    character,
+                    ';' | '|' | '&' | '$' | '`' | '<' | '>' | '\'' | '"'
+                )
+        }) {
+            return Err(PiSessionError(
+                "SSH target contains invalid characters".into(),
+            ));
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 pub fn list_models_argv(binary: &str, ssh_host: &str) -> Vec<String> {
     if ssh_host.is_empty() {
         return vec![binary.into(), "--list-models".into()];
     }
+    let Ok(target) = ValidatedSshTarget::new(ssh_host) else {
+        return vec!["ssh-target-invalid".into()];
+    };
+    list_models_argv_checked(binary, &target)
+}
+
+pub fn list_models_argv_checked(binary: &str, target: &ValidatedSshTarget) -> Vec<String> {
     vec![
         "ssh".into(),
         "-T".into(),
@@ -761,7 +821,7 @@ pub fn list_models_argv(binary: &str, ssh_host: &str) -> Vec<String> {
         "BatchMode=yes".into(),
         "-o".into(),
         "ConnectTimeout=10".into(),
-        ssh_host.into(),
+        target.as_str().into(),
         format!("{} --list-models", shell_quote(binary)),
     ]
 }
@@ -803,6 +863,9 @@ pub fn remote_argv(
     extra_args: &[String],
     env: &HashMap<String, String>,
 ) -> Vec<String> {
+    let Ok(target) = ValidatedSshTarget::new(host) else {
+        return vec!["ssh-target-invalid".into()];
+    };
     let mut remote = vec![binary.into(), "--mode".into(), "rpc".into()];
     if let Some(model) = model {
         remote.extend(["--model".into(), model.into()]);
@@ -841,7 +904,7 @@ pub fn remote_argv(
         "BatchMode=yes".into(),
         "-o".into(),
         "ConnectTimeout=10".into(),
-        host.into(),
+        target.as_str().into(),
         command,
     ]
 }
@@ -909,6 +972,35 @@ mod tests {
         write_executable_script(&path, source);
         path
     }
+    #[test]
+    fn ssh_targets_are_validated_once_and_fail_closed() {
+        assert!(ValidatedSshTarget::new("user@example.com").is_ok());
+        for value in ["", "-oProxyCommand=x", "host name", "host;rm", "host\nname"] {
+            assert!(
+                ValidatedSshTarget::new(value).is_err(),
+                "accepted {value:?}"
+            );
+            assert_eq!(
+                remote_argv(
+                    value,
+                    "/tmp",
+                    "pi",
+                    None,
+                    None,
+                    None,
+                    None,
+                    &[],
+                    &HashMap::new()
+                ),
+                vec!["ssh-target-invalid"]
+            );
+        }
+        assert_eq!(
+            list_models_argv("pi", "host;rm"),
+            vec!["ssh-target-invalid"]
+        );
+    }
+
     #[test]
     fn quotes_shell_values_and_builds_remote_commands() {
         assert_eq!(shell_quote("a b; rm -rf /"), "'a b; rm -rf /'");
@@ -1034,6 +1126,24 @@ mod tests {
         let turn = session.prompt("hello").await.unwrap();
         assert_eq!(turn.text, "All done.");
         assert_eq!(turn.signals[0].name, RETURN_TOOL);
+        session.close().await;
+    }
+
+    #[tokio::test]
+    async fn speak_requires_matching_successful_tool_end() {
+        let script = "read line; printf '%s\\n' '{\"type\":\"tool_execution_start\",\"toolName\":\"speak\",\"toolCallId\":\"call-1\",\"args\":{\"text\":\"hello\"}}' '{\"type\":\"tool_execution_end\",\"toolName\":\"speak\",\"toolCallId\":\"call-other\",\"isError\":false}' '{\"type\":\"agent_settled\"}'";
+        let session = PiSession::start(
+            vec!["sh".into(), "-c".into(), script.into()],
+            "test",
+            None,
+            None,
+            Duration::from_secs(1),
+            None,
+        )
+        .await
+        .unwrap();
+        let turn = session.prompt("hello").await.unwrap();
+        assert!(!turn.agent_spoke());
         session.close().await;
     }
 

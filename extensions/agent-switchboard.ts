@@ -39,6 +39,16 @@ const SPEAK_URL = process.env.SWITCHBOARD_SPEAK_URL ?? "";
 const STATE_URL = process.env.SWITCHBOARD_STATE_URL ?? "";
 const DIAGRAM_URL = process.env.SWITCHBOARD_DIAGRAM_URL ?? "";
 const SESSION_TOKEN = process.env.SWITCHBOARD_SESSION_TOKEN ?? "";
+const parsedSpeechDeadline = Number.parseInt(
+	process.env.SWITCHBOARD_SPEECH_DEADLINE_MS ?? "25000",
+	10,
+);
+const SPEECH_DEADLINE_MS =
+	Number.isFinite(parsedSpeechDeadline) &&
+	parsedSpeechDeadline > 0 &&
+	parsedSpeechDeadline <= 120000
+		? parsedSpeechDeadline
+		: 25000;
 
 export default function agentSwitchboard(pi: ExtensionAPI) {
 	// The switchboard asks for a thinking level on the command line, but the
@@ -99,8 +109,11 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 				const resp = await fetch(SPEAK_URL, {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ text: params.text }),
-					signal: AbortSignal.timeout(30_000),
+					body: JSON.stringify({
+						text: params.text,
+						...(SESSION_TOKEN ? { token: SESSION_TOKEN } : {}),
+					}),
+					signal: AbortSignal.timeout(SPEECH_DEADLINE_MS),
 				});
 				if (!resp.ok) {
 					return {
@@ -119,8 +132,11 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 					reason?: string;
 				};
 				if (data.delivered === false) {
-					// Not an error — nobody has the page open. Worth telling the model so
-					// it stops narrating to an empty room.
+					// Preserve written fallback whenever audio was not committed.
+					// The Rust endpoint has already emitted the bounded reason.
+					// Nobody has the page open, so the tool must not claim success.
+					// Treat this as a tool error so written fallback remains eligible,
+					// while the bounded reason tells the model why audio was not heard.
 					return {
 						content: [
 							{
@@ -129,6 +145,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 							},
 						],
 						details: {},
+						isError: true,
 					};
 				}
 				return { content: [{ type: "text", text: "Spoken." }], details: {} };
@@ -196,6 +213,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 						source: params.source,
 						title: params.title ?? "",
 						notes: params.notes ?? "",
+						...(SESSION_TOKEN ? { token: SESSION_TOKEN } : {}),
 					}),
 					signal: AbortSignal.timeout(30_000),
 				});

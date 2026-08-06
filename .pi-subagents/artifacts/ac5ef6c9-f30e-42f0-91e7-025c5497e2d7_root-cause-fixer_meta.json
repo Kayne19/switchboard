@@ -1,0 +1,137 @@
+{
+  "runId": "ac5ef6c9-f30e-42f0-91e7-025c5497e2d7",
+  "agent": "root-cause-fixer",
+  "task": "Inspect the completed implementation, the `review_impl` handoff, and approved plan_v11. Fix only concrete review findings at their shared root cause; if the review is APPROVE, make no code changes. Preserve legacy/homelab boundaries and existing wire shapes. Read affected symbols before editing, add or update focused regression tests for every fix, and run targeted checks. Do not perform unrelated refactors. Report changed files, tests, and residual risks.\n\n## Context from phase 'review_impl'\n# Handoff Output: review_impl\nStatus: success\nVerdict: REQUEST_CHANGES\nTimestamp: 1786012946\n\n## Content\nFindings, ordered by severity:\n\n1. **Blocker:** `/speak` reports success before TTS or WebSocket delivery. `src/api.rs:1045-1099` returns `delivered:true` merely when a browser is connected and queues work; `process_speech` later reports TTS failures (`src/api.rs:482-519`). The extension then suppresses written fallback after a false success.\n\n2. **High:** Redial bypasses coordinator adoption. `src/pbx.rs:1340-1433` generates a new callback token but never updates `Coordinator`; new callbacks are rejected while delayed callbacks bearing the old token remain accepted.\n\n3. **High:** Rescue can race turn registration. `src/api.rs:687-731,780-809,438-451` checks generation and begins the operation before registering its abort handle. Rescue can clear the registry in between, allowing stale `board.handle()` work to execute after rescue.\n\n4. **High:** Candidate lifecycle is not transactional. `src/pbx.rs:694` drops the existing leg before candidate startup, contrary to deferred cleanup. `ExtensionStageTxn::commit` is never used; staging is cached immediately via `src/pbx.rs:1065-1090`, so failed candidates can remove shared artifacts.\n\n5. **High:** Callback acceptance does not require an active operation. `src/lifecycle.rs:483-502` validates only token and phase; `/speak` and `/diagram` (`src/api.rs:1019,1099`) can accept late callbacks after a turn settles.\n\n6. **Medium:** Invalid candidate startup thinking is accepted and promoted publicly. `src/lifecycle.rs:504-544` stores candidate values before validating `THINKING_LEVELS`.\n\n7. **Medium:** Diagnostics log unbounded sensitive context: complete argv/system prompts (`src/pi_client.rs:133`), raw prepare stderr (`src/pbx.rs:1038-1046`), and model-listing commands (`src/models.rs:339-365`), contrary to the sanitization boundary.\n\n8. **Medium:** Invalid `SWITCHBOARD_SPEECH_DEADLINE_MS` silently falls back rather than being rejected (`src/main.rs:155-162`, `src/audio.rs:23-36`).\n\nNo files were edited. Tests were not rerun in this review.\n\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"Concrete implementation findings are listed with severity and exact source paths/ranges.\"\n    }\n  ],\n  \"changedFiles\": [\n    \"README.md\",\n    \"extensions/agent-switchboard.ts\",\n    \"src/api.rs\",\n    \"src/audio.rs\",\n    \"src/diagnostic.rs\",\n    \"src/lifecycle.rs\",\n    \"src/main.rs\",\n    \"src/models.rs\",\n    \"src/pbx.rs\",\n    \"src/pi_client.rs\",\n    \"tests/test_app.mjs\",\n    \"tests/test_extensions.mjs\",\n    \"web/app.ts\",\n    \"static/app.js\"\n  ],\n  \"testsAddedOrUpdated\": [],\n  \"commandsRun\": [],\n  \"validationOutput\": [\n    \"Reviewed lifecycle, callback, redial, staging, delivery, browser, diagnostics, model, and SSH paths.\"\n  ],\n  \"residualRisks\": [\n    \"Repository test claims from implementation handoffs were not independently rerun.\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"Read-only adversarial review of the implementation against plan_v11.\",\n  \"reviewFindings\": [\n    \"blocker: /speak reports delivery before TTS and writer commitment.\",\n    \"high: redial token ownership bypasses Coordinator.\",\n    \"high: stale turn registration can execute after rescue.\",\n    \"high: candidate staging and adoption are not transactional.\",\n    \"high: callbacks are accepted without an active operation.\",\n    \"medium: invalid startup thinking is promoted.\",\n    \"medium: diagnostics expose prompts, commands, and stderr.\",\n    \"medium: invalid speech deadlines silently default.\"\n  ],\n  \"manualNotes\": \"No source files were edited.\"\n}\n```\n\nVERDICT: REQUEST_CHANGES\n\n\u001b[38;2;136;136;136m✻ Turn took 4m 16s (Total time 4m 15s · 2 turns)\u001b[0m\n\n---\n**Output:**\nWrite your findings to exactly this path: /home/kayne19/projects/switchboard/.pi-workflow/outputs/wf_1786002388285300339_3730916_0/fix_impl.md\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.\n\n## Acceptance Contract\nAcceptance level: checked\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Implement the requested change without widening scope\n- criterion-2: Return evidence sufficient for an independent acceptance review\n\nRequired evidence: changed-files, tests-added, commands-run, residual-risks, no-staged-files\n\nReview gate: required by reviewer.\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    },\n    {\n      \"id\": \"criterion-2\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 1,
+  "model": "openai-codex/gpt-5.6-luna",
+  "attemptedModels": [
+    "openai-codex/gpt-5.6-luna"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.6-luna",
+      "success": false,
+      "exitCode": 1,
+      "error": "You have hit your ChatGPT usage limit (edu plan). Try again in ~4498 min.",
+      "usage": {
+        "input": 263433,
+        "output": 15440,
+        "cacheRead": 5584896,
+        "cacheWrite": 0,
+        "cost": 0.18291252,
+        "turns": 64
+      }
+    }
+  ],
+  "error": "You have hit your ChatGPT usage limit (edu plan). Try again in ~4498 min.",
+  "acceptance": {
+    "status": "rejected",
+    "evidenceStatus": "rejected",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "checked",
+      "explicit": false,
+      "inferredReason": [
+        "async write-capable or risky run"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Implement the requested change without widening scope",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        },
+        {
+          "id": "criterion-2",
+          "must": "Return evidence sufficient for an independent acceptance review",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "changed-files",
+        "tests-added",
+        "commands-run",
+        "residual-risks",
+        "no-staged-files"
+      ],
+      "verify": [],
+      "review": {
+        "agent": "reviewer",
+        "required": true
+      },
+      "stopRules": []
+    },
+    "inferredReason": [
+      "async write-capable or risky run"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Implement the requested change without widening scope",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      },
+      {
+        "id": "criterion-2",
+        "must": "Return evidence sufficient for an independent acceptance review",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [
+      {
+        "id": "attestation",
+        "status": "failed",
+        "message": "Structured acceptance report not found."
+      }
+    ],
+    "verifyRuns": [],
+    "childReportParseError": "Structured acceptance report not found."
+  },
+  "launchContractDigest": "5a33e7022c96715c7a8469e59d9a2929713b4419f0b93f83dfda92587690c027",
+  "launchResolvedExtensions": {
+    "version": 1,
+    "source": "launch-resolved",
+    "disableAmbientExtensions": false,
+    "runtime": [
+      "sha256:249682fb0750be04"
+    ],
+    "configured": [],
+    "effective": [
+      "sha256:249682fb0750be04"
+    ],
+    "omitted": {
+      "runtime": 0,
+      "configured": 0,
+      "effective": 0
+    }
+  },
+  "transcriptPath": "/home/kayne19/projects/switchboard/.pi-subagents/artifacts/ac5ef6c9-f30e-42f0-91e7-025c5497e2d7_root-cause-fixer_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1786013562937
+}

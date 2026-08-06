@@ -66,24 +66,23 @@ dispatched → settled. `journalctl -u switchboard | grep <clip-id>` reconstruct
 one utterance end to end. A real per-connection span is still worth doing but was
 not needed to make the path traceable.
 
-## Behavioral defects found and deliberately NOT fixed
+## Behavioral defect and deliberate follow-up
 
-Both are pre-existing and shared with the Python baseline, so fixing either is a
-redesign, which `docs/rust-typescript-migration-handoff.md` forbids without a
-separate decision. Both are now at least visible in the logs.
+The Mermaid feedback gap remains pre-existing and shared with the Python
+baseline, so fixing it is a redesign, which
+`docs/rust-typescript-migration-handoff.md` forbids without a separate decision.
+The speech fallback defect was corrected in the Rust path and is covered by the
+signal-correlation tests.
 
-1. **A failed `speak` still suppresses the switchboard's own synthesis.**
-   `src/pi_client.rs` records the `speak` signal on `tool_execution_start`,
-   before the extension's HTTP POST to `/speak` has resolved. `Turn::agent_spoke()`
-   is true if the signal is present at all, and `src/pbx.rs` sets
-   `synthesize: !spoke`. So when `/speak` is down, the agent is correctly told
-   the tool failed, the switchboard never voices the written reply, and **the
-   caller gets dead air with no fallback** — worse than if `speak` had never been
-   called. `legacy/backend/piclient.py:132` computes it identically, so this is
-   not a Rust regression. Mitigation shipped: every routing signal is now logged,
-   so a `speak` signal with no matching `POST /speak` in the same window is the
-   greppable signature of this failure. A real fix means capturing the signal on
-   `tool_execution_end` (or from the tool result's `isError`) instead.
+1. **Failed `speak` fallback is now explicit and correlated.**
+   `src/pi_client.rs` records the tool call id at `tool_execution_start`, but
+   `Turn::agent_spoke()` becomes true only after a matching successful
+   `tool_execution_end`. HTTP failure, stale/candidate callback rejection,
+   `delivered:false`, and TTS failure therefore leave the written reply eligible
+   for normal switchboard synthesis. This is intentionally a Rust-side behavior
+   correction; the legacy tree remains the compatibility baseline and is not
+   edited here. The extension marks `delivered:false` as `isError`, while the
+   server keeps the written transcript/event so the caller has a visible trail.
 
 2. **A malformed Mermaid diagram is unreportable to the agent.** `/diagram` in
    `src/api.rs` does no validation and returns `delivered: true` whenever a
@@ -103,8 +102,9 @@ separate decision. Both are now at least visible in the logs.
       the lowest-severity remaining gap, which is why it was left.
 - [ ] `src/api.rs`: the `/hangup`, `/connect`, `/thinking`, `/leg-state`,
       `/speak` and `/diagram` handlers still have no entry/outcome lines. The
-      workers and websocket path are done; the HTTP endpoints are not. `/speak`
-      in particular should log arrivals — that is the other half of defect 1.
+      workers and websocket path are done; the HTTP endpoints are not. Callback
+      failures are bounded and returned to the extension, but endpoint-level
+      arrival/outcome logging remains follow-up work.
 - [ ] Consider a per-connection `info_span!` carrying a connection id so
       concurrent tabs can be told apart. The clip id covers the common case.
 

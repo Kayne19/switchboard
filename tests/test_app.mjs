@@ -783,6 +783,9 @@ export { setRoute, post };`;
 			{ model: "fixture-provider/fixture-model" },
 			modelSelect,
 		);
+		// The native select already contains the user's new value when the
+		// change handler runs; the picker must still remember the committed one.
+		thinkingSelect.value = "high";
 		const thinking = picker.post(
 			"/thinking",
 			{ level: "high" },
@@ -828,6 +831,11 @@ export { setRoute, post };`;
 		assert.equal(routeSelect.disabled, false);
 		assert.equal(modelSelect.disabled, false);
 		assert.equal(thinkingSelect.disabled, false);
+		assert.equal(
+			thinkingSelect.value,
+			"",
+			"failed picker request restores the last committed value",
+		);
 	} finally {
 		delete globalThis.document;
 		for (const name of [

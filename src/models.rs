@@ -230,12 +230,23 @@ impl ModelCatalog {
             return Err(ModelError("no model was named".into()));
         }
         if !self.available {
-            return Err(ModelError(format!(
-                "I can't verify models right now: {}",
-                self.diagnostic
-                    .as_deref()
-                    .unwrap_or("the model catalog is unavailable")
-            )));
+            // A provider-qualified spec is unambiguous even when discovery is
+            // unavailable. Keep the deployment contract useful during a
+            // transient SSH/listing failure, while refusing a bare name that
+            // would require guessing the provider.
+            if wanted_provider.is_empty() {
+                return Err(ModelError(format!(
+                    "I can't verify bare model names right now: {}",
+                    self.diagnostic
+                        .as_deref()
+                        .unwrap_or("the model catalog is unavailable")
+                )));
+            }
+            return Ok(ModelChoice {
+                provider: wanted_provider,
+                model: wanted_model,
+                thinking: level,
+            });
         }
         let key = normalize(&wanted_model);
         let pool = self
@@ -321,11 +332,11 @@ pub async fn fetch_catalog(argv: &[String]) -> ModelCatalog {
     // narrows what models may be requested. Without these lines, "the model I
     // asked for was refused" and "listing models never worked on that host"
     // look identical from outside.
-    let listing = argv.join(" ");
+    let program = argv.first().map(String::as_str).unwrap_or("<missing>");
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
-            tracing::warn!(command = %listing, %error, "could not list models");
+            tracing::warn!(%program, %error, "could not list models");
             return ModelCatalog::unavailable(format!("could not run model listing: {error}"));
         }
     };
@@ -348,10 +359,10 @@ pub async fn fetch_catalog(argv: &[String]) -> ModelCatalog {
         outcome => {
             match outcome {
                 Ok(Err(error)) => {
-                    tracing::warn!(command = %listing, %error, "listing models failed")
+                    tracing::warn!(%program, %error, "listing models failed")
                 }
                 _ => tracing::warn!(
-                    command = %listing,
+                    %program,
                     timeout = ?LIST_TIMEOUT,
                     "listing models timed out"
                 ),
@@ -476,12 +487,23 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_catalog_reports_diagnostic_and_rejects_explicit_model() {
+    fn unavailable_catalog_passes_through_qualified_models_and_suffixes() {
         let catalog = ModelCatalog::unavailable("ssh failed");
         assert!(!catalog.available);
         assert_eq!(catalog.diagnostic.as_deref(), Some("ssh failed"));
+        assert_eq!(
+            catalog
+                .resolve("anthropic/opus:thinking level x high", "")
+                .unwrap()
+                .spec(),
+            "anthropic/opus:xhigh"
+        );
+        assert_eq!(
+            catalog.resolve("openai/gpt-5.6", "medium").unwrap().spec(),
+            "openai/gpt-5.6:medium"
+        );
         assert!(catalog
-            .resolve("anthropic/opus", "")
+            .resolve("opus", "")
             .unwrap_err()
             .to_string()
             .contains("ssh failed"));

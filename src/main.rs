@@ -1,6 +1,8 @@
 pub mod api;
 pub mod audio;
+pub mod diagnostic;
 pub mod history;
+pub mod lifecycle;
 pub mod models;
 pub mod pbx;
 pub mod pi_client;
@@ -33,6 +35,7 @@ pub struct Config {
     pub idle_timeout: f64,
     pub idle_poll: f64,
     pub max_spoken_chars: usize,
+    pub speech_deadline_ms: u64,
     pub history_limit: usize,
     pub session: String,
     pub speak_url: String,
@@ -108,6 +111,7 @@ impl Config {
             idle_timeout: number(values, "SWITCHBOARD_IDLE_TIMEOUT", 3600.0),
             idle_poll: number(values, "SWITCHBOARD_IDLE_POLL", 30.0),
             max_spoken_chars: usize_value(values, "SWITCHBOARD_MAX_SPOKEN_CHARS", 700, false),
+            speech_deadline_ms: bounded_ms(values, "SWITCHBOARD_SPEECH_DEADLINE_MS", 25_000),
             history_limit: usize_value(values, "SWITCHBOARD_HISTORY_LIMIT", 200, true),
             session: get(values, "SWITCHBOARD_SESSION", ""),
             speak_url: get(values, "SWITCHBOARD_SPEAK_URL", ""),
@@ -146,6 +150,17 @@ fn number(values: &HashMap<String, String>, name: &str, default: f64) -> f64 {
             tracing::warn!(setting = name, value = raw, %default, "setting is not a number; using the default");
             default
         }
+    }
+}
+fn bounded_ms(values: &HashMap<String, String>, name: &str, default: u64) -> u64 {
+    match values.get(name) {
+        None => default,
+        Some(raw) => raw
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .filter(|value| (1..=120_000).contains(value))
+            .unwrap_or_else(|| panic!("{name} must be a positive integer from 1 to 120000 ms")),
     }
 }
 fn usize_value(
@@ -334,6 +349,7 @@ async fn main() {
         idle_timeout = config.idle_timeout,
         idle_poll = config.idle_poll,
         max_spoken_chars = config.max_spoken_chars,
+        speech_deadline_ms = config.speech_deadline_ms,
         history_limit = config.history_limit,
         log_filter = %filter,
         "switchboard configuration"

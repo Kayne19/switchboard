@@ -1,0 +1,1 @@
+The review is partly stale: callback operation matching and rescue registration comments are present, but I traced two remaining gaps. I’m fixing the shared delivery/operation gates first, then lifecycle token/staging and configuration diagnostics, with focused Rust tests.

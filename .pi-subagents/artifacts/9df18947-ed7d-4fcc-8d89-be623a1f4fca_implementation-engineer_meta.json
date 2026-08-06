@@ -1,0 +1,147 @@
+{
+  "runId": "9df18947-ed7d-4fcc-8d89-be623a1f4fca",
+  "agent": "implementation-engineer",
+  "task": "Inspect the repository and apply the smallest safe fix based on # Handoff Output: plan\nStatus: success\nVerdict: (none)\nTimestamp: 1785999780\n\n## Content\n# Playback ownership fix plan\n\n## Findings\n\n- **High:** `web/app.ts:368-454` (`playNext`, `ended`, `pause`, `error`, document-click handlers) has no per-clip event identity or consumed latch. Late and duplicate events can mutate a newer clip.\n- **Medium:** `web/app.ts:370-386` replaces `player.src` without explicitly pausing and unloading the prior owner.\n- **Medium:** `web/app.ts:437-454` can resume a seek-to-end pause before `ended` confirms completion.\n- **Medium:** `tests/test_app.mjs:31-116` lacks reverse event ordering, duplicate events, stale play rejection, and owner-cleanup coverage.\n- `static/index.html:711` has only one native player; no server change is justified.\n\n## Ordered implementation\n\n1. **Make ownership explicit in `web/app.ts`.** Replace the ambiguous `currentBlob/currentUrl` pairing with one active playback-owner record containing the blob, URL, unique token, consumed state, pending-play token, and seek-to-end confirmation state. Update binary-frame and epoch-rescue references accordingly.\n2. **Centralize lifecycle transitions around `playNext` and new local helpers.**\n   - Keep ordinary pause ownership and queue membership unchanged.\n   - Before replacing or clearing an owner, invalidate it, detach its media handlers, call `player.pause()`, remove `src`, call `player.load()`, and revoke its object URL.\n   - Assign a fresh owner token and install media handlers that close over that owner. Old callbacks must no-op when their owner is no longer active.\n   - Increment the play-attempt token for every `play()` call, including resume, so stale promise settlements cannot restore playback.\n3. **Make event handling idempotent.**\n   - `pause` only marks the active owner paused and invalidates pending continuation; it never consumes or requeues the blob.\n   - Detect a pause at the clip duration as awaiting end confirmation; document-click resume must not restart it before `ended`.\n   - `ended` and decode `error` call one guarded consume/advance helper. The helper marks consumed before cleanup, so either event order and duplicates advance FIFO once.\n   - A rejected `play()` requeues the owner once only while its owner and attempt tokens remain current.\n4. **Reuse the same cleanup helper in the epoch-rescue block at `web/app.ts:768-780`.** Preserve queue clearing and epoch invalidation, but do not duplicate player pause/source/URL cleanup. Do not modify `src/api.rs`, `static/index.html`, or server delivery.\n5. **Extend `tests/test_app.mjs:31-116`.** Upgrade the fake player to model `pause`, `load`, `paused`, duration/currentTime, errors, deferred play promises, and multiple listeners. Cover:\n   - ordinary pause retains A and queued B; resume starts A once;\n   - `pause → ended` and `ended → pause`;\n   - duplicate ended/pause/error events;\n   - stale A handlers and rejected A promises after B starts;\n   - explicit pause/load cleanup and one owner/source at a time.\n6. **Regenerate `static/app.js` only through `npm run build`; never hand-edit generated output.**\n\n## Checks\n\n- `npm test`\n- `npm run check`\n- `git diff --check`\n- `git diff --exit-code -- static` after the build, confirming generated output is included and stable.\n- Manual browser instrumentation should log `src`, `play`, `pause`, `load`, URL revocation, and every media owner during both seek event orders.\n\n## Rejected alternatives\n\n- No caller-specific guards: the shared playback lifecycle is the root cause.\n- No server/API changes: delivery is already ordered and the defect is browser ownership/state.\n- No second audio element or new playback abstraction: one native player exists; explicit owner identity and cleanup are sufficient.\n\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"The plan identifies severity-rated findings in web/app.ts and tests/test_app.mjs, names exact symbols, specifies the minimal ownership/idempotence fix, and defines runnable checks.\"\n    }\n  ],\n  \"changedFiles\": [],\n  \"testsAddedOrUpdated\": [],\n  \"commandsRun\": [],\n  \"validationOutput\": [\n    \"Inspected web/app.ts, static/app.js, static/index.html, tests/test_app.mjs, package.json, tsconfig.json, and docs/concurrency-and-test-hazards.md.\",\n    \"Confirmed one native audio element and no server-side evidence requiring a change.\"\n  ],\n  \"residualRisks\": [\n    \"Static inspection cannot prove whether the reported second stream is a browser source-replacement artifact or another runtime owner.\",\n    \"Browser-specific media event timing still requires manual instrumentation after implementation.\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"No files changed; implementation plan only.\",\n  \"reviewFindings\": [\n    \"high: web/app.ts:368-454 - playback handlers lack explicit per-clip identity and consumed protection\",\n    \"medium: web/app.ts:370-386 - source replacement does not explicitly stop and unload the prior owner\",\n    \"medium: web/app.ts:437-454 - document click can resume a seek-to-end pause before end confirmation\",\n    \"medium: tests/test_app.mjs:31-116 - missing reverse-order, duplicate-event, stale-promise, and cleanup coverage\"\n  ],\n  \"manualNotes\": \"Preserve FIFO and autoplay-retry behavior while making owner invalidation precede player.pause() during replacement and rescue.\"\n}\n```\n\n\u001b[38;2;136;136;136m✻ Turn took 2m 4s (Total time 2m 4s · 1 turn)\u001b[0m and # Handoff Output: review_plan\nStatus: success\nVerdict: REVISE\nTimestamp: 1785999925\n\n## Content\n# Adversarial playback-plan review\n\n1. **High:** `web/app.ts:392-405`  \n   The rejection path must invalidate and clean up the owner before requeueing. If it unshifts the blob while retaining the active owner, a later successful resume plays A, then FIFO plays requeued A again. Specify one-shot rejection handling: invalidate owner, pause/remove `src`/`load`/revoke, then unshift exactly once.\n\n2. **High:** `web/app.ts:437-454`  \n   Attempt tokens prevent stale settlements but do not prevent repeated document clicks from issuing multiple `play()` calls before the first resolves. Add a pending-resume guard and test two clicks before resolution, including one rejection followed by retry.\n\n3. **High:** `web/app.ts:386-406`, proposed pause semantics  \n   A `pause` caused by `src` replacement or `load()` can occur while initial `play()` is pending. “Pause invalidates pending continuation” can suppress the required autoplay-rejection requeue. Distinguish setup/cleanup pauses from user pauses, and test pending-play rejection after each.\n\n4. **Medium:** `web/app.ts:420-425`  \n   Terminal seek handling can wedge playback: a paused seek to `duration` may not emit `ended` until playback resumes, while the plan forbids resume; seeking backward before confirmation can leave a sticky terminal flag. Define reset behavior using `timeupdate`/`seeking`/`seeked` or a fresh duration check, with tests for reverse seek, duplicate `timeupdate`, and `NaN`/infinite duration. Never consume solely on `timeupdate`.\n\n5. **Medium:** `tests/test_app.mjs:31-116`  \n   The extracted test section does not exercise epoch rescue or binary-frame admission. Add coverage invoking the shared cleanup through rescue, asserting old callbacks/promises cannot mutate state, cleanup occurs once, and binary audio arriving during an ordinary pause queues behind the owner.\n\n6. **Medium:** listener detachment needs a real retained-listener fake. Verify old A callbacks manually after B starts, rather than relying only on a map that replaces handlers; otherwise listener accumulation and stale dispatch remain untested.\n\nResidual risk: the tests are transpiled lifecycle tests, not browser media tests. Actual `src` setter timing, native pause emission, autoplay policy, and whether paused terminal seeks emit `ended` still require browser instrumentation.\n\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"Concrete severity-rated race and validation findings are identified with repository paths and line ranges, including required implementation amendments.\"\n    }\n  ],\n  \"changedFiles\": [],\n  \"testsAddedOrUpdated\": [],\n  \"commandsRun\": [],\n  \"validationOutput\": [\n    \"Inspected web/app.ts, tests/test_app.mjs, static/index.html, package.json, and docs/concurrency-and-test-hazards.md.\",\n    \"Confirmed one native audio element and identified unresolved rejection, duplicate-click, pending-pause, seek, and rescue-test gaps.\"\n  ],\n  \"residualRisks\": [\n    \"Browser-specific media event scheduling and autoplay behavior remain unverified without manual instrumentation or browser tests.\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"Review only; no files changed.\",\n  \"reviewFindings\": [\n    \"high: web/app.ts:392-405 - rejection requeue can duplicate playback unless owner teardown precedes unshift\",\n    \"high: web/app.ts:437-454 - repeated clicks can issue duplicate resume play() calls\",\n    \"high: web/app.ts:386-406 - setup/cleanup pause can conflict with pending-play rejection handling\",\n    \"medium: web/app.ts:420-425 - terminal seek confirmation can wedge or remain stale after reverse seeking\",\n    \"medium: tests/test_app.mjs:31-116 - rescue, binary admission, and retained stale callbacks are not exercised\"\n  ],\n  \"manualNotes\": \"Revise the plan with explicit rejection teardown, pending-resume suppression, setup-pause discrimination, terminal-seek reset rules, and rescue-path tests.\"\n}\n```\n\nVERDICT: REVISE\n\n\u001b[38;2;136;136;136m✻ Turn took 2m 20s (Total time 2m 20s · 1 turn)\u001b[0m. Re-read the actual symbols before editing. Fix the shared playback/queue ownership or lifecycle root cause, not just one caller. Add or update focused tests where the existing test structure calls for it, rebuild committed static browser output when source changes, and run targeted checks. Do not touch deployment or homelab files. Report changed files and commands/results.\n\n---\n**Output:**\nWrite your findings to exactly this path: /home/kayne19/projects/switchboard/.pi-workflow/outputs/wf_1785999378987544477_3719023_0/implement.md\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-5.6-luna",
+  "attemptedModels": [
+    "openai-codex/gpt-5.6-luna"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.6-luna",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 116232,
+        "output": 19158,
+        "cacheRead": 1785344,
+        "cacheWrite": 0,
+        "cost": 0.08194288000000001,
+        "turns": 42
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only task wording"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only task wording"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Fixed the shared playback ownership root cause in web/app.ts, regenerated static/app.js, and added focused deferred-promise, duplicate-event, retained-listener, cleanup, seek, and stale-settlement coverage in tests/test_app.mjs."
+        }
+      ],
+      "changedFiles": [
+        "web/app.ts",
+        "tests/test_app.mjs",
+        "static/app.js"
+      ],
+      "testsAddedOrUpdated": [
+        "tests/test_app.mjs"
+      ],
+      "commandsRun": [
+        {
+          "command": "npm test",
+          "result": "passed",
+          "summary": "All browser protocol, diagram, extension, app lifecycle, and model-picker tests passed."
+        },
+        {
+          "command": "npm run check",
+          "result": "passed",
+          "summary": "TypeScript strict check passed."
+        },
+        {
+          "command": "git diff --check",
+          "result": "passed",
+          "summary": "No whitespace errors."
+        },
+        {
+          "command": "npm run build",
+          "result": "passed",
+          "summary": "Committed static browser output regenerated successfully."
+        }
+      ],
+      "validationOutput": [
+        "Playback tests model pause/load cleanup, deferred play promises, duplicate events, retained stale handlers, terminal seek reset, and stale rejected settlements.",
+        "No deployment or homelab files were changed."
+      ],
+      "residualRisks": [
+        "Native browser media event timing and autoplay behavior remain outside the Node harness and need manual browser instrumentation."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Replaced global blob/url playback state with explicit owner-scoped lifecycle and regenerated the browser bundle; expanded focused playback regression coverage.",
+      "reviewFindings": [
+        "fixed: web/app.ts:374-544 - global playback state allowed stale events and promises to mutate newer clips",
+        "fixed: web/app.ts:380-392 - owner replacement now pauses, unloads, detaches, and revokes before source handoff",
+        "fixed: web/app.ts:402-408 - duplicate or handoff ended events are owner/pending-attempt guarded",
+        "fixed: web/app.ts:856-860 - epoch rescue now uses shared owner cleanup",
+        "none remaining in the implemented scope"
+      ],
+      "manualNotes": "Browser instrumentation is still advisable for native src replacement, autoplay rejection, and seek-to-end event timing."
+    }
+  },
+  "launchContractDigest": "ac675f8901a30bc9161bae777e3da38be25cf504b59888315f900f6f8ddad969",
+  "launchResolvedExtensions": {
+    "version": 1,
+    "source": "launch-resolved",
+    "disableAmbientExtensions": false,
+    "runtime": [
+      "sha256:249682fb0750be04"
+    ],
+    "configured": [],
+    "effective": [
+      "sha256:249682fb0750be04"
+    ],
+    "omitted": {
+      "runtime": 0,
+      "configured": 0,
+      "effective": 0
+    }
+  },
+  "transcriptPath": "/home/kayne19/projects/switchboard/.pi-subagents/artifacts/9df18947-ed7d-4fcc-8d89-be623a1f4fca_implementation-engineer_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1786000427308
+}

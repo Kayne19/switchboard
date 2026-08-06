@@ -126,7 +126,11 @@ resolved spec is always provider-qualified even when the caller was not that
 specific.
 
 If the catalog cannot be read at all, a provider-qualified spec is passed
-through (it is unambiguous by construction) and a bare name is refused.
+through (it is unambiguous by construction) and a bare name is refused. A
+thinking suffix such as `provider/model:high` is normalized and retained during
+that fallback and on a context-preserving redial. When discovery succeeds, the
+picker contains only the provider-qualified entries from that host's catalog;
+the current entry is retained even if a refreshed catalog no longer lists it.
 
 The operator is never swappable. It is where a failed swap lands the caller, so
 it always answers on `switchboard_operator_model`. Set
@@ -150,6 +154,13 @@ level as requested rather than stating it.
 `POST /thinking` (the picker on the page) sets the level for the rest of the
 process and re-dials the live project leg onto it, keeping the session file. The
 operator is never re-dialled for this; its level is a deployed setting.
+
+Project callbacks carry `SWITCHBOARD_SESSION_TOKEN`, an opaque token freshly
+created for each process and distinct from the persistent Pi session ID. It
+rejects stale speech, diagram, and thinking callbacks after a redial; it is a
+correlation value, not authentication. A failed `/speak` delivery is reported
+as an extension tool error, so the written reply remains eligible for fallback
+synthesis rather than being suppressed by a tool-start event.
 
 ## Connecting without the operator
 
@@ -233,10 +244,17 @@ The plain project-agent extension reads `SWITCHBOARD_PERSONA` at runtime and the
 switchboard passes it through to each agent's environment. The homelab env file
 and its deployment template must provide this variable before deploying; the
 persona is no longer rendered into the extension source. Keep the authoritative
-Jinja deployment copies in homelab until that migration is complete.
+Jinja deployment copies in homelab until that migration is complete. Project
+processes also receive `SWITCHBOARD_SESSION_TOKEN`: a fresh per-process callback
+correlation token distinct from the persistent `SWITCHBOARD_SESSION` identity.
+It is not authentication, and deployment changes remain a separate homelab PR.
 
 The Rust service keeps STT behind the transitional `SWITCHBOARD_STT_COMMAND`
 sidecar contract: WebM bytes go to stdin and transcript text comes from stdout.
+Speech synthesis uses the shared `SWITCHBOARD_SPEECH_DEADLINE_MS` environment
+contract (positive, bounded milliseconds; default `25000`) for `/speak`, normal
+replies, and the project extension's abort timeout. Deployment overrides require
+the corresponding homelab contract update.
 The Rust Whisper path is intentionally not declared production-equivalent until
 it is benchmarked against the deployed faster-whisper model.
 

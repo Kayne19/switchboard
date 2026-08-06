@@ -1,0 +1,162 @@
+{
+  "runId": "9e41d3f6-d6b1-451d-b33a-78a64765ba75",
+  "agent": "code-reviewer",
+  "task": "Review all implementation, test, and verification handoffs. Confirm the user symptoms are addressed, no unresolved race/runtime issue remains in scope, static output is synchronized, and model-picker claims are honest about repository versus deployment configuration. End with exactly one terminal verdict line: VERDICT: APPROVE or VERDICT: REQUEST_CHANGES. Do not edit files.\n\n## Context from phase 'verify'\n# Handoff Output: verify\nStatus: success\nVerdict: (none)\nTimestamp: 1785995663\n\n## Content\nVerification artifact for `/home/kayne19/projects/switchboard/.pi-workflow/outputs/wf_1785993137994978505_3627287_0/verify.md`:\n\n```markdown\n# Verification\n\nStatus: code gates passed. Deployment attestation remains incomplete.\n\nManifest inspection covered `Cargo.toml`/`Cargo.lock`, `package.json`/`package-lock.json`,\n`tsconfig.json`, `rust-toolchain.toml`, `requirements.txt`, and CI workflow.\n\n- `cargo fmt --all -- --check`: exit 0.\n- `cargo test --locked`: exit 0; 50 passed.\n- `cargo clippy --locked --all-targets -- -D warnings`: exit 0.\n- `python3 -m unittest discover -s legacy/tests`: exit 0; 143 passed. Expected injected-error logs appeared.\n- `npm test`: exit 0; TypeScript build and all browser tests passed.\n- `git diff --check`: exit 0.\n- `npm ci --ignore-scripts --dry-run`: exit 0; lockfile current.\n- `cargo metadata --locked --no-deps --format-version 1`: exit 0; one package/workspace.\n- `npm run build`: exit 0; repository status unchanged.\n\n`git diff --exit-code -- static`: exit 1. The only reported difference is the expected,\ncurrently-uncommitted generated `static/app.js` change. This is not a generated-source\nmismatch; rebuilding reproduces the existing artifact. No files were intentionally edited\nduring verification.\n\n## Model catalog evidence\n\n- `src/models.rs:386-403` Rust fixture resolves:\n  - `GPT 5.6` -> `openai/gpt-5.6`\n  - `moonshot/luna` -> `moonshot/luna`\n  - `openai/sol` -> `openai/sol`\n- `tests/test_app.mjs:369-386` browser fixture exposes all three entries.\n- Local `pi --list-models` succeeded (exit 0) and showed:\n  - `cursor/gpt-5.6@1m` and `cursor/gpt-5.6@272k` variants\n  - `openai-codex/gpt-5.6-luna`\n  - `openai-codex/gpt-5.6-sol`\n- Bare names may be ambiguous in the live catalog; use provider-qualified canonical IDs.\n\n## Residual risks\n\nThe local catalog is not deployment evidence. Catalogs are queried per target host via\n`pi --list-models` (`src/pi_client.rs:753-766`); this workspace lacks the homelab\ndeployment registry, target-host credentials, and remote-host verification. The deployed\ncopy remains homelab-controlled until cutover. No real browser/media-device, WebSocket\nE2E, SSH project-host, or production STT/model validation was performed.\n```\n\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"All requested gates were executed with exit statuses; model catalog evidence and deployment limitations are documented with source paths.\"\n    }\n  ],\n  \"changedFiles\": [\n    \"package.json\",\n    \"src/models.rs\",\n    \"src/pbx.rs\",\n    \"web/app.ts\",\n    \"static/app.js\",\n    \"tests/test_app.mjs\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"src/models.rs\",\n    \"tests/test_app.mjs\"\n  ],\n  \"commandsRun\": [\n    {\"command\": \"cargo fmt --all -- --check\", \"result\": \"passed\", \"summary\": \"exit 0\"},\n    {\"command\": \"cargo test --locked\", \"result\": \"passed\", \"summary\": \"50 passed\"},\n    {\"command\": \"cargo clippy --locked --all-targets -- -D warnings\", \"result\": \"passed\", \"summary\": \"exit 0\"},\n    {\"command\": \"python3 -m unittest discover -s legacy/tests\", \"result\": \"passed\", \"summary\": \"143 passed\"},\n    {\"command\": \"npm test\", \"result\": \"passed\", \"summary\": \"build and browser tests passed\"},\n    {\"command\": \"git diff --exit-code -- static\", \"result\": \"failed\", \"summary\": \"exit 1 due expected uncommitted static/app.js change\"},\n    {\"command\": \"git diff --check\", \"result\": \"passed\", \"summary\": \"exit 0\"},\n    {\"command\": \"pi --list-models\", \"result\": \"passed\", \"summary\": \"local catalog showed GPT 5.6, Luna, and Sol variants\"}\n  ],\n  \"validationOutput\": [\n    \"Manifest and lockfile checks passed.\",\n    \"Generated static output rebuilt reproducibly.\"\n  ],\n  \"residualRisks\": [\n    \"Deployment-host catalogs and credentials were not verifiable.\",\n    \"No real browser, media-device, WebSocket, SSH, or production STT/model validation.\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"Verification only; approved source and generated static changes remain unstaged.\",\n  \"reviewFindings\": [\n    \"medium: deployment-side model availability cannot be attested from this repository.\",\n    \"info: git diff --exit-code -- static is nonzero only because static/app.js is an expected uncommitted generated artifact.\"\n  ],\n  \"manualNotes\": \"Local canonical IDs include openai-codex/gpt-5.6-luna and openai-codex/gpt-5.6-sol; bare names can be ambiguous.\"\n}\n```\n\n\u001b[38;2;136;136;136m✻ Turn took 3m 15s (Total time 3m 14s · 2 turns)\u001b[0m\n\n---\n**Output:**\nReturn the complete artifact in your final response.\nThe runtime will persist it to exactly this path: /home/kayne19/projects/switchboard/.pi-workflow/outputs/wf_1785993137994978505_3627287_0/final_review.md\nDo not call contact_supervisor merely because no write-capable tool is available.\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-5.6-luna",
+  "attemptedModels": [
+    "openai-codex/gpt-5.6-luna"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.6-luna",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 210902,
+        "output": 8199,
+        "cacheRead": 1116160,
+        "cacheWrite": 0,
+        "cost": 0.07434239999999999,
+        "turns": 21
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "not-satisfied",
+          "evidence": "Verification gates passed, but the review found unresolved audio, transcript, session-callback, picker, catalog, and playback races with concrete source and test evidence."
+        }
+      ],
+      "changedFiles": [
+        "package.json",
+        "src/models.rs",
+        "src/pbx.rs",
+        "web/app.ts",
+        "static/app.js",
+        "tests/test_app.mjs"
+      ],
+      "testsAddedOrUpdated": [
+        "src/models.rs",
+        "tests/test_app.mjs"
+      ],
+      "commandsRun": [
+        {
+          "command": "cargo test --locked",
+          "result": "passed",
+          "summary": "50 passed"
+        },
+        {
+          "command": "cargo clippy --locked --all-targets -- -D warnings",
+          "result": "passed",
+          "summary": "No warnings"
+        },
+        {
+          "command": "python3 -m unittest discover -s legacy/tests",
+          "result": "passed",
+          "summary": "143 passed"
+        },
+        {
+          "command": "npm test",
+          "result": "passed",
+          "summary": "Build and browser tests passed"
+        },
+        {
+          "command": "git diff --exit-code -- static",
+          "result": "failed",
+          "summary": "Expected uncommitted generated static/app.js change"
+        }
+      ],
+      "validationOutput": [
+        "npm run build reproduced the existing static artifact.",
+        "No deployment-host catalog, browser/device, WebSocket, SSH, or production model validation was performed."
+      ],
+      "residualRisks": [
+        "Pre-rescue transcripts and audio can still reach durable history or the caller.",
+        "Stale agent callbacks can mutate replacement-leg status.",
+        "Unavailable catalogs can authorize arbitrary qualified models and are indistinguishable in status.",
+        "The exact deployment model IDs and picker options remain unattested."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Browser lifecycle fixes and generated output were added, but planned backend epoch/audio/session protections and explicit catalog availability semantics remain unresolved.",
+      "reviewFindings": [
+        "high: src/models.rs:211-221,297-370 - unavailable catalogs accept arbitrary qualified models",
+        "high: src/api.rs:344-374 - stale transcripts are published before epoch validation",
+        "high: src/api.rs:57-59,272-290,853-881 and web/app.ts:726-730 - audio ordering and stale-audio suppression remain unresolved",
+        "high: src/pbx.rs:54-104,1068 and extensions/agent-switchboard.ts:44-50 - stale thinking callbacks lack session identity",
+        "high: web/app.ts:407-430 and tests/test_app.mjs:90-106 - pause-then-ended playback race is not fixed or tested",
+        "medium: web/app.ts:835-967 - new recording is not blocked until prior onstop cleanup",
+        "medium: web/app.ts:489-565 - picker requests are not globally serialized",
+        "medium: src/pbx.rs:289-316 - catalog availability is not exposed"
+      ],
+      "manualNotes": "Verification is honest that local pi output is not deployment evidence; fixture model names must not be presented as deployed canonical IDs."
+    }
+  },
+  "launchContractDigest": "d5b9e1ee4eba21401636ca0b238764cc244740f9f62aeb27b1faddf0a8095be7",
+  "launchResolvedExtensions": {
+    "version": 1,
+    "source": "launch-resolved",
+    "disableAmbientExtensions": false,
+    "runtime": [
+      "sha256:249682fb0750be04"
+    ],
+    "configured": [],
+    "effective": [
+      "sha256:249682fb0750be04"
+    ],
+    "omitted": {
+      "runtime": 0,
+      "configured": 0,
+      "effective": 0
+    }
+  },
+  "transcriptPath": "/home/kayne19/projects/switchboard/.pi-subagents/artifacts/9e41d3f6-d6b1-451d-b33a-78a64765ba75_code-reviewer_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1785995866940
+}

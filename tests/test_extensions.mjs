@@ -32,7 +32,10 @@ async function loadExtension(path) {
 		/import \{ Type \} from ["']typebox["'];/,
 		typeboxStub,
 	);
-	assert.ok(javascript.includes("const Type ="), "typebox import should be stubbed");
+	assert.ok(
+		javascript.includes("const Type ="),
+		"typebox import should be stubbed",
+	);
 	const encoded = Buffer.from(javascript).toString("base64");
 	moduleNumber += 1;
 	return import(`data:text/javascript;base64,${encoded}#${moduleNumber}`);
@@ -61,11 +64,16 @@ async function agentExtensionBehavior() {
 	process.env.SWITCHBOARD_STATE_URL = "http://switchboard.test/leg-state";
 	process.env.SWITCHBOARD_DIAGRAM_URL = "http://switchboard.test/diagram";
 	process.env.SWITCHBOARD_PERSONA = "Sound calm and direct.";
+	process.env.SWITCHBOARD_SESSION_TOKEN = "leg-token";
 
 	const requests = [];
 	const previousFetch = globalThis.fetch;
 	globalThis.fetch = async (url, options) => {
-		requests.push({ url: String(url), options, body: JSON.parse(options.body) });
+		requests.push({
+			url: String(url),
+			options,
+			body: JSON.parse(options.body),
+		});
 		return new Response(JSON.stringify({ delivered: true }), {
 			status: 200,
 			headers: { "Content-Type": "application/json" },
@@ -77,18 +85,32 @@ async function agentExtensionBehavior() {
 		extension.default(pi);
 		assert.deepEqual(
 			[...pi.tools.keys()],
-			["speak", "diagram", "return_to_operator", "transfer_to_project", "set_model"],
+			[
+				"speak",
+				"diagram",
+				"return_to_operator",
+				"transfer_to_project",
+				"set_model",
+			],
 		);
 		assert.match(pi.tools.get("speak").description, /Sound calm and direct/);
 
 		await pi.handlers.get("session_start")();
 		await pi.handlers.get("thinking_level_select")();
 		assert.equal(requests[0].url, process.env.SWITCHBOARD_STATE_URL);
-		assert.deepEqual(requests[0].body, { thinking: "xhigh" });
+		assert.deepEqual(requests[0].body, {
+			thinking: "xhigh",
+			token: "leg-token",
+		});
 
-		const spoken = await pi.tools.get("speak").execute("call", { text: "Still working." });
+		const spoken = await pi.tools
+			.get("speak")
+			.execute("call", { text: "Still working." });
 		assert.equal(spoken.content[0].text, "Spoken.");
-		assert.deepEqual(requests.at(-1).body, { text: "Still working." });
+		assert.deepEqual(requests.at(-1).body, {
+			text: "Still working.",
+			token: "leg-token",
+		});
 
 		const drawn = await pi.tools.get("diagram").execute("call", {
 			source: "flowchart TD; A-->B",
@@ -99,6 +121,7 @@ async function agentExtensionBehavior() {
 			source: "flowchart TD; A-->B",
 			title: "Call path",
 			notes: "",
+			token: "leg-token",
 		});
 
 		const returned = await pi.tools
@@ -121,6 +144,7 @@ async function agentExtensionBehavior() {
 		});
 	} finally {
 		globalThis.fetch = previousFetch;
+		delete process.env.SWITCHBOARD_SESSION_TOKEN;
 	}
 }
 
@@ -129,6 +153,7 @@ async function agentExtensionFallbacks() {
 	delete process.env.SWITCHBOARD_STATE_URL;
 	delete process.env.SWITCHBOARD_DIAGRAM_URL;
 	delete process.env.SWITCHBOARD_PERSONA;
+	delete process.env.SWITCHBOARD_SESSION_TOKEN;
 	const extension = await loadExtension("extensions/agent-switchboard.ts");
 	const pi = fakePi();
 	extension.default(pi);
@@ -157,6 +182,12 @@ async function agentExtensionHttpFailures() {
 			);
 		}
 		if (speakMode === "network-error") throw new Error("connection refused");
+		if (speakMode === "not-delivered") {
+			return new Response(
+				JSON.stringify({ delivered: false, reason: "no browser connected" }),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			);
+		}
 		return new Response("bad gateway", { status: 502 });
 	};
 	try {
@@ -166,7 +197,9 @@ async function agentExtensionHttpFailures() {
 		// State reporting is advisory and must never fail session startup.
 		await pi.handlers.get("session_start")();
 
-		const refused = await pi.tools.get("speak").execute("call", { text: "Hello" });
+		const refused = await pi.tools
+			.get("speak")
+			.execute("call", { text: "Hello" });
 		assert.equal(refused.isError, true);
 		assert.match(refused.content[0].text, /HTTP 502/);
 
@@ -176,6 +209,13 @@ async function agentExtensionHttpFailures() {
 			.execute("call", { text: "Hello again" });
 		assert.equal(unreachable.isError, true);
 		assert.match(unreachable.content[0].text, /Could not reach/);
+
+		speakMode = "not-delivered";
+		const undelivered = await pi.tools
+			.get("speak")
+			.execute("call", { text: "Hello without a page" });
+		assert.equal(undelivered.isError, true);
+		assert.match(undelivered.content[0].text, /Nothing was played/);
 
 		const held = await pi.tools
 			.get("diagram")
@@ -209,7 +249,10 @@ async function operatorExtensionBehavior() {
 		const extension = await loadExtension("extensions/operator-switchboard.ts");
 		const pi = fakePi();
 		extension.default(pi);
-		assert.deepEqual([...pi.tools.keys()], ["list_projects", "transfer_to_project"]);
+		assert.deepEqual(
+			[...pi.tools.keys()],
+			["list_projects", "transfer_to_project"],
+		);
 		const listed = await pi.tools.get("list_projects").execute("call", {});
 		assert.match(listed.content[0].text, /alpha/);
 		assert.match(listed.content[0].text, /scriptorium:\/srv\/alpha/);

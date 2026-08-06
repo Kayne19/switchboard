@@ -1,0 +1,131 @@
+{
+  "runId": "43ba1e38-1cac-4e19-adf1-0201ef66e2bf",
+  "agent": "implementation-planner",
+  "task": "Revise plan_v6 using review_v6. Close all six findings with exact mechanisms, ownership boundaries, propagation paths, and deterministic tests. Do not edit source files. Preserve all previously approved behavior, compatibility, and scope decisions.\n\nRequired corrections:\n1. Generation authority: CallLifecycle is the sole owner of current generation. Remove generation ownership from DeliveryState; reservations carry a captured identity only. Define one coordinator transaction/order that advances lifecycle generation and cancels/finalizes affected audio reservations before any finish_audio can commit. Add timeout-versus-transition race tests.\n2. Remote input validation: require POSIX environment-name validation before emitting any shell export, reject invalid names and unsafe values with bounded errors, and safely handle option-like SSH hosts using an explicit argument strategy. Preserve shell quoting and session identity validation. Add tests for invalid names, leading-dash hosts, metacharacters, and normal inputs.\n3. Lock directory replacement race: specify a real descriptor-relative no-follow algorithm whose held directory FDs prevent namespace replacement between ancestor traversal and lock-file open, with inode/device or equivalent identity checks where needed. Define secure owner/mode checks and the exact Result/error path. Add deterministic pre-existing symlink and replacement-race tests; do not claim weaker checks prove safety.\n4. Audio queue saturation: define finish_audio/oneshot behavior when bounded per-connection try_send cannot enqueue. No committed audio may be silently lost and no delivered:true may precede actual acceptance. Choose explicit block-with-deadline or fail-and-report semantics, finalize/cancel reservations consistently, and test queue-full plus written fallback behavior.\n5. Candidate effective-thinking: preserve session_start thinking state without allowing candidate callback side effects. Define a private startup-result/staging channel owned by CandidateLeg, commit it only at adoption, and ensure candidate callbacks remain rejected externally. Add startup/adoption/failure tests proving thinking state is neither lost nor exposed prematurely.\n6. Diagnostics authority: put the process-global ring and monotonic sequence in a separate DiagnosticTrace service. CallLifecycle emits bounded records through it but does not own the global counter/ring; define synchronization, retention, and sanitization ownership and tests.\n\nEnd with exact file/symbol mapping, ownership table, race/security tests, acceptance commands, and no unresolved ambiguity for these findings.\n\n## Context from phase 'review_v6'\n# Handoff Output: review_v6\nStatus: success\nVerdict: REVISE\nTimestamp: 1786006066\n\n## Content\n# Adversarial review\n\n1. **High: lifecycle generation has two authorities.**  \n   Slice 1 assigns generation to `CallLifecycle`, while slice 5 makes `DeliveryState` own the current generation. Slice 2 advances it under the coordinator lock, then cancels audio separately. A `finish_audio` can interleave between those operations and observe inconsistent state. Make generation coordinator-owned and define one lock/order transaction for lifecycle advancement plus reservation cancellation.\n\n2. **High: remote command validation leaves injection/option risks.**  \n   `src/pi_client.rs:795-850` currently emits `export {name}=...` and passes `host` as an SSH argument. Plan_v6 only rejects NULs and bounds lengths. Invalid environment names can alter shell parsing, and option-like hosts can be interpreted as SSH options. Require POSIX environment-name validation and safe host argument handling, with tests.\n\n3. **High: descriptor algorithm does not prove replacement-race rejection.**  \n   `mkdirat` followed by `openat(O_NOFOLLOW)` and owner/mode checks can accept a different same-owner, mode-0700 directory substituted between operations. The plan claims replacement races are rejected but specifies no inode/identity verification. Clarify and test the required invariant.\n\n4. **Medium: bounded `try_send` can silently lose committed audio.**  \n   `finish_audio` marks a reservation ready and drains it, then `try_send`s to a bounded queue. Queue-full behavior is unspecified; `/speak` may already have returned `delivered:true`. Define whether full queues cancel, block, or report failure, and test it.\n\n5. **Medium: candidate callback rejection loses effective thinking state.**  \n   `extensions/agent-switchboard.ts` reports thinking during `session_start`, before candidate adoption. Since plan_v6 rejects all Candidate callbacks and forbids buffering, the new leg can become Active with `thinking_confirmed:false` permanently. Preserve this callback result through an explicit startup/adoption mechanism without exposing candidate state.\n\n6. **Medium: diagnostics ownership contradicts process-global sequencing.**  \n   Slice 1 puts lifecycle diagnostics inside `CallLifecycle`, while slice 8 requires a process-global 256-entry ring and monotonic sequence numbers. Store the ring/counter in a separate diagnostic service; lifecycle may only emit bounded records.\n\nExisting v5 blockers are otherwise addressed: lock `Result` propagation and exit-75 settlement, atomic audio finalization intent, socket epoch capture/replacement cleanup, fresh status projection, and process/WebSocket ownership separation. Legacy sentinel/RPC behavior, unavailable catalogs, redial intent, and no homelab scope are explicitly retained, but the above ambiguities still permit security, delivery, and compatibility regressions.\n\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"not-satisfied\",\n      \"evidence\": \"The five v5 blockers are addressed, but generation ownership, remote validation/race invariants, queue-full behavior, candidate callbacks, and diagnostics ownership remain underspecified.\"\n    },\n    {\n      \"id\": \"criterion-2\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"Read-only inspection covered the plan, review_v5, src/api.rs, src/pi_client.rs, src/pbx.rs, extensions, browser protocol, and concurrency documentation.\"\n    }\n  ],\n  \"changedFiles\": [],\n  \"testsAddedOrUpdated\": [],\n  \"commandsRun\": [\n    {\n      \"command\": \"Repository and plan inspection via read/grep\",\n      \"result\": \"passed\",\n      \"summary\": \"Read-only review; no source changes.\"\n    }\n  ],\n  \"validationOutput\": [\n    \"Checked remote_argv callers, lifecycle mirrors, audio reservation paths, WebSocket protocol epochs, extension callbacks, and documented concurrency invariants.\"\n  ],\n  \"residualRisks\": [\n    \"Lifecycle/audio generation race\",\n    \"Remote shell and SSH input validation gaps\",\n    \"Directory replacement race\",\n    \"Audio loss on bounded queue saturation\",\n    \"Candidate effective-thinking callback loss\",\n    \"Diagnostics ownership ambiguity\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"No source changes; adversarial review only.\",\n  \"reviewFindings\": [\n    \"high: plan_v6 slices 1, 2, 5 - duplicated lifecycle-generation authority and incomplete cancellation ordering\",\n    \"high: src/pi_client.rs:795-850 - environment-name and SSH-host validation are insufficient\",\n    \"high: plan_v6 slice 3 - replacement-race rejection is asserted but not specified\",\n    \"medium: plan_v6 slice 5 - bounded try_send queue-full behavior is undefined\",\n    \"medium: plan_v6 slices 1-2 - Candidate startup callbacks can lose effective thinking\",\n    \"medium: plan_v6 slices 1 and 8 - diagnostics ownership conflicts with process-global ring semantics\"\n  ],\n  \"manualNotes\": \"Review_v5 closure is substantial but not exact enough to approve.\"\n}\n```\n\nVERDICT: REVISE\n\n\u001b[38;2;136;136;136m✻ Turn took 4m 30s (Total time 4m 30s · 1 turn)\u001b[0m\n\n---\n**Output:**\nReturn the complete artifact in your final response.\nThe runtime will persist it to exactly this path: /home/kayne19/projects/switchboard/.pi-workflow/outputs/wf_1786002388285300339_3730916_0/plan_v7.md\nDo not call contact_supervisor merely because no write-capable tool is available.\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-5.6-luna",
+  "attemptedModels": [
+    "openai-codex/gpt-5.6-luna"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.6-luna",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 95629,
+        "output": 12033,
+        "cacheRead": 148480,
+        "cacheWrite": 0,
+        "cost": 0.036535000000000005,
+        "turns": 9
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Plan_v7 assigns exact owners, transaction ordering, validation rules, descriptor identity checks, queue outcomes, candidate staging, diagnostic synchronization, deterministic tests, and file/symbol mappings for all six review findings."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "Read-only repository inspection and plan revision",
+          "result": "passed",
+          "summary": "No source files were edited."
+        },
+        {
+          "command": "cargo fmt --all -- --check; cargo test --locked; cargo clippy --locked --all-targets -- -D warnings; python3 -m unittest discover -s legacy/tests; npm test; git diff --exit-code -- static",
+          "result": "not-run",
+          "summary": "Implementation and verification belong to the executing implementation phase."
+        }
+      ],
+      "validationOutput": [
+        "All six review_v6 findings have explicit mechanisms, ownership boundaries, propagation paths, and deterministic tests."
+      ],
+      "residualRisks": [
+        "Live SSH, TTS, browser scheduling, and homelab deployment remain external validation surfaces."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Planning-only revision; no source changes.",
+      "reviewFindings": [
+        "closed high: generation authority and transition/audio ordering",
+        "closed high: POSIX environment validation and option-safe SSH host handling",
+        "closed high: descriptor-relative no-follow traversal with identity checks and fail-closed replacement handling",
+        "closed medium: bounded audio queue saturation and acknowledgement semantics",
+        "closed medium: private candidate thinking staging with adoption-only commit",
+        "closed medium: separate process-global DiagnosticTrace authority"
+      ],
+      "manualNotes": "No unresolved ambiguity remains for the six review_v6 findings."
+    }
+  },
+  "launchContractDigest": "ee06f0cad24a32cebad089ecf5afc8951cd50d25e822a9495a79ac213f4afffa",
+  "launchResolvedExtensions": {
+    "version": 1,
+    "source": "launch-resolved",
+    "disableAmbientExtensions": false,
+    "runtime": [
+      "sha256:249682fb0750be04"
+    ],
+    "configured": [],
+    "effective": [
+      "sha256:249682fb0750be04"
+    ],
+    "omitted": {
+      "runtime": 0,
+      "configured": 0,
+      "effective": 0
+    }
+  },
+  "transcriptPath": "/home/kayne19/projects/switchboard/.pi-subagents/artifacts/43ba1e38-1cac-4e19-adf1-0201ef66e2bf_implementation-planner_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1786006352181
+}

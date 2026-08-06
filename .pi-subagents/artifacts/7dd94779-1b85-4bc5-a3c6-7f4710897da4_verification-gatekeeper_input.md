@@ -1,0 +1,181 @@
+# Task for verification-gatekeeper
+
+Run the full repository gates against the repaired worktree: cargo fmt --all -- --check, cargo test --locked, cargo clippy --locked --all-targets -- -D warnings, python3 -m unittest discover -s legacy/tests, npm test, npm run build, git diff --check, and verify static output is synchronized. Inspect the actual diff. Report each rejected finding with direct evidence. Deployment-host model availability remains external, but verify local canonical model IDs and picker contract honestly. Do not edit files.
+
+## Context from phase 'repair'
+# Handoff Output: repair
+Status: success
+Verdict: (none)
+Timestamp: 1785997105
+
+## Content
+# Repair findings
+
+1. **Fixed:** `ModelCatalog` now distinguishes valid empty listings from unavailable/malformed listings, carries diagnostics, rejects explicit unverified provider/model swaps, and preserves configured startup fallback. PBX status exposes `models_available` and `models_diagnostic`; the picker disables unavailable model selection and shows the diagnostic.
+2. **Fixed:** stale clip epochs are checked under the transition lock before transcript history or transcript events are written.
+3. **Fixed:** audio synthesis reserves ordered sequence slots, emits generation/sequence metadata before binary audio, atomically rejects stale generations, clears pending server slots on rescue, and the browser drops queued/current old-epoch audio.
+4. **Fixed:** project leg state callbacks carry `SWITCHBOARD_SESSION_TOKEN`; the server validates it against the live leg, including startup publication before the process is fully attached. Stale tokens are rejected.
+5. **Fixed:** playback keeps the current blob across pause; ended advances even after pause, and ended-then-pause cannot re-wedge playback.
+6. **Fixed:** recording refuses a new recorder while the prior recorder remains active, pending `onstop`, or permission startup; recorder errors without `onstop` release tracks and terminate ownership.
+7. **Fixed:** route/model/thinking page operations share one serialized promise chain and retain request-generation/error/disabled-state protection.
+8. **Fixed:** PBX catalog availability and diagnostic state are present in status responses.
+
+## Changed files
+
+`src/models.rs`, `src/api.rs`, `src/pbx.rs`, `extensions/agent-switchboard.ts`, `web/app.ts`, `web/browser.d.ts`, `static/app.js`, `tests/test_app.mjs` (plus the pre-existing worktree change in `package.json`).
+
+## Tests and validation
+
+Added/updated deterministic regressions for catalog state, stale transcript suppression, ordered audio slots, stale session tokens, pause/ended playback, recorder terminal cleanup, and picker serialization.
+
+Commands passed:
+
+- `cargo fmt --all -- --check`
+- `cargo test --locked` (54 passed)
+- `cargo clippy --locked --all-targets -- -D warnings`
+- `npm test`
+- `python3 -m unittest discover -s legacy/tests` (143 passed)
+- `git diff --check`
+- staged-file check: no staged files
+
+Static output was rebuilt by `npm test` (`npm run build`).
+
+## Residual risks
+
+The extracted application is not deployed until the homelab deployment copy is switched to this tree/tag; that deployment-only drift remains outside this repository. No finding was deferred or blocked locally.
+
+```acceptance-report
+{
+  "criteriaSatisfied": [
+    {
+      "id": "criterion-1",
+      "status": "satisfied",
+      "evidence": "All eight accepted findings are repaired at shared Rust/PBX/browser state owners; static/app.js was rebuilt from web/app.ts."
+    },
+    {
+      "id": "criterion-2",
+      "status": "satisfied",
+      "evidence": "54 Rust tests, clippy, npm/browser tests, 143 legacy tests, diff checks, and no-staged-files verification passed."
+    }
+  ],
+  "changedFiles": [
+    "src/models.rs",
+    "src/api.rs",
+    "src/pbx.rs",
+    "extensions/agent-switchboard.ts",
+    "web/app.ts",
+    "web/browser.d.ts",
+    "static/app.js",
+    "tests/test_app.mjs",
+    "package.json"
+  ],
+  "testsAddedOrUpdated": [
+    "src/models.rs",
+    "src/api.rs",
+    "src/pbx.rs",
+    "tests/test_app.mjs"
+  ],
+  "commandsRun": [
+    {
+      "command": "cargo fmt --all -- --check",
+      "result": "passed",
+      "summary": "Rust formatting clean"
+    },
+    {
+      "command": "cargo test --locked",
+      "result": "passed",
+      "summary": "54 tests passed"
+    },
+    {
+      "command": "cargo clippy --locked --all-targets -- -D warnings",
+      "result": "passed",
+      "summary": "No warnings"
+    },
+    {
+      "command": "npm test",
+      "result": "passed",
+      "summary": "Build and browser regressions passed"
+    },
+    {
+      "command": "python3 -m unittest discover -s legacy/tests",
+      "result": "passed",
+      "summary": "143 tests passed"
+    },
+    {
+      "command": "git diff --check && git diff --cached --name-only",
+      "result": "passed",
+      "summary": "Diff clean and no staged files"
+    }
+  ],
+  "validationOutput": [
+    "Static/app.js was regenerated by the TypeScript build and is clean on a repeated build."
+  ],
+  "residualRisks": [
+    "Deployment remains dependent on the homelab copy switching to this application tree/tag."
+  ],
+  "noStagedFiles": true,
+  "diffSummary": "Catalog diagnostics and validation, stale transcript/audio guards with ordered metadata, session-token callbacks, and deterministic browser state-machine fixes.",
+  "reviewFindings": [
+    "no blockers; all eight actionable findings fixed locally"
+  ],
+  "manualNotes": "The worktree's package.json change predates this repair and was preserved."
+}
+```
+
+
+---
+**Output:**
+Write your findings to exactly this path: /home/kayne19/projects/switchboard/.pi-workflow/outputs/wf_1785995920184813107_3673414_0/verify_repair.md
+This path is authoritative for this run.
+Ignore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.
+
+## Acceptance Contract
+Acceptance level: attested
+Completion is not accepted from prose alone. End with a structured acceptance report.
+
+Criteria:
+- criterion-1: Return concrete findings with file paths and severity when applicable
+
+Required evidence: review-findings, residual-risks
+
+Finish with a fenced JSON block tagged `acceptance-report` in this shape:
+Use empty arrays when no items apply; array fields contain strings unless object entries are shown.
+`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.
+`commandsRun[].result` must be exactly one of: passed, failed, not-run.
+`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.
+```acceptance-report
+{
+  "criteriaSatisfied": [
+    {
+      "id": "criterion-1",
+      "status": "satisfied",
+      "evidence": "specific proof"
+    }
+  ],
+  "changedFiles": [
+    "src/file.ts"
+  ],
+  "testsAddedOrUpdated": [
+    "test/file.test.ts"
+  ],
+  "commandsRun": [
+    {
+      "command": "command",
+      "result": "passed",
+      "summary": "short result"
+    }
+  ],
+  "validationOutput": [
+    "validation output or concise summary"
+  ],
+  "residualRisks": [
+    "none"
+  ],
+  "noStagedFiles": true,
+  "diffSummary": "short description of the diff",
+  "reviewFindings": [
+    "blocker: file.ts:12 - issue found, or no blockers"
+  ],
+  "manualNotes": "anything else the parent should know"
+}
+```

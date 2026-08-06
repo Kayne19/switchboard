@@ -12,6 +12,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
@@ -21,10 +22,27 @@ const STT_TIMEOUT: Duration = Duration::from_secs(120);
 const STT_STDOUT_LIMIT: usize = 1024 * 1024;
 const STT_STDERR_LIMIT: usize = 64 * 1024;
 const TTS_RESPONSE_LIMIT: usize = 32 * 1024 * 1024;
+const SPEECH_DEADLINE_MAX_MS: u64 = 120_000;
+
+fn duration_value(values: &HashMap<String, String>, name: &str, default_ms: u64) -> Duration {
+    let millis = match values.get(name) {
+        None => default_ms,
+        Some(raw) => raw
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .filter(|value| (1..=SPEECH_DEADLINE_MAX_MS).contains(value))
+            .unwrap_or_else(|| {
+                panic!("{name} must be a positive integer from 1 to {SPEECH_DEADLINE_MAX_MS} ms")
+            }),
+    };
+    Duration::from_millis(millis)
+}
 
 #[derive(Debug)]
 pub enum AudioError {
     MissingSttCommand,
+    Deadline,
     Process(String),
     Tts(String),
 }
@@ -34,6 +52,7 @@ impl std::fmt::Display for AudioError {
             Self::MissingSttCommand => f.write_str(
                 "SWITCHBOARD_STT_COMMAND is not set; configure a WebM-to-text sidecar command",
             ),
+            Self::Deadline => f.write_str("speech deadline expired"),
             Self::Process(s) | Self::Tts(s) => f.write_str(s),
         }
     }
@@ -45,6 +64,7 @@ struct TtsRequest {
     url: String,
     api_key: String,
     body: serde_json::Value,
+    deadline: Instant,
 }
 
 type TtsFuture =
@@ -60,8 +80,12 @@ struct HttpTtsTransport;
 impl TtsTransport for HttpTtsTransport {
     fn send(&self, request: TtsRequest) -> TtsFuture {
         Box::pin(async move {
+            let remaining = request.deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(AudioError::Deadline);
+            }
             let client = reqwest::Client::builder()
-                .timeout(Duration::from_secs(30))
+                .timeout(remaining)
                 .build()
                 .map_err(|error| {
                     AudioError::Tts(format!("could not configure ElevenLabs client: {error}"))
@@ -88,6 +112,9 @@ impl TtsTransport for HttpTtsTransport {
             while let Some(chunk) = response.chunk().await.map_err(|error| {
                 AudioError::Tts(format!("could not read ElevenLabs response: {error}"))
             })? {
+                if Instant::now() >= request.deadline {
+                    return Err(AudioError::Deadline);
+                }
                 if bytes.len().saturating_add(chunk.len()) > TTS_RESPONSE_LIMIT {
                     return Err(AudioError::Tts(
                         "ElevenLabs response exceeded the audio size limit".into(),
@@ -242,6 +269,7 @@ pub struct Speaker {
     pub style: f32,
     pub speed: f32,
     pub max_chars: usize,
+    pub speech_deadline: Duration,
     transport: Arc<dyn TtsTransport>,
 }
 impl std::fmt::Debug for Speaker {
@@ -255,6 +283,7 @@ impl std::fmt::Debug for Speaker {
             .field("style", &self.style)
             .field("speed", &self.speed)
             .field("max_chars", &self.max_chars)
+            .field("speech_deadline", &self.speech_deadline)
             .finish()
     }
 }
@@ -289,6 +318,7 @@ impl Speaker {
             style: number(values, "ELEVENLABS_STYLE", 0.0),
             speed: number(values, "ELEVENLABS_SPEED", 1.0),
             max_chars,
+            speech_deadline: duration_value(values, "SWITCHBOARD_SPEECH_DEADLINE_MS", 25_000),
             transport: Arc::new(HttpTtsTransport),
         }
     }
@@ -316,6 +346,18 @@ impl Speaker {
         format!("{} — there's more on screen.", clipped.trim_end())
     }
     pub async fn synthesize(&self, text: &str) -> Result<Vec<u8>, AudioError> {
+        self.synthesize_until(text, Instant::now() + self.speech_deadline)
+            .await
+    }
+
+    pub async fn synthesize_until(
+        &self,
+        text: &str,
+        deadline: Instant,
+    ) -> Result<Vec<u8>, AudioError> {
+        if deadline <= Instant::now() {
+            return Err(AudioError::Deadline);
+        }
         if !self.configured() {
             return Err(AudioError::Tts("ELEVENLABS_API_KEY is not set".into()));
         }
@@ -331,6 +373,7 @@ impl Speaker {
             url: ELEVENLABS_TTS_URL.replace("{voice_id}", &self.voice_id),
             api_key: self.api_key.clone(),
             body,
+            deadline,
         };
         let (status, bytes) = self.transport.send(request).await?;
         if bytes.len() > TTS_RESPONSE_LIMIT {

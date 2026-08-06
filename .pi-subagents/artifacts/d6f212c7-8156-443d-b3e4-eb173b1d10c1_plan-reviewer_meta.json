@@ -1,0 +1,137 @@
+{
+  "runId": "d6f212c7-8156-443d-b3e4-eb173b1d10c1",
+  "agent": "plan-reviewer",
+  "task": "Adversarially review plan_v7 against review_v6 and the repository. Verify exact closure of all six findings: sole coordinator generation with atomic audio cancellation ordering; POSIX env and safe SSH-host validation; descriptor-relative no-follow lock creation with replacement-race proof; explicit queue-full delivery semantics; private candidate thinking-state staging without external callback side effects; and separate DiagnosticTrace ownership of process-global ring/sequence. Confirm all earlier lifecycle, callback, redial, status, speech, compatibility, and scope requirements remain intact. Read-only. End exactly with `VERDICT: APPROVE` or `VERDICT: REVISE`.\n\n## plan_v7\n# Handoff Output: plan_v7\nStatus: success\nVerdict: (none)\nTimestamp: 1786006352\n\n## Content\n# plan_v7\n\nRevise only the Rust/extension implementation and tests; preserve legacy RPC/sentinel behavior, unavailable-catalog passthrough, redial intent, compatibility, no durable queue/database, and no homelab changes.\n\n## Ordered implementation plan\n\n1. **Lifecycle and generation authority**\n   - In `src/pbx.rs`, make `CallLifecycle` the sole owner of `GenerationId`, phase, route, leg token, session identity, model, and thinking state.\n   - Remove current-generation state from `DeliveryState`/`AppInner`; reservations retain only captured generation and connection identities.\n   - Add one coordinator transaction used by `transfer`, `redial`, `return_operator`, `force_hangup`, and rescue: acquire coordinator lock, acquire `DeliveryState`, mark the old lifecycle quiescing, finalize/cancel all affected reservations, advance `CallLifecycle` generation, publish the new lifecycle, then release locks. `finish_audio` cannot commit while this transaction holds `DeliveryState`.\n   - `reserve_audio` reads the generation from `CallLifecycle` through the coordinator. Every stale check uses the reservation identity, never a duplicated “current generation.”\n   - Propagation: transition → reservation cancellation → generation advance → status/epoch publication; old callbacks and queued turns reject by captured identity.\n\n2. **Remote command validation**\n   - In `src/pi_client.rs::{remote_argv, validate_remote_inputs, validate_env_name}`, return `Result<Vec<String>, PiSessionError>`.\n   - Validate before constructing any export: POSIX names must match `[A-Za-z_][A-Za-z0-9_]*`; names, values, host, session identity, command parts, and generated command have fixed byte limits; reject NULs and unsafe control characters with bounded, non-echoing errors.\n   - Preserve `shell_quote` for values and command arguments. Metacharacters in values remain data; they are never interpolated unquoted.\n   - Invoke SSH with an explicit `--` separator before the host so leading-dash hosts cannot become options. Preserve normal host behavior and session identity validation.\n   - Propagate failures through `src/pbx.rs::start_agent` with `?`; never construct an unsafe fallback.\n   - Tests in `src/pi_client.rs`: invalid names, NUL/oversized values, shell metacharacters, leading-dash host argument capture, normal host/command generation, and session identity rejection.\n\n3. **Descriptor-relative lock safety**\n   - In `src/pi_client.rs::{remote_lock_script, lock_directory, open_lock_file}`, use only descriptor-relative operations from an fd for `/`.\n   - Traverse each component with `openat`/`os.open` using directory, close-on-exec, and no-follow flags. Create missing components with `mkdirat`/`os.mkdir` mode `0700`, then reopen them by descriptor.\n   - Hold every ancestor fd through lock-file open. After each open, compare `fstat` of the held fd with `fstatat(..., AT_SYMLINK_NOFOLLOW)` for device, inode, type, uid, and exact mode. Any mismatch, symlink, replacement, ownership mismatch, or mode mismatch returns `remote_session_lock_invalid` and exit 75; do not retry or adopt the replacement.\n   - Open the final lock by the held terminal directory fd with no-follow semantics. Require effective-user ownership and exact `0600`; never chmod or silently adopt an existing mismatch. `flock` contention returns `remote_session_lock_busy`, exit 75. Preserve fd 9 across `exec`.\n   - Tests inject replacement at each traversal/open boundary and assert identity mismatch rejection and no runtime invocation; separately test pre-existing symlinks for every ancestor and lock file, wrong owner/mode, contention, and valid reuse. Do not claim owner/mode checks alone prove race safety.\n\n4. **Audio saturation and delivery acknowledgement**\n   - In `src/api.rs::{DeliveryState, AudioReservation, finish_audio, process_speech, speak, synthesize_reply_if_current}`, make queue-full behavior fail-and-report.\n   - A reservation is committed only after the captured connection’s bounded `try_send` accepts the frame. `Full`, disconnected, stale-generation, timeout, and cancellation states finalize the reservation exactly once and can never produce `delivered:true`.\n   - Add a per-request `oneshot` completion to `SpeechRequest`; `/speak` awaits the bounded completion result. Success returns `delivered:true` only after actual queue acceptance. Failure returns `delivered:false` with a bounded reason and emits a written `audio_delivery_failed` event. The transcript/spoken text remains written; no durable audio fallback is introduced.\n   - Normal agent speech reports the same failure through the error event. No `receiver_count` shortcut remains.\n   - Tests in `src/api.rs` cover queue-full, disconnected writer, successful acknowledgement, duplicate-finalization prevention, and written fallback/error response.\n\n5. **Candidate effective-thinking staging**\n   - In `src/pbx.rs`, give `CandidateLeg` a private bounded startup-result channel containing validated effective thinking.\n   - Candidate startup callbacks may write only to this channel after token validation; they cannot mutate `CallLifecycle`, status snapshots, route, or active-leg state. Public `report_leg_state`/`/leg-state` callbacks remain rejected while phase is `Candidate`.\n   - `start_agent` and intro handling consume the staged startup result only during the adoption transaction. Adoption commits the staged effective thinking; startup failure drops it and returns to the operator without exposing candidate state.\n   - Tests cover callback before adoption, adoption preserving `thinking` and `thinking_confirmed`, callback invisibility during candidate phase, failed startup discarding staged state, and stale-token rejection.\n\n6. **Diagnostics authority**\n   - Add `src/diagnostics.rs::{DiagnosticTrace, DiagnosticRecord}`. `main.rs` creates one process-global `Arc<DiagnosticTrace>` and passes it to `CallLifecycle`/application state.\n   - `DiagnosticTrace` exclusively owns the synchronized 256-entry ring, monotonic sequence, retention, UTF-8-safe 128-byte field limits, 2 KiB serialized payload limit, and sanitization allowlist. Sequence allocation and ring insertion occur under one mutex.\n   - `CallLifecycle` only emits bounded records through `DiagnosticTrace`; it owns neither the counter nor ring.\n   - Tests cover concurrent unique monotonic sequencing, 256-entry eviction, byte-safe truncation, payload bounds, and removal of tokens, prompts, transcripts, stderr, paths, secrets, and raw tool arguments.\n\n## Ownership and propagation\n\n| Owner | Owns | Must not own |\n|---|---|---|\n| `CallLifecycle`/coordinator | Current generation, phase, route, leg identity, model/thinking | Audio queues, process handles, global diagnostics |\n| `DeliveryState` | Reservations, captured identities, queue state, terminal outcomes | Current generation |\n| `CandidateLeg` | Candidate process and private startup staging | Published lifecycle/status |\n| `DiagnosticTrace` | Global sequence, ring, sanitization, retention | Lifecycle transitions |\n| API/WebSocket state | Connection epochs, writers, acknowledgements | PBX lifecycle mirrors |\n| `PiSession` remote helper | Validated argv and descriptor-held lock | Lifecycle adoption decisions |\n\n## Rejected alternatives\n\n- Keeping a generation mirror in `DeliveryState`.\n- Checking paths with `mkdir -p`, `test -L`, ordinary opens, or owner/mode checks alone.\n- Returning `delivered:true` from receiver presence before queue acceptance.\n- Buffering candidate callbacks in public lifecycle state.\n- Storing the global diagnostic ring or sequence in `CallLifecycle`.\n- Durable audio queues, databases, Redis, or homelab edits.\n\n## Acceptance checks\n\nRun:\n\n```text\ncargo fmt --all -- --check\ncargo test --locked\ncargo clippy --locked --all-targets -- -D warnings\npython3 -m unittest discover -s legacy/tests\nnpm test\ngit diff --exit-code -- static\n```\n\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"Plan_v7 assigns exact owners, transaction ordering, validation rules, descriptor identity checks, queue outcomes, candidate staging, diagnostic synchronization, deterministic tests, and file/symbol mappings for all six review findings.\"\n    }\n  ],\n  \"changedFiles\": [],\n  \"testsAddedOrUpdated\": [],\n  \"commandsRun\": [\n    {\n      \"command\": \"Read-only repository inspection and plan revision\",\n      \"result\": \"passed\",\n      \"summary\": \"No source files were edited.\"\n    },\n    {\n      \"command\": \"cargo fmt --all -- --check; cargo test --locked; cargo clippy --locked --all-targets -- -D warnings; python3 -m unittest discover -s legacy/tests; npm test; git diff --exit-code -- static\",\n      \"result\": \"not-run\",\n      \"summary\": \"Implementation and verification belong to the executing implementation phase.\"\n    }\n  ],\n  \"validationOutput\": [\n    \"All six review_v6 findings have explicit mechanisms, ownership boundaries, propagation paths, and deterministic tests.\"\n  ],\n  \"residualRisks\": [\n    \"Live SSH, TTS, browser scheduling, and homelab deployment remain external validation surfaces.\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"Planning-only revision; no source changes.\",\n  \"reviewFindings\": [\n    \"closed high: generation authority and transition/audio ordering\",\n    \"closed high: POSIX environment validation and option-safe SSH host handling\",\n    \"closed high: descriptor-relative no-follow traversal with identity checks and fail-closed replacement handling\",\n    \"closed medium: bounded audio queue saturation and acknowledgement semantics\",\n    \"closed medium: private candidate thinking staging with adoption-only commit\",\n    \"closed medium: separate process-global DiagnosticTrace authority\"\n  ],\n  \"manualNotes\": \"No unresolved ambiguity remains for the six review_v6 findings.\"\n}\n```\n\n\u001b[38;2;136;136;136m✻ Turn took 3m 51s (Total time 3m 50s · 1 turn)\u001b[0m\n\n## review_v6\n# Handoff Output: review_v6\nStatus: success\nVerdict: REVISE\nTimestamp: 1786006066\n\n## Content\n# Adversarial review\n\n1. **High: lifecycle generation has two authorities.**  \n   Slice 1 assigns generation to `CallLifecycle`, while slice 5 makes `DeliveryState` own the current generation. Slice 2 advances it under the coordinator lock, then cancels audio separately. A `finish_audio` can interleave between those operations and observe inconsistent state. Make generation coordinator-owned and define one lock/order transaction for lifecycle advancement plus reservation cancellation.\n\n2. **High: remote command validation leaves injection/option risks.**  \n   `src/pi_client.rs:795-850` currently emits `export {name}=...` and passes `host` as an SSH argument. Plan_v6 only rejects NULs and bounds lengths. Invalid environment names can alter shell parsing, and option-like hosts can be interpreted as SSH options. Require POSIX environment-name validation and safe host argument handling, with tests.\n\n3. **High: descriptor algorithm does not prove replacement-race rejection.**  \n   `mkdirat` followed by `openat(O_NOFOLLOW)` and owner/mode checks can accept a different same-owner, mode-0700 directory substituted between operations. The plan claims replacement races are rejected but specifies no inode/identity verification. Clarify and test the required invariant.\n\n4. **Medium: bounded `try_send` can silently lose committed audio.**  \n   `finish_audio` marks a reservation ready and drains it, then `try_send`s to a bounded queue. Queue-full behavior is unspecified; `/speak` may already have returned `delivered:true`. Define whether full queues cancel, block, or report failure, and test it.\n\n5. **Medium: candidate callback rejection loses effective thinking state.**  \n   `extensions/agent-switchboard.ts` reports thinking during `session_start`, before candidate adoption. Since plan_v6 rejects all Candidate callbacks and forbids buffering, the new leg can become Active with `thinking_confirmed:false` permanently. Preserve this callback result through an explicit startup/adoption mechanism without exposing candidate state.\n\n6. **Medium: diagnostics ownership contradicts process-global sequencing.**  \n   Slice 1 puts lifecycle diagnostics inside `CallLifecycle`, while slice 8 requires a process-global 256-entry ring and monotonic sequence numbers. Store the ring/counter in a separate diagnostic service; lifecycle may only emit bounded records.\n\nExisting v5 blockers are otherwise addressed: lock `Result` propagation and exit-75 settlement, atomic audio finalization intent, socket epoch capture/replacement cleanup, fresh status projection, and process/WebSocket ownership separation. Legacy sentinel/RPC behavior, unavailable catalogs, redial intent, and no homelab scope are explicitly retained, but the above ambiguities still permit security, delivery, and compatibility regressions.\n\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"not-satisfied\",\n      \"evidence\": \"The five v5 blockers are addressed, but generation ownership, remote validation/race invariants, queue-full behavior, candidate callbacks, and diagnostics ownership remain underspecified.\"\n    },\n    {\n      \"id\": \"criterion-2\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"Read-only inspection covered the plan, review_v5, src/api.rs, src/pi_client.rs, src/pbx.rs, extensions, browser protocol, and concurrency documentation.\"\n    }\n  ],\n  \"changedFiles\": [],\n  \"testsAddedOrUpdated\": [],\n  \"commandsRun\": [\n    {\n      \"command\": \"Repository and plan inspection via read/grep\",\n      \"result\": \"passed\",\n      \"summary\": \"Read-only review; no source changes.\"\n    }\n  ],\n  \"validationOutput\": [\n    \"Checked remote_argv callers, lifecycle mirrors, audio reservation paths, WebSocket protocol epochs, extension callbacks, and documented concurrency invariants.\"\n  ],\n  \"residualRisks\": [\n    \"Lifecycle/audio generation race\",\n    \"Remote shell and SSH input validation gaps\",\n    \"Directory replacement race\",\n    \"Audio loss on bounded queue saturation\",\n    \"Candidate effective-thinking callback loss\",\n    \"Diagnostics ownership ambiguity\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"No source changes; adversarial review only.\",\n  \"reviewFindings\": [\n    \"high: plan_v6 slices 1, 2, 5 - duplicated lifecycle-generation authority and incomplete cancellation ordering\",\n    \"high: src/pi_client.rs:795-850 - environment-name and SSH-host validation are insufficient\",\n    \"high: plan_v6 slice 3 - replacement-race rejection is asserted but not specified\",\n    \"medium: plan_v6 slice 5 - bounded try_send queue-full behavior is undefined\",\n    \"medium: plan_v6 slices 1-2 - Candidate startup callbacks can lose effective thinking\",\n    \"medium: plan_v6 slices 1 and 8 - diagnostics ownership conflicts with process-global ring semantics\"\n  ],\n  \"manualNotes\": \"Review_v5 closure is substantial but not exact enough to approve.\"\n}\n```\n\nVERDICT: REVISE\n\n\u001b[38;2;136;136;136m✻ Turn took 4m 30s (Total time 4m 30s · 1 turn)\u001b[0m\n\n---\n**Output:**\nReturn the complete artifact in your final response.\nThe runtime will persist it to exactly this path: /home/kayne19/projects/switchboard/.pi-workflow/outputs/wf_1786002388285300339_3730916_0/review_v7.md\nDo not call contact_supervisor merely because no write-capable tool is available.\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-5.6-luna",
+  "attemptedModels": [
+    "openai-codex/gpt-5.6-luna"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.6-luna",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 358760,
+        "output": 8313,
+        "cacheRead": 825344,
+        "cacheWrite": 0,
+        "cost": 0.09823448,
+        "turns": 19
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "not-satisfied",
+          "evidence": "Plan_v7 closes the six review_v6 topics at a high level, but does not concretely preserve all earlier lock, callback, redial, socket, speech, status, and compatibility invariants."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "Read-only repository and plan inspection",
+          "result": "passed",
+          "summary": "Inspected lifecycle, API, SSH, extension, model, browser, and concurrency paths."
+        }
+      ],
+      "validationOutput": [
+        "Found nine unresolved or insufficiently specified risks, including three high-severity security/lifecycle gaps."
+      ],
+      "residualRisks": [
+        "Replacement-race acceptance in descriptor traversal",
+        "Unvalidated SSH callers",
+        "Coordinator lock blocking callbacks",
+        "Candidate speech/diagram side effects",
+        "Incomplete redial settlement",
+        "Socket epoch replacement races",
+        "TTS timeout duplicate delivery",
+        "Missing tool completion correlation",
+        "Stale status and unavailable-catalog compatibility"
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Read-only adversarial review; no source changes.",
+      "reviewFindings": [
+        "high: src/pi_client.rs and plan step 3 - same-owner replacement can still be accepted",
+        "high: src/pi_client.rs:753-766 and src/pbx.rs:985-996 - SSH host validation bypasses remain",
+        "high: src/api.rs:455-460 - coordinator lock order/nonblocking behavior is unspecified",
+        "high: extensions/agent-switchboard.ts:99-106,192-200 - candidate external callbacks remain ungated",
+        "high: src/pbx.rs:~1170-1264 - close/reap and exit-75 redial settlement are not explicit",
+        "medium: src/api.rs:1030-1080,1261-1280 - socket epoch lifecycle is asserted, not specified",
+        "medium: extensions/agent-switchboard.ts:99-106 - timeout cancellation and late results are undefined",
+        "medium: src/pi_client.rs:54-56,414-435 - tool completion correlation is omitted",
+        "medium: src/api.rs:37,176-204 and src/models.rs:230-237 - status/catalog compatibility is not concretely preserved"
+      ],
+      "manualNotes": "The six review_v6 headings are named in plan_v7, but exact closure and preservation of earlier requirements cannot be confirmed."
+    }
+  },
+  "launchContractDigest": "2c7ca6bcb5a03c24438788f284752c2278a4f832e099c13c87f9d394d58f4110",
+  "launchResolvedExtensions": {
+    "version": 1,
+    "source": "launch-resolved",
+    "disableAmbientExtensions": false,
+    "runtime": [
+      "sha256:249682fb0750be04"
+    ],
+    "configured": [],
+    "effective": [
+      "sha256:249682fb0750be04"
+    ],
+    "omitted": {
+      "runtime": 0,
+      "configured": 0,
+      "effective": 0
+    }
+  },
+  "transcriptPath": "/home/kayne19/projects/switchboard/.pi-subagents/artifacts/d6f212c7-8156-443d-b3e4-eb173b1d10c1_plan-reviewer_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1786006589326
+}

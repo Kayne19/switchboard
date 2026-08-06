@@ -1,0 +1,83 @@
+{
+  "runId": "fd1e7c73-7020-4d42-b920-bbe7b846c9c3",
+  "agent": "plan-reviewer",
+  "task": "Perform the one final adversarial review of the parent-synthesized plan at `/home/kayne19/projects/switchboard/.pi-workflow/outputs/wf_1786002388285300339_3730916_0/plan_v11.md`. Read the plan completely, then inspect the current repository and `review_v10.md` as needed. Check every ledger invariant and exact mechanism: sole lifecycle ownership and deadlock-free locks; fail-closed SSH same-session redial; callback/session_start thinking and steer correlation without invented ExtensionAPI metadata; candidate staging rollback; browser recording epochs and stale outbox/transcript suppression; WebSocket registration barrier and exact JSON/binary framing; one genuinely shared speech deadline and cancellation; coherent catalog/status publication; diagnostics bounds and tests; model suffix/picker compatibility; legacy/docs/homelab boundaries. Do not propose another broad architecture. Report only concrete implementation blockers or state that the plan is approved. End exactly with `VERDICT: APPROVE` or `VERDICT: REVISE`. Read-only.\n\n---\n**Output:**\nReturn the complete artifact in your final response.\nThe runtime will persist it to exactly this path: /home/kayne19/projects/switchboard/.pi-workflow/outputs/wf_1786002388285300339_3730916_0/review_v11.md\nDo not call contact_supervisor merely because no write-capable tool is available.\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-5.6-luna",
+  "attemptedModels": [
+    "openai-codex/gpt-5.6-luna"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.6-luna",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 157730,
+        "output": 10307,
+        "cacheRead": 616448,
+        "cacheWrite": 0,
+        "cost": 0.05624336,
+        "turns": 12
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "not-required",
+    "evidenceStatus": "not-required",
+    "explicit": true,
+    "effectiveAcceptance": {
+      "level": "none",
+      "explicit": true,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [],
+          "severity": "required"
+        }
+      ],
+      "evidence": [],
+      "verify": [],
+      "stopRules": [],
+      "reason": "disabled by deprecated false shorthand"
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": []
+  },
+  "launchContractDigest": "2c24361aa4c3934155b6ebffe7804bbe664b1bbf2826f525d4a72b38a26468c3",
+  "launchResolvedExtensions": {
+    "version": 1,
+    "source": "launch-resolved",
+    "disableAmbientExtensions": false,
+    "runtime": [
+      "sha256:249682fb0750be04"
+    ],
+    "configured": [],
+    "effective": [
+      "sha256:249682fb0750be04"
+    ],
+    "omitted": {
+      "runtime": 0,
+      "configured": 0,
+      "effective": 0
+    }
+  },
+  "transcriptPath": "/home/kayne19/projects/switchboard/.pi-subagents/artifacts/fd1e7c73-7020-4d42-b920-bbe7b846c9c3_plan-reviewer_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1786008971402
+}

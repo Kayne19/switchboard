@@ -66,6 +66,7 @@ let clipSequence = 0;
 // transcription both happen afterwards.
 let turnEpoch = 0;
 let socketGeneration = 0;
+let snapshotReady = false;
 let heartbeatSequence = 0;
 let reconnectTimer = null;
 let heartbeatTimer = null;
@@ -486,6 +487,9 @@ function fillSelect(select, values, current) {
     }
     if (current && select.value !== current)
         select.value = current;
+    // Keep the last server-confirmed choice separate from the native value,
+    // which already contains the user's uncommitted change in a `change` event.
+    select.dataset.committedValue = select.value;
 }
 function setRoute(msg) {
     const onProject = Boolean(msg.route && msg.route !== "operator");
@@ -559,8 +563,10 @@ function applyPickerDisabled() {
 async function post(url, body, control) {
     const request = (pickerRequests.get(control) || 0) + 1;
     pickerRequests.set(control, request);
+    const previousValue = control.dataset.committedValue ?? control.value;
     control.disabled = true;
     const execute = async () => {
+        let succeeded = false;
         pickerBusy = true;
         if (typeof document !== "undefined")
             applyPickerDisabled();
@@ -570,14 +576,22 @@ async function post(url, body, control) {
             if (response.error !== null && response.error !== undefined) {
                 throw new Error(String(response.error));
             }
+            succeeded = true;
         }
         catch (err) {
             if (pickerRequests.get(control) === request) {
+                // A failed POST must not leave the native select claiming a model
+                // that the live leg never adopted. A newer status invalidates this
+                // request, so never overwrite a fresh server selection here.
+                control.value = previousValue;
                 statusEl.textContent = "That did not go through: " + errorText(err);
                 statusEl.classList.add("error");
             }
         }
         finally {
+            if (pickerRequests.get(control) === request && succeeded) {
+                control.dataset.committedValue = control.value;
+            }
             pickerBusy = false;
             if (pickerRequests.get(control) === request)
                 control.disabled = false;
@@ -621,7 +635,7 @@ function updateOutboxUI() {
 // transcript arrives, so a backend restart cannot destroy the only copy.
 function flushOutbox() {
     updateOutboxUI();
-    if (outbox.length === 0)
+    if (!snapshotReady || outbox.length === 0)
         return;
     const clip = outbox.find((entry) => !entry.sent);
     if (!clip) {
@@ -705,6 +719,7 @@ function connect() {
         previous.close();
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const socket = new WebSocket(`${proto}://${location.host}/ws`);
+    snapshotReady = false;
     ws = socket;
     socket.binaryType = "arraybuffer";
     const current = () => generation === socketGeneration && socket === ws;
@@ -715,8 +730,8 @@ function connect() {
         statusEl.classList.remove("error");
         btn.disabled = false;
         outbox.forEach((clip) => (clip.sent = false));
+        snapshotReady = false;
         startHeartbeat(socket, generation);
-        flushOutbox();
     };
     socket.onclose = () => {
         if (!current())
@@ -753,10 +768,15 @@ function connect() {
                 return;
             if (msg.type === "epoch") {
                 // Adopt the server's epoch immediately and retire every queued or
-                // currently playing clip from the old leg.
+                // currently playing clip from the old leg. Do this before allowing
+                // reconnect retry, otherwise a pre-rescue clip can cross the barrier.
                 if (typeof msg.generation === "number") {
+                    outbox = outbox.filter((clip) => clip.epoch === msg.generation);
+                    updateOutboxUI();
                     turnEpoch = msg.generation;
                     audioEpoch = msg.generation;
+                    snapshotReady = true;
+                    flushOutbox();
                     audioQueue.length = 0;
                     pendingAudioGeneration = null;
                     if (playbackOwner)

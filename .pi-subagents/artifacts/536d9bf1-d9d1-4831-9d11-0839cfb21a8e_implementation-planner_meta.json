@@ -1,0 +1,139 @@
+{
+  "runId": "536d9bf1-d9d1-4831-9d11-0839cfb21a8e",
+  "agent": "implementation-planner",
+  "task": "Produce the final implementation plan using plan_v8, review_v8, and all prior review artifacts, incorporating the parent decision: same-session SSH redial must fail closed when remote shutdown cannot be verified. Do not edit source files. This must be implementation-ready, not another high-level wish list.\n\nMandatory decisions and corrections:\n1. Same-session redial: remove the unimplementable remote FD/flock scheme from the current SSH path. For an SSH leg, keep_context=true must not reopen the persistent session unless an adapter-provided verified shutdown acknowledgement exists; with the current protocol, record a bounded remote_shutdown_unverified outcome and settle to operator without starting a candidate or touching the session file concurrently. Keep any safe local/fake-process behavior explicit. No partial route/model/session publication. Test operator settlement and zero overlap.\n2. Centralize SSH argument construction and validation for remote_argv, list_models_argv, prepare, and extension staging. Validate POSIX env names, shell values, control characters, option-like hosts, quoting, and bounded identity inputs. Propagate Result errors and test every caller.\n3. Identity and callbacks: register an internal operation/generation before prompt/steer; callbacks carry only the real leg token, validate current leg plus active operation state, and never depend on nonexistent ExtensionAPI operation fields. Candidate speech/diagram/activity/status/thinking callbacks are rejected or privately staged until adoption. Tool speech correlation must register toolCallId at start and require matching successful completion at end.\n4. Ownership and locks: provide a complete table for CallLifecycle, CandidateLeg/PiSession, Switchboard config/catalog/staging/adapters, API transport/tasks/audio/WebSocket, TranscriptLog, diagram/channel/session locks, and DiagnosticTrace. Define a deadlock-free order and keep callback/status paths nonblocking while turns hold existing PBX locks. All lifecycle mutations, including idle worker and shutdown, cross the coordinator boundary; late quiesced-leg activity is rejected.\n5. WebSocket/audio: specify connection epoch allocation, registration before snapshot, per-connection writer lifecycle/shutdown, replacement/disconnect cleanup, lag/queue-full policy, exact existing JSON metadata then binary audio framing, and atomic generation transition plus reservation cancellation. Define one end-to-end speech deadline/cancellation rule and no late/duplicate delivery.\n6. Status/compatibility/docs: status_snapshot/current_status/publish_status are fresh stateless projections with no caller-supplied cached Value; model unavailable-catalog provider-qualified passthrough has implementation and regression tests; successful speak fallback and delivered-false isError behavior are exact; preserve newline JSONL, sentinel/RPC, browser wire shapes, reconnect ordering, one-caller ephemerality, legacy tests, and static output. Documentation edits are in scope here, while homelab deployment edits remain out of scope.\n\nMap every item to exact files/symbols, slice-local deterministic tests, acceptance commands, and only external host risks. No unresolved ambiguity may remain.\n\n## Context from phase 'review_v8'\n# Handoff Output: review_v8\nStatus: success\nVerdict: REVISE\nTimestamp: 1786007199\n\n## Content\n# Adversarial review\n\n1. **Critical: §5’s remote lock design is not implementable as written.**  \n   `src/pi_client.rs:753-850` constructs a remote shell command, but `openat`/FD 9 would operate on the local host, not the SSH target. `O_CLOEXEC` also contradicts “hold through exec.” The lock root path, collision-resistant key derivation, and remote helper/protocol are unspecified. Same-session redial remains unsafe. Fail closed or define a real remote lock helper and invariant.\n\n2. **High: operation identity has no registration or ordering mechanism.**  \n   `src/pi_client.rs:215-244,410-445` parses tool events only after the extension callback may already run. §3 rejects unknown operations, yet never specifies how `toolCallId` is registered before `/speak` or `/diagram`. The Pi extension context API carrying generation/operation fields is also asserted, not identified or tested.\n\n3. **High: the lock model omits existing mutexes and cannot prove nonblocking status.**  \n   `src/api.rs:32-54,176-222` has transcript, active-operation, session, diagram, and channel locks beyond C/D/P. Catalog state remains in `Switchboard` behind P, while §8 requires fresh status without P. Define all lock order and an independently readable catalog/status projection.\n\n4. **High: remote shutdown is still only a claim.**  \n   `PiSession::close` (`src/pi_client.rs:197-212`) drops stdin and kills the local SSH child; no remote shutdown command or acknowledgement protocol exists. §4’s “remote shutdown and wait” cannot be implemented or tested against the current RPC contract.\n\n5. **High: WebSocket writer lifecycle and wire compatibility remain incomplete.**  \n   Current delivery is broadcast plus per-socket sends (`src/api.rs:1018-1110,1258-1270`). §6 does not specify registration-before-snapshot buffering, writer shutdown, lag recovery, or replacement races. “Combined audio frame” risks breaking `web/app.ts:963-974`, which expects JSON metadata followed by binary audio.\n\n6. **High: speech fallback correlation is underspecified.**  \n   `Turn::agent_spoke` currently records `tool_execution_start` (`src/pi_client.rs:54,414-438`). The plan requires successful matching ends but does not define the end-event success field or extension behavior. Current `/speak` delivered-false responses are HTTP 200 and omit `isError` (`extensions/agent-switchboard.ts:202-224`), so written fallback can still be suppressed.\n\n7. **Medium: omitted lifecycle callers and candidate side effects.**  \n   `spawn_idle_worker` directly calls `return_if_idle` (`src/api.rs:267-290`), and shutdown directly mutates PBX state (`src/api.rs:259-265`), outside the listed coordinator transactions. Candidate `run_prepare` and extension staging (`src/pbx.rs:633,827,951`) mutate local/remote state before adoption without rollback or serialization.\n\n8. **Medium: scope contradicts documentation requirements.**  \n   §7 requires migration-document edits, while the declared scope forbids documentation changes. The existing migration document also explicitly requires preserving newline JSONL and existing WebSocket binary framing.\n\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"not-satisfied\",\n      \"evidence\": \"Plan_v8 still leaves critical remote-lock, identity-registration, shutdown, transport, fallback, lock-order, and omitted-caller gaps.\"\n    },\n    {\n      \"id\": \"criterion-2\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"Findings cite concrete repository paths, current mechanisms, plan sections, failure modes, and required closure.\"\n    }\n  ],\n  \"changedFiles\": [],\n  \"testsAddedOrUpdated\": [],\n  \"commandsRun\": [\n    {\n      \"command\": \"Read-only repository, plan, and prior-review inspection\",\n      \"result\": \"passed\",\n      \"summary\": \"Checked all ownership rows and relevant Rust, extension, browser, and migration-contract call paths.\"\n    }\n  ],\n  \"validationOutput\": [\n    \"Prior review_v7 findings were rechecked and several remain unresolved at implementation level.\"\n  ],\n  \"residualRisks\": [\n    \"Unsafe same-session remote overlap\",\n    \"Rejected legitimate callbacks due missing operation registration\",\n    \"Status blocking or stale projections\",\n    \"Remote process surviving local SSH teardown\",\n    \"Lost or duplicated speech and broken audio wire framing\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"Read-only final adversarial review; no source changes.\",\n  \"reviewFindings\": [\n    \"critical: src/pi_client.rs:753-850 and plan §5 - remote FD lock strategy is not implementable over SSH\",\n    \"high: src/pi_client.rs:215-244,410-445 and plan §3 - operation registration/context propagation is unspecified\",\n    \"high: src/api.rs:32-54,176-222 and plan §2/§8 - lock model omits mutexes and catalog freshness path\",\n    \"high: src/pi_client.rs:197-212 and plan §4 - remote shutdown protocol is absent\",\n    \"high: src/api.rs:1018-1110 and web/app.ts:963-974 - exact writer lifecycle and wire framing are incomplete\",\n    \"high: src/pi_client.rs:54,414-438 and extensions/agent-switchboard.ts:202-224 - speak fallback success correlation is incomplete\",\n    \"medium: src/api.rs:267-290 and src/pbx.rs:633,827,951 - omitted callers and candidate setup side effects\",\n    \"medium: plan §7 and docs/rust-typescript-migration-handoff.md - scope/documentation conflict\"\n  ],\n  \"manualNotes\": \"Prefer a simpler fail-closed same-session redial policy over an unprovable remote filesystem guarantee.\"\n}\n```\n\nVERDICT: REVISE\n\n\u001b[38;2;136;136;136m✻ Turn took 5m 9s (Total time 5m 9s · 1 turn)\u001b[0m\n\n---\n**Output:**\nReturn the complete artifact in your final response.\nThe runtime will persist it to exactly this path: /home/kayne19/projects/switchboard/.pi-workflow/outputs/wf_1786002388285300339_3730916_0/plan_v9.md\nDo not call contact_supervisor merely because no write-capable tool is available.\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-5.6-luna",
+  "attemptedModels": [
+    "openai-codex/gpt-5.6-luna"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.6-luna",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 355267,
+        "output": 13368,
+        "cacheRead": 680448,
+        "cacheWrite": 0,
+        "cost": 0.10070396000000002,
+        "turns": 17
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "The plan closes review_v8's critical remote-lock finding with a fail-closed current-SSH policy, and maps lifecycle ownership, operation identity, SSH validation, callback gating, lock order, WebSocket/audio epochs, status freshness, compatibility, documentation, and deterministic tests to exact files and symbols."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "Read-only repository and prior-artifact inspection",
+          "result": "passed",
+          "summary": "Inspected plan_v8, review_v8, prior reviews, relevant Rust/TypeScript/browser paths, migration contracts, and concurrency hazards."
+        },
+        {
+          "command": "cargo fmt --all -- --check; cargo test --locked; cargo clippy --locked --all-targets -- -D warnings; python3 -m unittest discover -s legacy/tests; npm test; git diff --exit-code -- static",
+          "result": "not-run",
+          "summary": "Implementation and verification are outside this planning-only task."
+        }
+      ],
+      "validationOutput": [
+        "Remote FD/flock design is explicitly rejected as unimplementable over SSH.",
+        "Current SSH same-session redial has a bounded remote_shutdown_unverified operator-settlement path with no candidate or session-file reuse.",
+        "Every SSH construction caller uses one Result-returning validator.",
+        "All lifecycle mutations cross Coordinator; callbacks/status paths do not wait on PBX locks.",
+        "WebSocket registration, writer ownership, queue saturation, epoch transitions, audio framing, and cancellation are specified.",
+        "Provider-qualified unavailable-catalog passthrough and exact speech fallback semantics have regression tests."
+      ],
+      "residualRisks": [
+        "Live SSH/Pi adapter shutdown acknowledgement and real extension event ordering require host validation.",
+        "Browser media/autoplay timing and external STT/TTS latency require hardware/service validation.",
+        "Homelab pinned-tag deployment remains a separate review."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Planning-only artifact; no source files changed.",
+      "reviewFindings": [
+        "critical closed: src/pi_client.rs remote FD/flock scheme removed; current SSH same-session redial fails closed",
+        "high closed: src/pi_client.rs, src/pbx.rs SSH construction centralized and validated for every caller",
+        "high closed: src/pbx.rs/api.rs operation registration, callback gating, candidate isolation, and coordinator ownership specified",
+        "high closed: src/api.rs WebSocket writer/epoch/reservation lifecycle and exact framing specified",
+        "high closed: src/pi_client.rs/extensions/agent-switchboard.ts successful speech correlation and fallback specified",
+        "high closed: src/api.rs fresh status projection, lock order, and catalog compatibility specified",
+        "medium closed: web/app.ts playback, stale outbox, recorder, picker, and reconnect races assigned deterministic tests"
+      ],
+      "manualNotes": "No unresolved implementation ambiguity remains inside the repository scope."
+    }
+  },
+  "launchContractDigest": "dc615d2c47eaeb451c5ec2907215b8263ec01db0f89daa95b2e3e6e8ecb986ed",
+  "launchResolvedExtensions": {
+    "version": 1,
+    "source": "launch-resolved",
+    "disableAmbientExtensions": false,
+    "runtime": [
+      "sha256:249682fb0750be04"
+    ],
+    "configured": [],
+    "effective": [
+      "sha256:249682fb0750be04"
+    ],
+    "omitted": {
+      "runtime": 0,
+      "configured": 0,
+      "effective": 0
+    }
+  },
+  "transcriptPath": "/home/kayne19/projects/switchboard/.pi-subagents/artifacts/536d9bf1-d9d1-4831-9d11-0839cfb21a8e_implementation-planner_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1786007633159
+}

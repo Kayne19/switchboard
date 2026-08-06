@@ -1,11 +1,12 @@
 //! Call routing and Pi session lifecycle.
+use crate::lifecycle::{CandidateLeg, Coordinator};
 use crate::models::{
     fetch_catalog, normalize_thinking, pin_thinking, ModelCatalog, ModelChoice, ModelError,
     THINKING_LEVELS,
 };
 use crate::pi_client::{
     local_argv, remote_argv, ActivityCallback, PiSession, PiSessionError, Signal, Turn,
-    RETURN_TOOL, SET_MODEL_TOOL, TRANSFER_TOOL,
+    ValidatedSshTarget, RETURN_TOOL, SET_MODEL_TOOL, TRANSFER_TOOL,
 };
 use crate::registry::{Project, Registry};
 use futures_util::FutureExt;
@@ -124,6 +125,58 @@ const PREPARE_OUTPUT_LIMIT: usize = 64 * 1024;
 const CHILD_ERROR_LIMIT: usize = 64 * 1024;
 const STAGE_OUTPUT_LIMIT: usize = 64 * 1024;
 
+/// A remote extension copy is provisional until its candidate is adopted.
+/// Rollback is explicit because Drop cannot await an SSH cleanup.
+pub struct ExtensionStageTxn {
+    ssh_program: String,
+    host: ValidatedSshTarget,
+    path: String,
+    committed: bool,
+}
+impl ExtensionStageTxn {
+    pub fn new(
+        ssh_program: impl Into<String>,
+        host: ValidatedSshTarget,
+        path: impl Into<String>,
+    ) -> Self {
+        Self {
+            ssh_program: ssh_program.into(),
+            host,
+            path: path.into(),
+            committed: false,
+        }
+    }
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+    pub fn commit(mut self) {
+        self.committed = true;
+    }
+    pub async fn rollback(self) -> Result<(), String> {
+        if self.committed {
+            return Ok(());
+        }
+        let command = format!("rm -f -- {}", crate::pi_client::shell_quote(&self.path));
+        let status = Command::new(&self.ssh_program)
+            .args([
+                "-T",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=10",
+                self.host.as_str(),
+                &command,
+            ])
+            .status()
+            .await
+            .map_err(|error| error.to_string())?;
+        status
+            .success()
+            .then_some(())
+            .ok_or_else(|| format!("remote cleanup exited with {status}"))
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Utterance {
     pub text: String,
@@ -176,6 +229,7 @@ pub struct Switchboard {
     pub diagram_url: String,
     pub persona: String,
     pub env: HashMap<String, String>,
+    speech_deadline_ms: u64,
     activity_callback: Option<ActivityCallback>,
     route_callback: Option<RouteCallback>,
     active_session: Arc<Mutex<Option<PiSession>>>,
@@ -190,6 +244,7 @@ pub struct Switchboard {
     staged_extensions: Mutex<HashMap<String, Option<String>>>,
     operator_note: Option<String>,
     last_activity: ActivityClock,
+    coordinator: Option<Coordinator>,
 }
 impl Switchboard {
     #[allow(clippy::too_many_arguments)]
@@ -210,6 +265,11 @@ impl Switchboard {
         persona: String,
         env: HashMap<String, String>,
     ) -> Self {
+        let speech_deadline_ms = env
+            .get("SWITCHBOARD_SPEECH_DEADLINE_MS")
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .filter(|value| (1..=120_000).contains(value))
+            .unwrap_or(25_000);
         Self {
             registry,
             pi_binary,
@@ -226,6 +286,7 @@ impl Switchboard {
             diagram_url,
             persona,
             env,
+            speech_deadline_ms,
             activity_callback: None,
             route_callback: None,
             active_session: Arc::new(Mutex::new(None)),
@@ -240,7 +301,11 @@ impl Switchboard {
             staged_extensions: Mutex::new(HashMap::new()),
             operator_note: None,
             last_activity: ActivityClock::new(),
+            coordinator: None,
         }
+    }
+    pub fn set_coordinator(&mut self, coordinator: Coordinator) {
+        self.coordinator = Some(coordinator);
     }
     pub fn set_activity_callback(&mut self, callback: Option<ActivityCallback>) {
         self.activity_callback = callback;
@@ -626,18 +691,46 @@ impl Switchboard {
             intent,
             "transferring the caller"
         );
-        self.drop_agent().await;
+        let previous_agent = self.agent.clone();
         let (model, model_note) = self
             .select_transfer_model(&project, requested_model, requested_thinking)
             .await;
         let prepared = self.run_prepare(&project).await;
         let session_id = uuid_like();
-        self.project = Some(project.clone());
-        self.route = project.id.clone();
-        self.live_leg.set_session(&self.route, &session_id);
-        self.model_spec = model.clone();
-        self.session_id = session_id.clone();
-        let session = match self.start_agent(&project, &model, &session_id).await {
+        let leg_token = uuid_like();
+        if let Some(coordinator) = &self.coordinator {
+            let catalog_key = format!(
+                "{}\0{}",
+                project.host.as_deref().unwrap_or(""),
+                project.runtime
+            );
+            let candidate = CandidateLeg::new(
+                project.id.clone(),
+                project.id.clone(),
+                session_id.clone(),
+                leg_token.clone(),
+                model.clone(),
+                self.agent_thinking.clone(),
+            );
+            let candidate = match self.catalogs.get(&catalog_key).cloned() {
+                Some(catalog) => candidate.with_catalog(catalog),
+                None => candidate,
+            };
+            if let Err(error) = coordinator.begin_candidate(candidate) {
+                tracing::warn!(project = %project.id, %error, "candidate startup was refused");
+                return self.reply_transfer_error(
+                    handoff,
+                    format!("I couldn't get {} on the line: {error}", project.id),
+                    Some(error.to_string()),
+                );
+            }
+        }
+        // Start and introduce the candidate while the adopted route remains
+        // private. A failed process must not publish a half-connected project.
+        let session = match self
+            .start_agent(&project, &model, &session_id, &leg_token)
+            .await
+        {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!(
@@ -646,7 +739,14 @@ impl Switchboard {
                     error = %e,
                     "could not connect to the project"
                 );
-                self.drop_agent().await;
+                if project.is_remote() {
+                    self.rollback_staged_extension(project.host.as_deref().unwrap_or_default())
+                        .await;
+                }
+                if let Some(coordinator) = &self.coordinator {
+                    coordinator.rollback_candidate(format!("startup failed: {e}"));
+                }
+                self.set_active_session(previous_agent.clone()).await;
                 self.operator_note = Some(format!("Transfer to {} failed: {e}", project.id));
                 return self.reply_transfer_error(
                     handoff,
@@ -655,25 +755,15 @@ impl Switchboard {
                 );
             }
         };
-        self.agent = Some(session);
-        // Publish a self-consistent PBX state before the await. A page rescue
-        // can cancel this transfer at any suspension point; once `agent` is
-        // owned here, the route must identify it so force_hangup will reap it.
-        self.set_active_session(self.agent.clone()).await;
-        self.announce_route().await;
+        // Keep the candidate resource reachable for rescue, but do not publish
+        // route/status until its intro has settled successfully.
+        self.set_active_session(Some(session.clone())).await;
         let workspace = if prepared.is_empty() {
             String::new()
         } else {
             format!("\nState of your working copy: {prepared}\n")
         };
         let intro = format!("The switchboard has just connected a caller to you.\nThey asked for: {}\n{workspace}Greet them in one short sentence and start if appropriate.", if intent.is_empty() { "nothing specific" } else { intent });
-        let Some(session) = self.agent.as_ref() else {
-            return self.reply_transfer_error(
-                handoff,
-                format!("{} did not come up.", project.id),
-                Some("project session was not created".into()),
-            );
-        };
         let turn = match session.prompt(&intro).await {
             Ok(t) => t,
             Err(e) => {
@@ -698,7 +788,15 @@ impl Switchboard {
                 }
             };
             tracing::error!(project = %project.id, %detail, "the project never answered its intro; returning to the operator");
-            self.drop_agent().await;
+            session.close().await;
+            if project.is_remote() {
+                self.rollback_staged_extension(project.host.as_deref().unwrap_or_default())
+                    .await;
+            }
+            self.set_active_session(previous_agent.clone()).await;
+            if let Some(coordinator) = &self.coordinator {
+                coordinator.rollback_candidate(format!("intro failed: {detail}"));
+            }
             self.operator_note = Some(format!("The transfer to {} failed: {detail}", project.id));
             return self.reply_transfer_error(
                 handoff,
@@ -706,6 +804,35 @@ impl Switchboard {
                 Some(detail),
             );
         }
+        if let Some(coordinator) = &self.coordinator {
+            if let Err(error) = coordinator.adopt_candidate() {
+                session.close().await;
+                self.set_active_session(previous_agent.clone()).await;
+                if project.is_remote() {
+                    self.rollback_staged_extension(project.host.as_deref().unwrap_or_default())
+                        .await;
+                }
+                coordinator.rollback_candidate(format!("adoption failed: {error}"));
+                return self.reply_transfer_error(
+                    handoff,
+                    format!("{} did not come up.", project.id),
+                    Some(error.to_string()),
+                );
+            }
+        }
+        if project.is_remote() {
+            self.commit_staged_extension(project.host.as_deref().unwrap_or_default())
+                .await;
+        }
+        self.drop_agent().await;
+        self.project = Some(project.clone());
+        self.route = project.id.clone();
+        self.live_leg.set_session(&self.route, &leg_token);
+        self.model_spec = model.clone();
+        self.session_id = session_id.clone();
+        self.agent = Some(session);
+        self.set_active_session(self.agent.clone()).await;
+        self.announce_route().await;
         self.reply_with_transfer_turn(turn, handoff, model_note)
     }
     async fn start_agent(
@@ -713,13 +840,14 @@ impl Switchboard {
         project: &Project,
         model: &str,
         session_id: &str,
+        leg_token: &str,
     ) -> Result<PiSession, PiSessionError> {
         let mut env = self.env.clone();
-        let agent_env = self.agent_env(session_id);
+        let agent_env = self.agent_env(leg_token);
         env.extend(agent_env.clone());
         let extension = if project.is_remote() {
             if project.stage_extension {
-                self.stage_extension(project.host.as_deref().unwrap_or_default())
+                self.stage_extension(project.host.as_deref().unwrap_or_default(), leg_token)
                     .await
             } else {
                 None
@@ -829,6 +957,13 @@ impl Switchboard {
             return String::new();
         }
         let mut command = if project.is_remote() {
+            let host = match ValidatedSshTarget::new(project.host.as_deref().unwrap_or_default()) {
+                Ok(host) => host,
+                Err(error) => {
+                    tracing::warn!(project = %project.id, %error, "refusing invalid SSH target");
+                    return "could not be refreshed (invalid SSH target)".into();
+                }
+            };
             let remote = format!(
                 "cd {} && {}",
                 crate::pi_client::shell_quote(&project.cwd),
@@ -841,7 +976,7 @@ impl Switchboard {
                 "BatchMode=yes",
                 "-o",
                 "ConnectTimeout=10",
-                project.host.as_deref().unwrap_or_default(),
+                host.as_str(),
                 &remote,
             ]);
             command
@@ -907,21 +1042,14 @@ impl Switchboard {
         }
         let report = String::from_utf8_lossy(&stdout.bytes).trim().to_owned();
         if !status.success() {
-            let detail = String::from_utf8_lossy(&stderr.bytes)
-                .trim()
-                .chars()
-                .take(300)
-                .collect::<String>();
-            tracing::warn!(project = %project.id, code = ?status.code(), %detail, "prepare exited unsuccessfully");
+            tracing::warn!(
+                project = %project.id,
+                code = ?status.code(),
+                stderr_bytes = stderr.bytes.len(),
+                "prepare exited unsuccessfully"
+            );
             return if report.is_empty() {
-                format!(
-                    "could not be refreshed ({})",
-                    if detail.is_empty() {
-                        "unknown error"
-                    } else {
-                        &detail
-                    }
-                )
+                "could not be refreshed (prepare command failed)".into()
             } else {
                 report
             };
@@ -932,29 +1060,89 @@ impl Switchboard {
         report
     }
 
-    async fn stage_extension(&self, host: &str) -> Option<String> {
-        if let Some(staged) = self.staged_extensions.lock().await.get(host).cloned() {
-            return staged;
-        }
-        let staged = self.upload_extension(host).await;
+    async fn stage_extension(&self, host: &str, candidate_token: &str) -> Option<String> {
+        // Each candidate gets a private remote path. Never reuse an adopted
+        // leg's artifact, because rollback of a failed candidate must not
+        // remove the live extension.
+        let key = format!("{host}\0{candidate_token}");
+        let staged = self.upload_extension(&key, host).await;
         self.staged_extensions
             .lock()
             .await
-            .insert(host.to_owned(), staged.clone());
+            .insert(key, staged.clone());
         staged
     }
 
-    async fn upload_extension(&self, host: &str) -> Option<String> {
-        self.upload_extension_with("ssh", host).await
+    async fn upload_extension(&self, key: &str, host: &str) -> Option<String> {
+        self.upload_extension_with_key("ssh", key, host).await
     }
 
+    async fn commit_staged_extension(&self, host: &str) {
+        let key = {
+            self.staged_extensions
+                .lock()
+                .await
+                .keys()
+                .find(|key| key.starts_with(&format!("{host}\0")))
+                .cloned()
+        };
+        let Some(key) = key else { return };
+        let path = self.staged_extensions.lock().await.remove(&key).flatten();
+        let Some(path) = path else { return };
+        let Ok(target) = ValidatedSshTarget::new(host) else {
+            return;
+        };
+        ExtensionStageTxn::new("ssh", target, path).commit();
+    }
+
+    async fn rollback_staged_extension(&self, host: &str) {
+        let key = {
+            self.staged_extensions
+                .lock()
+                .await
+                .keys()
+                .find(|key| key.starts_with(&format!("{host}\0")))
+                .cloned()
+        };
+        let path = match key {
+            Some(key) => self.staged_extensions.lock().await.remove(&key).flatten(),
+            None => None,
+        };
+        let Some(path) = path else { return };
+        let Ok(target) = ValidatedSshTarget::new(host) else {
+            return;
+        };
+        let txn = ExtensionStageTxn::new("ssh", target, path);
+        if let Err(error) = txn.rollback().await {
+            tracing::warn!(host, %error, "stage cleanup is unverified");
+        }
+    }
+
+    #[cfg(test)]
     async fn upload_extension_with(&self, ssh_program: &str, host: &str) -> Option<String> {
+        self.upload_extension_with_key(ssh_program, host, host)
+            .await
+    }
+
+    async fn upload_extension_with_key(
+        &self,
+        ssh_program: &str,
+        key: &str,
+        host: &str,
+    ) -> Option<String> {
+        let host = match ValidatedSshTarget::new(host) {
+            Ok(host) => host,
+            Err(error) => {
+                tracing::warn!(%error, "refusing invalid SSH target for extension staging");
+                return None;
+            }
+        };
         // Silently returning None here costs the agent its `speak` and
         // `diagram` tools and quietly rewrites its system prompt to use the
         // sentinel instead — a large behavior change from one unset path.
         let Some(source) = self.agent_extension_file.as_deref() else {
             tracing::warn!(
-                host,
+                host = host.as_str(),
                 "no agent extension file to stage; using sentinel fallback"
             );
             return None;
@@ -962,13 +1150,13 @@ impl Switchboard {
         let contents = match tokio::fs::read(source).await {
             Ok(contents) => contents,
             Err(error) => {
-                tracing::warn!(%error, source, "could not read project extension; using sentinel fallback");
+                tracing::warn!(%error, source, host = host.as_str(), "could not read project extension; using sentinel fallback");
                 return None;
             }
         };
         let name = Path::new(source).file_name()?.to_string_lossy();
         let cache = self.remote_cache_dir.trim_end_matches('/');
-        let target = format!("{cache}/{name}");
+        let target = format!("{cache}/{name}.{}", key.replace('\0', "-"));
         let cache_path = if cache.starts_with('/') {
             crate::pi_client::shell_quote(cache)
         } else {
@@ -990,7 +1178,7 @@ impl Switchboard {
                 "BatchMode=yes",
                 "-o",
                 "ConnectTimeout=10",
-                host,
+                host.as_str(),
                 &command,
             ])
             .stdin(std::process::Stdio::piped())
@@ -1000,7 +1188,7 @@ impl Switchboard {
         let mut child = match stage_command.spawn() {
             Ok(child) => child,
             Err(error) => {
-                tracing::warn!(%error, host, "could not stage project extension; using sentinel fallback");
+                tracing::warn!(%error, host = host.as_str(), "could not stage project extension; using sentinel fallback");
                 return None;
             }
         };
@@ -1038,7 +1226,7 @@ impl Switchboard {
                 status
             }
             Ok(Err(error)) => {
-                tracing::warn!(%error, host, "remote extension staging failed; using sentinel fallback");
+                tracing::warn!(%error, host = host.as_str(), "remote extension staging failed; using sentinel fallback");
                 crate::pi_client::terminate_process(&mut child).await;
                 process_guard.disarm();
                 abort_output(stdout_task);
@@ -1047,7 +1235,7 @@ impl Switchboard {
             }
             Err(_) => {
                 tracing::warn!(
-                    host,
+                    host = host.as_str(),
                     "remote extension staging timed out; using sentinel fallback"
                 );
                 crate::pi_client::terminate_process(&mut child).await;
@@ -1067,7 +1255,7 @@ impl Switchboard {
                 .collect::<String>();
             tracing::warn!(
                 ?detail,
-                host,
+                host = host.as_str(),
                 code = ?status.code(),
                 truncated = stdout.truncated,
                 "remote extension staging failed; using sentinel fallback"
@@ -1077,12 +1265,12 @@ impl Switchboard {
         let staged = String::from_utf8_lossy(&stdout.bytes).trim().to_owned();
         if staged.is_empty() {
             tracing::warn!(
-                host,
+                host = host.as_str(),
                 "remote extension staging reported no path; using sentinel fallback"
             );
             return None;
         }
-        tracing::info!(host, path = %staged, "staged the switchboard tool");
+        tracing::info!(host = host.as_str(), path = %staged, "staged the switchboard tool");
         Some(staged)
     }
 
@@ -1092,6 +1280,10 @@ impl Switchboard {
             (
                 String::from("SWITCHBOARD_SESSION_TOKEN"),
                 session_token.to_owned(),
+            ),
+            (
+                String::from("SWITCHBOARD_SPEECH_DEADLINE_MS"),
+                self.speech_deadline_ms.to_string(),
             ),
         ]);
         for (key, value) in [
@@ -1197,6 +1389,22 @@ impl Switchboard {
         if !self.model_swaps {
             return self.reply(["Model swapping is turned off on this switchboard."], None);
         }
+        // The remote adapter can reap only the local ssh process. With no
+        // verified remote shutdown protocol, reusing a persistent session ID
+        // could attach to work that is still running on the far host.
+        if project.is_remote() && keep_context {
+            let name = project.id.clone();
+            tracing::warn!(project = %name, "refusing same-session remote redial; remote shutdown is unverified");
+            self.drop_agent().await;
+            let detail = "remote_shutdown_unverified".to_owned();
+            self.operator_note = Some(format!(
+                "The call to {name} was closed; I could not verify the remote session stopped."
+            ));
+            return self.reply(
+                [format!("I couldn't safely restart {name}: the remote session could not be verified as stopped. You're back with the operator.")],
+                Some(detail),
+            );
+        }
         let requested_model = if model.is_empty() && !self.model_spec.is_empty() {
             self.model_spec.clone()
         } else {
@@ -1243,18 +1451,28 @@ impl Switchboard {
             context = if keep_context { "kept" } else { "cleared" },
             "swapping the model on the live leg"
         );
+        let leg_token = uuid_like();
+        if let Some(coordinator) = &self.coordinator {
+            // Redial owns a new process token too. Rotate it under the same
+            // lifecycle authority before the old process is torn down, so
+            // delayed callbacks from the old leg cannot reach the new one.
+            coordinator.rotate_leg_token(leg_token.clone());
+        }
         self.drop_agent().await;
         self.project = Some(project.clone());
         self.route = project.id.clone();
-        self.live_leg.set_session(&self.route, &session_id);
+        self.live_leg.set_session(&self.route, &leg_token);
         self.session_id = session_id.clone();
         self.model_spec = spec.clone();
-        match self.start_agent(&project, &spec, &session_id).await {
+        match self
+            .start_agent(&project, &spec, &session_id, &leg_token)
+            .await
+        {
             Ok(session) => {
                 let project_name = project.id.clone();
                 self.agent = Some(session);
                 self.route = project.id.clone();
-                self.live_leg.set_session(&self.route, &session_id);
+                self.live_leg.set_session(&self.route, &leg_token);
                 self.project = Some(project);
                 self.session_id = session_id;
                 self.model_spec = spec.clone();
@@ -1748,18 +1966,18 @@ done
         assert!(enabled.catalogs.contains_key("\0definitely-missing-pi"));
 
         let (model, note) = enabled
-            .select_transfer_model(&project, "other/requested", "")
+            .select_transfer_model(&project, "other/requested:high", "")
             .await;
-        assert_eq!(model, "anthropic/default:medium");
-        assert!(note.contains("verify models"));
+        assert_eq!(model, "other/requested:high");
+        assert!(note.is_empty());
     }
 
     #[tokio::test]
-    async fn missing_extension_is_cached_per_host() {
+    async fn missing_extension_is_recorded_per_candidate_for_cleanup() {
         let board = board_with(vec![], true);
-        assert_eq!(board.stage_extension("host-a").await, None);
-        assert_eq!(board.stage_extension("host-a").await, None);
-        assert_eq!(board.staged_extensions.lock().await.len(), 1);
+        assert_eq!(board.stage_extension("host-a", "candidate-a").await, None);
+        assert_eq!(board.stage_extension("host-a", "candidate-b").await, None);
+        assert_eq!(board.staged_extensions.lock().await.len(), 2);
     }
 
     #[test]
@@ -1989,7 +2207,8 @@ done
             .unwrap();
         assert_eq!(
             staged,
-            home.join(".cache/switchboard/agent.ts").to_string_lossy()
+            home.join(".cache/switchboard/agent.ts.fake-host")
+                .to_string_lossy()
         );
         assert_eq!(
             std::fs::read_to_string(&staged).unwrap(),

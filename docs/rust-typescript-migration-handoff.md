@@ -103,8 +103,9 @@ The following signals are routing events, not ordinary agent output:
 - `speak`
 
 Keep the `[[SWITCHBOARD:RETURN]]` fallback for runtimes that cannot load the
-extension. Keep `speak` suppression so a written reply is not synthesized a
-second time after an agent already spoke.
+extension. Suppress normal synthesis only after a matching successful
+`tool_execution_end` for `speak`; tool start, HTTP failure, stale callback,
+`delivered:false`, or TTS failure must leave written fallback eligible.
 
 ### Runtime and deployment environment
 
@@ -137,7 +138,17 @@ SWITCHBOARD_SPEAK_URL
 SWITCHBOARD_STATE_URL
 SWITCHBOARD_DIAGRAM_URL
 SWITCHBOARD_STT_COMMAND
+SWITCHBOARD_SPEECH_DEADLINE_MS
+SWITCHBOARD_LOG
+SWITCHBOARD_LOG_FORMAT
 ```
+
+`SWITCHBOARD_SPEECH_DEADLINE_MS` is a positive bounded millisecond deadline
+(default `25000`) shared by `/speak`, normal reply synthesis, the TTS transport,
+and the project extension's abort timeout. `SWITCHBOARD_LOG` overrides
+`RUST_LOG` for service filter directives; `SWITCHBOARD_LOG_FORMAT` is `text`
+(default) or `json`. Deployment overrides for these public variables require a
+separate homelab PR.
 
 `SWITCHBOARD_STT_COMMAND` is transitional: it receives WebM/Opus bytes on stdin
 and must write the transcript to stdout. The Rust service reports this adapter
@@ -147,6 +158,12 @@ faster-whisper model yet.
 `SWITCHBOARD_SESSION`, `SWITCHBOARD_SPEAK_URL`,
 `SWITCHBOARD_STATE_URL`, and `SWITCHBOARD_DIAGRAM_URL` are passed to project
 agents. They are not merely internal implementation details.
+
+Each project process also receives `SWITCHBOARD_SESSION_TOKEN`, a fresh opaque
+per-process callback correlation token distinct from the persistent Pi session
+ID. The service validates it for thinking, speech, and diagram callbacks to
+reject stale redial work. It is a correlation value, not authentication, and a
+deployment must not treat it as a secret.
 
 ### Registry and model behavior
 

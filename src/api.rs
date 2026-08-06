@@ -1,6 +1,7 @@
 //! HTTP, WebSocket and application workers.
 use crate::audio::{Speaker, SttAdapter};
 use crate::history::{TranscriptLog, AGENT, CALLER};
+use crate::lifecycle::Coordinator;
 use crate::pbx::{ActivityClock, LiveLegState, RouteCallback, Switchboard};
 use crate::pi_client::{Activity, ActivityCallback, PiSession};
 use axum::extract::ws::{Message, WebSocket};
@@ -10,6 +11,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
@@ -17,10 +19,10 @@ use std::{
     future::Future,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, RwLock as StdRwLock,
+        Arc,
     },
 };
-use tokio::sync::{broadcast, mpsc, watch, Mutex};
+use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex};
 use tokio::task::{AbortHandle, Id as TaskId, JoinHandle};
 use tower_http::services::ServeDir;
 
@@ -30,11 +32,12 @@ const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 pub struct AppState(pub Arc<AppInner>);
 pub struct AppInner {
     pub switchboard: Mutex<Switchboard>,
+    delivery: DeliveryState,
     pub transcript_log: Mutex<TranscriptLog>,
     pub speaker: Speaker,
     pub stt: SttAdapter,
     pub events: broadcast::Sender<Event>,
-    status_snapshot: Arc<StdRwLock<Value>>,
+    pub coordinator: Coordinator,
     speech: mpsc::Sender<SpeechRequest>,
     speech_rx: Mutex<Option<mpsc::Receiver<SpeechRequest>>>,
     clips: mpsc::Sender<Clip>,
@@ -48,11 +51,11 @@ pub struct AppInner {
     live_leg: LiveLegState,
     operation_transition: Mutex<()>,
     active_operations: Mutex<HashMap<TaskId, AbortHandle>>,
-    pub turn_generation: AtomicU64,
     pub queued_turns: AtomicU64,
     pub turn_in_flight: AtomicBool,
     shutdown: watch::Sender<bool>,
     audio: Mutex<AudioQueue>,
+    speech_deadline: std::time::Duration,
 }
 #[derive(Clone, Debug)]
 pub enum Event {
@@ -67,6 +70,84 @@ struct SpeechRequest {
     text: String,
     generation: u64,
     sequence: u64,
+    deadline: std::time::Instant,
+    result: oneshot::Sender<Result<(), String>>,
+}
+
+const DELIVERY_QUEUE: usize = 256;
+
+#[derive(Clone)]
+struct DeliveryState {
+    next_epoch: Arc<AtomicU64>,
+    next_sequence: Arc<AtomicU64>,
+    connections: Arc<std::sync::Mutex<HashMap<u64, mpsc::Sender<DeliveryFrame>>>>,
+}
+
+enum DeliveryFrame {
+    Event { sequence: u64, event: Event },
+    Message(Message),
+}
+
+struct DeliveryConnection {
+    epoch: u64,
+    receiver: mpsc::Receiver<DeliveryFrame>,
+}
+
+impl DeliveryState {
+    fn new() -> Self {
+        Self {
+            next_epoch: Arc::new(AtomicU64::new(1)),
+            next_sequence: Arc::new(AtomicU64::new(0)),
+            connections: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn register(&self) -> DeliveryConnection {
+        let epoch = self.next_epoch.fetch_add(1, Ordering::Relaxed);
+        let (sender, receiver) = mpsc::channel(DELIVERY_QUEUE);
+        self.connections.lock().unwrap().insert(epoch, sender);
+        DeliveryConnection { epoch, receiver }
+    }
+
+    fn retire(&self, epoch: u64) {
+        self.connections.lock().unwrap().remove(&epoch);
+    }
+
+    fn publish(&self, event: Event) -> bool {
+        let sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
+        let mut delivered = false;
+        let mut dead = Vec::new();
+        let connections = self.connections.lock().unwrap();
+        for (&epoch, sender) in connections.iter() {
+            match sender.try_send(DeliveryFrame::Event {
+                sequence,
+                event: event.clone(),
+            }) {
+                Ok(()) => delivered = true,
+                Err(_) => dead.push(epoch),
+            }
+        }
+        drop(connections);
+        if !dead.is_empty() {
+            let mut connections = self.connections.lock().unwrap();
+            for epoch in dead {
+                connections.remove(&epoch);
+            }
+        }
+        delivered
+    }
+
+    fn send(&self, epoch: u64, message: Message) -> bool {
+        self.connections
+            .lock()
+            .unwrap()
+            .get(&epoch)
+            .is_some_and(|sender| sender.try_send(DeliveryFrame::Message(message)).is_ok())
+    }
+
+    fn connected(&self) -> bool {
+        !self.connections.lock().unwrap().is_empty()
+    }
 }
 struct AudioSlot {
     generation: u64,
@@ -97,6 +178,10 @@ impl AudioQueue {
         );
         sequence
     }
+    fn cancel(&mut self, sequence: u64, generation: u64) -> Vec<Event> {
+        self.finish(sequence, generation, Vec::new())
+    }
+
     fn finish(&mut self, sequence: u64, generation: u64, audio: Vec<u8>) -> Vec<Event> {
         let Some(slot) = self.slots.get_mut(&sequence) else {
             return Vec::new();
@@ -159,49 +244,64 @@ impl AppState {
         let (clips, clip_rx) = mpsc::channel(8);
         let (turns, turn_rx) = mpsc::channel(64);
         let (shutdown, _) = watch::channel(false);
+        let last_diagram = Arc::new(Mutex::new(None));
+        let delivery = DeliveryState::new();
+        let speech_deadline = speaker.speech_deadline;
+        let coordinator = Coordinator::new(switchboard.status());
         let activity_events = events.clone();
+        let activity_delivery = delivery.clone();
+        let activity_coordinator = coordinator.clone();
         let activity_callback: ActivityCallback = Arc::new(move |activity: Activity| {
             let events = activity_events.clone();
+            let delivery = activity_delivery.clone();
+            let coordinator = activity_coordinator.clone();
             Box::pin(async move {
-                let _ = events.send(Event::Json(json!({
+                if coordinator.is_candidate() {
+                    return;
+                }
+                let event = Event::Json(json!({
                     "type": "activity",
                     "state": activity.state,
                     "tool": activity.tool,
                     "detail": activity.detail,
                     "label": activity.label,
-                })));
+                }));
+                let _ = events.send(event.clone());
+                delivery.publish(event);
             })
         });
-        let last_diagram = Arc::new(Mutex::new(None));
-        let status_snapshot = Arc::new(StdRwLock::new(switchboard.status()));
         let route_events = events.clone();
+        let route_delivery = delivery.clone();
         let route_diagram = last_diagram.clone();
-        let route_status = status_snapshot.clone();
+        let route_coordinator = coordinator.clone();
         let route_callback: RouteCallback = Arc::new(move |status| {
             let events = route_events.clone();
+            let delivery = route_delivery.clone();
             let diagram = route_diagram.clone();
-            let status_snapshot = route_status.clone();
+            let coordinator = route_coordinator.clone();
             Box::pin(async move {
-                *status_snapshot
-                    .write()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = status.clone();
+                coordinator.publish_status(status.clone());
                 *diagram.lock().await = None;
-                let _ = events.send(Event::Json(status));
+                let event = Event::Json(status);
+                let _ = events.send(event.clone());
+                delivery.publish(event);
             })
         });
         let active_session = switchboard.session_control();
         let activity_clock = switchboard.activity_clock();
         let live_leg = switchboard.live_leg_state();
         let mut switchboard = switchboard;
+        switchboard.set_coordinator(coordinator.clone());
         switchboard.set_activity_callback(Some(activity_callback));
         switchboard.set_route_callback(Some(route_callback));
         Self(Arc::new(AppInner {
             switchboard: Mutex::new(switchboard),
+            delivery,
             transcript_log: Mutex::new(transcript_log),
             speaker,
             stt,
             events,
-            status_snapshot,
+            coordinator,
             speech,
             speech_rx: Mutex::new(Some(speech_rx)),
             clips,
@@ -215,11 +315,11 @@ impl AppState {
             live_leg,
             operation_transition: Mutex::new(()),
             active_operations: Mutex::new(HashMap::new()),
-            turn_generation: AtomicU64::new(0),
             queued_turns: AtomicU64::new(0),
             turn_in_flight: AtomicBool::new(false),
             shutdown,
             audio: Mutex::new(AudioQueue::new()),
+            speech_deadline,
         }))
     }
     pub fn router(self, static_dir: Option<ServeDir>) -> Router {
@@ -257,12 +357,18 @@ pub fn spawn_workers(state: AppState) {
     });
 }
 pub async fn shutdown(state: &AppState) {
+    // Linearize shutdown before cancellation so late callbacks and deliveries
+    // fail closed while the process resources are being reaped.
+    if !state.0.coordinator.begin_shutdown() {
+        return;
+    }
     // Close upgraded WebSockets as well as the PBX children. Axum's graceful
     // shutdown waits for upgraded connections, so merely stopping the listener
     // can otherwise leave systemd waiting on a browser tab indefinitely.
     state.0.shutdown.send_replace(true);
     interrupt_active_turn(state).await;
     state.0.switchboard.lock().await.shutdown().await;
+    state.0.coordinator.finish_shutdown();
 }
 pub fn spawn_idle_worker(state: AppState, idle_timeout: f64, poll_seconds: f64) {
     if idle_timeout <= 0.0 {
@@ -281,38 +387,44 @@ pub fn spawn_idle_worker(state: AppState, idle_timeout: f64, poll_seconds: f64) 
                     continue;
                 }
             }
-            let mut board = state.0.switchboard.lock().await;
-            if let Some(left) = board.return_if_idle(idle_timeout).await {
+            if state
+                .0
+                .coordinator
+                .return_if_idle(std::time::Duration::from_secs_f64(idle_timeout))
+                .is_some()
+            {
+                let mut board = state.0.switchboard.lock().await;
+                let left = board.force_hangup().await;
                 let route = board.route().to_owned();
                 drop(board);
+                let Some(left) = left else { continue };
                 let minutes = (idle_timeout / 60.0).floor() as u64;
+                emit_json(
+                    &state,
+                    json!({"type":"epoch", "generation":state.0.coordinator.generation()}),
+                );
                 if let Some(entry) = state.0.transcript_log.lock().await.add(AGENT, &format!("Nothing was said for {minutes} minutes, so the line to {left} was dropped. You're back with the operator."), route) {
                     emit_json(&state, json!({"type":"spoken", "entry":entry}));
                 }
+                publish_status(&state, current_status(&state));
             }
         }
     });
 }
 fn emit(state: &AppState, event: Event) -> bool {
-    state.0.events.send(event).is_ok()
+    let delivered = state.0.events.receiver_count() > 0;
+    let browser_delivered = state.0.delivery.publish(event.clone());
+    let _ = state.0.events.send(event);
+    delivered || browser_delivered
 }
 fn emit_json(state: &AppState, value: Value) -> bool {
     emit(state, Event::Json(value))
 }
 fn current_status(state: &AppState) -> Value {
-    state
-        .0
-        .status_snapshot
-        .read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone()
+    state.0.coordinator.status_json()
 }
 fn publish_status(state: &AppState, status: Value) {
-    *state
-        .0
-        .status_snapshot
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = status.clone();
+    state.0.coordinator.publish_status(status.clone());
     emit_json(state, status);
 }
 async fn spawn_active_operation<F, T>(state: &AppState, future: F) -> (JoinHandle<T>, TaskId, u64)
@@ -320,23 +432,31 @@ where
     F: Future<Output = T> + Send + 'static,
     T: Send + 'static,
 {
-    let _transition = state.0.operation_transition.lock().await;
-    let generation = state.0.turn_generation.load(Ordering::Acquire);
-    let (task, id) = spawn_registered_operation(state, future).await;
+    let generation = state.0.coordinator.generation();
+    let (task, id) = spawn_registered_operation(state, generation, future).await;
     (task, id, generation)
 }
-async fn spawn_registered_operation<F, T>(state: &AppState, future: F) -> (JoinHandle<T>, TaskId)
+async fn spawn_registered_operation<F, T>(
+    state: &AppState,
+    generation: u64,
+    future: F,
+) -> (JoinHandle<T>, TaskId)
 where
     F: Future<Output = T> + Send + 'static,
     T: Send + 'static,
 {
-    // Acquire the registry before spawning. A rescue cannot observe a task
-    // that owns (or is about to own) the PBX lock without its abort handle.
+    // The generation check and registry insertion share the registry lock. A
+    // rescue that bumps the generation before this point rejects the task;
+    // one that races after the check waits for the inserted abort handle.
     let mut active = state.0.active_operations.lock().await;
     let task = tokio::spawn(future);
     let abort = task.abort_handle();
     let id = abort.id();
-    active.insert(id, abort);
+    if state.0.coordinator.generation() == generation {
+        active.insert(id, abort);
+    } else {
+        task.abort();
+    }
     (task, id)
 }
 async fn clear_active_operation(state: &AppState, id: TaskId) {
@@ -345,19 +465,30 @@ async fn clear_active_operation(state: &AppState, id: TaskId) {
 
 async fn reserve_audio(state: &AppState, generation: u64) -> Option<u64> {
     let mut audio = state.0.audio.lock().await;
-    if generation != state.0.turn_generation.load(Ordering::Acquire) {
+    if generation != state.0.coordinator.generation() || audio.slots.len() >= 64 {
         return None;
     }
     Some(audio.reserve(generation))
 }
-async fn finish_audio(state: &AppState, sequence: u64, generation: u64, bytes: Vec<u8>) {
+async fn cancel_audio(state: &AppState, sequence: u64, generation: u64) {
     let mut audio = state.0.audio.lock().await;
-    if generation != state.0.turn_generation.load(Ordering::Acquire) {
-        return;
-    }
-    for event in audio.finish(sequence, generation, bytes) {
+    for event in audio.cancel(sequence, generation) {
         emit(state, event);
     }
+}
+async fn finish_audio(state: &AppState, sequence: u64, generation: u64, bytes: Vec<u8>) -> bool {
+    let mut audio = state.0.audio.lock().await;
+    if generation != state.0.coordinator.generation() {
+        for event in audio.cancel(sequence, generation) {
+            emit(state, event);
+        }
+        return false;
+    }
+    let mut delivered = false;
+    for event in audio.finish(sequence, generation, bytes) {
+        delivered |= emit(state, event);
+    }
+    delivered
 }
 
 async fn process_speech(state: AppState) {
@@ -373,9 +504,12 @@ async fn process_speech(state: AppState) {
             text,
             generation,
             sequence,
+            deadline,
+            result,
         } = request;
+        state.0.coordinator.touch_activity();
         let started = std::time::Instant::now();
-        match state.0.speaker.synthesize(&text).await {
+        match state.0.speaker.synthesize_until(&text, deadline).await {
             Ok(audio) => {
                 tracing::info!(
                     chars = text.chars().count(),
@@ -383,10 +517,16 @@ async fn process_speech(state: AppState) {
                     elapsed = ?started.elapsed(),
                     "synthesized a mid-turn line"
                 );
-                finish_audio(&state, sequence, generation, audio).await;
+                let delivered = finish_audio(&state, sequence, generation, audio).await;
+                let _ = result.send(if delivered {
+                    Ok(())
+                } else {
+                    Err("no browser connected or the writer rejected audio".into())
+                });
             }
             Err(error) => {
                 finish_audio(&state, sequence, generation, Vec::new()).await;
+                let _ = result.send(Err(error.to_string()));
                 // The caller hears nothing at all when this fails, so it must
                 // never be inferable only from the absence of audio.
                 tracing::error!(%error, chars = text.chars().count(), "synthesis failed for an agent-spoken line");
@@ -411,6 +551,7 @@ async fn process_clips(state: AppState) {
         // frame quotes it. Logging it at each stage is what makes a caller's
         // "it broke when I said X" answerable from the journal.
         let started = std::time::Instant::now();
+        state.0.coordinator.touch_activity();
         tracing::info!(clip = %clip.id, bytes = clip.audio.len(), "transcribing clip");
         let transcript = match state.0.stt.transcribe(&clip.audio).await {
             Ok(text) => text,
@@ -432,8 +573,9 @@ async fn process_clips(state: AppState) {
             continue;
         }
         let _transition = state.0.operation_transition.lock().await;
-        if clip.generation != state.0.turn_generation.load(Ordering::Acquire) {
+        if clip.generation != state.0.coordinator.generation() {
             tracing::info!(clip = %clip.id, "discarding stale transcript before persistence");
+            emit_stale_clip(&state, &clip.id);
             continue;
         }
         let route = state.0.live_leg.route();
@@ -459,6 +601,14 @@ async fn process_clips(state: AppState) {
         // not while holding the PBX mutex. The turn worker keeps that mutex for
         // the duration of handle(), so awaiting here would deadlock it.
         let steered = {
+            // Steering attaches to the prompt operation already registered by
+            // the turn worker. PiSession::steer has its own wire path and is
+            // intentionally not serialized by the prompt mutex.
+            let steer_operation = state
+                .0
+                .coordinator
+                .attach_steer(&state.0.coordinator.current_identity())
+                .ok();
             // Hold the session-control guard across the write so a hangup or
             // redial cannot replace the child between the identity check and
             // the steer. The PBX mutex is intentionally not held here.
@@ -467,7 +617,7 @@ async fn process_clips(state: AppState) {
             // acted on. Checked under the session guard because a rescue bumps
             // the generation before it closes the session, so a steer that wins
             // this lock still observes the new epoch.
-            let current = state.0.turn_generation.load(Ordering::Acquire);
+            let current = state.0.coordinator.generation();
             if clip.generation != current {
                 tracing::info!(
                     clip = %clip.id,
@@ -475,11 +625,16 @@ async fn process_clips(state: AppState) {
                     %current,
                     "discarding speech captured before a page rescue"
                 );
+                emit_stale_clip(&state, &clip.id);
                 continue;
             }
             match active.as_ref().cloned() {
                 None => false,
-                Some(session) if !session.busy() || !session.alive().await => false,
+                Some(session)
+                    if steer_operation.is_none() || !session.busy() || !session.alive().await =>
+                {
+                    false
+                }
                 Some(session) => match session.steer(&transcript).await {
                     Ok(()) => {
                         // A session swapped out under us means the steer landed
@@ -529,6 +684,18 @@ async fn process_clips(state: AppState) {
     }
     tracing::warn!("the clip worker stopped; no further speech will be transcribed");
 }
+fn emit_stale_clip(state: &AppState, id: &str) {
+    emit_json(
+        state,
+        json!({
+            "type":"error",
+            "id":id,
+            "code":"stale_epoch",
+            "message":"that recording belongs to the previous leg"
+        }),
+    );
+}
+
 async fn process_turns(state: AppState) {
     let mut receiver = state
         .0
@@ -544,11 +711,12 @@ async fn process_turns(state: AppState) {
         // Register the abort handle before awaiting the task. Page-level rescue
         // endpoints can now cancel work even while transfer setup has no
         // PiSession yet.
-        let (task, task_id) = {
+        let (operation, _status) = {
             let _transition = state.0.operation_transition.lock().await;
-            let current = state.0.turn_generation.load(Ordering::Acquire);
+            let current = state.0.coordinator.generation();
             if generation != current {
                 tracing::info!(clip = %id, stamped = generation, %current, "dropping a queued turn from before a page rescue");
+                emit_stale_clip(&state, &id);
                 continue;
             }
             state.0.turn_in_flight.store(true, Ordering::Release);
@@ -559,19 +727,28 @@ async fn process_turns(state: AppState) {
                 &state,
                 json!({"type":"thinking", "route":status["route"], "waiting":waiting}),
             );
-            spawn_registered_operation(&state, async move {
-                let mut board = turn_state.0.switchboard.lock().await;
-                let reply = board.handle(&transcript).await;
-                let status = board.status();
-                (reply, status)
-            })
-            .await
+            let operation = state
+                .0
+                .coordinator
+                .begin_prompt(&state.0.coordinator.current_identity())
+                .ok();
+            (operation, status)
         };
+        let (task, task_id) = spawn_registered_operation(&state, generation, async move {
+            let mut board = turn_state.0.switchboard.lock().await;
+            let reply = board.handle(&transcript).await;
+            let status = board.status();
+            (reply, status)
+        })
+        .await;
         let (reply, status) = match task.await {
             Ok(result) => result,
             Err(error) if error.is_cancelled() => {
                 tracing::info!(clip = %id, elapsed = ?started.elapsed(), "the turn was cancelled by a page rescue");
                 clear_active_operation(&state, task_id).await;
+                if let Some(operation) = &operation {
+                    state.0.coordinator.finish_operation(operation);
+                }
                 state.0.turn_in_flight.store(false, Ordering::Release);
                 continue;
             }
@@ -580,6 +757,9 @@ async fn process_turns(state: AppState) {
                 // caller hears a generic apology and the journal holds nothing.
                 tracing::error!(clip = %id, %error, elapsed = ?started.elapsed(), "the turn worker failed");
                 clear_active_operation(&state, task_id).await;
+                if let Some(operation) = &operation {
+                    state.0.coordinator.finish_operation(operation);
+                }
                 state.0.turn_in_flight.store(false, Ordering::Release);
                 emit_json(
                     &state,
@@ -589,6 +769,9 @@ async fn process_turns(state: AppState) {
             }
         };
         clear_active_operation(&state, task_id).await;
+        if let Some(operation) = &operation {
+            state.0.coordinator.finish_operation(operation);
+        }
         if let Some(error) = &reply.error {
             // The caller was answered and recovered, so this is not an error
             // level — but a turn that carried a failure is worth an audit trail.
@@ -611,11 +794,14 @@ async fn status(State(state): State<AppState>) -> impl IntoResponse {
     Json(current_status(&state))
 }
 async fn interrupt_active_turn(state: &AppState) -> Option<String> {
-    let _transition = state.0.operation_transition.lock().await;
     cancel_active_operations(state).await
 }
 async fn cancel_active_operations(state: &AppState) -> Option<String> {
-    let generation = state.0.turn_generation.fetch_add(1, Ordering::AcqRel) + 1;
+    let generation = state
+        .0
+        .coordinator
+        .begin_rescue("operation interrupted")
+        .generation;
     state.0.audio.lock().await.clear();
     // Tell the browser at once, so speech it starts recording after this point
     // is stamped with the new epoch rather than the one being retired.
@@ -639,10 +825,9 @@ where
     F: Future<Output = T> + Send + 'static,
     T: Send + 'static,
 {
-    let _transition = state.0.operation_transition.lock().await;
     cancel_active_operations(state).await;
-    let generation = state.0.turn_generation.load(Ordering::Acquire);
-    let (task, id) = spawn_registered_operation(state, future).await;
+    let generation = state.0.coordinator.generation();
+    let (task, id) = spawn_registered_operation(state, generation, future).await;
     (task, id, generation)
 }
 async fn hangup(State(state): State<AppState>) -> impl IntoResponse {
@@ -817,24 +1002,60 @@ struct LegState {
     token: String,
 }
 async fn leg_state(State(state): State<AppState>, Json(req): Json<LegState>) -> impl IntoResponse {
-    let accepted = state.0.live_leg.report_thinking(&req.token, &req.thinking);
-    if accepted {
-        let mut status = current_status(&state);
-        status["thinking"] = Value::String(req.thinking.clone());
-        status["thinking_confirmed"] = Value::Bool(true);
-        publish_status(&state, status);
-    }
+    let accepted = match state
+        .0
+        .coordinator
+        .accept_thinking_callback(&req.token, &req.thinking)
+    {
+        Ok(public) => {
+            if public {
+                let _ = state.0.live_leg.report_thinking(&req.token, &req.thinking);
+                let mut status = current_status(&state);
+                status["thinking"] = Value::String(req.thinking.clone());
+                status["thinking_confirmed"] = Value::Bool(true);
+                publish_status(&state, status);
+            }
+            true
+        }
+        Err(_) => false,
+    };
     Json(json!({"accepted":accepted}))
 }
 #[derive(Deserialize)]
 struct Speak {
     text: String,
+    #[serde(default)]
+    token: String,
 }
 async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Response {
     if req.text.trim().is_empty() {
         return (
             axum::http::StatusCode::BAD_REQUEST,
             Json(json!({"detail":"text must not be empty"})),
+        )
+            .into_response();
+    }
+    if let Err(error) = state.0.coordinator.accept_side_effect(&req.token) {
+        let (code, detail) = match error {
+            crate::lifecycle::LifecycleError::CandidateSideEffect => (
+                axum::http::StatusCode::CONFLICT,
+                "candidate side effects are not public yet",
+            ),
+            _ => (
+                axum::http::StatusCode::CONFLICT,
+                "the project callback is stale or invalid",
+            ),
+        };
+        return (
+            code,
+            Json(json!({"delivered":false, "code":"invalid_leg", "detail":detail})),
+        )
+            .into_response();
+    }
+    if !state.0.delivery.connected() {
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"delivered":false, "detail":"no browser connected"})),
         )
             .into_response();
     }
@@ -873,36 +1094,70 @@ async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Respons
         emit_json(&state, json!({"type":"spoken", "entry":entry}));
     }
 
-    let delivered = state.0.events.receiver_count() > 0;
     if let Some(permit) = speech_permit {
-        let generation = state.0.turn_generation.load(Ordering::Acquire);
+        let generation = state.0.coordinator.generation();
         let sequence = match reserve_audio(&state, generation).await {
             Some(sequence) => sequence,
             None => return Json(delivery_response(false)).into_response(),
         };
+        let (result_tx, result_rx) = oneshot::channel();
         permit.send(SpeechRequest {
             text: spoken,
             generation,
             sequence,
+            deadline: std::time::Instant::now() + state.0.speech_deadline,
+            result: result_tx,
         });
+        match result_rx.await {
+            Ok(Ok(())) => return Json(delivery_response(true)).into_response(),
+            Ok(Err(detail)) => {
+                return (
+                    axum::http::StatusCode::BAD_GATEWAY,
+                    Json(json!({"delivered":false, "detail":detail})),
+                )
+                    .into_response();
+            }
+            Err(_) => {
+                return (
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({"delivered":false, "detail":"speech worker stopped"})),
+                )
+                    .into_response();
+            }
+        }
     }
 
-    Json(delivery_response(delivered)).into_response()
+    Json(delivery_response(false)).into_response()
 }
 #[derive(Deserialize)]
 struct Diagram {
     source: String,
     #[serde(default)]
+    token: String,
+    #[serde(default)]
     title: String,
     #[serde(default)]
     notes: String,
 }
-async fn diagram(State(state): State<AppState>, Json(req): Json<Diagram>) -> impl IntoResponse {
+async fn diagram(State(state): State<AppState>, Json(req): Json<Diagram>) -> Response {
+    if let Err(error) = state.0.coordinator.accept_side_effect(&req.token) {
+        let detail = match error {
+            crate::lifecycle::LifecycleError::CandidateSideEffect => {
+                "candidate side effects are not public yet"
+            }
+            _ => "the project callback is stale or invalid",
+        };
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({"delivered":false, "code":"invalid_leg", "detail":detail})),
+        )
+            .into_response();
+    }
     let value =
         json!({"type":"diagram", "source":req.source, "title":req.title, "notes":req.notes});
     *state.0.last_diagram.lock().await = Some(value.clone());
     let delivered = emit_json(&state, value);
-    Json(delivery_response(delivered))
+    Json(delivery_response(delivered)).into_response()
 }
 fn delivery_response(delivered: bool) -> Value {
     if delivered {
@@ -918,7 +1173,7 @@ async fn deliver_page_reply_if_current(
     generation: u64,
 ) -> bool {
     let _transition = state.0.operation_transition.lock().await;
-    if generation != state.0.turn_generation.load(Ordering::Acquire) {
+    if generation != state.0.coordinator.generation() {
         return false;
     }
     if !reply.text.is_empty() {
@@ -935,7 +1190,13 @@ async fn deliver_page_reply_if_current(
     }
     publish_status(state, status);
     drop(_transition);
-    synthesize_reply_if_current(state, &reply.to_speak, generation).await
+    synthesize_reply_if_current(
+        state,
+        &reply.to_speak,
+        generation,
+        std::time::Instant::now() + state.0.speech_deadline,
+    )
+    .await
 }
 
 async fn deliver_turn_if_current(
@@ -945,7 +1206,7 @@ async fn deliver_turn_if_current(
     generation: u64,
 ) -> bool {
     let _transition = state.0.operation_transition.lock().await;
-    if generation != state.0.turn_generation.load(Ordering::Acquire) {
+    if generation != state.0.coordinator.generation() {
         return false;
     }
     if !reply.text.is_empty() {
@@ -962,13 +1223,20 @@ async fn deliver_turn_if_current(
     );
     publish_status(state, status);
     drop(_transition);
-    synthesize_reply_if_current(state, &reply.to_speak, generation).await
+    synthesize_reply_if_current(
+        state,
+        &reply.to_speak,
+        generation,
+        std::time::Instant::now() + state.0.speech_deadline,
+    )
+    .await
 }
 
 async fn synthesize_reply_if_current(
     state: &AppState,
     utterances: &[String],
     generation: u64,
+    deadline: std::time::Instant,
 ) -> bool {
     for text in utterances {
         let spoken = state.0.speaker.clip_for_speech(text);
@@ -979,13 +1247,15 @@ async fn synthesize_reply_if_current(
             return false;
         };
         let started = std::time::Instant::now();
-        let synthesized = state.0.speaker.synthesize(&spoken).await;
+        let synthesized = state.0.speaker.synthesize_until(&spoken, deadline).await;
         let _transition = state.0.operation_transition.lock().await;
-        if generation != state.0.turn_generation.load(Ordering::Acquire) {
+        if generation != state.0.coordinator.generation() {
             tracing::info!(
                 generation,
                 "discarding synthesized audio for a superseded turn"
             );
+            drop(_transition);
+            cancel_audio(state, sequence, generation).await;
             return false;
         }
         match synthesized {
@@ -1006,7 +1276,7 @@ async fn synthesize_reply_if_current(
             }
         }
     }
-    generation == state.0.turn_generation.load(Ordering::Acquire)
+    generation == state.0.coordinator.generation()
 }
 
 async fn ws(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> impl IntoResponse {
@@ -1015,97 +1285,83 @@ async fn ws(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> impl In
         .max_frame_size(MAX_WEBSOCKET_MESSAGE_BYTES)
         .on_upgrade(move |socket| websocket(socket, state))
 }
-async fn websocket(mut socket: WebSocket, state: AppState) {
-    let mut events = state.0.events.subscribe();
+async fn websocket(socket: WebSocket, state: AppState) {
+    // Registration precedes snapshot reads. Every event published after this
+    // point is queued for this epoch, so the writer can release the barrier
+    // only after epoch, status, history, and the optional diagram are sent.
+    let connection = state.0.delivery.register();
+    let epoch = connection.epoch;
+    let (mut sink, mut incoming) = socket.split();
+    let mut frames = connection.receiver;
+    let writer_state = state.clone();
+    let mut writer = Box::pin(tokio::spawn(async move {
+        send_snapshot_sink(&mut sink, &writer_state).await?;
+        while let Some(frame) = frames.recv().await {
+            match frame {
+                DeliveryFrame::Event { sequence, event } => {
+                    tracing::trace!(sequence, epoch, "delivering sequenced event");
+                    send_event_sink(&mut sink, event).await?
+                }
+                DeliveryFrame::Message(message) => sink.send(message).await?,
+            }
+        }
+        Ok::<(), axum::Error>(())
+    }));
+    let writer_id = writer.id();
     let mut shutdown = state.0.shutdown.subscribe();
-    let listeners = state.0.events.receiver_count();
-    tracing::info!(listeners, "browser connected");
-    if let Err(error) = send_snapshot(&mut socket, &state).await {
-        tracing::warn!(%error, "browser dropped before it received the opening snapshot");
-        return;
-    }
-
     let mut pending_header: Option<ClipHeader> = None;
     loop {
         tokio::select! {
-            changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    return;
-                }
+            result = &mut writer => {
+                if let Ok(Err(error)) = result { tracing::warn!(%error, "could not deliver an event to the browser"); }
+                break;
             }
-            received = socket.recv() => match received {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() { break; }
+            }
+            received = incoming.next() => match received {
                 Some(Ok(Message::Text(text))) => {
-                    if handle_text_frame(&mut socket, &mut pending_header, text.as_ref()).await.is_err() {
-                        return;
-                    }
+                    if handle_text_frame(&state, epoch, &mut pending_header, text.as_ref()).await.is_err() { break; }
                 }
                 Some(Ok(Message::Binary(bytes))) => {
-                    if handle_audio_frame(&mut socket, &state, &mut pending_header, bytes.to_vec()).await.is_err() {
-                        return;
-                    }
+                    if handle_audio_frame(&state, epoch, &mut pending_header, bytes.to_vec()).await.is_err() { break; }
                 }
                 Some(Ok(Message::Ping(bytes))) => {
-                    if socket.send(Message::Pong(bytes)).await.is_err() {
-                        return;
-                    }
+                    if !state.0.delivery.send(epoch, Message::Pong(bytes)) { break; }
                 }
                 Some(Ok(Message::Pong(_))) => {}
-                // A clean close and a protocol/IO failure are the same event to
-                // the caller — the page goes quiet — and opposite events to
-                // whoever has to work out why.
                 Some(Ok(Message::Close(frame))) => {
                     tracing::info!(code = ?frame.as_ref().map(|frame| frame.code), "browser disconnected");
-                    return;
+                    break;
                 }
-                Some(Err(error)) => {
-                    tracing::warn!(%error, "the websocket reader failed");
-                    return;
-                }
-                None => {
-                    tracing::info!("browser disconnected without a close frame");
-                    return;
-                }
-            },
-            event = events.recv() => match event {
-                Ok(event) => {
-                    if let Err(error) = send_event(&mut socket, event).await {
-                        tracing::warn!(%error, "could not deliver an event to the browser");
-                        return;
-                    }
-                }
-                Err(broadcast::error::RecvError::Lagged(missed)) => {
-                    tracing::warn!(missed, "the browser fell behind the event stream; resending the snapshot");
-                    // Drop the retained stale tail and rebuild from durable
-                    // state. History/status/diagram are authoritative; activity
-                    // and already-missed audio are intentionally ephemeral.
-                    events = state.0.events.subscribe();
-                    if send_snapshot(&mut socket, &state).await.is_err() {
-                        return;
-                    }
-                }
-                Err(_) => return,
+                Some(Err(error)) => { tracing::warn!(%error, "the websocket reader failed"); break; }
+                None => break,
             },
         }
     }
+    state.0.delivery.retire(epoch);
+    // The writer owns the only sink. Retiring first prevents new events from
+    // being accepted while its final send is being canceled.
+    writer.abort();
+    tracing::debug!(?writer_id, epoch, "browser connection retired");
 }
 
-async fn send_snapshot(socket: &mut WebSocket, state: &AppState) -> Result<(), axum::Error> {
+async fn send_snapshot_sink(
+    sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    state: &AppState,
+) -> Result<(), axum::Error> {
     let initial = [
-        // First, so a reconnecting tab stamps clips against the live epoch
-        // instead of whatever it held before it dropped.
-        Event::Json(
-            json!({"type":"epoch", "generation":state.0.turn_generation.load(Ordering::Acquire)}),
-        ),
+        Event::Json(json!({"type":"epoch", "generation":state.0.coordinator.generation()})),
         Event::Json(current_status(state)),
         Event::Json(
             serde_json::to_value(state.0.transcript_log.lock().await.payload()).unwrap_or_default(),
         ),
     ];
     for event in initial {
-        send_event(socket, event).await?;
+        send_event_sink(sink, event).await?;
     }
     if let Some(diagram) = state.0.last_diagram.lock().await.clone() {
-        send_event(socket, Event::Json(diagram)).await?;
+        send_event_sink(sink, Event::Json(diagram)).await?;
     }
     Ok(())
 }
@@ -1137,15 +1393,17 @@ fn parse_clip_header(command: &serde_json::Map<String, Value>) -> Option<ClipHea
 }
 
 async fn handle_text_frame(
-    socket: &mut WebSocket,
+    state: &AppState,
+    epoch: u64,
     pending_header: &mut Option<ClipHeader>,
     text: &str,
-) -> Result<(), axum::Error> {
+) -> Result<(), ()> {
     let command: Value = match serde_json::from_str(text) {
         Ok(value) => value,
         Err(_) => {
             return send_json(
-                socket,
+                state,
+                epoch,
                 json!({"type":"error", "message":"Invalid JSON frame."}),
             )
             .await
@@ -1153,7 +1411,8 @@ async fn handle_text_frame(
     };
     let Some(command) = command.as_object() else {
         return send_json(
-            socket,
+            state,
+            epoch,
             json!({"type":"error", "message":"Invalid command shape."}),
         )
         .await;
@@ -1162,7 +1421,8 @@ async fn handle_text_frame(
     match command.get("type").and_then(Value::as_str) {
         Some("ping") => {
             send_json(
-                socket,
+                state,
+                epoch,
                 json!({"type":"pong", "nonce":command.get("nonce"), "time":command.get("time")}),
             )
             .await
@@ -1171,7 +1431,8 @@ async fn handle_text_frame(
             let Some(header) = parse_clip_header(command) else {
                 pending_header.take();
                 return send_json(
-                    socket,
+                    state,
+                    epoch,
                     json!({"type":"error", "message":"Invalid clip id."}),
                 )
                 .await;
@@ -1181,7 +1442,8 @@ async fn handle_text_frame(
         }
         _ => {
             send_json(
-                socket,
+                state,
+                epoch,
                 json!({"type":"error", "message":"Unknown websocket command."}),
             )
             .await
@@ -1190,15 +1452,16 @@ async fn handle_text_frame(
 }
 
 async fn handle_audio_frame(
-    socket: &mut WebSocket,
     state: &AppState,
+    epoch: u64,
     pending_header: &mut Option<ClipHeader>,
     audio: Vec<u8>,
-) -> Result<(), axum::Error> {
+) -> Result<(), ()> {
     let Some((id, mime, generation)) = pending_header.take() else {
         tracing::warn!(bytes = audio.len(), "audio arrived without a clip header");
         return send_json(
-            socket,
+            state,
+            epoch,
             json!({"type":"error", "message":"Audio arrived without a clip header."}),
         )
         .await;
@@ -1235,8 +1498,7 @@ async fn handle_audio_frame(
                 // earlier than anything this side can observe and therefore
                 // closes the upload window too. Arrival time is the fallback
                 // for clients that do not send one.
-                generation: generation
-                    .unwrap_or_else(|| state.0.turn_generation.load(Ordering::Acquire)),
+                generation: generation.unwrap_or_else(|| state.0.coordinator.generation()),
             })
             .await
             .is_err()
@@ -1247,18 +1509,27 @@ async fn handle_audio_frame(
         accepted.0.remove(&id);
         accepted.1.retain(|accepted_id| accepted_id != &id);
         return send_json(
-            socket,
+            state,
+            epoch,
             json!({"type":"error", "id":id, "message":"The call worker is unavailable."}),
         )
         .await;
     }
-    send_json(socket, json!({"type":"accepted", "id":id})).await
+    send_json(state, epoch, json!({"type":"accepted", "id":id})).await
 }
 
-async fn send_json(socket: &mut WebSocket, value: Value) -> Result<(), axum::Error> {
-    socket.send(Message::Text(value.to_string().into())).await
+async fn send_json(state: &AppState, epoch: u64, value: Value) -> Result<(), ()> {
+    state
+        .0
+        .delivery
+        .send(epoch, Message::Text(value.to_string().into()))
+        .then_some(())
+        .ok_or(())
 }
-async fn send_event(socket: &mut WebSocket, event: Event) -> Result<(), axum::Error> {
+async fn send_event_sink(
+    socket: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    event: Event,
+) -> Result<(), axum::Error> {
     match event {
         Event::Json(value) => socket.send(Message::Text(value.to_string().into())).await,
         Event::Audio {
@@ -1438,6 +1709,24 @@ mod tests {
         assert_eq!(*state.0.last_diagram.lock().await, Some(event));
     }
 
+    #[tokio::test]
+    async fn delivery_registration_captures_live_events_for_snapshot_barrier() {
+        let delivery = DeliveryState::new();
+        let mut connection = delivery.register();
+        delivery.publish(Event::Json(json!({"type":"status"})));
+        let Some(DeliveryFrame::Event {
+            sequence,
+            event: Event::Json(value),
+        }) = connection.receiver.recv().await
+        else {
+            panic!("registered connection should receive live event");
+        };
+        assert_eq!(sequence, 0);
+        assert_eq!(value["type"], "status");
+        delivery.retire(connection.epoch);
+        assert!(!delivery.connected());
+    }
+
     #[test]
     fn audio_queue_emits_reserved_sequences_in_order_and_drops_on_clear() {
         let mut queue = AudioQueue::new();
@@ -1455,6 +1744,19 @@ mod tests {
         let stale = queue.reserve(3);
         queue.clear();
         assert!(queue.finish(stale, 3, vec![9]).is_empty());
+    }
+
+    #[test]
+    fn audio_queue_cancellation_releases_following_audio() {
+        let mut queue = AudioQueue::new();
+        let first = queue.reserve(1);
+        let second = queue.reserve(1);
+        assert!(queue.cancel(first, 1).is_empty());
+        let events = queue.finish(second, 1, vec![7]);
+        assert!(matches!(
+            events.as_slice(),
+            [Event::Audio { sequence: 1, .. }]
+        ));
     }
 
     #[tokio::test]
@@ -1491,8 +1793,11 @@ mod tests {
         )
         .await
         .expect("speak must stay live during an agent turn");
-        assert_eq!(code, StatusCode::OK);
-        assert_eq!(spoken, json!({"delivered":true}));
+        assert_eq!(code, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            spoken,
+            json!({"delivered":false, "detail":"no browser connected"})
+        );
 
         let (code, leg) = timeout(
             Duration::from_secs(1),
@@ -1606,8 +1911,8 @@ mod tests {
     async fn superseded_reply_is_not_logged_or_broadcast() {
         let state = state();
         let mut events = state.0.events.subscribe();
-        let generation = state.0.turn_generation.load(Ordering::Acquire);
-        state.0.turn_generation.fetch_add(1, Ordering::AcqRel);
+        let generation = state.0.coordinator.generation();
+        state.0.coordinator.begin_rescue("test rescue");
         let reply = crate::pbx::Reply {
             text: "stale result".into(),
             route: OPERATOR.into(),
@@ -1631,8 +1936,8 @@ mod tests {
     async fn queued_turn_from_before_page_rescue_never_reaches_the_new_leg() {
         let state = state();
         let mut events = state.0.events.subscribe();
-        let old_generation = state.0.turn_generation.load(Ordering::Acquire);
-        state.0.turn_generation.fetch_add(1, Ordering::AcqRel);
+        let old_generation = state.0.coordinator.generation();
+        state.0.coordinator.begin_rescue("test rescue");
         state.0.queued_turns.store(1, Ordering::Release);
         let worker_state = state.clone();
         let worker = tokio::spawn(async move { process_turns(worker_state).await });
@@ -1648,10 +1953,10 @@ mod tests {
 
         assert!(!state.0.turn_in_flight.load(Ordering::Acquire));
         assert!(state.0.active_operations.lock().await.is_empty());
-        assert!(matches!(
-            events.try_recv(),
-            Err(broadcast::error::TryRecvError::Empty)
-        ));
+        let stale = events
+            .try_recv()
+            .expect("stale queued turn is acknowledged");
+        assert!(matches!(stale, Event::Json(ref value) if value["code"] == "stale_epoch"));
         worker.abort();
         assert!(worker.await.unwrap_err().is_cancelled());
     }
@@ -1701,12 +2006,12 @@ mod tests {
                 id: "old-clip".into(),
                 audio: vec![0],
                 _mime: "audio/webm".into(),
-                generation: state.0.turn_generation.load(Ordering::Acquire),
+                generation: state.0.coordinator.generation(),
             })
             .await
             .unwrap();
         // The transfer lands while the clip is still inside the sidecar.
-        state.0.turn_generation.fetch_add(1, Ordering::AcqRel);
+        state.0.coordinator.begin_rescue("test rescue");
         let worker_state = state.clone();
         let worker = tokio::spawn(async move { process_clips(worker_state).await });
 
@@ -1714,10 +2019,8 @@ mod tests {
         // transcript events must be suppressed before either side effect.
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(state.0.transcript_log.lock().await.entries().is_empty());
-        assert!(matches!(
-            events.try_recv(),
-            Err(broadcast::error::TryRecvError::Empty)
-        ));
+        let stale = events.try_recv().expect("stale clip is acknowledged");
+        assert!(matches!(stale, Event::Json(ref value) if value["code"] == "stale_epoch"));
         assert_eq!(state.0.queued_turns.load(Ordering::Acquire), 0);
         let mut turns = state.0.turn_rx.lock().await.take().unwrap();
         assert!(matches!(

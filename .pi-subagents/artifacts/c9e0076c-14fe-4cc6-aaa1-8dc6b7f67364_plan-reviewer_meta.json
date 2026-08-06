@@ -1,0 +1,211 @@
+{
+  "runId": "c9e0076c-14fe-4cc6-aaa1-8dc6b7f67364",
+  "agent": "plan-reviewer",
+  "task": "Adversarially review plan_v5 against review_v4 and the repository. Verify the five remaining blockers are closed precisely: collision-safe remote lock identity and secure placement; one end-to-end /speak deadline with cancellation and no duplicate late delivery; AudioQueue reservation cancellation on stale socket/generation; explicit quiescing callback rejection for all callback endpoints; and status_snapshot/current_status/publish_status clearly presentation-only with no lifecycle authority. Also ensure earlier decisions remain intact and no scope creep or new god object is introduced. Read-only. End exactly with `VERDICT: APPROVE` or `VERDICT: REVISE`.\n\n## plan_v5\n# Handoff Output: plan_v5\nStatus: success\nVerdict: (none)\nTimestamp: 1786005206\n\n## Content\n# plan_v5: implementation plan\n\n**Scope:** read-only implementation plan. Preserve `CallLifecycle` as the sole mutable lifecycle owner, one-caller ephemerality, legacy RPC/sentinel compatibility, unavailable-catalog passthrough, diagnostics-only phase status, no Postgres/Redis/run queue, and no homelab edits.\n\n## Ordered slices\n\n1. **Centralize lifecycle and callback gating.**  \n   In `src/pbx.rs`, introduce `CallLifecycle` with `LifecyclePhase::{Operator, Active, Quiescing, Candidate}`. Move route, project, persistent `session_id`, per-process `leg_token`, generation, model, thinking, activity clock, and diagnostics into it. `Switchboard` becomes an async facade with configuration and coordinator access only; remove duplicate `active_session`, route, token, generation, `LiveLegState`, and `ActivityClock` ownership.\n\n   Add coordinator commands for status snapshots, activity, callback acceptance, candidate adoption, quiescing, and terminal settlement. `accept_callback` succeeds only in `Active` with the exact current per-process token. `Quiescing`, `Candidate`, operator, missing, and stale tokens are rejected with bounded `409` responses and never buffered.\n\n2. **Make same-session redial quiescent before reopening.**  \n   Update `Switchboard::{transfer,redial,start_agent,drop_agent,force_hangup}` and `CandidateLeg` so redial first marks the old leg `Quiescing`, advances internal generation, rejects `/speak`, `/leg-state`, and `/diagram`, closes stdin, terminates the entire old process tree, and awaits reaping. Only then may a same-session candidate start.\n\n   Candidate state remains invisible and callback-rejecting until atomic adoption of route, model, persistent session ID, new leg token, generation, phase, and route event. Candidate failure closes only the candidate and settles to operator. Candidate callbacks are never queued.\n\n3. **Make remote locking collision-safe and bounded.**  \n   In `src/pi_client.rs::remote_argv`, add `sha2` and derive exactly 64 lowercase hex characters from `SHA-256(host bytes + NUL + persistent session_id bytes)`. Reject empty, NUL-containing, or oversized host/session identities before building the command; cap each at 4096 bytes and reject any generated command or lock path exceeding 8192 bytes.\n\n   Use the fixed remote directory `$HOME/.cache/switchboard/locks`. The remote shell must require an absolute `$HOME` of at most 1024 bytes, `flock` availability, a lock directory created with `umask 077`, mode `0700`, current-user ownership, and a non-symlink directory. Create/open only `<64-hex>.lock` with mode `0600`, then acquire it using nonblocking `flock` on inherited FD 9 before `exec pi`. Any directory, validation, lock-file, or `flock` failure exits 75; contention emits bounded `remote_session_lock_busy` diagnostics.\n\n   `PiSession::close` must finish local tree termination and reaping before same-session candidate startup. Exit 75 or the marker maps to bounded `remote_session_lock_busy`; candidate resources are reaped and lifecycle settles to operator. Distinct host/session pairs must never share a key; same pairs must share one key.\n\n4. **Define one bounded speech deadline with cancellation.**  \n   In `src/api.rs::{SpeechRequest,speak,process_speech}`, use one canonical 25-second speech deadline from request admission through TTS and audio commit. `extensions/agent-switchboard.ts` uses a 27-second fetch timeout only as transport grace; it does not extend server work. The server refuses all commits at the 25-second cutoff.\n\n   Carry a cancellation signal and acknowledgement oneshot in `SpeechRequest`. Dropping the HTTP handler, deadline expiry, worker shutdown, TTS failure, stale generation, stale socket epoch, or lost browser cancels the request and reserved audio slot. `src/audio.rs::{Speaker::synthesize,HttpTtsTransport::send}` must receive the remaining deadline; dropping the future cancels the HTTP request. No worker may commit after cancellation or deadline.\n\n   `/speak` validates the real token before logging or queueing. It returns success only after TTS succeeds, the generation and socket epoch still match, a browser remains connected, and `finish_audio` emits the committed frame. Return `200 delivered:false` only for no browser; return bounded `409` for callback identity failure, `502` for TTS failure, `503` for worker failure, and `504` for timeout. Failed speech never suppresses written-reply fallback.\n\n5. **Prevent stale audio reservations from wedging ordering.**  \n   Extend `AudioQueue::{reserve,finish,clear}` with socket epoch and explicit slot state. Add `AudioQueue::cancel(sequence, generation, socket_epoch)` and `cancel_epoch(epoch)`. Every stale-generation, stale-epoch, disconnected, timeout, worker-drop, and TTS-error path must cancel or finalize the slot; `finish_audio` must never return while leaving a pending slot at `emit`.\n\n   `src/api.rs::websocket` cancels the disconnected socket epoch before returning. `synthesize_reply_if_current` cancels its reservation on every stale barrier. A committed slot resolves its acknowledgement only when ordering drains and the browser event is emitted. Reconnect ordering remains `epoch → status → history → diagram`.\n\n6. **Correlate speech tool completion, not tool start.**  \n   In `src/pi_client.rs::{Signal,Turn,collect}`, track `toolCallId` from `tool_execution_start` and only mark `speak` successful after a matching `tool_execution_end` with `isError` false. Start-only, failed-end, and mismatched-ID events do not count as speech. `Turn::agent_spoke()` is true only for successful completed `speak`.\n\n   In `extensions/agent-switchboard.ts`, include `SESSION_TOKEN` in state, speak, and diagram bodies. Non-2xx and `delivered:false` speech responses return `isError:true`; successful acknowledged delivery remains successful. Preserve existing tool names, sentinel behavior, and response fields.\n\n7. **Remove API lifecycle/status mirrors.**  \n   In `src/api.rs::AppInner`, delete `status_snapshot`, `active_session`, `activity_clock`, `live_leg`, `operation_transition`, and authoritative generation mirrors once coordinator commands replace them. Delete `current_status` and `publish_status`; replace them with stateless `coordinator_status`/`emit_status_projection` helpers that query `CallLifecycle` and immediately emit presentation JSON.\n\n   `status`, `healthz`, `send_snapshot`, turn dispatch, page controls, and callback responses must obtain fresh projections from the coordinator. `status` JSON remains presentation-only; any phase field is diagnostics-only and cannot mutate lifecycle. Add tests proving a lifecycle mutation is visible through fresh status queries and stale projections cannot overwrite current state.\n\n8. **Retain stale barriers and bounded diagnostics.**  \n   Route awaited commits through coordinator identity checks in `src/pbx.rs::{handle,handle_agent,process_turns,deliver_turn_if_current}` and `src/api.rs::{process_clips,process_speech,deliver_page_reply_if_current,synthesize_reply_if_current}`. Keep capture-generation stamping, provider-qualified unavailable-catalog passthrough, one-caller ephemeral audio/activity state, and legacy compatibility.\n\n   Keep the 256-entry in-memory trace ring with process-global monotonic sequence, UTF-8-safe 128-byte field caps, and serialized payloads capped at 2 KiB. Exclude tokens, prompts, transcripts, stderr, paths, secrets, and raw tool arguments.\n\n## Slice-local tests\n\n- `src/pbx.rs`: lifecycle coordinator ownership, serialized commands, `Quiescing` rejection for `/speak`, `/leg-state`, and `/diagram`, candidate rejection/no buffering, same-session close-before-reopen, lock-busy operator settlement, status refresh, and trace bounds.\n- `src/pi_client.rs`: fixed 64-hex lock keys, distinct identity non-aliasing, oversized identity rejection, secure lock command/modes/path bounds, same-session fake SSH serialization, and tool-result correlation.\n- `src/api.rs`: acknowledged speech, timeout cancellation, worker-drop cancellation, no duplicate speech, stale generation/epoch rejection, reconnect/disconnect during TTS, reservation cancellation/unwedged ordering, token rejection, and status ownership.\n- `src/audio.rs`: deadline propagation, cancellation of delayed transport, and bounded TTS timeout.\n- `tests/test_extensions.mjs`: token in all callback bodies; non-2xx and `delivered:false` speech failures; successful acknowledgement; diagram callback behavior.\n- `tests/test_protocol.mjs` and legacy tests: additive wire compatibility, epoch handling, sentinel/RPC behavior, and unchanged unavailable-catalog passthrough.\n\n## Rejected alternatives\n\n- Truncated or plain hex lock names: distinct identities can alias.\n- Per-process lock files, blocking `flock`, or waiting for remote SSH teardown: unsafe or nondeterministic.\n- Independent 30-second client/server deadlines or late worker commits: can trigger fallback before original audio.\n- Returning from stale `finish_audio` without cancelling its slot: wedges later ordered audio.\n- Relying only on token mismatch after adoption: leaves a redial teardown acceptance window.\n- Retaining `status_snapshot` as mutable authority: duplicates lifecycle state.\n- Durable diagnostics, browser lifecycle state, Postgres, Redis, run queues, history cloning, rollback, or homelab changes.\n\n## Exact file/symbol mapping\n\n- `src/pbx.rs`: `CallLifecycle`, `LifecyclePhase`, `CandidateLeg`, `Switchboard`, `transfer`, `redial`, `start_agent`, `drop_agent`, `force_hangup`, `agent_env`, `report_leg_state`, `status`, `ActivityClock`, diagnostics ring.\n- `src/api.rs`: `AppInner`, `SpeechRequest`, `AudioQueue`, `reserve_audio`, `finish_audio`, `process_speech`, `speak`, `leg_state`, `diagram`, `websocket`, `send_snapshot`, stale delivery helpers.\n- `src/audio.rs`: `Speaker::synthesize`, `HttpTtsTransport::send`, TTS deadline tests.\n- `src/pi_client.rs`: `remote_argv`, `PiSession::close`, `Signal`, `Turn::agent_spoke`, `collect`.\n- `extensions/agent-switchboard.ts`: callback tokens, deadline, failure semantics.\n- `Cargo.toml`, `Cargo.lock`: `sha2` dependency.\n- `tests/test_extensions.mjs`, `tests/test_protocol.mjs`, legacy tests.\n- No homelab files.\n\n## Acceptance commands\n\n```text\ncargo fmt --all -- --check\ncargo test --locked\ncargo clippy --locked --all-targets -- -D warnings\npython3 -m unittest discover -s legacy/tests\nnpm test\ngit diff --exit-code -- static\n```\n\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"Plan v5 specifies exact collision-safe remote lock derivation, secure lock directory and failure behavior, one canonical speech deadline with cancellation and late-result suppression, explicit AudioQueue cancellation, Quiescing callback gates for every required callback, and removal of mutable API status ownership.\"\n    }\n  ],\n  \"changedFiles\": [],\n  \"testsAddedOrUpdated\": [\n    \"src/pbx.rs\",\n    \"src/api.rs\",\n    \"src/audio.rs\",\n    \"src/pi_client.rs\",\n    \"extensions/agent-switchboard.ts\",\n    \"tests/test_extensions.mjs\",\n    \"tests/test_protocol.mjs\",\n    \"Cargo.toml\",\n    \"Cargo.lock\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"Repository inspection and plan revision\",\n      \"result\": \"not-run\",\n      \"summary\": \"Planning only; no source files edited.\"\n    }\n  ],\n  \"validationOutput\": [\n    \"Reviewed current remote_argv, SpeechRequest/process_speech, AudioQueue/finish_audio, callback endpoints, extension payloads, and status mirror symbols.\",\n    \"All five review_v4 blockers have explicit mechanisms, symbols, failure behavior, and slice-local tests.\"\n  ],\n  \"residualRisks\": [\n    \"Remote deployments must provide a trustworthy user-owned HOME and flock implementation.\",\n    \"Live TTS, SSH, browser, credentials, and homelab cutover remain external validation.\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"No source changes; revised implementation plan only.\",\n  \"reviewFindings\": [\n    \"closed high: src/pi_client.rs::remote_argv - SHA-256 fixed-length identity key, bounded inputs, secure lock directory, and exit-75 behavior are specified.\",\n    \"closed high: extensions/agent-switchboard.ts and src/api.rs::process_speech - canonical deadline, cancellation propagation, worker-drop handling, and no-late-commit behavior are specified.\",\n    \"closed medium: src/api.rs::AudioQueue and finish_audio - stale reservations are explicitly cancelled and tested during reconnect/disconnect.\",\n    \"closed medium: src/pbx.rs lifecycle callbacks - Quiescing rejects old-leg speak, leg-state, and diagram callbacks.\",\n    \"closed medium: src/api.rs status_snapshot/current_status/publish_status - mutable mirror is removed and replaced by fresh coordinator projections.\"\n  ],\n  \"manualNotes\": \"No unresolved ambiguity remains for the five review_v4 blockers. No source files were edited.\"\n}\n```\n\n\u001b[38;2;136;136;136m✻ Turn took 4m 7s (Total time 4m 6s · 1 turn)\u001b[0m\n\n## review_v4\n# Handoff Output: review_v4\nStatus: success\nVerdict: REVISE\nTimestamp: 1786004922\n\n## Content\n# Adversarial review\n\n1. **High: remote lock identity is not safety-complete.**  \n   `src/pi_client.rs::remote_argv` is specified to use “bounded hex encoding,” but the plan does not define collision handling, rejection of oversized inputs, lock-directory location, or secure creation. Truncation can make distinct `(host, session_id)` pairs share a lock and violate the no-overlap guarantee. Require collision-resistant fixed-length derivation or reject unrepresentable identities, plus a test.\n\n2. **High: `/speak` can still duplicate speech on timeout.**  \n   `extensions/agent-switchboard.ts:98-103` has a 30-second fetch timeout, while `src/audio.rs` also allows 30-second TTS requests. The plan adds a oneshot but does not define an endpoint deadline, cancellation, or worker-health mechanism. The extension can mark the tool failed and trigger fallback while the server later delivers the original audio. Define one bounded deadline and cancellation/late-result behavior; test it.\n\n3. **Medium: stale socket results can wedge audio ordering.**  \n   `src/api.rs::AudioQueue` reserves ordered slots, while `finish_audio` currently returns early for stale generations. The plan adds socket-epoch rejection but does not specify cancellation/finalization of a reserved slot on epoch mismatch. A disconnected browser can leave sequence N pending forever, blocking later audio. Add an explicit reservation-cancel path and reconnect-during-TTS test.\n\n4. **Medium: same-session quiescing leaves an acceptance window.**  \n   During redial, the old token appears to remain authoritative until candidate adoption, while the old SSH process is being terminated. `/speak`, `/leg-state`, or `/diagram` callbacks arriving in that interval may mutate state despite the leg being quiesced. Define a `quiescing` rejection phase and test all callback types, not only candidate callbacks.\n\n5. **Medium: status mirror ownership remains ambiguous.**  \n   `src/api.rs::status_snapshot`, `current_status`, and `publish_status` are not named in the removal mapping. If `status_snapshot` remains authoritative, lifecycle state is still duplicated in `AppInner`; if it is only a presentation cache, state that explicitly and require coordinator refresh tests.\n\nThe prior explicit blockers are otherwise addressed: activity ownership is named for removal, remote locking is introduced, speech success requires acknowledged TTS/tool completion, and trace retention/sanitization tests are listed. These remaining races and timeout semantics prevent approval.\n\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"not-satisfied\",\n      \"evidence\": \"Plan v4 closes the previously listed blockers in principle, but remote lock identity, asynchronous speech timeout/worker failure, stale audio reservation, callback quiescence, and status mirror ownership remain underspecified.\"\n    }\n  ],\n  \"changedFiles\": [],\n  \"testsAddedOrUpdated\": [],\n  \"commandsRun\": [],\n  \"validationOutput\": [\n    \"Read-only inspection of plan_v4 against src/api.rs, src/pbx.rs, src/pi_client.rs, src/audio.rs, and extensions/agent-switchboard.ts.\",\n    \"Prior review blockers were checked against the revised plan.\"\n  ],\n  \"residualRisks\": [\n    \"Lock-key collisions or unspecified lock placement could permit same-session overlap.\",\n    \"A 30-second client/server timeout race can produce duplicate speech.\",\n    \"Socket-stale audio may block subsequent ordered audio.\",\n    \"Callbacks may be accepted while an old leg is being quiesced.\",\n    \"status_snapshot may remain a second lifecycle authority.\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"No source changes; read-only plan gate.\",\n  \"reviewFindings\": [\n    \"high: src/pi_client.rs::remote_argv - bounded lock-key derivation does not specify collision-safe behavior or lock placement.\",\n    \"high: extensions/agent-switchboard.ts:98-103 and src/audio.rs - client and TTS deadlines can trigger fallback while speech is later delivered.\",\n    \"medium: src/api.rs::AudioQueue and finish_audio - stale socket completion lacks reservation cancellation.\",\n    \"medium: src/pbx.rs lifecycle callbacks - quiescing old-leg callback rejection is not explicit.\",\n    \"medium: src/api.rs::status_snapshot - authoritative versus presentation-only ownership is ambiguous.\"\n  ],\n  \"manualNotes\": \"Trace bounds, UTF-8 handling, exclusion tests, AppState activity removal, and successful tool-result correlation are explicitly covered, but the findings above require plan revision.\"\n}\n```\n\nVERDICT: REVISE\n\n\u001b[38;2;136;136;136m✻ Turn took 4m 21s (Total time 4m 20s · 1 turn)\u001b[0m\n\n---\n**Output:**\nReturn the complete artifact in your final response.\nThe runtime will persist it to exactly this path: /home/kayne19/projects/switchboard/.pi-workflow/outputs/wf_1786002388285300339_3730916_0/review_v5.md\nDo not call contact_supervisor merely because no write-capable tool is available.\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.\n\n## Acceptance Contract\nAcceptance level: checked\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Implement the requested change without widening scope\n- criterion-2: Return evidence sufficient for an independent acceptance review\n\nRequired evidence: changed-files, tests-added, commands-run, residual-risks, no-staged-files\n\nReview gate: required by reviewer.\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    },\n    {\n      \"id\": \"criterion-2\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-5.6-luna",
+  "attemptedModels": [
+    "openai-codex/gpt-5.6-luna"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.6-luna",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 96894,
+        "output": 12404,
+        "cacheRead": 722432,
+        "cacheWrite": 0,
+        "cost": 0.04871224,
+        "turns": 19
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "rejected",
+    "evidenceStatus": "rejected",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "checked",
+      "explicit": false,
+      "inferredReason": [
+        "async write-capable or risky run"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Implement the requested change without widening scope",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        },
+        {
+          "id": "criterion-2",
+          "must": "Return evidence sufficient for an independent acceptance review",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "changed-files",
+        "tests-added",
+        "commands-run",
+        "residual-risks",
+        "no-staged-files"
+      ],
+      "verify": [],
+      "review": {
+        "agent": "reviewer",
+        "required": true
+      },
+      "stopRules": []
+    },
+    "inferredReason": [
+      "async write-capable or risky run"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Implement the requested change without widening scope",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      },
+      {
+        "id": "criterion-2",
+        "must": "Return evidence sufficient for an independent acceptance review",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [
+      {
+        "id": "criterion:criterion-1",
+        "status": "failed",
+        "message": "Required criterion 'criterion-1' was reported as not-satisfied."
+      },
+      {
+        "id": "criterion:criterion-2",
+        "status": "passed",
+        "message": "Required criterion 'criterion-2' satisfied."
+      },
+      {
+        "id": "evidence:changed-files",
+        "status": "not-applicable",
+        "message": "changed-files evidence explicitly reported as not applicable."
+      },
+      {
+        "id": "evidence:tests-added",
+        "status": "not-applicable",
+        "message": "tests-added evidence explicitly reported as not applicable."
+      },
+      {
+        "id": "evidence:commands-run",
+        "status": "passed",
+        "message": "commands-run evidence present."
+      },
+      {
+        "id": "evidence:residual-risks",
+        "status": "passed",
+        "message": "residual-risks evidence present."
+      },
+      {
+        "id": "evidence:no-staged-files",
+        "status": "passed",
+        "message": "no-staged-files evidence present."
+      },
+      {
+        "id": "no-staged-files",
+        "status": "passed",
+        "message": "No staged files detected."
+      }
+    ],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "not-satisfied",
+          "evidence": "The plan improves all five blockers but leaves secure no-follow lock creation, atomic speech cancellation/commit, and socket epoch ownership underspecified."
+        },
+        {
+          "id": "criterion-2",
+          "status": "satisfied",
+          "evidence": "Repository symbols and concrete call paths were checked for remote_argv, speech processing, AudioQueue, WebSocket lifecycle, callback endpoints, and status projection."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "Repository inspection and read-only plan review",
+          "result": "not-run",
+          "summary": "No source changes or validation commands were performed."
+        }
+      ],
+      "validationOutput": [
+        "Reviewed src/pi_client.rs, src/api.rs, src/audio.rs, src/pbx.rs, extensions/agent-switchboard.ts, and README.md against plan_v5 and review_v4."
+      ],
+      "residualRisks": [
+        "Symlink races and ambiguous ownership can invalidate remote lock safety.",
+        "Cancellation can race final audio emission.",
+        "A disconnected or replaced browser is not tied unambiguously to speech reservations.",
+        "Status freshness and lifecycle ownership remain implementation-sensitive."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Read-only review; no repository changes.",
+      "reviewFindings": [
+        "high: src/pi_client.rs:795 and src/pbx.rs:738 - secure lock creation and Result/error propagation are incomplete.",
+        "high: src/api.rs:353-390 - cancellation is not specified atomically with final audio commit.",
+        "high: src/api.rs:863-895 - SpeechRequest/reservation has no defined socket epoch ownership.",
+        "medium: src/api.rs:916-965 - stale status Value arguments can undermine fresh projection semantics.",
+        "medium: plan_v5 slices 1-2 - lifecycle ownership boundaries are insufficient to rule out a new god object."
+      ],
+      "manualNotes": "Quiescing rejection, completed tool correlation, and status-mirror removal intent are otherwise explicit."
+    }
+  },
+  "launchContractDigest": "4ccc2bb3baa055ae4e6399d109bbb4e414aa49ed9508a92ddabcf77a8c164174",
+  "launchResolvedExtensions": {
+    "version": 1,
+    "source": "launch-resolved",
+    "disableAmbientExtensions": false,
+    "runtime": [
+      "sha256:249682fb0750be04"
+    ],
+    "configured": [],
+    "effective": [
+      "sha256:249682fb0750be04"
+    ],
+    "omitted": {
+      "runtime": 0,
+      "configured": 0,
+      "effective": 0
+    }
+  },
+  "transcriptPath": "/home/kayne19/projects/switchboard/.pi-subagents/artifacts/c9e0076c-14fe-4cc6-aaa1-8dc6b7f67364_plan-reviewer_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1786005479271
+}

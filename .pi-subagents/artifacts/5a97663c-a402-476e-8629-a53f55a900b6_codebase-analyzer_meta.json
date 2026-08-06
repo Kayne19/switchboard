@@ -1,0 +1,126 @@
+{
+  "runId": "5a97663c-a402-476e-8629-a53f55a900b6",
+  "agent": "codebase-analyzer",
+  "task": "Read the adjacent reference repository `/home/kayne19/projects/AI-Linux-Assistant` read-only and comprehensively. Follow its `AGENTS.md` routing rules: read `graphify-out/architecture/wiki/index.md` first, then the maintained architecture docs (`Back-end/app/ARCHITECTURE.md`, `API.md`, `orchestration/RUNS.md`, `streaming/STREAMING.md`, `agents/AGENT_ROLES.md`, plus ingestion/retrieval/persistence/providers/auth/frontend docs), runtime entrypoints, orchestration modules, FSM implementations, durable run state, event serialization, and representative tests that assert traces/ownership. Exclude generated caches, node_modules, `.git`, and other dependency noise. Do not edit or run write-oriented commands. Return a compressed but evidence-backed architecture map with file paths and line ranges: boundaries, owner of each responsibility, central state machines, transitions, data/event contracts, dependency direction, test strategy, and the specific practices worth transferring versus those that would be inappropriate for switchboard.\n\n## Context from phase 'define'\n# Handoff Output: define\nStatus: success\nVerdict: (none)\nTimestamp: 1786002598\n\n## Content\n# Problem brief\n\n**Outcome:** Define an auditable target where one authoritative lifecycle state machine owns call workflow, transport adapters remain task-shaped, concurrency/durability boundaries are explicit, and deterministic tests assert complete state traces.\n\n**Goals**\n- Publish an ownership matrix for `src/api.rs`, `pbx.rs`, `pi_client.rs`, `audio.rs`, registry/models/history, `web/`, extensions, legacy Python, and homelab deployment.\n- Make transfer, return, hangup/rescue, model swap, idle timeout, turn dispatch, failure, and shutdown observable transitions.\n- Separate routing workflow from process/SSH/STT/TTS transport and from concurrency or persistence policy.\n- Define trace records with operation identity, ordered sequence, event/state, outcome, and terminal result.\n- Require exact trace assertions for happy paths, failures, stale work, and interruption races.\n\n**Findings**\n- **High architectural gap:** lifecycle state is split across `src/pbx.rs:168-240` and `src/api.rs:30-56,318-345,613-646`; no single canonical state authority exists.\n- **High verification gap:** no `state_trace` contract appears in switchboard; tests primarily assert final route/status (`src/pbx.rs:1653-1940`). `docs/observability-and-coverage-handoff.md` explicitly records stale-rescue, hangup, idle-drop, and failure-path coverage gaps.\n- **Medium observability gap:** `api.rs` broadcasts ephemeral JSON events and current snapshots; there is no ordered phase-transition history or durable replay contract.\n- **Medium ownership ambiguity:** Rust is the intended active service, Python is the compatibility baseline, and homelab owns deployment/configuration (`README.md`, `docs/rust-typescript-migration-handoff.md`, `docs/extraction-plan.md`), but no complete ownership matrix is enforced.\n- **Unresolved scope:** current history and lifecycle state are in memory; no durable run/lease/event store exists. This may be correct for the single-caller product and is not silently treated as a defect.\n\n**Non-goals**\n- No repository edits, deployment cutover, homelab changes, or behavior redesign in this task.\n- No accounts, multi-call support, job queue, frontend framework, new dependencies, or STT/TTS rewrite.\n- No durable run system unless the parent explicitly approves restart survival, replay, and lease semantics.\n\n**Constraints and assumptions**\n- Preserve WebSocket/HTTP contracts, `SWITCHBOARD_*` environment interface, one caller/one active leg, and legacy compatibility tests.\n- Rust remains the target runtime; adapters must not mutate routing state.\n- Tests use fake processes and no network/model downloads.\n- “Durable” must first be classified as process-, call-, turn-, or restart-lifetime state.\n\n**Acceptance gates**\n1. Ownership matrix covers every mutable datum and critical flow, with one owner, allowed mutators, synchronization boundary, lifetime, and forbidden responsibilities.\n2. A parent-approved canonical FSM (or explicitly coordinated FSMs) covers all critical flows; every transition has a monotonic trace entry and terminal outcome; stale generations cannot commit.\n3. Concurrency tests deterministically cover rescue during transcription, turn execution, transfer, and redial; no stale reply/audio/route mutation or orphaned process is accepted.\n4. Event/status/log contracts expose current phase and ordered transitions without secrets; reconnect and retention behavior is explicitly documented.\n5. Exact trace tests cover success, failed transfer, return, hangup, idle timeout, model swap success/failure, shutdown, and cancellation. Existing Rust, legacy Python, Clippy/format, npm, and static-build gates remain green.\n6. Documentation states whether restart durability/replay is intentionally absent or separately owned by a durable store/worker boundary.\n\n**Parent-owned decisions**\n- FSM scope and vocabulary: route-only, whole call/turn, or multiple coordinated machines.\n- Whether restart survival, durable replay, leases, idempotency, or multi-call concurrency are product requirements.\n- Whether transition events are public WebSocket API, internal diagnostics, durable records, or some combination.\n- Canonical authority for stale-result suppression and rescue linearization.\n- Rust/Python/homelab cutover ownership and any public API or environment-contract changes.\n- Whether the browser must render every phase or only consume current status plus selected events.\n\n```acceptance-report\n{\n  \"criteriaSatisfied\": [{\"id\": \"criterion-1\", \"status\": \"satisfied\", \"evidence\": \"Read-only inspection identified concrete severity-rated gaps in src/api.rs, src/pbx.rs, README.md, docs/observability-and-coverage-handoff.md, and docs/rust-typescript-migration-handoff.md.\"}],\n  \"changedFiles\": [],\n  \"testsAddedOrUpdated\": [],\n  \"commandsRun\": [],\n  \"validationOutput\": [\"Read-only repository and architecture inspection completed; no build or test commands run.\"],\n  \"residualRisks\": [\"Durability and FSM scope remain parent-owned product decisions.\", \"Current event broadcast has no durable ordered replay trace.\", \"Existing async rescue behavior lacks complete exact-trace regression coverage.\"],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"No files changed.\",\n  \"reviewFindings\": [\"high: src/api.rs:30-56 and src/pbx.rs:168-240 - lifecycle authority is split across multiple mutable state holders.\", \"high: src/pbx.rs:1653-1940 - tests assert outcomes but not complete state traces; documented rescue and failure-path gaps remain.\", \"medium: src/api.rs:153-190,296-300 - events are ephemeral JSON broadcasts without ordered transition history.\", \"medium: README.md and docs/extraction-plan.md - runtime, compatibility, and deployment ownership spans repository boundaries.\"],\n  \"manualNotes\": \"This is a definition artifact only; no implementation or product decision was made.\"\n}\n```\n\n\u001b[38;2;136;136;136m✻ Turn took 3m 22s (Total time 3m 21s · 1 turn)\u001b[0m\n\n---\n**Output:**\nReturn the complete artifact in your final response.\nThe runtime will persist it to exactly this path: /home/kayne19/projects/switchboard/.pi-workflow/outputs/wf_1786002388285300339_3730916_0/reference.md\nDo not call contact_supervisor merely because no write-capable tool is available.\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-5.6-luna",
+  "attemptedModels": [
+    "openai-codex/gpt-5.6-luna"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.6-luna",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 1009398,
+        "output": 15001,
+        "cacheRead": 4322816,
+        "cacheWrite": 0,
+        "cost": 0.31771336000000006,
+        "turns": 41
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Read-only architecture map covers process, API/auth, durable runs, router and nested FSMs, persistence, retrieval, memory, ingestion, providers, frontend, contracts, dependency direction, tests, and transfer guidance with concrete paths and line ranges."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "Repository inspection only",
+          "result": "not-run",
+          "summary": "No tests or write-oriented commands were run."
+        }
+      ],
+      "validationOutput": [
+        "Read AGENTS.md and graphify architecture index first.",
+        "Read maintained architecture documents and representative runtime/test files.",
+        "Excluded generated caches, dependency noise, .git, and node_modules."
+      ],
+      "residualRisks": [
+        "Reference documentation claims provider transport-only boundaries that OpenAI convenience implementations do not fully enforce.",
+        "Switchboard durability and concurrency semantics remain product decisions."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No files changed.",
+      "reviewFindings": [
+        "high: Back-end/app/providers/PROVIDERS.md:5-30 versus Back-end/app/providers/openAI_caller.py:531-829 - documented adapter boundary is looser than the actual provider tool-loop implementation.",
+        "medium: Back-end/app/orchestration/model_router.py:46-346 and Back-end/app/agents/magi/system.py:7-117 - multiple coordinated FSMs are explicit and testable, but should not be mistaken for a single universal lifecycle authority.",
+        "medium: Back-end/app/persistence/postgres_run_store.py:24-72,419-717 - durable run/lease machinery is valuable only when restart survival, replay, or multi-worker concurrency is required."
+      ],
+      "manualNotes": "Reference artifact is compressed intentionally; no implementation recommendation was made for switchboard."
+    }
+  },
+  "launchContractDigest": "027c40f07c9eb7849a6c3e2943aed465b54f0e8f181ca4b71cda63d97031cd0b",
+  "launchResolvedExtensions": {
+    "version": 1,
+    "source": "launch-resolved",
+    "disableAmbientExtensions": false,
+    "runtime": [
+      "sha256:249682fb0750be04"
+    ],
+    "configured": [],
+    "effective": [
+      "sha256:249682fb0750be04"
+    ],
+    "omitted": {
+      "runtime": 0,
+      "configured": 0,
+      "effective": 0
+    }
+  },
+  "transcriptPath": "/home/kayne19/projects/switchboard/.pi-subagents/artifacts/5a97663c-a402-476e-8629-a53f55a900b6_codebase-analyzer_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1786003011891
+}

@@ -1,0 +1,135 @@
+{
+  "runId": "6e71d7b6-2cc6-4f36-ad96-5ccff7b2eb04",
+  "agent": "verification-gatekeeper",
+  "task": "Independently verify the on-page model switcher work in /home/kayne19/projects/switchboard. Do NOT trust the implementer's claims — re-run everything yourself.\n\nWHAT THE IMPLEMENTER CLAIMS:\n# Handoff Output: implement\nStatus: success\nVerdict: (none)\nTimestamp: 1785953176\n\n## Content\nImplemented the on-page model switcher.\n\nChanged files:\n\n- `src/pbx.rs`: expose cached project catalog entries in status, add `set_model`, preserve current requested thinking, and add catalog/swap regression tests.\n- `src/api.rs`: add `POST /model` mirroring `/thinking`, returning `model_name`.\n- `web/app.ts`, `web/browser.d.ts`, `web/protocol.ts`: add model select/fallback/disable behavior and surface successful JSON error payloads.\n- `static/index.html`, generated `static/app.js`, `static/protocol.js`.\n- `tests/test_protocol.mjs`.\n\nApplied rulings R1, R2, R3, R5, and R6. R4 concurrency harness was intentionally skipped as directed. Empty-catalog model pass-through remains unchanged.\n\nChecks:\n\n- `cargo fmt --all -- --check`: passed\n- `cargo check`: passed\n- `cargo test --locked`: passed, 49 tests\n- `cargo clippy --locked --all-targets -- -D warnings`: passed\n- `npm run check`: passed\n- `npm run build`: passed\n- `npm test`: passed\n- `python3 -m unittest discover -s legacy/tests`: passed, 143 tests\n- `git diff --check`: passed\n- `git diff --exit-code -- static`: nonzero because the intended generated static changes are present; build regeneration completed successfully.\n\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"Implemented the model catalog status payload, model mutation endpoint, browser control, fallback behavior, error handling, generated output, and regression tests in the listed files.\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/pbx.rs\",\n    \"src/api.rs\",\n    \"web/app.ts\",\n    \"web/browser.d.ts\",\n    \"web/protocol.ts\",\n    \"static/index.html\",\n    \"static/app.js\",\n    \"static/protocol.js\",\n    \"tests/test_protocol.mjs\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"src/pbx.rs\",\n    \"src/api.rs\",\n    \"tests/test_protocol.mjs\"\n  ],\n  \"commandsRun\": [\n    {\"command\":\"cargo fmt --all -- --check\",\"result\":\"passed\",\"summary\":\"Formatting is clean.\"},\n    {\"command\":\"cargo check\",\"result\":\"passed\",\"summary\":\"Rust check passed.\"},\n    {\"command\":\"cargo test --locked\",\"result\":\"passed\",\"summary\":\"49 tests passed.\"},\n    {\"command\":\"cargo clippy --locked --all-targets -- -D warnings\",\"result\":\"passed\",\"summary\":\"Clippy passed with warnings denied.\"},\n    {\"command\":\"npm run check\",\"result\":\"passed\",\"summary\":\"TypeScript check passed.\"},\n    {\"command\":\"npm run build\",\"result\":\"passed\",\"summary\":\"Static browser output regenerated.\"},\n    {\"command\":\"npm test\",\"result\":\"passed\",\"summary\":\"All browser tests passed.\"},\n    {\"command\":\"python3 -m unittest discover -s legacy/tests\",\"result\":\"passed\",\"summary\":\"143 legacy tests passed.\"},\n    {\"command\":\"git diff --check\",\"result\":\"passed\",\"summary\":\"No whitespace errors.\"},\n    {\"command\":\"git diff --exit-code -- static\",\"result\":\"failed\",\"summary\":\"Expected nonzero while intended generated static files differ from the pre-change checkout.\"}\n  ],\n  \"validationOutput\": [\n    \"Cached catalog entries serialize as provider/model/thinks for the active project and [] on operator/cache misses.\",\n    \"Model swaps preserve the current model_spec thinking suffix and refuse populated-catalog unknown models without replacing the live spec.\",\n    \"The browser always injects the current model when absent from the catalog.\"\n  ],\n  \"residualRisks\": [\n    \"Catalog discovery failures intentionally leave only the current-model fallback; no alternatives are fabricated.\",\n    \"The static diff check remains nonzero until these generated files are included in the resulting change set.\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"Added the model switcher end to end, including cached catalog status, API operation semantics, browser control and generated assets.\",\n  \"reviewFindings\": [\n    \"no blockers\"\n  ],\n  \"manualNotes\": \"The project-leg concurrency harness was not added per ruling R4; the /model handler structurally mirrors /thinking.\"\n}\n```\n\n\nRun `export PATH=\"$HOME/.cargo/bin:$PATH\"` first, then run ALL of these from the repo root and report each outcome verbatim:\n- `cargo fmt --all -- --check`\n- `cargo check`\n- `cargo test --locked`\n- `cargo clippy --locked --all-targets -- -D warnings`\n- `npm run check`\n- `npm test`\n- `python3 -m unittest discover -s legacy/tests`\n- `git status --short` and `git diff --stat`\n\nThen confirm these three things specifically:\n1. The regression tests the implementer claims to have added actually exist and actually run. Name them and show them in the `cargo test` output.\n2. `static/app.js` is genuinely in sync with `web/app.ts`: run `npm run build` again and confirm `git diff --stat -- static` does not change afterwards. A drift here breaks CI.\n3. The changed-file set is exactly: src/api.rs, src/pbx.rs, web/app.ts, web/browser.d.ts, web/protocol.ts, static/index.html, static/app.js, static/protocol.js, tests/test_protocol.mjs. Ignore the untracked .pi-workflow/ and .pi-subagents/ directories. Flag any OTHER stray modified file.\n\nModify nothing. End with exactly one terminal line: `VERDICT: PASS` or `VERDICT: FAIL`.\n\n---\n**Output:**\nWrite your findings to exactly this path: /home/kayne19/projects/switchboard/.pi-workflow/outputs/wf_1785952055827064028_3602195_0/verify.md\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.\n\n## Acceptance Contract\nAcceptance level: checked\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Implement the requested change without widening scope\n- criterion-2: Return evidence sufficient for an independent acceptance review\n\nRequired evidence: changed-files, tests-added, commands-run, residual-risks, no-staged-files\n\nReview gate: required by reviewer.\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    },\n    {\n      \"id\": \"criterion-2\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-5.6-luna",
+  "attemptedModels": [
+    "openai-codex/gpt-5.6-luna"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.6-luna",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 30269,
+        "output": 6878,
+        "cacheRead": 142336,
+        "cacheWrite": 0,
+        "cost": 0.017154120000000002,
+        "turns": 11
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "rejected",
+    "evidenceStatus": "rejected",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "checked",
+      "explicit": false,
+      "inferredReason": [
+        "async write-capable or risky run"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Implement the requested change without widening scope",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        },
+        {
+          "id": "criterion-2",
+          "must": "Return evidence sufficient for an independent acceptance review",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "changed-files",
+        "tests-added",
+        "commands-run",
+        "residual-risks",
+        "no-staged-files"
+      ],
+      "verify": [],
+      "review": {
+        "agent": "reviewer",
+        "required": true
+      },
+      "stopRules": []
+    },
+    "inferredReason": [
+      "async write-capable or risky run"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Implement the requested change without widening scope",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      },
+      {
+        "id": "criterion-2",
+        "must": "Return evidence sufficient for an independent acceptance review",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [
+      {
+        "id": "attestation",
+        "status": "failed",
+        "message": "Structured acceptance report not found."
+      }
+    ],
+    "verifyRuns": [],
+    "childReportParseError": "Structured acceptance report not found."
+  },
+  "launchContractDigest": "34c516274b83af3f7e9784b235b611991ce7fcd4e938a470d07ea42361230993",
+  "launchResolvedExtensions": {
+    "version": 1,
+    "source": "launch-resolved",
+    "disableAmbientExtensions": false,
+    "runtime": [
+      "sha256:249682fb0750be04"
+    ],
+    "configured": [],
+    "effective": [
+      "sha256:249682fb0750be04"
+    ],
+    "omitted": {
+      "runtime": 0,
+      "configured": 0,
+      "effective": 0
+    }
+  },
+  "transcriptPath": "/home/kayne19/projects/switchboard/.pi-subagents/artifacts/6e71d7b6-2cc6-4f36-ad96-5ccff7b2eb04_verification-gatekeeper_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1785953570353
+}
