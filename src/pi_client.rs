@@ -451,10 +451,10 @@ impl PiSession {
                                 && signal.name == SPEAK_TOOL
                                 && signal.tool_call_id.as_deref() == call_id
                         }) {
-                            signal.successful_end = event
+                            signal.successful_end = !event
                                 .get("isError")
                                 .and_then(Value::as_bool)
-                                .is_some_and(|is_error| !is_error);
+                                .unwrap_or(false);
                         }
                     }
                     self.report_activity("end", name, String::new()).await
@@ -1132,6 +1132,42 @@ mod tests {
     #[tokio::test]
     async fn speak_requires_matching_successful_tool_end() {
         let script = "read line; printf '%s\\n' '{\"type\":\"tool_execution_start\",\"toolName\":\"speak\",\"toolCallId\":\"call-1\",\"args\":{\"text\":\"hello\"}}' '{\"type\":\"tool_execution_end\",\"toolName\":\"speak\",\"toolCallId\":\"call-other\",\"isError\":false}' '{\"type\":\"agent_settled\"}'";
+        let session = PiSession::start(
+            vec!["sh".into(), "-c".into(), script.into()],
+            "test",
+            None,
+            None,
+            Duration::from_secs(1),
+            None,
+        )
+        .await
+        .unwrap();
+        let turn = session.prompt("hello").await.unwrap();
+        assert!(!turn.agent_spoke());
+        session.close().await;
+    }
+
+    #[tokio::test]
+    async fn speak_tool_end_without_is_error_is_successful() {
+        let script = "read line; printf '%s\\n' '{\"type\":\"tool_execution_start\",\"toolName\":\"speak\",\"toolCallId\":\"call-1\",\"args\":{\"text\":\"hello\"}}' '{\"type\":\"tool_execution_end\",\"toolName\":\"speak\",\"toolCallId\":\"call-1\"}' '{\"type\":\"agent_settled\"}'";
+        let session = PiSession::start(
+            vec!["sh".into(), "-c".into(), script.into()],
+            "test",
+            None,
+            None,
+            Duration::from_secs(1),
+            None,
+        )
+        .await
+        .unwrap();
+        let turn = session.prompt("hello").await.unwrap();
+        assert!(turn.agent_spoke());
+        session.close().await;
+    }
+
+    #[tokio::test]
+    async fn speak_tool_end_with_is_error_true_is_unsuccessful() {
+        let script = "read line; printf '%s\\n' '{\"type\":\"tool_execution_start\",\"toolName\":\"speak\",\"toolCallId\":\"call-1\",\"args\":{\"text\":\"hello\"}}' '{\"type\":\"tool_execution_end\",\"toolName\":\"speak\",\"toolCallId\":\"call-1\",\"isError\":true}' '{\"type\":\"agent_settled\"}'";
         let session = PiSession::start(
             vec!["sh".into(), "-c".into(), script.into()],
             "test",
