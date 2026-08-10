@@ -874,7 +874,7 @@ impl Speaker {
         let body = serde_json::json!({"text": text, "model_id": self.model_id, "voice_settings": Settings { stability: self.stability, similarity_boost: self.similarity_boost, style: self.style, speed: self.speed }});
         let request = TtsRequest {
             url: format!(
-                "{}?output_format=mp3_44100_128",
+                "{}/stream?output_format=mp3_44100_128",
                 ELEVENLABS_TTS_URL.replace("{voice_id}", &self.voice_id)
             ),
             api_key: self.api_key.clone(),
@@ -1216,13 +1216,10 @@ mod tests {
             chunks.push(chunk.unwrap());
         }
         assert_eq!(chunks, vec![b"ab".to_vec(), b"cd".to_vec(), b"ef".to_vec()]);
-        assert!(request
-            .lock()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .url
-            .contains("output_format=mp3_44100_128"));
+        assert_eq!(
+            request.lock().unwrap().as_ref().unwrap().url,
+            "https://api.elevenlabs.io/v1/text-to-speech/voice-a/stream?output_format=mp3_44100_128"
+        );
     }
 
     #[tokio::test]
