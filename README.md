@@ -250,11 +250,21 @@ correlation token distinct from the persistent `SWITCHBOARD_SESSION` identity.
 It is not authentication, and deployment changes remain a separate homelab PR.
 
 The Rust service keeps STT behind the transitional `SWITCHBOARD_STT_COMMAND`
-sidecar contract: WebM bytes go to stdin and transcript text comes from stdout.
+sidecar contract: complete WebM bytes go to stdin and transcript text comes from
+stdout. Deployments may additionally set `SWITCHBOARD_STT_STREAM_COMMAND` to a
+long-lived worker. It receives length-prefixed frames (kind byte, big-endian
+`u32` payload length, payload), starts with a JSONL `{"type":"ready"}` line,
+and emits bounded JSONL `partial`/`final` records. A chunk payload starts with
+an id length byte, the UTF-8 clip id, big-endian generation and sequence
+numbers, then the WebM bytes, so concurrent clips remain attributable. Streaming is selected only
+for WebM/Opus clients after the WebSocket hello handshake; unavailable or
+backpressured workers explicitly fall back to the complete-clip contract.
 Speech synthesis uses the shared `SWITCHBOARD_SPEECH_DEADLINE_MS` environment
 contract (positive, bounded milliseconds; default `25000`) for `/speak`, normal
 replies, and the project extension's abort timeout. Deployment overrides require
-the corresponding homelab contract update.
+the corresponding homelab contract update. Adding the optional stream command
+also requires a separate homelab environment-template change; no deployment
+files live in this repository.
 The Rust Whisper path is intentionally not declared production-equivalent until
 it is benchmarked against the deployed faster-whisper model.
 

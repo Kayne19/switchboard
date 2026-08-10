@@ -16,6 +16,62 @@ export function decodeServerMessage(text: string): BrowserMessage | null {
 /// That is what stops speech begun before a page transfer from being acted on
 /// by the leg that replaced it, so the field has to survive every change to
 /// this frame.
+export function helloMessage(): string {
+	const mse =
+		typeof MediaSource !== "undefined" &&
+		MediaSource.isTypeSupported?.("audio/mpeg") === true;
+	return JSON.stringify({
+		type: "hello",
+		version: 1,
+		capabilities: {
+			stt_streaming: true,
+			audio_streaming: mse,
+			mse_mp3: mse,
+		},
+	});
+}
+
+export function sttStartHeader(clip: {
+	id: string;
+	mime: string;
+	epoch: number;
+}): string {
+	return JSON.stringify({
+		type: "stt_start",
+		clip_id: clip.id,
+		generation: clip.epoch,
+		mime: clip.mime,
+	});
+}
+
+export function sttChunkHeader(
+	clip: { id: string; epoch: number },
+	sequence: number,
+): string {
+	return JSON.stringify({
+		type: "stt_chunk",
+		clip_id: clip.id,
+		generation: clip.epoch,
+		sequence,
+	});
+}
+
+export function sttEndHeader(clip: { id: string; epoch: number }): string {
+	return JSON.stringify({
+		type: "stt_end",
+		clip_id: clip.id,
+		generation: clip.epoch,
+	});
+}
+
+export function sttCancelHeader(clip: { id: string; epoch: number }): string {
+	return JSON.stringify({
+		type: "stt_cancel",
+		clip_id: clip.id,
+		generation: clip.epoch,
+	});
+}
+
 export function clipHeader(clip: {
 	id: string;
 	mime: string;

@@ -24,6 +24,7 @@ pub struct Config {
     pub agent_extension: Option<String>,
     pub persona: String,
     pub stt_command: Option<String>,
+    pub stt_stream_command: Option<String>,
     pub bind: String,
     pub pi_binary: String,
     pub operator_model: Option<String>,
@@ -93,6 +94,7 @@ impl Config {
             agent_extension: optional(values, "SWITCHBOARD_AGENT_EXTENSION"),
             persona: get(values, "SWITCHBOARD_PERSONA", ""),
             stt_command: optional(values, "SWITCHBOARD_STT_COMMAND"),
+            stt_stream_command: optional(values, "SWITCHBOARD_STT_STREAM_COMMAND"),
             bind: get(values, "SWITCHBOARD_BIND", "0.0.0.0:8765"),
             pi_binary: get(values, "SWITCHBOARD_PI_BINARY", "pi"),
             operator_model: optional(values, "SWITCHBOARD_OPERATOR_MODEL"),
@@ -342,6 +344,7 @@ async fn main() {
         agent_thinking = %config.agent_thinking,
         model_swaps = config.model_swaps,
         stt_configured = config.stt_command.is_some(),
+        stt_stream_configured = config.stt_stream_command.is_some(),
         persona_configured = !config.persona.is_empty(),
         operator_extension = config.operator_extension.as_deref().unwrap_or("<none>"),
         agent_extension = config.agent_extension.as_deref().unwrap_or("<none>"),
@@ -379,11 +382,12 @@ async fn main() {
         config.persona.clone(),
         config.environment.clone(),
     );
-    let state = api::AppState::new(
+    let state = api::AppState::new_with_stream(
         board,
         history::TranscriptLog::new(config.history_limit),
         audio::Speaker::from_values(config.max_spoken_chars, &config.environment),
         audio::SttAdapter::from_command(config.stt_command.clone()),
+        audio::SttStreamAdapter::from_command(config.stt_stream_command.clone()),
     );
     api::spawn_workers(state.clone());
     api::spawn_idle_worker(state.clone(), config.idle_timeout, config.idle_poll);

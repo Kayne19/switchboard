@@ -1,4 +1,4 @@
-import { clipHeader, decodeServerMessage, postJson } from "./protocol.js";
+import { clipHeader, decodeServerMessage, helloMessage, postJson, sttChunkHeader, sttEndHeader, sttStartHeader, sttCancelHeader, } from "./protocol.js";
 function getElement(id) {
     const element = document.getElementById(id);
     if (!element)
@@ -44,8 +44,16 @@ let mediaRecorder = null;
 let activeRecording = null;
 const audioQueue = [];
 let isPlaying = false;
-let pendingAudioGeneration = null;
 let audioEpoch = 0;
+const MAX_AUDIO_UTTERANCE = 32 * 1024 * 1024;
+const MAX_AUDIO_REPLAY = 64 * 1024 * 1024;
+const MAX_OUTBOX_CLIPS = 16;
+const MAX_OUTBOX_BYTES = 128 * 1024 * 1024;
+let mseEnabled = false;
+let mseQueue = [];
+let mseActive = null;
+let msePending = null;
+let mseReplayBytes = 0;
 const idleText = "Connected. Tap Talk and speak.";
 // True from the moment getUserMedia is asked for until the recorder is
 // actually running. Without it a second click (or Space) lands inside the
@@ -58,7 +66,25 @@ let startCancelled = false;
 // accepts their id. `sent` means only "attempted on this socket"; reconnect
 // clears it and safely retransmits because the backend deduplicates ids.
 let outbox = [];
+let outboxBytes = 0;
+function setOutbox(next) {
+    outbox = next;
+    outboxBytes = outbox.reduce((total, clip) => total + clip.audio.size, 0);
+}
+function enqueueOutbox(clip) {
+    if (outbox.length >= MAX_OUTBOX_CLIPS ||
+        outboxBytes + clip.audio.size > MAX_OUTBOX_BYTES) {
+        statusEl.textContent =
+            "Too many unsent voice clips; reconnect before recording again.";
+        statusEl.classList.add("error");
+        return false;
+    }
+    outbox.push(clip);
+    outboxBytes += clip.audio.size;
+    return true;
+}
 let clipSequence = 0;
+let streamingSelected = false;
 // The server's turn epoch, as last announced. A clip is stamped with whatever
 // this held when its recording started, so speech begun before a transfer is
 // discarded rather than delivered to the leg that replaced it. Recording start
@@ -298,7 +324,7 @@ function renderHistory(entries = []) {
     const completed = new Set(history.map((entry) => entry.id).filter(Boolean));
     // A transcript in history is the durable completion acknowledgement.
     // Drop its retained audio even if the live transcript frame was lost.
-    outbox = outbox.filter((clip) => !completed.has(clip.id));
+    setOutbox(outbox.filter((clip) => !completed.has(clip.id)));
     updateOutboxUI();
     logEl.textContent = "";
     history.forEach(appendTurn);
@@ -456,6 +482,218 @@ function playNext() {
     player.src = owner.url;
     attemptPlay(owner);
 }
+function mseRuntimeSupported() {
+    return (typeof MediaSource !== "undefined" &&
+        MediaSource.isTypeSupported("audio/mpeg"));
+}
+function queueMseFallback(utterance) {
+    if (utterance.fallbackQueued)
+        return;
+    utterance.fallbackQueued = true;
+    if (utterance.bytes > MAX_AUDIO_UTTERANCE) {
+        statusEl.textContent = "Audio exceeded the replay limit and was stopped.";
+        statusEl.classList.add("error");
+        return;
+    }
+    audioQueue.push(new Blob(utterance.parts, { type: utterance.mime }));
+}
+function msePlay() {
+    if (!mseActive || mseActive.failed || isPlaying)
+        return;
+    isPlaying = true;
+    Promise.resolve(player.play()).catch((error) => {
+        isPlaying = false;
+        statusEl.textContent =
+            "Audio blocked by the browser — click anywhere on this page once, then it will play (" +
+                errorName(error) +
+                ").";
+        statusEl.classList.add("error");
+    });
+}
+function mseFinishSource(utterance) {
+    if (!utterance.done ||
+        !utterance.media ||
+        !utterance.buffer ||
+        utterance.buffer.updating ||
+        utterance.queued.length)
+        return;
+    try {
+        if (utterance.media.readyState === "open")
+            utterance.media.endOfStream();
+    }
+    catch (error) {
+        mseFail(utterance, error);
+    }
+}
+function mseAppend(utterance) {
+    if (utterance.failed || !utterance.buffer || utterance.buffer.updating)
+        return;
+    if (!utterance.queued.length) {
+        mseFinishSource(utterance);
+        return;
+    }
+    try {
+        utterance.buffer.appendBuffer(utterance.queued[0]);
+        utterance.started = true;
+        msePlay();
+        const remove = () => {
+            utterance.buffer?.removeEventListener("updateend", remove);
+            utterance.queued.shift();
+            mseAppend(utterance);
+        };
+        utterance.buffer.addEventListener("updateend", remove, { once: true });
+    }
+    catch (error) {
+        mseFail(utterance, error);
+    }
+}
+function mseFail(utterance, error) {
+    if (utterance.failed)
+        return;
+    utterance.failed = true;
+    if (mseActive === utterance) {
+        isPlaying = false;
+        if (utterance.endedHandler)
+            player.removeEventListener("ended", utterance.endedHandler);
+        player.pause();
+        player.removeAttribute("src");
+        player.load();
+        if (utterance.url)
+            URL.revokeObjectURL(utterance.url);
+        utterance.url = null;
+    }
+    statusEl.textContent =
+        "Streaming audio failed; using the complete replay (" +
+            errorName(error) +
+            ").";
+    statusEl.classList.add("error");
+    mseEnabled = false;
+    if (utterance.done && mseActive === utterance) {
+        queueMseFallback(utterance);
+        mseActive = null;
+        if (!isPlaying && !playbackOwner)
+            playNext();
+    }
+}
+function mseOpen(utterance) {
+    if (utterance.failed || !utterance.media)
+        return;
+    try {
+        utterance.buffer = utterance.media.addSourceBuffer(utterance.mime);
+        utterance.buffer.addEventListener("error", () => mseFail(utterance, new Error("MediaSource append error")));
+        player.src = utterance.url || "";
+        mseAppend(utterance);
+    }
+    catch (error) {
+        mseFail(utterance, error);
+    }
+}
+function mseStartNext() {
+    if (!mseEnabled || mseActive || !mseQueue.length)
+        return;
+    const utterance = mseQueue.shift();
+    mseActive = utterance;
+    utterance.media = new MediaSource();
+    utterance.url = URL.createObjectURL(utterance.media);
+    utterance.endedHandler = () => {
+        if (mseActive !== utterance)
+            return;
+        player.removeEventListener("ended", utterance.endedHandler);
+        mseActive = null;
+        isPlaying = false;
+        if (utterance.url)
+            URL.revokeObjectURL(utterance.url);
+        mseStartNext();
+    };
+    player.addEventListener("ended", utterance.endedHandler);
+    utterance.media.addEventListener("sourceopen", () => mseOpen(utterance), {
+        once: true,
+    });
+    if (utterance.media.readyState === "open")
+        mseOpen(utterance);
+}
+function clearMsePlayback() {
+    for (const utterance of [mseActive, ...mseQueue].filter(Boolean)) {
+        if (utterance.endedHandler)
+            player.removeEventListener("ended", utterance.endedHandler);
+        if (utterance.url)
+            URL.revokeObjectURL(utterance.url);
+    }
+    mseActive = null;
+    mseQueue = [];
+    msePending = null;
+    mseReplayBytes = 0;
+    isPlaying = false;
+    player.pause();
+    player.removeAttribute("src");
+    player.load();
+}
+function receiveAudioStart(msg) {
+    const generation = msg.generation;
+    const sequence = msg.sequence;
+    if (typeof generation !== "number" ||
+        typeof sequence !== "number" ||
+        generation !== audioEpoch)
+        return;
+    const utterance = {
+        generation,
+        sequence,
+        mime: msg.mime === "audio/mpeg" ? msg.mime : "audio/mpeg",
+        parts: [],
+        queued: [],
+        bytes: 0,
+        done: false,
+        failed: false,
+        fallbackQueued: false,
+        media: null,
+        buffer: null,
+        url: null,
+        started: false,
+    };
+    msePending = utterance;
+    if (mseEnabled) {
+        mseQueue.push(utterance);
+        mseStartNext();
+    }
+}
+function receiveAudioChunk(data) {
+    const utterance = msePending;
+    if (!utterance || utterance.generation !== audioEpoch)
+        return;
+    if (utterance.bytes + data.byteLength > MAX_AUDIO_UTTERANCE ||
+        mseReplayBytes + data.byteLength > MAX_AUDIO_REPLAY) {
+        mseFail(utterance, new Error("audio replay limit"));
+        return;
+    }
+    utterance.bytes += data.byteLength;
+    mseReplayBytes += data.byteLength;
+    utterance.parts.push(new Blob([data], { type: utterance.mime }));
+    if (mseEnabled && !utterance.failed) {
+        utterance.queued.push(data);
+        if (utterance === mseActive)
+            mseAppend(utterance);
+    }
+}
+function receiveAudioDone(msg) {
+    if (msg.generation !== audioEpoch || typeof msg.sequence !== "number")
+        return;
+    const utterance = msePending;
+    if (!utterance || utterance.sequence !== msg.sequence)
+        return;
+    utterance.done = msg.done === true;
+    if (!mseEnabled || utterance.failed) {
+        queueMseFallback(utterance);
+        if (mseActive === utterance)
+            mseActive = null;
+        msePending = null;
+        if (!isPlaying && !playbackOwner)
+            playNext();
+        return;
+    }
+    if (utterance === mseActive)
+        mseAppend(utterance);
+    msePending = null;
+}
 // The status message promises that a page interaction resumes blocked audio.
 // Keep that gesture path here rather than relying on a later clip to arrive.
 document.addEventListener("click", (event) => {
@@ -463,7 +701,9 @@ document.addEventListener("click", (event) => {
         return;
     const owner = playbackOwner;
     if (!owner) {
-        if (audioQueue.length)
+        if (typeof mseActive !== "undefined" && mseActive && !isPlaying)
+            msePlay();
+        else if (audioQueue.length)
             playNext();
         return;
     }
@@ -649,8 +889,18 @@ function flushOutbox() {
         return;
     }
     try {
-        ws.send(clipHeader(clip));
-        ws.send(clip.audio);
+        if (clip.streaming && clip.chunks) {
+            ws.send(sttStartHeader(clip));
+            clip.chunks.forEach((chunk, sequence) => {
+                ws?.send(sttChunkHeader(clip, sequence));
+                ws?.send(chunk);
+            });
+            ws.send(sttEndHeader(clip));
+        }
+        else {
+            ws.send(clipHeader(clip));
+            ws.send(clip.audio);
+        }
         clip.sent = true;
         statusEl.textContent = "Waiting for the server to accept your clip...";
         statusEl.classList.remove("error");
@@ -731,6 +981,14 @@ function connect() {
         btn.disabled = false;
         outbox.forEach((clip) => (clip.sent = false));
         snapshotReady = false;
+        streamingSelected = false;
+        try {
+            socket.send(helloMessage());
+        }
+        catch {
+            socket.close();
+            return;
+        }
         startHeartbeat(socket, generation);
     };
     socket.onclose = () => {
@@ -766,27 +1024,36 @@ function connect() {
             const msg = decodeServerMessage(event.data);
             if (!msg)
                 return;
-            if (msg.type === "epoch") {
+            if (msg.type === "hello_ack") {
+                streamingSelected = msg.stt_streaming === true;
+                mseEnabled = msg.mse_mp3 === true && mseRuntimeSupported();
+                if (!mseEnabled)
+                    clearMsePlayback();
+                flushOutbox();
+            }
+            else if (msg.type === "epoch") {
                 // Adopt the server's epoch immediately and retire every queued or
                 // currently playing clip from the old leg. Do this before allowing
                 // reconnect retry, otherwise a pre-rescue clip can cross the barrier.
                 if (typeof msg.generation === "number") {
-                    outbox = outbox.filter((clip) => clip.epoch === msg.generation);
+                    setOutbox(outbox.filter((clip) => clip.epoch === msg.generation));
                     updateOutboxUI();
                     turnEpoch = msg.generation;
                     audioEpoch = msg.generation;
                     snapshotReady = true;
                     flushOutbox();
                     audioQueue.length = 0;
-                    pendingAudioGeneration = null;
+                    clearMsePlayback();
                     if (playbackOwner)
                         cleanupOwner(playbackOwner);
                     isPlaying = false;
                 }
             }
-            else if (msg.type === "audio") {
-                pendingAudioGeneration =
-                    typeof msg.generation === "number" ? msg.generation : null;
+            else if (msg.type === "audio_start") {
+                receiveAudioStart(msg);
+            }
+            else if (msg.type === "audio_done") {
+                receiveAudioDone(msg);
             }
             else if (msg.type === "pong") {
                 if (msg.nonce === pendingPong) {
@@ -795,6 +1062,18 @@ function connect() {
                     pongDeadlineTimer = null;
                     clearTimeoutSafe(heartbeatTimer);
                     startHeartbeat(socket, generation);
+                }
+            }
+            else if (msg.type === "abandoned") {
+                if (activeRecording && activeRecording.id === msg.id)
+                    activeRecording.streaming = false;
+                const clip = outbox.find((entry) => entry.id === msg.id);
+                if (clip) {
+                    clip.streaming = false;
+                    clip.sent = false;
+                    statusEl.textContent =
+                        "Streaming unavailable; sending complete clip...";
+                    flushOutbox();
                 }
             }
             else if (msg.type === "accepted") {
@@ -811,7 +1090,7 @@ function connect() {
             }
             else if (msg.type === "transcript") {
                 if (msg.text) {
-                    outbox = outbox.filter((clip) => clip.id !== msg.id);
+                    setOutbox(outbox.filter((clip) => clip.id !== msg.id));
                     updateOutboxUI();
                     appendTurn({
                         role: "caller",
@@ -874,7 +1153,7 @@ function connect() {
                 stopActivity();
                 const pending = turnForClip(msg.id);
                 if (pending) {
-                    outbox = outbox.filter((clip) => clip.id !== msg.id);
+                    setOutbox(outbox.filter((clip) => clip.id !== msg.id));
                     updateOutboxUI();
                     pending.classList.remove("pending");
                     getChildElement(pending, ".body").textContent =
@@ -885,21 +1164,14 @@ function connect() {
             }
         }
         else {
-            // Binary frame: mp3. Its preceding metadata frame identifies the
-            // generation, so stale queued audio cannot survive a rescue.
-            if (pendingAudioGeneration !== null &&
-                pendingAudioGeneration !== audioEpoch) {
-                pendingAudioGeneration = null;
-                return;
+            if (event.data instanceof ArrayBuffer) {
+                receiveAudioChunk(event.data);
             }
-            audioQueue.push(new Blob([event.data], { type: "audio/mpeg" }));
-            pendingAudioGeneration = null;
-            if (!isPlaying && !playbackOwner) {
-                statusEl.textContent = "Playing speech...";
-                playNext();
-            }
-            else {
-                statusEl.textContent = `Queued (${audioQueue.length} waiting)...`;
+            else if (event.data instanceof Blob) {
+                void event.data.arrayBuffer().then((bytes) => {
+                    if (current())
+                        receiveAudioChunk(bytes);
+                });
             }
         }
     };
@@ -960,6 +1232,13 @@ async function startRecording() {
         return;
     }
     const chunks = [];
+    const recordingId = globalThis.crypto?.randomUUID
+        ? globalThis.crypto.randomUUID()
+        : `${Date.now()}-${++clipSequence}`;
+    const recordingEpoch = turnEpoch;
+    const recordingStreaming = typeof streamingSelected !== "undefined" &&
+        streamingSelected &&
+        (recorder.mimeType || "") === "audio/webm;codecs=opus";
     let streamReleased = false;
     const releaseStream = () => {
         if (streamReleased)
@@ -968,13 +1247,54 @@ async function startRecording() {
         stream.getTracks().forEach((t) => t.stop());
     };
     let recorderFailed = false;
-    const recording = { recorder, discard: false };
+    const recording = {
+        recorder,
+        discard: false,
+        id: recordingId,
+        epoch: recordingEpoch,
+        streaming: recordingStreaming,
+        chunks,
+        sequence: 0,
+    };
     activeRecording = recording;
     recorder.ondataavailable = (e) => {
-        if (e.data.size > 0)
-            chunks.push(e.data);
+        if (e.data.size === 0)
+            return;
+        chunks.push(e.data);
+        if (activeRecording?.recorder !== recorder || !activeRecording.streaming)
+            return;
+        if (!ws || ws.readyState !== WebSocket.OPEN)
+            return;
+        const sequence = activeRecording.sequence++;
+        try {
+            ws.send(sttChunkHeader({ id: activeRecording.id, epoch: activeRecording.epoch }, sequence));
+            ws.send(e.data);
+        }
+        catch {
+            try {
+                ws.send(sttCancelHeader({
+                    id: activeRecording.id,
+                    epoch: activeRecording.epoch,
+                }));
+            }
+            catch {
+                /* socket is already closed */
+            }
+            activeRecording.streaming = false;
+        }
     };
-    let recordingEpoch = turnEpoch;
+    if (recording.streaming && ws?.readyState === WebSocket.OPEN) {
+        try {
+            ws.send(sttStartHeader({
+                id: recording.id,
+                mime: recorder.mimeType,
+                epoch: recording.epoch,
+            }));
+        }
+        catch {
+            recording.streaming = false;
+        }
+    }
     recorder.onstop = () => {
         releaseStream();
         if (activeRecording?.recorder === recorder)
@@ -990,20 +1310,30 @@ async function startRecording() {
         const blob = new Blob(chunks, {
             type: recorder.mimeType || "audio/webm",
         });
-        const id = globalThis.crypto?.randomUUID
-            ? globalThis.crypto.randomUUID()
-            : `${Date.now()}-${++clipSequence}`;
         const clip = {
-            id,
+            id: recordingId,
             audio: blob,
             mime: blob.type,
             created: Date.now(),
             epoch: recordingEpoch,
             sent: false,
+            streaming: recording.streaming,
+            chunks: recording.streaming ? chunks : undefined,
         };
         // Local echo does not wait for a network round trip or Whisper. The
         // transcript carrying this id will replace the bubble in place.
-        outbox.push(clip);
+        if (!enqueueOutbox(clip))
+            return;
+        if (recording.streaming && ws?.readyState === WebSocket.OPEN) {
+            try {
+                ws.send(sttStartHeader(clip));
+                ws.send(sttEndHeader(clip));
+                clip.sent = true;
+            }
+            catch {
+                clip.sent = false;
+            }
+        }
         appendTurn(pendingEntry(clip));
         flushOutbox();
     };
@@ -1024,9 +1354,8 @@ async function startRecording() {
     // Sampled here, as recording actually begins, because that is what the
     // clip is stamped with. Nothing later -- upload, transcription -- is
     // early enough to be safe.
-    recordingEpoch = turnEpoch;
     try {
-        recorder.start();
+        recorder.start(recordingStreaming ? 200 : undefined);
     }
     catch (err) {
         recorderFailed = true;

@@ -382,6 +382,194 @@ export { audioQueue, player, playNext };`,
 	}
 }
 
+async function mseStreamingRegressions() {
+	const start = source.indexOf("function mseRuntimeSupported()");
+	const end = source.indexOf("// The status message promises", start);
+	assert.ok(start >= 0 && end > start, "MSE playback section is present");
+
+	const player = eventsNode();
+	player.playCalls = 0;
+	player.pauseCalls = 0;
+	player.loadCalls = 0;
+	player.play = () => {
+		player.playCalls += 1;
+		return Promise.resolve();
+	};
+	player.pause = () => {
+		player.pauseCalls += 1;
+	};
+	player.removeAttribute = () => {};
+	player.load = () => {
+		player.loadCalls += 1;
+	};
+
+	class FakeSourceBuffer {
+		constructor() {
+			this.listeners = new Map();
+			this.updating = false;
+			this.appended = [];
+			this.fail = false;
+		}
+		addEventListener(name, handler) {
+			if (!this.listeners.has(name)) this.listeners.set(name, new Set());
+			this.listeners.get(name).add(handler);
+		}
+		removeEventListener(name, handler) {
+			this.listeners.get(name)?.delete(handler);
+		}
+		emit(name) {
+			if (name === "updateend") this.updating = false;
+			for (const handler of [...(this.listeners.get(name) || [])]) handler();
+		}
+		appendBuffer(data) {
+			if (this.fail) {
+				const error = new Error("quota");
+				error.name = "QuotaExceededError";
+				throw error;
+			}
+			this.updating = true;
+			this.appended.push(new Uint8Array(data));
+		}
+	}
+	class FakeMediaSource {
+		constructor() {
+			this.readyState = "open";
+			this.buffer = new FakeSourceBuffer();
+			this.ended = false;
+			this.listeners = new Map();
+		}
+		addEventListener(name, handler) {
+			if (!this.listeners.has(name)) this.listeners.set(name, new Set());
+			this.listeners.get(name).add(handler);
+		}
+		addSourceBuffer() {
+			return this.buffer;
+		}
+		endOfStream() {
+			this.ended = true;
+			this.readyState = "ended";
+		}
+	}
+	FakeMediaSource.isTypeSupported = () => true;
+	const previousMediaSource = globalThis.MediaSource;
+	const previousUrl = globalThis.URL;
+	const urls = new Map();
+	let urlNumber = 0;
+	globalThis.MediaSource = FakeMediaSource;
+	globalThis.URL = {
+		createObjectURL(value) {
+			const url = `mse:${urlNumber++}`;
+			urls.set(url, value);
+			return url;
+		},
+		revokeObjectURL() {},
+	};
+	try {
+		globalThis.__msePlayer = player;
+		const encoded = Buffer.from(
+			compile(
+				`let audioEpoch = 0;
+let mseEnabled = true;
+let mseQueue = [];
+let mseActive = null;
+let msePending = null;
+let mseReplayBytes = 0;
+let isPlaying = false;
+let playbackOwner = null;
+const MAX_AUDIO_UTTERANCE = 32 * 1024 * 1024;
+const MAX_AUDIO_REPLAY = 64 * 1024 * 1024;
+const audioQueue = [];
+const statusEl = { textContent: "", classList: { add() {} } };
+const player = globalThis.__msePlayer;
+function errorName(error) { return error instanceof Error ? error.name : "unknown error"; }
+function playNext() { globalThis.__mseFallbackPlays = (globalThis.__mseFallbackPlays || 0) + 1; }
+${source.slice(start, end)}
+export { audioQueue, mseQueue, receiveAudioStart, receiveAudioChunk, receiveAudioDone };`,
+				"msePlayback",
+			),
+		).toString("base64");
+		const loaded = await import(
+			`data:text/javascript;base64,${encoded}#msePlayback`
+		);
+		loaded.receiveAudioStart({
+			generation: 0,
+			sequence: 1,
+			mime: "audio/mpeg",
+		});
+		loaded.receiveAudioChunk(new TextEncoder().encode("one").buffer);
+		loaded.receiveAudioChunk(new TextEncoder().encode("two").buffer);
+		const first = urls.get(player.src);
+		assert.equal(player.playCalls, 1, "first MSE chunk starts playback");
+		assert.deepEqual(
+			[...first.buffer.appended],
+			[new Uint8Array([111, 110, 101])],
+		);
+		first.buffer.emit("updateend");
+		assert.deepEqual(
+			[...first.buffer.appended],
+			[new Uint8Array([111, 110, 101]), new Uint8Array([116, 119, 111])],
+		);
+		first.buffer.emit("updateend");
+		loaded.receiveAudioDone({ generation: 0, sequence: 1, done: true });
+		assert.equal(first.ended, true, "done waits for every queued append");
+
+		loaded.receiveAudioStart({
+			generation: 0,
+			sequence: 2,
+			mime: "audio/mpeg",
+		});
+		loaded.receiveAudioChunk(new TextEncoder().encode("next").buffer);
+		loaded.receiveAudioDone({ generation: 0, sequence: 2, done: true });
+		player.emit("ended");
+		const second = urls.get(player.src);
+		assert.notEqual(second, first, "each utterance owns a MediaSource");
+		second.buffer.emit("updateend");
+		assert.equal(second.ended, true);
+
+		loaded.receiveAudioStart({
+			generation: 0,
+			sequence: 3,
+			mime: "audio/mpeg",
+		});
+		player.emit("ended");
+		const third = urls.get(player.src);
+		third.buffer.fail = true;
+		loaded.receiveAudioChunk(new TextEncoder().encode("fallback").buffer);
+		loaded.receiveAudioDone({ generation: 0, sequence: 3, done: true });
+		assert.equal(
+			loaded.audioQueue.length,
+			1,
+			"quota failure retains complete replay",
+		);
+		assert.equal(await loaded.audioQueue[0].text(), "fallback");
+		assert.equal(
+			loaded.audioQueue.length,
+			1,
+			"fallback is queued exactly once",
+		);
+
+		const queueBeforeStale = loaded.mseQueue.length;
+		loaded.receiveAudioStart({
+			generation: 9,
+			sequence: 99,
+			mime: "audio/mpeg",
+		});
+		loaded.receiveAudioChunk(new TextEncoder().encode("stale").buffer);
+		loaded.receiveAudioDone({ generation: 9, sequence: 99, done: true });
+		assert.equal(
+			loaded.mseQueue.length,
+			queueBeforeStale,
+			"stale audio is ignored",
+		);
+	} finally {
+		if (previousMediaSource === undefined) delete globalThis.MediaSource;
+		else globalThis.MediaSource = previousMediaSource;
+		globalThis.URL = previousUrl;
+		delete globalThis.__msePlayer;
+		delete globalThis.__mseFallbackPlays;
+	}
+}
+
 async function recorderLifecycleRegressions() {
 	const start = source.indexOf("function setRecordingUI");
 	const end = source.indexOf('btn.addEventListener("click"', start);
@@ -469,6 +657,7 @@ const idleText = "idle";
 function appendTurn() {}
 function pendingEntry(clip) { return clip; }
 function updateOutboxUI() {}
+function enqueueOutbox(clip) { outbox.push(clip); return true; }
 function flushOutbox() {}
 function errorName(error) { return error instanceof Error ? error.name : "unknown error"; }
 ${source.slice(start, end)}
@@ -854,6 +1043,7 @@ export { setRoute, post };`;
 }
 
 await audioPlaybackRegressions();
+await mseStreamingRegressions();
 await recorderLifecycleRegressions();
 await modelPickerRegressions();
 await pickerRequestRegressions();

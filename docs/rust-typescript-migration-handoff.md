@@ -138,6 +138,7 @@ SWITCHBOARD_SPEAK_URL
 SWITCHBOARD_STATE_URL
 SWITCHBOARD_DIAGRAM_URL
 SWITCHBOARD_STT_COMMAND
+SWITCHBOARD_STT_STREAM_COMMAND (optional long-lived framed worker)
 SWITCHBOARD_SPEECH_DEADLINE_MS
 SWITCHBOARD_LOG
 SWITCHBOARD_LOG_FORMAT
@@ -150,8 +151,14 @@ and the project extension's abort timeout. `SWITCHBOARD_LOG` overrides
 (default) or `json`. Deployment overrides for these public variables require a
 separate homelab PR.
 
-`SWITCHBOARD_STT_COMMAND` is transitional: it receives WebM/Opus bytes on stdin
-and must write the transcript to stdout. The Rust service reports this adapter
+`SWITCHBOARD_STT_COMMAND` is transitional: it receives complete WebM/Opus bytes
+on stdin and must write the transcript to stdout. The optional
+`SWITCHBOARD_STT_STREAM_COMMAND` is a long-lived framed worker: each frame is a
+kind byte, big-endian `u32` payload length, and JSON control or raw audio
+payload. It emits bounded JSONL `ready`, `partial`, and `final` records. The
+browser selects it only after the hello capability handshake; a failed or full
+worker is explicitly abandoned and the retained complete clip uses the legacy
+contract. Adding this variable requires a separate homelab template PR. The Rust service reports this adapter
 in `/healthz`; it is not a claim that Rust Whisper matches the deployed
 faster-whisper model yet.
 

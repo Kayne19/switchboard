@@ -33,6 +33,9 @@ interface BrowserMessage {
 	waiting?: number;
 	steered?: boolean;
 	generation?: number;
+	sequence?: number;
+	streaming?: boolean;
+	capabilities?: Record<string, boolean>;
 	[key: string]: unknown;
 }
 

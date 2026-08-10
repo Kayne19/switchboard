@@ -13,9 +13,16 @@ const compiled = ts.transpileModule(source, {
 });
 assert.deepEqual(compiled.diagnostics ?? [], []);
 const encoded = Buffer.from(compiled.outputText).toString("base64");
-const { clipHeader, decodeServerMessage, postJson } = await import(
-	`data:text/javascript;base64,${encoded}`
-);
+const {
+	clipHeader,
+	decodeServerMessage,
+	helloMessage,
+	sttChunkHeader,
+	sttEndHeader,
+	sttStartHeader,
+	sttCancelHeader,
+	postJson,
+} = await import(`data:text/javascript;base64,${encoded}`);
 
 assert.deepEqual(decodeServerMessage('{"type":"status","route":"operator"}'), {
 	type: "status",
@@ -65,5 +72,46 @@ assert.equal(
 	JSON.parse(clipHeader({ id: "abc", mime: "", epoch: 0 })).generation,
 	0,
 );
+assert.deepEqual(JSON.parse(helloMessage()), {
+	type: "hello",
+	version: 1,
+	capabilities: { stt_streaming: true, audio_streaming: false, mse_mp3: false },
+});
+const previousMediaSource = globalThis.MediaSource;
+globalThis.MediaSource = { isTypeSupported: (mime) => mime === "audio/mpeg" };
+assert.deepEqual(JSON.parse(helloMessage()).capabilities, {
+	stt_streaming: true,
+	audio_streaming: true,
+	mse_mp3: true,
+});
+if (previousMediaSource === undefined) delete globalThis.MediaSource;
+else globalThis.MediaSource = previousMediaSource;
+assert.deepEqual(
+	JSON.parse(
+		sttStartHeader({ id: "abc", mime: "audio/webm;codecs=opus", epoch: 4 }),
+	),
+	{
+		type: "stt_start",
+		clip_id: "abc",
+		generation: 4,
+		mime: "audio/webm;codecs=opus",
+	},
+);
+assert.deepEqual(JSON.parse(sttChunkHeader({ id: "abc", epoch: 4 }, 2)), {
+	type: "stt_chunk",
+	clip_id: "abc",
+	generation: 4,
+	sequence: 2,
+});
+assert.deepEqual(JSON.parse(sttEndHeader({ id: "abc", epoch: 4 })), {
+	type: "stt_end",
+	clip_id: "abc",
+	generation: 4,
+});
+assert.deepEqual(JSON.parse(sttCancelHeader({ id: "abc", epoch: 4 })), {
+	type: "stt_cancel",
+	clip_id: "abc",
+	generation: 4,
+});
 
 console.log("ok — browser protocol parsing and POST failures");

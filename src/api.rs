@@ -1,5 +1,5 @@
 //! HTTP, WebSocket and application workers.
-use crate::audio::{Speaker, SttAdapter};
+use crate::audio::{Speaker, StreamResult, SttAdapter, SttStreamAdapter};
 use crate::history::{TranscriptLog, AGENT, CALLER};
 use crate::lifecycle::Coordinator;
 use crate::pbx::{ActivityClock, LiveLegState, RouteCallback, Switchboard};
@@ -36,6 +36,7 @@ pub struct AppInner {
     pub transcript_log: Mutex<TranscriptLog>,
     pub speaker: Speaker,
     pub stt: SttAdapter,
+    pub stt_stream: SttStreamAdapter,
     pub events: broadcast::Sender<Event>,
     pub coordinator: Coordinator,
     speech: mpsc::Sender<SpeechRequest>,
@@ -45,6 +46,7 @@ pub struct AppInner {
     pub turns: mpsc::Sender<(String, String, u64)>,
     turn_rx: Mutex<Option<mpsc::Receiver<(String, String, u64)>>>,
     pub accepted_clips: Mutex<(HashSet<String>, VecDeque<String>)>,
+    stream_clips: Mutex<HashMap<String, StreamClipState>>,
     pub last_diagram: Arc<Mutex<Option<Value>>>,
     pub active_session: Arc<Mutex<Option<PiSession>>>,
     activity_clock: ActivityClock,
@@ -57,11 +59,38 @@ pub struct AppInner {
     audio: Mutex<AudioQueue>,
     speech_deadline: std::time::Duration,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StreamClipState {
+    Open {
+        generation: u64,
+        next_sequence: u64,
+        connection: u64,
+    },
+    Ended {
+        generation: u64,
+        connection: u64,
+    },
+    Cancelled,
+    Abandoned,
+    Finalized,
+}
+
 #[derive(Clone, Debug)]
 pub enum Event {
     Json(Value),
-    Audio {
+    AudioStart {
+        generation: u64,
+        sequence: u64,
+        mime: String,
+        format: String,
+    },
+    AudioChunk {
         audio: Vec<u8>,
+        generation: u64,
+        sequence: u64,
+    },
+    AudioDone {
         generation: u64,
         sequence: u64,
     },
@@ -151,7 +180,9 @@ impl DeliveryState {
 }
 struct AudioSlot {
     generation: u64,
-    audio: Option<Vec<u8>>,
+    events: Vec<Event>,
+    started: bool,
+    done: bool,
 }
 struct AudioQueue {
     next: u64,
@@ -173,39 +204,80 @@ impl AudioQueue {
             sequence,
             AudioSlot {
                 generation,
-                audio: None,
+                events: Vec::new(),
+                started: false,
+                done: false,
             },
         );
         sequence
     }
-    fn cancel(&mut self, sequence: u64, generation: u64) -> Vec<Event> {
-        self.finish(sequence, generation, Vec::new())
+    fn start(&mut self, sequence: u64, generation: u64) -> Vec<Event> {
+        let Some(slot) = self.slots.get_mut(&sequence) else {
+            return Vec::new();
+        };
+        if slot.generation == generation && !slot.started {
+            slot.started = true;
+            slot.events.push(Event::AudioStart {
+                generation,
+                sequence,
+                mime: "audio/mpeg".into(),
+                format: "mp3".into(),
+            });
+        }
+        self.drain_ready()
     }
-
-    fn finish(&mut self, sequence: u64, generation: u64, audio: Vec<u8>) -> Vec<Event> {
+    fn append(&mut self, sequence: u64, generation: u64, audio: Vec<u8>) -> Vec<Event> {
+        let Some(slot) = self.slots.get_mut(&sequence) else {
+            return Vec::new();
+        };
+        if slot.generation == generation && !audio.is_empty() {
+            slot.events.push(Event::AudioChunk {
+                audio,
+                generation,
+                sequence,
+            });
+        }
+        self.drain_ready()
+    }
+    fn cancel(&mut self, sequence: u64, generation: u64) -> Vec<Event> {
+        self.finish(sequence, generation)
+    }
+    fn finish(&mut self, sequence: u64, generation: u64) -> Vec<Event> {
         let Some(slot) = self.slots.get_mut(&sequence) else {
             return Vec::new();
         };
         if slot.generation == generation {
-            slot.audio = Some(audio);
-        } else {
-            slot.audio = Some(Vec::new());
+            if !slot.started {
+                slot.started = true;
+                slot.events.push(Event::AudioStart {
+                    generation,
+                    sequence,
+                    mime: "audio/mpeg".into(),
+                    format: "mp3".into(),
+                });
+            }
+            if !slot.done {
+                slot.events.push(Event::AudioDone {
+                    generation,
+                    sequence,
+                });
+            }
         }
+        slot.done = true;
+        self.drain_ready()
+    }
+    fn drain_ready(&mut self) -> Vec<Event> {
         let mut ready = Vec::new();
-        while let Some(slot) = self.slots.get(&self.emit) {
-            if slot.audio.is_none() {
+        while self.slots.contains_key(&self.emit) {
+            let done = {
+                let slot = self.slots.get_mut(&self.emit).expect("audio slot exists");
+                ready.append(&mut slot.events);
+                slot.done
+            };
+            if !done {
                 break;
             }
-            let slot = self.slots.remove(&self.emit).expect("audio slot exists");
-            if let Some(audio) = slot.audio {
-                if !audio.is_empty() {
-                    ready.push(Event::Audio {
-                        audio,
-                        generation: slot.generation,
-                        sequence: self.emit,
-                    });
-                }
-            }
+            self.slots.remove(&self.emit);
             self.emit += 1;
         }
         ready
@@ -234,6 +306,22 @@ impl AppState {
         transcript_log: TranscriptLog,
         speaker: Speaker,
         stt: SttAdapter,
+    ) -> Self {
+        Self::new_with_stream(
+            switchboard,
+            transcript_log,
+            speaker,
+            stt,
+            SttStreamAdapter::from_env(),
+        )
+    }
+
+    pub fn new_with_stream(
+        switchboard: Switchboard,
+        transcript_log: TranscriptLog,
+        speaker: Speaker,
+        stt: SttAdapter,
+        stt_stream: SttStreamAdapter,
     ) -> Self {
         let (events, _) = broadcast::channel(256);
         let (speech, speech_rx) = mpsc::channel(64);
@@ -300,6 +388,7 @@ impl AppState {
             transcript_log: Mutex::new(transcript_log),
             speaker,
             stt,
+            stt_stream,
             events,
             coordinator,
             speech,
@@ -309,6 +398,7 @@ impl AppState {
             turns,
             turn_rx: Mutex::new(Some(turn_rx)),
             accepted_clips: Mutex::new((HashSet::new(), VecDeque::new())),
+            stream_clips: Mutex::new(HashMap::new()),
             last_diagram,
             active_session,
             activity_clock,
@@ -344,6 +434,10 @@ impl AppState {
 }
 
 pub fn spawn_workers(state: AppState) {
+    let stream_state = state.clone();
+    tokio::spawn(async move {
+        process_stream_results(stream_state).await;
+    });
     let speech_state = state.clone();
     tokio::spawn(async move {
         process_speech(speech_state).await;
@@ -412,10 +506,9 @@ pub fn spawn_idle_worker(state: AppState, idle_timeout: f64, poll_seconds: f64) 
     });
 }
 fn emit(state: &AppState, event: Event) -> bool {
-    let delivered = state.0.events.receiver_count() > 0;
     let browser_delivered = state.0.delivery.publish(event.clone());
     let _ = state.0.events.send(event);
-    delivered || browser_delivered
+    browser_delivered
 }
 fn emit_json(state: &AppState, value: Value) -> bool {
     emit(state, Event::Json(value))
@@ -472,25 +565,67 @@ async fn reserve_audio(state: &AppState, generation: u64) -> Option<u64> {
     }
     Some(audio.reserve(generation))
 }
-async fn cancel_audio(state: &AppState, sequence: u64, generation: u64) {
-    let mut audio = state.0.audio.lock().await;
-    for event in audio.cancel(sequence, generation) {
-        emit(state, event);
-    }
-}
-async fn finish_audio(state: &AppState, sequence: u64, generation: u64, bytes: Vec<u8>) -> bool {
-    let mut audio = state.0.audio.lock().await;
-    if generation != state.0.coordinator.generation() {
-        for event in audio.cancel(sequence, generation) {
-            emit(state, event);
-        }
-        return false;
-    }
+async fn publish_audio_events(state: &AppState, events: Vec<Event>) -> bool {
     let mut delivered = false;
-    for event in audio.finish(sequence, generation, bytes) {
+    for event in events {
         delivered |= emit(state, event);
     }
     delivered
+}
+async fn start_audio(state: &AppState, sequence: u64, generation: u64) -> bool {
+    let events = {
+        let mut audio = state.0.audio.lock().await;
+        audio.start(sequence, generation)
+    };
+    publish_audio_events(state, events).await
+}
+async fn append_audio(state: &AppState, sequence: u64, generation: u64, bytes: Vec<u8>) -> bool {
+    let events = {
+        let mut audio = state.0.audio.lock().await;
+        audio.append(sequence, generation, bytes)
+    };
+    publish_audio_events(state, events).await
+}
+async fn finish_audio(state: &AppState, sequence: u64, generation: u64, bytes: Vec<u8>) -> bool {
+    let (events, current) = {
+        let mut audio = state.0.audio.lock().await;
+        let current = generation == state.0.coordinator.generation();
+        let events = if current {
+            let mut events = audio.append(sequence, generation, bytes);
+            events.extend(audio.finish(sequence, generation));
+            events
+        } else {
+            audio.cancel(sequence, generation)
+        };
+        (events, current)
+    };
+    publish_audio_events(state, events).await && current
+}
+
+async fn synthesize_audio_stream(
+    state: &AppState,
+    text: &str,
+    sequence: u64,
+    generation: u64,
+    deadline: std::time::Instant,
+) -> Result<(usize, bool), crate::audio::AudioError> {
+    let mut delivered = start_audio(state, sequence, generation).await;
+    let mut bytes = 0usize;
+    let mut stream = state.0.speaker.stream_until(text, deadline).await?;
+    while let Some(chunk) = stream.next().await {
+        if generation != state.0.coordinator.generation() {
+            return Err(crate::audio::AudioError::Tts(
+                "speech generation was superseded".into(),
+            ));
+        }
+        let chunk = chunk?;
+        bytes = bytes.saturating_add(chunk.len());
+        for part in chunk.chunks(32 * 1024) {
+            delivered |= append_audio(state, sequence, generation, part.to_vec()).await;
+        }
+    }
+    delivered |= finish_audio(state, sequence, generation, Vec::new()).await;
+    Ok((bytes, delivered))
 }
 
 async fn process_speech(state: AppState) {
@@ -511,15 +646,40 @@ async fn process_speech(state: AppState) {
         } = request;
         state.0.coordinator.touch_activity();
         let started = std::time::Instant::now();
-        match state.0.speaker.synthesize_until(&text, deadline).await {
-            Ok(audio) => {
-                tracing::info!(
-                    chars = text.chars().count(),
-                    bytes = audio.len(),
-                    elapsed = ?started.elapsed(),
-                    "synthesized a mid-turn line"
-                );
-                let delivered = finish_audio(&state, sequence, generation, audio).await;
+        let operation_state = state.clone();
+        let operation_text = text.clone();
+        let synthesized = match spawn_registered_operation(&state, generation, async move {
+            synthesize_audio_stream(
+                &operation_state,
+                &operation_text,
+                sequence,
+                generation,
+                deadline,
+            )
+            .await
+        })
+        .await
+        {
+            Some((task, id)) => {
+                let result = match task.await {
+                    Ok(result) => result,
+                    Err(error) if error.is_cancelled() => {
+                        Err(crate::audio::AudioError::Tts("speech was cancelled".into()))
+                    }
+                    Err(error) => Err(crate::audio::AudioError::Tts(format!(
+                        "speech worker failed: {error}"
+                    ))),
+                };
+                clear_active_operation(&state, id).await;
+                result
+            }
+            None => Err(crate::audio::AudioError::Tts(
+                "speech generation was superseded".into(),
+            )),
+        };
+        match synthesized {
+            Ok((bytes, delivered)) => {
+                tracing::info!(chars = text.chars().count(), bytes, elapsed = ?started.elapsed(), "synthesized a mid-turn line");
                 if delivered {
                     let route = state.0.live_leg.route();
                     if let Some(entry) =
@@ -537,14 +697,161 @@ async fn process_speech(state: AppState) {
             Err(error) => {
                 finish_audio(&state, sequence, generation, Vec::new()).await;
                 let _ = result.send(Err(error.to_string()));
-                // The caller hears nothing at all when this fails, so it must
-                // never be inferable only from the absence of audio.
                 tracing::error!(%error, chars = text.chars().count(), "synthesis failed for an agent-spoken line");
                 emit_json(&state, json!({"type":"error", "message":error.to_string()}));
             }
         }
     }
     tracing::warn!("the speech worker stopped; agent-spoken lines will not be voiced");
+}
+
+async fn process_stream_results(state: AppState) {
+    let Some(mut results) = state.0.stt_stream.take_results().await else {
+        return;
+    };
+    while let Some(result) = results.recv().await {
+        match result {
+            StreamResult::Partial(partial) => {
+                let valid = {
+                    let clips = state.0.stream_clips.lock().await;
+                    matches!(clips.get(&partial.clip_id), Some(StreamClipState::Open { generation, next_sequence, .. }) if *generation == partial.generation && partial.sequence <= *next_sequence)
+                };
+                if valid && partial.generation == state.0.coordinator.generation() {
+                    emit_json(
+                        &state,
+                        json!({"type":"partial", "id":partial.clip_id, "generation":partial.generation, "sequence":partial.sequence, "text":partial.text}),
+                    );
+                }
+            }
+            StreamResult::Final(final_result) => {
+                let claim = {
+                    let mut clips = state.0.stream_clips.lock().await;
+                    match clips.get(&final_result.clip_id).copied() {
+                        Some(StreamClipState::Ended { generation, .. })
+                            if generation == final_result.generation =>
+                        {
+                            clips.insert(final_result.clip_id.clone(), StreamClipState::Finalized);
+                            true
+                        }
+                        _ => false,
+                    }
+                };
+                if claim {
+                    route_final_transcript(
+                        &state,
+                        &final_result.clip_id,
+                        final_result.generation,
+                        final_result.text,
+                    )
+                    .await;
+                }
+            }
+            StreamResult::WorkerError(error) => {
+                tracing::error!(%error, "streaming STT worker failed");
+                let abandoned = {
+                    let mut clips = state.0.stream_clips.lock().await;
+                    let mut abandoned = Vec::new();
+                    for (id, clip) in clips.iter_mut() {
+                        match *clip {
+                            StreamClipState::Open { connection, .. }
+                            | StreamClipState::Ended { connection, .. } => {
+                                *clip = StreamClipState::Abandoned;
+                                abandoned.push((id.clone(), connection));
+                            }
+                            _ => {}
+                        }
+                    }
+                    abandoned
+                };
+                for (id, connection) in abandoned {
+                    let _ = send_json(
+                        &state,
+                        connection,
+                        json!({"type":"abandoned", "id":id, "reason":"stream worker unavailable"}),
+                    )
+                    .await;
+                }
+            }
+        }
+    }
+}
+
+async fn route_final_transcript(state: &AppState, id: &str, generation: u64, transcript: String) {
+    if transcript.trim().is_empty() {
+        emit_json(
+            state,
+            json!({"type":"error", "id":id, "message":"I didn't catch that — say it again."}),
+        );
+        return;
+    }
+    let _transition = state.0.operation_transition.lock().await;
+    if generation != state.0.coordinator.generation() {
+        emit_stale_clip(state, id);
+        return;
+    }
+    let route = state.0.live_leg.route();
+    state.0.transcript_log.lock().await.add_with_id(
+        CALLER,
+        &transcript,
+        route.clone(),
+        Some(id.to_owned()),
+    );
+    emit_json(
+        state,
+        json!({"type":"transcript", "id":id, "text":transcript}),
+    );
+    drop(_transition);
+    let steer_operation = state
+        .0
+        .coordinator
+        .attach_steer(&state.0.coordinator.current_identity())
+        .ok();
+    let active = state.0.active_session.lock().await;
+    let steered = match active.as_ref().cloned() {
+        None => false,
+        Some(session) if steer_operation.is_none() || !session.busy() || !session.alive().await => {
+            false
+        }
+        Some(session) => match session.steer(&transcript).await {
+            Ok(()) => active
+                .as_ref()
+                .is_some_and(|current| current.same_session(&session)),
+            Err(error) => {
+                tracing::warn!(%error, clip = id, "steering failed; queueing streamed utterance");
+                false
+            }
+        },
+    };
+    drop(active);
+    if steered {
+        state.0.activity_clock.touch();
+        emit_json(
+            state,
+            json!({"type":"queued", "id":id, "waiting":0, "steered":true}),
+        );
+    } else {
+        let waiting = state.0.queued_turns.fetch_add(1, Ordering::AcqRel) + 1;
+        if state
+            .0
+            .turns
+            .send((id.to_owned(), transcript, generation))
+            .await
+            .is_ok()
+        {
+            if waiting > 1 || state.0.turn_in_flight.load(Ordering::Acquire) {
+                emit_json(
+                    state,
+                    json!({"type":"queued", "id":id, "waiting":waiting, "steered":false}),
+                );
+            }
+        } else {
+            state.0.queued_turns.fetch_sub(1, Ordering::AcqRel);
+            emit_json(
+                state,
+                json!({"type":"error", "id":id, "message":"The call worker is unavailable."}),
+            );
+        }
+    }
 }
 
 async fn process_clips(state: AppState) {
@@ -805,7 +1112,7 @@ async fn process_turns(state: AppState) {
 async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
     let status = current_status(&state);
     Json(
-        json!({"status":"ok", "whisper_model":"sidecar", "stt_configured":state.0.stt.command.is_some(), "stt_adapter":"sidecar", "elevenlabs_configured":state.0.speaker.configured(), "route":status["route"], "model":status["model"], "thinking":status["thinking"], "model_swaps":status["model_swaps"], "projects":status["projects"]}),
+        json!({"status":"ok", "whisper_model":"sidecar", "stt_configured":state.0.stt.command.is_some(), "stt_stream_configured":state.0.stt_stream.configured(), "stt_adapter":"sidecar", "elevenlabs_configured":state.0.speaker.configured(), "route":status["route"], "model":status["model"], "thinking":status["thinking"], "model_swaps":status["model_swaps"], "projects":status["projects"]}),
     )
 }
 async fn status(State(state): State<AppState>) -> impl IntoResponse {
@@ -1271,26 +1578,14 @@ async fn synthesize_reply_if_current(
             return false;
         };
         let started = std::time::Instant::now();
-        let synthesized = state.0.speaker.synthesize_until(&spoken, deadline).await;
-        let _transition = state.0.operation_transition.lock().await;
-        if generation != state.0.coordinator.generation() {
-            tracing::info!(
-                generation,
-                "discarding synthesized audio for a superseded turn"
-            );
-            drop(_transition);
-            cancel_audio(state, sequence, generation).await;
-            return false;
-        }
+        let synthesized =
+            synthesize_audio_stream(state, &spoken, sequence, generation, deadline).await;
         match synthesized {
-            Ok(audio) => {
-                tracing::info!(
-                    chars = spoken.chars().count(),
-                    bytes = audio.len(),
-                    elapsed = ?started.elapsed(),
-                    "synthesized a reply"
-                );
-                finish_audio(state, sequence, generation, audio).await;
+            Ok((bytes, delivered)) => {
+                tracing::info!(chars = spoken.chars().count(), bytes, elapsed = ?started.elapsed(), "synthesized a reply");
+                if !delivered {
+                    return false;
+                }
             }
             Err(error) => {
                 finish_audio(state, sequence, generation, Vec::new()).await;
@@ -1334,6 +1629,7 @@ async fn websocket(socket: WebSocket, state: AppState) {
     let writer_id = writer.id();
     let mut shutdown = state.0.shutdown.subscribe();
     let mut pending_header: Option<ClipHeader> = None;
+    let mut pending_stream_chunk: Option<StreamChunkHeader> = None;
     loop {
         tokio::select! {
             result = &mut writer => {
@@ -1345,10 +1641,10 @@ async fn websocket(socket: WebSocket, state: AppState) {
             }
             received = incoming.next() => match received {
                 Some(Ok(Message::Text(text))) => {
-                    if handle_text_frame(&state, epoch, &mut pending_header, text.as_ref()).await.is_err() { break; }
+                    if handle_text_frame(&state, epoch, &mut pending_header, &mut pending_stream_chunk, text.as_ref()).await.is_err() { break; }
                 }
                 Some(Ok(Message::Binary(bytes))) => {
-                    if handle_audio_frame(&state, epoch, &mut pending_header, bytes.to_vec()).await.is_err() { break; }
+                    if handle_audio_frame(&state, epoch, &mut pending_header, &mut pending_stream_chunk, bytes.to_vec()).await.is_err() { break; }
                 }
                 Some(Ok(Message::Ping(bytes))) => {
                     if !state.0.delivery.send(epoch, Message::Pong(bytes)) { break; }
@@ -1399,6 +1695,7 @@ async fn send_snapshot_sink(
 /// the equality check later and the clip is dropped, so a wrong number can only
 /// discard speech, never route it somewhere it does not belong.
 type ClipHeader = (String, String, Option<u64>);
+type StreamChunkHeader = (String, u64, u64);
 
 fn parse_clip_header(command: &serde_json::Map<String, Value>) -> Option<ClipHeader> {
     let id = command
@@ -1420,6 +1717,7 @@ async fn handle_text_frame(
     state: &AppState,
     epoch: u64,
     pending_header: &mut Option<ClipHeader>,
+    pending_stream_chunk: &mut Option<StreamChunkHeader>,
     text: &str,
 ) -> Result<(), ()> {
     let command: Value = match serde_json::from_str(text) {
@@ -1443,6 +1741,262 @@ async fn handle_text_frame(
     };
 
     match command.get("type").and_then(Value::as_str) {
+        Some("hello") => {
+            let version = command.get("version").and_then(Value::as_u64).unwrap_or(0);
+            let capabilities = command.get("capabilities").and_then(Value::as_object);
+            let stream_requested = capabilities
+                .and_then(|caps| caps.get("stt_streaming"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let mse_requested = capabilities
+                .and_then(|caps| caps.get("mse_mp3"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let mse_selected = version == 1 && mse_requested;
+            send_json(state, epoch, json!({"type":"hello_ack", "version":1, "stt_streaming": version == 1 && stream_requested && state.0.stt_stream.configured(), "audio_streaming":mse_selected, "mse_mp3":mse_selected})).await
+        }
+        Some("stt_start") => {
+            pending_header.take();
+            let Some(id) = command
+                .get("clip_id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty() && id.len() <= 128)
+            else {
+                return send_json(
+                    state,
+                    epoch,
+                    json!({"type":"error", "message":"Invalid streaming clip id."}),
+                )
+                .await;
+            };
+            let generation = command
+                .get("generation")
+                .and_then(Value::as_u64)
+                .unwrap_or_else(|| state.0.coordinator.generation());
+            let mime = command.get("mime").and_then(Value::as_str).unwrap_or("");
+            if mime != "audio/webm;codecs=opus" || !state.0.stt_stream.configured() {
+                return send_json(state, epoch, json!({"type":"abandoned", "id":id, "reason":"streaming STT is unavailable for this clip"})).await;
+            }
+            let mut clips = state.0.stream_clips.lock().await;
+            match clips.get(id).copied() {
+                Some(StreamClipState::Open { connection, .. }) if connection == epoch => {
+                    return send_json(
+                        state,
+                        epoch,
+                        json!({"type":"accepted", "id":id, "streaming":true}),
+                    )
+                    .await;
+                }
+                Some(StreamClipState::Ended {
+                    generation: _,
+                    connection,
+                }) if connection == epoch => {
+                    return send_json(
+                        state,
+                        epoch,
+                        json!({"type":"accepted", "id":id, "streaming":true}),
+                    )
+                    .await;
+                }
+                Some(StreamClipState::Ended { generation, .. }) => {
+                    clips.insert(
+                        id.to_owned(),
+                        StreamClipState::Open {
+                            generation,
+                            next_sequence: 0,
+                            connection: epoch,
+                        },
+                    );
+                    drop(clips);
+                    if let Err(reason) =
+                        state
+                            .0
+                            .stt_stream
+                            .try_start(id.to_owned(), generation, mime.to_owned())
+                    {
+                        state
+                            .0
+                            .stream_clips
+                            .lock()
+                            .await
+                            .insert(id.to_owned(), StreamClipState::Abandoned);
+                        return send_json(
+                            state,
+                            epoch,
+                            json!({"type":"abandoned", "id":id, "reason":reason}),
+                        )
+                        .await;
+                    }
+                    return send_json(
+                        state,
+                        epoch,
+                        json!({"type":"accepted", "id":id, "streaming":true}),
+                    )
+                    .await;
+                }
+                Some(
+                    StreamClipState::Abandoned
+                    | StreamClipState::Cancelled
+                    | StreamClipState::Finalized,
+                ) => {
+                    return send_json(state, epoch, json!({"type":"abandoned", "id":id, "reason":"clip is no longer resumable"})).await;
+                }
+                _ => {}
+            }
+            if clips.len() >= 512 {
+                let retired = clips
+                    .iter()
+                    .find(|(_, state)| {
+                        matches!(
+                            state,
+                            StreamClipState::Cancelled
+                                | StreamClipState::Abandoned
+                                | StreamClipState::Finalized
+                        )
+                    })
+                    .map(|(id, _)| id.clone());
+                if let Some(retired) = retired {
+                    clips.remove(&retired);
+                }
+            }
+            if clips.len() >= 512 {
+                return send_json(state, epoch, json!({"type":"abandoned", "id":id, "reason":"too many active streaming clips"})).await;
+            }
+            clips.insert(
+                id.to_owned(),
+                StreamClipState::Open {
+                    generation,
+                    next_sequence: 0,
+                    connection: epoch,
+                },
+            );
+            drop(clips);
+            if let Err(reason) =
+                state
+                    .0
+                    .stt_stream
+                    .try_start(id.to_owned(), generation, mime.to_owned())
+            {
+                state
+                    .0
+                    .stream_clips
+                    .lock()
+                    .await
+                    .insert(id.to_owned(), StreamClipState::Abandoned);
+                return send_json(
+                    state,
+                    epoch,
+                    json!({"type":"abandoned", "id":id, "reason":reason}),
+                )
+                .await;
+            }
+            send_json(
+                state,
+                epoch,
+                json!({"type":"accepted", "id":id, "streaming":true}),
+            )
+            .await
+        }
+        Some("stt_chunk") => {
+            let Some(id) = command
+                .get("clip_id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty() && id.len() <= 128)
+            else {
+                return send_json(
+                    state,
+                    epoch,
+                    json!({"type":"error", "message":"Invalid streaming clip id."}),
+                )
+                .await;
+            };
+            let generation = command
+                .get("generation")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let sequence = command
+                .get("sequence")
+                .and_then(Value::as_u64)
+                .unwrap_or(u64::MAX);
+            *pending_stream_chunk = Some((id.to_owned(), generation, sequence));
+            Ok(())
+        }
+        Some("stt_end") => {
+            let Some(id) = command.get("clip_id").and_then(Value::as_str) else {
+                return Ok(());
+            };
+            let generation = command
+                .get("generation")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let valid = {
+                let mut clips = state.0.stream_clips.lock().await;
+                match clips.get(id).copied() {
+                    Some(StreamClipState::Open {
+                        generation: current,
+                        connection,
+                        ..
+                    }) if current == generation && connection == epoch => {
+                        clips.insert(
+                            id.to_owned(),
+                            StreamClipState::Ended {
+                                generation,
+                                connection,
+                            },
+                        );
+                        true
+                    }
+                    Some(StreamClipState::Ended { .. })
+                    | Some(StreamClipState::Cancelled)
+                    | Some(StreamClipState::Abandoned)
+                    | Some(StreamClipState::Finalized) => false,
+                    _ => false,
+                }
+            };
+            if valid {
+                if let Err(reason) = state.0.stt_stream.try_end(id.to_owned(), generation) {
+                    state
+                        .0
+                        .stream_clips
+                        .lock()
+                        .await
+                        .insert(id.to_owned(), StreamClipState::Abandoned);
+                    return send_json(
+                        state,
+                        epoch,
+                        json!({"type":"abandoned", "id":id, "reason":reason}),
+                    )
+                    .await;
+                }
+            }
+            Ok(())
+        }
+        Some("stt_cancel") => {
+            let Some(id) = command.get("clip_id").and_then(Value::as_str) else {
+                return Ok(());
+            };
+            let generation = command
+                .get("generation")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let should_cancel = {
+                let mut clips = state.0.stream_clips.lock().await;
+                match clips.get(id).copied() {
+                    Some(StreamClipState::Cancelled)
+                    | Some(StreamClipState::Finalized)
+                    | Some(StreamClipState::Abandoned)
+                    | None => false,
+                    Some(_) => {
+                        clips.insert(id.to_owned(), StreamClipState::Cancelled);
+                        true
+                    }
+                }
+            };
+            if should_cancel {
+                let _ = state.0.stt_stream.try_cancel(id.to_owned(), generation);
+            }
+            Ok(())
+        }
         Some("ping") => {
             send_json(
                 state,
@@ -1479,8 +2033,50 @@ async fn handle_audio_frame(
     state: &AppState,
     epoch: u64,
     pending_header: &mut Option<ClipHeader>,
+    pending_stream_chunk: &mut Option<StreamChunkHeader>,
     audio: Vec<u8>,
 ) -> Result<(), ()> {
+    if let Some((id, generation, sequence)) = pending_stream_chunk.take() {
+        let admitted = {
+            let mut clips = state.0.stream_clips.lock().await;
+            match clips.get_mut(&id) {
+                Some(StreamClipState::Open {
+                    generation: current,
+                    next_sequence,
+                    connection,
+                }) if *current == generation
+                    && *connection == epoch
+                    && *next_sequence == sequence =>
+                {
+                    *next_sequence += 1;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if !admitted {
+            return send_json(state, epoch, json!({"type":"error", "id":id, "message":"Invalid or out-of-order streaming chunk."})).await;
+        }
+        if let Err(reason) = state
+            .0
+            .stt_stream
+            .try_chunk(id.clone(), generation, sequence, audio)
+        {
+            state
+                .0
+                .stream_clips
+                .lock()
+                .await
+                .insert(id.clone(), StreamClipState::Abandoned);
+            return send_json(
+                state,
+                epoch,
+                json!({"type":"abandoned", "id":id, "reason":reason}),
+            )
+            .await;
+        }
+        return Ok(());
+    }
     let Some((id, mime, generation)) = pending_header.take() else {
         tracing::warn!(bytes = audio.len(), "audio arrived without a clip header");
         return send_json(
@@ -1556,19 +2152,12 @@ async fn send_event_sink(
 ) -> Result<(), axum::Error> {
     match event {
         Event::Json(value) => socket.send(Message::Text(value.to_string().into())).await,
-        Event::Audio {
-            audio,
-            generation,
-            sequence,
-        } => {
-            socket
-                .send(Message::Text(
-                    json!({"type":"audio", "generation":generation, "sequence":sequence})
-                        .to_string()
-                        .into(),
-                ))
-                .await?;
-            socket.send(Message::Binary(audio.into())).await
+        Event::AudioStart { generation, sequence, mime, format } => {
+            socket.send(Message::Text(json!({"type":"audio_start", "generation":generation, "sequence":sequence, "mime":mime, "format":format}).to_string().into())).await
+        }
+        Event::AudioChunk { audio, .. } => socket.send(Message::Binary(audio.into())).await,
+        Event::AudioDone { generation, sequence } => {
+            socket.send(Message::Text(json!({"type":"audio_done", "generation":generation, "sequence":sequence, "done":true}).to_string().into())).await
         }
     }
 }
@@ -1592,6 +2181,10 @@ mod tests {
     }
 
     fn state_with_stt(stt: Option<String>) -> AppState {
+        state_with_stream(stt, None)
+    }
+
+    fn state_with_stream(stt: Option<String>, stream: Option<String>) -> AppState {
         let board = Switchboard::new(
             Registry::new(vec![]),
             "pi".into(),
@@ -1609,7 +2202,7 @@ mod tests {
             "".into(),
             HashMap::new(),
         );
-        AppState::new(
+        AppState::new_with_stream(
             board,
             TranscriptLog::new(10),
             Speaker::from_values(
@@ -1617,7 +2210,16 @@ mod tests {
                 &HashMap::from([("ELEVENLABS_API_KEY".into(), "test-key".into())]),
             ),
             SttAdapter::from_command(stt),
+            SttStreamAdapter::from_command(stream),
         )
+    }
+
+    async fn next_delivery(connection: &mut DeliveryConnection) -> Value {
+        let Some(DeliveryFrame::Message(Message::Text(text))) = connection.receiver.recv().await
+        else {
+            panic!("expected a websocket response");
+        };
+        serde_json::from_str(&text).unwrap()
     }
 
     async fn request_json(
@@ -1722,7 +2324,10 @@ mod tests {
         let (code, response) =
             request_json(&state, Method::POST, "/diagram", Some(payload.clone())).await;
         assert_eq!(code, StatusCode::OK);
-        assert_eq!(response, json!({"delivered":true}));
+        assert_eq!(
+            response,
+            json!({"delivered":false, "reason":"no browser connected"})
+        );
         let Event::Json(event) = events.recv().await.unwrap() else {
             panic!("diagram should be a JSON event")
         };
@@ -1756,18 +2361,30 @@ mod tests {
         let mut queue = AudioQueue::new();
         let first = queue.reserve(3);
         let second = queue.reserve(3);
-        assert!(queue.finish(second, 3, vec![2]).is_empty());
-        let events = queue.finish(first, 3, vec![1]);
+        assert!(queue.start(second, 3).is_empty());
+        assert!(queue.append(second, 3, vec![2]).is_empty());
+        assert!(queue.finish(second, 3).is_empty());
+        assert!(matches!(
+            queue.start(first, 3).as_slice(),
+            [Event::AudioStart { sequence: 0, .. }]
+        ));
+        assert!(matches!(
+            queue.append(first, 3, vec![1]).as_slice(),
+            [Event::AudioChunk { sequence: 0, .. }]
+        ));
+        let events = queue.finish(first, 3);
         assert!(matches!(
             events.as_slice(),
             [
-                Event::Audio { sequence: 0, .. },
-                Event::Audio { sequence: 1, .. }
+                Event::AudioDone { sequence: 0, .. },
+                Event::AudioStart { sequence: 1, .. },
+                Event::AudioChunk { sequence: 1, .. },
+                Event::AudioDone { sequence: 1, .. }
             ]
         ));
         let stale = queue.reserve(3);
         queue.clear();
-        assert!(queue.finish(stale, 3, vec![9]).is_empty());
+        assert!(queue.finish(stale, 3).is_empty());
     }
 
     #[test]
@@ -1775,12 +2392,111 @@ mod tests {
         let mut queue = AudioQueue::new();
         let first = queue.reserve(1);
         let second = queue.reserve(1);
-        assert!(queue.cancel(first, 1).is_empty());
-        let events = queue.finish(second, 1, vec![7]);
+        assert!(matches!(
+            queue.cancel(first, 1).as_slice(),
+            [
+                Event::AudioStart { sequence: 0, .. },
+                Event::AudioDone { sequence: 0, .. }
+            ]
+        ));
+        assert!(matches!(
+            queue.start(second, 1).as_slice(),
+            [Event::AudioStart { sequence: 1, .. }]
+        ));
+        assert!(matches!(
+            queue.append(second, 1, vec![7]).as_slice(),
+            [Event::AudioChunk { sequence: 1, .. }]
+        ));
+        let events = queue.finish(second, 1);
         assert!(matches!(
             events.as_slice(),
-            [Event::Audio { sequence: 1, .. }]
+            [Event::AudioDone { sequence: 1, .. }]
         ));
+    }
+
+    #[tokio::test]
+    async fn streaming_clip_rejects_duplicate_chunks_and_repeats_end_cancel_safely() {
+        let state = state_with_stream(None, Some("true".into()));
+        let mut connection = state.0.delivery.register();
+        let epoch = connection.epoch;
+        let mut pending_header = None;
+        let mut pending_chunk = None;
+
+        handle_text_frame(
+            &state,
+            epoch,
+            &mut pending_header,
+            &mut pending_chunk,
+            r#"{"type":"stt_start","clip_id":"clip","generation":1,"mime":"audio/webm;codecs=opus"}"#,
+        )
+        .await
+        .unwrap();
+        assert_eq!(next_delivery(&mut connection).await["type"], "accepted");
+
+        handle_text_frame(
+            &state,
+            epoch,
+            &mut pending_header,
+            &mut pending_chunk,
+            r#"{"type":"stt_chunk","clip_id":"clip","generation":1,"sequence":0}"#,
+        )
+        .await
+        .unwrap();
+        handle_audio_frame(
+            &state,
+            epoch,
+            &mut pending_header,
+            &mut pending_chunk,
+            b"first".to_vec(),
+        )
+        .await
+        .unwrap();
+        handle_text_frame(
+            &state,
+            epoch,
+            &mut pending_header,
+            &mut pending_chunk,
+            r#"{"type":"stt_chunk","clip_id":"clip","generation":1,"sequence":0}"#,
+        )
+        .await
+        .unwrap();
+        handle_audio_frame(
+            &state,
+            epoch,
+            &mut pending_header,
+            &mut pending_chunk,
+            b"duplicate".to_vec(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(next_delivery(&mut connection).await["type"], "error");
+
+        for _ in 0..2 {
+            handle_text_frame(
+                &state,
+                epoch,
+                &mut pending_header,
+                &mut pending_chunk,
+                r#"{"type":"stt_end","clip_id":"clip","generation":1}"#,
+            )
+            .await
+            .unwrap();
+        }
+        for _ in 0..2 {
+            handle_text_frame(
+                &state,
+                epoch,
+                &mut pending_header,
+                &mut pending_chunk,
+                r#"{"type":"stt_cancel","clip_id":"clip","generation":1}"#,
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(
+            state.0.stream_clips.lock().await.get("clip"),
+            Some(&StreamClipState::Cancelled)
+        );
     }
 
     #[tokio::test]

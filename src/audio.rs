@@ -5,17 +5,22 @@
 //! and reads the transcript from stdout. This keeps the service portable while
 //! deployments migrate their existing faster-whisper sidecar.
 
+use futures_util::{Stream, StreamExt};
 use reqwest::StatusCode;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Instant;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use tokio::time::{timeout, Duration};
+use tokio::sync::{mpsc, Mutex};
+use tokio::time::{sleep, timeout, Duration, Instant as TokioInstant};
 
 pub const ELEVENLABS_TTS_URL: &str = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}";
 const STT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -69,52 +74,41 @@ struct TtsRequest {
 
 type TtsFuture =
     Pin<Box<dyn Future<Output = Result<(StatusCode, Vec<u8>), AudioError>> + Send + 'static>>;
+type TtsByteStream = Pin<Box<dyn Stream<Item = Result<Vec<u8>, AudioError>> + Send>>;
+type TtsStreamFuture = Pin<
+    Box<
+        dyn Future<Output = Result<(StatusCode, Option<u64>, TtsByteStream), AudioError>>
+            + Send
+            + 'static,
+    >,
+>;
 
 trait TtsTransport: Send + Sync {
     fn send(&self, request: TtsRequest) -> TtsFuture;
+    fn send_stream(&self, request: TtsRequest) -> TtsStreamFuture;
 }
 
-#[derive(Debug)]
-struct HttpTtsTransport;
+#[derive(Clone, Debug)]
+struct HttpTtsTransport {
+    client: reqwest::Client,
+}
+
+impl HttpTtsTransport {
+    fn new() -> Self {
+        Self {
+            client: reqwest::Client::new(),
+        }
+    }
+}
 
 impl TtsTransport for HttpTtsTransport {
     fn send(&self, request: TtsRequest) -> TtsFuture {
+        let transport = self.clone();
         Box::pin(async move {
-            let remaining = request.deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(AudioError::Deadline);
-            }
-            let client = reqwest::Client::builder()
-                .timeout(remaining)
-                .build()
-                .map_err(|error| {
-                    AudioError::Tts(format!("could not configure ElevenLabs client: {error}"))
-                })?;
-            let mut response = client
-                .post(request.url)
-                .header("xi-api-key", request.api_key)
-                .header("Content-Type", "application/json")
-                .header("Accept", "audio/mpeg")
-                .json(&request.body)
-                .send()
-                .await
-                .map_err(|error| AudioError::Tts(format!("could not reach ElevenLabs: {error}")))?;
-            let status = response.status();
-            if response
-                .content_length()
-                .is_some_and(|length| length > TTS_RESPONSE_LIMIT as u64)
-            {
-                return Err(AudioError::Tts(
-                    "ElevenLabs response exceeded the audio size limit".into(),
-                ));
-            }
+            let (status, _, mut stream) = transport.send_stream(request).await?;
             let mut bytes = Vec::new();
-            while let Some(chunk) = response.chunk().await.map_err(|error| {
-                AudioError::Tts(format!("could not read ElevenLabs response: {error}"))
-            })? {
-                if Instant::now() >= request.deadline {
-                    return Err(AudioError::Deadline);
-                }
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk?;
                 if bytes.len().saturating_add(chunk.len()) > TTS_RESPONSE_LIMIT {
                     return Err(AudioError::Tts(
                         "ElevenLabs response exceeded the audio size limit".into(),
@@ -124,6 +118,130 @@ impl TtsTransport for HttpTtsTransport {
             }
             Ok((status, bytes))
         })
+    }
+
+    fn send_stream(&self, request: TtsRequest) -> TtsStreamFuture {
+        let client = self.client.clone();
+        Box::pin(async move {
+            let remaining = request.deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(AudioError::Deadline);
+            }
+            let response = timeout(
+                remaining,
+                client
+                    .post(request.url)
+                    .header("xi-api-key", request.api_key)
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "audio/mpeg")
+                    .json(&request.body)
+                    .send(),
+            )
+            .await
+            .map_err(|_| AudioError::Deadline)?
+            .map_err(|error| AudioError::Tts(format!("could not reach ElevenLabs: {error}")))?;
+            let status = response.status();
+            let length = response.content_length();
+            if length.is_some_and(|length| length > TTS_RESPONSE_LIMIT as u64) {
+                return Err(AudioError::Tts(
+                    "ElevenLabs response exceeded the audio size limit".into(),
+                ));
+            }
+            let (sender, receiver) = mpsc::channel(8);
+            let task = tokio::spawn(async move {
+                let mut response = response;
+                loop {
+                    let item = match response.chunk().await {
+                        Ok(Some(chunk)) => Ok(chunk.to_vec()),
+                        Ok(None) => break,
+                        Err(error) => Err(AudioError::Tts(format!(
+                            "could not read ElevenLabs response: {error}"
+                        ))),
+                    };
+                    if sender.send(item).await.is_err() {
+                        break;
+                    }
+                }
+            });
+            Ok((
+                status,
+                length,
+                Box::pin(ChunkReceiverStream {
+                    receiver,
+                    task: Some(task),
+                }) as TtsByteStream,
+            ))
+        })
+    }
+}
+
+struct ChunkReceiverStream {
+    receiver: mpsc::Receiver<Result<Vec<u8>, AudioError>>,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for ChunkReceiverStream {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
+impl Stream for ChunkReceiverStream {
+    type Item = Result<Vec<u8>, AudioError>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.receiver.poll_recv(cx)
+    }
+}
+
+pub struct TtsChunkStream {
+    inner: TtsByteStream,
+    deadline: Instant,
+    deadline_wake: Pin<Box<tokio::time::Sleep>>,
+    bytes: usize,
+    finished: bool,
+}
+
+impl Stream for TtsChunkStream {
+    type Item = Result<Vec<u8>, AudioError>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        if self.finished {
+            return std::task::Poll::Ready(None);
+        }
+        if self.deadline_wake.as_mut().poll(cx).is_ready() || Instant::now() >= self.deadline {
+            self.finished = true;
+            return std::task::Poll::Ready(Some(Err(AudioError::Deadline)));
+        }
+        match self.inner.as_mut().poll_next(cx) {
+            std::task::Poll::Ready(Some(Ok(chunk))) => {
+                if self.bytes.saturating_add(chunk.len()) > TTS_RESPONSE_LIMIT {
+                    self.finished = true;
+                    return std::task::Poll::Ready(Some(Err(AudioError::Tts(
+                        "ElevenLabs response exceeded the audio size limit".into(),
+                    ))));
+                }
+                self.bytes += chunk.len();
+                std::task::Poll::Ready(Some(Ok(chunk)))
+            }
+            std::task::Poll::Ready(Some(Err(error))) => {
+                self.finished = true;
+                std::task::Poll::Ready(Some(Err(error)))
+            }
+            std::task::Poll::Ready(None) => {
+                self.finished = true;
+                std::task::Poll::Ready(None)
+            }
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
     }
 }
 
@@ -259,6 +377,345 @@ async fn join_bounded(
     }
 }
 
+const STREAM_QUEUE: usize = 128;
+const STREAM_QUEUE_BYTES: usize = 16 * 1024 * 1024;
+const STREAM_FRAME_LIMIT: usize = 8 * 1024 * 1024;
+const STREAM_CHUNK_HEADER: usize = 1 + 128 + 8 + 8;
+const STREAM_CHUNK_LIMIT: usize = STREAM_FRAME_LIMIT - STREAM_CHUNK_HEADER;
+const STREAM_OUTPUT_LIMIT: usize = 64 * 1024;
+const STREAM_START_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamClip {
+    pub clip_id: String,
+    pub generation: u64,
+    pub sequence: u64,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StreamResult {
+    Partial(StreamClip),
+    Final(StreamClip),
+    WorkerError(String),
+}
+
+#[derive(Debug)]
+enum StreamRequest {
+    Start {
+        clip_id: String,
+        generation: u64,
+        mime: String,
+    },
+    Chunk {
+        clip_id: String,
+        generation: u64,
+        sequence: u64,
+        audio: Vec<u8>,
+    },
+    End {
+        clip_id: String,
+        generation: u64,
+    },
+    Cancel {
+        clip_id: String,
+        generation: u64,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct SttStreamAdapter {
+    command: Option<String>,
+    requests: mpsc::Sender<StreamRequest>,
+    results: Arc<Mutex<Option<mpsc::Receiver<StreamResult>>>>,
+    queued_bytes: Arc<std::sync::atomic::AtomicUsize>,
+    started: Arc<AtomicBool>,
+}
+
+impl SttStreamAdapter {
+    pub fn from_command(command: Option<String>) -> Self {
+        let (requests, request_rx) = mpsc::channel(STREAM_QUEUE);
+        let (results, result_rx) = mpsc::channel(STREAM_QUEUE);
+        let adapter = Self {
+            command: command.filter(|value| !value.trim().is_empty()),
+            requests,
+            results: Arc::new(Mutex::new(Some(result_rx))),
+            queued_bytes: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            started: Arc::new(AtomicBool::new(false)),
+        };
+        if tokio::runtime::Handle::try_current().is_ok() {
+            adapter.spawn_worker(request_rx, results);
+        }
+        adapter
+    }
+
+    pub fn from_env() -> Self {
+        Self::from_command(std::env::var("SWITCHBOARD_STT_STREAM_COMMAND").ok())
+    }
+
+    pub fn configured(&self) -> bool {
+        self.command.is_some()
+    }
+
+    pub async fn take_results(&self) -> Option<mpsc::Receiver<StreamResult>> {
+        self.results.lock().await.take()
+    }
+
+    fn spawn_worker(
+        &self,
+        mut requests: mpsc::Receiver<StreamRequest>,
+        results: mpsc::Sender<StreamResult>,
+    ) {
+        if self.command.is_none() || self.started.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let command = self.command.clone().expect("stream command configured");
+        let queued_bytes = Arc::clone(&self.queued_bytes);
+        tokio::spawn(async move {
+            let result_tx = results;
+            let mut backoff = Duration::from_millis(100);
+            loop {
+                if !start_stream_process(&command, &mut requests, &result_tx, &queued_bytes).await {
+                    if requests.is_closed() {
+                        return;
+                    }
+                    sleep(backoff).await;
+                    backoff = (backoff * 2).min(Duration::from_secs(5));
+                } else {
+                    backoff = Duration::from_millis(100);
+                }
+            }
+        });
+    }
+
+    fn try_request(&self, request: StreamRequest) -> Result<(), &'static str> {
+        if !self.configured() {
+            return Err("streaming STT is not configured");
+        }
+        let bytes = request.queued_bytes();
+        if bytes > 0 {
+            let mut current = self.queued_bytes.load(Ordering::Acquire);
+            loop {
+                let Some(next) = current.checked_add(bytes) else {
+                    return Err("streaming STT admission is full");
+                };
+                if next > STREAM_QUEUE_BYTES {
+                    return Err("streaming STT admission is full");
+                }
+                match self.queued_bytes.compare_exchange_weak(
+                    current,
+                    next,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => break,
+                    Err(observed) => current = observed,
+                }
+            }
+        }
+        match self.requests.try_send(request) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                if bytes > 0 {
+                    self.queued_bytes.fetch_sub(bytes, Ordering::AcqRel);
+                }
+                Err(match error {
+                    mpsc::error::TrySendError::Full(_) => "streaming STT admission is full",
+                    mpsc::error::TrySendError::Closed(_) => "streaming STT worker is unavailable",
+                })
+            }
+        }
+    }
+
+    pub fn try_start(
+        &self,
+        clip_id: String,
+        generation: u64,
+        mime: String,
+    ) -> Result<(), &'static str> {
+        self.try_request(StreamRequest::Start {
+            clip_id,
+            generation,
+            mime,
+        })
+    }
+    pub fn try_chunk(
+        &self,
+        clip_id: String,
+        generation: u64,
+        sequence: u64,
+        audio: Vec<u8>,
+    ) -> Result<(), &'static str> {
+        if audio.len() > STREAM_CHUNK_LIMIT {
+            return Err("streaming STT chunk exceeds the size limit");
+        }
+        self.try_request(StreamRequest::Chunk {
+            clip_id,
+            generation,
+            sequence,
+            audio,
+        })
+    }
+    pub fn try_end(&self, clip_id: String, generation: u64) -> Result<(), &'static str> {
+        self.try_request(StreamRequest::End {
+            clip_id,
+            generation,
+        })
+    }
+    pub fn try_cancel(&self, clip_id: String, generation: u64) -> Result<(), &'static str> {
+        self.try_request(StreamRequest::Cancel {
+            clip_id,
+            generation,
+        })
+    }
+}
+
+impl StreamRequest {
+    fn queued_bytes(&self) -> usize {
+        match self {
+            Self::Chunk { audio, .. } => audio.len(),
+            Self::Start { .. } | Self::End { .. } | Self::Cancel { .. } => 0,
+        }
+    }
+}
+
+fn encode_chunk_payload(
+    clip_id: &str,
+    generation: u64,
+    sequence: u64,
+    audio: Vec<u8>,
+) -> Option<Vec<u8>> {
+    if clip_id.is_empty() || clip_id.len() > 128 || audio.len() > STREAM_CHUNK_LIMIT {
+        return None;
+    }
+    let mut payload = Vec::with_capacity(STREAM_CHUNK_HEADER + audio.len());
+    payload.push(clip_id.len() as u8);
+    payload.extend_from_slice(clip_id.as_bytes());
+    payload.extend_from_slice(&generation.to_be_bytes());
+    payload.extend_from_slice(&sequence.to_be_bytes());
+    payload.extend_from_slice(&audio);
+    Some(payload)
+}
+
+async fn write_worker_frame(
+    stdin: &mut tokio::process::ChildStdin,
+    kind: u8,
+    payload: &[u8],
+) -> bool {
+    if payload.len() > STREAM_FRAME_LIMIT || payload.len() > u32::MAX as usize {
+        return false;
+    }
+    let mut frame = Vec::with_capacity(5 + payload.len());
+    frame.push(kind);
+    frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    frame.extend_from_slice(payload);
+    stdin.write_all(&frame).await.is_ok()
+}
+
+async fn start_stream_process(
+    command: &str,
+    requests: &mut mpsc::Receiver<StreamRequest>,
+    results: &mpsc::Sender<StreamResult>,
+    queued_bytes: &Arc<std::sync::atomic::AtomicUsize>,
+) -> bool {
+    let mut process = Command::new("sh");
+    process
+        .args(["-c", command])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    crate::pi_client::isolate_process(&mut process);
+    let mut child = match process.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            let _ = results
+                .send(StreamResult::WorkerError(format!(
+                    "could not start STT stream worker: {error}"
+                )))
+                .await;
+            return false;
+        }
+    };
+    let guard = crate::pi_client::ProcessTreeGuard::new(&child);
+    let mut stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => return false,
+    };
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => return false,
+    };
+    if let Some(stderr) = child.stderr.take() {
+        tokio::spawn(async move {
+            let mut stderr = stderr;
+            let _ = crate::pi_client::drain_bounded(&mut stderr, STT_STDERR_LIMIT).await;
+        });
+    }
+    let mut lines = BufReader::new(stdout).lines();
+    let ready = timeout(STREAM_START_TIMEOUT, lines.next_line())
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .flatten();
+    let ready_ok = ready
+        .as_deref()
+        .and_then(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .is_some_and(|value| value.get("type").and_then(|value| value.as_str()) == Some("ready"));
+    if !ready_ok {
+        crate::pi_client::terminate_process(&mut child).await;
+        guard.disarm();
+        let _ = results
+            .send(StreamResult::WorkerError(
+                "STT stream worker did not become ready".into(),
+            ))
+            .await;
+        return false;
+    }
+    let failure = loop {
+        tokio::select! {
+            request = requests.recv() => {
+                let Some(request) = request else { crate::pi_client::terminate_process(&mut child).await; guard.disarm(); break None; };
+                let request_bytes = request.queued_bytes();
+                if request_bytes > 0 { queued_bytes.fetch_sub(request_bytes, Ordering::AcqRel); }
+                let (kind, payload) = match request {
+                    StreamRequest::Start { clip_id, generation, mime } => (b's', serde_json::json!({"clip_id":clip_id,"generation":generation,"mime":mime}).to_string().into_bytes()),
+                    StreamRequest::Chunk { clip_id, generation, sequence, audio } => {
+                        let Some(payload) = encode_chunk_payload(&clip_id, generation, sequence, audio) else {
+                            break Some("STT stream worker received an invalid chunk".into());
+                        };
+                        (b'c', payload)
+                    },
+                    StreamRequest::End { clip_id, generation } => (b'e', serde_json::json!({"clip_id":clip_id,"generation":generation}).to_string().into_bytes()),
+                    StreamRequest::Cancel { clip_id, generation } => (b'x', serde_json::json!({"clip_id":clip_id,"generation":generation}).to_string().into_bytes()),
+                };
+                if !write_worker_frame(&mut stdin, kind, &payload).await {
+                    break Some("STT stream worker stdin closed unexpectedly".into());
+                }
+            }
+            line = lines.next_line() => {
+                let line = match line { Ok(Some(line)) => line, Ok(None) => break Some("STT stream worker exited unexpectedly".into()), Err(error) => break Some(format!("could not read STT stream worker output: {error}")) };
+                if line.len() > STREAM_OUTPUT_LIMIT { break Some("STT stream worker output exceeded the limit".into()); }
+                let value: serde_json::Value = match serde_json::from_str(&line) { Ok(value) => value, Err(_) => break Some("STT stream worker emitted malformed JSON".into()) };
+                let kind = value.get("type").and_then(|value| value.as_str());
+                if kind == Some("ready") { continue; }
+                let clip_id = value.get("clip_id").and_then(|value| value.as_str()).filter(|id| !id.is_empty() && id.len() <= 128);
+                let generation = value.get("generation").and_then(|value| value.as_u64());
+                let sequence = value.get("sequence").and_then(|value| value.as_u64());
+                let text = value.get("text").and_then(|value| value.as_str()).filter(|text| text.chars().count() <= 16 * 1024);
+                let (Some(clip_id), Some(generation), Some(sequence), Some(text)) = (clip_id, generation, sequence, text) else { break Some("STT stream worker emitted an invalid result".into()); };
+                let output = StreamClip { clip_id: clip_id.to_owned(), generation, sequence, text: text.to_owned() };
+                match kind { Some("partial") => { if results.send(StreamResult::Partial(output)).await.is_err() { return false; } }, Some("final") => { if results.send(StreamResult::Final(output)).await.is_err() { return false; } }, _ => { break Some("STT stream worker emitted an unknown result".into()); } }
+            }
+        }
+    };
+    crate::pi_client::terminate_process(&mut child).await;
+    guard.disarm();
+    if let Some(error) = failure {
+        let _ = results.send(StreamResult::WorkerError(error)).await;
+    }
+    false
+}
+
 #[derive(Clone)]
 pub struct Speaker {
     pub api_key: String,
@@ -319,7 +776,7 @@ impl Speaker {
             speed: number(values, "ELEVENLABS_SPEED", 1.0),
             max_chars,
             speech_deadline: duration_value(values, "SWITCHBOARD_SPEECH_DEADLINE_MS", 25_000),
-            transport: Arc::new(HttpTtsTransport),
+            transport: Arc::new(HttpTtsTransport::new()),
         }
     }
     pub fn configured(&self) -> bool {
@@ -370,7 +827,10 @@ impl Speaker {
         }
         let body = serde_json::json!({"text": text, "model_id": self.model_id, "voice_settings": Settings { stability: self.stability, similarity_boost: self.similarity_boost, style: self.style, speed: self.speed }});
         let request = TtsRequest {
-            url: ELEVENLABS_TTS_URL.replace("{voice_id}", &self.voice_id),
+            url: format!(
+                "{}?output_format=mp3_44100_128",
+                ELEVENLABS_TTS_URL.replace("{voice_id}", &self.voice_id)
+            ),
             api_key: self.api_key.clone(),
             body,
             deadline,
@@ -392,6 +852,62 @@ impl Speaker {
         }
         Ok(bytes)
     }
+
+    pub async fn stream_until(
+        &self,
+        text: &str,
+        deadline: Instant,
+    ) -> Result<TtsChunkStream, AudioError> {
+        if deadline <= Instant::now() {
+            return Err(AudioError::Deadline);
+        }
+        if !self.configured() {
+            return Err(AudioError::Tts("ELEVENLABS_API_KEY is not set".into()));
+        }
+        #[derive(Serialize)]
+        struct Settings {
+            stability: f32,
+            similarity_boost: f32,
+            style: f32,
+            speed: f32,
+        }
+        let body = serde_json::json!({"text": text, "model_id": self.model_id, "voice_settings": Settings { stability: self.stability, similarity_boost: self.similarity_boost, style: self.style, speed: self.speed }});
+        let request = TtsRequest {
+            url: format!(
+                "{}?output_format=mp3_44100_128",
+                ELEVENLABS_TTS_URL.replace("{voice_id}", &self.voice_id)
+            ),
+            api_key: self.api_key.clone(),
+            body,
+            deadline,
+        };
+        let (status, _, stream) = self.transport.send_stream(request).await?;
+        if status != StatusCode::OK {
+            let mut body = Vec::new();
+            let mut stream = stream;
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk?;
+                if body.len().saturating_add(chunk.len()) > 4096 {
+                    break;
+                }
+                body.extend_from_slice(&chunk);
+            }
+            return Err(AudioError::Tts(format!(
+                "ElevenLabs TTS failed ({status}): {}",
+                String::from_utf8_lossy(&body)
+                    .chars()
+                    .take(500)
+                    .collect::<String>()
+            )));
+        }
+        Ok(TtsChunkStream {
+            inner: stream,
+            deadline,
+            deadline_wake: Box::pin(tokio::time::sleep_until(TokioInstant::from_std(deadline))),
+            bytes: 0,
+            finished: false,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -410,6 +926,26 @@ mod tests {
             *self.request.lock().unwrap() = Some(request);
             let response = Ok((self.status, self.bytes.clone()));
             Box::pin(async move { response })
+        }
+
+        fn send_stream(&self, request: TtsRequest) -> TtsStreamFuture {
+            *self.request.lock().unwrap() = Some(request);
+            let status = self.status;
+            let bytes = self.bytes.clone();
+            Box::pin(async move {
+                let (sender, receiver) = mpsc::channel(bytes.len().saturating_add(1));
+                for chunk in bytes.chunks(2) {
+                    let _ = sender.send(Ok(chunk.to_vec())).await;
+                }
+                Ok((
+                    status,
+                    None,
+                    Box::pin(ChunkReceiverStream {
+                        receiver,
+                        task: None,
+                    }) as TtsByteStream,
+                ))
+            })
         }
     }
 
@@ -439,6 +975,189 @@ mod tests {
         let result = speaker.clip_for_speech("One short sentence. Second sentence goes on and on.");
         assert_eq!(result, "One short sentence. — there's more on screen.");
     }
+    #[test]
+    fn stream_admission_is_bounded_and_optional() {
+        let adapter = SttStreamAdapter::from_command(None);
+        assert!(!adapter.configured());
+        assert_eq!(
+            adapter.try_start("clip".into(), 1, "audio/webm;codecs=opus".into()),
+            Err("streaming STT is not configured")
+        );
+        let configured = SttStreamAdapter::from_command(Some("true".into()));
+        assert!(configured
+            .try_chunk("clip".into(), 1, 0, vec![0; STREAM_CHUNK_LIMIT + 1])
+            .is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stream_worker_delivers_multiple_chunks_to_one_process() {
+        let root = std::env::temp_dir().join(format!(
+            "switchboard-stt-stream-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let capture = root.join("frames");
+        let worker = root.join("worker");
+        crate::pi_client::write_executable_script(
+            &worker,
+            &format!(
+                "printf '%s\\n' '{{\"type\":\"ready\"}}'\ncat > '{}'\n",
+                capture.display()
+            ),
+        );
+        let adapter = SttStreamAdapter::from_command(Some(worker.display().to_string()));
+        let mut results = adapter.take_results().await.unwrap();
+        adapter
+            .try_start("clip".into(), 4, "audio/webm;codecs=opus".into())
+            .unwrap();
+        adapter
+            .try_chunk("clip".into(), 4, 0, b"one".to_vec())
+            .unwrap();
+        adapter
+            .try_chunk("other".into(), 4, 1, b"two".to_vec())
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let frames = loop {
+            if let Ok(bytes) = std::fs::read(&capture) {
+                if bytes.len() >= 16 {
+                    break bytes;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "worker did not receive both chunks"
+            );
+            sleep(Duration::from_millis(5)).await;
+        };
+        assert_eq!(frames[0], b's');
+        assert!(frames.windows(3).any(|window| window == b"one"));
+        assert!(frames.windows(3).any(|window| window == b"two"));
+        assert!(frames.windows(5).any(|window| window == b"other"));
+        assert!(results.try_recv().is_err());
+        drop(results);
+        drop(adapter);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn stream_worker_reports_malformed_output() {
+        let adapter = SttStreamAdapter::from_command(Some(
+            "printf '{\"type\":\"ready\"}\\nmalformed\\n'; cat >/dev/null".into(),
+        ));
+        let mut results = adapter.take_results().await.unwrap();
+        adapter
+            .try_start("clip".into(), 1, "audio/webm;codecs=opus".into())
+            .unwrap();
+        let result = timeout(Duration::from_secs(1), results.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            result,
+            StreamResult::WorkerError(message)
+                if message.contains("malformed JSON")
+        ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stream_worker_restarts_after_malformed_output() {
+        let root = std::env::temp_dir().join(format!(
+            "switchboard-stt-restart-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let counter = root.join("counter");
+        let capture = root.join("retry");
+        let worker = root.join("worker");
+        crate::pi_client::write_executable_script(
+            &worker,
+            &format!(
+                "if [ ! -e '{}' ]; then : > '{}'; printf '%s\\n' '{{\"type\":\"ready\"}}' malformed; exit 0; fi\nprintf '%s\\n' '{{\"type\":\"ready\"}}'\ncat > '{}'\n",
+                counter.display(),
+                counter.display(),
+                capture.display()
+            ),
+        );
+        let adapter = SttStreamAdapter::from_command(Some(worker.display().to_string()));
+        let mut results = adapter.take_results().await.unwrap();
+        adapter
+            .try_start("clip".into(), 1, "audio/webm;codecs=opus".into())
+            .unwrap();
+        let first_error = timeout(Duration::from_secs(1), results.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            first_error,
+            StreamResult::WorkerError(message) if message.contains("malformed JSON")
+        ));
+        adapter
+            .try_chunk("clip".into(), 1, 0, b"retry".to_vec())
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let frames = loop {
+            if let Ok(bytes) = std::fs::read(&capture) {
+                if bytes.windows(5).any(|window| window == b"retry") {
+                    break bytes;
+                }
+            }
+            assert!(Instant::now() < deadline, "worker did not restart");
+            sleep(Duration::from_millis(5)).await;
+        };
+        assert!(frames.windows(5).any(|window| window == b"retry"));
+        drop(results);
+        drop(adapter);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn stream_worker_preserves_partial_and_final_turn_boundaries() {
+        let adapter = SttStreamAdapter::from_command(Some(
+            "printf '%s\\n' '{\"type\":\"ready\"}' '{\"type\":\"partial\",\"clip_id\":\"clip\",\"generation\":2,\"sequence\":0,\"text\":\"hel\"}' '{\"type\":\"final\",\"clip_id\":\"clip\",\"generation\":2,\"sequence\":1,\"text\":\"hello\"}'; cat >/dev/null".into(),
+        ));
+        let mut results = adapter.take_results().await.unwrap();
+        adapter
+            .try_start("clip".into(), 2, "audio/webm;codecs=opus".into())
+            .unwrap();
+        let partial = timeout(Duration::from_secs(1), results.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let final_result = timeout(Duration::from_secs(1), results.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            partial,
+            StreamResult::Partial(StreamClip {
+                clip_id,
+                generation: 2,
+                sequence: 0,
+                text
+            }) if clip_id == "clip" && text == "hel"
+        ));
+        assert!(matches!(
+            final_result,
+            StreamResult::Final(StreamClip {
+                clip_id,
+                generation: 2,
+                sequence: 1,
+                text
+            }) if clip_id == "clip" && text == "hello"
+        ));
+    }
+
     #[tokio::test]
     async fn missing_sidecar_is_clear() {
         let error = SttAdapter::from_command(None)
@@ -486,13 +1205,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tts_stream_preserves_provider_chunk_boundaries_and_request_contract() {
+        let (speaker, request) = speaker_with_response(StatusCode::OK, b"abcdef");
+        let mut stream = speaker
+            .stream_until("Hello", Instant::now() + Duration::from_secs(1))
+            .await
+            .unwrap();
+        let mut chunks = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            chunks.push(chunk.unwrap());
+        }
+        assert_eq!(chunks, vec![b"ab".to_vec(), b"cd".to_vec(), b"ef".to_vec()]);
+        assert!(request
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .url
+            .contains("output_format=mp3_44100_128"));
+    }
+
+    #[tokio::test]
     async fn tts_adapter_sends_expected_request_and_surfaces_http_failure() {
         let (speaker, request) = speaker_with_response(StatusCode::OK, b"mp3");
         assert_eq!(speaker.synthesize("Hello there").await.unwrap(), b"mp3");
         let request = request.lock().unwrap().clone().unwrap();
         assert_eq!(
             request.url,
-            "https://api.elevenlabs.io/v1/text-to-speech/voice-a"
+            "https://api.elevenlabs.io/v1/text-to-speech/voice-a?output_format=mp3_44100_128"
         );
         assert_eq!(request.api_key, "test-secret");
         assert_eq!(request.body["text"], "Hello there");
