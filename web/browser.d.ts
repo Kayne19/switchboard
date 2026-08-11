@@ -1,3 +1,20 @@
+declare module "openwakeword-wasm-browser" {
+	interface WakeWordEngineOptions {
+		baseAssetUrl?: string;
+		ortWasmPath?: string;
+		keywords?: string[];
+		detectionThreshold?: number;
+		cooldownMs?: number;
+		executionProviders?: string[];
+	}
+
+	class WakeWordEngine {
+		constructor(options?: WakeWordEngineOptions);
+	}
+
+	export default WakeWordEngine;
+}
+
 interface TranscriptEntry {
 	role: string;
 	text: string;
@@ -10,6 +27,8 @@ interface TranscriptEntry {
 interface BrowserMessage {
 	type?: string;
 	id?: string;
+	response_id?: string;
+	success?: boolean;
 	source?: string;
 	title?: string;
 	notes?: string;
@@ -42,3 +61,26 @@ interface BrowserMessage {
 interface Window {
 	renderDiagram?: (message: BrowserMessage) => Promise<void>;
 }
+
+declare const sampleRate: number;
+declare const currentTime: number;
+
+interface AudioWorkletProcessor {
+	readonly port: MessagePort;
+	process(
+		inputs: Float32Array[][],
+		outputs?: Float32Array[][],
+		parameters?: Record<string, Float32Array>,
+	): boolean;
+}
+
+declare const AudioWorkletProcessor: {
+	new (options?: Record<string, unknown>): AudioWorkletProcessor;
+};
+
+declare function registerProcessor(
+	name: string,
+	processorCtor: new (
+		options?: Record<string, unknown>,
+	) => AudioWorkletProcessor,
+): void;

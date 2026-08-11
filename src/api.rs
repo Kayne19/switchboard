@@ -242,6 +242,16 @@ impl AudioQueue {
     fn cancel(&mut self, sequence: u64, generation: u64) -> Vec<Event> {
         self.finish(sequence, generation)
     }
+    fn barrier(&mut self, sequence: u64, generation: u64, value: Value) -> Vec<Event> {
+        let Some(slot) = self.slots.get_mut(&sequence) else {
+            return Vec::new();
+        };
+        if slot.generation == generation && !slot.done {
+            slot.events.push(Event::Json(value));
+            slot.done = true;
+        }
+        self.drain_ready()
+    }
     fn finish(&mut self, sequence: u64, generation: u64) -> Vec<Event> {
         let Some(slot) = self.slots.get_mut(&sequence) else {
             return Vec::new();
@@ -1103,7 +1113,7 @@ async fn process_turns(state: AppState) {
             tracing::warn!(clip = %id, route = %reply.route, %error, "the turn reported a failure");
         }
         tracing::info!(clip = %id, route = %reply.route, elapsed = ?started.elapsed(), "turn settled");
-        deliver_turn_if_current(&state, &reply, status, generation).await;
+        deliver_turn_if_current(&state, &reply, status, generation, &id).await;
         state.0.turn_in_flight.store(false, Ordering::Release);
     }
     tracing::warn!("the turn worker stopped; no further turns will be dispatched");
@@ -1521,13 +1531,14 @@ async fn deliver_page_reply_if_current(
     }
     publish_status(state, status);
     drop(_transition);
-    synthesize_reply_if_current(
+    let _ = synthesize_reply_if_current(
         state,
         &reply.to_speak,
         generation,
         std::time::Instant::now() + state.0.speech_deadline,
     )
-    .await
+    .await;
+    generation == state.0.coordinator.generation()
 }
 
 async fn deliver_turn_if_current(
@@ -1535,6 +1546,7 @@ async fn deliver_turn_if_current(
     reply: &crate::pbx::Reply,
     status: Value,
     generation: u64,
+    response_id: &str,
 ) -> bool {
     let _transition = state.0.operation_transition.lock().await;
     if generation != state.0.coordinator.generation() {
@@ -1554,13 +1566,31 @@ async fn deliver_turn_if_current(
     );
     publish_status(state, status);
     drop(_transition);
-    synthesize_reply_if_current(
+    let success = synthesize_reply_if_current(
         state,
         &reply.to_speak,
         generation,
         std::time::Instant::now() + state.0.speech_deadline,
     )
-    .await
+    .await;
+    if generation != state.0.coordinator.generation() {
+        return false;
+    }
+    let Some(sequence) = reserve_audio(state, generation).await else {
+        return false;
+    };
+    let barrier = json!({
+        "type": "final_response_audio_closed",
+        "response_id": response_id,
+        "generation": generation,
+        "success": success,
+    });
+    let events = {
+        let mut audio = state.0.audio.lock().await;
+        audio.barrier(sequence, generation, barrier)
+    };
+    let _ = publish_audio_events(state, events).await;
+    success
 }
 
 async fn synthesize_reply_if_current(
@@ -1569,33 +1599,32 @@ async fn synthesize_reply_if_current(
     generation: u64,
     deadline: std::time::Instant,
 ) -> bool {
+    let mut success = true;
     for text in utterances {
         let spoken = state.0.speaker.clip_for_speech(text);
         if spoken.is_empty() {
             continue;
         }
         let Some(sequence) = reserve_audio(state, generation).await else {
-            return false;
+            success = false;
+            break;
         };
         let started = std::time::Instant::now();
         let synthesized =
             synthesize_audio_stream(state, &spoken, sequence, generation, deadline).await;
         match synthesized {
-            Ok((bytes, delivered)) => {
+            Ok((bytes, _delivered)) => {
                 tracing::info!(chars = spoken.chars().count(), bytes, elapsed = ?started.elapsed(), "synthesized a reply");
-                if !delivered {
-                    return false;
-                }
             }
             Err(error) => {
                 finish_audio(state, sequence, generation, Vec::new()).await;
                 tracing::error!(%error, chars = spoken.chars().count(), "synthesis failed; the caller hears nothing for this reply");
                 emit_json(state, json!({"type":"error", "message":error.to_string()}));
-                break;
+                success = false;
             }
         }
     }
-    generation == state.0.coordinator.generation()
+    success && generation == state.0.coordinator.generation()
 }
 
 async fn ws(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> impl IntoResponse {
@@ -2385,6 +2414,93 @@ mod tests {
         let stale = queue.reserve(3);
         queue.clear();
         assert!(queue.finish(stale, 3).is_empty());
+    }
+
+    #[tokio::test]
+    async fn final_response_barrier_is_emitted_once_after_a_settled_turn() {
+        let state = state();
+        let mut events = state.0.events.subscribe();
+        let generation = state.0.coordinator.generation();
+        let reply = crate::pbx::Reply {
+            text: "Final answer".into(),
+            route: OPERATOR.into(),
+            route_label: "Operator".into(),
+            error: None,
+            to_speak: Vec::new(),
+        };
+
+        assert!(
+            deliver_turn_if_current(&state, &reply, current_status(&state), generation, "clip-1",)
+                .await
+        );
+        let mut barriers = Vec::new();
+        while let Ok(Event::Json(value)) = events.try_recv() {
+            if value["type"] == "final_response_audio_closed" {
+                barriers.push(value);
+            }
+        }
+        assert_eq!(barriers.len(), 1);
+        assert_eq!(
+            barriers[0],
+            json!({
+                "type": "final_response_audio_closed",
+                "response_id": "clip-1",
+                "generation": generation,
+                "success": true,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_final_response_does_not_emit_a_barrier() {
+        let state = state();
+        let mut events = state.0.events.subscribe();
+        let generation = state.0.coordinator.generation();
+        state.0.coordinator.begin_rescue("test rescue");
+        let reply = crate::pbx::Reply {
+            text: "stale".into(),
+            route: OPERATOR.into(),
+            route_label: "Operator".into(),
+            error: None,
+            to_speak: Vec::new(),
+        };
+
+        assert!(
+            !deliver_turn_if_current(
+                &state,
+                &reply,
+                current_status(&state),
+                generation,
+                "stale-clip",
+            )
+            .await
+        );
+        assert!(matches!(
+            events.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn audio_queue_barrier_waits_for_reserved_audio_before_it() {
+        let mut queue = AudioQueue::new();
+        let audio = queue.reserve(1);
+        let marker = queue.reserve(1);
+        assert!(queue
+            .barrier(marker, 1, json!({"type":"barrier"}))
+            .is_empty());
+        assert!(matches!(
+            queue.start(audio, 1).as_slice(),
+            [Event::AudioStart { sequence: 0, .. }]
+        ));
+        let events = queue.finish(audio, 1);
+        assert!(matches!(
+            events.as_slice(),
+            [
+                Event::AudioDone { sequence: 0, .. },
+                Event::Json(value)
+            ] if value["type"] == "barrier"
+        ));
     }
 
     #[test]

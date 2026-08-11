@@ -232,6 +232,9 @@ test it manually and then fails with "command not found" for the switchboard.
 | `static/index.html` | HTML shell for the tap-to-talk page |
 | `web/` | TypeScript browser protocol, client, and diagram sources |
 | `static/*.js` | committed deterministic browser build output |
+| `static/openwakeword/` | same-origin Hey Jarvis ONNX, wrapper, and ONNX Runtime WASM assets |
+| `web/hands_free.ts` | hands-free controller, real wake adapter, and separate VAD endpointing |
+| `docs/hands-free.md` | hands-free lifecycle, asset provenance, and license obligations |
 | `src/` | Rust service: API, routing, pi sessions, registry, models, history, audio |
 | `extensions/*.ts` | plain TypeScript pi extensions; homelab templates remain authoritative until cutover |
 | `docs/diagram-tool.md` | the `diagram` tool: payload, rendering, layout, and what was left out |

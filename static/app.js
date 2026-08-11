@@ -1,4 +1,6 @@
 import { clipHeader, decodeServerMessage, helloMessage, postJson, sttChunkHeader, sttEndHeader, sttStartHeader, sttCancelHeader, } from "./protocol.js";
+import { HandsFreeController, PLAYBACK_DRAIN_DEBOUNCE_MS, } from "./hands_free.js";
+import { createWakeWordDetector } from "./wake_word.js";
 function getElement(id) {
     const element = document.getElementById(id);
     if (!element)
@@ -39,6 +41,9 @@ const thinkingSelect = getElement("thinkingSelect");
 const hangupBtn = getElement("hangupBtn");
 const retryBtn = getElement("retryBtn");
 const player = getElement("player");
+const handsFreeBtn = getElement("handsFreeBtn");
+const handsFreeStatusEl = getElement("handsFreeStatus");
+const handsFreeLeaseEl = getElement("handsFreeLease");
 let ws = null;
 let mediaRecorder = null;
 let activeRecording = null;
@@ -100,9 +105,48 @@ let pongDeadlineTimer = null;
 let pendingPong = null;
 let playbackOwner = null;
 let playbackToken = 0;
+let handsFreeController = null;
+let pendingResponseBarrier = null;
 let playAttemptToken = 0;
 let turnStarted = 0;
 let clockTimer = null;
+function playbackIsDrained() {
+    return (audioQueue.length === 0 &&
+        playbackOwner === null &&
+        !isPlaying &&
+        mseActive === null &&
+        mseQueue.length === 0 &&
+        msePending === null);
+}
+function clearResponseBarrier() {
+    const barrier = pendingResponseBarrier;
+    if (barrier?.timer !== null && barrier?.timer !== undefined) {
+        clearTimeoutSafe(barrier.timer);
+    }
+    pendingResponseBarrier = null;
+}
+function maybeCompleteResponseBarrier() {
+    const barrier = pendingResponseBarrier;
+    if (!barrier || !snapshotReady || barrier.generation !== audioEpoch)
+        return;
+    if (!playbackIsDrained()) {
+        if (barrier.timer !== null)
+            clearTimeoutSafe(barrier.timer);
+        barrier.timer = null;
+        return;
+    }
+    if (barrier.timer !== null)
+        return;
+    barrier.timer = setTimeout(() => {
+        if (pendingResponseBarrier !== barrier ||
+            !playbackIsDrained() ||
+            !snapshotReady ||
+            barrier.generation !== audioEpoch)
+            return;
+        pendingResponseBarrier = null;
+        handsFreeController?.openFollowUpLease(barrier.generation);
+    }, PLAYBACK_DRAIN_DEBOUNCE_MS);
+}
 const activityEl = getElement("activity");
 const activityList = getElement("activityList");
 const activityWho = getElement("activityWho");
@@ -348,6 +392,13 @@ function cleanupOwner(owner) {
     player.load();
     URL.revokeObjectURL(owner.url);
     isPlaying = false;
+    notifyPlaybackChange();
+}
+// Kept next to playback ownership so source-slice playback tests can exercise
+// the same cleanup path without bootstrapping the whole page.
+function notifyPlaybackChange() {
+    if (typeof maybeCompleteResponseBarrier === "function")
+        maybeCompleteResponseBarrier();
 }
 function consumeOwner(owner) {
     if (playbackOwner !== owner || owner.consumed)
@@ -414,6 +465,7 @@ function playNext() {
     if (!blob) {
         isPlaying = false;
         statusEl.textContent = idleText;
+        notifyPlaybackChange();
         statusEl.classList.remove("error");
         return;
     }
@@ -430,6 +482,7 @@ function playNext() {
         handlers: [],
     };
     playbackOwner = owner;
+    notifyPlaybackChange();
     const ended = () => {
         if (playbackOwner !== owner || owner.consumed || player.ended === false)
             return;
@@ -496,6 +549,8 @@ function queueMseFallback(utterance) {
         return;
     }
     audioQueue.push(new Blob(utterance.parts, { type: utterance.mime }));
+    if (typeof maybeCompleteResponseBarrier === "function")
+        maybeCompleteResponseBarrier();
 }
 function msePlay() {
     if (!mseActive || mseActive.failed || isPlaying)
@@ -508,6 +563,8 @@ function msePlay() {
                 errorName(error) +
                 ").";
         statusEl.classList.add("error");
+        if (typeof maybeCompleteResponseBarrier === "function")
+            maybeCompleteResponseBarrier();
     });
 }
 function mseFinishSource(utterance) {
@@ -574,6 +631,8 @@ function mseFail(utterance, error) {
         if (!isPlaying && !playbackOwner)
             playNext();
     }
+    if (typeof maybeCompleteResponseBarrier === "function")
+        maybeCompleteResponseBarrier();
 }
 function mseOpen(utterance) {
     if (utterance.failed || !utterance.media)
@@ -604,6 +663,8 @@ function mseStartNext() {
         if (utterance.url)
             URL.revokeObjectURL(utterance.url);
         mseStartNext();
+        if (typeof maybeCompleteResponseBarrier === "function")
+            maybeCompleteResponseBarrier();
     };
     player.addEventListener("ended", utterance.endedHandler);
     utterance.media.addEventListener("sourceopen", () => mseOpen(utterance), {
@@ -627,6 +688,8 @@ function clearMsePlayback() {
     player.pause();
     player.removeAttribute("src");
     player.load();
+    if (typeof maybeCompleteResponseBarrier === "function")
+        maybeCompleteResponseBarrier();
 }
 function receiveAudioStart(msg) {
     const generation = msg.generation;
@@ -655,6 +718,8 @@ function receiveAudioStart(msg) {
         mseQueue.push(utterance);
         mseStartNext();
     }
+    if (typeof maybeCompleteResponseBarrier === "function")
+        maybeCompleteResponseBarrier();
 }
 function receiveAudioChunk(data) {
     const utterance = msePending;
@@ -673,6 +738,8 @@ function receiveAudioChunk(data) {
         if (utterance === mseActive)
             mseAppend(utterance);
     }
+    if (typeof maybeCompleteResponseBarrier === "function")
+        maybeCompleteResponseBarrier();
 }
 function receiveAudioDone(msg) {
     if (msg.generation !== audioEpoch || typeof msg.sequence !== "number")
@@ -688,11 +755,15 @@ function receiveAudioDone(msg) {
         msePending = null;
         if (!isPlaying && !playbackOwner)
             playNext();
+        if (typeof maybeCompleteResponseBarrier === "function")
+            maybeCompleteResponseBarrier();
         return;
     }
     if (utterance === mseActive)
         mseAppend(utterance);
     msePending = null;
+    if (typeof maybeCompleteResponseBarrier === "function")
+        maybeCompleteResponseBarrier();
 }
 // The status message promises that a page interaction resumes blocked audio.
 // Keep that gesture path here rather than relying on a later clip to arrive.
@@ -856,6 +927,8 @@ async function post(url, body, control) {
 // which is the whole point — it has to work when that agent is the problem,
 // including while it is still mid-turn.
 async function hangup() {
+    handsFreeController?.disable("Hands-free stopped for hangup.");
+    clearResponseBarrier();
     hangupBtn.disabled = true;
     try {
         await postJson("/hangup", {});
@@ -979,6 +1052,7 @@ function connect() {
         statusEl.textContent = idleText;
         statusEl.classList.remove("error");
         btn.disabled = false;
+        handsFreeBtn.disabled = false;
         outbox.forEach((clip) => (clip.sent = false));
         snapshotReady = false;
         streamingSelected = false;
@@ -999,12 +1073,15 @@ function connect() {
         // work remains locally retryable under the same id.
         if (isRecording() || starting)
             stopRecording(true);
+        handsFreeController?.disable("Hands-free stopped while disconnected.");
+        clearResponseBarrier();
         stopHeartbeat();
         outbox.forEach((clip) => (clip.sent = false));
         updateOutboxUI();
         statusEl.textContent = "Disconnected. Reconnecting...";
         statusEl.classList.add("error");
         btn.disabled = true;
+        handsFreeBtn.disabled = true;
         clearTimeoutSafe(reconnectTimer);
         reconnectTimer = setTimeout(() => {
             if (generation === socketGeneration)
@@ -1016,6 +1093,7 @@ function connect() {
             return;
         statusEl.textContent = "Connection error.";
         statusEl.classList.add("error");
+        handsFreeBtn.disabled = true;
     };
     socket.onmessage = (event) => {
         if (!current())
@@ -1036,6 +1114,8 @@ function connect() {
                 // currently playing clip from the old leg. Do this before allowing
                 // reconnect retry, otherwise a pre-rescue clip can cross the barrier.
                 if (typeof msg.generation === "number") {
+                    handsFreeController?.epochChanged();
+                    clearResponseBarrier();
                     setOutbox(outbox.filter((clip) => clip.epoch === msg.generation));
                     updateOutboxUI();
                     turnEpoch = msg.generation;
@@ -1054,6 +1134,26 @@ function connect() {
             }
             else if (msg.type === "audio_done") {
                 receiveAudioDone(msg);
+            }
+            else if (msg.type === "final_response_audio_closed") {
+                if (typeof msg.response_id === "string" &&
+                    typeof msg.generation === "number" &&
+                    msg.generation === audioEpoch) {
+                    clearResponseBarrier();
+                    if (msg.success !== false) {
+                        pendingResponseBarrier = {
+                            responseId: msg.response_id,
+                            generation: msg.generation,
+                            timer: null,
+                        };
+                        maybeCompleteResponseBarrier();
+                    }
+                    else {
+                        handsFreeStatusEl.textContent =
+                            "Hands-free follow-up is waiting for a successful response.";
+                        handsFreeStatusEl.classList.add("error");
+                    }
+                }
             }
             else if (msg.type === "pong") {
                 if (msg.nonce === pendingPong) {
@@ -1181,9 +1281,18 @@ function setRecordingUI(on) {
     cancelBtn.classList.toggle("hidden", !on);
     sendBtn.classList.toggle("hidden", !on);
 }
+function pauseHandsFreeForPtt() {
+    if (typeof handsFreeController !== "undefined")
+        handsFreeController?.pauseForPtt();
+}
+function resumeHandsFreeAfterPtt() {
+    if (typeof handsFreeController !== "undefined")
+        handsFreeController?.resumeAfterPtt();
+}
 async function startRecording() {
     if (starting || activeRecording || isRecording())
         return;
+    pauseHandsFreeForPtt();
     starting = true;
     startCancelled = false;
     let stream;
@@ -1192,6 +1301,7 @@ async function startRecording() {
     }
     catch (err) {
         starting = false;
+        resumeHandsFreeAfterPtt();
         statusEl.textContent = "Microphone unavailable (" + errorName(err) + ").";
         statusEl.classList.add("error");
         return;
@@ -1201,6 +1311,7 @@ async function startRecording() {
     if (startCancelled) {
         starting = false;
         stream.getTracks().forEach((t) => t.stop());
+        resumeHandsFreeAfterPtt();
         statusEl.textContent = idleText;
         setRecordingUI(false);
         return;
@@ -1219,6 +1330,7 @@ async function startRecording() {
     catch (err) {
         starting = false;
         stream.getTracks().forEach((t) => t.stop());
+        resumeHandsFreeAfterPtt();
         setRecordingUI(false);
         statusEl.textContent =
             "This browser cannot record audio (" + errorName(err) + ").";
@@ -1297,6 +1409,7 @@ async function startRecording() {
     }
     recorder.onstop = () => {
         releaseStream();
+        resumeHandsFreeAfterPtt();
         if (activeRecording?.recorder === recorder)
             activeRecording = null;
         if (mediaRecorder === recorder)
@@ -1347,6 +1460,7 @@ async function startRecording() {
             mediaRecorder = null;
         starting = false;
         releaseStream();
+        resumeHandsFreeAfterPtt();
         setRecordingUI(false);
         statusEl.textContent = "Recording failed (" + errorName(event.error) + ").";
         statusEl.classList.add("error");
@@ -1362,6 +1476,7 @@ async function startRecording() {
         if (activeRecording?.recorder === recorder)
             activeRecording = null;
         releaseStream();
+        resumeHandsFreeAfterPtt();
         mediaRecorder = null;
         starting = false;
         setRecordingUI(false);
@@ -1393,11 +1508,61 @@ function stopRecording(send) {
 function isRecording() {
     return mediaRecorder?.state === "recording";
 }
+function submitHandsFreeClip(audio, mime, epoch) {
+    if (!snapshotReady || epoch !== turnEpoch)
+        return;
+    const clip = {
+        id: globalThis.crypto?.randomUUID
+            ? globalThis.crypto.randomUUID()
+            : `${Date.now()}-${++clipSequence}`,
+        audio,
+        mime: mime || audio.type || "audio/webm",
+        created: Date.now(),
+        epoch,
+        sent: false,
+        streaming: false,
+    };
+    if (!enqueueOutbox(clip))
+        return;
+    appendTurn(pendingEntry(clip));
+    flushOutbox();
+}
+function renderHandsFreeState(detail) {
+    const active = detail.state !== "off" && detail.state !== "error";
+    handsFreeBtn.setAttribute("aria-pressed", active ? "true" : "false");
+    handsFreeBtn.textContent = active
+        ? "Disable hands-free listening"
+        : "Enable hands-free listening";
+    handsFreeStatusEl.textContent = detail.message;
+    handsFreeStatusEl.classList.toggle("error", detail.state === "error");
+    const leaseStates = detail.state === "lease" || detail.state === "lease_capturing";
+    handsFreeLeaseEl.textContent = leaseStates
+        ? `Follow-up lease: ${Math.ceil(detail.leaseRemainingMs / 1000)} seconds remaining.`
+        : "";
+}
 btn.addEventListener("click", () => {
     startRecording();
 });
+handsFreeController = new HandsFreeController({
+    wakeDetector: createWakeWordDetector(),
+    isSnapshotReady: () => snapshotReady,
+    currentEpoch: () => turnEpoch,
+    isPttActive: () => starting || isRecording() || activeRecording !== null,
+    onClip: submitHandsFreeClip,
+    onState: renderHandsFreeState,
+});
+handsFreeBtn.addEventListener("click", () => {
+    if (handsFreeController?.isEnabled) {
+        handsFreeController.disable();
+    }
+    else {
+        void handsFreeController?.enable();
+    }
+});
 hangupBtn.addEventListener("click", hangup);
 routeSelect.addEventListener("change", () => {
+    handsFreeController?.disable("Hands-free stopped while changing the line.");
+    clearResponseBarrier();
     statusEl.textContent =
         routeSelect.value === "operator"
             ? "Going back to the operator..."
@@ -1516,5 +1681,16 @@ document.addEventListener("keydown", (e) => {
         setTheater(false);
     }
 });
+handsFreeBtn.disabled = true;
 btn.disabled = true;
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+        handsFreeController?.disable("Hands-free stopped while the page is hidden.");
+        clearResponseBarrier();
+    }
+});
+window.addEventListener("pagehide", () => {
+    handsFreeController?.disable("Hands-free stopped when the page was left.");
+    clearResponseBarrier();
+});
 connect();

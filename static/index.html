@@ -395,6 +395,27 @@
         gap: 10px;
         margin-top: 16px;
       }
+      #handsFreeBtn {
+        margin-top: 10px;
+        padding: 10px 14px;
+        font-size: 0.9rem;
+        background: none;
+        color: var(--text);
+        border-color: var(--line);
+      }
+      #handsFreeBtn[aria-pressed="true"] {
+        border-color: var(--accent);
+      }
+      #handsFreeStatus,
+      #handsFreeLease {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+      #handsFreeStatus::before {
+        content: "Microphone: ";
+        font-weight: 600;
+      }
       #cancelBtn {
         background: none;
         color: var(--muted);
@@ -684,7 +705,19 @@
             &#10148; Send
           </button>
         </div>
-        <div id="status">Connecting...</div>
+        <button
+          id="handsFreeBtn"
+          type="button"
+          aria-pressed="false"
+          aria-controls="handsFreeStatus handsFreeLease"
+        >
+          Enable hands-free listening
+        </button>
+        <div id="handsFreeStatus" role="status" aria-live="polite">
+          Hands-free is off.
+        </div>
+        <div id="handsFreeLease" aria-live="polite"></div>
+        <div id="status" role="status" aria-live="polite">Connecting...</div>
         <button
           id="retryBtn"
           class="hidden"
@@ -728,6 +761,14 @@
      because a CDN that fails to load must cost the page its diagrams and
      nothing else. window.renderDiagram stays undefined and the caller still
      has a working phone. -->
+    <script type="importmap">
+      {
+        "imports": {
+          "openwakeword-wasm-browser": "/openwakeword/wake-word-engine.js",
+          "onnxruntime-web": "/openwakeword/ort/ort.wasm.bundle.min.mjs"
+        }
+      }
+    </script>
     <script type="module" src="/diagram.js"></script>
 
     <script type="module" src="/app.js"></script>
