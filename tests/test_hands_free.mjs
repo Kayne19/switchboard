@@ -158,6 +158,7 @@ assert.match(worklet, /this\.speaking = false/);
 assert.match(worklet, /postMessage\(\{ type: "audio", samples: frame \}/);
 assert.doesNotMatch(worklet, /postMessage\(\s*channel/);
 assert.match(app, /createWakeWordDetector/);
+assert.match(app, /import\("\.\/wake_word\.js"\)/);
 assert.match(app, /final_response_audio_closed/);
 assert.match(app, /snapshotReady/);
 assert.match(app, /submitHandsFreeClip/);

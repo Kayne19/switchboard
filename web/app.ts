@@ -12,7 +12,6 @@ import {
 	HandsFreeController,
 	PLAYBACK_DRAIN_DEBOUNCE_MS,
 } from "./hands_free.js";
-import { createWakeWordDetector } from "./wake_word.js";
 
 interface Clip {
 	id: string;
@@ -182,6 +181,7 @@ interface PlaybackOwner {
 let playbackOwner: PlaybackOwner | null = null;
 let playbackToken = 0;
 let handsFreeController: HandsFreeController | null = null;
+let handsFreeStartup: Promise<void> | null = null;
 let pendingResponseBarrier: {
 	responseId: string;
 	generation: number;
@@ -1680,20 +1680,52 @@ function renderHandsFreeState(detail: {
 btn.addEventListener("click", () => {
 	startRecording();
 });
-handsFreeController = new HandsFreeController({
-	wakeDetector: createWakeWordDetector(),
-	isSnapshotReady: () => snapshotReady,
-	currentEpoch: () => turnEpoch,
-	isPttActive: () => starting || isRecording() || activeRecording !== null,
-	onClip: submitHandsFreeClip,
-	onState: renderHandsFreeState,
+async function enableHandsFree(): Promise<void> {
+if (handsFreeController) {
+await handsFreeController.enable();
+return;
+}
+if (handsFreeStartup) return handsFreeStartup;
+handsFreeStartup = (async () => {
+handsFreeBtn.disabled = true;
+renderHandsFreeState({
+state: "starting",
+message: "Loading the local wake-word detector...",
+leaseRemainingMs: 0,
 });
+try {
+const { createWakeWordDetector } = await import("./wake_word.js");
+handsFreeController = new HandsFreeController({
+wakeDetector: createWakeWordDetector(),
+isSnapshotReady: () => snapshotReady,
+currentEpoch: () => turnEpoch,
+isPttActive: () =>
+starting || isRecording() || activeRecording !== null,
+onClip: submitHandsFreeClip,
+onState: renderHandsFreeState,
+});
+await handsFreeController.enable();
+} catch (error) {
+handsFreeController = null;
+renderHandsFreeState({
+state: "error",
+message: `Hands-free detector could not load (${errorText(error)}).`,
+leaseRemainingMs: 0,
+});
+} finally {
+handsFreeStartup = null;
+handsFreeBtn.disabled = ws?.readyState !== WebSocket.OPEN;
+}
+})();
+return handsFreeStartup;
+}
+
 handsFreeBtn.addEventListener("click", () => {
-	if (handsFreeController?.isEnabled) {
-		handsFreeController.disable();
-	} else {
-		void handsFreeController?.enable();
-	}
+if (handsFreeController?.isEnabled) {
+handsFreeController.disable();
+} else {
+void enableHandsFree();
+}
 });
 hangupBtn.addEventListener("click", hangup);
 routeSelect.addEventListener("change", () => {
