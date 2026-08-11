@@ -1681,51 +1681,51 @@ btn.addEventListener("click", () => {
 	startRecording();
 });
 async function enableHandsFree(): Promise<void> {
-if (handsFreeController) {
-await handsFreeController.enable();
-return;
-}
-if (handsFreeStartup) return handsFreeStartup;
-handsFreeStartup = (async () => {
-handsFreeBtn.disabled = true;
-renderHandsFreeState({
-state: "starting",
-message: "Loading the local wake-word detector...",
-leaseRemainingMs: 0,
-});
-try {
-const { createWakeWordDetector } = await import("./wake_word.js");
-handsFreeController = new HandsFreeController({
-wakeDetector: createWakeWordDetector(),
-isSnapshotReady: () => snapshotReady,
-currentEpoch: () => turnEpoch,
-isPttActive: () =>
-starting || isRecording() || activeRecording !== null,
-onClip: submitHandsFreeClip,
-onState: renderHandsFreeState,
-});
-await handsFreeController.enable();
-} catch (error) {
-handsFreeController = null;
-renderHandsFreeState({
-state: "error",
-message: `Hands-free detector could not load (${errorText(error)}).`,
-leaseRemainingMs: 0,
-});
-} finally {
-handsFreeStartup = null;
-handsFreeBtn.disabled = ws?.readyState !== WebSocket.OPEN;
-}
-})();
-return handsFreeStartup;
+	if (handsFreeController) {
+		await handsFreeController.enable();
+		return;
+	}
+	if (handsFreeStartup) return handsFreeStartup;
+	handsFreeStartup = (async () => {
+		handsFreeBtn.disabled = true;
+		renderHandsFreeState({
+			state: "starting",
+			message: "Loading the local wake-word detector...",
+			leaseRemainingMs: 0,
+		});
+		try {
+			const { createWakeWordDetector } = await import("./wake_word.js");
+			handsFreeController = new HandsFreeController({
+				wakeDetector: createWakeWordDetector(),
+				isSnapshotReady: () => snapshotReady,
+				currentEpoch: () => turnEpoch,
+				isPttActive: () =>
+					starting || isRecording() || activeRecording !== null,
+				onClip: submitHandsFreeClip,
+				onState: renderHandsFreeState,
+			});
+			await handsFreeController.enable();
+		} catch (error) {
+			handsFreeController = null;
+			renderHandsFreeState({
+				state: "error",
+				message: `Hands-free detector could not load (${errorText(error)}).`,
+				leaseRemainingMs: 0,
+			});
+		} finally {
+			handsFreeStartup = null;
+			handsFreeBtn.disabled = ws?.readyState !== WebSocket.OPEN;
+		}
+	})();
+	return handsFreeStartup;
 }
 
 handsFreeBtn.addEventListener("click", () => {
-if (handsFreeController?.isEnabled) {
-handsFreeController.disable();
-} else {
-void enableHandsFree();
-}
+	if (handsFreeController?.isEnabled) {
+		handsFreeController.disable();
+	} else {
+		void enableHandsFree();
+	}
 });
 hangupBtn.addEventListener("click", hangup);
 routeSelect.addEventListener("change", () => {

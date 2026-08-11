@@ -1,4 +1,4 @@
-import WakeWordEngine from "openwakeword-wasm-browser";
+import { WakeWordEngine } from "openwakeword-wasm-browser";
 import { WakeWordDetectorAdapter } from "./wake_detector.js";
 export function createWakeWordDetector() {
     const engine = new WakeWordEngine({

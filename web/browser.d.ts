@@ -8,11 +8,9 @@ declare module "openwakeword-wasm-browser" {
 		executionProviders?: string[];
 	}
 
-	class WakeWordEngine {
+	export class WakeWordEngine {
 		constructor(options?: WakeWordEngineOptions);
 	}
-
-	export default WakeWordEngine;
 }
 
 interface TranscriptEntry {

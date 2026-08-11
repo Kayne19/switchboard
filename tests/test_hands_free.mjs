@@ -4,6 +4,7 @@ import ts from "typescript";
 
 const source = readFileSync("web/hands_free.ts", "utf8");
 const detectorSource = readFileSync("web/wake_detector.ts", "utf8");
+const wakeWordSource = readFileSync("web/wake_word.ts", "utf8");
 const worklet = readFileSync("web/vad-worklet.ts", "utf8");
 const app = readFileSync("web/app.ts", "utf8");
 const html = readFileSync("static/index.html", "utf8");
@@ -159,6 +160,7 @@ assert.match(worklet, /postMessage\(\{ type: "audio", samples: frame \}/);
 assert.doesNotMatch(worklet, /postMessage\(\s*channel/);
 assert.match(app, /createWakeWordDetector/);
 assert.match(app, /import\("\.\/wake_word\.js"\)/);
+assert.match(wakeWordSource, /import \{ WakeWordEngine \}/);
 assert.match(app, /final_response_audio_closed/);
 assert.match(app, /snapshotReady/);
 assert.match(app, /submitHandsFreeClip/);
