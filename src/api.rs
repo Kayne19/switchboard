@@ -378,6 +378,13 @@ impl AppState {
             let diagram = route_diagram.clone();
             let coordinator = route_coordinator.clone();
             Box::pin(async move {
+                let generation = coordinator.generation();
+                let epoch = Event::Json(json!({
+                    "type": "epoch",
+                    "generation": generation,
+                }));
+                let _ = events.send(epoch.clone());
+                delivery.publish(epoch);
                 coordinator.publish_status(status.clone());
                 *diagram.lock().await = None;
                 let event = Event::Json(status);
