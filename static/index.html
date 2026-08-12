@@ -18,6 +18,15 @@
         --accent: #3f5bd9;
         --accent-text: #ffffff;
         --danger: #b3261e;
+        --ok: #1f7a4d;
+        --energy: #0b6f7d;
+        --hold: #8a5300;
+        --rail-active-wash: color-mix(
+          in oklab,
+          var(--energy) 10%,
+          var(--surface)
+        );
+        --bloom: color-mix(in oklab, var(--energy) 55%, transparent);
         --radius: 10px;
       }
       @media (prefers-color-scheme: dark) {
@@ -31,6 +40,9 @@
           --accent: #6b83f0;
           --accent-text: #10131f;
           --danger: #e8817a;
+          --ok: #5fbd8b;
+          --energy: #5ee0f2;
+          --hold: #f2b45e;
         }
       }
       /* One gutter value, quoted twice: the padding that draws it and the max-width
@@ -91,8 +103,9 @@
        sitting beside it, so it keeps to two thirds of the screen. Theater mode
        is how you give the diagram the other third, and all the rest of it. */
         body:not(.theater) #stage {
-          max-height: 68vh;
-          max-height: 68dvh;
+          position: static;
+          max-height: 40vh;
+          max-height: 40dvh;
         }
       }
       /* No panel, no border, no drop shadow. A card would make the diagram a tile
@@ -270,8 +283,163 @@
           transition: none;
         }
       }
-      /* The reveal animates this wrapper, never the group mermaid put a translate
-     on. fill-box makes scale happen about the node's own centre. */
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+      #stage {
+        container-type: inline-size;
+        container-name: stage;
+      }
+      #stage:focus-visible,
+      #stageCanvas:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      .stage-stale #stage {
+        opacity: 0.72;
+      }
+      .stage-stale #stageNotes::before {
+        content: "From the previous leg — ";
+      }
+      #stageCanvas.structured {
+        touch-action: pan-y;
+      }
+      ol.plan {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        border-top: 1px solid var(--line);
+        padding-top: 8px;
+        max-inline-size: min(100%, 90ch);
+        margin-inline: auto;
+      }
+      .plan-row {
+        --rail: var(--line);
+        position: relative;
+        padding-inline-start: 14px;
+        padding-block: 10px;
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        border-radius: 4px;
+        transition: background-color 180ms cubic-bezier(0.22, 0.61, 0.36, 1);
+      }
+      .plan-row::before {
+        content: "";
+        position: absolute;
+        inset-block: 0;
+        inset-inline-start: 0;
+        inline-size: 3px;
+        background-color: var(--rail);
+        transition: background-color 180ms cubic-bezier(0.22, 0.61, 0.36, 1);
+      }
+      .plan-row[data-state="done"] {
+        --rail: var(--ok);
+        color: var(--muted);
+      }
+      .plan-row[data-state="active"] {
+        --rail: var(--energy);
+        background: var(--rail-active-wash);
+        color: var(--text);
+      }
+      .plan-row[data-state="blocked"] {
+        --rail: var(--hold);
+        color: var(--text);
+      }
+      .plan-row[data-state="todo"] {
+        --rail: var(--line);
+        color: var(--text);
+      }
+      .plan-row .idx {
+        font-family: ui-monospace, monospace;
+        font-size: 0.72rem;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+        flex: none;
+      }
+      .plan-row .glyph {
+        color: var(--rail);
+        font-size: 0.9rem;
+        flex: none;
+        transition: color 180ms cubic-bezier(0.22, 0.61, 0.36, 1);
+      }
+      .plan-row .label {
+        flex: 1 1 auto;
+        font-size: 0.92rem;
+      }
+      .plan-row .detail {
+        font-family: ui-monospace, monospace;
+        font-size: 0.78rem;
+        font-variant-numeric: tabular-nums;
+        color: var(--muted);
+        flex: none;
+      }
+      @media (max-width: 599px) {
+        .plan-row {
+          padding-block: 8px;
+          flex-wrap: wrap;
+        }
+        .plan-row::before {
+          inline-size: 2px;
+        }
+        .plan-row .idx {
+          display: none;
+        }
+        .plan-row .detail {
+          width: 100%;
+          padding-left: 20px;
+        }
+      }
+      @media (min-width: 600px) and (max-width: 1079px) {
+        .plan-row {
+          padding-block: 10px;
+          flex-wrap: wrap;
+        }
+        .plan-row .detail {
+          width: 100%;
+          padding-left: 28px;
+        }
+      }
+      @media (min-width: 1080px) {
+        .plan-row {
+          padding-block: 10px;
+          flex-wrap: nowrap;
+        }
+      }
+      @container stage (min-width: 900px) {
+        .plan-row {
+          padding-block: 14px;
+          flex-wrap: nowrap;
+        }
+        .plan-row::before {
+          inline-size: 4px;
+        }
+        .plan-row .label {
+          font-size: 1.05rem;
+        }
+        .plan-row .detail {
+          margin-left: auto;
+        }
+      }
+      #stage .plan-row[data-state="active"]::before {
+        filter: drop-shadow(0 0 6px var(--bloom));
+      }
+      #stageCanvas svg g.active :is(rect, circle, polygon, path) {
+        filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.16))
+          drop-shadow(0 0 8px var(--bloom));
+      }
       #stageCanvas g.fx {
         transform-box: fill-box;
         transform-origin: 50% 50%;
@@ -294,6 +462,11 @@
         #stageCanvas svg * {
           animation: none !important;
           transition: none !important;
+        }
+        #stage .plan-row,
+        #stage .plan-row::before,
+        #stage .plan-row .glyph {
+          transition-duration: 0ms !important;
         }
       }
       #stageError {
@@ -631,9 +804,14 @@
     <div id="shell">
       <!-- Left half, hidden until an agent draws something. Sits before the column
        so that on a narrow screen it stacks on top rather than below the fold. -->
-      <section id="stage">
-        <p id="stageTitle">Diagram</p>
-        <div id="stageCanvas"></div>
+      <section id="stage" role="region" aria-labelledby="stageTitle">
+        <p id="stageTitle" aria-live="polite">Diagram</p>
+        <div
+          id="stageCanvas"
+          tabindex="0"
+          role="region"
+          aria-label="Diagram viewport"
+        ></div>
         <p id="stageZoom">
           <button type="button" data-zoom="-">&minus;</button>
           <button type="button" data-zoom="+">+</button>
@@ -658,7 +836,7 @@
           </button>
         </p>
         <p id="stageNotes"></p>
-        <p id="stageError"></p>
+        <p id="stageError" role="status"></p>
       </section>
 
       <main id="column">

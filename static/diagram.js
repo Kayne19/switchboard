@@ -1,16 +1,14 @@
-function getElement(id) {
-    const element = document.getElementById(id);
-    if (!element)
-        throw new Error(`Missing required element #${id}`);
-    return element;
-}
+import { getElement, registerRenderer, setCaption, showStageError, } from "./stage.js";
 const loadCdnModule = (url) => import(url);
-const mermaid = (await loadCdnModule("https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs")).default;
+let mermaid = null;
+try {
+    mermaid = (await loadCdnModule("https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs")).default;
+}
+catch {
+    /* CDN failed */
+}
 const canvas = getElement("stageCanvas");
 const stage = getElement("stage");
-const titleEl = getElement("stageTitle");
-const notesEl = getElement("stageNotes");
-const errorEl = getElement("stageError");
 const zoomLabel = getElement("stageZoomLabel");
 // Optional. The diagram renders without it; it just appears all at once.
 let anime = null;
@@ -25,7 +23,15 @@ catch {
 // and follows the light/dark switch for free. Re-read per render rather than
 // once at load, because the scheme can change while the page is open.
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const getSemanticClassDefs = () => `
+classDef active stroke:${css("--energy")},stroke-width:2px,color:${css("--energy")};
+classDef done stroke:${css("--ok")},stroke-width:1px,color:${css("--ok")};
+classDef blocked stroke:${css("--hold")},stroke-width:1px,color:${css("--hold")};
+classDef muted stroke:${css("--muted")},stroke-width:1px,color:${css("--muted")};
+`;
 const applyTheme = () => {
+    if (!mermaid)
+        return;
     const dark = matchMedia("(prefers-color-scheme: dark)").matches;
     mermaid.initialize({
         startOnLoad: false,
@@ -66,7 +72,9 @@ const applyTheme = () => {
         flowchart: { htmlLabels: true, curve: "basis", useMaxWidth: true },
     });
 };
-applyTheme();
+if (mermaid) {
+    applyTheme();
+}
 let seq = 0;
 let renderGeneration = 0;
 // Zoom is an absolute scale on the diagram's own dimensions rather than a
@@ -214,6 +222,41 @@ canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
     zoomAbout(zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1), e.clientX, e.clientY);
 }, { passive: false });
+canvas.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowLeft") {
+        panBy(-40, 0, "keyboard");
+        e.preventDefault();
+    }
+    else if (e.key === "ArrowRight") {
+        panBy(40, 0, "keyboard");
+        e.preventDefault();
+    }
+    else if (e.key === "ArrowUp") {
+        panBy(0, -40, "keyboard");
+        e.preventDefault();
+    }
+    else if (e.key === "ArrowDown") {
+        panBy(0, 40, "keyboard");
+        e.preventDefault();
+    }
+    else if (e.key === "+" || e.key === "=") {
+        zoomAbout(zoom * 1.25, ...canvasCentre());
+        e.preventDefault();
+    }
+    else if (e.key === "-") {
+        zoomAbout(zoom * 0.8, ...canvasCentre());
+        e.preventDefault();
+    }
+    else if (e.key === "0") {
+        const next = userZoomed
+            ? fitMode
+            : fitMode === "contain"
+                ? "width"
+                : "contain";
+        fitDiagram(next, { toTop: true });
+        e.preventDefault();
+    }
+});
 // Touch, by way of pointer events rather than touch events, so that a mouse
 // drag pans for free and there is one code path to be wrong in rather than
 // two. Two live pointers is a pinch, one is a pan.
@@ -244,7 +287,7 @@ const panBy = (dx, dy, type) => {
 // Far enough that it is a drag and not a tap with a shaky hand.
 const DRAG_SLOP = 6;
 canvas.addEventListener("pointerdown", (e) => {
-    if (!canvas.querySelector("svg"))
+    if (!canvas.querySelector("svg") || canvas.classList.contains("structured"))
         return;
     pointers.set(e.pointerId, {
         x: e.clientX,
@@ -446,9 +489,10 @@ const reveal = (svg) => {
     const { depth, edgeDepth } = waves(nodes, edges);
     // One hop of the build. A node extrudes, then the wires leave it while it
     // is still settling — overlapping the two is what makes it read as one
-    // continuous movement rather than a slideshow.
-    const STEP = 300;
-    const EDGE_LAG = 190;
+    // continuous movement rather than a slideshow. Cap total wave delay to 1.2s.
+    const maxDepth = Math.max(0, ...depth.values(), ...edgeDepth.values());
+    const STEP = maxDepth > 0 ? Math.min(300, 1200 / maxDepth) : 0;
+    const EDGE_LAG = Math.min(190, STEP * 0.6);
     // Everything starts hidden in one pass, before anything animates. Setting
     // this per-group as each animation starts lets the first frame flash the
     // finished diagram.
@@ -478,7 +522,6 @@ const reveal = (svg) => {
                 { to: 1.05, duration: 300, ease: "outCubic" },
                 { to: 1, duration: 260, ease: "outBack" },
             ],
-            filter: ["blur(9px)", "blur(0px)"],
             duration: 560,
             delay: at,
         });
@@ -518,13 +561,26 @@ const reveal = (svg) => {
         });
     });
 };
-window.renderDiagram = async (msg) => {
-    const src = (msg.source || "").trim();
-    if (!src)
+export async function renderMermaid(msg) {
+    if (!mermaid) {
+        showStageError("Diagram renderer unavailable");
         return;
+    }
+    const srcRaw = (msg.source || "").trim();
+    if (!srcRaw)
+        return;
+    const firstLine = srcRaw
+        .split("\n")
+        .map((l) => l.trim())
+        .find((l) => l.length > 0 && !l.startsWith("%%")) || "";
+    const supportsClassDef = /^(flowchart|graph|stateDiagram)/i.test(firstLine);
+    const src = supportsClassDef
+        ? `${getSemanticClassDefs()}\n${srcRaw}`
+        : srcRaw;
     const generation = ++renderGeneration;
     const current = () => generation === renderGeneration;
-    document.body.classList.add("has-diagram");
+    document.body.classList.remove("stage-structured");
+    canvas.classList.remove("structured");
     // Mermaid measures text in the DOM, so the panel has to be visible and the
     // fonts settled before rendering or the labels come out the wrong size.
     await document.fonts.ready;
@@ -538,7 +594,7 @@ window.renderDiagram = async (msg) => {
         if (!current())
             return;
         if (!parsed) {
-            errorEl.textContent = "That diagram did not parse. Previous one kept.";
+            showStageError("That diagram did not parse. Previous one kept.");
             return;
         }
         const { svg, bindFunctions } = await mermaid.render(id, src);
@@ -555,11 +611,10 @@ window.renderDiagram = async (msg) => {
             // rendered. Applied up front, a diagram that failed to parse left the
             // previous picture on screen wearing the new one's title — "Previous
             // one kept" captioned as something else entirely.
-            titleEl.textContent = msg.title || "Diagram";
-            notesEl.textContent = msg.notes || "";
+            setCaption(msg.title || "Diagram", msg.notes || "");
             canvas.replaceChildren(el);
             bindFunctions?.(canvas);
-            errorEl.textContent = "";
+            showStageError("");
             // Mermaid's own sizing comes off first: the inline `max-width` that
             // `useMaxWidth` emits, and the width and height attributes with it.
             // The box is the stylesheet's business now, driven by --dgm-w/--dgm-h
@@ -581,7 +636,7 @@ window.renderDiagram = async (msg) => {
     }
     catch (err) {
         if (current())
-            errorEl.textContent = "Render failed: " + err;
+            showStageError("Render failed: " + err);
     }
     finally {
         // A throw mid-render leaves mermaid's scratch node parented to the body.
@@ -589,5 +644,6 @@ window.renderDiagram = async (msg) => {
         document.getElementById(id)?.parentNode === document.body &&
             document.getElementById(id)?.remove();
     }
-};
+}
+registerRenderer("mermaid", renderMermaid);
 export { waves };

@@ -6,13 +6,13 @@ use crate::pbx::{ActivityClock, LiveLegState, RouteCallback, Switchboard};
 use crate::pi_client::{Activity, ActivityCallback, PiSession};
 use axum::extract::ws::{Message, WebSocket};
 use axum::{
-    extract::{State, WebSocketUpgrade},
+    extract::{DefaultBodyLimit, State, WebSocketUpgrade},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 use futures_util::{SinkExt, StreamExt};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
@@ -432,7 +432,10 @@ impl AppState {
             .route("/model", post(model))
             .route("/leg-state", post(leg_state))
             .route("/speak", post(speak))
-            .route("/diagram", post(diagram))
+            .route(
+                "/diagram",
+                post(diagram).layer(DefaultBodyLimit::max(64 * 1024)),
+            )
             .route("/ws", get(ws))
             .with_state(self);
         if let Some(service) = static_dir {
@@ -1470,9 +1473,24 @@ async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Respons
 
     Json(json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})).into_response()
 }
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct VisualItem {
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub detail: String,
+}
+
 #[derive(Deserialize)]
 struct Diagram {
+    #[serde(default)]
     source: String,
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    items: Vec<VisualItem>,
     #[serde(default)]
     token: String,
     #[serde(default)]
@@ -1480,7 +1498,155 @@ struct Diagram {
     #[serde(default)]
     notes: String,
 }
-async fn diagram(State(state): State<AppState>, Json(req): Json<Diagram>) -> Response {
+
+fn starts_with_keyword(line: &str, kw: &str) -> bool {
+    if let Some(rest) = line.strip_prefix(kw) {
+        rest.is_empty() || rest.starts_with(|c: char| c.is_whitespace() || c == ':' || c == '{')
+    } else {
+        false
+    }
+}
+
+fn validate_visual(req: &mut Diagram) -> Result<(), String> {
+    if req.title.len() > 200 {
+        return Err("title exceeds maximum limit of 200 bytes".into());
+    }
+    if req.notes.len() > 300 {
+        return Err("notes exceeds maximum limit of 300 bytes".into());
+    }
+
+    let kind = req.kind.trim();
+    match kind {
+        "" | "mermaid" => {
+            if req.source.trim().is_empty() {
+                return Err("mermaid source must not be empty".into());
+            }
+            if req.source.len() > 20000 {
+                return Err("mermaid source exceeds maximum limit of 20000 bytes".into());
+            }
+
+            let legal_classes = "legal classes: active, done, blocked, muted";
+            let mut active_count = 0;
+
+            for line in req.source.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if trimmed.starts_with("%%") && !trimmed.starts_with("%%{init") {
+                    continue;
+                }
+
+                if starts_with_keyword(trimmed, "classDef")
+                    || starts_with_keyword(trimmed, "style")
+                    || starts_with_keyword(trimmed, "linkStyle")
+                    || trimmed.starts_with("%%{init")
+                {
+                    return Err(format!(
+                        "prohibited styling directive in mermaid source ({})",
+                        legal_classes
+                    ));
+                }
+
+                if starts_with_keyword(trimmed, "class") {
+                    return Err(format!(
+                        "prohibited class statement in mermaid source ({})",
+                        legal_classes
+                    ));
+                }
+
+                let mut remainder = trimmed;
+                while let Some(pos) = remainder.find(":::") {
+                    let after = &remainder[pos + 3..];
+                    let name_end = after
+                        .find(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
+                        .unwrap_or(after.len());
+                    let class_name = &after[..name_end];
+                    if class_name.is_empty() {
+                        remainder = after;
+                        continue;
+                    }
+                    match class_name {
+                        "active" => {
+                            active_count += 1;
+                        }
+                        "done" | "blocked" | "muted" => {}
+                        _ => {
+                            return Err(format!(
+                                "invalid class :::{}, only :::active, :::done, :::blocked, :::muted are permitted ({})",
+                                class_name, legal_classes
+                            ));
+                        }
+                    }
+                    remainder = &after[name_end..];
+                }
+            }
+
+            if active_count > 1 {
+                return Err(format!(
+                    "at most one node may be :::active ({})",
+                    legal_classes
+                ));
+            }
+
+            Ok(())
+        }
+        "plan" => {
+            if req.items.is_empty() {
+                return Err("plan requires at least 1 item".into());
+            }
+            if req.items.len() > 40 {
+                return Err("plan items exceed maximum limit of 40".into());
+            }
+
+            let mut active_count = 0;
+            for (idx, item) in req.items.iter_mut().enumerate() {
+                if item.label.is_empty() {
+                    return Err(format!("plan item {} label must not be empty", idx + 1));
+                }
+                if item.label.len() > 200 {
+                    return Err(format!(
+                        "plan item {} label exceeds maximum limit of 200 bytes",
+                        idx + 1
+                    ));
+                }
+                if item.detail.len() > 300 {
+                    return Err(format!(
+                        "plan item {} detail exceeds maximum limit of 300 bytes",
+                        idx + 1
+                    ));
+                }
+                if item.state.trim().is_empty() {
+                    item.state = "todo".to_string();
+                }
+                match item.state.as_str() {
+                    "done" | "todo" | "blocked" => {}
+                    "active" => {
+                        active_count += 1;
+                    }
+                    _ => {
+                        return Err(format!(
+                            "invalid plan item state '{}', must be one of: done, active, todo, blocked",
+                            item.state
+                        ));
+                    }
+                }
+            }
+
+            if active_count > 1 {
+                return Err("plan has more than one active item".into());
+            }
+
+            Ok(())
+        }
+        _ => Err(format!(
+            "unknown visual kind '{}', must be 'mermaid' or 'plan'",
+            req.kind
+        )),
+    }
+}
+
+async fn diagram(State(state): State<AppState>, Json(mut req): Json<Diagram>) -> Response {
     if let Err(error) = state.0.coordinator.accept_side_effect(&req.token) {
         let detail = match error {
             crate::lifecycle::LifecycleError::CandidateSideEffect => {
@@ -1494,8 +1660,34 @@ async fn diagram(State(state): State<AppState>, Json(req): Json<Diagram>) -> Res
         )
             .into_response();
     }
-    let value =
-        json!({"type":"diagram", "source":req.source, "title":req.title, "notes":req.notes});
+    if let Err(detail) = validate_visual(&mut req) {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({"delivered":false, "detail":detail})),
+        )
+            .into_response();
+    }
+    let effective_kind = if req.kind.trim().is_empty() {
+        "mermaid"
+    } else {
+        req.kind.trim()
+    };
+    let value = if effective_kind == "plan" {
+        json!({
+            "type": "diagram",
+            "kind": "plan",
+            "items": req.items,
+            "title": req.title,
+            "notes": req.notes,
+        })
+    } else {
+        json!({
+            "type": "diagram",
+            "source": req.source,
+            "title": req.title,
+            "notes": req.notes,
+        })
+    };
     *state.0.last_diagram.lock().await = Some(value.clone());
     let delivered = emit_json(&state, value);
     Json(delivery_response(delivered)).into_response()
@@ -2365,6 +2557,411 @@ mod tests {
             json!({"type":"diagram", "source":"flowchart TD; A-->B", "title":"Path", "notes":"One hop"})
         );
         assert_eq!(*state.0.last_diagram.lock().await, Some(event));
+    }
+
+    #[tokio::test]
+    async fn visual_plan_payload_validates_and_replays() {
+        let state = state();
+        let mut events = state.0.events.subscribe();
+        let payload = json!({
+            "kind": "plan",
+            "items": [
+                {"label": "Inspect code", "state": "done", "detail": "1 file"},
+                {"label": "Write tests", "state": "active", "detail": "src/api.rs"},
+                {"label": "Verify build", "state": "todo", "detail": ""},
+                {"label": "Deploy stage", "state": "blocked", "detail": "waiting"}
+            ],
+            "title": "Implementation Plan",
+            "notes": "Step 2 of 4"
+        });
+        let (code, response) =
+            request_json(&state, Method::POST, "/diagram", Some(payload.clone())).await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(
+            response,
+            json!({"delivered":false, "reason":"no browser connected"})
+        );
+        let Event::Json(event) = events.recv().await.unwrap() else {
+            panic!("plan visual should be a JSON event")
+        };
+        let expected_event = json!({
+            "type": "diagram",
+            "kind": "plan",
+            "items": [
+                {"label": "Inspect code", "state": "done", "detail": "1 file"},
+                {"label": "Write tests", "state": "active", "detail": "src/api.rs"},
+                {"label": "Verify build", "state": "todo", "detail": ""},
+                {"label": "Deploy stage", "state": "blocked", "detail": "waiting"}
+            ],
+            "title": "Implementation Plan",
+            "notes": "Step 2 of 4"
+        });
+        assert_eq!(event, expected_event);
+        assert_eq!(*state.0.last_diagram.lock().await, Some(expected_event));
+    }
+
+    #[tokio::test]
+    async fn visual_plan_omitted_state_defaults_to_todo() {
+        let state = state();
+        let mut events = state.0.events.subscribe();
+        let payload = json!({
+            "kind": "plan",
+            "items": [
+                {"label": "Step without state"}
+            ]
+        });
+        let (code, _) = request_json(&state, Method::POST, "/diagram", Some(payload)).await;
+        assert_eq!(code, StatusCode::OK);
+        let Event::Json(event) = events.recv().await.unwrap() else {
+            panic!("expected json event")
+        };
+        assert_eq!(event["items"][0]["state"], "todo");
+    }
+
+    #[tokio::test]
+    async fn visual_whitespace_kind_defaults_to_mermaid() {
+        let state = state();
+        let payload = json!({
+            "kind": "   ",
+            "source": "flowchart TD; A-->B"
+        });
+        let (code, _) = request_json(&state, Method::POST, "/diagram", Some(payload)).await;
+        assert_eq!(code, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn visual_mermaid_validation_enforces_semantic_classes() {
+        let state = state();
+
+        // 1. classDef line reject
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({
+                "source": "flowchart TD\nclassDef hot fill:#2a0d1a\nA:::hot"
+            })),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert_eq!(res["delivered"], false);
+        let detail = res["detail"].as_str().unwrap();
+        assert!(
+            detail.contains("active")
+                && detail.contains("done")
+                && detail.contains("blocked")
+                && detail.contains("muted")
+        );
+
+        // 2. %%{init line reject
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({
+                "source": "%%{init: {'theme': 'dark'}}%%\nflowchart TD\nA"
+            })),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert_eq!(res["delivered"], false);
+        let detail = res["detail"].as_str().unwrap();
+        assert!(
+            detail.contains("active")
+                && detail.contains("done")
+                && detail.contains("blocked")
+                && detail.contains("muted")
+        );
+
+        // 3. :::glow reject (unknown class name)
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({
+                "source": "flowchart TD\nA:::glow"
+            })),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert_eq!(res["delivered"], false);
+        let detail = res["detail"].as_str().unwrap();
+        assert!(
+            detail.contains("active")
+                && detail.contains("done")
+                && detail.contains("blocked")
+                && detail.contains("muted")
+        );
+
+        // 4. two :::active reject
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({
+                "source": "flowchart TD\nA:::active\nB:::active"
+            })),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert_eq!(res["delivered"], false);
+        let detail = res["detail"].as_str().unwrap();
+        assert!(
+            detail.contains("active")
+                && detail.contains("done")
+                && detail.contains("blocked")
+                && detail.contains("muted")
+        );
+
+        // 5. Clean source accept (one active, other legal classes)
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({
+                "source": "flowchart TD\nA:::active --> B:::done\nB --> C:::blocked\nC --> D:::muted"
+            })),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(res["delivered"], false);
+    }
+
+    #[tokio::test]
+    async fn visual_rejects_oversized_plan() {
+        let state = state();
+
+        // 41 items
+        let items: Vec<_> = (0..41)
+            .map(|i| json!({"label": format!("Item {i}"), "state": "todo"}))
+            .collect();
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({"kind": "plan", "items": items})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert_eq!(res["delivered"], false);
+        assert!(res["detail"].as_str().unwrap().contains("40"));
+
+        // Label > 200 bytes
+        let long_label = "a".repeat(201);
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({"kind": "plan", "items": [{"label": long_label, "state": "todo"}]})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert_eq!(res["delivered"], false);
+        assert!(res["detail"].as_str().unwrap().contains("200"));
+
+        // Detail > 300 bytes
+        let long_detail = "b".repeat(301);
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({"kind": "plan", "items": [{"label": "Step", "detail": long_detail, "state": "todo"}]})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert_eq!(res["delivered"], false);
+        assert!(res["detail"].as_str().unwrap().contains("300"));
+
+        // Two active items in plan
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({"kind": "plan", "items": [{"label": "Step 1", "state": "active"}, {"label": "Step 2", "state": "active"}]})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert_eq!(res["delivered"], false);
+        assert!(res["detail"].as_str().unwrap().contains("active"));
+    }
+
+    #[tokio::test]
+    async fn visual_validation_field_limits_and_preservation() {
+        let state = state();
+
+        // 1. First establish a valid diagram in state
+        let valid_payload = json!({
+            "source": "flowchart TD; A-->B",
+            "title": "Initial",
+            "notes": "Valid"
+        });
+        let (code, _) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(valid_payload.clone()),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+        let initial_diagram = state.0.last_diagram.lock().await.clone();
+        assert!(initial_diagram.is_some());
+
+        // 2. Empty plan items reject
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({"kind": "plan", "items": []})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert!(res["detail"]
+            .as_str()
+            .unwrap()
+            .contains("requires at least 1 item"));
+
+        // 3. Plan item empty label reject
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({"kind": "plan", "items": [{"label": "", "state": "todo"}]})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert!(res["detail"]
+            .as_str()
+            .unwrap()
+            .contains("label must not be empty"));
+
+        // 4. Plan item invalid state reject
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({"kind": "plan", "items": [{"label": "Step", "state": "invalid_state"}]})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert!(res["detail"]
+            .as_str()
+            .unwrap()
+            .contains("invalid plan item state"));
+
+        // 5. Oversized mermaid source reject (> 20,000 bytes)
+        let huge_mermaid = "flowchart TD\nA-->B; ".repeat(1500);
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({"source": huge_mermaid})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert!(res["detail"].as_str().unwrap().contains("20000"));
+
+        // 6. Title > 200 bytes reject
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({"source": "flowchart TD; A", "title": "a".repeat(201)})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert!(res["detail"].as_str().unwrap().contains("200"));
+
+        // 7. Notes > 300 bytes reject
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({"source": "flowchart TD; A", "notes": "b".repeat(301)})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert!(res["detail"].as_str().unwrap().contains("300"));
+
+        // 8. Assert that after all failed validations, last_diagram was preserved
+        assert_eq!(*state.0.last_diagram.lock().await, initial_diagram);
+    }
+
+    #[tokio::test]
+    async fn visual_backward_frames_format() {
+        let state = state();
+
+        // 1. Absent kind defaults to 4-key Mermaid broadcast format
+        let (code, _) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({"source": "flowchart TD; X-->Y", "title": "Mermaid1", "notes": "notes1"})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+        let diagram1 = state.0.last_diagram.lock().await.clone().unwrap();
+        let obj1 = diagram1.as_object().unwrap();
+        assert_eq!(obj1.len(), 4);
+        assert_eq!(obj1.get("type").unwrap(), "diagram");
+        assert_eq!(obj1.get("source").unwrap(), "flowchart TD; X-->Y");
+        assert_eq!(obj1.get("title").unwrap(), "Mermaid1");
+        assert_eq!(obj1.get("notes").unwrap(), "notes1");
+        assert!(!obj1.contains_key("kind"));
+        assert!(!obj1.contains_key("items"));
+
+        // 2. Explicit kind: "mermaid" also outputs 4-key frame
+        let (code, _) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({"kind": "mermaid", "source": "flowchart TD; X-->Y", "title": "Mermaid2", "notes": "notes2"})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+        let diagram2 = state.0.last_diagram.lock().await.clone().unwrap();
+        let obj2 = diagram2.as_object().unwrap();
+        assert_eq!(obj2.len(), 4);
+        assert!(!obj2.contains_key("kind"));
+
+        // 3. Explicit kind: "plan" outputs 5-key Plan frame
+        let (code, _) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({
+                "kind": "plan",
+                "items": [{"label": "Task", "state": "active"}],
+                "title": "PlanTitle",
+                "notes": "PlanNotes"
+            })),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+        let diagram3 = state.0.last_diagram.lock().await.clone().unwrap();
+        let obj3 = diagram3.as_object().unwrap();
+        assert_eq!(obj3.len(), 5);
+        assert_eq!(obj3.get("type").unwrap(), "diagram");
+        assert_eq!(obj3.get("kind").unwrap(), "plan");
+        assert_eq!(obj3.get("title").unwrap(), "PlanTitle");
+        assert_eq!(obj3.get("notes").unwrap(), "PlanNotes");
+        assert!(obj3.contains_key("items"));
+    }
+
+    #[tokio::test]
+    async fn visual_rejects_oversized_body() {
+        let state = state();
+        let huge_source = "a".repeat(65 * 1024);
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/diagram")
+            .header("content-type", "application/json")
+            .body(Body::from(json!({"source": huge_source}).to_string()))
+            .unwrap();
+        let response = state.clone().router(None).oneshot(request).await.unwrap();
+        assert!(
+            response.status() == StatusCode::PAYLOAD_TOO_LARGE
+                || response.status() == StatusCode::BAD_REQUEST
+        );
     }
 
     #[tokio::test]

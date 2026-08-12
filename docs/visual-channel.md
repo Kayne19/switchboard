@@ -1,110 +1,59 @@
-# What else the visual channel should carry
+# Visual Channel Capabilities & Deferred Proposals
 
-Proposals, not decisions. `docs/diagram-tool.md` describes what is built; this
-describes what has been considered and why, so the next person picking it up
-argues with a position instead of starting from a blank page. Nothing here is
-committed to, and the ranking is a recommendation.
+`docs/diagram-tool.md` describes the active implementation contracts; this document records implemented capabilities, deferred proposals, and refused patterns.
 
-## The principle worth keeping
+## Core Principle
 
-The screen exists to answer the questions voice is bad at. That is already the
-reason the activity strip exists — four minutes of real work and a leg that died
-sound identical, so the page shows tools firing and an elapsed clock while the
-caller listens to nothing.
+The visual stage exists to answer questions that are expensive to ask or answer out loud over audio. Visual payloads must compose with speech rather than compete with it (e.g., "I am on step three of five" is effective spoken prose because the screen presents the full plan).
 
-Every proposal below earns its place the same way: it answers a question that is
-expensive to ask or answer out loud. A visual that merely repeats what the agent
-just said is not worth the transport.
+## Implemented Capabilities
 
-The corollary is that these should compose with speech rather than compete with
-it. "I'm on step three of five" is a good spoken sentence *because* the screen is
-holding the other four.
+### 1. Multi-Form Mermaid Guidance
 
-## Free today: Mermaid forms the agent probably is not using
+The `diagram` tool explicitly prompts project agents to select appropriate diagram forms:
 
-`diagram` already accepts arbitrary Mermaid, but an agent defaults to
-`flowchart TD` unless its tool description suggests otherwise. Several forms map
-directly onto what a call involves:
-
-| form | what it is for |
+| Form | Primary Use Case |
 |---|---|
-| `sequenceDiagram` | caller → operator → project agent → back; the best fit there is, and the thing voice explains worst |
-| `stateDiagram-v2` | the leg state itself: transfer, return, hangup, idle timeout |
-| `gitGraph` | branch and commit topology, miserable to describe aloud |
-| `timeline` / `gantt` | the order work will happen in |
-| `erDiagram` | schema questions |
-| `mindmap` | "what are the options", a common operator-level question |
+| `flowchart TD` | Architecture, call trees, process flows |
+| `sequenceDiagram` | Leg handoffs, caller → operator → agent sequences |
+| `stateDiagram-v2` | Leg lifecycle and state machines |
+| `timeline` / `gantt` | Execution order and operation schedules |
+| `gitGraph` | Branch and commit topology |
+| `erDiagram` | Schema and relationship questions |
+| `mindmap` | Option trees and decision spaces |
 
-The cost is a sentence in the extension's tool description telling the agent to
-pick the form that fits. No infrastructure, no new payload, no server change.
-On effort ratio alone this comes first.
+Node styling is restricted to four semantic classes (`:::active`, `:::done`, `:::blocked`, `:::muted`) enforced via server-side validation.
 
-## New payload types
+### 2. Structured Live Plan / Checklist (`kind: "plan"`)
 
-Each of these follows the existing shape — the agent POSTs, the service
-broadcasts on the socket the browser already holds — so none of them needs a new
-module or a new transport. That is the same argument `diagram` made for being
-shaped like `speak`, and it still holds.
+Pushed via the `plan` tool to `POST /diagram` with `kind: "plan"`. The client renders progress lists into `<ol class="plan">` with positional updating, active step highlighting (`aria-current="step"`), tabular telemetry details, and dark-mode bloom effects.
 
-Ranked by what is worth building, not by difficulty:
+## Deferred Payload Types
 
-### 1. Live plan or checklist
+The following proposals are explicitly deferred and documented for future iterations:
 
-The agent pushes a list of steps with states and updates it in place as it goes.
+### 1. Diff View
 
-This attacks the black-box problem directly. The activity strip says *a tool
-fired*; a plan says *where we are in the work*, which is what a caller actually
-wants when they cannot read scrollback. It is a JSON list and some CSS — no
-library, no new transport, and it composes with speech better than anything else
-here.
+- **Purpose**: Render unified git diffs for code changes proposed or made by coding agents.
+- **Rationale**: Diff details are nearly impossible to read aloud cleanly.
+- **Status**: Deferred. Future implementations can introduce a structured `kind: "diff"` with hand-written line rendering in `static/index.html`.
 
-### 2. Diff view
+### 2. Call-Path Timeline
 
-These are coding agents; what they produce is diffs, and a diff read aloud is
-close to useless. It is also the thing a caller most wants to approve or reject.
+- **Purpose**: Show historical leg transitions, handoffs, and durations over the lifetime of a call.
+- **Status**: Deferred.
 
-A unified diff renderer is a couple of hundred lines written by hand, which
-matters: `static/index.html` is deliberately one hand-written file with no
-toolchain, and the diagram tool already refused to add one. This is the natural
-place to grow a voice approve/reject affordance later, if gating changes by voice
-ever becomes interesting.
+### 3. Diagram & Visual History Strip
 
-### 3. Diagram history strip
+- **Purpose**: Provide UI controls to step back through the last N visuals sent during a call.
+- **Status**: Deferred. The server currently retains only `last_diagram` for reconnection replay.
 
-Already scoped in `docs/diagram-tool.md`: *"if flipping back through diagrams
-turns out to matter, the payloads are small and keeping the last N is a list and
-two buttons."* The service already holds `last_diagram` and replays it to a
-browser that connects or reconnects; making that the last N is a small change on
-both sides. Cheapest real win on this page.
+### 4. Direct Binary Image Payload
 
-### 4. Images
+- **Purpose**: Transfer PNG/JPEG bytes directly over the socket for display on the stage canvas.
+- **Status**: Deferred. Inline HTML images (`<img src="...">`) remain supported within Mermaid nodes where reachable by the browser.
 
-Mechanically easy — mp3 bytes already travel over this socket, so a PNG is the
-same shape.
+## Explicitly Refused Patterns
 
-Worth more thought than its difficulty suggests, because it is the first payload
-where the agent controls arbitrary rendered content. The diagram tool's trust
-argument is that the source comes from our own agent over our own socket; that
-argument weakens when the agent has been reading a repository whose contents it
-did not write. Wants a size cap and a deliberate decision rather than being
-fallen into.
-
-### 5. Call-path timeline
-
-Hops between legs over the life of the call, with durations. Answers "how did I
-get to this leg", which is otherwise reconstructed from memory. Cheap, and it
-makes the routing legible when debugging a bad transfer.
-
-## What to skip
-
-**A general HTML payload.** It collapses every proposal above into one feature
-and destroys the property that makes them safe: each type above renders from
-structured data whose rendering we control. Once the agent ships markup, the page
-that is also holding the call owns an XSS surface reachable by prompt injection.
-The convenience is not worth it.
-
-## Suggested first cut
-
-The Mermaid tool-description change plus the plan/checklist. That pair is the
-cheapest available and changes what a call *feels* like more than anything else
-on this page — one costs a sentence, the other costs a list and some CSS.
+- **General Raw HTML / Arbitrary Markup**: Refused. Allowing agents to transmit arbitrary HTML exposes the client page (which holds active WebRTC / WebSocket call state) to cross-site scripting (XSS) via prompt injection from external repositories. All visual features must render from structured data controlled by client code.
+- **Adding Environment Variables or Endpoint Overheads**: Refused. All visual kinds multiplex over `POST /diagram` and the existing socket channel to avoid expanding the environment file contract between Switchboard and `homelab`.

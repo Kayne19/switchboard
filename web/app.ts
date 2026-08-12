@@ -12,6 +12,7 @@ import {
 	HandsFreeController,
 	PLAYBACK_DRAIN_DEBOUNCE_MS,
 } from "./hands_free.js";
+import { markStale, renderVisual } from "./stage.js";
 
 interface Clip {
 	id: string;
@@ -938,7 +939,13 @@ function fillSelect(
 	select.dataset.committedValue = select.value;
 }
 
+let lastRoute: string | undefined;
 function setRoute(msg: BrowserMessage): void {
+	const currentRoute = msg.route || "operator";
+	if (lastRoute !== undefined && lastRoute !== currentRoute) {
+		markStale();
+	}
+	lastRoute = currentRoute;
 	const onProject = Boolean(msg.route && msg.route !== "operator");
 	whoEl.textContent = msg.label || "Operator";
 	// Every leg runs at a level somebody chose, so there is always a level to
@@ -1383,9 +1390,7 @@ function connect() {
 			} else if (msg.type === "status") {
 				setRoute(msg);
 			} else if (msg.type === "diagram") {
-				// Undefined if the CDN never loaded. The call is still worth
-				// noting in the transcript so the caller knows one was sent.
-				window.renderDiagram?.(msg);
+				void renderVisual(msg);
 			} else if (msg.type === "error") {
 				stopActivity();
 				const pending = turnForClip(msg.id);
@@ -1773,15 +1778,36 @@ let logWasAtBottom = true;
 const hasDiagram = () => document.body.classList.contains("has-diagram");
 const inTheater = () => document.body.classList.contains("theater");
 
+let previousTheaterFocus: HTMLElement | null = null;
+
 function applyTheater() {
 	const active = wantsTheater && hasDiagram();
+	const theaterBtn = document.querySelector<HTMLButtonElement>(
+		'[data-stage="theater"]',
+	);
+	if (theaterBtn) {
+		theaterBtn.setAttribute("aria-pressed", active ? "true" : "false");
+	}
 	if (active === inTheater()) return;
 	if (active) {
 		logWasAtBottom =
 			logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
+		previousTheaterFocus =
+			document.activeElement instanceof HTMLElement
+				? document.activeElement
+				: null;
 	}
 	document.body.classList.toggle("theater", active);
-	if (!active && logWasAtBottom) logEl.scrollTop = logEl.scrollHeight;
+	if (active) {
+		theaterExit.focus();
+	} else {
+		if (previousTheaterFocus && document.body.contains(previousTheaterFocus)) {
+			previousTheaterFocus.focus();
+		} else if (theaterBtn) {
+			theaterBtn.focus();
+		}
+		if (logWasAtBottom) logEl.scrollTop = logEl.scrollHeight;
+	}
 	// Nothing to say to the diagram from here. The canvas has just changed
 	// size by most of a screen, but the SVG is sized absolutely — off its own
 	// viewBox rather than off the panel — so the zoom is still the zoom, and

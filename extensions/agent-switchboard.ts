@@ -50,6 +50,32 @@ const SPEECH_DEADLINE_MS =
 		? parsedSpeechDeadline
 		: 25000;
 
+async function refusal(resp: Response, action: string): Promise<string> {
+	if (resp.status === 422 || resp.status === 404) {
+		return "this deployment has no plan screen; describe the steps in words";
+	}
+	let detail = "";
+	try {
+		const text = await resp.text();
+		try {
+			const data = JSON.parse(text) as { detail?: string; reason?: string };
+			detail = data.detail ?? data.reason ?? text;
+		} catch {
+			detail = text;
+		}
+	} catch {
+		// Ignore body read errors
+	}
+	detail = detail.trim();
+	if (detail.length > 500) {
+		detail = `${detail.slice(0, 500)}…`;
+	}
+	if (detail) {
+		return `The switchboard refused that ${action} (HTTP ${resp.status}): ${detail}`;
+	}
+	return `The switchboard refused that ${action} (HTTP ${resp.status}).`;
+}
+
 export default function agentSwitchboard(pi: ExtensionAPI) {
 	// The switchboard asks for a thinking level on the command line, but the
 	// runtime clamps it to what the model actually exposes — some models have
@@ -120,7 +146,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 						content: [
 							{
 								type: "text",
-								text: `The switchboard refused that line (HTTP ${resp.status}).`,
+								text: await refusal(resp, "line"),
 							},
 						],
 						details: {},
@@ -169,9 +195,9 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 		label: "Diagram",
 		description:
 			"Draw a diagram on the caller's screen. This is a voice call, so use it whenever the answer is a shape rather than a sentence — an architecture, a call path, a state machine, a sequence, a comparison, a tree of options. Say the point out loud with `speak`; put the structure here. It renders immediately, mid-turn, so send one early and send another when the picture changes.\n\n" +
-			"`source` is Mermaid. Keep it readable: a dozen nodes is a diagram, forty is wallpaper. Labels are short phrases, not sentences.\n\n" +
+			"`source` is Mermaid. Keep it readable: a dozen nodes is a diagram, forty is wallpaper. Labels are short phrases, not sentences. Pick the diagram form that best fits the question: `flowchart TD`, `sequenceDiagram`, `stateDiagram-v2`, `timeline`, `gantt`, `gitGraph`, `erDiagram`, `mindmap`.\n\n" +
 			"Draw top-down (`flowchart TD`) unless the shape genuinely reads better sideways — the panel is a tall column the caller scrolls and zooms, so left-to-right graphs come out squeezed.\n\n" +
-			"The page renders on a dark background with a neon palette already applied, so do not set a theme. Do colour individual nodes when colour carries meaning — `classDef hot fill:#2a0d1a,stroke:#ff2d78,color:#ffd9e6;` then `A:::hot` — and leave them alone when it does not.\n\n" +
+			"The page applies a dark graphite theme from visual tokens. Do NOT use custom `classDef`, `style`, `linkStyle`, `%%{init}`, or hex colors — the server will reject them. Instead, use semantic class names: `:::active` (current step/causal path, max 1 node), `:::done` (completed work), `:::blocked` (waiting/held), `:::muted` (de-emphasized background).\n\n" +
 			'Images work. HTML labels are enabled, so `A["<img src=\'https://…\' width=\'48\'/><br/>label"]` puts a picture in a node; any URL the caller\'s browser can reach is fine. Newer Mermaid image and icon shapes (`A@{ img: "https://…", label: "…" }`) also work where the renderer supports them.\n\n' +
 			"Each call replaces the diagram on screen. There is no history, so do not send a diagram you still need visible.",
 		parameters: Type.Object({
@@ -222,7 +248,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 						content: [
 							{
 								type: "text",
-								text: `The switchboard refused that diagram (HTTP ${resp.status}).`,
+								text: await refusal(resp, "diagram"),
 							},
 						],
 						details: {},
@@ -255,6 +281,123 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 						{
 							type: "text",
 							text: `Could not reach the switchboard to draw: ${err}`,
+						},
+					],
+					details: {},
+					isError: true,
+				};
+			}
+		},
+	});
+
+	pi.registerTool({
+		name: "plan",
+		label: "Plan",
+		description:
+			"Push a structured plan or checklist to the caller's screen. Use this to show progress during multi-step tasks, long operations, or complex workflows. Updates in place on each call.\n\n" +
+			"Each item must have a `label` (short phrase) and may specify a `state` (`done`, `active`, `todo`, `blocked`) and optional `detail` (monospace telemetry like paths, counts, durations).\n\n" +
+			"At most one item may be `active` at a time. Send 1 to 40 items.",
+		parameters: Type.Object({
+			items: Type.Array(
+				Type.Object({
+					label: Type.String({
+						description: "The step description or action name.",
+					}),
+					state: Type.Optional(
+						Type.String({
+							description:
+								"Step status: 'done', 'active', 'todo', or 'blocked'. Default is 'todo'.",
+						}),
+					),
+					detail: Type.Optional(
+						Type.String({
+							description:
+								"Optional monospace detail line: path, symbol, count, duration, or telemetry.",
+						}),
+					),
+				}),
+			),
+			title: Type.Optional(
+				Type.String({
+					description:
+						"A few words naming what this plan accomplishes, displayed above the list.",
+				}),
+			),
+			notes: Type.Optional(
+				Type.String({
+					description:
+						"One optional line under the plan for context, caveats, or instructions.",
+				}),
+			),
+		}),
+		async execute(_toolCallId, params) {
+			if (!DIAGRAM_URL) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: "No SWITCHBOARD_DIAGRAM_URL is set, so there is no screen to show a plan on. Describe the steps in words instead.",
+						},
+					],
+					details: {},
+					isError: true,
+				};
+			}
+			try {
+				const resp = await fetch(DIAGRAM_URL, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						kind: "plan",
+						source: "",
+						items: params.items.map((item) => ({
+							label: item.label,
+							state: item.state ?? "todo",
+							...(item.detail ? { detail: item.detail } : {}),
+						})),
+						title: params.title ?? "",
+						notes: params.notes ?? "",
+						...(SESSION_TOKEN ? { token: SESSION_TOKEN } : {}),
+					}),
+					signal: AbortSignal.timeout(30_000),
+				});
+				if (!resp.ok) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: await refusal(resp, "plan"),
+							},
+						],
+						details: {},
+						isError: true,
+					};
+				}
+				const data = (await resp.json()) as {
+					delivered?: boolean;
+					reason?: string;
+				};
+				if (data.delivered === false) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Nobody is looking: ${data.reason ?? "no browser connected"}. It will be there if they open the page.`,
+							},
+						],
+						details: {},
+					};
+				}
+				return {
+					content: [{ type: "text", text: "Plan on screen." }],
+					details: {},
+				};
+			} catch (err) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Could not reach the switchboard to show plan: ${err}`,
 						},
 					],
 					details: {},

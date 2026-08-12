@@ -28,6 +28,8 @@ interface BrowserMessage {
 	response_id?: string;
 	success?: boolean;
 	source?: string;
+	kind?: string;
+	items?: Array<{ label: string; state?: string; detail?: string }>;
 	title?: string;
 	notes?: string;
 	text?: string;
@@ -54,10 +56,6 @@ interface BrowserMessage {
 	streaming?: boolean;
 	capabilities?: Record<string, boolean>;
 	[key: string]: unknown;
-}
-
-interface Window {
-	renderDiagram?: (message: BrowserMessage) => Promise<void>;
 }
 
 declare const sampleRate: number;

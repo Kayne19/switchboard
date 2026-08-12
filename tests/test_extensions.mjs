@@ -10,6 +10,7 @@ const Type = {
   String: (options = {}) => options,
   Optional: (value) => value,
   Boolean: (options = {}) => options,
+  Array: (items) => items,
 };`;
 let moduleNumber = 0;
 
@@ -88,6 +89,7 @@ async function agentExtensionBehavior() {
 			[
 				"speak",
 				"diagram",
+				"plan",
 				"return_to_operator",
 				"transfer_to_project",
 				"set_model",
@@ -120,6 +122,20 @@ async function agentExtensionBehavior() {
 		assert.deepEqual(requests.at(-1).body, {
 			source: "flowchart TD; A-->B",
 			title: "Call path",
+			notes: "",
+			token: "leg-token",
+		});
+
+		const planned = await pi.tools.get("plan").execute("call", {
+			items: [{ label: "Step 1", state: "active" }],
+			title: "Build plan",
+		});
+		assert.equal(planned.content[0].text, "Plan on screen.");
+		assert.deepEqual(requests.at(-1).body, {
+			kind: "plan",
+			source: "",
+			items: [{ label: "Step 1", state: "active" }],
+			title: "Build plan",
 			notes: "",
 			token: "leg-token",
 		});
@@ -176,6 +192,30 @@ async function agentExtensionHttpFailures() {
 	globalThis.fetch = async (url) => {
 		if (String(url).endsWith("leg-state")) throw new Error("page went away");
 		if (String(url).endsWith("diagram")) {
+			if (speakMode === "bad-request-detail") {
+				return new Response(
+					JSON.stringify({
+						delivered: false,
+						detail: "at most one active item allowed",
+					}),
+					{ status: 400, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (speakMode === "legacy-422") {
+				return new Response("Unprocessable Entity", { status: 422 });
+			}
+			if (speakMode === "not-found-404") {
+				return new Response("Not Found", { status: 404 });
+			}
+			if (speakMode === "long-400-detail") {
+				return new Response(
+					JSON.stringify({
+						delivered: false,
+						detail: "x".repeat(600),
+					}),
+					{ status: 400, headers: { "Content-Type": "application/json" } },
+				);
+			}
 			return new Response(
 				JSON.stringify({ delivered: false, reason: "no browser connected" }),
 				{ status: 200, headers: { "Content-Type": "application/json" } },
@@ -202,6 +242,42 @@ async function agentExtensionHttpFailures() {
 			.execute("call", { text: "Hello" });
 		assert.equal(refused.isError, true);
 		assert.match(refused.content[0].text, /HTTP 502/);
+
+		speakMode = "bad-request-detail";
+		const detailedRefusal = await pi.tools.get("plan").execute("call", {
+			items: [
+				{ label: "A", state: "active" },
+				{ label: "B", state: "active" },
+			],
+		});
+		assert.equal(detailedRefusal.isError, true);
+		assert.match(
+			detailedRefusal.content[0].text,
+			/at most one active item allowed/,
+		);
+
+		speakMode = "legacy-422";
+		const legacyRefusal = await pi.tools
+			.get("plan")
+			.execute("call", { items: [{ label: "A" }] });
+		assert.equal(legacyRefusal.isError, true);
+		assert.match(legacyRefusal.content[0].text, /no plan screen/);
+
+		speakMode = "not-found-404";
+		const notFoundRefusal = await pi.tools
+			.get("plan")
+			.execute("call", { items: [{ label: "A" }] });
+		assert.equal(notFoundRefusal.isError, true);
+		assert.match(notFoundRefusal.content[0].text, /no plan screen/);
+
+		speakMode = "long-400-detail";
+		const longRefusal = await pi.tools
+			.get("plan")
+			.execute("call", { items: [{ label: "A" }] });
+		assert.equal(longRefusal.isError, true);
+		assert.match(longRefusal.content[0].text, /HTTP 400/);
+		assert.match(longRefusal.content[0].text, /…$/);
+		assert.ok(longRefusal.content[0].text.length < 600);
 
 		speakMode = "network-error";
 		const unreachable = await pi.tools
