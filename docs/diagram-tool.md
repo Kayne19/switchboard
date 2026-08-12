@@ -16,7 +16,7 @@ The tool is deliberately **not** a `SIGNAL_TOOL` in `piclient.py`. Signals exist
 
 ## Endpoint & Payload Contract
 
-The `POST /diagram` endpoint accepts two visual payload kinds (`mermaid` and `plan`):
+The `POST /diagram` endpoint accepts four visual payload kinds (`mermaid`, `plan`, `timeline`, `diff`):
 
 ### 1. Mermaid diagram payload
 
@@ -42,22 +42,49 @@ The `POST /diagram` endpoint accepts two visual payload kinds (`mermaid` and `pl
 }
 ```
 
-The agent extension passes `source: ""` on plan payloads to maintain compatibility with legacy backends expecting a string `source` field.
+### 3. Timeline payload
+
+```json
+{
+  "kind": "timeline",
+  "source": "",
+  "items": [
+    { "label": "Caller connected", "state": "done", "ms": 120 },
+    { "label": "Routed to agent", "state": "active", "ms": 450, "detail": "damocles" }
+  ],
+  "title": "Call Timeline",
+  "notes": "optional"
+}
+```
+
+### 4. Diff payload
+
+```json
+{
+  "kind": "diff",
+  "source": "@@ -1,2 +1,2 @@\n-old line\n+new line",
+  "title": "Code changes",
+  "notes": "optional"
+}
+```
+
+The agent extension passes `source: ""` on plan and timeline payloads to maintain compatibility with legacy backends expecting a string `source` field.
 
 ### Server Validation & Caps
 
 - **Body cap**: `64 KB` maximum (`DefaultBodyLimit::max(64 * 1024)`).
 - **Title / Notes**: `title` ≤ 200 bytes, `notes` ≤ 300 bytes.
 - **Mermaid source**: non-empty, ≤ 20,000 bytes.
-- **Plan items**: 1 to 40 items per plan.
-- **Item fields**: `label` 1..=200 bytes, `detail` ≤ 300 bytes, `state` in `{"done", "active", "todo", "blocked"}` (defaults to `"todo"` if omitted or blank).
+- **Plan / Timeline items**: 1 to 40 items per payload.
+- **Item fields**: `label` 1..=200 bytes, `detail` ≤ 300 bytes, `state` in `{"done", "active", "todo", "blocked"}` (defaults to `"todo"` if omitted or blank). `ms` ≤ 86,400,000 (timeline only).
+- **Diff source**: non-empty, ≤ 20,000 bytes, ≤ 600 lines, must contain at least one `@@` hunk header.
 - **Active constraint**: at most 1 item may be `active` at a time.
 - Rejections return HTTP 400 with `{"delivered": false, "detail": "<limit hit>"}` which is surfaced directly to the agent.
 
 ## Trust Exposure & Boundary
 
-- **Mermaid exposure**: `securityLevel: "loose"` and `htmlLabels: true` remain enabled in Mermaid to support image nodes (`A["<img src='...'/>"]`). Because the agent reads repositories it did not write, Mermaid source is reachable by prompt injection on the page holding the live call. This is an accepted, documented exposure of the Mermaid renderer.
-- **Structured safety**: Structured kinds (`plan`) do **not** inherit this exposure. Plan items are written to the DOM exclusively via `textContent` (never `innerHTML`). Server caps bound storage and replay sizes in `last_diagram`.
+- **Mermaid exposure**: `securityLevel: "antiscript"` is set in Mermaid configuration to prevent script execution while supporting rich node labels. Because the agent reads repositories it did not write, Mermaid diagrams pass through sanitized rendering.
+- **Structured safety**: Structured kinds (`plan`, `timeline`, `diff`) do **not** inherit raw HTML rendering risks. Items and code lines are written to the DOM exclusively via `textContent` (never `innerHTML`). Server caps bound storage and replay sizes in `last_diagram`.
 - **Palette enforcement**: The server validates Mermaid source lines and rejects custom `classDef`, `style`, `linkStyle`, `%%{init}`, `class` statements, unknown `:::class` names, or multiple `:::active` declarations. The page strictly owns the color palette.
 
 ## Visual System & Style Grammar
@@ -104,5 +131,9 @@ Plan rows render into `<ol class="plan">` inside `#stageCanvas`:
 `extensions/agent-switchboard.ts` is the authoritative reference copy in this repository. However, production project hosts receive extensions rendered from Ansible templates in the homelab repository (`switchboard_projects`).
 
 - Extension updates land on project hosts (`damocles`) only through a homelab PR cutover.
-- Until homelab cutover, the `plan` tool sends `source: ""` to ensure legacy backends return HTTP 200 without errors.
-- If a legacy endpoint returns HTTP 422 or 404, the extension refusal helper returns an actionable fallback message to the agent: `"this deployment has no plan screen; describe the steps in words"`.
+- Structured tools send `source: ""` so legacy backends can deserialize the shared request without an HTTP 422.
+- If a legacy endpoint returns HTTP 422 or 404, the extension refusal helper names the unavailable screen and provides an action-specific fallback:
+  - diagram: `this deployment has no diagram screen; describe the steps in words`
+  - plan: `this deployment has no plan screen; describe the steps in words`
+  - timeline: `this deployment has no timeline screen; describe the timeline in words`
+  - diff: `this deployment has no diff screen; describe the changes in words`

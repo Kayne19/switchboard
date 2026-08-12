@@ -1481,6 +1481,8 @@ pub struct VisualItem {
     pub state: String,
     #[serde(default)]
     pub detail: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ms: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -1500,11 +1502,14 @@ struct Diagram {
 }
 
 fn starts_with_keyword(line: &str, kw: &str) -> bool {
-    if let Some(rest) = line.strip_prefix(kw) {
-        rest.is_empty() || rest.starts_with(|c: char| c.is_whitespace() || c == ':' || c == '{')
-    } else {
-        false
+    if let Some(head) = line.get(..kw.len()) {
+        if head.eq_ignore_ascii_case(kw) {
+            let rest = &line[kw.len()..];
+            return rest.is_empty()
+                || rest.starts_with(|c: char| c.is_whitespace() || c == ':' || c == '{');
+        }
     }
+    false
 }
 
 fn validate_visual(req: &mut Diagram) -> Result<(), String> {
@@ -1535,6 +1540,13 @@ fn validate_visual(req: &mut Diagram) -> Result<(), String> {
                 }
                 if trimmed.starts_with("%%") && !trimmed.starts_with("%%{init") {
                     continue;
+                }
+
+                if starts_with_keyword(trimmed, "click") {
+                    return Err(
+                        "prohibited click directive in mermaid source (node selection is provided by the page)"
+                            .into(),
+                    );
                 }
 
                 if starts_with_keyword(trimmed, "classDef")
@@ -1591,30 +1603,41 @@ fn validate_visual(req: &mut Diagram) -> Result<(), String> {
 
             Ok(())
         }
-        "plan" => {
+        "plan" | "timeline" => {
             if req.items.is_empty() {
-                return Err("plan requires at least 1 item".into());
+                return Err(format!("{kind} requires at least 1 item"));
             }
             if req.items.len() > 40 {
-                return Err("plan items exceed maximum limit of 40".into());
+                return Err(format!("{kind} items exceed maximum limit of 40"));
             }
 
             let mut active_count = 0;
             for (idx, item) in req.items.iter_mut().enumerate() {
                 if item.label.is_empty() {
-                    return Err(format!("plan item {} label must not be empty", idx + 1));
+                    return Err(format!("{kind} item {} label must not be empty", idx + 1));
                 }
                 if item.label.len() > 200 {
                     return Err(format!(
-                        "plan item {} label exceeds maximum limit of 200 bytes",
+                        "{kind} item {} label exceeds maximum limit of 200 bytes",
                         idx + 1
                     ));
                 }
                 if item.detail.len() > 300 {
                     return Err(format!(
-                        "plan item {} detail exceeds maximum limit of 300 bytes",
+                        "{kind} item {} detail exceeds maximum limit of 300 bytes",
                         idx + 1
                     ));
+                }
+                if let Some(ms) = item.ms {
+                    if kind == "plan" {
+                        return Err("ms is only valid on a timeline".into());
+                    }
+                    if ms > 86_400_000 {
+                        return Err(format!(
+                            "timeline item {} ms exceeds maximum limit of 86400000",
+                            idx + 1
+                        ));
+                    }
                 }
                 if item.state.trim().is_empty() {
                     item.state = "todo".to_string();
@@ -1626,7 +1649,7 @@ fn validate_visual(req: &mut Diagram) -> Result<(), String> {
                     }
                     _ => {
                         return Err(format!(
-                            "invalid plan item state '{}', must be one of: done, active, todo, blocked",
+                            "invalid {kind} item state '{}', must be one of: done, active, todo, blocked",
                             item.state
                         ));
                     }
@@ -1634,13 +1657,29 @@ fn validate_visual(req: &mut Diagram) -> Result<(), String> {
             }
 
             if active_count > 1 {
-                return Err("plan has more than one active item".into());
+                return Err(format!("{kind} has more than one active item"));
+            }
+
+            Ok(())
+        }
+        "diff" => {
+            if req.source.trim().is_empty() {
+                return Err("diff source must not be empty".into());
+            }
+            if req.source.len() > 20000 {
+                return Err("diff source exceeds maximum limit of 20000 bytes".into());
+            }
+            if req.source.lines().count() > 600 {
+                return Err("diff exceeds maximum limit of 600 lines".into());
+            }
+            if !req.source.lines().any(|l| l.trim_start().starts_with("@@")) {
+                return Err("diff source must contain at least one @@ hunk header".into());
             }
 
             Ok(())
         }
         _ => Err(format!(
-            "unknown visual kind '{}', must be 'mermaid' or 'plan'",
+            "unknown visual kind '{}', must be one of: mermaid, plan, timeline, diff",
             req.kind
         )),
     }
@@ -1677,6 +1716,22 @@ async fn diagram(State(state): State<AppState>, Json(mut req): Json<Diagram>) ->
             "type": "diagram",
             "kind": "plan",
             "items": req.items,
+            "title": req.title,
+            "notes": req.notes,
+        })
+    } else if effective_kind == "timeline" {
+        json!({
+            "type": "diagram",
+            "kind": "timeline",
+            "items": req.items,
+            "title": req.title,
+            "notes": req.notes,
+        })
+    } else if effective_kind == "diff" {
+        json!({
+            "type": "diagram",
+            "kind": "diff",
+            "source": req.source,
             "title": req.title,
             "notes": req.notes,
         })
@@ -2882,8 +2937,35 @@ mod tests {
         assert_eq!(code, StatusCode::BAD_REQUEST);
         assert!(res["detail"].as_str().unwrap().contains("300"));
 
-        // 8. Assert that after all failed validations, last_diagram was preserved
-        assert_eq!(*state.0.last_diagram.lock().await, initial_diagram);
+        // 8. Non-ASCII Mermaid input should validate or reject safely without panicking
+        let (code, _) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({"source": "flowchart TD\n  A[中文abc] --> B"})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({"source": "flowchart TD\n  click 中文"})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert!(res["detail"]
+            .as_str()
+            .unwrap()
+            .contains("prohibited click directive"));
+
+        // 9. Assert that after all failed validations, last_diagram was preserved
+        let last = state.0.last_diagram.lock().await.clone().unwrap();
+        assert_eq!(
+            last["source"].as_str().unwrap(),
+            "flowchart TD\n  A[中文abc] --> B"
+        );
     }
 
     #[tokio::test]
@@ -2945,6 +3027,153 @@ mod tests {
         assert_eq!(obj3.get("title").unwrap(), "PlanTitle");
         assert_eq!(obj3.get("notes").unwrap(), "PlanNotes");
         assert!(obj3.contains_key("items"));
+
+        // 4. Explicit kind: "timeline" outputs 5-key Timeline frame
+        let (code, _) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({
+                "kind": "timeline",
+                "items": [{"label": "Step 1", "state": "done", "ms": 1200}],
+                "title": "TimelineTitle",
+                "notes": "TimelineNotes"
+            })),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+        let diagram4 = state.0.last_diagram.lock().await.clone().unwrap();
+        let obj4 = diagram4.as_object().unwrap();
+        assert_eq!(obj4.len(), 5);
+        assert_eq!(obj4.get("type").unwrap(), "diagram");
+        assert_eq!(obj4.get("kind").unwrap(), "timeline");
+        assert_eq!(obj4.get("title").unwrap(), "TimelineTitle");
+        assert_eq!(obj4.get("notes").unwrap(), "TimelineNotes");
+        assert!(obj4.contains_key("items"));
+
+        // 5. Explicit kind: "diff" outputs 5-key Diff frame
+        let (code, _) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({
+                "kind": "diff",
+                "source": "@@ -1,2 +1,2 @@\n-old\n+new",
+                "title": "DiffTitle",
+                "notes": "DiffNotes"
+            })),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+        let diagram5 = state.0.last_diagram.lock().await.clone().unwrap();
+        let obj5 = diagram5.as_object().unwrap();
+        assert_eq!(obj5.len(), 5);
+        assert_eq!(obj5.get("type").unwrap(), "diagram");
+        assert_eq!(obj5.get("kind").unwrap(), "diff");
+        assert_eq!(obj5.get("source").unwrap(), "@@ -1,2 +1,2 @@\n-old\n+new");
+        assert_eq!(obj5.get("title").unwrap(), "DiffTitle");
+        assert_eq!(obj5.get("notes").unwrap(), "DiffNotes");
+    }
+
+    #[tokio::test]
+    async fn visual_timeline_and_diff_validation() {
+        let state = state();
+
+        // 1. Timeline item ms bound reject (> 86400000)
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({
+                "kind": "timeline",
+                "items": [{"label": "Step 1", "ms": 86400001}]
+            })),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert!(res["detail"].as_str().unwrap().contains("86400000"));
+
+        // 2. Plan item with ms reject
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({
+                "kind": "plan",
+                "items": [{"label": "Step 1", "ms": 100}]
+            })),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert!(res["detail"]
+            .as_str()
+            .unwrap()
+            .contains("ms is only valid on a timeline"));
+
+        // 3. Diff source empty reject
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({
+                "kind": "diff",
+                "source": "   "
+            })),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert!(res["detail"]
+            .as_str()
+            .unwrap()
+            .contains("diff source must not be empty"));
+
+        // 4. Diff line limit reject (> 600 lines)
+        let many_lines = (0..601)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({
+                "kind": "diff",
+                "source": format!("@@ -1,601 +1,601 @@\n{many_lines}")
+            })),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert!(res["detail"].as_str().unwrap().contains("600 lines"));
+
+        // 5. Diff missing @@ hunk header reject
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({
+                "kind": "diff",
+                "source": "--- a/file\n+++ b/file\n+line"
+            })),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert!(res["detail"].as_str().unwrap().contains("@@ hunk header"));
+
+        // 6. Prohibited click directive in mermaid reject
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({
+                "source": "flowchart TD\nA-->B\nclick A callAlert"
+            })),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert!(res["detail"]
+            .as_str()
+            .unwrap()
+            .contains("prohibited click directive"));
     }
 
     #[tokio::test]
@@ -2962,6 +3191,86 @@ mod tests {
             response.status() == StatusCode::PAYLOAD_TOO_LARGE
                 || response.status() == StatusCode::BAD_REQUEST
         );
+    }
+
+    #[tokio::test]
+    async fn visual_boundary_limits_and_case_insensitivity() {
+        let state = state();
+
+        // 1. Title exactly 200 bytes & notes exactly 300 bytes accepted
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({
+                "source": "flowchart TD; A-->B",
+                "title": "a".repeat(200),
+                "notes": "b".repeat(300)
+            })),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(res["delivered"], false);
+
+        // 2. Timeline ms exactly 86,400,000 accepted
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({
+                "kind": "timeline",
+                "items": [{"label": "Step 1", "ms": 86_400_000}]
+            })),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(res["delivered"], false);
+
+        // 3. Diff source with exactly 600 lines accepted
+        let diff_600 = format!(
+            "@@ -1,600 +1,600 @@\n{}",
+            (0..599)
+                .map(|i| format!("+line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({
+                "kind": "diff",
+                "source": diff_600
+            })),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(res["delivered"], false);
+
+        // 4. Mixed-case prohibited Mermaid directives rejected
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({
+                "source": "flowchart TD\nA-->B\nCLICK A callAlert"
+            })),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert!(res["detail"].as_str().unwrap().contains("click"));
+
+        let (code, res) = request_json(
+            &state,
+            Method::POST,
+            "/diagram",
+            Some(json!({
+                "source": "flowchart TD\nCLASSDEF hot fill:#fff\nA:::hot"
+            })),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert!(res["detail"].as_str().unwrap().contains("legal classes"));
     }
 
     #[tokio::test]

@@ -20,12 +20,17 @@ const lift = (name) => {
 	return diagram.slice(start, end);
 };
 
-const { waves } = await import(
+const { waves, graphInteractive, neighboursOf } = await import(
 	"data:text/javascript," +
 		encodeURIComponent(
-			[lift("nodeKey"), lift("edgeEnds"), lift("topOf"), lift("waves")].join(
-				"\n",
-			) + "\nexport { waves };",
+			[
+				lift("nodeKey"),
+				lift("edgeEnds"),
+				lift("graphInteractive"),
+				lift("neighboursOf"),
+				lift("topOf"),
+				lift("waves"),
+			].join("\n") + "\nexport { waves, graphInteractive, neighboursOf };",
 		)
 );
 
@@ -84,6 +89,51 @@ const edge = (from, to) => ({
 	const high = { id: "", getBBox: () => ({ y: 10 }) };
 	const { depth } = waves([low, high], [{ classList: [] }]);
 	assert.ok(depth.get(high) < depth.get(low));
+}
+
+// neighboursOf and graphInteractive predicates
+{
+	const [a, b, c] = [node("A"), node("B"), node("C")];
+	const edges = [edge("A", "B"), edge("B", "C"), edge("A", "C")];
+
+	assert.equal(graphInteractive([a, b, c], edges), true);
+
+	const bNeighbours = neighboursOf("B", edges);
+	assert.deepEqual(Array.from(bNeighbours.in), ["A"]);
+	assert.deepEqual(Array.from(bNeighbours.out), ["C"]);
+	assert.equal(bNeighbours.edges.length, 2);
+
+	const unkeyedNodes = [{ id: "", getBBox: () => ({ y: 10 }) }];
+	const unkeyedEdges = [{ classList: [] }];
+	assert.equal(graphInteractive(unkeyedNodes, edges), false);
+	assert.equal(graphInteractive([a, b, c], unkeyedEdges), false);
+
+	// Self-loops and isolated node neighbours
+	const selfEdge = edge("A", "A");
+	const aSelf = neighboursOf("A", [selfEdge]);
+	assert.deepEqual(Array.from(aSelf.in), ["A"]);
+	assert.deepEqual(Array.from(aSelf.out), ["A"]);
+
+	const unknownNeighbours = neighboursOf("Z", edges);
+	assert.equal(unknownNeighbours.in.size, 0);
+	assert.equal(unknownNeighbours.out.size, 0);
+	assert.equal(unknownNeighbours.edges.length, 0);
+}
+
+// Bounded large graph wave computation (50 nodes, 100 edges)
+{
+	const nodesList = Array.from({ length: 50 }, (_, i) => node(`N${i}`, i * 10));
+	const edgesList = [];
+	for (let i = 0; i < 49; i++) {
+		edgesList.push(edge(`N${i}`, `N${i + 1}`));
+		if (i % 2 === 0 && i + 2 < 50) {
+			edgesList.push(edge(`N${i}`, `N${i + 2}`));
+		}
+	}
+	const { depth, edgeDepth } = waves(nodesList, edgesList);
+	assert.equal(depth.size, 50);
+	assert.equal(edgeDepth.size, edgesList.length);
+	nodesList.forEach((n) => assert.ok(Number.isFinite(depth.get(n))));
 }
 
 console.log("ok — diagram reveal ordering");

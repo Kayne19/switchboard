@@ -8,6 +8,7 @@ const typeboxStub = `
 const Type = {
   Object: (shape) => shape,
   String: (options = {}) => options,
+  Number: (options = {}) => options,
   Optional: (value) => value,
   Boolean: (options = {}) => options,
   Array: (items) => items,
@@ -90,6 +91,8 @@ async function agentExtensionBehavior() {
 				"speak",
 				"diagram",
 				"plan",
+				"timeline",
+				"diff",
 				"return_to_operator",
 				"transfer_to_project",
 				"set_model",
@@ -136,6 +139,33 @@ async function agentExtensionBehavior() {
 			source: "",
 			items: [{ label: "Step 1", state: "active" }],
 			title: "Build plan",
+			notes: "",
+			token: "leg-token",
+		});
+
+		const timelined = await pi.tools.get("timeline").execute("call", {
+			items: [{ label: "Hop 1", state: "done", ms: 1200 }],
+			title: "Trace timeline",
+		});
+		assert.equal(timelined.content[0].text, "Timeline on screen.");
+		assert.deepEqual(requests.at(-1).body, {
+			kind: "timeline",
+			source: "",
+			items: [{ label: "Hop 1", state: "done", ms: 1200 }],
+			title: "Trace timeline",
+			notes: "",
+			token: "leg-token",
+		});
+
+		const diffed = await pi.tools.get("diff").execute("call", {
+			source: "@@ -1,2 +1,2 @@\n-old\n+new",
+			title: "Code diff",
+		});
+		assert.equal(diffed.content[0].text, "Diff on screen.");
+		assert.deepEqual(requests.at(-1).body, {
+			kind: "diff",
+			source: "@@ -1,2 +1,2 @@\n-old\n+new",
+			title: "Code diff",
 			notes: "",
 			token: "leg-token",
 		});
@@ -262,6 +292,24 @@ async function agentExtensionHttpFailures() {
 			.execute("call", { items: [{ label: "A" }] });
 		assert.equal(legacyRefusal.isError, true);
 		assert.match(legacyRefusal.content[0].text, /no plan screen/);
+
+		const timelineRefusal = await pi.tools
+			.get("timeline")
+			.execute("call", { items: [{ label: "A" }] });
+		assert.equal(timelineRefusal.isError, true);
+		assert.match(timelineRefusal.content[0].text, /no timeline screen/);
+
+		const diffRefusal = await pi.tools
+			.get("diff")
+			.execute("call", { source: "@@ -1 +1 @@\n-a\n+b" });
+		assert.equal(diffRefusal.isError, true);
+		assert.match(diffRefusal.content[0].text, /no diff screen/);
+
+		const diagramRefusal = await pi.tools
+			.get("diagram")
+			.execute("call", { source: "flowchart TD; A-->B" });
+		assert.equal(diagramRefusal.isError, true);
+		assert.match(diagramRefusal.content[0].text, /no diagram screen/);
 
 		speakMode = "not-found-404";
 		const notFoundRefusal = await pi.tools

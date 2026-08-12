@@ -27,7 +27,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .audio import Speaker, Transcriber, TTSError
 from .history import AGENT, CALLER, TranscriptLog
@@ -225,7 +225,9 @@ class SpeakRequest(BaseModel):
 
 
 class DiagramRequest(BaseModel):
-    source: str
+    source: str = ""
+    kind: str = ""
+    items: list[dict] = Field(default_factory=list)
     title: str = ""
     notes: str = ""
 
@@ -565,12 +567,38 @@ async def diagram(req: DiagramRequest):
     can actually see and leaves a good diagram up if a bad one arrives.
     """
     global last_diagram
-    message = {
-        "type": "diagram",
-        "source": req.source,
-        "title": req.title,
-        "notes": req.notes,
-    }
+    effective_kind = req.kind.strip() if req.kind else ""
+    if effective_kind == "plan":
+        message = {
+            "type": "diagram",
+            "kind": "plan",
+            "items": req.items,
+            "title": req.title,
+            "notes": req.notes,
+        }
+    elif effective_kind == "timeline":
+        message = {
+            "type": "diagram",
+            "kind": "timeline",
+            "items": req.items,
+            "title": req.title,
+            "notes": req.notes,
+        }
+    elif effective_kind == "diff":
+        message = {
+            "type": "diagram",
+            "kind": "diff",
+            "source": req.source,
+            "title": req.title,
+            "notes": req.notes,
+        }
+    else:
+        message = {
+            "type": "diagram",
+            "source": req.source,
+            "title": req.title,
+            "notes": req.notes,
+        }
     last_diagram = message
     if await _broadcast_json(message) == 0:
         return {"delivered": False, "reason": "no browser connected"}

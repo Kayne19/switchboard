@@ -1,6 +1,7 @@
 import { clipHeader, decodeServerMessage, helloMessage, postJson, sttChunkHeader, sttEndHeader, sttStartHeader, sttCancelHeader, } from "./protocol.js";
 import { HandsFreeController, PLAYBACK_DRAIN_DEBOUNCE_MS, } from "./hands_free.js";
-import { markStale, renderVisual } from "./stage.js";
+import { historyBack, historyForward, historyLive, markStale, renderVisual, } from "./stage.js";
+import "./diff.js";
 function getElement(id) {
     const element = document.getElementById(id);
     if (!element)
@@ -1700,8 +1701,16 @@ new MutationObserver(applyTheater).observe(document.body, {
 const stageZoom = getElement("stageZoom");
 stageZoom.addEventListener("click", (e) => {
     const target = e.target;
-    if (target instanceof HTMLElement && target.dataset.stage === "theater")
-        setTheater(true);
+    if (target instanceof HTMLElement) {
+        if (target.dataset.stage === "theater")
+            setTheater(true);
+        if (target.id === "historyBack")
+            historyBack();
+        if (target.id === "historyForward")
+            historyForward();
+        if (target.id === "historyLive")
+            historyLive();
+    }
 });
 theaterExit.addEventListener("click", () => setTheater(false));
 try {

@@ -107,6 +107,9 @@
           max-height: 40vh;
           max-height: 40dvh;
         }
+        body:not(.theater) #stageCanvas {
+          min-height: 0;
+        }
       }
       /* No panel, no border, no drop shadow. A card would make the diagram a tile
      laid on top of the page; it is meant to be part of the page, drawn in the
@@ -204,7 +207,8 @@
       body.has-diagram #stageZoom {
         display: flex;
       }
-      #stageZoom button {
+      #stageZoom button,
+      #stageHistory button {
         background: var(--surface-alt);
         color: var(--text);
         border: 1px solid var(--line);
@@ -212,6 +216,21 @@
         padding: 2px 9px;
         font: inherit;
         cursor: pointer;
+        min-inline-size: 44px;
+        min-block-size: 44px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #stageHistory {
+        display: none;
+        gap: 6px;
+        align-items: center;
+      }
+      #historyLive[data-behind]::after {
+        content: " (" attr(data-behind) ")";
+        font-weight: 600;
+        color: var(--accent);
       }
       /* Pushed to the far end of the bar, because it is not one of the three
      buttons next to it: those adjust the diagram, this one replaces the page. */
@@ -310,7 +329,115 @@
         content: "From the previous leg — ";
       }
       #stageCanvas.structured {
-        touch-action: pan-y;
+        touch-action: pan-x pan-y;
+      }
+      .timeline .plan-row .bar {
+        flex: none;
+        inline-size: clamp(48px, 18cqi, 220px);
+        height: 6px;
+        background: var(--surface-alt);
+        border-radius: 3px;
+        position: relative;
+        overflow: hidden;
+        align-self: center;
+      }
+      .timeline .plan-row .bar > i {
+        position: absolute;
+        inset-block: 0;
+        inset-inline-start: 0;
+        inline-size: 100%;
+        background: var(--rail);
+        transform: scaleX(var(--dur, 0));
+        transform-origin: left;
+        transition: transform 200ms ease;
+      }
+      .timeline .plan-row .bar[data-dur="unknown"] {
+        opacity: 0.4;
+      }
+      ul.diff {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        max-inline-size: min(100%, 120ch);
+        margin-inline: auto;
+      }
+      .diff-file {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+        overflow: hidden;
+      }
+      .diff-path {
+        font-family: ui-monospace, monospace;
+        font-size: 0.8rem;
+        font-weight: 600;
+        padding: 8px 12px;
+        margin: 0;
+        background: var(--surface-alt);
+        border-bottom: 1px solid var(--line);
+        color: var(--text);
+      }
+      ol.diff-hunk {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        overflow-x: auto;
+      }
+      .diff-line {
+        --rail: var(--line);
+        position: relative;
+        display: flex;
+        align-items: baseline;
+        font-family: ui-monospace, monospace;
+        font-size: 0.82rem;
+        line-height: 1.4;
+        white-space: pre-wrap;
+        word-break: break-word;
+        min-inline-size: 0;
+        padding-inline-start: 78px;
+        padding-block: 2px;
+      }
+      .diff-line::before {
+        content: "";
+        position: absolute;
+        inset-block: 0;
+        inset-inline-start: 0;
+        inline-size: 3px;
+        background-color: var(--rail);
+      }
+      .diff-line::after {
+        content: attr(data-old) "  " attr(data-new);
+        position: absolute;
+        inset-inline-start: 6px;
+        inline-size: 64px;
+        font-family: ui-monospace, monospace;
+        font-size: 0.72rem;
+        font-variant-numeric: tabular-nums;
+        color: var(--muted);
+        text-align: right;
+        user-select: none;
+        pointer-events: none;
+        white-space: pre;
+      }
+      .diff-line[data-op="add"] {
+        --rail: var(--ok);
+        background: color-mix(in oklab, var(--ok) 10%, transparent);
+      }
+      .diff-line[data-op="del"] {
+        --rail: var(--danger);
+        background: color-mix(in oklab, var(--danger) 10%, transparent);
+      }
+      .diff-line[data-op="ctx"] {
+        --rail: var(--line);
+      }
+      .diff-line .text {
+        font-family: inherit;
+        font-size: inherit;
+        background: none;
+        padding: 0;
       }
       ol.plan {
         list-style: none;
@@ -397,9 +524,20 @@
         .plan-row .idx {
           display: none;
         }
+        .timeline .plan-row .idx {
+          display: inline;
+        }
         .plan-row .detail {
           width: 100%;
           padding-left: 20px;
+        }
+        .diff-line::after {
+          content: attr(data-new);
+          inline-size: 24px;
+        }
+        .diff-line {
+          padding-inline-start: 32px;
+          font-size: 0.76rem;
         }
       }
       @media (min-width: 600px) and (max-width: 1079px) {
@@ -454,6 +592,17 @@
       #stageCanvas .node path {
         filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.16));
       }
+      #stageCanvas svg g.dim {
+        opacity: 0.35;
+      }
+      #stageCanvas svg g.focus :is(rect, circle, polygon, path) {
+        stroke: var(--accent) !important;
+        stroke-width: 2px !important;
+      }
+      #stageCanvas svg path.focus-edge {
+        stroke: var(--accent) !important;
+        stroke-width: 2px !important;
+      }
       #stageError {
         color: var(--danger);
       }
@@ -465,7 +614,8 @@
         }
         #stage .plan-row,
         #stage .plan-row::before,
-        #stage .plan-row .glyph {
+        #stage .plan-row .glyph,
+        #stage .bar > i {
           transition-duration: 0ms !important;
         }
       }
@@ -825,6 +975,33 @@
             fit
           </button>
           <span id="stageZoomLabel">100%</span>
+          <span id="stageHistory" role="region" aria-label="Visual history">
+            <button
+              type="button"
+              id="historyBack"
+              aria-label="Previous visual"
+              title="Previous visual"
+            >
+              &larr;
+            </button>
+            <button
+              type="button"
+              id="historyForward"
+              aria-label="Next visual"
+              title="Next visual"
+            >
+              &rarr;
+            </button>
+            <button
+              type="button"
+              id="historyLive"
+              aria-label="Return to live visual"
+              title="Return to live visual"
+            >
+              live
+            </button>
+            <span id="historyLabel" aria-live="polite"></span>
+          </span>
           <!-- Its own attribute rather than a fourth data-zoom value: this does not
            zoom anything, and the zoom handler should not have to know it. -->
           <button

@@ -29,7 +29,12 @@ interface BrowserMessage {
 	success?: boolean;
 	source?: string;
 	kind?: string;
-	items?: Array<{ label: string; state?: string; detail?: string }>;
+	items?: Array<{
+		label: string;
+		state?: string;
+		detail?: string;
+		ms?: number;
+	}>;
 	title?: string;
 	notes?: string;
 	text?: string;

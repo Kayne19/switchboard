@@ -10,6 +10,7 @@ catch {
 const canvas = getElement("stageCanvas");
 const stage = getElement("stage");
 const zoomLabel = getElement("stageZoomLabel");
+const stageNotes = getElement("stageNotes");
 // Optional. The diagram renders without it; it just appears all at once.
 let anime = null;
 try {
@@ -68,7 +69,7 @@ const applyTheme = () => {
         // Both of these are what make `<img>` inside a node label work. The
         // source comes from our own agent over our own socket, so the sanitizer
         // is not guarding a trust boundary here.
-        securityLevel: "loose",
+        securityLevel: "antiscript",
         flowchart: { htmlLabels: true, curve: "basis", useMaxWidth: true },
     });
 };
@@ -223,6 +224,13 @@ canvas.addEventListener("wheel", (e) => {
     zoomAbout(zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1), e.clientX, e.clientY);
 }, { passive: false });
 canvas.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+        if (currentFocusedNode) {
+            clearGraphFocus();
+            e.preventDefault();
+            return;
+        }
+    }
     if (e.key === "ArrowLeft") {
         panBy(-40, 0, "keyboard");
         e.preventDefault();
@@ -384,6 +392,31 @@ const edgeEnds = (p) => {
     const from = of("LS-");
     const to = of("LE-");
     return from && to ? { from, to } : null;
+};
+const graphInteractive = (nodes, edges) => {
+    if (nodes.length === 0 || edges.length === 0)
+        return false;
+    return (nodes.some((n) => nodeKey(n) !== null) &&
+        edges.every((e) => edgeEnds(e) !== null));
+};
+const neighboursOf = (key, edges) => {
+    const inSet = new Set();
+    const outSet = new Set();
+    const incidentEdges = [];
+    for (const e of edges) {
+        const ends = edgeEnds(e);
+        if (ends) {
+            if (ends.to === key) {
+                inSet.add(ends.from);
+                incidentEdges.push(e);
+            }
+            if (ends.from === key) {
+                outSet.add(ends.to);
+                incidentEdges.push(e);
+            }
+        }
+    }
+    return { in: inSet, out: outSet, edges: incidentEdges };
 };
 const topOf = (el) => el.getBBox?.().y ?? 0;
 // Breadth-first from every node nothing points at, so each wave is one hop
@@ -631,7 +664,12 @@ export async function renderMermaid(msg) {
             // against a panel that is still the shape it was for it.
             el.getBoundingClientRect();
             fitDiagram(fitMode, { toTop: true });
-            reveal(el);
+            const edges = Array.from(el.querySelectorAll("path.flowchart-link, path.relation, path.transition, .messageLine0, .messageLine1"));
+            const nodes = Array.from(el.querySelectorAll(".node, .actor, .statediagram-state, .cluster"));
+            setupGraphInteraction(el, nodes, edges, msg);
+            if (!msg.replay) {
+                reveal(el);
+            }
         }
     }
     catch (err) {
@@ -646,4 +684,89 @@ export async function renderMermaid(msg) {
     }
 }
 registerRenderer("mermaid", renderMermaid);
-export { waves };
+let currentFocusedNode = null;
+let currentSvgEl = null;
+let currentMsg = null;
+const clearGraphFocus = () => {
+    if (!currentSvgEl)
+        return;
+    const allNodes = Array.from(currentSvgEl.querySelectorAll(".node, .actor, .statediagram-state, .cluster"));
+    const allEdges = Array.from(currentSvgEl.querySelectorAll("path.flowchart-link, path.relation, path.transition, .messageLine0, .messageLine1"));
+    allNodes.forEach((n) => {
+        n.classList.remove("focus", "dim");
+    });
+    allEdges.forEach((e) => {
+        e.classList.remove("focus-edge");
+    });
+    currentFocusedNode = null;
+    if (currentMsg) {
+        stageNotes.textContent = currentMsg.notes || "";
+    }
+};
+const setupGraphInteraction = (svg, nodes, edges, msg) => {
+    currentSvgEl = svg;
+    currentMsg = msg;
+    clearGraphFocus();
+    const isArmed = graphInteractive(nodes, edges);
+    if (!isArmed) {
+        canvas.setAttribute("aria-label", "Diagram viewport");
+        return;
+    }
+    canvas.setAttribute("aria-label", "Diagram viewport — nodes selectable");
+    const keyedNodes = nodes.filter((n) => nodeKey(n) !== null);
+    for (const n of keyedNodes) {
+        const key = nodeKey(n);
+        const { in: inSet, out: outSet, edges: incidentEdges, } = neighboursOf(key, edges);
+        n.setAttribute("tabindex", "0");
+        n.setAttribute("role", "button");
+        const rawLabel = (n.textContent || "").trim().replace(/\s+/g, " ");
+        const nodeLabel = rawLabel || key;
+        n.setAttribute("aria-label", `${nodeLabel}, ${inSet.size} in, ${outSet.size} out`);
+        const focusThisNode = () => {
+            if (currentFocusedNode === n) {
+                clearGraphFocus();
+                return;
+            }
+            currentFocusedNode = n;
+            const incidentSet = new Set(incidentEdges);
+            nodes.forEach((other) => {
+                if (other === n) {
+                    other.classList.add("focus");
+                    other.classList.remove("dim");
+                }
+                else {
+                    other.classList.remove("focus");
+                    other.classList.add("dim");
+                }
+            });
+            edges.forEach((e) => {
+                if (incidentSet.has(e)) {
+                    e.classList.add("focus-edge");
+                }
+                else {
+                    e.classList.remove("focus-edge");
+                }
+            });
+            stageNotes.textContent = `${nodeLabel}: ${inSet.size} in, ${outSet.size} out`;
+        };
+        n.addEventListener("click", (e) => {
+            e.stopPropagation();
+            focusThisNode();
+        });
+        n.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                e.stopPropagation();
+                focusThisNode();
+            }
+        });
+    }
+};
+canvas.addEventListener("click", (e) => {
+    if (currentFocusedNode &&
+        e.target instanceof Element &&
+        !e.target.closest(".node, .actor, .statediagram-state, .cluster")) {
+        clearGraphFocus();
+    }
+});
+export { waves, graphInteractive, neighboursOf };

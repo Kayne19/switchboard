@@ -52,7 +52,14 @@ const SPEECH_DEADLINE_MS =
 
 async function refusal(resp: Response, action: string): Promise<string> {
 	if (resp.status === 422 || resp.status === 404) {
-		return "this deployment has no plan screen; describe the steps in words";
+		const screen = action === "line" ? "diagram" : action;
+		const description =
+			action === "diff"
+				? "describe the changes in words"
+				: action === "timeline"
+					? "describe the timeline in words"
+					: "describe the steps in words";
+		return `this deployment has no ${screen} screen; ${description}`;
 	}
 	let detail = "";
 	try {
@@ -197,9 +204,9 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 			"Draw a diagram on the caller's screen. This is a voice call, so use it whenever the answer is a shape rather than a sentence — an architecture, a call path, a state machine, a sequence, a comparison, a tree of options. Say the point out loud with `speak`; put the structure here. It renders immediately, mid-turn, so send one early and send another when the picture changes.\n\n" +
 			"`source` is Mermaid. Keep it readable: a dozen nodes is a diagram, forty is wallpaper. Labels are short phrases, not sentences. Pick the diagram form that best fits the question: `flowchart TD`, `sequenceDiagram`, `stateDiagram-v2`, `timeline`, `gantt`, `gitGraph`, `erDiagram`, `mindmap`.\n\n" +
 			"Draw top-down (`flowchart TD`) unless the shape genuinely reads better sideways — the panel is a tall column the caller scrolls and zooms, so left-to-right graphs come out squeezed.\n\n" +
-			"The page applies a dark graphite theme from visual tokens. Do NOT use custom `classDef`, `style`, `linkStyle`, `%%{init}`, or hex colors — the server will reject them. Instead, use semantic class names: `:::active` (current step/causal path, max 1 node), `:::done` (completed work), `:::blocked` (waiting/held), `:::muted` (de-emphasized background).\n\n" +
+			"The page applies a dark graphite theme from visual tokens. Do NOT use custom `classDef`, `style`, `linkStyle`, `%%{init}`, `click` directives, or hex colors — the server will reject them. Instead, use semantic class names: `:::active` (current step/causal path, max 1 node), `:::done` (completed work), `:::blocked` (waiting/held), `:::muted` (de-emphasized background). Node selection and incident edge highlighting are provided interactively by the page for flowchart and graph forms.\n\n" +
 			'Images work. HTML labels are enabled, so `A["<img src=\'https://…\' width=\'48\'/><br/>label"]` puts a picture in a node; any URL the caller\'s browser can reach is fine. Newer Mermaid image and icon shapes (`A@{ img: "https://…", label: "…" }`) also work where the renderer supports them.\n\n' +
-			"Each call replaces the diagram on screen. There is no history, so do not send a diagram you still need visible.",
+			"Each call makes the new diagram live. The caller can review the eight most recent visuals with the page history controls, so update the picture when the structure changes rather than preserving obsolete detail in one crowded diagram.",
 		parameters: Type.Object({
 			source: Type.String({
 				description:
@@ -398,6 +405,225 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 						{
 							type: "text",
 							text: `Could not reach the switchboard to show plan: ${err}`,
+						},
+					],
+					details: {},
+					isError: true,
+				};
+			}
+		},
+	});
+
+	pi.registerTool({
+		name: "timeline",
+		label: "Timeline",
+		description:
+			"Push a causal timeline or execution path to the caller's screen. Use this to show execution sequences, active operation progress, or duration metrics for multi-step causal traces.\n\n" +
+			"Each item must have a `label` (short phrase) and may specify a `state` (`done`, `active`, `todo`, `blocked`), optional `detail` (monospace telemetry like paths or component names), and optional `ms` (duration in milliseconds, up to 86400000).\n\n" +
+			"At most one item may be `active` at a time. Send 1 to 40 items.",
+		parameters: Type.Object({
+			items: Type.Array(
+				Type.Object({
+					label: Type.String({
+						description: "The hop or phase description.",
+					}),
+					state: Type.Optional(
+						Type.String({
+							description:
+								"Hop status: 'done', 'active', 'todo', or 'blocked'. Default is 'todo'.",
+						}),
+					),
+					detail: Type.Optional(
+						Type.String({
+							description:
+								"Monospace telemetry detail: component name, route, or status.",
+						}),
+					),
+					ms: Type.Optional(
+						Type.Number({
+							description:
+								"Duration in milliseconds for this hop (0 to 86400000).",
+						}),
+					),
+				}),
+			),
+			title: Type.Optional(
+				Type.String({
+					description:
+						"A few words naming what this timeline traces, displayed above the list.",
+				}),
+			),
+			notes: Type.Optional(
+				Type.String({
+					description:
+						"One optional line under the timeline for context or total latency.",
+				}),
+			),
+		}),
+		async execute(_toolCallId, params) {
+			if (!DIAGRAM_URL) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: "No SWITCHBOARD_DIAGRAM_URL is set, so there is no screen to show a timeline on. Describe the timeline in words instead.",
+						},
+					],
+					details: {},
+					isError: true,
+				};
+			}
+			try {
+				const resp = await fetch(DIAGRAM_URL, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						kind: "timeline",
+						source: "",
+						items: params.items.map((item) => ({
+							label: item.label,
+							state: item.state ?? "todo",
+							...(item.detail ? { detail: item.detail } : {}),
+							...(item.ms !== undefined ? { ms: item.ms } : {}),
+						})),
+						title: params.title ?? "",
+						notes: params.notes ?? "",
+						...(SESSION_TOKEN ? { token: SESSION_TOKEN } : {}),
+					}),
+					signal: AbortSignal.timeout(30_000),
+				});
+				if (!resp.ok) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: await refusal(resp, "timeline"),
+							},
+						],
+						details: {},
+						isError: true,
+					};
+				}
+				const data = (await resp.json()) as {
+					delivered?: boolean;
+					reason?: string;
+				};
+				if (data.delivered === false) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Nobody is looking: ${data.reason ?? "no browser connected"}. It will be there if they open the page.`,
+							},
+						],
+						details: {},
+					};
+				}
+				return {
+					content: [{ type: "text", text: "Timeline on screen." }],
+					details: {},
+				};
+			} catch (err) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Could not reach the switchboard to show timeline: ${err}`,
+						},
+					],
+					details: {},
+					isError: true,
+				};
+			}
+		},
+	});
+
+	pi.registerTool({
+		name: "diff",
+		label: "Diff",
+		description:
+			"Show code or text changes as a unified diff on the caller's screen. Source must contain unified diff format text with at least one `@@` hunk header. Max 600 lines / 20000 bytes.",
+		parameters: Type.Object({
+			source: Type.String({
+				description:
+					"The unified diff source containing `@@` hunk headers. No Markdown code fences.",
+			}),
+			title: Type.Optional(
+				Type.String({
+					description:
+						"A few words naming what this diff shows, displayed above the code.",
+				}),
+			),
+			notes: Type.Optional(
+				Type.String({
+					description:
+						"One optional line under the diff for context, summary, or warnings.",
+				}),
+			),
+		}),
+		async execute(_toolCallId, params) {
+			if (!DIAGRAM_URL) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: "No SWITCHBOARD_DIAGRAM_URL is set, so there is no screen to show a diff on. Describe the changes in words instead.",
+						},
+					],
+					details: {},
+					isError: true,
+				};
+			}
+			try {
+				const resp = await fetch(DIAGRAM_URL, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						kind: "diff",
+						source: params.source,
+						title: params.title ?? "",
+						notes: params.notes ?? "",
+						...(SESSION_TOKEN ? { token: SESSION_TOKEN } : {}),
+					}),
+					signal: AbortSignal.timeout(30_000),
+				});
+				if (!resp.ok) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: await refusal(resp, "diff"),
+							},
+						],
+						details: {},
+						isError: true,
+					};
+				}
+				const data = (await resp.json()) as {
+					delivered?: boolean;
+					reason?: string;
+				};
+				if (data.delivered === false) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Nobody is looking: ${data.reason ?? "no browser connected"}. It will be there if they open the page.`,
+							},
+						],
+						details: {},
+					};
+				}
+				return {
+					content: [{ type: "text", text: "Diff on screen." }],
+					details: {},
+				};
+			} catch (err) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Could not reach the switchboard to show diff: ${err}`,
 						},
 					],
 					details: {},

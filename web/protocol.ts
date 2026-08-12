@@ -1,3 +1,21 @@
+export type VisualKind = "mermaid" | "plan" | "timeline" | "diff";
+
+export interface VisualItem {
+	label: string;
+	state?: "done" | "active" | "todo" | "blocked" | string;
+	detail?: string;
+	ms?: number;
+}
+
+export interface DiagramMessage extends BrowserMessage {
+	type: "diagram";
+	kind?: VisualKind;
+	source?: string;
+	items?: VisualItem[];
+	title?: string;
+	notes?: string;
+}
+
 export function decodeServerMessage(text: string): BrowserMessage | null {
 	try {
 		const value: unknown = JSON.parse(text);
