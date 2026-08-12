@@ -136,4 +136,46 @@ const edge = (from, to) => ({
 	nodesList.forEach((n) => assert.ok(Number.isFinite(depth.get(n))));
 }
 
-console.log("ok — diagram reveal ordering");
+// The semantic classDefs the page injects must sit UNDER the diagram header:
+// mermaid reads the diagram type off the first non-comment line, so a classDef
+// there means "no diagram type detected" and every flowchart fails to parse.
+{
+	globalThis.document = { documentElement: {} };
+	globalThis.getComputedStyle = () => ({ getPropertyValue: () => "#0b6f7d" });
+	const { withSemanticClassDefs } = await import(
+		"data:text/javascript," +
+			encodeURIComponent(
+				[
+					lift("css"),
+					lift("getSemanticClassDefs"),
+					lift("withSemanticClassDefs"),
+				].join("\n") + "\nexport { withSemanticClassDefs };",
+			)
+	);
+	const meaningful = (src) =>
+		src
+			.split("\n")
+			.map((l) => l.trim())
+			.filter(Boolean);
+
+	const flow = meaningful(withSemanticClassDefs("flowchart TD\n  A --> B"));
+	assert.equal(flow[0], "flowchart TD", "the header still comes first");
+	assert.ok(
+		flow[1].startsWith("classDef active"),
+		"classDefs are injected under the header",
+	);
+
+	// A leading comment keeps its place; the classDefs follow the header.
+	const commented = meaningful(
+		withSemanticClassDefs("%% note\ngraph LR\n  A --> B"),
+	);
+	assert.deepEqual(commented.slice(0, 2), ["%% note", "graph LR"]);
+	assert.ok(commented[2].startsWith("classDef active"));
+
+	// Forms without classDef support are handed to mermaid untouched.
+	const seq = "sequenceDiagram\n  A ->> B: hi";
+	assert.equal(withSemanticClassDefs(seq), seq);
+	assert.equal(withSemanticClassDefs(""), "");
+}
+
+console.log("ok — diagram reveal ordering and classDef placement");

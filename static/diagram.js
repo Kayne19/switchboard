@@ -30,6 +30,19 @@ classDef done stroke:${css("--ok")},stroke-width:1px,color:${css("--ok")};
 classDef blocked stroke:${css("--hold")},stroke-width:1px,color:${css("--hold")};
 classDef muted stroke:${css("--muted")},stroke-width:1px,color:${css("--muted")};
 `;
+// Mermaid picks the diagram type off the first non-comment line, so the class
+// definitions have to land *under* the header — put them on top and every
+// flowchart dies with "no diagram type detected", which is every `:::active`
+// diagram the agent can draw.
+const withSemanticClassDefs = (srcRaw) => {
+    const lines = srcRaw.split("\n");
+    const header = lines.findIndex((l) => l.trim().length > 0 && !l.trim().startsWith("%%"));
+    if (header < 0 ||
+        !/^(flowchart|graph|stateDiagram)/i.test(lines[header].trim()))
+        return srcRaw;
+    lines.splice(header + 1, 0, getSemanticClassDefs());
+    return lines.join("\n");
+};
 const applyTheme = () => {
     if (!mermaid)
         return;
@@ -602,14 +615,7 @@ export async function renderMermaid(msg) {
     const srcRaw = (msg.source || "").trim();
     if (!srcRaw)
         return;
-    const firstLine = srcRaw
-        .split("\n")
-        .map((l) => l.trim())
-        .find((l) => l.length > 0 && !l.startsWith("%%")) || "";
-    const supportsClassDef = /^(flowchart|graph|stateDiagram)/i.test(firstLine);
-    const src = supportsClassDef
-        ? `${getSemanticClassDefs()}\n${srcRaw}`
-        : srcRaw;
+    const src = withSemanticClassDefs(srcRaw);
     const generation = ++renderGeneration;
     const current = () => generation === renderGeneration;
     document.body.classList.remove("stage-structured");

@@ -1401,11 +1401,11 @@ async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Respons
         let (code, detail) = match error {
             crate::lifecycle::LifecycleError::CandidateSideEffect => (
                 axum::http::StatusCode::CONFLICT,
-                "candidate side effects are not public yet",
+                "the line is not live until this transfer completes: put it in your written reply instead and the switchboard will read it out",
             ),
             _ => (
                 axum::http::StatusCode::CONFLICT,
-                "the project callback is stale or invalid",
+                "this leg is no longer on the call: stop retrying, nothing you send reaches the caller",
             ),
         };
         return (
@@ -1696,9 +1696,9 @@ async fn diagram(State(state): State<AppState>, Json(mut req): Json<Diagram>) ->
     if let Err(error) = state.0.coordinator.accept_side_effect(&req.token) {
         let detail = match error {
             crate::lifecycle::LifecycleError::CandidateSideEffect => {
-                "candidate side effects are not public yet"
+                "the caller's screen is not live until this transfer completes: draw it again on your next turn"
             }
-            _ => "the project callback is stale or invalid",
+            _ => "this leg is no longer on the call: stop retrying, nothing you send reaches the caller",
         };
         return (
             axum::http::StatusCode::CONFLICT,
