@@ -6,6 +6,7 @@ pub mod lifecycle;
 pub mod models;
 pub mod pbx;
 pub mod pi_client;
+pub mod prewarm;
 pub mod registry;
 
 use std::collections::HashMap;
@@ -27,6 +28,7 @@ pub struct Config {
     pub stt_stream_command: Option<String>,
     pub bind: String,
     pub pi_binary: String,
+    pub ssh_program: String,
     pub operator_model: Option<String>,
     pub agent_model: Option<String>,
     pub agent_thinking: String,
@@ -97,6 +99,7 @@ impl Config {
             stt_stream_command: optional(values, "SWITCHBOARD_STT_STREAM_COMMAND"),
             bind: get(values, "SWITCHBOARD_BIND", "0.0.0.0:8765"),
             pi_binary: get(values, "SWITCHBOARD_PI_BINARY", "pi"),
+            ssh_program: get(values, "SWITCHBOARD_SSH_PROGRAM", "ssh"),
             operator_model: optional(values, "SWITCHBOARD_OPERATOR_MODEL"),
             agent_model: optional(values, "SWITCHBOARD_AGENT_MODEL"),
             agent_thinking: get(values, "SWITCHBOARD_AGENT_THINKING", "medium"),
@@ -389,6 +392,10 @@ async fn main() {
         audio::SttAdapter::from_command(config.stt_command.clone()),
         audio::SttStreamAdapter::from_command(config.stt_stream_command.clone()),
     );
+    let prewarm = std::sync::Arc::new(
+        prewarm::Prewarm::start(&config, &state.0.switchboard.lock().await.registry).await,
+    );
+    state.0.switchboard.lock().await.set_prewarm(prewarm);
     api::spawn_workers(state.clone());
     api::spawn_idle_worker(state.clone(), config.idle_timeout, config.idle_poll);
     let bind = config.bind.clone();

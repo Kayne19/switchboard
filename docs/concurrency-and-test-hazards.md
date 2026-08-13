@@ -174,3 +174,13 @@ log quality: a remote that stops reading early but *succeeds* was being reported
 as a staging failure and fell back to the sentinel. The regression test covers
 exactly that, by sending a megabyte to a remote that reads sixteen bytes and
 exits zero.
+
+## Prewarm SSH transport, flock, and deterministic control paths
+
+Prewarm relies on cross-process `flock` locking and OpenSSH control sockets under `SWITCHBOARD_STATE_DIR`:
+
+- Lock files (`<state_dir>/ssh/locks/<sha256>.lock`) and socket files (`<state_dir>/ssh/control/<sha256>.sock`) are deterministic per canonical host (`canonical_host()`).
+- Stale control socket removal occurs ONLY AFTER acquiring the kernel `flock` on the lock file.
+- Only the process that created the master connection initiates master exit (`-O exit`) or child termination on shutdown; an adopting process releases its `flock` lock without signaling or deleting a sibling's live control socket.
+- Prepare exit status (zero, nonzero, or timeout) is a terminal report snapshot; nonzero or timed-out prepare outputs remain launchable and are never retried.
+- Injected SSH program options (`SshClientOptions`) carry `ControlMaster=no` and explicit `ControlPath` parameters to prevent client processes from becoming masters.

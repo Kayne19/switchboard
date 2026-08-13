@@ -50,8 +50,15 @@ fn default_stage_extension() -> bool {
 }
 
 impl Project {
+    pub fn canonical_host(&self) -> Option<&str> {
+        self.host
+            .as_deref()
+            .map(str::trim)
+            .filter(|host| !host.is_empty())
+    }
+
     pub fn is_remote(&self) -> bool {
-        self.host.as_ref().is_some_and(|host| !host.is_empty())
+        self.canonical_host().is_some()
     }
 
     pub fn public(&self) -> serde_json::Value {
@@ -59,15 +66,22 @@ impl Project {
             "id": self.id,
             "description": self.description,
             "aliases": self.aliases,
-            "location": format!("{}:{}", self.host.as_deref().unwrap_or("damocles"), self.cwd),
+            "location": format!("{}:{}", self.canonical_host().unwrap_or("damocles"), self.cwd),
         })
     }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ResolveResult<'a> {
+    Exact(&'a Project),
+    Ambiguous(Vec<String>),
+    Unknown,
 }
 
 #[derive(Clone, Debug)]
 pub struct Registry {
     pub projects: Vec<Project>,
-    by_key: HashMap<String, usize>,
+    by_key: HashMap<String, Vec<usize>>,
 }
 
 fn normalize(text: &str) -> String {
@@ -91,12 +105,13 @@ impl Registry {
             if project.runtime.trim().is_empty() {
                 project.runtime = default_runtime();
             }
-            if project
-                .host
-                .as_ref()
-                .is_some_and(|host| host.trim().is_empty())
-            {
-                project.host = None;
+            if let Some(host) = &project.host {
+                let trimmed = host.trim();
+                if trimmed.is_empty() {
+                    project.host = None;
+                } else {
+                    project.host = Some(trimmed.to_string());
+                }
             }
             if project
                 .model
@@ -106,7 +121,7 @@ impl Registry {
                 project.model = None;
             }
         }
-        let mut by_key: HashMap<String, usize> = HashMap::new();
+        let mut by_key: HashMap<String, Vec<usize>> = HashMap::new();
         for (index, project) in projects.iter().enumerate() {
             for key in std::iter::once(project.id.as_str())
                 .chain(project.aliases.iter().map(String::as_str))
@@ -115,22 +130,17 @@ impl Registry {
                 if normalized.is_empty() {
                     continue;
                 }
-                match by_key.get(&normalized) {
-                    // Two projects claiming one alias is a registry authoring
-                    // mistake that silently sends every caller who says that
-                    // word to whichever entry happens to be first.
-                    Some(&first) if first != index => {
+                let indices = by_key.entry(normalized).or_default();
+                if !indices.contains(&index) {
+                    if !indices.is_empty() {
                         tracing::warn!(
                             alias = key,
-                            kept = %projects[first].id,
-                            ignored = %project.id,
-                            "alias maps to two projects; keeping the first"
+                            first = %projects[indices[0]].id,
+                            duplicate = %project.id,
+                            "alias maps to multiple projects; resolution will be ambiguous"
                         );
                     }
-                    Some(_) => {}
-                    None => {
-                        by_key.insert(normalized, index);
-                    }
+                    indices.push(index);
                 }
             }
         }
@@ -223,42 +233,62 @@ impl Registry {
         Some(project)
     }
 
-    pub fn resolve(&self, spoken: &str) -> Option<&Project> {
+    pub fn resolve_detailed(&self, spoken: &str) -> ResolveResult<'_> {
         let phrase = normalize(spoken);
         if phrase.is_empty() {
-            return None;
+            return ResolveResult::Unknown;
         }
-        if let Some(index) = self.by_key.get(&phrase) {
-            return self.projects.get(*index);
+        if let Some(indexes) = self.by_key.get(&phrase) {
+            if indexes.len() == 1 {
+                return ResolveResult::Exact(&self.projects[indexes[0]]);
+            }
+            let mut candidates = indexes
+                .iter()
+                .filter_map(|&index| self.projects.get(index))
+                .map(|project| project.id.clone())
+                .collect::<Vec<_>>();
+            candidates.sort();
+            let candidates_str = candidates.join(", ");
+            tracing::info!(chars = spoken.chars().count(), candidates = %candidates_str, "ambiguous exact project key");
+            return ResolveResult::Ambiguous(candidates);
         }
         let mut matches = Vec::new();
-        for (key, index) in &self.by_key {
-            if (key.contains(&phrase) || phrase.contains(key)) && !matches.contains(index) {
-                matches.push(*index);
+        for (key, indexes) in &self.by_key {
+            if key.contains(&phrase) || phrase.contains(key) {
+                for &index in indexes {
+                    if !matches.contains(&index) {
+                        matches.push(index);
+                    }
+                }
             }
         }
         match matches.len() {
-            1 => self.projects.get(matches[0]),
-            // "Nothing matched" and "too many things matched" send the caller
-            // the same refusal but need opposite fixes: a typo versus two
-            // projects whose aliases overlap.
+            1 => ResolveResult::Exact(&self.projects[matches[0]]),
             0 => {
                 tracing::info!(
                     chars = spoken.chars().count(),
                     "no project matched the spoken phrase"
                 );
-                None
+                ResolveResult::Unknown
             }
             _ => {
-                let candidates = matches
+                let mut candidates = matches
                     .iter()
                     .filter_map(|index| self.projects.get(*index))
-                    .map(|project| project.id.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                tracing::info!(chars = spoken.chars().count(), %candidates, "ambiguous project phrase");
-                None
+                    .map(|project| project.id.clone())
+                    .collect::<Vec<_>>();
+                candidates.sort();
+                let candidates_str = candidates.join(", ");
+                tracing::info!(chars = spoken.chars().count(), candidates = %candidates_str, "ambiguous project phrase");
+                ResolveResult::Ambiguous(candidates)
             }
+        }
+    }
+
+    pub fn resolve(&self, spoken: &str) -> Option<&Project> {
+        match self.resolve_detailed(spoken) {
+            ResolveResult::Exact(project) => Some(project),
+            _ => None,
         }
     }
 
@@ -355,5 +385,41 @@ mod tests {
         assert_eq!(project.runtime, "pi");
         assert_eq!(project.model, None);
         assert_eq!(project.public()["location"], "damocles:");
+    }
+
+    #[test]
+    fn host_canonicalization_and_descriptions_never_resolve() {
+        let mut proj = project("alpha", &["a"]);
+        proj.description = "secret alpha project".into();
+        proj.host = Some("  host-one  ".into());
+
+        let registry = Registry::new(vec![proj]);
+        assert_eq!(registry.projects[0].host.as_deref(), Some("host-one"));
+        assert_eq!(registry.projects[0].canonical_host(), Some("host-one"));
+        assert!(registry.resolve("secret").is_none());
+        assert!(registry.resolve("unknown key").is_none());
+    }
+
+    #[test]
+    fn duplicate_and_overlapping_keys_are_ambiguous() {
+        let registry = Registry::new(vec![
+            project("proj-a", &["shared-alias"]),
+            project("proj-b", &["shared-alias"]),
+        ]);
+        assert!(registry.resolve("shared-alias").is_none());
+        assert_eq!(
+            registry.resolve_detailed("shared-alias"),
+            ResolveResult::Ambiguous(vec!["proj-a".into(), "proj-b".into()])
+        );
+
+        let overlapping = Registry::new(vec![
+            project("apple-pie", &["pie"]),
+            project("apple-tart", &["tart"]),
+        ]);
+        assert!(overlapping.resolve("apple").is_none());
+        assert_eq!(
+            overlapping.resolve_detailed("apple"),
+            ResolveResult::Ambiguous(vec!["apple-pie".into(), "apple-tart".into()])
+        );
     }
 }

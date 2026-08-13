@@ -212,11 +212,22 @@ src/
   api.rs        HTTP and WebSocket handlers
   audio.rs      STT/TTS adapters
   pbx.rs        route state and transfer lifecycle
-  pi_client.rs JSONL process/session handling
+  pi_client.rs  JSONL process/session handling
   registry.rs   registry loading and spoken resolution
   models.rs     model catalog and thinking resolution
   history.rs    transcript history
+  prewarm.rs    asynchronous prewarm for SSH, catalogs, staging, and prepare
 ```
+
+### Prewarm, zero transfer-time setup, and catalog fallback
+
+- **No resident project Pi at startup**: Project Pi processes launch on call transfer; they are not resident at startup.
+- **Asynchronous prewarm**: `Prewarm` runs asynchronously at startup before worker spawning (`api::spawn_workers`). It establishes persistent master SSH connections, fetches in-memory model catalog snapshots (`CatalogKey`), verifies extension digests (SHA-256, mode `0600`, atomic tmp write, LKG fallback with async refresh and restart validation), and executes per-project prepare commands (nonzero exit or timeout produce terminal launchable reports carrying timestamped snapshots, never retried).
+- **Zero transfer-time setup**: Transfer paths consume prewarmed transport generations, catalog snapshots, extension decisions, and prepare reports, completely bypassing transfer-time setup (no live SSH setup, extension uploads, prepare command executions, or model catalog listings during transfer).
+- **Silent transfer & immediate address**: Transfers are silent on successful routing paths (handoff text and model notes omitted). The intro prompt carries original caller transcript, derived intent, project metadata, and timestamped prepare reports with instructions to address the request immediately without greetings.
+- **Persistent SSH ownership**: Lock files (`<state_dir>/ssh/locks/<sha256>.lock`) and socket files (`<state_dir>/ssh/control/<sha256>.sock`) under `SWITCHBOARD_STATE_DIR` use `flock` locking. Master ownership is strictly preserved: only the process that created the master connection terminates master (`-O exit`) or child processes on shutdown; adopting processes release locks without signaling sibling control sockets. Injected client options set `ControlMaster=no` with explicit `ControlPath`.
+- **In-memory catalog & qualified fallback**: Catalog snapshots are indexed by `CatalogKey`. When catalog resolution is unpopulated or unavailable, provider-qualified model specs pass through cleanly while bare model names fail closed with clear diagnostic errors.
+- **Homelab deployment/pinned-tag boundary**: Homelab owns Ansible deployment, secrets, registry files, persona rendering into `SWITCHBOARD_PERSONA`, and systemd service definitions. Releases land via pinned-tag checkouts in homelab PRs.
 
 The service owns cancellation, child-process reaping, turn serialization,
 forced hangup, idle return, model redial, and recovery to the operator. Avoid

@@ -517,7 +517,20 @@ impl PiSession {
 pub(crate) fn isolate_process(command: &mut Command) {
     command.kill_on_drop(true);
     #[cfg(unix)]
-    command.process_group(0);
+    {
+        command.process_group(0);
+        #[cfg(target_os = "linux")]
+        {
+            #[allow(unused_imports)]
+            use std::os::unix::process::CommandExt;
+            unsafe {
+                command.pre_exec(|| {
+                    libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+                    Ok(())
+                });
+            }
+        }
+    }
 }
 
 /// Synchronous cancellation backstop for async operations that own child
@@ -803,27 +816,176 @@ impl ValidatedSshTarget {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SshClientOptions {
+    pub ssh_program: String,
+    pub target: ValidatedSshTarget,
+    pub control_path: Option<std::path::PathBuf>,
+}
+
+impl SshClientOptions {
+    pub fn new(ssh_program: impl Into<String>, target: ValidatedSshTarget) -> Self {
+        Self {
+            ssh_program: ssh_program.into(),
+            target,
+            control_path: None,
+        }
+    }
+
+    pub fn with_control_path(mut self, control_path: impl Into<std::path::PathBuf>) -> Self {
+        self.control_path = Some(control_path.into());
+        self
+    }
+
+    pub fn base_args(&self) -> Vec<String> {
+        let mut args = vec![
+            "-T".into(),
+            "-o".into(),
+            "BatchMode=yes".into(),
+            "-o".into(),
+            "ConnectTimeout=10".into(),
+            "-o".into(),
+            "ControlMaster=no".into(),
+        ];
+        if let Some(control_path) = &self.control_path {
+            args.extend([
+                "-o".into(),
+                format!("ControlPath={}", control_path.display()),
+            ]);
+        }
+        args.push(self.target.as_str().into());
+        args
+    }
+
+    pub fn remote_command(&self, remote_cmd: &str) -> Command {
+        let mut command = Command::new(&self.ssh_program);
+        command.args(self.base_args());
+        command.arg(remote_cmd);
+        command
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn remote_argv(
+        &self,
+        cwd: &str,
+        binary: &str,
+        model: Option<&str>,
+        extension: Option<&str>,
+        append_system_prompt: Option<&str>,
+        session_id: Option<&str>,
+        extra_args: &[String],
+        env: &HashMap<String, String>,
+    ) -> Vec<String> {
+        let mut remote = vec![binary.into(), "--mode".into(), "rpc".into()];
+        if let Some(model) = model {
+            remote.extend(["--model".into(), model.into()]);
+        }
+        if let Some(session_id) = session_id {
+            remote.extend(["--session-id".into(), session_id.into()]);
+        }
+        if let Some(extension) = extension {
+            remote.extend(["-e".into(), extension.into()]);
+        }
+        if let Some(prompt) = append_system_prompt {
+            remote.extend(["--append-system-prompt".into(), prompt.into()]);
+        }
+        remote.extend(extra_args.iter().cloned());
+        let mut environment = env.iter().collect::<Vec<_>>();
+        environment.sort_unstable_by_key(|(left, _)| *left);
+        let exports = environment
+            .into_iter()
+            .map(|(name, value)| format!("export {name}={}; ", shell_quote(value)))
+            .collect::<Vec<_>>()
+            .join("");
+        let command = format!(
+            "set -e; cd {}; {}exec {}",
+            shell_quote(cwd),
+            exports,
+            remote
+                .iter()
+                .map(|arg| shell_quote(arg))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+
+        let mut argv = vec![self.ssh_program.clone()];
+        argv.extend(self.base_args());
+        argv.push(command);
+        argv
+    }
+
+    pub fn catalog_argv(&self, binary: &str) -> Vec<String> {
+        let remote_cmd = format!("{} --list-models", shell_quote(binary));
+        let mut argv = vec![self.ssh_program.clone()];
+        argv.extend(self.base_args());
+        argv.push(remote_cmd);
+        argv
+    }
+
+    pub fn master_command(&self, control_path: &Path) -> Command {
+        let mut command = Command::new(&self.ssh_program);
+        command.args([
+            "-N",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "ControlMaster=yes",
+            "-o",
+            "ControlPersist=no",
+            "-o",
+            &format!("ControlPath={}", control_path.display()),
+            self.target.as_str(),
+        ]);
+        command
+    }
+
+    pub fn check_command(&self, control_path: &Path) -> Command {
+        let mut command = Command::new(&self.ssh_program);
+        command.args([
+            "-o",
+            &format!("ControlPath={}", control_path.display()),
+            "-O",
+            "check",
+            self.target.as_str(),
+        ]);
+        command
+    }
+
+    pub fn exit_command(&self, control_path: &Path) -> Command {
+        let mut command = Command::new(&self.ssh_program);
+        command.args([
+            "-o",
+            &format!("ControlPath={}", control_path.display()),
+            "-O",
+            "exit",
+            self.target.as_str(),
+        ]);
+        command
+    }
+}
+
 pub fn list_models_argv(binary: &str, ssh_host: &str) -> Vec<String> {
+    list_models_argv_with_program("ssh", binary, ssh_host)
+}
+
+pub fn list_models_argv_with_program(
+    ssh_program: &str,
+    binary: &str,
+    ssh_host: &str,
+) -> Vec<String> {
     if ssh_host.is_empty() {
         return vec![binary.into(), "--list-models".into()];
     }
     let Ok(target) = ValidatedSshTarget::new(ssh_host) else {
         return vec!["ssh-target-invalid".into()];
     };
-    list_models_argv_checked(binary, &target)
+    SshClientOptions::new(ssh_program, target).catalog_argv(binary)
 }
 
 pub fn list_models_argv_checked(binary: &str, target: &ValidatedSshTarget) -> Vec<String> {
-    vec![
-        "ssh".into(),
-        "-T".into(),
-        "-o".into(),
-        "BatchMode=yes".into(),
-        "-o".into(),
-        "ConnectTimeout=10".into(),
-        target.as_str().into(),
-        format!("{} --list-models", shell_quote(binary)),
-    ]
+    SshClientOptions::new("ssh", target.clone()).catalog_argv(binary)
 }
 pub fn local_argv(
     binary: &str,
@@ -863,50 +1025,47 @@ pub fn remote_argv(
     extra_args: &[String],
     env: &HashMap<String, String>,
 ) -> Vec<String> {
+    remote_argv_with_program(
+        "ssh",
+        host,
+        cwd,
+        binary,
+        model,
+        extension,
+        append_system_prompt,
+        session_id,
+        extra_args,
+        env,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn remote_argv_with_program(
+    ssh_program: &str,
+    host: &str,
+    cwd: &str,
+    binary: &str,
+    model: Option<&str>,
+    extension: Option<&str>,
+    append_system_prompt: Option<&str>,
+    session_id: Option<&str>,
+    extra_args: &[String],
+    env: &HashMap<String, String>,
+) -> Vec<String> {
     let Ok(target) = ValidatedSshTarget::new(host) else {
         return vec!["ssh-target-invalid".into()];
     };
-    let mut remote = vec![binary.into(), "--mode".into(), "rpc".into()];
-    if let Some(model) = model {
-        remote.extend(["--model".into(), model.into()]);
-    }
-    if let Some(session_id) = session_id {
-        remote.extend(["--session-id".into(), session_id.into()]);
-    }
-    if let Some(extension) = extension {
-        remote.extend(["-e".into(), extension.into()]);
-    }
-    if let Some(prompt) = append_system_prompt {
-        remote.extend(["--append-system-prompt".into(), prompt.into()]);
-    }
-    remote.extend(extra_args.iter().cloned());
-    let mut environment = env.iter().collect::<Vec<_>>();
-    environment.sort_unstable_by_key(|(left, _)| *left);
-    let exports = environment
-        .into_iter()
-        .map(|(name, value)| format!("export {name}={}; ", shell_quote(value)))
-        .collect::<Vec<_>>()
-        .join("");
-    let command = format!(
-        "set -e; cd {}; {}exec {}",
-        shell_quote(cwd),
-        exports,
-        remote
-            .iter()
-            .map(|arg| shell_quote(arg))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-    vec![
-        "ssh".into(),
-        "-T".into(),
-        "-o".into(),
-        "BatchMode=yes".into(),
-        "-o".into(),
-        "ConnectTimeout=10".into(),
-        target.as_str().into(),
-        command,
-    ]
+    let options = SshClientOptions::new(ssh_program, target);
+    options.remote_argv(
+        cwd,
+        binary,
+        model,
+        extension,
+        append_system_prompt,
+        session_id,
+        extra_args,
+        env,
+    )
 }
 
 /// Writes `body` as a `/bin/sh` script, marks it executable, and does not return
@@ -972,6 +1131,27 @@ mod tests {
         write_executable_script(&path, source);
         path
     }
+    #[test]
+    fn ssh_options_injected_program_and_control_master_no() {
+        let target = ValidatedSshTarget::new("user@remote.host").unwrap();
+        let options = SshClientOptions::new("/usr/local/bin/custom-ssh", target)
+            .with_control_path("/tmp/control.sock");
+
+        let base_args = options.base_args();
+        assert_eq!(options.ssh_program, "/usr/local/bin/custom-ssh");
+        assert!(base_args.contains(&"ControlMaster=no".into()));
+        assert!(base_args.contains(&"ControlPath=/tmp/control.sock".into()));
+
+        let cat_argv = options.catalog_argv("pi");
+        assert_eq!(cat_argv[0], "/usr/local/bin/custom-ssh");
+        assert!(cat_argv.contains(&"ControlMaster=no".into()));
+
+        let remote_args =
+            options.remote_argv("/tmp", "pi", None, None, None, None, &[], &HashMap::new());
+        assert_eq!(remote_args[0], "/usr/local/bin/custom-ssh");
+        assert!(remote_args.contains(&"ControlMaster=no".into()));
+    }
+
     #[test]
     fn ssh_targets_are_validated_once_and_fail_closed() {
         assert!(ValidatedSshTarget::new("user@example.com").is_ok());

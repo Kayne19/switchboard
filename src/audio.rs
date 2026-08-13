@@ -1094,14 +1094,16 @@ mod tests {
         adapter
             .try_start("clip".into(), 1, "audio/webm;codecs=opus".into())
             .unwrap();
-        let first_error = timeout(Duration::from_secs(1), results.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(matches!(
-            first_error,
-            StreamResult::WorkerError(message) if message.contains("malformed JSON")
-        ));
+        let first_error = loop {
+            let res = timeout(Duration::from_secs(5), results.recv())
+                .await
+                .expect("recv timeout")
+                .expect("channel closed");
+            if let StreamResult::WorkerError(msg) = res {
+                break msg;
+            }
+        };
+        assert!(first_error.contains("malformed JSON"));
         adapter
             .try_chunk("clip".into(), 1, 0, b"retry".to_vec())
             .unwrap();

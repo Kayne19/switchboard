@@ -21,7 +21,18 @@ Two kinds of leg, both a `pi --mode rpc` process driven over stdin/stdout:
 | leg | runs | tools | lifetime |
 |---|---|---|---|
 | operator | on damocles | `list_projects`, `transfer_to_project` only (`--no-builtin-tools`) | persistent — it is the home base |
-| project | on the host in the registry entry, `cd`'d into that project's directory | its normal coding tools | created on transfer, destroyed on return |
+| project | on the host in the registry entry, `cd`'d into that project's directory | its normal coding tools | created on transfer, destroyed on return (never resident at startup) |
+
+## Startup prewarm
+
+At startup, before workers begin listening, `Prewarm` runs asynchronous prewarming for all configured hosts and projects:
+
+- **SSH Transports**: Manages persistent master SSH connections (`ControlMaster=yes`, `ControlPersist=no`) per canonical host with deterministic lock files (`<state_dir>/ssh/locks/<sha256>.lock`) and socket files (`<state_dir>/ssh/control/<sha256>.sock`) under `SWITCHBOARD_STATE_DIR`. Supports cross-process flock locking, adoption of live masters, health monitoring probes, dead-master reconnects with generation increments, and bounded shutdown. Master ownership is strictly preserved: only the process that created the master connection initiates master exit (`-O exit`) or child termination on shutdown, while adopting processes release their lock without signaling sibling control sockets. Injected client options set `ControlMaster=no` with explicit `ControlPath`.
+- **Model Catalogs**: Fetches model catalogs per unique `CatalogKey` (`host`, `runtime`, list models argv) during startup and maintains in-memory snapshots.
+- **Extension Staging**: Verifies extension files using SHA-256 digest checks, atomic temporary file replacement, mode `0600`, and last-known-good (LKG) fallback with async refresh and restart validation. Does not upload files during transfer.
+- **Project Prepare**: Runs per-project prepare commands at startup with bounded stdout/stderr snapshots. Non-zero exit status or timeout become terminal, launchable reports carrying timestamped snapshots and are never retried.
+
+Project Pi processes are **not** resident at startup; they launch on call transfer. Transfer awaits prewarm readiness and consumes prewarmed transport generations, catalog snapshots, extension decisions, and prepare reports, completely bypassing transfer-time setup (no live SSH setup, extension uploads, prepare command executions, or model catalog listing during transfer).
 
 ## Who does the talking
 
@@ -89,10 +100,9 @@ Project agents get `transfer_to_project` too, so "send me to the other project"
 is one hop instead of a round trip through the operator. They cannot read the
 registry from a project host, so the extensions they may hand the caller to are
 named in their system prompt; anything else, they send the caller back and let
-the operator resolve it. A handoff back is delivered to the operator as its own
-prompt, immediately — that is what lets an onward destination an agent was told
-about ("send me back and tell them I want the homelab") be acted on instead of
-sitting in a note until the caller repeats themselves.
+the operator resolve it.
+
+Successful transfers are silent: handoff text and model notes are omitted on successful routing paths, and the target project addresses the request immediately without spoken handoff text or greetings. The intro prompt carries the exact original caller transcript, derived intent, project metadata, and any timestamped prepare report snapshot.
 
 The page is relabelled the moment the line swings rather than when the turn
 ends, because bringing a leg up means ssh, an agent start and an intro prompt,

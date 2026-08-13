@@ -19,11 +19,14 @@
  * (rendered by ansible/roles/damocles), so the two can never disagree.
  */
 
+// @ts-expect-error Pi supplies these modules on the project host, not in this app's npm tree.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+// @ts-expect-error Pi supplies these modules on the project host, not in this app's npm tree.
 import { Type } from "typebox";
 import { readFileSync } from "node:fs";
 
-const REGISTRY_PATH = process.env.SWITCHBOARD_PROJECTS_FILE ?? "/etc/switchboard/projects.json";
+const REGISTRY_PATH =
+	process.env.SWITCHBOARD_PROJECTS_FILE ?? "/etc/switchboard/projects.json";
 
 interface RegistryEntry {
 	id: string;
@@ -67,7 +70,9 @@ export default function operatorSwitchboard(pi: ExtensionAPI) {
 			}
 			const lines = projects.map((p) => {
 				const where = p.host ? `${p.host}:${p.cwd ?? "?"}` : (p.cwd ?? "local");
-				const aliases = p.aliases?.length ? ` (also: ${p.aliases.join(", ")})` : "";
+				const aliases = p.aliases?.length
+					? ` (also: ${p.aliases.join(", ")})`
+					: "";
 				return `- ${p.id}${aliases} — ${p.description ?? "no description"} [${where}]`;
 			});
 			return {
@@ -81,7 +86,7 @@ export default function operatorSwitchboard(pi: ExtensionAPI) {
 		name: "transfer_to_project",
 		label: "Transfer",
 		description:
-			"Connect the caller to a project's coding agent, in that project's working directory. Call this as soon as you know where they want to go — the connection happens the moment you call it, and the caller hears the agent's greeting, not you, so say nothing alongside this call. Pass along what they actually asked for as `intent` so the agent opens already working on it.",
+			"Connect the caller to a project's coding agent, in that project's working directory. Call this as soon as you know where they want to go — the transfer is silent, the target project addresses the request immediately without a greeting, and anything you write alongside this call is omitted. Pass along what they actually asked for as `intent` so the agent opens already working on it.",
 		parameters: Type.Object({
 			project: Type.String({
 				description:
@@ -96,7 +101,7 @@ export default function operatorSwitchboard(pi: ExtensionAPI) {
 			model: Type.Optional(
 				Type.String({
 					description:
-						"Only if the caller asked for a particular model on that leg. Pass it the way they said it, provider first when they gave one, e.g. \"anthropic/claude-opus-5\". An ambiguous name is refused and the candidates read back, so do not guess a provider. Omit for the project's usual model.",
+						'Only if the caller asked for a particular model on that leg. Pass it the way they said it, provider first when they gave one, e.g. "anthropic/claude-opus-5". An ambiguous name is refused and the candidates read back, so do not guess a provider. Omit for the project\'s usual model.',
 				}),
 			),
 			thinking: Type.Optional(
@@ -113,7 +118,7 @@ export default function operatorSwitchboard(pi: ExtensionAPI) {
 				content: [
 					{
 						type: "text",
-						text: `Connecting the caller to ${params.project}. You are off this call now; say nothing further — anything you write here is not spoken.`,
+						text: `Connecting the caller to ${params.project}. Transfer is silent; say nothing further — anything you write here is omitted.`,
 					},
 				],
 				details: { project: params.project },

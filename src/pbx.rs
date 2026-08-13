@@ -5,8 +5,8 @@ use crate::models::{
     THINKING_LEVELS,
 };
 use crate::pi_client::{
-    local_argv, remote_argv, ActivityCallback, PiSession, PiSessionError, Signal, Turn,
-    ValidatedSshTarget, RETURN_TOOL, SET_MODEL_TOOL, TRANSFER_TOOL,
+    local_argv, remote_argv_with_program, ActivityCallback, PiSession, PiSessionError, Signal,
+    Turn, ValidatedSshTarget, RETURN_TOOL, SET_MODEL_TOOL, TRANSFER_TOOL,
 };
 use crate::registry::{Project, Registry};
 use futures_util::FutureExt;
@@ -157,23 +157,59 @@ impl ExtensionStageTxn {
             return Ok(());
         }
         let command = format!("rm -f -- {}", crate::pi_client::shell_quote(&self.path));
-        let status = Command::new(&self.ssh_program)
-            .args([
-                "-T",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=10",
-                self.host.as_str(),
-                &command,
-            ])
-            .status()
-            .await
-            .map_err(|error| error.to_string())?;
-        status
-            .success()
-            .then_some(())
-            .ok_or_else(|| format!("remote cleanup exited with {status}"))
+        let options = crate::pi_client::SshClientOptions::new(&self.ssh_program, self.host);
+        let mut child_cmd = options.remote_command(&command);
+        child_cmd.stdin(std::process::Stdio::null());
+        child_cmd.stdout(std::process::Stdio::piped());
+        child_cmd.stderr(std::process::Stdio::piped());
+        crate::pi_client::isolate_process(&mut child_cmd);
+
+        let mut child = match child_cmd.spawn() {
+            Ok(child) => child,
+            Err(error) => return Err(format!("rollback could not start: {error}")),
+        };
+        let process_guard = crate::pi_client::ProcessTreeGuard::new(&child);
+
+        let stdout_task = child.stdout.take().map(|mut output| {
+            tokio::spawn(async move {
+                crate::pi_client::drain_bounded(&mut output, STAGE_OUTPUT_LIMIT).await
+            })
+        });
+        let stderr_task = child.stderr.take().map(|mut output| {
+            tokio::spawn(async move {
+                crate::pi_client::drain_bounded(&mut output, CHILD_ERROR_LIMIT).await
+            })
+        });
+
+        let status = match timeout(Duration::from_secs(10), child.wait()).await {
+            Ok(Ok(status)) => {
+                process_guard.disarm();
+                status
+            }
+            Ok(Err(error)) => {
+                crate::pi_client::terminate_process(&mut child).await;
+                process_guard.disarm();
+                abort_output(stdout_task);
+                abort_output(stderr_task);
+                return Err(format!("rollback wait failed: {error}"));
+            }
+            Err(_) => {
+                crate::pi_client::terminate_process(&mut child).await;
+                process_guard.disarm();
+                abort_output(stdout_task);
+                abort_output(stderr_task);
+                return Err("rollback timed out".to_string());
+            }
+        };
+
+        let _ = join_output(stdout_task).await;
+        let _ = join_output(stderr_task).await;
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("remote cleanup exited with status {status}"))
+        }
     }
 }
 
@@ -213,9 +249,78 @@ impl Reply {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct TransferContext {
+    pub exact_caller_transcript: String,
+    pub derived_intent: String,
+    pub direct_page_transfer_context: Option<String>,
+    pub selected_project_id: Option<String>,
+    pub return_operator_note: Option<String>,
+    pub project_summary: Option<String>,
+}
+
+fn build_intro_prompt(
+    context: &TransferContext,
+    project: &Project,
+    prepare_report: Option<&crate::prewarm::PrepareReport>,
+) -> String {
+    let mut prompt = String::new();
+    prompt.push_str("Address the request immediately. Do not greet the caller and do not mention tool or connection details.\n\n");
+
+    prompt.push_str("[PROJECT METADATA]\n");
+    prompt.push_str(&format!("ID: {}\n", project.id));
+    if !project.description.is_empty() {
+        prompt.push_str(&format!("Description: {}\n", project.description));
+    }
+
+    if let Some(page_ctx) = &context.direct_page_transfer_context {
+        prompt.push_str("\n[DIRECT PAGE TRANSFER]\n");
+        prompt.push_str("No caller transcript was supplied.\n");
+        prompt.push_str(&format!("Context: {page_ctx}\n"));
+    } else {
+        prompt.push_str("\n[CALLER TRANSCRIPT]\n");
+        if context.exact_caller_transcript.is_empty() {
+            prompt.push_str("No caller transcript was supplied.\n");
+        } else {
+            prompt.push_str(&format!(
+                "Bytes: {}\n",
+                context.exact_caller_transcript.len()
+            ));
+            prompt.push_str(&context.exact_caller_transcript);
+            prompt.push('\n');
+        }
+    }
+
+    if !context.derived_intent.is_empty() {
+        prompt.push_str("\n[DERIVED INTENT]\n");
+        prompt.push_str(&context.derived_intent);
+        prompt.push('\n');
+    }
+
+    if let Some(rep) = prepare_report {
+        prompt.push_str("\n[STARTUP PREPARE REPORT (TIMESTAMPED SNAPSHOT)]\n");
+        prompt.push_str(&format!("Timestamp Unix Ms: {}\n", rep.timestamp_unix_ms));
+        prompt.push_str(&format!("Source: {:?}\n", rep.source));
+        prompt.push_str(&format!("Outcome: {:?}\n", rep.outcome));
+        prompt.push_str(&format!("Duration Ms: {}\n", rep.duration_ms));
+        if let Some(code) = rep.exit_code {
+            prompt.push_str(&format!("Exit Code: {code}\n"));
+        }
+        if !rep.stdout.is_empty() {
+            prompt.push_str(&format!("Stdout: {}\n", rep.stdout));
+        }
+        if !rep.stderr.is_empty() {
+            prompt.push_str(&format!("Stderr: {}\n", rep.stderr));
+        }
+    }
+
+    prompt
+}
+
 pub struct Switchboard {
     pub registry: Registry,
     pub pi_binary: String,
+    pub ssh_program: String,
     pub operator_model: Option<String>,
     pub operator_system_prompt: String,
     pub operator_extension: Option<String>,
@@ -245,6 +350,7 @@ pub struct Switchboard {
     operator_note: Option<String>,
     last_activity: ActivityClock,
     coordinator: Option<Coordinator>,
+    pub prewarm: Option<Arc<crate::prewarm::Prewarm>>,
 }
 impl Switchboard {
     #[allow(clippy::too_many_arguments)]
@@ -276,9 +382,16 @@ impl Switchboard {
                     panic!("SWITCHBOARD_SPEECH_DEADLINE_MS must be a positive integer from 1 to 120000 ms")
                 }),
         };
+        let ssh_program = env
+            .get("SWITCHBOARD_SSH_PROGRAM")
+            .map(String::as_str)
+            .unwrap_or("ssh")
+            .trim()
+            .to_owned();
         Self {
             registry,
             pi_binary,
+            ssh_program,
             operator_model,
             operator_system_prompt,
             operator_extension,
@@ -308,7 +421,11 @@ impl Switchboard {
             operator_note: None,
             last_activity: ActivityClock::new(),
             coordinator: None,
+            prewarm: None,
         }
+    }
+    pub fn set_prewarm(&mut self, prewarm: Arc<crate::prewarm::Prewarm>) {
+        self.prewarm = Some(prewarm);
     }
     pub fn set_coordinator(&mut self, coordinator: Coordinator) {
         self.coordinator = Some(coordinator);
@@ -371,11 +488,7 @@ impl Switchboard {
         let (models, models_available, models_diagnostic) = if self.route == OPERATOR {
             (Vec::new(), true, None)
         } else if let Some(project) = &self.project {
-            let key = format!(
-                "{}\0{}",
-                project.host.as_deref().unwrap_or(""),
-                project.runtime
-            );
+            let key = crate::models::CatalogKey::for_project(project).to_key_string();
             self.catalogs
                 .get(&key)
                 .map(|catalog| {
@@ -428,6 +541,9 @@ impl Switchboard {
             session.close().await;
         }
         self.set_active_session(None).await;
+        if let Some(prewarm) = self.prewarm.take() {
+            prewarm.shutdown().await;
+        }
     }
     fn active(&self) -> Option<&PiSession> {
         if self.route == OPERATOR {
@@ -438,14 +554,24 @@ impl Switchboard {
     }
 
     pub async fn handle(&mut self, text: &str) -> Reply {
+        let context = TransferContext {
+            exact_caller_transcript: text.to_owned(),
+            derived_intent: String::new(),
+            direct_page_transfer_context: None,
+            selected_project_id: None,
+            return_operator_note: None,
+            project_summary: None,
+        };
+        self.handle_ctx(&context).await
+    }
+
+    pub async fn handle_ctx(&mut self, context: &TransferContext) -> Reply {
         self.touch_activity();
         let reply = if self.route == OPERATOR {
-            self.handle_operator(text).await
+            self.handle_operator_ctx(context).await
         } else {
-            self.handle_agent(text).await
+            self.handle_agent_ctx(context).await
         };
-        // A long healthy turn is activity too. Without this final touch, the
-        // idle worker can drop the leg immediately after a multi-minute reply.
         self.touch_activity();
         reply
     }
@@ -509,12 +635,10 @@ impl Switchboard {
             .as_ref()
             .ok_or_else(|| PiSessionError("operator session was not created".into()))
     }
-    async fn handle_operator(&mut self, text: &str) -> Reply {
+    async fn handle_operator_ctx(&mut self, context: &TransferContext) -> Reply {
         let session = match self.ensure_operator().await {
             Ok(session) => session.clone(),
             Err(e) => {
-                // Nothing downstream of here can recover: the operator is the
-                // fallback every other failure path returns to.
                 tracing::error!(error = %e, "operator unavailable");
                 return self.reply(
                     [format!("The operator is not answering: {e}")],
@@ -523,8 +647,13 @@ impl Switchboard {
             }
         };
         let message = self.operator_note.take().map_or_else(
-            || text.to_owned(),
-            |note| format!("[switchboard] {note}\n\n{text}"),
+            || context.exact_caller_transcript.clone(),
+            |note| {
+                format!(
+                    "[switchboard] {note}\n\n{}",
+                    context.exact_caller_transcript
+                )
+            },
         );
         let turn = match session.prompt(&message).await {
             Ok(turn) => turn,
@@ -547,11 +676,13 @@ impl Switchboard {
             return self.recover_operator(error).await;
         }
         if let Some(signal) = turn.signals.iter().find(|s| s.name == TRANSFER_TOOL) {
+            let mut onward_ctx = context.clone();
+            onward_ctx.derived_intent = arg(signal, "intent");
+            onward_ctx.selected_project_id = Some(arg(signal, "project"));
             return self
-                .transfer(
+                .transfer_ctx(
+                    &onward_ctx,
                     &arg(signal, "project"),
-                    &arg(signal, "intent"),
-                    turn.text.clone(),
                     &arg(signal, "model"),
                     &arg(signal, "thinking"),
                 )
@@ -559,12 +690,15 @@ impl Switchboard {
         }
         self.reply([turn.text], None)
     }
-    async fn handle_agent(&mut self, text: &str) -> Reply {
+
+    async fn handle_agent_ctx(&mut self, context: &TransferContext) -> Reply {
         let Some(session) = self.agent.clone() else {
             tracing::warn!(route = %self.route, "the project leg is gone; returning to the operator");
-            return self.return_operator("project session is gone").await;
+            return self
+                .return_operator_ctx(context, "project session is gone")
+                .await;
         };
-        let turn = match session.prompt(text).await {
+        let turn = match session.prompt(&context.exact_caller_transcript).await {
             Ok(t) => t,
             Err(error) => {
                 let detail = error.to_string();
@@ -605,15 +739,20 @@ impl Switchboard {
             );
         }
         if let Some(signal) = transfer {
+            let mut onward_ctx = context.clone();
+            onward_ctx.derived_intent = arg(signal, "intent");
+            onward_ctx.selected_project_id = Some(arg(signal, "project"));
             let onward = self
-                .transfer(
+                .transfer_ctx(
+                    &onward_ctx,
                     &arg(signal, "project"),
-                    &arg(signal, "intent"),
-                    String::new(),
                     &arg(signal, "model"),
                     &arg(signal, "thinking"),
                 )
                 .await;
+            if onward.error.is_none() && onward.route != OPERATOR {
+                return onward;
+            }
             return self.prepend(turn, onward);
         }
         if !returning {
@@ -629,9 +768,6 @@ impl Switchboard {
                 } else {
                     self.reply(["Model swapping is turned off on this switchboard."], None)
                 };
-                // A model-control tool is a signal, so any adjacent written text is
-                // transcript-only. The replacement leg (or this refusal) owns the
-                // spoken response.
                 self.prepend_utterance(&turn.text, false, &mut reply);
                 return reply;
             }
@@ -648,68 +784,155 @@ impl Switchboard {
                 .map(|summary| format!(" Summary from that agent: {summary}"))
                 .unwrap_or_default();
             let mut reply = self
-                .return_operator(&format!(
-                    "The caller was handed back from {}.{summary}",
-                    self.route_label()
-                ))
+                .return_operator_ctx(
+                    context,
+                    &format!(
+                        "The caller was handed back from {}.{summary}",
+                        self.route_label()
+                    ),
+                )
                 .await;
             self.prepend_utterance(&text, synthesize && reply.route == OPERATOR, &mut reply);
             return reply;
         }
         self.reply_with_turn(turn)
     }
-    async fn transfer(
+    pub async fn transfer_direct_page(&mut self, spoken: &str, page_context: &str) -> Reply {
+        let context = TransferContext {
+            exact_caller_transcript: String::new(),
+            derived_intent: String::new(),
+            direct_page_transfer_context: Some(page_context.to_owned()),
+            selected_project_id: Some(spoken.to_owned()),
+            return_operator_note: None,
+            project_summary: None,
+        };
+        self.transfer_ctx(&context, spoken, "", "").await
+    }
+
+    pub async fn transfer(
         &mut self,
         spoken: &str,
         intent: &str,
-        handoff: String,
+        _handoff: String,
         requested_model: &str,
         requested_thinking: &str,
     ) -> Reply {
-        let Some(project) = self.registry.resolve(spoken).cloned() else {
-            tracing::warn!(from = %self.route, requested = spoken, "transfer to an unknown project");
-            let known = self.registry.ids();
-            let known_text = if known.is_empty() {
-                "nothing yet".to_owned()
-            } else {
-                known.join(", ")
-            };
-            let from = (self.route != OPERATOR).then(|| self.route_label());
-            if from.is_some() {
-                self.drop_agent().await;
-            }
-            self.operator_note = Some(format!(
-                "Transfer to {spoken:?} failed. Known projects: {known_text}.{}",
-                from.map(|name| format!(" The caller was on {name}."))
-                    .unwrap_or_default()
-            ));
-            return self.reply_transfer_error(
-                handoff,
-                format!("I don't have a project called {spoken}. I know: {known_text}."),
-                Some(format!("unknown project {spoken:?}")),
-            );
+        let context = TransferContext {
+            exact_caller_transcript: String::new(),
+            derived_intent: intent.to_owned(),
+            direct_page_transfer_context: None,
+            selected_project_id: Some(spoken.to_owned()),
+            return_operator_note: None,
+            project_summary: None,
         };
+        self.transfer_ctx(&context, spoken, requested_model, requested_thinking)
+            .await
+    }
+
+    pub async fn transfer_ctx(
+        &mut self,
+        context: &TransferContext,
+        spoken: &str,
+        requested_model: &str,
+        requested_thinking: &str,
+    ) -> Reply {
+        let project = match self.registry.resolve_detailed(spoken) {
+            crate::registry::ResolveResult::Exact(project) => project.clone(),
+            crate::registry::ResolveResult::Ambiguous(candidates) => {
+                let candidates_text = candidates.join(", ");
+                let from = (self.route != OPERATOR).then(|| self.route_label());
+                if from.is_some() {
+                    self.drop_agent().await;
+                }
+                self.operator_note = Some(format!(
+                    "Transfer to {spoken:?} was ambiguous. Candidates: {candidates_text}.{}",
+                    from.map(|name| format!(" The caller was on {name}."))
+                        .unwrap_or_default()
+                ));
+                return self.reply_transfer_error(
+                    format!(
+                        "Which project did you mean by {spoken}? Candidates: {candidates_text}."
+                    ),
+                    Some(format!("ambiguous project {spoken:?}: {candidates_text}")),
+                );
+            }
+            crate::registry::ResolveResult::Unknown => {
+                let known = self.registry.ids();
+                let known_text = if known.is_empty() {
+                    "nothing yet".to_owned()
+                } else {
+                    known.join(", ")
+                };
+                let from = (self.route != OPERATOR).then(|| self.route_label());
+                if from.is_some() {
+                    self.drop_agent().await;
+                }
+                self.operator_note = Some(format!(
+                    "Transfer to {spoken:?} failed. Known projects: {known_text}.{}",
+                    from.map(|name| format!(" The caller was on {name}."))
+                        .unwrap_or_default()
+                ));
+                return self.reply_transfer_error(
+                    format!("I don't have a project called {spoken}. I know: {known_text}."),
+                    Some(format!("unknown project {spoken:?}")),
+                );
+            }
+        };
+
         tracing::info!(
             from = %self.route,
             to = %project.id,
-            host = project.host.as_deref().unwrap_or("<local>"),
+            host = project.canonical_host().unwrap_or("<local>"),
             cwd = %project.cwd,
-            intent,
-            "transferring the caller"
+            transcript_len = context.exact_caller_transcript.len(),
+            "transferring caller"
         );
+
         let previous_agent = self.agent.clone();
-        let (model, model_note) = self
-            .select_transfer_model(&project, requested_model, requested_thinking)
-            .await;
-        let prepared = self.run_prepare(&project).await;
+
+        let (readiness, _prepared_legacy) = if let Some(prewarm) = &self.prewarm {
+            match prewarm.await_project(&project).await {
+                Ok(r) => (Some(r), String::new()),
+                Err(err) => {
+                    tracing::warn!(project = %project.id, error = %err, "prewarm readiness failed");
+                    self.operator_note = Some(format!("Transfer to {} failed: {err}", project.id));
+                    return self.reply_transfer_error(
+                        format!("I couldn't get {} on the line: {err}", project.id),
+                        Some(err),
+                    );
+                }
+            }
+        } else {
+            let prepared = self.run_prepare(&project).await;
+            self.load_catalog(&project).await;
+            (None, prepared)
+        };
+
+        let catalog_ref = readiness.as_ref().and_then(|r| r.catalog.as_ref());
+        let model = match self
+            .select_transfer_model_resolved(
+                &project,
+                catalog_ref,
+                requested_model,
+                requested_thinking,
+            )
+            .await
+        {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(project = %project.id, error = %e, "transfer model selection failed");
+                self.operator_note = Some(format!("Transfer to {} failed: {e}", project.id));
+                return self.reply_transfer_error(
+                    format!("I couldn't get {} on the line: {e}", project.id),
+                    Some(e),
+                );
+            }
+        };
+
         let session_id = uuid_like();
         let leg_token = uuid_like();
+
         if let Some(coordinator) = &self.coordinator {
-            let catalog_key = format!(
-                "{}\0{}",
-                project.host.as_deref().unwrap_or(""),
-                project.runtime
-            );
             let candidate = CandidateLeg::new(
                 project.id.clone(),
                 project.id.clone(),
@@ -718,36 +941,80 @@ impl Switchboard {
                 model.clone(),
                 self.agent_thinking.clone(),
             );
-            let candidate = match self.catalogs.get(&catalog_key).cloned() {
-                Some(catalog) => candidate.with_catalog(catalog),
+            let candidate = match catalog_ref {
+                Some(catalog) => candidate.with_catalog(catalog.clone()),
                 None => candidate,
             };
             if let Err(error) = coordinator.begin_candidate(candidate) {
                 tracing::warn!(project = %project.id, %error, "candidate startup was refused");
                 return self.reply_transfer_error(
-                    handoff,
                     format!("I couldn't get {} on the line: {error}", project.id),
                     Some(error.to_string()),
                 );
             }
         }
-        // Start and introduce the candidate while the adopted route remains
-        // private. A failed process must not publish a half-connected project.
+
+        let client_options = if let Some(r) = &readiness {
+            if project.is_remote() {
+                let prewarm = self.prewarm.as_ref().unwrap();
+                match prewarm.client_for(project.canonical_host().unwrap(), r.transport_generation)
+                {
+                    Ok(opts) => Some(opts),
+                    Err(e) => {
+                        if let Some(coordinator) = &self.coordinator {
+                            coordinator
+                                .rollback_candidate(format!("transport options failed: {e}"));
+                        }
+                        self.operator_note =
+                            Some(format!("Transfer to {} failed: {e}", project.id));
+                        return self.reply_transfer_error(
+                            format!("I couldn't get {} on the line: {e}", project.id),
+                            Some(e),
+                        );
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // A prewarm artifact decision only overrides remote staging. Local
+        // projects still use the configured local extension file selected by
+        // `start_agent_with_options`.
+        let extension_override: Option<Option<&str>> = if project.is_remote() {
+            readiness.as_ref().map(|r| match &r.artifact_decision {
+                crate::prewarm::ArtifactDecision::Ready(p) => Some(p.as_str()),
+                crate::prewarm::ArtifactDecision::Sentinel(_)
+                | crate::prewarm::ArtifactDecision::None => None,
+            })
+        } else {
+            None
+        };
+
         let session = match self
-            .start_agent(&project, &model, &session_id, &leg_token)
+            .start_agent_with_options(
+                &project,
+                &model,
+                &session_id,
+                &leg_token,
+                client_options.as_ref(),
+                extension_override,
+            )
             .await
         {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!(
                     project = %project.id,
-                    host = project.host.as_deref().unwrap_or("<local>"),
+                    host = project.canonical_host().unwrap_or("<local>"),
                     error = %e,
-                    "could not connect to the project"
+                    "could not connect to project"
                 );
-                if project.is_remote() {
+                if readiness.is_none() && project.is_remote() {
                     self.rollback_staged_extension(
-                        project.host.as_deref().unwrap_or_default(),
+                        project.canonical_host().unwrap_or_default(),
                         &leg_token,
                     )
                     .await;
@@ -758,25 +1025,21 @@ impl Switchboard {
                 self.set_active_session(previous_agent.clone()).await;
                 self.operator_note = Some(format!("Transfer to {} failed: {e}", project.id));
                 return self.reply_transfer_error(
-                    handoff,
                     format!("I couldn't get {} on the line: {e}", project.id),
                     Some(e.to_string()),
                 );
             }
         };
-        // Keep the candidate resource reachable for rescue, but do not publish
-        // route/status until its intro has settled successfully.
+
         self.set_active_session(Some(session.clone())).await;
-        let workspace = if prepared.is_empty() {
-            String::new()
-        } else {
-            format!("\nState of your working copy: {prepared}\n")
-        };
-        let intro = format!("The switchboard has just connected a caller to you.\nThey asked for: {}\n{workspace}Greet them in one short sentence and start if appropriate.", if intent.is_empty() { "nothing specific" } else { intent });
-        let turn = match session.prompt(&intro).await {
+
+        let prepare_rep = readiness.as_ref().and_then(|r| r.prepare_report.as_ref());
+        let intro_prompt = build_intro_prompt(context, &project, prepare_rep);
+
+        let turn = match session.prompt(&intro_prompt).await {
             Ok(t) => t,
             Err(e) => {
-                tracing::warn!(project = %project.id, error = %e, "intro prompt to the project failed");
+                tracing::warn!(project = %project.id, error = %e, "intro prompt to project failed");
                 Turn {
                     text: String::new(),
                     signals: vec![],
@@ -785,6 +1048,7 @@ impl Switchboard {
                 }
             }
         };
+
         if turn.failed && turn.text.is_empty() {
             let detail = if !turn.error.trim().is_empty() {
                 turn.error
@@ -796,11 +1060,11 @@ impl Switchboard {
                     tail
                 }
             };
-            tracing::error!(project = %project.id, %detail, "the project never answered its intro; returning to the operator");
+            tracing::error!(project = %project.id, %detail, "project intro turn failed");
             session.close().await;
-            if project.is_remote() {
+            if readiness.is_none() && project.is_remote() {
                 self.rollback_staged_extension(
-                    project.host.as_deref().unwrap_or_default(),
+                    project.canonical_host().unwrap_or_default(),
                     &leg_token,
                 )
                 .await;
@@ -809,36 +1073,37 @@ impl Switchboard {
             if let Some(coordinator) = &self.coordinator {
                 coordinator.rollback_candidate(format!("intro failed: {detail}"));
             }
-            self.operator_note = Some(format!("The transfer to {} failed: {detail}", project.id));
+            self.operator_note = Some(format!("Transfer to {} failed: {detail}", project.id));
             return self.reply_transfer_error(
-                handoff,
                 format!("{} didn't pick up: {detail}", project.id),
                 Some(detail),
             );
         }
+
         if let Some(coordinator) = &self.coordinator {
             if let Err(error) = coordinator.adopt_candidate() {
                 session.close().await;
                 self.set_active_session(previous_agent.clone()).await;
-                if project.is_remote() {
+                if readiness.is_none() && project.is_remote() {
                     self.rollback_staged_extension(
-                        project.host.as_deref().unwrap_or_default(),
+                        project.canonical_host().unwrap_or_default(),
                         &leg_token,
                     )
                     .await;
                 }
                 coordinator.rollback_candidate(format!("adoption failed: {error}"));
                 return self.reply_transfer_error(
-                    handoff,
                     format!("{} did not come up.", project.id),
                     Some(error.to_string()),
                 );
             }
         }
-        if project.is_remote() {
-            self.commit_staged_extension(project.host.as_deref().unwrap_or_default(), &leg_token)
+
+        if readiness.is_none() && project.is_remote() {
+            self.commit_staged_extension(project.canonical_host().unwrap_or_default(), &leg_token)
                 .await;
         }
+
         self.drop_agent().await;
         self.project = Some(project.clone());
         self.route = project.id.clone();
@@ -848,21 +1113,25 @@ impl Switchboard {
         self.agent = Some(session);
         self.set_active_session(self.agent.clone()).await;
         self.announce_route().await;
-        self.reply_with_transfer_turn(turn, handoff, model_note)
+        self.reply_with_transfer_turn(turn)
     }
-    async fn start_agent(
+    async fn start_agent_with_options(
         &self,
         project: &Project,
         model: &str,
         session_id: &str,
         leg_token: &str,
+        client_options: Option<&crate::pi_client::SshClientOptions>,
+        extension_override: Option<Option<&str>>,
     ) -> Result<PiSession, PiSessionError> {
         let mut env = self.env.clone();
         let agent_env = self.agent_env(leg_token);
         env.extend(agent_env.clone());
-        let extension = if project.is_remote() {
+        let extension = if let Some(ext) = extension_override {
+            ext.map(str::to_owned)
+        } else if project.is_remote() {
             if project.stage_extension {
-                self.stage_extension(project.host.as_deref().unwrap_or_default(), leg_token)
+                self.stage_extension(project.canonical_host().unwrap_or_default(), leg_token)
                     .await
             } else {
                 None
@@ -878,17 +1147,31 @@ impl Switchboard {
         // about a tool that never loaded.
         let brief = self.agent_brief(project, extension.is_some());
         let argv = if project.is_remote() {
-            remote_argv(
-                project.host.as_deref().unwrap_or_default(),
-                &project.cwd,
-                &project.runtime,
-                (!model.is_empty()).then_some(model),
-                extension.as_deref(),
-                Some(&brief),
-                Some(session_id),
-                &project.extra_args,
-                &agent_env,
-            )
+            if let Some(opts) = client_options {
+                opts.remote_argv(
+                    &project.cwd,
+                    &project.runtime,
+                    (!model.is_empty()).then_some(model),
+                    extension.as_deref(),
+                    Some(&brief),
+                    Some(session_id),
+                    &project.extra_args,
+                    &agent_env,
+                )
+            } else {
+                remote_argv_with_program(
+                    &self.ssh_program,
+                    project.canonical_host().unwrap_or_default(),
+                    &project.cwd,
+                    &project.runtime,
+                    (!model.is_empty()).then_some(model),
+                    extension.as_deref(),
+                    Some(&brief),
+                    Some(session_id),
+                    &project.extra_args,
+                    &agent_env,
+                )
+            }
         } else {
             let mut a = vec![project.runtime.clone(), "--mode".into(), "rpc".into()];
             if !model.is_empty() {
@@ -972,7 +1255,7 @@ impl Switchboard {
             return String::new();
         }
         let mut command = if project.is_remote() {
-            let host = match ValidatedSshTarget::new(project.host.as_deref().unwrap_or_default()) {
+            let host = match ValidatedSshTarget::new(project.canonical_host().unwrap_or_default()) {
                 Ok(host) => host,
                 Err(error) => {
                     tracing::warn!(project = %project.id, %error, "refusing invalid SSH target");
@@ -984,17 +1267,8 @@ impl Switchboard {
                 crate::pi_client::shell_quote(&project.cwd),
                 project.prepare
             );
-            let mut command = Command::new("ssh");
-            command.args([
-                "-T",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=10",
-                host.as_str(),
-                &remote,
-            ]);
-            command
+            let options = crate::pi_client::SshClientOptions::new(&self.ssh_program, host);
+            options.remote_command(&remote)
         } else {
             let mut command = Command::new("sh");
             command.args(["-c", project.prepare.as_str()]);
@@ -1089,7 +1363,8 @@ impl Switchboard {
     }
 
     async fn upload_extension(&self, key: &str, host: &str) -> Option<String> {
-        self.upload_extension_with_key("ssh", key, host).await
+        self.upload_extension_with_key(&self.ssh_program, key, host)
+            .await
     }
 
     async fn commit_staged_extension(&self, host: &str, candidate_token: &str) {
@@ -1099,7 +1374,7 @@ impl Switchboard {
         let Ok(target) = ValidatedSshTarget::new(host) else {
             return;
         };
-        ExtensionStageTxn::new("ssh", target, path).commit();
+        ExtensionStageTxn::new(&self.ssh_program, target, path).commit();
     }
 
     async fn rollback_staged_extension(&self, host: &str, candidate_token: &str) {
@@ -1109,7 +1384,7 @@ impl Switchboard {
         let Ok(target) = ValidatedSshTarget::new(host) else {
             return;
         };
-        let txn = ExtensionStageTxn::new("ssh", target, path);
+        let txn = ExtensionStageTxn::new(&self.ssh_program, target, path);
         if let Err(error) = txn.rollback().await {
             tracing::warn!(host, %error, "stage cleanup is unverified");
         }
@@ -1180,17 +1455,9 @@ impl Switchboard {
         let command = format!(
             "set -e; mkdir -p {cache_path}; cat > {target_path}; printf '%s' {target_path}"
         );
-        let mut stage_command = Command::new(ssh_program);
+        let options = crate::pi_client::SshClientOptions::new(ssh_program, host.clone());
+        let mut stage_command = options.remote_command(&command);
         stage_command
-            .args([
-                "-T",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=10",
-                host.as_str(),
-                &command,
-            ])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
@@ -1309,15 +1576,12 @@ impl Switchboard {
         e
     }
     async fn load_catalog(&mut self, project: &Project) {
-        let key = format!(
-            "{}\0{}",
-            project.host.as_deref().unwrap_or(""),
-            project.runtime
-        );
+        let key = crate::models::CatalogKey::for_project(project).to_key_string();
         if let std::collections::hash_map::Entry::Vacant(e) = self.catalogs.entry(key) {
-            let catalog = fetch_catalog(&crate::pi_client::list_models_argv(
+            let catalog = fetch_catalog(&crate::pi_client::list_models_argv_with_program(
+                &self.ssh_program,
                 &project.runtime,
-                project.host.as_deref().unwrap_or(""),
+                project.canonical_host().unwrap_or(""),
             ))
             .await;
             e.insert(catalog);
@@ -1341,48 +1605,126 @@ impl Switchboard {
             model.to_owned()
         };
         self.load_catalog(project).await;
-        let key = format!(
-            "{}\0{}",
-            project.host.as_deref().unwrap_or(""),
-            project.runtime
-        );
+        let key = crate::models::CatalogKey::for_project(project).to_key_string();
         self.catalogs
             .get(&key)
             .ok_or_else(|| ModelError("the model catalog was unavailable".into()))?
             .resolve(&requested, thinking)
     }
 
-    async fn select_transfer_model(
+    async fn select_transfer_model_resolved(
+        &mut self,
+        project: &Project,
+        catalog: Option<&ModelCatalog>,
+        requested_model: &str,
+        requested_thinking: &str,
+    ) -> Result<String, String> {
+        if !self.model_swaps {
+            let fallback = pin_thinking(
+                project
+                    .model
+                    .as_deref()
+                    .or(self.agent_model.as_deref())
+                    .unwrap_or(""),
+                &self.agent_thinking,
+            );
+            return Ok(fallback);
+        }
+
+        self.resolve_model_with_catalog(project, catalog, requested_model, requested_thinking)
+            .map(|choice| pin_thinking(&choice.spec(), &self.agent_thinking))
+    }
+
+    fn resolve_model_with_catalog(
+        &self,
+        project: &Project,
+        catalog: Option<&ModelCatalog>,
+        model: &str,
+        thinking: &str,
+    ) -> Result<ModelChoice, String> {
+        let requested = if model.trim().is_empty() {
+            project
+                .model
+                .as_deref()
+                .or(self.agent_model.as_deref())
+                .unwrap_or("")
+                .to_owned()
+        } else {
+            model.to_owned()
+        };
+
+        if let Some(cat) = catalog {
+            cat.resolve(&requested, thinking).map_err(|e| e.to_string())
+        } else {
+            let (wanted_provider, wanted_model, spec_thinking) =
+                crate::models::parse_spec(&requested);
+            let level = if thinking.trim().is_empty() {
+                spec_thinking
+            } else {
+                thinking.trim().to_string()
+            };
+            let level = if level.is_empty() {
+                self.agent_thinking.clone()
+            } else {
+                normalize_thinking(&level).map_err(|e| e.to_string())?
+            };
+            if requested.is_empty() {
+                return Ok(ModelChoice {
+                    provider: String::new(),
+                    model: String::new(),
+                    thinking: level,
+                });
+            }
+            if !wanted_provider.is_empty() {
+                Ok(ModelChoice {
+                    provider: wanted_provider,
+                    model: wanted_model,
+                    thinking: level,
+                })
+            } else {
+                Err(format!(
+                    "catalog unavailable to resolve bare model {requested:?}"
+                ))
+            }
+        }
+    }
+
+    pub async fn select_transfer_model(
         &mut self,
         project: &Project,
         requested_model: &str,
         requested_thinking: &str,
     ) -> (String, String) {
-        let fallback = pin_thinking(
-            project
-                .model
-                .as_deref()
-                .or(self.agent_model.as_deref())
-                .unwrap_or(""),
-            &self.agent_thinking,
-        );
-        if !self.model_swaps {
-            return (fallback, String::new());
-        }
-        if requested_model.trim().is_empty() {
+        if self.prewarm.is_none() {
             self.load_catalog(project).await;
-            return (fallback, String::new());
         }
-
+        let catalog_key = crate::models::CatalogKey::for_project(project);
+        let catalog_ref = if let Some(prewarm) = &self.prewarm {
+            prewarm.catalog_snapshot(project)
+        } else {
+            self.catalogs.get(&catalog_key.to_key_string()).cloned()
+        };
         match self
-            .resolve_model(project, requested_model, requested_thinking)
+            .select_transfer_model_resolved(
+                project,
+                catalog_ref.as_ref(),
+                requested_model,
+                requested_thinking,
+            )
             .await
         {
-            Ok(choice) => (
-                pin_thinking(&choice.spec(), &self.agent_thinking),
-                String::new(),
+            Ok(m) => (m, String::new()),
+            Err(e) => (
+                pin_thinking(
+                    project
+                        .model
+                        .as_deref()
+                        .or(self.agent_model.as_deref())
+                        .unwrap_or(""),
+                    &self.agent_thinking,
+                ),
+                format!("About the model: {e}"),
             ),
-            Err(error) => (fallback, format!("About the model: {error}")),
         }
     }
 
@@ -1464,11 +1806,7 @@ impl Switchboard {
         let leg_token = uuid_like();
         let _previous_agent = self.agent.clone();
         if let Some(coordinator) = &self.coordinator {
-            let catalog_key = format!(
-                "{}\0{}",
-                project.host.as_deref().unwrap_or(""),
-                project.runtime
-            );
+            let catalog_key = crate::models::CatalogKey::for_project(&project).to_key_string();
             let candidate = CandidateLeg::new(
                 project.id.clone(),
                 project.id.clone(),
@@ -1489,16 +1827,52 @@ impl Switchboard {
                 );
             }
         }
+        let (client_options, extension_override) = if let Some(prewarm) = &self.prewarm {
+            match prewarm.await_project(&project).await {
+                Ok(readiness) => {
+                    let opts = if project.is_remote() {
+                        prewarm
+                            .client_for(
+                                project.canonical_host().unwrap_or_default(),
+                                readiness.transport_generation,
+                            )
+                            .ok()
+                    } else {
+                        None
+                    };
+                    let ext = if project.is_remote() {
+                        match &readiness.artifact_decision {
+                            crate::prewarm::ArtifactDecision::Ready(p) => Some(Some(p.clone())),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+                    (opts, ext)
+                }
+                Err(_) => (None, None),
+            }
+        } else {
+            (None, None)
+        };
+
         let session = match self
-            .start_agent(&project, &spec, &session_id, &leg_token)
+            .start_agent_with_options(
+                &project,
+                &spec,
+                &session_id,
+                &leg_token,
+                client_options.as_ref(),
+                extension_override.as_ref().map(|opt| opt.as_deref()),
+            )
             .await
         {
             Ok(session) => session,
             Err(error) => {
                 tracing::error!(project = %project.id, %spec, %error, "could not restart the leg on the new model");
-                if project.is_remote() {
+                if project.is_remote() && extension_override.is_none() {
                     self.rollback_staged_extension(
-                        project.host.as_deref().unwrap_or_default(),
+                        project.canonical_host().unwrap_or_default(),
                         &leg_token,
                     )
                     .await;
@@ -1562,9 +1936,9 @@ impl Switchboard {
             };
             tracing::error!(project = %project.id, %spec, %detail, "the swapped leg never answered");
             session.close().await;
-            if project.is_remote() {
+            if project.is_remote() && extension_override.is_none() {
                 self.rollback_staged_extension(
-                    project.host.as_deref().unwrap_or_default(),
+                    project.canonical_host().unwrap_or_default(),
                     &leg_token,
                 )
                 .await;
@@ -1589,9 +1963,9 @@ impl Switchboard {
         if let Some(coordinator) = &self.coordinator {
             if let Err(error) = coordinator.adopt_candidate() {
                 session.close().await;
-                if project.is_remote() {
+                if project.is_remote() && extension_override.is_none() {
                     self.rollback_staged_extension(
-                        project.host.as_deref().unwrap_or_default(),
+                        project.canonical_host().unwrap_or_default(),
                         &leg_token,
                     )
                     .await;
@@ -1604,8 +1978,8 @@ impl Switchboard {
                 );
             }
         }
-        if project.is_remote() {
-            self.commit_staged_extension(project.host.as_deref().unwrap_or_default(), &leg_token)
+        if project.is_remote() && extension_override.is_none() {
+            self.commit_staged_extension(project.canonical_host().unwrap_or_default(), &leg_token)
                 .await;
         }
         self.drop_agent().await;
@@ -1619,12 +1993,23 @@ impl Switchboard {
         self.announce_route().await;
         self.reply_with_turn(turn)
     }
+    #[allow(dead_code)]
     async fn return_operator(&mut self, note: &str) -> Reply {
+        let context = TransferContext {
+            exact_caller_transcript: String::new(),
+            derived_intent: String::new(),
+            direct_page_transfer_context: None,
+            selected_project_id: None,
+            return_operator_note: Some(note.to_owned()),
+            project_summary: None,
+        };
+        self.return_operator_ctx(&context, note).await
+    }
+
+    async fn return_operator_ctx(&mut self, context: &TransferContext, note: &str) -> Reply {
         self.drop_agent().await;
-        // Prompt the operator immediately so an onward destination in the note
-        // is acted on now, not stapled onto the caller's next utterance.
         let note = note.to_owned();
-        let reply = self.handle_operator(&format!("[switchboard] {note}")).await;
+        let reply = self.handle_operator_ctx(context).await;
         if reply.error.is_some() {
             self.operator_note = Some(note);
         }
@@ -1692,50 +2077,29 @@ impl Switchboard {
             failed.then_some(error),
         )
     }
-    fn reply_transfer_error(
-        &self,
-        handoff: String,
-        message: String,
-        error: Option<String>,
-    ) -> Reply {
+    fn reply_transfer_error(&self, message: String, error: Option<String>) -> Reply {
         Reply::new(
             &self.route,
             &self.route_label(),
-            vec![
-                Utterance {
-                    text: handoff,
-                    synthesize: false,
-                },
-                Utterance {
-                    text: message,
-                    synthesize: true,
-                },
-            ],
+            vec![Utterance {
+                text: message,
+                synthesize: true,
+            }],
             error,
         )
     }
 
-    fn reply_with_transfer_turn(&self, turn: Turn, handoff: String, model_note: String) -> Reply {
-        let mut texts = Vec::new();
-        texts.push(Utterance {
-            text: handoff,
-            synthesize: false,
-        });
-        texts.push(Utterance {
-            text: model_note,
-            synthesize: true,
-        });
+    fn reply_with_transfer_turn(&self, turn: Turn) -> Reply {
         let spoke = turn.agent_spoke();
         let failed = turn.failed;
         let error = turn.error;
-        texts.push(Utterance {
-            text: turn.text,
-            synthesize: !spoke,
-        });
         Reply::new(
             &self.route,
             &self.route_label(),
-            texts,
+            vec![Utterance {
+                text: turn.text,
+                synthesize: !spoke,
+            }],
             failed.then_some(error),
         )
     }
@@ -1856,7 +2220,7 @@ fn arg(signal: &Signal, name: &str) -> String {
         .unwrap_or_default()
         .to_owned()
 }
-fn uuid_like() -> String {
+pub(crate) fn uuid_like() -> String {
     format!(
         "{:x}-{:x}",
         std::time::SystemTime::now()
@@ -1986,7 +2350,7 @@ done
         board.project = Some(project);
         board.model_spec = "anthropic/current:high".into();
         board.catalogs.insert(
-            "\0pi".into(),
+            ":pi".into(),
             ModelCatalog {
                 entries: vec![crate::models::CatalogEntry {
                     provider: "anthropic".into(),
@@ -2029,7 +2393,7 @@ done
         let (model, note) = enabled.select_transfer_model(&project, "", "").await;
         assert_eq!(model, "anthropic/default:medium");
         assert!(note.is_empty());
-        assert!(enabled.catalogs.contains_key("\0definitely-missing-pi"));
+        assert!(enabled.catalogs.contains_key(":definitely-missing-pi"));
 
         let (model, note) = enabled
             .select_transfer_model(&project, "other/requested:high", "")
@@ -2049,26 +2413,16 @@ done
     #[test]
     fn transfer_handoff_is_silent_but_model_notes_and_failures_are_spoken() {
         let board = board_with(vec![], true);
-        let reply = board.reply_with_transfer_turn(
-            Turn {
-                text: "Ready.".into(),
-                signals: vec![],
-                failed: false,
-                error: String::new(),
-            },
-            "Putting you through.".into(),
-            "About the model: that name was ambiguous.".into(),
-        );
-        assert_eq!(
-            reply.to_speak,
-            ["About the model: that name was ambiguous.", "Ready."]
-        );
+        let reply = board.reply_with_transfer_turn(Turn {
+            text: "Ready.".into(),
+            signals: vec![],
+            failed: false,
+            error: String::new(),
+        });
+        assert_eq!(reply.to_speak, ["Ready."]);
 
-        let failed = board.reply_transfer_error(
-            "Putting you through.".into(),
-            "The project did not answer.".into(),
-            Some("failed".into()),
-        );
+        let failed =
+            board.reply_transfer_error("The project did not answer.".into(), Some("failed".into()));
         assert_eq!(failed.to_speak, ["The project did not answer."]);
     }
 
@@ -2117,7 +2471,7 @@ done
         board.route = "alpha".into();
         board.model_spec = "anthropic/current:high".into();
         board.catalogs.insert(
-            "\0pi".into(),
+            ":pi".into(),
             ModelCatalog {
                 entries: vec![crate::models::CatalogEntry {
                     provider: "anthropic".into(),
@@ -2156,7 +2510,7 @@ done
         board.route = "alpha".into();
         board.model_spec = "anthropic/current:high".into();
         board.catalogs.insert(
-            format!("\0{}", project.runtime),
+            crate::models::CatalogKey::for_project(&project).to_key_string(),
             ModelCatalog {
                 entries: vec![
                     crate::models::CatalogEntry {
@@ -2181,6 +2535,88 @@ done
         assert_eq!(board.status()["model"], "anthropic/next:high");
         board.shutdown().await;
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn transfer_model_selection_honors_thinking_without_model() {
+        let project = Project {
+            id: "alpha".into(),
+            description: String::new(),
+            aliases: vec![],
+            host: None,
+            cwd: String::new(),
+            runtime: "pi".into(),
+            model: Some("anthropic/claude-3-5-sonnet".into()),
+            stage_extension: true,
+            extra_args: vec![],
+            prepare: String::new(),
+        };
+
+        let mut board = board_with(vec![project.clone()], true);
+        board.catalogs.insert(
+            ":pi".into(),
+            ModelCatalog {
+                entries: vec![crate::models::CatalogEntry {
+                    provider: "anthropic".into(),
+                    model: "claude-3-5-sonnet".into(),
+                    thinks: true,
+                }],
+                available: true,
+                diagnostic: None,
+            },
+        );
+
+        let (model, note) = board.select_transfer_model(&project, "", "high").await;
+        assert_eq!(model, "anthropic/claude-3-5-sonnet:high");
+        assert!(note.is_empty());
+    }
+
+    #[tokio::test]
+    async fn transfer_ctx_ambiguous_project_returns_candidate_options() {
+        let p1 = Project {
+            id: "proj-a".into(),
+            description: String::new(),
+            aliases: vec!["shared".into()],
+            host: None,
+            cwd: String::new(),
+            runtime: "pi".into(),
+            model: None,
+            stage_extension: false,
+            extra_args: vec![],
+            prepare: String::new(),
+        };
+        let p2 = Project {
+            id: "proj-b".into(),
+            description: String::new(),
+            aliases: vec!["shared".into()],
+            host: None,
+            cwd: String::new(),
+            runtime: "pi".into(),
+            model: None,
+            stage_extension: false,
+            extra_args: vec![],
+            prepare: String::new(),
+        };
+
+        let mut board = board_with(vec![p1, p2], true);
+        let ctx = TransferContext {
+            exact_caller_transcript: "transfer to shared".into(),
+            derived_intent: String::new(),
+            direct_page_transfer_context: None,
+            selected_project_id: None,
+            return_operator_note: None,
+            project_summary: None,
+        };
+
+        let reply = board.transfer_ctx(&ctx, "shared", "", "").await;
+        assert!(reply.to_speak.iter().any(
+            |s| s.contains("Which project did you mean by shared? Candidates: proj-a, proj-b.")
+        ));
+        assert!(board
+            .operator_note
+            .as_deref()
+            .unwrap_or("")
+            .contains("was ambiguous"));
     }
 
     #[cfg(unix)]
@@ -2227,8 +2663,7 @@ done
 
         let connected = board.handle("put me through").await;
         assert_eq!(connected.route, "alpha");
-        assert!(connected.text.contains("Connecting now."));
-        assert!(connected.text.contains("Alpha is ready."));
+        assert_eq!(connected.text, "Alpha is ready.");
         assert_eq!(board.route(), "alpha");
         let first_project_status = statuses
             .lock()
@@ -2378,5 +2813,251 @@ done
             None
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unicode_payload_preserved_in_transfer_context_and_intro_prompt() {
+        let unicode_text =
+            "Caller voice text with Unicode: 🌐 🚀 日本語, emoji, and quote \"hello\".";
+        let context = TransferContext {
+            exact_caller_transcript: unicode_text.to_owned(),
+            derived_intent: "intent with 日本語".to_owned(),
+            direct_page_transfer_context: None,
+            selected_project_id: Some("alpha".to_owned()),
+            return_operator_note: None,
+            project_summary: None,
+        };
+        let project = Project {
+            id: "alpha".into(),
+            description: "Alpha project".into(),
+            aliases: vec![],
+            host: None,
+            cwd: "/srv/alpha".into(),
+            runtime: "pi".into(),
+            model: None,
+            stage_extension: false,
+            extra_args: vec![],
+            prepare: String::new(),
+        };
+        let intro = build_intro_prompt(&context, &project, None);
+        assert!(intro.contains(unicode_text));
+        assert!(intro.contains("intent with 日本語"));
+        assert!(intro.contains(&format!("Bytes: {}", unicode_text.len())));
+    }
+
+    #[test]
+    fn model_fallback_preserves_qualified_and_rejects_bare_when_catalog_unavailable() {
+        let project = Project {
+            id: "alpha".into(),
+            description: String::new(),
+            aliases: vec![],
+            host: None,
+            cwd: String::new(),
+            runtime: "pi".into(),
+            model: None,
+            stage_extension: false,
+            extra_args: Vec::new(),
+            prepare: String::new(),
+        };
+        let board = board_with(vec![project.clone()], true);
+
+        // Catalog unavailable (None)
+        let qualified =
+            board.resolve_model_with_catalog(&project, None, "anthropic/claude-3-5-sonnet", "high");
+        assert!(qualified.is_ok());
+        let choice = qualified.unwrap();
+        assert_eq!(choice.provider, "anthropic");
+        assert_eq!(choice.model, "claude-3-5-sonnet");
+        assert_eq!(choice.thinking, "high");
+
+        let bare = board.resolve_model_with_catalog(&project, None, "claude-3-5-sonnet", "high");
+        assert!(bare.is_err());
+
+        // Catalog marked unavailable (ModelCatalog::unavailable)
+        let unavail_cat = ModelCatalog {
+            entries: vec![],
+            available: false,
+            diagnostic: Some("listing failed".into()),
+        };
+        let qualified_unavail = board.resolve_model_with_catalog(
+            &project,
+            Some(&unavail_cat),
+            "openai/gpt-4o",
+            "medium",
+        );
+        assert!(qualified_unavail.is_ok());
+        let bare_unavail =
+            board.resolve_model_with_catalog(&project, Some(&unavail_cat), "gpt-4o", "medium");
+        assert!(bare_unavail.is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn direct_agent_to_agent_transfer_context_and_no_prepended_text() {
+        let root = std::env::temp_dir().join(format!(
+            "switchboard-direct-transfer-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let runtime = root.join("fake-pi");
+        crate::pi_client::write_executable_script(
+            &runtime,
+            r##"mode=""
+for arg in "$@"; do
+    if [ "$arg" = "--no-builtin-tools" ]; then mode="operator"; fi
+done
+count=0
+while IFS= read -r line; do
+    count=$((count + 1))
+    if [ "$mode" = "operator" ]; then
+        printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Handoff to alpha."}}'
+        printf '%s\n' '{"type":"tool_execution_start","toolName":"transfer_to_project","args":{"project":"alpha","intent":"start work"}}'
+    else
+        if [ "$count" -eq 1 ]; then
+            if echo "$line" | grep -q "ID: beta"; then
+                printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Beta response."}}'
+            else
+                printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Alpha response."}}'
+            fi
+        else
+            if echo "$line" | grep -q "ID: beta"; then
+                printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Beta done."}}'
+            else
+                printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Alpha transferring to Beta."}}'
+                printf '%s\n' '{"type":"tool_execution_start","toolName":"transfer_to_project","args":{"project":"beta","intent":"continue work"}}'
+            fi
+        fi
+    fi
+    printf '%s\n' '{"type":"agent_settled"}'
+done
+"##,
+        );
+
+        let alpha = Project {
+            id: "alpha".into(),
+            description: "Alpha project".into(),
+            aliases: vec![],
+            host: None,
+            cwd: root.to_string_lossy().into_owned(),
+            runtime: runtime.to_string_lossy().into_owned(),
+            model: None,
+            stage_extension: false,
+            extra_args: Vec::new(),
+            prepare: String::new(),
+        };
+        let beta = Project {
+            id: "beta".into(),
+            description: "Beta project".into(),
+            aliases: vec![],
+            host: None,
+            cwd: root.to_string_lossy().into_owned(),
+            runtime: runtime.to_string_lossy().into_owned(),
+            model: None,
+            stage_extension: false,
+            extra_args: Vec::new(),
+            prepare: String::new(),
+        };
+
+        let mut board = Switchboard::new(
+            Registry::new(vec![alpha, beta]),
+            runtime.to_string_lossy().into_owned(),
+            None,
+            String::new(),
+            None,
+            None,
+            None,
+            "medium".into(),
+            ".cache/switchboard".into(),
+            true,
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            HashMap::new(),
+        );
+
+        let r1 = board.handle("connect me to alpha").await;
+        assert_eq!(r1.route, "alpha");
+        assert_eq!(r1.text, "Alpha response.");
+
+        // Direct agent-to-agent transfer: Alpha transfers to Beta
+        let r2 = board.handle("please hand off to beta").await;
+        assert_eq!(r2.route, "beta");
+        assert_eq!(r2.text, "Beta response.");
+        assert_eq!(r2.to_speak, vec!["Beta response."]);
+        assert!(!r2.text.contains("Alpha transferring to Beta."));
+
+        board.shutdown().await;
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn no_live_setup_when_prewarm_attached() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("switchboard-prewarm-test-{}", uuid_like()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let config = crate::Config {
+            env_file: temp_dir.join("env"),
+            state_dir: temp_dir.join("state"),
+            config_dir: temp_dir.join("config"),
+            projects_file: temp_dir.join("projects.json"),
+            operator_prompt: temp_dir.join("op.md"),
+            operator_extension: None,
+            agent_extension: None,
+            persona: String::new(),
+            stt_command: None,
+            stt_stream_command: None,
+            bind: "127.0.0.1:0".into(),
+            pi_binary: "pi".into(),
+            ssh_program: "ssh".into(),
+            operator_model: None,
+            agent_model: None,
+            agent_thinking: "medium".into(),
+            remote_cache_dir: ".cache/switchboard".into(),
+            model_swaps: true,
+            self_url: String::new(),
+            idle_timeout: 3600.0,
+            idle_poll: 30.0,
+            max_spoken_chars: 700,
+            speech_deadline_ms: 25000,
+            history_limit: 100,
+            session: String::new(),
+            speak_url: String::new(),
+            state_url: String::new(),
+            diagram_url: String::new(),
+            environment: HashMap::new(),
+        };
+
+        let project = Project {
+            id: "local_proj".into(),
+            description: "Local Project".into(),
+            aliases: vec![],
+            host: None,
+            cwd: temp_dir.to_string_lossy().into_owned(),
+            runtime: "pi".into(),
+            model: Some("anthropic/claude-3-5-sonnet".into()),
+            stage_extension: false,
+            extra_args: vec![],
+            prepare: "echo 'prepare executed'".into(),
+        };
+
+        let registry = Registry::new(vec![project.clone()]);
+        let prewarm = Arc::new(crate::prewarm::Prewarm::start(&config, &registry).await);
+        let mut board = board_with(vec![project.clone()], true);
+        board.set_prewarm(prewarm.clone());
+
+        // Select model uses prewarm catalog snapshot without live catalog fetch
+        let (model, note) = board.select_transfer_model(&project, "", "").await;
+        assert_eq!(model, "anthropic/claude-3-5-sonnet:medium");
+        assert!(note.is_empty());
+
+        let readiness = prewarm.await_project(&project).await.unwrap();
+        assert_eq!(readiness.transport_generation, 0);
+
+        let _ = std::fs::remove_dir_all(temp_dir);
     }
 }

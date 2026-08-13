@@ -663,7 +663,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 		name: "transfer_to_project",
 		label: "Transfer",
 		description:
-			"Put the caller straight through to another project's agent, without going back through the operator. Call this when they ask to be sent somewhere else and name a project you were told exists \u2014 the connection happens the moment you call it, and the next voice they hear is that agent, so say nothing alongside this call. Pass what they want done as `intent`. If you are not sure the project exists, use `return_to_operator` instead.",
+			"Put the caller straight through to another project's agent, without going back through the operator. Call this when they ask to be sent somewhere else and name a project you were told exists \u2014 the transfer is silent, and the target project addresses the request immediately without a greeting, so say nothing alongside this call. Pass what they want done as `intent`. If you are not sure the project exists, use `return_to_operator` instead.",
 		parameters: Type.Object({
 			project: Type.String({
 				description:
@@ -692,7 +692,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 				content: [
 					{
 						type: "text",
-						text: `Connecting the caller to ${params.project}. You are off this call now; say nothing further \u2014 anything you write here is not spoken.`,
+						text: `Connecting the caller to ${params.project}. Transfer is silent; say nothing further \u2014 anything you write here is omitted.`,
 					},
 				],
 				details: { project: params.project },

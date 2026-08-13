@@ -49,6 +49,39 @@ impl ModelChoice {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct CatalogKey {
+    pub host: Option<String>,
+    pub runtime: String,
+    pub list_argv: Vec<String>,
+}
+
+impl CatalogKey {
+    pub fn for_project(project: &crate::registry::Project) -> Self {
+        let host = project.canonical_host().map(String::from);
+        let runtime = if project.runtime.trim().is_empty() {
+            "pi".to_string()
+        } else {
+            project.runtime.trim().to_string()
+        };
+        let list_argv = vec![runtime.clone(), "--list-models".to_string()];
+        Self {
+            host,
+            runtime,
+            list_argv,
+        }
+    }
+
+    pub fn to_key_string(&self) -> String {
+        format!("{}:{}", self.host.as_deref().unwrap_or(""), self.runtime)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CatalogSpec {
+    pub key: CatalogKey,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogEntry {
     pub provider: String,
@@ -408,6 +441,43 @@ mod tests {
             ("anthropic".into(), "claude-opus-5".into(), "high".into())
         );
         assert_eq!(parse_spec("  "), ("".into(), "".into(), "".into()));
+    }
+
+    #[test]
+    fn catalog_key_identity_ignores_launch_only_args() {
+        use crate::registry::Project;
+        let mut proj1 = Project {
+            id: "proj1".into(),
+            description: String::new(),
+            aliases: Vec::new(),
+            host: Some(" host.example.com ".into()),
+            cwd: "/tmp/dir1".into(),
+            runtime: "pi".into(),
+            model: None,
+            stage_extension: true,
+            extra_args: vec!["--arg1".into()],
+            prepare: String::new(),
+        };
+        let proj2 = Project {
+            id: "proj2".into(),
+            description: String::new(),
+            aliases: Vec::new(),
+            host: Some("host.example.com".into()),
+            cwd: "/tmp/dir2".into(),
+            runtime: "pi".into(),
+            model: None,
+            stage_extension: true,
+            extra_args: vec!["--arg2".into()],
+            prepare: String::new(),
+        };
+
+        let key1 = CatalogKey::for_project(&proj1);
+        let key2 = CatalogKey::for_project(&proj2);
+        assert_eq!(key1, key2);
+
+        proj1.runtime = "custom-pi".into();
+        let key3 = CatalogKey::for_project(&proj1);
+        assert_ne!(key1, key3);
     }
     #[test]
     fn catalog_exposes_provider_models_with_decimal_and_short_names() {
