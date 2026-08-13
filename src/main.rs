@@ -338,6 +338,8 @@ async fn main() {
     // echoed: this line goes to the journal, which is not where the
     // ElevenLabs key belongs.
     tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        git = env!("SWITCHBOARD_GIT_SHA"),
         env_file = %config.env_file.display(),
         projects_file = %config.projects_file.display(),
         operator_prompt = %config.operator_prompt.display(),
