@@ -156,10 +156,15 @@ pub struct Prewarm {
     inner: Arc<PrewarmInner>,
 }
 
+/// Truncated deliberately: this names a ControlMaster socket, and sun_path is
+/// 108 bytes. ssh appends a 17-byte ".XXXXXXXXXXXXXXXX" suffix while binding,
+/// so a full 64-hex digest overflowed and every master died with "path too
+/// long for Unix domain socket". 16 hex (64 bits) is ample for distinguishing
+/// a handful of hosts, and collisions are not adversarial here.
 fn host_hash(canonical_host: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(canonical_host.as_bytes());
-    format!("{:x}", hasher.finalize())
+    format!("{:x}", hasher.finalize())[..16].to_owned()
 }
 
 fn ensure_private_dir(dir: &Path) -> std::io::Result<()> {
@@ -1548,6 +1553,21 @@ impl Prewarm {
 mod tests {
     use super::*;
     use crate::pi_client::write_executable_script;
+
+    #[test]
+    fn control_socket_path_fits_in_sun_path() {
+        // ssh binds "<control_path>.XXXXXXXXXXXXXXXX" (17 extra bytes) and the
+        // kernel caps sun_path at 108 including the NUL.
+        let path = Path::new("/var/lib/switchboard")
+            .join("ssh")
+            .join("control")
+            .join(format!("{}.sock", host_hash("scriptorium")));
+        assert!(
+            path.to_string_lossy().len() + 17 < 108,
+            "control path too long: {}",
+            path.display()
+        );
+    }
 
     fn uuid_like_test() -> String {
         format!(
