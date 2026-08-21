@@ -448,10 +448,7 @@ impl AppState {
                 "/diagram",
                 post(diagram).layer(DefaultBodyLimit::max(64 * 1024)),
             )
-            .route(
-                "/view",
-                post(view).layer(DefaultBodyLimit::max(16 * 1024)),
-            )
+            .route("/view", post(view).layer(DefaultBodyLimit::max(16 * 1024)))
             .route("/ws", get(ws))
             .with_state(self);
         if let Some(service) = static_dir {

@@ -2,7 +2,7 @@
 <html lang="en" data-theme="nerv">
   <head>
     <meta charset="utf-8" />
-    <title>Switchboard // Damocles Tactical Command Station</title>
+    <title>Switchboard // NERV Tactical Command Station</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -11,50 +11,50 @@
       rel="stylesheet"
     />
     <style>
-      /* Damocles Full-Viewport Tactical Command Station
-         3-Bay Panoramic Control Console, MAGI Tri-Circuit Matrix,
-         Multi-Instrument Audio Synchro Array, and CRT Phosphor Stage. */
+      /* NERV Cinematic Tactical Command Station Architecture
+         3-Bay Panoramic Tactical Matrix, MAGI Monolith Tri-System,
+         Multi-Instrument Audio Synchro Radar, and CRT Phosphor Stage. */
       :root {
         color-scheme: dark;
-        --void: #010103;
-        --bg: #040407;
-        --surface: #08080d;
-        --surface-alt: #0e0e16;
-        --line: #181824;
+        --void: #000002;
+        --bg: #030306;
+        --surface: #07070c;
+        --surface-alt: #0c0c14;
+        --line: #161622;
         --line-active: #ff9a00;
         --text: #eaeaf4;
         --muted: #727286;
 
-        /* Tactical Functional Colors */
+        /* Tactical Functional Palette */
         --nerv-amber: #ff9a00;
         --nerv-amber-dim: #a66400;
         --nerv-amber-hot: #ffbb33;
-        --nerv-amber-glow: rgba(255, 154, 0, 0.4);
+        --nerv-amber-glow: rgba(255, 154, 0, 0.45);
 
         --data-green: #38ef7d;
         --data-green-dim: #1c7e3f;
-        --data-green-glow: rgba(56, 239, 125, 0.4);
+        --data-green-glow: rgba(56, 239, 125, 0.45);
 
         --wire-cyan: #00e5ff;
         --wire-cyan-dim: #007a8a;
-        --wire-cyan-glow: rgba(0, 229, 255, 0.4);
+        --wire-cyan-glow: rgba(0, 229, 255, 0.45);
 
         --magi-red: #ff2222;
-        --magi-red-glow: rgba(255, 34, 34, 0.55);
+        --magi-red-glow: rgba(255, 34, 34, 0.6);
 
         --hazard-yellow: #ffd700;
         --steel: #d4d4e4;
         --steel-dim: #828296;
 
         --accent: var(--nerv-amber);
-        --accent-text: #010103;
+        --accent-text: #000002;
         --danger: var(--magi-red);
         --ok: var(--data-green);
         --energy: var(--wire-cyan);
         --hold: var(--hazard-yellow);
         --rail-active-wash: rgba(0, 229, 255, 0.1);
         --bloom: rgba(0, 229, 255, 0.45);
-        --radius: 2px;
+        --radius: 1px;
 
         --font-title: "Noto Serif Display", Georgia, serif;
         --font-mincho: "Shippori Mincho B1", "YuMincho", serif;
@@ -68,7 +68,7 @@
         box-sizing: border-box;
       }
 
-      /* Full Viewport Command Console Reset */
+      /* Full Viewport Reset */
       html,
       body {
         margin: 0;
@@ -81,40 +81,30 @@
         color: var(--text);
         font-family: var(--font-mono);
         font-size: 13px;
-        line-height: 1.45;
+        line-height: 1.4;
         user-select: none;
       }
 
-      /* CRT Screen Texture Overlay */
+      /* CRT Phosphor Scanline & Vignette Texture */
       .crt-overlay {
         position: fixed;
         inset: 0;
         pointer-events: none;
         z-index: 99999;
         background:
-          linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%),
+          linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.28) 50%),
           radial-gradient(
             circle at 50% 50%,
             transparent 65%,
-            rgba(0, 0, 0, 0.65) 100%
+            rgba(0, 0, 0, 0.75) 100%
           );
         background-size:
           100% 3px,
           100% 100%;
-        opacity: 0.6;
+        opacity: 0.65;
       }
 
-      #appContainer {
-        display: flex;
-        flex-direction: column;
-        width: 100%;
-        height: 100%;
-        padding: 8px 12px 10px;
-        gap: 8px;
-        overflow: hidden;
-      }
-
-      /* Emergency Mode (Global Evangelion Red Alert) */
+      /* Global Emergency Alert Mode */
       [data-mode="emergency"] {
         --line-active: #ff2222;
         --accent: #ff2222;
@@ -126,16 +116,16 @@
         border-color: var(--magi-red);
         background: repeating-linear-gradient(
           -45deg,
-          rgba(255, 34, 34, 0.18),
-          rgba(255, 34, 34, 0.18) 12px,
-          rgba(0, 0, 0, 0.7) 12px,
-          rgba(0, 0, 0, 0.7) 24px
+          rgba(255, 34, 34, 0.2),
+          rgba(255, 34, 34, 0.2) 14px,
+          rgba(0, 0, 0, 0.75) 14px,
+          rgba(0, 0, 0, 0.75) 28px
         );
       }
 
       [data-mode="emergency"] .banner-tag {
         color: var(--magi-red);
-        animation: emergencyBlink 1s infinite;
+        animation: emergencyBlink 0.9s infinite;
       }
 
       @keyframes emergencyBlink {
@@ -148,31 +138,22 @@
         }
       }
 
-      #emergencyToggle {
-        font-family: var(--font-stamp);
-        font-size: 0.76rem;
-        letter-spacing: 0.08em;
-        padding: 2px 8px;
-        background: rgba(255, 34, 34, 0.1);
-        color: var(--magi-red);
-        border: 1px solid var(--magi-red);
-        border-radius: var(--radius);
-        cursor: pointer;
-        width: auto;
+      #appContainer {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        height: 100%;
+        padding: 6px 10px 8px;
+        gap: 6px;
+        overflow: hidden;
       }
 
-      #emergencyToggle:hover {
-        background: var(--magi-red);
-        color: #fff;
-        box-shadow: 0 0 8px var(--magi-red-glow);
-      }
-
-      /* Top Mission & Telemetry Header Banner */
+      /* Top Mission & Telemetry Header */
       #commandBanner {
         flex: none;
         border: 1px solid var(--line);
         background: var(--surface);
-        padding: 6px 10px;
+        padding: 5px 8px;
         position: relative;
       }
 
@@ -201,12 +182,12 @@
       .banner-top {
         display: flex;
         align-items: center;
-        gap: 12px;
+        gap: 10px;
         font-size: 0.72rem;
         letter-spacing: 0.08em;
         text-transform: uppercase;
         border-bottom: 1px solid var(--line);
-        padding-bottom: 4px;
+        padding-bottom: 3px;
       }
 
       .banner-tag {
@@ -217,8 +198,26 @@
       .banner-kanji {
         font-family: var(--font-mincho);
         color: var(--steel-dim);
-        font-size: 0.8rem;
+        font-size: 0.78rem;
         letter-spacing: 0.15em;
+      }
+
+      #emergencyToggle {
+        font-family: var(--font-stamp);
+        font-size: 0.76rem;
+        letter-spacing: 0.08em;
+        padding: 1px 6px;
+        background: rgba(255, 34, 34, 0.1);
+        color: var(--magi-red);
+        border: 1px solid var(--magi-red);
+        cursor: pointer;
+        width: auto;
+      }
+
+      #emergencyToggle:hover {
+        background: var(--magi-red);
+        color: #fff;
+        box-shadow: 0 0 8px var(--magi-red-glow);
       }
 
       .banner-status {
@@ -253,16 +252,17 @@
         color: var(--nerv-amber-hot);
         font-variant-numeric: tabular-nums;
         font-weight: 700;
+        font-size: 0.8rem;
       }
 
       .banner-sub {
         display: flex;
         align-items: center;
         gap: 8px;
-        font-size: 0.65rem;
+        font-size: 0.64rem;
         color: var(--muted);
         letter-spacing: 0.06em;
-        padding-top: 4px;
+        padding-top: 3px;
         text-transform: uppercase;
       }
 
@@ -270,13 +270,13 @@
         color: var(--line);
       }
 
-      /* 3-Bay Command Grid Architecture with Dynamic Fluid Transitions & Fullscreen Bay Focus */
+      /* 3-Bay Command Grid Architecture */
       #shell {
         flex: 1 1 auto;
         min-height: 0;
         display: grid;
         grid-template-columns: 240px minmax(460px, 1fr) 310px;
-        gap: 10px;
+        gap: 8px;
         overflow: hidden;
         transition: grid-template-columns 280ms
           cubic-bezier(0.22, 0.61, 0.36, 1);
@@ -310,31 +310,23 @@
         display: none !important;
       }
 
-      /* Large-Format Glancability When Fullscreen Comms is Active */
-      #shell.focus-bay3 #log .turn .body {
-        font-size: 1.15rem;
-        line-height: 1.6;
-      }
-      #shell.focus-bay3 #log .turn .meta {
-        font-size: 0.85rem;
-      }
-
       #shell.collapse-bay1 {
-        grid-template-columns: 42px minmax(420px, 1fr) 370px;
+        grid-template-columns: 38px minmax(460px, 1fr) 310px;
       }
 
       #shell.collapse-bay3 {
-        grid-template-columns: 290px minmax(420px, 1fr) 42px;
+        grid-template-columns: 240px minmax(460px, 1fr) 38px;
       }
 
       #shell.collapse-bay1.collapse-bay3 {
-        grid-template-columns: 42px 1fr 42px;
+        grid-template-columns: 38px 1fr 38px;
       }
 
+      /* HUD Bay Panels with Chamfers */
       .hud-bay {
         border: 1px solid var(--line);
         background: var(--surface);
-        padding: 10px;
+        padding: 8px;
         display: flex;
         flex-direction: column;
         min-height: 0;
@@ -343,8 +335,17 @@
         transition: all 260ms cubic-bezier(0.22, 0.61, 0.36, 1);
       }
 
+      .hud-bay::before {
+        content: "+";
+        position: absolute;
+        top: 2px;
+        right: 4px;
+        font-size: 0.6rem;
+        color: var(--line);
+      }
+
       .hud-bay.collapsed {
-        padding: 8px 4px;
+        padding: 6px 2px;
         cursor: pointer;
         background: var(--surface-alt);
         border-color: var(--line-active);
@@ -361,12 +362,10 @@
         margin: auto auto;
         letter-spacing: 0.15em;
         white-space: nowrap;
-        font-size: 0.75rem;
+        font-size: 0.72rem;
       }
 
-      .hud-bay.collapsed .hud-bay-header .tag,
-      .hud-bay.collapsed .hud-bay-header .bay-toggle-btn,
-      .hud-bay.collapsed .hud-bay-header .bay-max-btn {
+      .hud-bay.collapsed .hud-bay-header .bay-header-actions {
         display: none;
       }
 
@@ -377,8 +376,8 @@
         letter-spacing: 0.08em;
         text-transform: uppercase;
         border-bottom: 1px solid var(--line);
-        padding-bottom: 6px;
-        margin-bottom: 10px;
+        padding-bottom: 4px;
+        margin-bottom: 8px;
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -396,8 +395,8 @@
         border: 1px solid var(--line);
         color: var(--steel-dim);
         font-family: var(--font-mono);
-        font-size: 0.65rem;
-        padding: 1px 5px;
+        font-size: 0.62rem;
+        padding: 1px 4px;
         width: auto;
         cursor: pointer;
         border-radius: var(--radius);
@@ -410,57 +409,94 @@
         color: var(--nerv-amber);
       }
 
-      .hud-bay-header .tag {
-        color: var(--steel-dim);
-        font-weight: 400;
-      }
-
-      /* BAY 01: MAGI Consensus & Fleet Routing Deck */
+      /* BAY 01: MAGI Tri-Pillar Consensus Monoliths */
       #bayMagi {
-        gap: 10px;
+        gap: 8px;
       }
 
-      .magi-nodes {
+      .magi-monoliths {
         display: flex;
         flex-direction: column;
-        gap: 6px;
+        gap: 5px;
       }
 
-      .magi-node {
+      .magi-monolith {
         border: 1px solid var(--line);
         background: var(--surface-alt);
         padding: 6px 8px;
         display: flex;
+        flex-direction: column;
+        gap: 3px;
+        position: relative;
+        clip-path: polygon(
+          0 0,
+          calc(100% - 8px) 0,
+          100% 8px,
+          100% 100%,
+          0 100%
+        );
+      }
+
+      .magi-monolith.active {
+        border-color: var(--wire-cyan);
+        box-shadow: inset 0 0 10px rgba(0, 229, 255, 0.08);
+      }
+
+      .magi-monolith-top {
+        display: flex;
         align-items: center;
-        gap: 8px;
+        justify-content: space-between;
+        font-size: 0.68rem;
+      }
+
+      .magi-monolith .pod-name {
+        font-family: var(--font-title);
+        font-weight: 900;
+        letter-spacing: 0.08em;
+        color: var(--nerv-amber);
         font-size: 0.72rem;
       }
 
-      .magi-node.active {
-        border-color: var(--wire-cyan);
-        box-shadow: inset 0 0 8px rgba(0, 229, 255, 0.08);
+      .magi-monolith .pod-kanji {
+        font-family: var(--font-mincho);
+        color: var(--steel-dim);
+        font-size: 0.64rem;
       }
 
-      .magi-node .node-id {
-        color: var(--nerv-amber);
-        font-weight: 700;
+      .magi-monolith-body {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 0.64rem;
       }
 
-      .magi-node .node-role {
+      .magi-monolith .pod-role {
         color: var(--steel-dim);
       }
 
-      .magi-node .node-badge {
-        margin-left: auto;
-        font-size: 0.62rem;
+      .magi-monolith .pod-vote {
         padding: 1px 4px;
         background: rgba(56, 239, 125, 0.12);
         color: var(--data-green);
-        font-weight: 600;
+        font-weight: 700;
+        font-size: 0.6rem;
+        letter-spacing: 0.04em;
+      }
+
+      .magi-consensus-banner {
+        font-size: 0.62rem;
+        color: var(--data-green);
+        background: rgba(56, 239, 125, 0.08);
+        border: 1px solid rgba(56, 239, 125, 0.2);
+        padding: 3px 6px;
+        text-align: center;
+        letter-spacing: 0.06em;
+        font-weight: 700;
+        text-transform: uppercase;
       }
 
       #line {
-        padding: 10px;
+        padding: 8px;
         border: 1px solid var(--line);
         background: var(--surface-alt);
         border-left: 3px solid var(--nerv-amber);
@@ -474,7 +510,7 @@
 
       #line .who {
         font-weight: 700;
-        font-size: 0.95rem;
+        font-size: 0.88rem;
         color: var(--text);
         letter-spacing: 0.04em;
         text-transform: uppercase;
@@ -483,36 +519,36 @@
 
       #line .model {
         display: block;
-        margin-top: 2px;
+        margin-top: 1px;
         color: var(--steel-dim);
-        font-size: 0.7rem;
+        font-size: 0.68rem;
       }
 
       #legControls {
         display: flex;
         flex-direction: column;
-        gap: 6px;
-        margin-top: 8px;
+        gap: 5px;
+        margin-top: 6px;
       }
 
       .control-row {
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 4px;
       }
 
       .control-label {
-        font-size: 0.65rem;
+        font-size: 0.62rem;
         color: var(--steel-dim);
-        min-width: 48px;
+        min-width: 44px;
         text-transform: uppercase;
       }
 
       select {
         flex: 1;
         font-family: var(--font-mono);
-        font-size: 0.72rem;
-        padding: 4px 6px;
+        font-size: 0.68rem;
+        padding: 3px 5px;
         color: var(--text);
         background: var(--surface);
         border: 1px solid var(--line);
@@ -531,9 +567,9 @@
       }
 
       #hangupBtn {
-        font-family: var(--font-mono);
-        font-size: 0.72rem;
-        padding: 5px 8px;
+        font-family: var(--font-stamp);
+        font-size: 0.85rem;
+        padding: 4px 6px;
         width: 100%;
         background: rgba(255, 34, 34, 0.08);
         color: var(--magi-red);
@@ -541,9 +577,9 @@
         border-radius: var(--radius);
         cursor: pointer;
         text-transform: uppercase;
-        letter-spacing: 0.04em;
+        letter-spacing: 0.06em;
         font-weight: 700;
-        margin-top: 4px;
+        margin-top: 2px;
       }
 
       #hangupBtn:hover {
@@ -552,15 +588,15 @@
         box-shadow: 0 0 8px var(--magi-red-glow);
       }
 
-      /* Diagnostic Fleet Gauges */
+      /* Diagnostic Fleet Status Gauges */
       .fleet-status {
         margin-top: auto;
         border-top: 1px solid var(--line);
-        padding-top: 8px;
+        padding-top: 6px;
         display: flex;
         flex-direction: column;
-        gap: 6px;
-        font-size: 0.68rem;
+        gap: 5px;
+        font-size: 0.65rem;
       }
 
       .gauge-row {
@@ -574,8 +610,8 @@
       }
 
       .gauge-bar {
-        width: 110px;
-        height: 5px;
+        width: 90px;
+        height: 4px;
         background: var(--surface-alt);
         border: 1px solid var(--line);
         position: relative;
@@ -589,8 +625,8 @@
 
       #status {
         color: var(--steel-dim);
-        font-size: 0.7rem;
-        margin-top: 6px;
+        font-size: 0.68rem;
+        margin-top: 4px;
       }
 
       #status.error {
@@ -600,19 +636,19 @@
 
       #retryBtn {
         width: 100%;
-        margin-top: 4px;
-        padding: 4px 6px;
+        margin-top: 3px;
+        padding: 3px 5px;
         font-family: var(--font-mono);
-        font-size: 0.7rem;
+        font-size: 0.68rem;
         background: none;
         color: var(--magi-red);
         border: 1px solid var(--magi-red);
         cursor: pointer;
       }
 
-      /* BAY 02: Hero Stage Viewport & Synchro Action Core */
+      /* BAY 02: Tactical Stage Viewport & Synchro Action Core */
       #bayCenter {
-        gap: 8px;
+        gap: 6px;
       }
 
       #stage {
@@ -622,22 +658,32 @@
         min-height: 0;
         border: 1px solid var(--line);
         background: var(--void);
-        padding: 8px;
+        padding: 6px;
         position: relative;
       }
 
+      #stage::after {
+        content: "[ SEC-04 // X-104 Y-882 ]";
+        position: absolute;
+        top: 6px;
+        right: 8px;
+        font-size: 0.6rem;
+        color: var(--steel-dim);
+        letter-spacing: 0.08em;
+      }
+
       #stageTitle {
-        font-size: 0.72rem;
+        font-size: 0.7rem;
         text-transform: uppercase;
-        letter-spacing: 0.14em;
+        letter-spacing: 0.12em;
         color: var(--wire-cyan);
-        margin: 0 0 4px;
+        margin: 0 0 3px;
         font-weight: 700;
         flex: none;
       }
 
       #stageCanvas {
-        min-height: 140px;
+        min-height: 120px;
         flex: 1 1 auto;
         overflow: auto;
         overscroll-behavior: contain;
@@ -663,7 +709,7 @@
       /* Tactical Mermaid SVG Styling */
       #stageCanvas svg text {
         font-family: var(--font-mono) !important;
-        font-size: 0.76rem !important;
+        font-size: 0.74rem !important;
         letter-spacing: 0.04em;
         fill: var(--text) !important;
       }
@@ -689,7 +735,7 @@
 
       #stageCanvas svg .edgeLabel {
         font-family: var(--font-mono) !important;
-        font-size: 0.72rem !important;
+        font-size: 0.7rem !important;
         background: var(--void) !important;
         color: var(--nerv-amber) !important;
       }
@@ -713,10 +759,10 @@
 
       #stageZoom {
         display: flex;
-        gap: 4px;
+        gap: 3px;
         align-items: center;
-        margin: 6px 0 0;
-        font-size: 0.68rem;
+        margin: 4px 0 0;
+        font-size: 0.65rem;
         color: var(--muted);
         flex: none;
       }
@@ -727,12 +773,12 @@
         color: var(--steel);
         border: 1px solid var(--line);
         border-radius: var(--radius);
-        padding: 2px 7px;
+        padding: 1px 6px;
         font: inherit;
-        font-size: 0.68rem;
+        font-size: 0.65rem;
         cursor: pointer;
-        min-inline-size: 32px;
-        min-block-size: 26px;
+        min-inline-size: 28px;
+        min-block-size: 22px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -747,7 +793,7 @@
 
       #stageHistory {
         display: flex;
-        gap: 4px;
+        gap: 3px;
         align-items: center;
       }
 
@@ -762,9 +808,9 @@
       }
 
       #stageNotes {
-        font-size: 0.72rem;
+        font-size: 0.68rem;
         color: var(--muted);
-        margin: 4px 0 0;
+        margin: 3px 0 0;
         flex: none;
       }
 
@@ -774,20 +820,20 @@
       }
 
       #stageError {
-        font-size: 0.72rem;
+        font-size: 0.68rem;
         color: var(--magi-red);
-        margin: 4px 0 0;
+        margin: 3px 0 0;
         flex: none;
       }
 
-      /* Audio Synchro Array & Tactical Action Deck */
+      /* Audio Synchro Array & Action Controls */
       .action-deck {
         flex: none;
         display: flex;
         flex-direction: column;
-        gap: 6px;
+        gap: 5px;
         border-top: 1px solid var(--line);
-        padding-top: 8px;
+        padding-top: 6px;
       }
 
       .synchro-container {
@@ -800,13 +846,13 @@
       .synchro-canvas {
         display: block;
         width: 100%;
-        height: 64px;
+        height: 60px;
         background: transparent;
       }
 
       #controls {
         display: flex;
-        gap: 6px;
+        gap: 5px;
       }
 
       button {
@@ -815,7 +861,7 @@
         font-weight: 700;
         letter-spacing: 0.08em;
         text-transform: uppercase;
-        padding: 10px 16px;
+        padding: 9px 14px;
         border-radius: var(--radius);
         border: 1px solid transparent;
         background: var(--nerv-amber);
@@ -874,7 +920,7 @@
         color: var(--muted);
         border: 1px solid var(--line);
         flex: 0 0 30%;
-        font-size: 1rem;
+        font-size: 0.95rem;
       }
 
       #cancelBtn:hover {
@@ -897,13 +943,13 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 8px;
+        gap: 6px;
       }
 
       #handsFreeBtn {
-        padding: 5px 8px;
+        padding: 4px 7px;
         font-family: var(--font-mono);
-        font-size: 0.68rem;
+        font-size: 0.65rem;
         background: var(--surface-alt);
         color: var(--steel);
         border: 1px solid var(--line);
@@ -926,7 +972,7 @@
 
       #handsFreeStatus {
         color: var(--steel-dim);
-        font-size: 0.66rem;
+        font-size: 0.65rem;
       }
 
       #handsFreeStatus::before {
@@ -937,19 +983,19 @@
 
       #handsFreeLease {
         color: var(--nerv-amber);
-        font-size: 0.66rem;
+        font-size: 0.65rem;
       }
 
       /* BAY 03: Telemetry & Intercom Transcript */
       #bayComms {
-        gap: 8px;
+        gap: 6px;
       }
 
       #activity {
         border: 1px solid var(--line);
         background: var(--void);
-        padding: 6px 8px;
-        max-height: 140px;
+        padding: 5px 7px;
+        max-height: 130px;
         display: flex;
         flex-direction: column;
         flex: none;
@@ -958,14 +1004,14 @@
       #activityHead {
         display: flex;
         align-items: center;
-        gap: 6px;
-        font-size: 0.68rem;
+        gap: 5px;
+        font-size: 0.65rem;
         text-transform: uppercase;
         letter-spacing: 0.06em;
         color: var(--steel-dim);
         font-weight: 600;
         border-bottom: 1px solid var(--line);
-        padding-bottom: 4px;
+        padding-bottom: 3px;
       }
 
       #activityClock {
@@ -994,15 +1040,15 @@
 
       #activityList {
         list-style: none;
-        margin: 4px 0 0;
+        margin: 3px 0 0;
         padding: 0;
         overflow-y: auto;
-        font-size: 0.7rem;
+        font-size: 0.68rem;
       }
 
       #activityList li {
         display: flex;
-        gap: 6px;
+        gap: 5px;
         padding: 2px 0;
         border-bottom: 1px solid rgba(255, 255, 255, 0.02);
       }
@@ -1028,7 +1074,7 @@
         flex-direction: column;
         border: 1px solid var(--line);
         background: var(--void);
-        padding: 8px;
+        padding: 6px 8px;
         overflow: hidden;
       }
 
@@ -1041,11 +1087,11 @@
       #log:empty::after {
         content: "[ NO COMMS LOGGED // CIRCUIT STANDBY ]";
         color: var(--steel-dim);
-        font-size: 0.72rem;
+        font-size: 0.7rem;
       }
 
       .turn {
-        padding: 6px 0;
+        padding: 5px 0;
         border-top: 1px solid var(--line);
       }
 
@@ -1056,7 +1102,7 @@
 
       .turn .meta {
         font-weight: 700;
-        font-size: 0.65rem;
+        font-size: 0.64rem;
         color: var(--nerv-amber);
         text-transform: uppercase;
         letter-spacing: 0.08em;
@@ -1069,7 +1115,7 @@
 
       .turn .body {
         white-space: pre-wrap;
-        font-size: 0.78rem;
+        font-size: 0.76rem;
         color: var(--text);
       }
 
@@ -1089,7 +1135,7 @@
       .md pre {
         background: var(--surface);
         border: 1px solid var(--line);
-        padding: 6px 8px;
+        padding: 5px 7px;
         overflow-x: auto;
       }
 
@@ -1102,15 +1148,15 @@
 
       .md blockquote {
         border-left: 2px solid var(--nerv-amber);
-        padding-left: 8px;
+        padding-left: 6px;
         color: var(--steel-dim);
-        margin: 0.4em 0;
+        margin: 0.3em 0;
       }
 
       audio {
-        margin-top: 6px;
+        margin-top: 4px;
         width: 100%;
-        height: 28px;
+        height: 26px;
         flex: none;
       }
 
@@ -1134,17 +1180,17 @@
 
       body.theater #bayCenter {
         border: none;
-        padding: 10px;
+        padding: 8px;
       }
 
       #theaterExit {
         display: none;
         position: fixed;
-        top: 10px;
-        right: 10px;
+        top: 8px;
+        right: 8px;
         z-index: 999999;
-        width: 40px;
-        height: 40px;
+        width: 38px;
+        height: 38px;
         padding: 0;
         align-items: center;
         justify-content: center;
@@ -1211,10 +1257,10 @@
         }
       }
 
-      /* Responsive Layout Rules */
+      /* Responsive Rules */
       @media (max-width: 1180px) {
         #shell {
-          grid-template-columns: 260px 1fr;
+          grid-template-columns: 240px 1fr;
           grid-template-rows: 1fr 1fr;
         }
         #bayComms {
@@ -1258,7 +1304,7 @@
         padding: 0;
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: 10px;
       }
 
       .diff-file {
@@ -1267,9 +1313,9 @@
       }
 
       .diff-path {
-        font-size: 0.74rem;
+        font-size: 0.72rem;
         font-weight: 700;
-        padding: 6px 10px;
+        padding: 5px 8px;
         margin: 0;
         background: var(--surface-alt);
         border-bottom: 1px solid var(--line);
@@ -1287,11 +1333,11 @@
         position: relative;
         display: flex;
         align-items: baseline;
-        font-size: 0.76rem;
+        font-size: 0.74rem;
         line-height: 1.4;
         white-space: pre-wrap;
         word-break: break-word;
-        padding-inline-start: 70px;
+        padding-inline-start: 68px;
         padding-block: 1px;
       }
 
@@ -1299,8 +1345,8 @@
         content: attr(data-old) " " attr(data-new);
         position: absolute;
         inset-inline-start: 4px;
-        inline-size: 60px;
-        font-size: 0.68rem;
+        inline-size: 58px;
+        font-size: 0.66rem;
         font-variant-numeric: tabular-nums;
         color: var(--steel-dim);
         text-align: right;
@@ -1326,16 +1372,16 @@
         flex-direction: column;
         gap: 2px;
         border-top: 1px solid var(--line);
-        padding-top: 6px;
+        padding-top: 5px;
       }
 
       .plan-row {
         position: relative;
-        padding-inline-start: 12px;
-        padding-block: 6px;
+        padding-inline-start: 10px;
+        padding-block: 5px;
         display: flex;
         align-items: baseline;
-        gap: 8px;
+        gap: 6px;
         background: var(--surface);
         border-left: 2px solid var(--line);
       }
@@ -1385,8 +1431,8 @@
       <!-- Top Mission Telemetry Ticker -->
       <header id="commandBanner">
         <div class="banner-top">
-          <span class="banner-tag">[DAMOCLES TACTICAL STATION // PBX-01]</span>
-          <span class="banner-kanji">有線交換司令局</span>
+          <span class="banner-tag">[NERV // DAMOCLES LAB PBX-01]</span>
+          <span class="banner-kanji">特務機関 // 有線交換司令所</span>
           <button
             id="emergencyToggle"
             type="button"
@@ -1404,7 +1450,7 @@
         <div class="banner-sub">
           <span class="sec-label">VOICE INGRESS 16kHz PCM</span>
           <span class="sec-div">|</span>
-          <span class="sec-label">SYNCHRO MESH: DAMOCLES &times; HOMELAB</span>
+          <span class="sec-label">MAGI SYNCHRO MESH: DAMOCLES &times; HOMELAB</span>
           <span class="sec-div">|</span>
           <span class="sec-label">JARVIS PERSONAL SUPER-INTELLIGENCE</span>
         </div>
@@ -1416,31 +1462,62 @@
         <section class="hud-bay" id="bayMagi" aria-label="Magi Routing Deck">
           <div class="hud-bay-header">
             <span>[ BAY 01 // MAGI MATRIX ]</span>
-            <button
-              class="bay-toggle-btn"
-              data-toggle="bay1"
-              title="Toggle Bay 1 (Key 1)"
-            >
-              [ &minus; ]
-            </button>
+            <div class="bay-header-actions">
+              <button
+                class="bay-toggle-btn"
+                data-toggle="bay1"
+                title="Toggle Bay 1 (Key 1)"
+              >
+                [ &minus; ]
+              </button>
+              <button
+                class="bay-max-btn"
+                data-max="bay1"
+                title="Maximize Bay 1"
+              >
+                [ ⛶ ]
+              </button>
+            </div>
           </div>
 
-          <div class="magi-nodes">
-            <div class="magi-node">
-              <span class="node-id">MAGI-01</span>
-              <span class="node-role">OPERATOR CORE</span>
-              <span class="node-badge">ONLINE</span>
+          <!-- The 3 MAGI Monolith Pods -->
+          <div class="magi-monoliths">
+            <div class="magi-monolith">
+              <div class="magi-monolith-top">
+                <span class="pod-name">MELCHIOR-1</span>
+                <span class="pod-kanji">メルキオール-1</span>
+              </div>
+              <div class="magi-monolith-body">
+                <span class="pod-role">OPERATOR SYS CORE</span>
+                <span class="pod-vote">承認 // CONSENSUS</span>
+              </div>
             </div>
-            <div class="magi-node active">
-              <span class="node-id">MAGI-02</span>
-              <span class="node-role">TARGET AGENT</span>
-              <span class="node-badge">LINKED</span>
+
+            <div class="magi-monolith active">
+              <div class="magi-monolith-top">
+                <span class="pod-name">BALTHASAR-2</span>
+                <span class="pod-kanji">バルタザール-2</span>
+              </div>
+              <div class="magi-monolith-body">
+                <span class="pod-role">TARGET AGENT UNIT</span>
+                <span class="pod-vote">接続中 // LINKED</span>
+              </div>
             </div>
-            <div class="magi-node">
-              <span class="node-id">MAGI-03</span>
-              <span class="node-role">HOST PBX MESH</span>
-              <span class="node-badge">DAEMON</span>
+
+            <div class="magi-monolith">
+              <div class="magi-monolith-top">
+                <span class="pod-name">CASPER-3</span>
+                <span class="pod-kanji">カスパー-3</span>
+              </div>
+              <div class="magi-monolith-body">
+                <span class="pod-role">HOST PBX MESH</span>
+                <span class="pod-vote">承認 // CONSENSUS</span>
+              </div>
             </div>
+          </div>
+
+          <div class="magi-consensus-banner">
+            MAGI TRI-SYSTEM: 3/3 RESOLVED // 全会一致
           </div>
 
           <!-- Active Leg Circuit Controls -->
@@ -1476,7 +1553,7 @@
                 class="hidden"
                 title="Drop this leg and go back to the operator"
               >
-                Sever Circuit / Return Op
+                回路遮断 // CIRCUIT SEVER
               </button>
             </div>
           </div>
@@ -1602,17 +1679,17 @@
                 id="synchroCanvas"
                 class="synchro-canvas"
                 width="600"
-                height="64"
+                height="60"
               ></canvas>
             </div>
 
             <div id="controls">
-              <button id="talkBtn">TALK // PTT TRIGGER</button>
+              <button id="talkBtn">発話起動 // PTT TRIGGER</button>
               <button id="cancelBtn" class="hidden" title="Discard">
-                &#9632; Discard
+                &#9632; 破棄 // DISCARD
               </button>
               <button id="sendBtn" class="hidden" title="Send">
-                &#10148; Transmit
+                &#10148; 送信 // TRANSMIT
               </button>
             </div>
 
@@ -1641,13 +1718,22 @@
         >
           <div class="hud-bay-header">
             <span>[ BAY 03 // TELEMETRY & COMMS ]</span>
-            <button
-              class="bay-toggle-btn"
-              data-toggle="bay3"
-              title="Toggle Bay 3 (Key 3)"
-            >
-              [ &minus; ]
-            </button>
+            <div class="bay-header-actions">
+              <button
+                class="bay-toggle-btn"
+                data-toggle="bay3"
+                title="Toggle Bay 3 (Key 3)"
+              >
+                [ &minus; ]
+              </button>
+              <button
+                class="bay-max-btn"
+                data-max="bay3"
+                title="Maximize Bay 3"
+              >
+                [ ⛶ ]
+              </button>
+            </div>
           </div>
 
           <!-- Live Sub-Routine Tool Execution Terminal -->
