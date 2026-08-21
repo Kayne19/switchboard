@@ -1,5 +1,9 @@
 use super::*;
 use crate::pi_client::write_executable_script;
+use std::io;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use tokio::io::ReadBuf;
 
 #[test]
 fn control_socket_path_fits_in_sun_path() {
@@ -68,6 +72,32 @@ fn fake_pi_script(root: &Path) -> PathBuf {
         "printf 'provider model alias default thinks\\ncustom pi-model pi-model yes yes\\n'",
     );
     runtime
+}
+
+struct ReadThenError {
+    emitted: bool,
+}
+
+impl tokio::io::AsyncRead for ReadThenError {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        if self.emitted {
+            Poll::Ready(Err(io::Error::other("simulated channel read failure")))
+        } else {
+            self.emitted = true;
+            buf.put_slice(b"partial catalog");
+            Poll::Ready(Ok(()))
+        }
+    }
+}
+
+#[tokio::test]
+async fn output_reader_keeps_partial_data_after_a_read_error() {
+    let mut reader = ReadThenError { emitted: false };
+    assert_eq!(drain_bounded(&mut reader, 4096).await, "partial catalog");
 }
 
 fn fake_ssh_script(root: &Path) -> PathBuf {

@@ -12,7 +12,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::{watch, Mutex, RwLock, Semaphore};
 use tokio::time::timeout;
 
-const STDOUT_LIMIT: usize = 4096;
+const STDOUT_LIMIT: usize = 64 * 1024;
 const STDERR_LIMIT: usize = 4096;
 #[cfg(not(test))]
 const PREPARE_TIMEOUT_SECS: u64 = 120;
@@ -197,14 +197,17 @@ fn unlock_flock(file: &std::fs::File) -> std::io::Result<()> {
     Ok(())
 }
 
-async fn drain_bounded<R: tokio::io::AsyncRead + Unpin>(
-    reader: &mut R,
-    limit: usize,
-) -> std::io::Result<String> {
+async fn drain_bounded<R: tokio::io::AsyncRead + Unpin>(reader: &mut R, limit: usize) -> String {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 1024];
     loop {
-        let n = reader.read(&mut chunk).await?;
+        let n = match reader.read(&mut chunk).await {
+            Ok(n) => n,
+            Err(error) => {
+                tracing::warn!(%error, captured = buf.len(), "output reader stopped; keeping partial output");
+                break;
+            }
+        };
         if n == 0 {
             break;
         }
@@ -213,7 +216,7 @@ async fn drain_bounded<R: tokio::io::AsyncRead + Unpin>(
             buf.extend_from_slice(&chunk[..to_take]);
         }
     }
-    Ok(String::from_utf8_lossy(&buf).to_string())
+    String::from_utf8_lossy(&buf).to_string()
 }
 
 impl Prewarm {
@@ -1001,7 +1004,7 @@ impl Prewarm {
 
                     let stdout_task = tokio::spawn(async move {
                         if let Some(pipe) = &mut stdout_pipe {
-                            drain_bounded(pipe, STDOUT_LIMIT).await.unwrap_or_default()
+                            drain_bounded(pipe, STDOUT_LIMIT).await
                         } else {
                             String::new()
                         }
@@ -1009,7 +1012,7 @@ impl Prewarm {
 
                     let stderr_task = tokio::spawn(async move {
                         if let Some(pipe) = &mut stderr_pipe {
-                            drain_bounded(pipe, STDERR_LIMIT).await.unwrap_or_default()
+                            drain_bounded(pipe, STDERR_LIMIT).await
                         } else {
                             String::new()
                         }
@@ -1052,7 +1055,7 @@ impl Prewarm {
                 Err(e) => Err(format!("catalog command failed to spawn: {e}")),
             };
 
-            match output_res {
+            let retry_soon = match output_res {
                 Ok((status, stdout, _stderr)) if status.success() => {
                     let catalog = ModelCatalog::parse(&stdout);
                     if catalog.entries.is_empty() {
@@ -1065,12 +1068,14 @@ impl Prewarm {
                         } else {
                             tx.send_replace(CatalogState::Unavailable { reason: err_msg });
                         }
+                        true
                     } else {
                         prior_snapshot = Some(catalog.clone());
                         tx.send_replace(CatalogState::Ready {
                             snapshot: catalog,
                             degraded_reason: None,
                         });
+                        false
                     }
                 }
                 Ok((status, _stdout, stderr)) => {
@@ -1083,6 +1088,7 @@ impl Prewarm {
                     } else {
                         tx.send_replace(CatalogState::Unavailable { reason: err_msg });
                     }
+                    true
                 }
                 Err(err_msg) => {
                     if let Some(snapshot) = &prior_snapshot {
@@ -1093,12 +1099,14 @@ impl Prewarm {
                     } else {
                         tx.send_replace(CatalogState::Unavailable { reason: err_msg });
                     }
+                    true
                 }
-            }
+            };
 
+            let delay = if retry_soon { 5 } else { 300 };
             tokio::select! {
                 _ = shutdown_rx.changed() => break,
-                _ = tokio::time::sleep(Duration::from_secs(300)) => {}
+                _ = tokio::time::sleep(Duration::from_secs(delay)) => {}
             }
         }
     }
@@ -1271,7 +1279,7 @@ impl Prewarm {
 
             let stdout_task = tokio::spawn(async move {
                 if let Some(pipe) = &mut stdout_pipe {
-                    drain_bounded(pipe, STDOUT_LIMIT).await.unwrap_or_default()
+                    drain_bounded(pipe, STDOUT_LIMIT).await
                 } else {
                     String::new()
                 }
@@ -1279,7 +1287,7 @@ impl Prewarm {
 
             let stderr_task = tokio::spawn(async move {
                 if let Some(pipe) = &mut stderr_pipe {
-                    drain_bounded(pipe, STDERR_LIMIT).await.unwrap_or_default()
+                    drain_bounded(pipe, STDERR_LIMIT).await
                 } else {
                     String::new()
                 }
@@ -1473,7 +1481,7 @@ impl Prewarm {
 
         let stdout_task = tokio::spawn(async move {
             if let Some(pipe) = &mut stdout_pipe {
-                drain_bounded(pipe, STDOUT_LIMIT).await.unwrap_or_default()
+                drain_bounded(pipe, STDOUT_LIMIT).await
             } else {
                 String::new()
             }
@@ -1481,7 +1489,7 @@ impl Prewarm {
 
         let stderr_task = tokio::spawn(async move {
             if let Some(pipe) = &mut stderr_pipe {
-                drain_bounded(pipe, STDERR_LIMIT).await.unwrap_or_default()
+                drain_bounded(pipe, STDERR_LIMIT).await
             } else {
                 String::new()
             }
