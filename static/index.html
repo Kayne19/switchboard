@@ -2,7 +2,7 @@
 <html lang="en" data-theme="nerv">
   <head>
     <meta charset="utf-8" />
-    <title>Switchboard // Damocles Command Station</title>
+    <title>Switchboard // Damocles Tactical Command Station</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -11,43 +11,43 @@
       rel="stylesheet"
     />
     <style>
-      /* Damocles NERV-Inspired Command Station Design System
-         Void black default, functional tactical colors, compressed NERV serif,
-         mechanical HUD panels, and audio synchro visualization. */
+      /* Damocles Full-Viewport Tactical Command Station
+         3-Bay Panoramic Control Console, MAGI Tri-Circuit Matrix,
+         Multi-Instrument Audio Synchro Array, and CRT Phosphor Stage. */
       :root {
         color-scheme: dark;
-        --void: #020204;
-        --bg: #050508;
-        --surface: #0a0a0f;
-        --surface-alt: #111118;
-        --line: #1c1c28;
+        --void: #010103;
+        --bg: #040407;
+        --surface: #08080d;
+        --surface-alt: #0e0e16;
+        --line: #181824;
         --line-active: #ff9a00;
-        --text: #eaeaf2;
-        --muted: #78788a;
+        --text: #eaeaf4;
+        --muted: #727286;
 
         /* Tactical Functional Colors */
         --nerv-amber: #ff9a00;
-        --nerv-amber-dim: #b86e00;
+        --nerv-amber-dim: #a66400;
         --nerv-amber-hot: #ffbb33;
-        --nerv-amber-glow: rgba(255, 154, 0, 0.35);
+        --nerv-amber-glow: rgba(255, 154, 0, 0.4);
 
         --data-green: #38ef7d;
-        --data-green-dim: #1f8a48;
-        --data-green-glow: rgba(56, 239, 125, 0.35);
+        --data-green-dim: #1c7e3f;
+        --data-green-glow: rgba(56, 239, 125, 0.4);
 
         --wire-cyan: #00e5ff;
-        --wire-cyan-dim: #008899;
-        --wire-cyan-glow: rgba(0, 229, 255, 0.35);
+        --wire-cyan-dim: #007a8a;
+        --wire-cyan-glow: rgba(0, 229, 255, 0.4);
 
         --magi-red: #ff2222;
-        --magi-red-glow: rgba(255, 34, 34, 0.5);
+        --magi-red-glow: rgba(255, 34, 34, 0.55);
 
         --hazard-yellow: #ffd700;
-        --steel: #d4d4e0;
-        --steel-dim: #848496;
+        --steel: #d4d4e4;
+        --steel-dim: #828296;
 
         --accent: var(--nerv-amber);
-        --accent-text: #050508;
+        --accent-text: #010103;
         --danger: var(--magi-red);
         --ok: var(--data-green);
         --energy: var(--wire-cyan);
@@ -62,74 +62,64 @@
         --font-stamp: "Saira Extra Condensed", Impact, sans-serif;
       }
 
-      /* Global Reset & Tactical CRT Base */
       *,
       *::before,
       *::after {
         box-sizing: border-box;
       }
 
+      /* Full Viewport Command Console Reset */
+      html,
       body {
-        --gutter: 16px;
-        font-family: var(--font-mono);
-        max-width: 720px;
-        margin: 0 auto;
-        padding: 16px var(--gutter) 40px;
+        margin: 0;
+        padding: 0;
+        width: 100vw;
+        height: 100vh;
+        height: 100dvh;
+        overflow: hidden;
         background: var(--bg);
         color: var(--text);
-        line-height: 1.5;
-        transition: max-width 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
-        position: relative;
-        min-height: 100vh;
+        font-family: var(--font-mono);
+        font-size: 13px;
+        line-height: 1.45;
+        user-select: none;
       }
 
-      /* CRT Scanline & Screen Texture */
+      /* CRT Screen Texture Overlay */
       .crt-overlay {
         position: fixed;
         inset: 0;
         pointer-events: none;
-        z-index: 9999;
+        z-index: 99999;
         background:
-          linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.28) 50%),
+          linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%),
           radial-gradient(
             circle at 50% 50%,
             transparent 65%,
-            rgba(0, 0, 0, 0.6) 100%
+            rgba(0, 0, 0, 0.65) 100%
           );
         background-size:
           100% 3px,
           100% 100%;
-        opacity: 0.65;
+        opacity: 0.6;
       }
 
-      body.has-diagram {
-        --gutter: clamp(16px, 1.6vw, 40px);
-        max-width: calc(100% - 2 * var(--gutter));
+      #appContainer {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        height: 100%;
+        padding: 8px 12px 10px;
+        gap: 8px;
+        overflow: hidden;
       }
 
-      #shell {
-        display: grid;
-        gap: 24px;
-        grid-template-columns: minmax(0, 1fr);
-        align-items: start;
-      }
-
-      body.has-diagram #shell {
-        grid-template-columns: minmax(0, 1.25fr) clamp(340px, 32vw, 580px);
-      }
-
-      @media (min-width: 2200px) {
-        body.has-diagram #shell {
-          grid-template-columns: minmax(0, 1fr) 700px;
-        }
-      }
-
-      /* Command Header Ticker */
+      /* Top Mission & Telemetry Header Banner */
       #commandBanner {
+        flex: none;
         border: 1px solid var(--line);
         background: var(--surface);
-        padding: 8px 12px;
-        margin-bottom: 18px;
+        padding: 6px 10px;
         position: relative;
       }
 
@@ -138,8 +128,8 @@
         position: absolute;
         top: -1px;
         left: -1px;
-        width: 8px;
-        height: 8px;
+        width: 6px;
+        height: 6px;
         border-top: 2px solid var(--nerv-amber);
         border-left: 2px solid var(--nerv-amber);
       }
@@ -149,8 +139,8 @@
         position: absolute;
         bottom: -1px;
         right: -1px;
-        width: 8px;
-        height: 8px;
+        width: 6px;
+        height: 6px;
         border-bottom: 2px solid var(--nerv-amber);
         border-right: 2px solid var(--nerv-amber);
       }
@@ -163,7 +153,7 @@
         letter-spacing: 0.08em;
         text-transform: uppercase;
         border-bottom: 1px solid var(--line);
-        padding-bottom: 5px;
+        padding-bottom: 4px;
       }
 
       .banner-tag {
@@ -219,7 +209,7 @@
         font-size: 0.65rem;
         color: var(--muted);
         letter-spacing: 0.06em;
-        padding-top: 5px;
+        padding-top: 4px;
         text-transform: uppercase;
       }
 
@@ -227,69 +217,255 @@
         color: var(--line);
       }
 
-      /* Main Titles */
-      h1 {
-        font-family: var(--font-title);
-        font-size: 1.6rem;
-        font-weight: 900;
-        margin: 0 0 2px;
-        color: var(--text);
-        letter-spacing: 0.15em;
-        text-transform: uppercase;
-        transform: scaleX(0.85);
-        transform-origin: left center;
+      /* 3-Bay Command Grid Architecture */
+      #shell {
+        flex: 1 1 auto;
+        min-height: 0;
+        display: grid;
+        grid-template-columns: 290px minmax(420px, 1fr) 370px;
+        gap: 10px;
+        overflow: hidden;
       }
 
-      .sub {
-        color: var(--muted);
-        font-size: 0.76rem;
-        margin: 0 0 16px;
-        letter-spacing: 0.02em;
-      }
-
-      /* Tactical Stage (Left Viewport) */
-      #stage {
-        display: none;
-        position: sticky;
-        top: 16px;
-        padding: 12px;
-        flex-direction: column;
-        max-height: calc(100vh - 32px);
-        max-height: calc(100dvh - 32px);
+      .hud-bay {
         border: 1px solid var(--line);
         background: var(--surface);
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
         position: relative;
+        overflow: hidden;
       }
 
-      #stage::before {
-        content: "[ SYS.STG // VISUAL MATRIX ]";
-        position: absolute;
-        top: -9px;
-        right: 12px;
-        background: var(--surface);
-        padding: 0 6px;
-        font-size: 0.65rem;
-        color: var(--wire-cyan);
-        letter-spacing: 0.1em;
+      .hud-bay-header {
+        font-size: 0.68rem;
+        font-weight: 700;
+        color: var(--nerv-amber);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 6px;
+        margin-bottom: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .hud-bay-header .tag {
+        color: var(--steel-dim);
+        font-weight: 400;
+      }
+
+      /* BAY 01: MAGI Consensus & Fleet Routing Deck */
+      #bayMagi {
+        gap: 10px;
+      }
+
+      .magi-nodes {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .magi-node {
+        border: 1px solid var(--line);
+        background: var(--surface-alt);
+        padding: 6px 8px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.72rem;
+      }
+
+      .magi-node.active {
+        border-color: var(--wire-cyan);
+        box-shadow: inset 0 0 8px rgba(0, 229, 255, 0.08);
+      }
+
+      .magi-node .node-id {
+        color: var(--nerv-amber);
         font-weight: 700;
       }
 
-      body.has-diagram #stage {
-        display: flex;
+      .magi-node .node-role {
+        color: var(--steel-dim);
       }
 
-      @media (max-width: 1080px) {
-        body.has-diagram #shell {
-          grid-template-columns: minmax(0, 1fr);
-        }
-        body:not(.theater) #stage {
-          position: static;
-          max-height: 44vh;
-          max-height: 44dvh;
-        }
-        body:not(.theater) #stageCanvas {
-          min-height: 0;
-        }
+      .magi-node .node-badge {
+        margin-left: auto;
+        font-size: 0.62rem;
+        padding: 1px 4px;
+        background: rgba(56, 239, 125, 0.12);
+        color: var(--data-green);
+        font-weight: 600;
+      }
+
+      #line {
+        padding: 10px;
+        border: 1px solid var(--line);
+        background: var(--surface-alt);
+        border-left: 3px solid var(--nerv-amber);
+        position: relative;
+        flex: none;
+      }
+
+      #line.project {
+        border-left-color: var(--wire-cyan);
+      }
+
+      #line .who {
+        font-weight: 700;
+        font-size: 0.95rem;
+        color: var(--text);
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        display: block;
+      }
+
+      #line .model {
+        display: block;
+        margin-top: 2px;
+        color: var(--steel-dim);
+        font-size: 0.7rem;
+      }
+
+      #legControls {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-top: 8px;
+      }
+
+      .control-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .control-label {
+        font-size: 0.65rem;
+        color: var(--steel-dim);
+        min-width: 48px;
+        text-transform: uppercase;
+      }
+
+      select {
+        flex: 1;
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        padding: 4px 6px;
+        color: var(--text);
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        cursor: pointer;
+      }
+
+      select:focus {
+        border-color: var(--nerv-amber);
+        outline: none;
+      }
+
+      select:disabled {
+        color: var(--muted);
+        cursor: not-allowed;
+      }
+
+      #hangupBtn {
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        padding: 5px 8px;
+        width: 100%;
+        background: rgba(255, 34, 34, 0.08);
+        color: var(--magi-red);
+        border: 1px solid var(--magi-red);
+        border-radius: var(--radius);
+        cursor: pointer;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        font-weight: 700;
+        margin-top: 4px;
+      }
+
+      #hangupBtn:hover {
+        background: var(--magi-red);
+        color: #fff;
+        box-shadow: 0 0 8px var(--magi-red-glow);
+      }
+
+      /* Diagnostic Fleet Gauges */
+      .fleet-status {
+        margin-top: auto;
+        border-top: 1px solid var(--line);
+        padding-top: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        font-size: 0.68rem;
+      }
+
+      .gauge-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .gauge-name {
+        color: var(--steel-dim);
+      }
+
+      .gauge-bar {
+        width: 110px;
+        height: 5px;
+        background: var(--surface-alt);
+        border: 1px solid var(--line);
+        position: relative;
+        overflow: hidden;
+      }
+
+      .gauge-fill {
+        height: 100%;
+        background: var(--wire-cyan);
+      }
+
+      #status {
+        color: var(--steel-dim);
+        font-size: 0.7rem;
+        margin-top: 6px;
+      }
+
+      #status.error {
+        color: var(--magi-red);
+        font-weight: 600;
+      }
+
+      #retryBtn {
+        width: 100%;
+        margin-top: 4px;
+        padding: 4px 6px;
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+        background: none;
+        color: var(--magi-red);
+        border: 1px solid var(--magi-red);
+        cursor: pointer;
+      }
+
+      /* BAY 02: Hero Stage Viewport & Synchro Action Core */
+      #bayCenter {
+        gap: 8px;
+      }
+
+      #stage {
+        display: flex;
+        flex: 1 1 auto;
+        flex-direction: column;
+        min-height: 0;
+        border: 1px solid var(--line);
+        background: var(--void);
+        padding: 8px;
+        position: relative;
       }
 
       #stageTitle {
@@ -297,36 +473,19 @@
         text-transform: uppercase;
         letter-spacing: 0.14em;
         color: var(--wire-cyan);
-        margin: 0 0 8px;
+        margin: 0 0 4px;
         font-weight: 700;
-      }
-
-      #stageNotes {
-        font-size: 0.76rem;
-        color: var(--muted);
-        margin: 8px 0 0;
-      }
-
-      #stageNotes:empty {
-        display: none;
-      }
-
-      #stageTitle,
-      #stageZoom,
-      #stageNotes,
-      #stageError {
         flex: none;
       }
 
       #stageCanvas {
-        min-height: 220px;
+        min-height: 140px;
         flex: 1 1 auto;
         overflow: auto;
         overscroll-behavior: contain;
         touch-action: none;
-        border: 1px solid var(--line);
         background: var(--void);
-        padding: 8px;
+        padding: 4px;
       }
 
       #stageCanvas svg {
@@ -395,16 +554,13 @@
       }
 
       #stageZoom {
-        display: none;
-        gap: 6px;
-        align-items: center;
-        margin: 8px 0 0;
-        font-size: 0.72rem;
-        color: var(--muted);
-      }
-
-      body.has-diagram #stageZoom {
         display: flex;
+        gap: 4px;
+        align-items: center;
+        margin: 6px 0 0;
+        font-size: 0.68rem;
+        color: var(--muted);
+        flex: none;
       }
 
       #stageZoom button,
@@ -413,17 +569,16 @@
         color: var(--steel);
         border: 1px solid var(--line);
         border-radius: var(--radius);
-        padding: 2px 9px;
+        padding: 2px 7px;
         font: inherit;
-        font-size: 0.72rem;
+        font-size: 0.68rem;
         cursor: pointer;
-        min-inline-size: 38px;
-        min-block-size: 34px;
+        min-inline-size: 32px;
+        min-block-size: 26px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
         text-transform: uppercase;
-        letter-spacing: 0.05em;
       }
 
       #stageZoom button:hover,
@@ -433,8 +588,8 @@
       }
 
       #stageHistory {
-        display: none;
-        gap: 6px;
+        display: flex;
+        gap: 4px;
         align-items: center;
       }
 
@@ -448,166 +603,38 @@
         margin-left: auto;
       }
 
-      /* Theater Mode */
-      body.theater {
-        --gutter: 0px;
-        max-width: 100%;
-        padding: 0;
-      }
-
-      body.theater #shell {
-        display: block;
-      }
-
-      body.theater #column {
-        display: none;
-      }
-
-      body.theater #stage {
-        position: static;
-        box-sizing: border-box;
-        padding: 16px;
-        height: 100vh;
-        height: 100dvh;
-        max-height: none;
-        border: none;
-      }
-
-      #theaterExit {
-        display: none;
-        position: fixed;
-        top: 12px;
-        right: 12px;
-        z-index: 99999;
-        width: 44px;
-        height: 44px;
-        padding: 0;
-        align-items: center;
-        justify-content: center;
-        font-size: 1.1rem;
-        line-height: 1;
-        border-radius: var(--radius);
-        background: var(--surface);
-        color: var(--magi-red);
-        border: 1px solid var(--magi-red);
-        opacity: 0.7;
-        cursor: pointer;
-        transition: opacity 160ms ease;
-      }
-
-      body.theater #theaterExit {
-        display: flex;
-      }
-
-      #theaterExit:hover,
-      #theaterExit:focus-visible {
-        opacity: 1;
-        box-shadow: 0 0 10px var(--magi-red-glow);
-      }
-
-      /* MAGI Circuit Line Controls */
-      #line {
-        padding: 12px 14px;
-        border-radius: var(--radius);
-        background: var(--surface);
-        border: 1px solid var(--line);
-        border-left: 3px solid var(--nerv-amber);
-        margin-bottom: 14px;
-        position: relative;
-      }
-
-      #line::before {
-        content: "[ CIRCUIT ROUTE // MAGI MATRIX ]";
-        position: absolute;
-        top: -8px;
-        right: 10px;
-        background: var(--surface);
-        padding: 0 4px;
-        font-size: 0.62rem;
-        color: var(--nerv-amber);
-        letter-spacing: 0.08em;
-      }
-
-      #line.project {
-        border-left-color: var(--wire-cyan);
-      }
-
-      #line.project::before {
-        content: "[ CIRCUIT ROUTE // UNIT ACTIVE ]";
-        color: var(--wire-cyan);
-      }
-
-      #line .who {
-        font-weight: 700;
-        font-size: 0.95rem;
-        color: var(--text);
-        letter-spacing: 0.05em;
-        text-transform: uppercase;
-      }
-
-      #line .model {
-        display: block;
-        margin-top: 2px;
-        color: var(--steel-dim);
+      #stageNotes {
         font-size: 0.72rem;
-      }
-
-      #legControls {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        align-items: center;
-        margin-top: 10px;
-      }
-
-      select {
-        font-family: var(--font-mono);
-        font-size: 0.76rem;
-        padding: 5px 8px;
-        color: var(--text);
-        background: var(--surface-alt);
-        border: 1px solid var(--line);
-        border-radius: var(--radius);
-        cursor: pointer;
-      }
-
-      select:focus {
-        border-color: var(--nerv-amber);
-        outline: none;
-      }
-
-      select:disabled {
         color: var(--muted);
-        cursor: not-allowed;
+        margin: 4px 0 0;
+        flex: none;
       }
 
-      #hangupBtn {
-        font-family: var(--font-mono);
-        font-size: 0.76rem;
-        padding: 5px 10px;
-        width: auto;
-        background: rgba(255, 34, 34, 0.08);
+      #stageNotes:empty,
+      #stageError:empty {
+        display: none;
+      }
+
+      #stageError {
+        font-size: 0.72rem;
         color: var(--magi-red);
-        border: 1px solid var(--magi-red);
-        border-radius: var(--radius);
-        margin-left: auto;
-        cursor: pointer;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        font-weight: 700;
+        margin: 4px 0 0;
+        flex: none;
       }
 
-      #hangupBtn:hover {
-        background: var(--magi-red);
-        color: #fff;
-        box-shadow: 0 0 8px var(--magi-red-glow);
+      /* Audio Synchro Array & Tactical Action Deck */
+      .action-deck {
+        flex: none;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        border-top: 1px solid var(--line);
+        padding-top: 8px;
       }
 
-      /* Audio Synchro Waveform Canvas */
       .synchro-container {
         border: 1px solid var(--line);
         background: var(--void);
-        margin-bottom: 12px;
         position: relative;
         padding: 2px;
       }
@@ -619,20 +646,18 @@
         background: transparent;
       }
 
-      /* Tactical Controls & PTT */
       #controls {
         display: flex;
-        gap: 8px;
-        margin-top: 12px;
+        gap: 6px;
       }
 
       button {
         font-family: var(--font-stamp);
-        font-size: 1.25rem;
+        font-size: 1.15rem;
         font-weight: 700;
-        letter-spacing: 0.1em;
+        letter-spacing: 0.08em;
         text-transform: uppercase;
-        padding: 12px 20px;
+        padding: 10px 16px;
         border-radius: var(--radius);
         border: 1px solid transparent;
         background: var(--nerv-amber);
@@ -662,7 +687,6 @@
         border: 1px solid var(--nerv-amber-hot);
       }
 
-      /* Recording active: pulsing hazard warning */
       body.recording #talkBtn,
       #talkBtn.recording {
         background: repeating-linear-gradient(
@@ -691,8 +715,8 @@
         background: none;
         color: var(--muted);
         border: 1px solid var(--line);
-        flex: 0 0 32%;
-        font-size: 1.05rem;
+        flex: 0 0 30%;
+        font-size: 1rem;
       }
 
       #cancelBtn:hover {
@@ -711,17 +735,24 @@
         box-shadow: 0 0 10px var(--wire-cyan-glow);
       }
 
+      .hands-free-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
       #handsFreeBtn {
-        margin-top: 8px;
-        padding: 8px 12px;
+        padding: 5px 8px;
         font-family: var(--font-mono);
-        font-size: 0.76rem;
-        background: var(--surface);
+        font-size: 0.68rem;
+        background: var(--surface-alt);
         color: var(--steel);
         border: 1px solid var(--line);
         letter-spacing: 0.04em;
         text-transform: uppercase;
         font-weight: 600;
+        width: auto;
       }
 
       #handsFreeBtn:hover {
@@ -735,68 +766,42 @@
         background: rgba(56, 239, 125, 0.08);
       }
 
-      #handsFreeStatus,
-      #handsFreeLease {
-        margin-top: 4px;
+      #handsFreeStatus {
         color: var(--steel-dim);
-        font-size: 0.72rem;
+        font-size: 0.66rem;
       }
 
       #handsFreeStatus::before {
-        content: "[ACOUSTIC SENSOR] ";
+        content: "[SENSOR] ";
         font-weight: 700;
         color: var(--steel);
       }
 
-      #status {
-        color: var(--steel-dim);
-        margin-top: 10px;
-        font-size: 0.76rem;
-      }
-
-      #status.error {
-        color: var(--magi-red);
-        font-weight: 600;
-      }
-
-      #retryBtn {
-        width: auto;
-        margin-top: 6px;
-        padding: 4px 10px;
-        font-family: var(--font-mono);
-        font-size: 0.74rem;
-        background: none;
-        color: var(--magi-red);
-        border: 1px solid var(--magi-red);
-      }
-
-      /* Live Sub-Routine Activity Feed */
-      #activity {
-        margin-top: 14px;
-        border: 1px solid var(--line);
-        background: var(--surface);
-        padding: 10px 12px;
-        position: relative;
-      }
-
-      #activity::before {
-        content: "[ SUB-ROUTINE EXECUTION TELEMETRY ]";
-        position: absolute;
-        top: -8px;
-        left: 10px;
-        background: var(--surface);
-        padding: 0 4px;
-        font-size: 0.62rem;
+      #handsFreeLease {
         color: var(--nerv-amber);
-        font-weight: 700;
-        letter-spacing: 0.06em;
+        font-size: 0.66rem;
+      }
+
+      /* BAY 03: Telemetry & Intercom Transcript */
+      #bayComms {
+        gap: 8px;
+      }
+
+      #activity {
+        border: 1px solid var(--line);
+        background: var(--void);
+        padding: 6px 8px;
+        max-height: 140px;
+        display: flex;
+        flex-direction: column;
+        flex: none;
       }
 
       #activityHead {
         display: flex;
         align-items: center;
-        gap: 8px;
-        font-size: 0.72rem;
+        gap: 6px;
+        font-size: 0.68rem;
         text-transform: uppercase;
         letter-spacing: 0.06em;
         color: var(--steel-dim);
@@ -813,8 +818,8 @@
       }
 
       #activitySpinner {
-        width: 8px;
-        height: 8px;
+        width: 6px;
+        height: 6px;
         background: var(--nerv-amber);
         box-shadow: 0 0 6px var(--nerv-amber-glow);
         animation: spinStepped 1.6s steps(8) infinite;
@@ -831,18 +836,17 @@
 
       #activityList {
         list-style: none;
-        margin: 6px 0 0;
+        margin: 4px 0 0;
         padding: 0;
-        max-height: 120px;
         overflow-y: auto;
-        font-size: 0.74rem;
+        font-size: 0.7rem;
       }
 
       #activityList li {
         display: flex;
-        gap: 8px;
+        gap: 6px;
         padding: 2px 0;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.02);
       }
 
       #activityList .tool {
@@ -858,37 +862,32 @@
         white-space: nowrap;
       }
 
-      /* Intercom Transcript Log */
-      .label {
-        font-weight: 700;
-        font-size: 0.72rem;
-        color: var(--nerv-amber);
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        margin: 18px 0 0;
-      }
-
-      .box {
-        margin-top: 6px;
-        padding: 10px 12px;
-        background: var(--surface);
+      /* Intercom Log */
+      #logContainer {
+        flex: 1 1 auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
         border: 1px solid var(--line);
-        min-height: 1.5em;
+        background: var(--void);
+        padding: 8px;
+        overflow: hidden;
       }
 
       #log {
-        max-height: 52vh;
+        flex: 1 1 auto;
         overflow-y: auto;
+        user-select: text;
       }
 
       #log:empty::after {
         content: "[ NO COMMS LOGGED // CIRCUIT STANDBY ]";
         color: var(--steel-dim);
-        font-size: 0.75rem;
+        font-size: 0.72rem;
       }
 
       .turn {
-        padding: 8px 0;
+        padding: 6px 0;
         border-top: 1px solid var(--line);
       }
 
@@ -899,11 +898,11 @@
 
       .turn .meta {
         font-weight: 700;
-        font-size: 0.68rem;
+        font-size: 0.65rem;
         color: var(--nerv-amber);
         text-transform: uppercase;
         letter-spacing: 0.08em;
-        margin-bottom: 3px;
+        margin-bottom: 2px;
       }
 
       .turn.caller .meta {
@@ -912,17 +911,12 @@
 
       .turn .body {
         white-space: pre-wrap;
-        font-size: 0.84rem;
+        font-size: 0.78rem;
         color: var(--text);
       }
 
       .turn.caller .body {
         color: var(--steel);
-      }
-
-      /* Markdown Formatter Inside Transcript */
-      .md {
-        white-space: normal;
       }
 
       .md code {
@@ -935,9 +929,9 @@
       }
 
       .md pre {
-        background: var(--void);
+        background: var(--surface);
         border: 1px solid var(--line);
-        padding: 8px 10px;
+        padding: 6px 8px;
         overflow-x: auto;
       }
 
@@ -950,9 +944,103 @@
 
       .md blockquote {
         border-left: 2px solid var(--nerv-amber);
-        padding-left: 10px;
+        padding-left: 8px;
         color: var(--steel-dim);
-        margin: 0.5em 0;
+        margin: 0.4em 0;
+      }
+
+      audio {
+        margin-top: 6px;
+        width: 100%;
+        height: 28px;
+        flex: none;
+      }
+
+      /* Theater Mode */
+      body.theater #appContainer {
+        padding: 0;
+      }
+
+      body.theater #commandBanner,
+      body.theater #bayMagi,
+      body.theater #bayComms,
+      body.theater .action-deck {
+        display: none !important;
+      }
+
+      body.theater #shell {
+        grid-template-columns: 1fr;
+        height: 100vh;
+        height: 100dvh;
+      }
+
+      body.theater #bayCenter {
+        border: none;
+        padding: 10px;
+      }
+
+      #theaterExit {
+        display: none;
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        z-index: 999999;
+        width: 40px;
+        height: 40px;
+        padding: 0;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.1rem;
+        line-height: 1;
+        border-radius: var(--radius);
+        background: var(--surface);
+        color: var(--magi-red);
+        border: 1px solid var(--magi-red);
+        cursor: pointer;
+      }
+
+      body.theater #theaterExit {
+        display: flex;
+      }
+
+      /* Responsive Layout Rules */
+      @media (max-width: 1180px) {
+        #shell {
+          grid-template-columns: 260px 1fr;
+          grid-template-rows: 1fr 1fr;
+        }
+        #bayComms {
+          grid-column: 1 / -1;
+        }
+      }
+
+      @media (max-width: 1080px) {
+        html,
+        body {
+          overflow: auto;
+          height: auto;
+        }
+        #appContainer {
+          height: auto;
+        }
+        #shell {
+          display: flex;
+          flex-direction: column;
+          height: auto;
+        }
+        body:not(.theater) #stageCanvas {
+          min-height: 0;
+        }
+        #stage {
+          max-height: 48vh;
+        }
+        #logContainer {
+          max-height: 380px;
+        }
+      }
+
+      .hidden {
+        display: none !important;
       }
 
       /* Diff, Plan, and Timeline Structured Renderers */
@@ -1079,202 +1167,270 @@
         transform: scaleX(var(--dur, 0));
         transform-origin: left;
       }
-
-      audio {
-        margin-top: 16px;
-        width: 100%;
-        height: 32px;
-      }
-
-      .hidden {
-        display: none !important;
-      }
     </style>
   </head>
   <body>
     <!-- CRT Texture Overlay -->
     <div class="crt-overlay" aria-hidden="true"></div>
 
-    <!-- Top Mission Telemetry Ticker -->
-    <header id="commandBanner">
-      <div class="banner-top">
-        <span class="banner-tag">[DAMOCLES LAB // PBX-01]</span>
-        <span class="banner-kanji">有線交換司令局</span>
-        <span class="banner-status">
-          <span class="status-led"></span>
-          LINK: ONLINE
-        </span>
-        <span class="banner-clock" id="missionClock">T+00:00:00.0</span>
-      </div>
-      <div class="banner-sub">
-        <span class="sec-label">VOICE INGRESS 16kHz PCM</span>
-        <span class="sec-div">|</span>
-        <span class="sec-label">SYNCHRO MESH: DAMOCLES &times; HOMELAB</span>
-        <span class="sec-div">|</span>
-        <span class="sec-label">JARVIS PERSONAL TERMINAL</span>
-      </div>
-    </header>
-
-    <div id="shell">
-      <!-- Left Stage Viewport -->
-      <section id="stage" role="region" aria-labelledby="stageTitle">
-        <p id="stageTitle" aria-live="polite">Tactical Visual Stage</p>
-        <div
-          id="stageCanvas"
-          tabindex="0"
-          role="region"
-          aria-label="Diagram viewport"
-        ></div>
-        <p id="stageZoom">
-          <button type="button" data-zoom="-">&minus;</button>
-          <button type="button" data-zoom="+">+</button>
-          <button
-            type="button"
-            data-zoom="0"
-            title="Fit the whole diagram; press again to fill the width"
-          >
-            fit
-          </button>
-          <span id="stageZoomLabel">100%</span>
-          <span id="stageHistory" role="region" aria-label="Visual history">
-            <button
-              type="button"
-              id="historyBack"
-              aria-label="Previous visual"
-              title="Previous visual"
-            >
-              &larr;
-            </button>
-            <button
-              type="button"
-              id="historyForward"
-              aria-label="Next visual"
-              title="Next visual"
-            >
-              &rarr;
-            </button>
-            <button
-              type="button"
-              id="historyLive"
-              aria-label="Return to live visual"
-              title="Return to live visual"
-            >
-              live
-            </button>
-            <span id="historyLabel" aria-live="polite"></span>
+    <div id="appContainer">
+      <!-- Top Mission Telemetry Ticker -->
+      <header id="commandBanner">
+        <div class="banner-top">
+          <span class="banner-tag">[DAMOCLES TACTICAL STATION // PBX-01]</span>
+          <span class="banner-kanji">有線交換司令局</span>
+          <span class="banner-status">
+            <span class="status-led"></span>
+            LINK: ONLINE
           </span>
-          <button
-            type="button"
-            data-stage="theater"
-            title="Give the diagram the whole screen (T)"
-          >
-            theater
-          </button>
-        </p>
-        <p id="stageNotes"></p>
-        <p id="stageError" role="status"></p>
-      </section>
+          <span class="banner-clock" id="missionClock">T+00:00:00.00</span>
+        </div>
+        <div class="banner-sub">
+          <span class="sec-label">VOICE INGRESS 16kHz PCM</span>
+          <span class="sec-div">|</span>
+          <span class="sec-label">SYNCHRO MESH: DAMOCLES &times; HOMELAB</span>
+          <span class="sec-div">|</span>
+          <span class="sec-label">JARVIS PERSONAL SUPER-INTELLIGENCE</span>
+        </div>
+      </header>
 
-      <main id="column">
-        <h1>Switchboard</h1>
-        <p class="sub">
-          Tap to talk. The operator connects you; the project agent hands you
-          back.
-        </p>
+      <!-- Panoramic 3-Bay Command Grid -->
+      <div id="shell">
+        <!-- BAY 01: MAGI Consensus & Fleet Routing Deck -->
+        <section class="hud-bay" id="bayMagi" aria-label="Magi Routing Deck">
+          <div class="hud-bay-header">
+            <span>[ BAY 01 // MAGI MATRIX ]</span>
+            <span class="tag">TRI-CORE</span>
+          </div>
 
-        <!-- MAGI Circuit Router Deck -->
-        <div id="line">
-          <span class="who" id="who">—</span>
-          <span class="model" id="model"></span>
-          <div id="legControls">
-            <select
-              id="routeSelect"
-              title="Connect straight to a project, without asking the operator"
-            >
-              <option value="operator">Operator</option>
-            </select>
-            <select
-              id="modelSelect"
-              title="Model for this leg and the ones after it"
-            ></select>
-            <select
-              id="thinkingSelect"
-              title="Thinking level for this leg and the ones after it"
-            ></select>
+          <div class="magi-nodes">
+            <div class="magi-node">
+              <span class="node-id">MAGI-01</span>
+              <span class="node-role">OPERATOR CORE</span>
+              <span class="node-badge">ONLINE</span>
+            </div>
+            <div class="magi-node active">
+              <span class="node-id">MAGI-02</span>
+              <span class="node-role">TARGET AGENT</span>
+              <span class="node-badge">LINKED</span>
+            </div>
+            <div class="magi-node">
+              <span class="node-id">MAGI-03</span>
+              <span class="node-role">HOST PBX MESH</span>
+              <span class="node-badge">DAEMON</span>
+            </div>
+          </div>
+
+          <!-- Active Leg Circuit Controls -->
+          <div id="line">
+            <span class="who" id="who">—</span>
+            <span class="model" id="model"></span>
+            <div id="legControls">
+              <div class="control-row">
+                <span class="control-label">ROUTE:</span>
+                <select
+                  id="routeSelect"
+                  title="Connect straight to a project, without asking the operator"
+                >
+                  <option value="operator">Operator</option>
+                </select>
+              </div>
+              <div class="control-row">
+                <span class="control-label">MODEL:</span>
+                <select
+                  id="modelSelect"
+                  title="Model for this leg and the ones after it"
+                ></select>
+              </div>
+              <div class="control-row">
+                <span class="control-label">THINK:</span>
+                <select
+                  id="thinkingSelect"
+                  title="Thinking level for this leg and the ones after it"
+                ></select>
+              </div>
+              <button
+                id="hangupBtn"
+                class="hidden"
+                title="Drop this leg and go back to the operator"
+              >
+                Sever Circuit / Return Op
+              </button>
+            </div>
+          </div>
+
+          <!-- Fleet Health & Network Status -->
+          <div class="fleet-status">
+            <div class="gauge-row">
+              <span class="gauge-name">DAMOCLES MESH</span>
+              <div class="gauge-bar">
+                <div class="gauge-fill" style="width: 100%"></div>
+              </div>
+            </div>
+            <div class="gauge-row">
+              <span class="gauge-name">HOMELAB NODE</span>
+              <div class="gauge-bar">
+                <div class="gauge-fill" style="width: 100%"></div>
+              </div>
+            </div>
+            <div class="gauge-row">
+              <span class="gauge-name">VAD PROBABILITY</span>
+              <div class="gauge-bar">
+                <div
+                  class="gauge-fill"
+                  style="width: 95%; background: var(--data-green)"
+                ></div>
+              </div>
+            </div>
+            <div id="status" role="status" aria-live="polite">
+              Connecting...
+            </div>
             <button
-              id="hangupBtn"
+              id="retryBtn"
               class="hidden"
-              title="Drop this leg and go back to the operator"
+              type="button"
+              title="Force connection reconnect"
             >
-              Hang up
+              Retry Connection
             </button>
           </div>
-        </div>
+        </section>
 
-        <!-- Audio Synchro Harmonic Waveform -->
-        <div class="synchro-container">
-          <canvas
-            id="synchroCanvas"
-            class="synchro-canvas"
-            width="400"
-            height="64"
-          ></canvas>
-        </div>
-
-        <div id="controls">
-          <button id="talkBtn">Talk</button>
-          <button id="cancelBtn" class="hidden" title="Discard">
-            &#9632; Discard
-          </button>
-          <button id="sendBtn" class="hidden" title="Send">
-            &#10148; Send
-          </button>
-        </div>
-
-        <button
-          id="handsFreeBtn"
-          type="button"
-          aria-pressed="false"
-          aria-controls="handsFreeStatus handsFreeLease"
-        >
-          Enable hands-free listening
-        </button>
-        <div id="handsFreeStatus" role="status" aria-live="polite">
-          Hands-free is off.
-        </div>
-        <div id="handsFreeLease" aria-live="polite"></div>
-        <div id="status" role="status" aria-live="polite">Connecting...</div>
-        <button
-          id="retryBtn"
-          class="hidden"
-          type="button"
-          title="Replace a stale connection and retransmit every unacknowledged clip"
-        >
-          Retry now / Force send
-        </button>
-
-        <!-- Sub-Routine Live Activity Feed -->
-        <div id="activity" class="hidden">
-          <div id="activityHead">
-            <span id="activitySpinner"></span>
-            <span id="activityWho">working</span>
-            <span id="activityClock">0s</span>
+        <!-- BAY 02: Tactical Stage Viewport & Synchro Action Core -->
+        <section class="hud-bay" id="bayCenter" aria-label="Tactical Visual Stage">
+          <div class="hud-bay-header">
+            <span>[ BAY 02 // TACTICAL VISUAL MATRIX ]</span>
+            <span class="tag">STAGE CORE</span>
           </div>
-          <ul id="activityList"></ul>
-        </div>
 
-        <p class="label">Comms Transcript</p>
-        <div class="box" id="log"></div>
+          <section id="stage" role="region" aria-labelledby="stageTitle">
+            <p id="stageTitle" aria-live="polite">Visual Matrix Viewport</p>
+            <div
+              id="stageCanvas"
+              tabindex="0"
+              role="region"
+              aria-label="Diagram viewport"
+            ></div>
+            <p id="stageZoom">
+              <button type="button" data-zoom="-">&minus;</button>
+              <button type="button" data-zoom="+">+</button>
+              <button
+                type="button"
+                data-zoom="0"
+                title="Fit diagram to viewport"
+              >
+                fit
+              </button>
+              <span id="stageZoomLabel">100%</span>
+              <span id="stageHistory" role="region" aria-label="Visual history">
+                <button
+                  type="button"
+                  id="historyBack"
+                  aria-label="Previous visual"
+                  title="Previous visual"
+                >
+                  &larr;
+                </button>
+                <button
+                  type="button"
+                  id="historyForward"
+                  aria-label="Next visual"
+                  title="Next visual"
+                >
+                  &rarr;
+                </button>
+                <button
+                  type="button"
+                  id="historyLive"
+                  aria-label="Return to live visual"
+                  title="Return to live visual"
+                >
+                  live
+                </button>
+                <span id="historyLabel" aria-live="polite"></span>
+              </span>
+              <button
+                type="button"
+                data-stage="theater"
+                title="Theater mode (T)"
+              >
+                theater
+              </button>
+            </p>
+            <p id="stageNotes"></p>
+            <p id="stageError" role="status"></p>
+          </section>
 
-        <audio id="player" controls></audio>
-      </main>
+          <!-- Audio Synchro Waveform & Action Controls -->
+          <div class="action-deck">
+            <div class="synchro-container">
+              <canvas
+                id="synchroCanvas"
+                class="synchro-canvas"
+                width="600"
+                height="64"
+              ></canvas>
+            </div>
+
+            <div id="controls">
+              <button id="talkBtn">TALK // PTT TRIGGER</button>
+              <button id="cancelBtn" class="hidden" title="Discard">
+                &#9632; Discard
+              </button>
+              <button id="sendBtn" class="hidden" title="Send">
+                &#10148; Transmit
+              </button>
+            </div>
+
+            <div class="hands-free-bar">
+              <button
+                id="handsFreeBtn"
+                type="button"
+                aria-pressed="false"
+                aria-controls="handsFreeStatus handsFreeLease"
+              >
+                Acoustic Sensor: Off
+              </button>
+              <div id="handsFreeStatus" role="status" aria-live="polite">
+                Standby
+              </div>
+              <div id="handsFreeLease" aria-live="polite"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- BAY 03: Telemetry & Intercom Transcript -->
+        <section class="hud-bay" id="bayComms" aria-label="Telemetry & Comms Transcript">
+          <div class="hud-bay-header">
+            <span>[ BAY 03 // TELEMETRY & COMMS ]</span>
+            <span class="tag">LIVE DISPATCH</span>
+          </div>
+
+          <!-- Live Sub-Routine Tool Execution Terminal -->
+          <div id="activity" class="hidden">
+            <div id="activityHead">
+              <span id="activitySpinner"></span>
+              <span id="activityWho">executing</span>
+              <span id="activityClock">0s</span>
+            </div>
+            <ul id="activityList"></ul>
+          </div>
+
+          <!-- Comms Log Terminal -->
+          <div id="logContainer">
+            <div id="log"></div>
+          </div>
+
+          <audio id="player" controls></audio>
+        </section>
+      </div>
     </div>
 
     <button
       id="theaterExit"
       type="button"
-      title="Bring the call back (T or Escape)"
-      aria-label="Leave theater mode"
+      title="Exit theater mode (T or Escape)"
+      aria-label="Exit theater mode"
     >
       &#10005;
     </button>
