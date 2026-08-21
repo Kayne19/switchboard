@@ -189,6 +189,33 @@ async fn process_prompt_collects_text_signal_and_sentinel() {
 }
 
 #[tokio::test]
+async fn first_text_delta_reports_agent_life_before_the_turn_settles() {
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = events.clone();
+    let callback: ActivityCallback = Arc::new(move |activity| {
+        let seen = seen.clone();
+        Box::pin(async move {
+            seen.lock().unwrap().push((activity.state, activity.tool));
+        })
+    });
+    let script = "read line; printf '%s\\n' '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"Hello\"}}' '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_end\",\"content\":\"Hello\"}}' '{\"type\":\"agent_settled\"}'";
+    let session = PiSession::start(
+        vec!["sh".into(), "-c".into(), script.into()],
+        "test",
+        None,
+        None,
+        Duration::from_secs(1),
+        Some(callback),
+    )
+    .await
+    .unwrap();
+    let turn = session.prompt("hello").await.unwrap();
+    assert_eq!(turn.text, "Hello");
+    assert_eq!(*events.lock().unwrap(), vec![("life".into(), "".into())]);
+    session.close().await;
+}
+
+#[tokio::test]
 async fn speak_requires_matching_successful_tool_end() {
     let script = "read line; printf '%s\\n' '{\"type\":\"tool_execution_start\",\"toolName\":\"speak\",\"toolCallId\":\"call-1\",\"args\":{\"text\":\"hello\"}}' '{\"type\":\"tool_execution_end\",\"toolName\":\"speak\",\"toolCallId\":\"call-other\",\"isError\":false}' '{\"type\":\"agent_settled\"}'";
     let session = PiSession::start(

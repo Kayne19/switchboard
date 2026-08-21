@@ -346,15 +346,21 @@ impl AppState {
         let delivery = DeliveryState::new();
         let speech_deadline = speaker.speech_deadline;
         let coordinator = Coordinator::new(switchboard.status());
+        let live_leg = switchboard.live_leg_state();
         let activity_events = events.clone();
         let activity_delivery = delivery.clone();
         let activity_coordinator = coordinator.clone();
+        let activity_live_leg = live_leg.clone();
         let activity_callback: ActivityCallback = Arc::new(move |activity: Activity| {
             let events = activity_events.clone();
             let delivery = activity_delivery.clone();
             let coordinator = activity_coordinator.clone();
+            let live_leg = activity_live_leg.clone();
             Box::pin(async move {
                 if coordinator.is_candidate() {
+                    let _ = promote_candidate(&coordinator, &live_leg, &events, &delivery);
+                }
+                if activity.state == "life" {
                     return;
                 }
                 let event = Event::Json(json!({
@@ -394,7 +400,6 @@ impl AppState {
         });
         let active_session = switchboard.session_control();
         let activity_clock = switchboard.activity_clock();
-        let live_leg = switchboard.live_leg_state();
         let mut switchboard = switchboard;
         switchboard.set_coordinator(coordinator.clone());
         switchboard.set_activity_callback(Some(activity_callback));
@@ -540,6 +545,54 @@ fn publish_status(state: &AppState, status: Value) {
     state.0.coordinator.publish_status(status.clone());
     emit_json(state, status);
 }
+
+fn promote_candidate(
+    coordinator: &Coordinator,
+    live_leg: &LiveLegState,
+    events: &broadcast::Sender<Event>,
+    delivery: &DeliveryState,
+) -> bool {
+    let Ok(identity) = coordinator.adopt_candidate() else {
+        return false;
+    };
+    let status = coordinator.status_json();
+    let route = status["route"].as_str().unwrap_or("operator");
+    live_leg.set_session(
+        route,
+        if route == crate::pbx::OPERATOR {
+            ""
+        } else {
+            &identity.token
+        },
+    );
+    let epoch = Event::Json(json!({
+        "type": "epoch",
+        "generation": identity.generation,
+    }));
+    let _ = events.send(epoch.clone());
+    delivery.publish(epoch);
+    let status_event = Event::Json(status);
+    let _ = events.send(status_event.clone());
+    delivery.publish(status_event);
+    true
+}
+
+fn promote_candidate_for_token(state: &AppState, token: &str) {
+    if state
+        .0
+        .coordinator
+        .candidate_identity()
+        .is_some_and(|candidate| candidate.token == token)
+    {
+        let _ = promote_candidate(
+            &state.0.coordinator,
+            &state.0.live_leg,
+            &state.0.events,
+            &state.0.delivery,
+        );
+    }
+}
+
 async fn spawn_active_operation<F, T>(
     state: &AppState,
     future: F,
@@ -1123,7 +1176,14 @@ async fn process_turns(state: AppState) {
             tracing::warn!(clip = %id, route = %reply.route, %error, "the turn reported a failure");
         }
         tracing::info!(clip = %id, route = %reply.route, elapsed = ?started.elapsed(), "turn settled");
-        deliver_turn_if_current(&state, &reply, status, generation, &id).await;
+        deliver_turn_if_current(
+            &state,
+            &reply,
+            status,
+            reply.delivery_generation.unwrap_or(generation),
+            &id,
+        )
+        .await;
         state.0.turn_in_flight.store(false, Ordering::Release);
     }
     tracing::warn!("the turn worker stopped; no further turns will be dispatched");
@@ -1207,7 +1267,7 @@ async fn connect(State(state): State<AppState>, Json(req): Json<Connect>) -> Res
     // before taking the PBX lock; otherwise a direct connection can wait for
     // the very leg the caller is trying to leave.
     let operation_state = state.clone();
-    let Some((task, task_id, generation)) = spawn_replacing_operation(&state, async move {
+    let Some((task, task_id, _generation)) = spawn_replacing_operation(&state, async move {
         let mut board = operation_state.0.switchboard.lock().await;
         let reply = board.dial(&req.project, &req.intent).await;
         let status = board.status();
@@ -1241,7 +1301,14 @@ async fn connect(State(state): State<AppState>, Json(req): Json<Connect>) -> Res
         }
     };
     clear_active_operation(&state, task_id).await;
-    if !deliver_page_reply_if_current(&state, &reply, status, generation).await {
+    if !deliver_page_reply_if_current(
+        &state,
+        &reply,
+        status,
+        reply.delivery_generation.unwrap_or(_generation),
+    )
+    .await
+    {
         return (
             axum::http::StatusCode::CONFLICT,
             Json(json!({"detail":"connection attempt was superseded"})),
@@ -1262,7 +1329,7 @@ async fn thinking(State(state): State<AppState>, Json(req): Json<Thinking>) -> R
         let status = board.status();
         (reply, status)
     };
-    let Some((task, task_id, generation)) = (if state.0.live_leg.route() == crate::pbx::OPERATOR {
+    let Some((task, task_id, _generation)) = (if state.0.live_leg.route() == crate::pbx::OPERATOR {
         spawn_active_operation(&state, operation).await
     } else {
         spawn_replacing_operation(&state, operation).await
@@ -1293,7 +1360,14 @@ async fn thinking(State(state): State<AppState>, Json(req): Json<Thinking>) -> R
         }
     };
     clear_active_operation(&state, task_id).await;
-    if !deliver_page_reply_if_current(&state, &reply, status, generation).await {
+    if !deliver_page_reply_if_current(
+        &state,
+        &reply,
+        status,
+        reply.delivery_generation.unwrap_or(_generation),
+    )
+    .await
+    {
         return (
             axum::http::StatusCode::CONFLICT,
             Json(json!({"detail":"thinking change was superseded"})),
@@ -1315,7 +1389,7 @@ async fn model(State(state): State<AppState>, Json(req): Json<Model>) -> Respons
         let status = board.status();
         (reply, status)
     };
-    let Some((task, task_id, generation)) = (if state.0.live_leg.route() == crate::pbx::OPERATOR {
+    let Some((task, task_id, _generation)) = (if state.0.live_leg.route() == crate::pbx::OPERATOR {
         spawn_active_operation(&state, operation).await
     } else {
         spawn_replacing_operation(&state, operation).await
@@ -1346,7 +1420,14 @@ async fn model(State(state): State<AppState>, Json(req): Json<Model>) -> Respons
         }
     };
     clear_active_operation(&state, task_id).await;
-    if !deliver_page_reply_if_current(&state, &reply, status, generation).await {
+    if !deliver_page_reply_if_current(
+        &state,
+        &reply,
+        status,
+        reply.delivery_generation.unwrap_or(_generation),
+    )
+    .await
+    {
         return (
             axum::http::StatusCode::CONFLICT,
             Json(json!({"detail":"model change was superseded"})),
@@ -1397,6 +1478,7 @@ async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Respons
         )
             .into_response();
     }
+    promote_candidate_for_token(&state, &req.token);
     if let Err(error) = state.0.coordinator.accept_side_effect(&req.token) {
         let (code, detail) = match error {
             crate::lifecycle::LifecycleError::CandidateSideEffect => (
@@ -1693,6 +1775,7 @@ fn validate_visual(req: &mut Diagram) -> Result<(), String> {
 }
 
 async fn diagram(State(state): State<AppState>, Json(mut req): Json<Diagram>) -> Response {
+    promote_candidate_for_token(&state, &req.token);
     if let Err(error) = state.0.coordinator.accept_side_effect(&req.token) {
         let detail = match error {
             crate::lifecycle::LifecycleError::CandidateSideEffect => {

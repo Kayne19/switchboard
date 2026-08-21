@@ -280,6 +280,7 @@ impl PiSession {
         let mut chunks = Vec::new();
         let mut signals = Vec::new();
         let mut error = String::new();
+        let mut response_life_reported = false;
         loop {
             let read = {
                 let mut stdout = self.inner.stdout.lock().await;
@@ -360,16 +361,22 @@ impl PiSession {
             };
             match event.get("type").and_then(Value::as_str) {
                 Some("message_update") => {
-                    if event
-                        .pointer("/assistantMessageEvent/type")
+                    let assistant_event = event.get("assistantMessageEvent");
+                    let event_type = assistant_event
+                        .and_then(Value::as_object)
+                        .and_then(|event| event.get("type"))
+                        .and_then(Value::as_str);
+                    let text = assistant_event
+                        .and_then(Value::as_object)
+                        .and_then(|event| event.get("content").or_else(|| event.get("delta")))
                         .and_then(Value::as_str)
-                        == Some("text_end")
-                    {
-                        if let Some(content) = event
-                            .pointer("/assistantMessageEvent/content")
-                            .and_then(Value::as_str)
-                            .filter(|content| !content.trim().is_empty())
-                        {
+                        .filter(|text| !text.trim().is_empty());
+                    if text.is_some() && !response_life_reported {
+                        response_life_reported = true;
+                        self.report_activity("life", "", String::new()).await;
+                    }
+                    if event_type == Some("text_end") {
+                        if let Some(content) = text {
                             let collected = chunks.iter().map(String::len).sum::<usize>();
                             if collected.saturating_add(content.len()) > STREAM_LIMIT {
                                 tracing::error!(

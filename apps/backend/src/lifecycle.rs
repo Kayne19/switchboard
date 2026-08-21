@@ -168,6 +168,19 @@ impl fmt::Display for LifecycleError {
 }
 impl std::error::Error for LifecycleError {}
 
+#[derive(Clone)]
+struct StartupRollback {
+    route: String,
+    project: Option<String>,
+    persistent_session_id: String,
+    leg: LegIdentity,
+    model: String,
+    thinking_requested: String,
+    thinking_effective: String,
+    catalog: Option<CatalogPublication>,
+    status_value: Value,
+}
+
 pub struct CallLifecycle {
     route: String,
     project: Option<String>,
@@ -181,6 +194,7 @@ pub struct CallLifecycle {
     operation: Option<OperationIdentity>,
     terminal_reason: Option<String>,
     candidate: Option<CandidateLeg>,
+    startup_rollback: Option<StartupRollback>,
     catalog: Option<CatalogPublication>,
     status_value: Value,
 }
@@ -200,6 +214,7 @@ impl CallLifecycle {
             operation: None,
             terminal_reason: None,
             candidate: None,
+            startup_rollback: None,
             catalog: None,
             status_value: status,
         }
@@ -469,6 +484,17 @@ impl Coordinator {
                 return Err(LifecycleError::CandidateTokenMismatch);
             }
             candidate.identity.generation = state.leg.generation + 1;
+            state.startup_rollback = Some(StartupRollback {
+                route: state.route.clone(),
+                project: state.project.clone(),
+                persistent_session_id: state.persistent_session_id.clone(),
+                leg: state.leg.clone(),
+                model: state.model.clone(),
+                thinking_requested: state.thinking_requested.clone(),
+                thinking_effective: state.thinking_effective.clone(),
+                catalog: state.catalog.clone(),
+                status_value: state.status_value.clone(),
+            });
             state.phase = Phase::Starting;
             state.candidate = Some(candidate);
             Ok(())
@@ -576,6 +602,7 @@ impl Coordinator {
             if state.candidate.take().is_none() {
                 return false;
             }
+            state.startup_rollback = None;
             state.terminal_reason = Some(reason.into());
             if state.phase == Phase::Starting || state.phase == Phase::Intro {
                 state.phase = if state.route == OPERATOR {
@@ -597,7 +624,7 @@ impl Coordinator {
             state.project = Some(candidate.project.clone());
             state.persistent_session_id = candidate.persistent_session_id;
             state.leg = identity.clone();
-            state.phase = Phase::Active;
+            state.phase = Phase::TurnRunning;
             state.model = candidate.model;
             state.thinking_requested = candidate.thinking.clone();
             state.thinking_effective =
@@ -606,7 +633,11 @@ impl Coordinator {
                 } else {
                     candidate.thinking
                 };
-            state.operation = None;
+            state.operation = Some(OperationIdentity {
+                id: self.next_operation.fetch_add(1, Ordering::Relaxed),
+                leg: identity.clone(),
+                kind: OperationKind::Prompt,
+            });
             state.terminal_reason = None;
             state.catalog = candidate.catalog.map(|catalog| CatalogPublication {
                 project: candidate.project,
@@ -615,6 +646,57 @@ impl Coordinator {
             });
             self.refresh_locked(state);
             Ok(identity)
+        })
+    }
+
+    pub fn finish_intro(&self) -> bool {
+        self.linearize(|state| {
+            if state.startup_rollback.is_none() || state.phase != Phase::TurnRunning {
+                return false;
+            }
+            state.operation = None;
+            state.phase = Phase::Active;
+            state.startup_rollback = None;
+            self.refresh_locked(state);
+            true
+        })
+    }
+
+    pub fn rollback_startup(&self, reason: impl Into<String>) -> bool {
+        self.linearize(|state| {
+            if state.candidate.take().is_some() {
+                state.startup_rollback = None;
+                state.terminal_reason = Some(reason.into());
+                state.phase = if state.route == OPERATOR {
+                    Phase::Operator
+                } else {
+                    Phase::Active
+                };
+                self.refresh_locked(state);
+                return true;
+            }
+            let Some(previous) = state.startup_rollback.take() else {
+                return false;
+            };
+            let generation = state.leg.generation;
+            state.route = previous.route;
+            state.project = previous.project;
+            state.persistent_session_id = previous.persistent_session_id;
+            state.leg = LegIdentity::new(previous.leg.token, generation);
+            state.phase = if state.route == OPERATOR {
+                Phase::Operator
+            } else {
+                Phase::Active
+            };
+            state.model = previous.model;
+            state.thinking_requested = previous.thinking_requested;
+            state.thinking_effective = previous.thinking_effective;
+            state.operation = None;
+            state.terminal_reason = Some(reason.into());
+            state.catalog = previous.catalog;
+            state.status_value = previous.status_value;
+            self.refresh_locked(state);
+            true
         })
     }
 

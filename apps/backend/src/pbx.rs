@@ -75,7 +75,7 @@ impl LiveLegState {
             .clone()
     }
 
-    fn set_session(&self, route: &str, token: &str) {
+    pub(crate) fn set_session(&self, route: &str, token: &str) {
         let mut state = self
             .0
             .write()
@@ -225,6 +225,8 @@ pub struct Reply {
     pub route_label: String,
     pub error: Option<String>,
     pub to_speak: Vec<String>,
+    #[serde(skip)]
+    pub(crate) delivery_generation: Option<u64>,
 }
 impl Reply {
     fn new(route: &str, label: &str, utterances: Vec<Utterance>, error: Option<String>) -> Self {
@@ -245,6 +247,7 @@ impl Reply {
             route_label: label.into(),
             error,
             to_speak,
+            delivery_generation: None,
         }
     }
 }
@@ -450,6 +453,26 @@ impl Switchboard {
                 );
             }
         }
+    }
+
+    fn rollback_startup(&self, reason: impl Into<String>) {
+        let Some(coordinator) = &self.coordinator else {
+            return;
+        };
+        if !coordinator.rollback_startup(reason) {
+            return;
+        }
+        let status = coordinator.status_json();
+        let route = status["route"].as_str().unwrap_or(OPERATOR);
+        let identity = coordinator.current_identity();
+        self.live_leg.set_session(
+            route,
+            if route == OPERATOR {
+                ""
+            } else {
+                &identity.token
+            },
+        );
     }
 
     pub fn session_control(&self) -> Arc<Mutex<Option<PiSession>>> {
@@ -961,10 +984,7 @@ impl Switchboard {
                 {
                     Ok(opts) => Some(opts),
                     Err(e) => {
-                        if let Some(coordinator) = &self.coordinator {
-                            coordinator
-                                .rollback_candidate(format!("transport options failed: {e}"));
-                        }
+                        self.rollback_startup(format!("transport options failed: {e}"));
                         self.operator_note =
                             Some(format!("Transfer to {} failed: {e}", project.id));
                         return self.reply_transfer_error(
@@ -1019,9 +1039,7 @@ impl Switchboard {
                     )
                     .await;
                 }
-                if let Some(coordinator) = &self.coordinator {
-                    coordinator.rollback_candidate(format!("startup failed: {e}"));
-                }
+                self.rollback_startup(format!("startup failed: {e}"));
                 self.set_active_session(previous_agent.clone()).await;
                 self.operator_note = Some(format!("Transfer to {} failed: {e}", project.id));
                 return self.reply_transfer_error(
@@ -1070,9 +1088,7 @@ impl Switchboard {
                 .await;
             }
             self.set_active_session(previous_agent.clone()).await;
-            if let Some(coordinator) = &self.coordinator {
-                coordinator.rollback_candidate(format!("intro failed: {detail}"));
-            }
+            self.rollback_startup(format!("intro failed: {detail}"));
             self.operator_note = Some(format!("Transfer to {} failed: {detail}", project.id));
             return self.reply_transfer_error(
                 format!("{} didn't pick up: {detail}", project.id),
@@ -1081,22 +1097,25 @@ impl Switchboard {
         }
 
         if let Some(coordinator) = &self.coordinator {
-            if let Err(error) = coordinator.adopt_candidate() {
-                session.close().await;
-                self.set_active_session(previous_agent.clone()).await;
-                if readiness.is_none() && project.is_remote() {
-                    self.rollback_staged_extension(
-                        project.canonical_host().unwrap_or_default(),
-                        &leg_token,
-                    )
-                    .await;
+            if coordinator.is_candidate() {
+                if let Err(error) = coordinator.adopt_candidate() {
+                    session.close().await;
+                    self.set_active_session(previous_agent.clone()).await;
+                    if readiness.is_none() && project.is_remote() {
+                        self.rollback_staged_extension(
+                            project.canonical_host().unwrap_or_default(),
+                            &leg_token,
+                        )
+                        .await;
+                    }
+                    self.rollback_startup(format!("adoption failed: {error}"));
+                    return self.reply_transfer_error(
+                        format!("{} did not come up.", project.id),
+                        Some(error.to_string()),
+                    );
                 }
-                coordinator.rollback_candidate(format!("adoption failed: {error}"));
-                return self.reply_transfer_error(
-                    format!("{} did not come up.", project.id),
-                    Some(error.to_string()),
-                );
             }
+            coordinator.finish_intro();
         }
 
         if readiness.is_none() && project.is_remote() {
@@ -1104,7 +1123,9 @@ impl Switchboard {
                 .await;
         }
 
-        self.drop_agent().await;
+        if let Some(previous) = self.agent.take() {
+            previous.close().await;
+        }
         self.project = Some(project.clone());
         self.route = project.id.clone();
         self.live_leg.set_session(&self.route, &leg_token);
@@ -1877,9 +1898,7 @@ impl Switchboard {
                     )
                     .await;
                 }
-                if let Some(coordinator) = &self.coordinator {
-                    coordinator.rollback_candidate(format!("startup failed: {error}"));
-                }
+                self.rollback_startup(format!("startup failed: {error}"));
                 self.drop_agent().await;
                 let note = format!("{} could not be restarted on {}: {error}", project.id, spec);
                 self.operator_note = Some(note);
@@ -1943,9 +1962,7 @@ impl Switchboard {
                 )
                 .await;
             }
-            if let Some(coordinator) = &self.coordinator {
-                coordinator.rollback_candidate(format!("prompt failed: {detail}"));
-            }
+            self.rollback_startup(format!("prompt failed: {detail}"));
             self.drop_agent().await;
             self.operator_note = Some(format!(
                 "{} could not be restarted on {spec}: {detail}",
@@ -1961,28 +1978,33 @@ impl Switchboard {
         }
 
         if let Some(coordinator) = &self.coordinator {
-            if let Err(error) = coordinator.adopt_candidate() {
-                session.close().await;
-                if project.is_remote() && extension_override.is_none() {
-                    self.rollback_staged_extension(
-                        project.canonical_host().unwrap_or_default(),
-                        &leg_token,
-                    )
-                    .await;
+            if coordinator.is_candidate() {
+                if let Err(error) = coordinator.adopt_candidate() {
+                    session.close().await;
+                    if project.is_remote() && extension_override.is_none() {
+                        self.rollback_staged_extension(
+                            project.canonical_host().unwrap_or_default(),
+                            &leg_token,
+                        )
+                        .await;
+                    }
+                    self.rollback_startup(format!("adoption failed: {error}"));
+                    self.drop_agent().await;
+                    return self.reply(
+                        [format!("{} did not come up.", project.id)],
+                        Some(error.to_string()),
+                    );
                 }
-                coordinator.rollback_candidate(format!("adoption failed: {error}"));
-                self.drop_agent().await;
-                return self.reply(
-                    [format!("{} did not come up.", project.id)],
-                    Some(error.to_string()),
-                );
             }
+            coordinator.finish_intro();
         }
         if project.is_remote() && extension_override.is_none() {
             self.commit_staged_extension(project.canonical_host().unwrap_or_default(), &leg_token)
                 .await;
         }
-        self.drop_agent().await;
+        if let Some(previous) = self.agent.take() {
+            previous.close().await;
+        }
         self.project = Some(project.clone());
         self.route = project.id.clone();
         self.live_leg.set_session(&self.route, &leg_token);
@@ -2067,7 +2089,7 @@ impl Switchboard {
         let spoke = turn.agent_spoke();
         let failed = turn.failed;
         let error = turn.error;
-        Reply::new(
+        let mut reply = Reply::new(
             &self.route,
             &self.route_label(),
             vec![Utterance {
@@ -2075,7 +2097,11 @@ impl Switchboard {
                 synthesize: !spoke,
             }],
             failed.then_some(error),
-        )
+        );
+        if let Some(coordinator) = &self.coordinator {
+            reply.delivery_generation = Some(coordinator.generation());
+        }
+        reply
     }
     fn reply_transfer_error(&self, message: String, error: Option<String>) -> Reply {
         Reply::new(
@@ -2093,7 +2119,7 @@ impl Switchboard {
         let spoke = turn.agent_spoke();
         let failed = turn.failed;
         let error = turn.error;
-        Reply::new(
+        let mut reply = Reply::new(
             &self.route,
             &self.route_label(),
             vec![Utterance {
@@ -2101,7 +2127,11 @@ impl Switchboard {
                 synthesize: !spoke,
             }],
             failed.then_some(error),
-        )
+        );
+        if let Some(coordinator) = &self.coordinator {
+            reply.delivery_generation = Some(coordinator.generation());
+        }
+        reply
     }
     fn prepend(&self, turn: Turn, mut reply: Reply) -> Reply {
         let synthesize = !turn.agent_spoke() && reply.route == OPERATOR;

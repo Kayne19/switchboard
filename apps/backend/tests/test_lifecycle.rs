@@ -137,6 +137,12 @@ fn callbacks_require_the_current_leg_token_and_stale_work_is_rejected() {
         Err(LifecycleError::StaleLeg)
     );
     coordinator.adopt_candidate().unwrap();
+    assert!(coordinator.accept_side_effect("candidate").is_ok());
+    assert_eq!(
+        coordinator.accept_side_effect("candidate-old"),
+        Err(LifecycleError::StaleLeg)
+    );
+    assert!(coordinator.finish_intro());
     assert_eq!(
         coordinator.accept_side_effect("candidate"),
         Err(LifecycleError::StaleLeg)

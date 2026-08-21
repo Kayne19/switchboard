@@ -889,6 +889,7 @@ async fn final_response_barrier_is_emitted_once_after_a_settled_turn() {
         route_label: "Operator".into(),
         error: None,
         to_speak: Vec::new(),
+        delivery_generation: None,
     };
 
     assert!(
@@ -925,6 +926,7 @@ async fn stale_final_response_does_not_emit_a_barrier() {
         route_label: "Operator".into(),
         error: None,
         to_speak: Vec::new(),
+        delivery_generation: None,
     };
 
     assert!(
@@ -1271,6 +1273,7 @@ async fn superseded_reply_is_not_logged_or_broadcast() {
         route_label: "Operator".into(),
         error: None,
         to_speak: Vec::new(),
+        delivery_generation: None,
     };
 
     assert!(
