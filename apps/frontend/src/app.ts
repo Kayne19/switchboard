@@ -20,6 +20,11 @@ import {
 	renderVisual,
 } from "./stage.js";
 import "./diff.js";
+import {
+	initMissionClock,
+	initSynchro,
+	type SynchroController,
+} from "./synchro.js";
 
 interface Clip {
 	id: string;
@@ -554,11 +559,7 @@ function playFailed(
 }
 
 function attemptPlay(owner: PlaybackOwner): void {
-	if (
-		playbackOwner !== owner ||
-		owner.consumed ||
-		owner.pendingAttempt !== null
-	)
+	if (playbackOwner !== owner || owner.consumed || owner.pendingAttempt !== null)
 		return;
 	owner.paused = false;
 	owner.seeked = false;
@@ -728,8 +729,7 @@ function mseFinishSource(utterance: MseUtterance): void {
 }
 
 function mseAppend(utterance: MseUtterance): void {
-	if (utterance.failed || !utterance.buffer || utterance.buffer.updating)
-		return;
+	if (utterance.failed || !utterance.buffer || utterance.buffer.updating) return;
 	if (!utterance.queued.length) {
 		mseFinishSource(utterance);
 		return;
@@ -1023,12 +1023,8 @@ function invalidatePicker(control: HTMLSelectElement): void {
 function applyPickerDisabled(): void {
 	routeSelect.disabled = pickerBusy;
 	modelSelect.disabled =
-		pickerBusy ||
-		!pickerOnProject ||
-		!pickerModelSwaps ||
-		!pickerModelsAvailable;
-	thinkingSelect.disabled =
-		pickerBusy || (pickerOnProject && !pickerModelSwaps);
+		pickerBusy || !pickerOnProject || !pickerModelSwaps || !pickerModelsAvailable;
+	thinkingSelect.disabled = pickerBusy || (pickerOnProject && !pickerModelSwaps);
 	modelSelect.title = !pickerModelsAvailable
 		? pickerDiagnostic || "Model catalog unavailable"
 		: "";
@@ -1334,8 +1330,7 @@ function connect() {
 				if (clip) {
 					clip.streaming = false;
 					clip.sent = false;
-					statusEl.textContent =
-						"Streaming unavailable; sending complete clip...";
+					statusEl.textContent = "Streaming unavailable; sending complete clip...";
 					flushOutbox();
 				}
 			} else if (msg.type === "accepted") {
@@ -1368,9 +1363,7 @@ function connect() {
 						? "Operator is listening..."
 						: `${whoEl.textContent || "working"} is working...`;
 				startActivity(
-					msg.route === "operator"
-						? "Operator"
-						: whoEl.textContent || "working",
+					msg.route === "operator" ? "Operator" : whoEl.textContent || "working",
 				);
 			} else if (msg.type === "activity") {
 				addActivity(msg);
@@ -1381,8 +1374,7 @@ function connect() {
 				} else if (waiting > 1) {
 					statusEl.textContent = `Got it — ${waiting} waiting their turn.`;
 				} else {
-					statusEl.textContent =
-						"Got it — you're next, once this turn finishes.";
+					statusEl.textContent = "Got it — you're next, once this turn finishes.";
 				}
 				statusEl.classList.remove("error");
 			} else if (msg.type === "reply") {
@@ -1427,6 +1419,25 @@ function setRecordingUI(on: boolean): void {
 	btn.classList.toggle("hidden", on);
 	cancelBtn.classList.toggle("hidden", !on);
 	sendBtn.classList.toggle("hidden", !on);
+	const doc = (globalThis as unknown as { document?: Document }).document;
+	if (doc?.body?.classList) {
+		doc.body.classList.toggle("recording", on);
+	}
+	const ctrl = (
+		globalThis as unknown as { synchroController?: SynchroController }
+	).synchroController;
+	if (ctrl) {
+		if (on) {
+			ctrl.setMode("transmitting");
+			ctrl.setLevel(0.85);
+		} else {
+			const playing = Boolean(
+				(globalThis as unknown as { isPlaying?: boolean }).isPlaying ?? isPlaying,
+			);
+			ctrl.setMode(playing ? "receiving" : "idle");
+			ctrl.setLevel(playing ? 0.65 : 0.05);
+		}
+	}
 }
 
 function pauseHandsFreeForPtt(): void {
@@ -1711,8 +1722,7 @@ async function enableHandsFree(): Promise<void> {
 				wakeDetector: createWakeWordDetector(),
 				isSnapshotReady: () => snapshotReady,
 				currentEpoch: () => turnEpoch,
-				isPttActive: () =>
-					starting || isRecording() || activeRecording !== null,
+				isPttActive: () => starting || isRecording() || activeRecording !== null,
 				onClip: submitHandsFreeClip,
 				onState: renderHandsFreeState,
 			});
@@ -1894,9 +1904,7 @@ handsFreeBtn.disabled = true;
 btn.disabled = true;
 document.addEventListener("visibilitychange", () => {
 	if (document.visibilityState === "hidden") {
-		handsFreeController?.disable(
-			"Hands-free stopped while the page is hidden.",
-		);
+		handsFreeController?.disable("Hands-free stopped while the page is hidden.");
 		clearResponseBarrier();
 	}
 });
@@ -1904,4 +1912,12 @@ window.addEventListener("pagehide", () => {
 	handsFreeController?.disable("Hands-free stopped when the page was left.");
 	clearResponseBarrier();
 });
+try {
+	initMissionClock("missionClock");
+	(
+		globalThis as unknown as { synchroController?: SynchroController }
+	).synchroController = initSynchro("synchroCanvas");
+} catch {
+	// Tactical canvas and mission clock enhancements degrade gracefully
+}
 connect();

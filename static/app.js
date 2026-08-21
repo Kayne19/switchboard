@@ -2,6 +2,7 @@ import { clipHeader, decodeServerMessage, helloMessage, postJson, sttChunkHeader
 import { HandsFreeController, PLAYBACK_DRAIN_DEBOUNCE_MS, } from "./hands_free.js";
 import { historyBack, historyForward, historyLive, markStale, renderVisual, } from "./stage.js";
 import "./diff.js";
+import { initMissionClock, initSynchro, } from "./synchro.js";
 function getElement(id) {
     const element = document.getElementById(id);
     if (!element)
@@ -428,9 +429,7 @@ function playFailed(owner, attempt, error) {
     statusEl.classList.add("error");
 }
 function attemptPlay(owner) {
-    if (playbackOwner !== owner ||
-        owner.consumed ||
-        owner.pendingAttempt !== null)
+    if (playbackOwner !== owner || owner.consumed || owner.pendingAttempt !== null)
         return;
     owner.paused = false;
     owner.seeked = false;
@@ -866,12 +865,8 @@ function invalidatePicker(control) {
 function applyPickerDisabled() {
     routeSelect.disabled = pickerBusy;
     modelSelect.disabled =
-        pickerBusy ||
-            !pickerOnProject ||
-            !pickerModelSwaps ||
-            !pickerModelsAvailable;
-    thinkingSelect.disabled =
-        pickerBusy || (pickerOnProject && !pickerModelSwaps);
+        pickerBusy || !pickerOnProject || !pickerModelSwaps || !pickerModelsAvailable;
+    thinkingSelect.disabled = pickerBusy || (pickerOnProject && !pickerModelSwaps);
     modelSelect.title = !pickerModelsAvailable
         ? pickerDiagnostic || "Model catalog unavailable"
         : "";
@@ -1179,8 +1174,7 @@ function connect() {
                 if (clip) {
                     clip.streaming = false;
                     clip.sent = false;
-                    statusEl.textContent =
-                        "Streaming unavailable; sending complete clip...";
+                    statusEl.textContent = "Streaming unavailable; sending complete clip...";
                     flushOutbox();
                 }
             }
@@ -1218,9 +1212,7 @@ function connect() {
                     msg.route === "operator"
                         ? "Operator is listening..."
                         : `${whoEl.textContent || "working"} is working...`;
-                startActivity(msg.route === "operator"
-                    ? "Operator"
-                    : whoEl.textContent || "working");
+                startActivity(msg.route === "operator" ? "Operator" : whoEl.textContent || "working");
             }
             else if (msg.type === "activity") {
                 addActivity(msg);
@@ -1234,8 +1226,7 @@ function connect() {
                     statusEl.textContent = `Got it — ${waiting} waiting their turn.`;
                 }
                 else {
-                    statusEl.textContent =
-                        "Got it — you're next, once this turn finishes.";
+                    statusEl.textContent = "Got it — you're next, once this turn finishes.";
                 }
                 statusEl.classList.remove("error");
             }
@@ -1286,6 +1277,22 @@ function setRecordingUI(on) {
     btn.classList.toggle("hidden", on);
     cancelBtn.classList.toggle("hidden", !on);
     sendBtn.classList.toggle("hidden", !on);
+    const doc = globalThis.document;
+    if (doc?.body?.classList) {
+        doc.body.classList.toggle("recording", on);
+    }
+    const ctrl = globalThis.synchroController;
+    if (ctrl) {
+        if (on) {
+            ctrl.setMode("transmitting");
+            ctrl.setLevel(0.85);
+        }
+        else {
+            const playing = Boolean(globalThis.isPlaying ?? isPlaying);
+            ctrl.setMode(playing ? "receiving" : "idle");
+            ctrl.setLevel(playing ? 0.65 : 0.05);
+        }
+    }
 }
 function pauseHandsFreeForPtt() {
     if (typeof handsFreeController !== "undefined")
@@ -1760,4 +1767,11 @@ window.addEventListener("pagehide", () => {
     handsFreeController?.disable("Hands-free stopped when the page was left.");
     clearResponseBarrier();
 });
+try {
+    initMissionClock("missionClock");
+    globalThis.synchroController = initSynchro("synchroCanvas");
+}
+catch {
+    // Tactical canvas and mission clock enhancements degrade gracefully
+}
 connect();
