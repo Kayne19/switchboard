@@ -1006,8 +1006,8 @@ impl Switchboard {
         // projects still use the configured local extension file selected by
         // `start_agent_with_options`.
         let extension_override: Option<Option<&str>> = if project.is_remote() {
-            readiness.as_ref().map(|r| match &r.artifact_decision {
-                crate::prewarm::ArtifactDecision::Ready(p) => Some(p.as_str()),
+            readiness.as_ref().and_then(|r| match &r.artifact_decision {
+                crate::prewarm::ArtifactDecision::Ready(p) => Some(Some(p.as_str())),
                 crate::prewarm::ArtifactDecision::Sentinel(_)
                 | crate::prewarm::ArtifactDecision::None => None,
             })
