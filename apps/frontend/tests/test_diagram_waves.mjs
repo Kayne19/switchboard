@@ -4,14 +4,11 @@
 // script and run against plain objects, since they only ever touch `id`,
 // `classList` and `getBBox`.
 //
-// Run: node tests/test_diagram_waves.mjs
+// Run: node apps/frontend/tests/test_diagram_waves.mjs
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-const diagram = readFileSync(
-	new URL("../static/diagram.js", import.meta.url),
-	"utf8",
-);
+const diagram = readFileSync("static/diagram.js", "utf8");
 const lift = (name) => {
 	const start = diagram.indexOf(`const ${name} = `);
 	assert.notEqual(start, -1, `${name} is no longer in static/diagram.js`);

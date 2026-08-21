@@ -240,16 +240,16 @@ test it manually and then fails with "command not found" for the switchboard.
 | `legacy/backend/models.py` | legacy spoken model name resolution |
 | `legacy/backend/audio.py` | legacy whisper in, ElevenLabs out, and reply-length shaping |
 | `static/index.html` | HTML shell for the tap-to-talk page |
-| `web/` | TypeScript browser protocol, client, and diagram sources |
+| `apps/frontend/src/` | TypeScript browser protocol, client, and diagram sources |
 | `static/*.js` | committed deterministic browser build output |
 | `static/openwakeword/` | same-origin Hey Jarvis ONNX, wrapper, and ONNX Runtime WASM assets |
-| `web/hands_free.ts` | hands-free controller, real wake adapter, and separate VAD endpointing |
+| `apps/frontend/src/hands_free.ts` | hands-free controller, real wake adapter, and separate VAD endpointing |
 | `docs/hands-free.md` | hands-free lifecycle, asset provenance, and license obligations |
-| `src/` | Rust service: API, routing, pi sessions, registry, models, history, audio |
+| `apps/backend/src/` | Rust service: API, routing, pi sessions, registry, models, history, audio |
 | `extensions/*.ts` | plain TypeScript pi extensions; homelab templates remain authoritative until cutover |
 | `docs/diagram-tool.md` | the `diagram` tool: payload, rendering, layout, and what was left out |
 | `legacy/tests/` | Python compatibility tests (`python3 -m unittest discover -s legacy/tests`) |
-| `tests/` | Node browser/diagram and pi-extension tests |
+| `apps/frontend/tests/` | Node browser/diagram and pi-extension tests |
 
 ## Agent persona deployment contract
 

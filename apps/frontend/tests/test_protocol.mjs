@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 
-const source = readFileSync("web/protocol.ts", "utf8");
+const source = readFileSync("apps/frontend/src/protocol.ts", "utf8");
 const compiled = ts.transpileModule(source, {
 	compilerOptions: {
 		target: ts.ScriptTarget.ES2022,
 		module: ts.ModuleKind.ES2022,
 	},
-	fileName: "web/protocol.ts",
+	fileName: "apps/frontend/src/protocol.ts",
 	reportDiagnostics: true,
 });
 assert.deepEqual(compiled.diagnostics ?? [], []);

@@ -156,9 +156,7 @@ class FakeElement {
 		if (selector === "*") return true;
 		if (selector.includes("[")) {
 			const tag = selector.split("[")[0];
-			const attrMatch = selector.match(
-				/\[([a-zA-Z0-9_-]+)=['"]?([^'"]+)['"]?\]/,
-			);
+			const attrMatch = selector.match(/\[([a-zA-Z0-9_-]+)=['"]?([^'"]+)['"]?\]/);
 			const tagMatch = !tag || this.tagName.toLowerCase() === tag.toLowerCase();
 			if (!attrMatch) return false;
 			return tagMatch && this.getAttribute(attrMatch[1]) === attrMatch[2];
@@ -214,7 +212,7 @@ globalThis.matchMedia = (query) => ({
 		: false,
 });
 
-const stageModule = await import("../static/stage.js");
+const stageModule = await import("../../../static/stage.js");
 
 // 1. normalizeVisual
 assert.deepEqual(stageModule.normalizeVisual({ source: "flowchart TD; A" }), {
@@ -425,7 +423,7 @@ assert.equal(planOl.getAttribute("data-visual"), "plan");
 assert.equal(planOl.hasAttribute("data-bars"), false);
 
 // 10. diff module tests
-const diffModule = await import("../static/diff.js");
+const diffModule = await import("../../../static/diff.js");
 
 const sampleDiff = `diff --git a/src/main.ts b/src/main.ts
 --- a/src/main.ts

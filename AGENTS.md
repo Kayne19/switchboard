@@ -32,15 +32,15 @@ does it should say so.
 
 `agent-switchboard.ts` and `operator-switchboard.ts` are plain TypeScript and
 authoritative here. The persona is no longer rendered into them: it arrives as
-`SWITCHBOARD_PERSONA`, read in `src/main.rs` and passed to the agent process in
-`src/pbx.rs`, which is the fix `docs/extraction-plan.md` asked for first. The
+`SWITCHBOARD_PERSONA`, read in `apps/backend/src/main.rs` and passed to the agent process in
+`apps/backend/src/pbx.rs`, which is the fix `docs/extraction-plan.md` asked for first. The
 stale `.ts.j2` copies have been removed; homelab still renders its own until the
 cutover, so until then a change here reaches a project host only through the
 extension staging path, not through a deploy.
 
 ## Working here
 
-- The service is Rust (`src/`), the browser client is TypeScript (`web/`,
+- The service is Rust (`apps/backend/src/`), the browser client is TypeScript (`apps/frontend/src/`,
   compiled to the committed `static/`). The Python tree in `legacy/` is the
   compatibility baseline, not the running service.
 - The Rust toolchain is pinned in `rust-toolchain.toml` so a local run and CI
@@ -50,7 +50,7 @@ extension staging path, not through a deploy.
   `python3 -m unittest discover -s legacy/tests`, and `npm test` followed by
   `git diff --exit-code -- static` — the compiled browser output is committed,
   so rebuild it in the same change.
-- Compatibility tests live in `legacy/tests/`; browser tests stay in `tests/`.
+- Compatibility tests live in `legacy/tests/`; browser tests stay in `apps/frontend/tests/`.
   They are the reason this repo exists — keep them passing on every commit.
 - No network, no ElevenLabs, no whisper model downloads in tests. Stub them.
 - Read `docs/concurrency-and-test-hazards.md` before touching turn dispatch, page

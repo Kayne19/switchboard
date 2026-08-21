@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 
-const source = readFileSync("web/app.ts", "utf8");
+const source = readFileSync("apps/frontend/src/app.ts", "utf8");
 
 function compile(body, name) {
 	const result = ts.transpileModule(body, {
@@ -542,11 +542,7 @@ export { audioQueue, mseQueue, receiveAudioStart, receiveAudioChunk, receiveAudi
 			"quota failure retains complete replay",
 		);
 		assert.equal(await loaded.audioQueue[0].text(), "fallback");
-		assert.equal(
-			loaded.audioQueue.length,
-			1,
-			"fallback is queued exactly once",
-		);
+		assert.equal(loaded.audioQueue.length, 1, "fallback is queued exactly once");
 
 		const queueBeforeStale = loaded.mseQueue.length;
 		loaded.receiveAudioStart({
@@ -701,11 +697,7 @@ export { startRecording, stopRecording, isRecording, outbox };`;
 		assert.equal(typeof globalThis.__recorder.onerror, "function");
 		globalThis.__recorder.state = "inactive";
 		globalThis.__recorder.onerror({ error: new Error("encoder failed") });
-		assert.equal(
-			streams[2].stops(),
-			1,
-			"recorder errors release the microphone",
-		);
+		assert.equal(streams[2].stops(), 1, "recorder errors release the microphone");
 
 		// A recorder may finish asynchronously after the next recording starts.
 		// Its chunks and discard choice must stay attached to that recorder.
@@ -975,11 +967,7 @@ export { setRoute, post };`;
 		// The native select already contains the user's new value when the
 		// change handler runs; the picker must still remember the committed one.
 		thinkingSelect.value = "high";
-		const thinking = picker.post(
-			"/thinking",
-			{ level: "high" },
-			thinkingSelect,
-		);
+		const thinking = picker.post("/thinking", { level: "high" }, thinkingSelect);
 		assert.equal(calls.length, 1, "cross-control requests are serialized");
 		assert.deepEqual(calls[0], {
 			url: "/connect",

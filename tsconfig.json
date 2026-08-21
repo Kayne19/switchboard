@@ -4,7 +4,7 @@
     "module": "ES2022",
     "moduleResolution": "Bundler",
     "lib": ["ES2022", "DOM"],
-    "rootDir": "web",
+    "rootDir": "apps/frontend/src",
     "outDir": "static",
     "strict": true,
     "skipLibCheck": true,
@@ -12,5 +12,5 @@
     "removeComments": false,
     "sourceMap": false
   },
-  "include": ["web/**/*.ts"]
+  "include": ["apps/frontend/src/**/*.ts"]
 }

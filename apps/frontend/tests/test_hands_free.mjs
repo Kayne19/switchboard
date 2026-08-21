@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import { readFileSync, statSync } from "node:fs";
 import ts from "typescript";
 
-const source = readFileSync("web/hands_free.ts", "utf8");
-const detectorSource = readFileSync("web/wake_detector.ts", "utf8");
-const wakeWordSource = readFileSync("web/wake_word.ts", "utf8");
-const worklet = readFileSync("web/vad-worklet.ts", "utf8");
-const app = readFileSync("web/app.ts", "utf8");
+const source = readFileSync("apps/frontend/src/hands_free.ts", "utf8");
+const detectorSource = readFileSync(
+	"apps/frontend/src/wake_detector.ts",
+	"utf8",
+);
+const wakeWordSource = readFileSync("apps/frontend/src/wake_word.ts", "utf8");
+const worklet = readFileSync("apps/frontend/src/vad-worklet.ts", "utf8");
+const app = readFileSync("apps/frontend/src/app.ts", "utf8");
 const html = readFileSync("static/index.html", "utf8");
 const packageRuntime = readFileSync(
 	"static/openwakeword/wake-word-engine.js",

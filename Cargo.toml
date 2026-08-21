@@ -3,6 +3,10 @@ name = "switchboard"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "switchboard"
+path = "apps/backend/src/main.rs"
+
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
 futures-util = { version = "0.3", default-features = false, features = [
