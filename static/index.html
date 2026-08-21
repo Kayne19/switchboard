@@ -114,6 +114,59 @@
         overflow: hidden;
       }
 
+      /* Emergency Mode (Global Evangelion Red Alert) */
+      [data-mode="emergency"] {
+        --line-active: #ff2222;
+        --accent: #ff2222;
+        --data-green: #ff2222;
+        --wire-cyan: #ff2222;
+      }
+
+      [data-mode="emergency"] #commandBanner {
+        border-color: var(--magi-red);
+        background: repeating-linear-gradient(
+          -45deg,
+          rgba(255, 34, 34, 0.18),
+          rgba(255, 34, 34, 0.18) 12px,
+          rgba(0, 0, 0, 0.7) 12px,
+          rgba(0, 0, 0, 0.7) 24px
+        );
+      }
+
+      [data-mode="emergency"] .banner-tag {
+        color: var(--magi-red);
+        animation: emergencyBlink 1s infinite;
+      }
+
+      @keyframes emergencyBlink {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.3;
+        }
+      }
+
+      #emergencyToggle {
+        font-family: var(--font-stamp);
+        font-size: 0.76rem;
+        letter-spacing: 0.08em;
+        padding: 2px 8px;
+        background: rgba(255, 34, 34, 0.1);
+        color: var(--magi-red);
+        border: 1px solid var(--magi-red);
+        border-radius: var(--radius);
+        cursor: pointer;
+        width: auto;
+      }
+
+      #emergencyToggle:hover {
+        background: var(--magi-red);
+        color: #fff;
+        box-shadow: 0 0 8px var(--magi-red-glow);
+      }
+
       /* Top Mission & Telemetry Header Banner */
       #commandBanner {
         flex: none;
@@ -217,14 +270,65 @@
         color: var(--line);
       }
 
-      /* 3-Bay Command Grid Architecture */
+      /* 3-Bay Command Grid Architecture with Dynamic Fluid Transitions & Fullscreen Bay Focus */
       #shell {
         flex: 1 1 auto;
         min-height: 0;
         display: grid;
-        grid-template-columns: 290px minmax(420px, 1fr) 370px;
+        grid-template-columns: 240px minmax(460px, 1fr) 310px;
         gap: 10px;
         overflow: hidden;
+        transition: grid-template-columns 280ms
+          cubic-bezier(0.22, 0.61, 0.36, 1);
+      }
+
+      body.has-diagram #shell {
+        grid-template-columns: 210px 1fr 280px;
+      }
+
+      #shell.focus-bay1 {
+        grid-template-columns: 1fr;
+      }
+      #shell.focus-bay1 #bayCenter,
+      #shell.focus-bay1 #bayComms {
+        display: none !important;
+      }
+
+      #shell.focus-bay2 {
+        grid-template-columns: 1fr;
+      }
+      #shell.focus-bay2 #bayMagi,
+      #shell.focus-bay2 #bayComms {
+        display: none !important;
+      }
+
+      #shell.focus-bay3 {
+        grid-template-columns: 1fr;
+      }
+      #shell.focus-bay3 #bayMagi,
+      #shell.focus-bay3 #bayCenter {
+        display: none !important;
+      }
+
+      /* Large-Format Glancability When Fullscreen Comms is Active */
+      #shell.focus-bay3 #log .turn .body {
+        font-size: 1.15rem;
+        line-height: 1.6;
+      }
+      #shell.focus-bay3 #log .turn .meta {
+        font-size: 0.85rem;
+      }
+
+      #shell.collapse-bay1 {
+        grid-template-columns: 42px minmax(420px, 1fr) 370px;
+      }
+
+      #shell.collapse-bay3 {
+        grid-template-columns: 290px minmax(420px, 1fr) 42px;
+      }
+
+      #shell.collapse-bay1.collapse-bay3 {
+        grid-template-columns: 42px 1fr 42px;
       }
 
       .hud-bay {
@@ -236,6 +340,34 @@
         min-height: 0;
         position: relative;
         overflow: hidden;
+        transition: all 260ms cubic-bezier(0.22, 0.61, 0.36, 1);
+      }
+
+      .hud-bay.collapsed {
+        padding: 8px 4px;
+        cursor: pointer;
+        background: var(--surface-alt);
+        border-color: var(--line-active);
+      }
+
+      .hud-bay.collapsed > *:not(.hud-bay-header) {
+        display: none !important;
+      }
+
+      .hud-bay.collapsed .hud-bay-header {
+        writing-mode: vertical-lr;
+        transform: rotate(180deg);
+        border-bottom: none;
+        margin: auto auto;
+        letter-spacing: 0.15em;
+        white-space: nowrap;
+        font-size: 0.75rem;
+      }
+
+      .hud-bay.collapsed .hud-bay-header .tag,
+      .hud-bay.collapsed .hud-bay-header .bay-toggle-btn,
+      .hud-bay.collapsed .hud-bay-header .bay-max-btn {
+        display: none;
       }
 
       .hud-bay-header {
@@ -250,6 +382,32 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
+      }
+
+      .bay-header-actions {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .bay-toggle-btn,
+      .bay-max-btn {
+        background: none;
+        border: 1px solid var(--line);
+        color: var(--steel-dim);
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        padding: 1px 5px;
+        width: auto;
+        cursor: pointer;
+        border-radius: var(--radius);
+        line-height: 1;
+      }
+
+      .bay-toggle-btn:hover,
+      .bay-max-btn:hover {
+        border-color: var(--nerv-amber);
+        color: var(--nerv-amber);
       }
 
       .hud-bay-header .tag {
@@ -1003,6 +1161,56 @@
         display: flex;
       }
 
+      /* iPad / Tablet Workout Distance Glanceability */
+      @media (min-width: 768px) and (max-width: 1280px) {
+        html,
+        body {
+          font-size: 15px;
+        }
+
+        .banner-top {
+          font-size: 0.82rem;
+        }
+
+        .banner-clock {
+          font-size: 0.95rem;
+        }
+
+        #stageTitle {
+          font-size: 0.85rem;
+        }
+
+        .synchro-canvas {
+          height: 80px;
+        }
+
+        button {
+          font-size: 1.35rem;
+          padding: 14px 20px;
+        }
+
+        #log .turn .body {
+          font-size: 0.95rem;
+          line-height: 1.6;
+        }
+
+        #log .turn .meta {
+          font-size: 0.76rem;
+        }
+
+        .hud-bay-header {
+          font-size: 0.78rem;
+        }
+
+        #activityHead {
+          font-size: 0.78rem;
+        }
+
+        #activityList {
+          font-size: 0.8rem;
+        }
+      }
+
       /* Responsive Layout Rules */
       @media (max-width: 1180px) {
         #shell {
@@ -1179,6 +1387,14 @@
         <div class="banner-top">
           <span class="banner-tag">[DAMOCLES TACTICAL STATION // PBX-01]</span>
           <span class="banner-kanji">有線交換司令局</span>
+          <button
+            id="emergencyToggle"
+            type="button"
+            title="Toggle Emergency Red Alert"
+            aria-label="Toggle Emergency Red Alert"
+          >
+            非常事態 // ALERT
+          </button>
           <span class="banner-status">
             <span class="status-led"></span>
             LINK: ONLINE
@@ -1200,7 +1416,13 @@
         <section class="hud-bay" id="bayMagi" aria-label="Magi Routing Deck">
           <div class="hud-bay-header">
             <span>[ BAY 01 // MAGI MATRIX ]</span>
-            <span class="tag">TRI-CORE</span>
+            <button
+              class="bay-toggle-btn"
+              data-toggle="bay1"
+              title="Toggle Bay 1 (Key 1)"
+            >
+              [ &minus; ]
+            </button>
           </div>
 
           <div class="magi-nodes">
@@ -1297,10 +1519,22 @@
         </section>
 
         <!-- BAY 02: Tactical Stage Viewport & Synchro Action Core -->
-        <section class="hud-bay" id="bayCenter" aria-label="Tactical Visual Stage">
+        <section
+          class="hud-bay"
+          id="bayCenter"
+          aria-label="Tactical Visual Stage"
+        >
           <div class="hud-bay-header">
             <span>[ BAY 02 // TACTICAL VISUAL MATRIX ]</span>
-            <span class="tag">STAGE CORE</span>
+            <div class="bay-header-actions">
+              <button
+                class="bay-max-btn"
+                data-max="bay2"
+                title="Maximize Stage Viewport (Key 2)"
+              >
+                [ ⛶ MAXIMIZE ]
+              </button>
+            </div>
           </div>
 
           <section id="stage" role="region" aria-labelledby="stageTitle">
@@ -1400,10 +1634,20 @@
         </section>
 
         <!-- BAY 03: Telemetry & Intercom Transcript -->
-        <section class="hud-bay" id="bayComms" aria-label="Telemetry & Comms Transcript">
+        <section
+          class="hud-bay"
+          id="bayComms"
+          aria-label="Telemetry & Comms Transcript"
+        >
           <div class="hud-bay-header">
             <span>[ BAY 03 // TELEMETRY & COMMS ]</span>
-            <span class="tag">LIVE DISPATCH</span>
+            <button
+              class="bay-toggle-btn"
+              data-toggle="bay3"
+              title="Toggle Bay 3 (Key 3)"
+            >
+              [ &minus; ]
+            </button>
           </div>
 
           <!-- Live Sub-Routine Tool Execution Terminal -->

@@ -245,7 +245,36 @@ AudioContext (16kHz PCM)
 
 ---
 
-## 6. Migration Plan: Vanilla TS to Command Station
+## 7. Spatial Viewport Mapping & Voice Navigation Protocol
+
+To enable hands-free workout and distant-screen interaction, the agent possesses programmatic spatial control over the user's display. Instead of forcing all widgets to fit simultaneously on smaller screens, the agent dynamically reconfigures the viewport based on the caller's spoken intent.
+
+### Visual State & View Protocol (`type: "view"`)
+
+The backend and project agents can transmit a lightweight spatial control message:
+
+```json
+{
+  "type": "view",
+  "target": "stage" | "comms" | "magi" | "overview" | "theater",
+  "reason": "Displaying transformer architecture graph"
+}
+```
+
+### Supported View Targets
+
+| Spoken Intent / Trigger | `target` | Client State & Behavior |
+|---|---|---|
+| *"Pull up the architecture / loss graph / diff"* | `"stage"` | Collapses Bay 1 & 3, expanding Bay 2 (Stage) to dominant screen width. |
+| *"Show me the full transcript / email summary"* | `"comms"` | Maximizes Bay 3 (Comms) with large 1.15rem high-contrast typography readable from 8+ feet away. |
+| *"Show me the fleet routing / MAGI consensus"* | `"magi"` | Maximizes Bay 1 (MAGI) to display node health, route switches, and model dials. |
+| *"Give the diagram the whole screen"* | `"theater"` | Enters full-screen Theater mode (100% viewport, hiding all side chrome). |
+| *"Reset view / show everything / overview"* | `"overview"` | Restores the balanced 3-bay command matrix. |
+
+### Integration with Existing Visual Payloads
+
+When an agent invokes the `diagram`, `diff`, or `plan` tool, the visual stage automatically brings Bay 02 into active focus. This ensures that callers never have to physically touch the iPad or mouse to view what was just discussed.
+
 
 To ensure continuous development without breaking call control or test suites:
 

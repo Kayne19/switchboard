@@ -867,9 +867,9 @@ function applyPickerDisabled() {
     modelSelect.disabled =
         pickerBusy || !pickerOnProject || !pickerModelSwaps || !pickerModelsAvailable;
     thinkingSelect.disabled = pickerBusy || (pickerOnProject && !pickerModelSwaps);
-    modelSelect.title = !pickerModelsAvailable
-        ? pickerDiagnostic || "Model catalog unavailable"
-        : "";
+    modelSelect.title = pickerModelsAvailable
+        ? ""
+        : pickerDiagnostic || "Model catalog unavailable";
 }
 // Both selects act immediately and both can take a while — connecting dials
 // ssh and starts an agent, changing the level restarts the live leg. Lock
@@ -1143,18 +1143,18 @@ function connect() {
                     typeof msg.generation === "number" &&
                     msg.generation === audioEpoch) {
                     clearResponseBarrier();
-                    if (msg.success !== false) {
+                    if (msg.success === false) {
+                        handsFreeStatusEl.textContent =
+                            "Hands-free follow-up is waiting for a successful response.";
+                        handsFreeStatusEl.classList.add("error");
+                    }
+                    else {
                         pendingResponseBarrier = {
                             responseId: msg.response_id,
                             generation: msg.generation,
                             timer: null,
                         };
                         maybeCompleteResponseBarrier();
-                    }
-                    else {
-                        handsFreeStatusEl.textContent =
-                            "Hands-free follow-up is waiting for a successful response.";
-                        handsFreeStatusEl.classList.add("error");
                     }
                 }
             }
@@ -1246,6 +1246,40 @@ function connect() {
             else if (msg.type === "diagram") {
                 void renderVisual(msg);
             }
+            else if (msg.type === "view") {
+                const target = typeof msg.target === "string" ? msg.target.toLowerCase() : "";
+                const shell = document.querySelector("#shell");
+                if (target === "theater") {
+                    setTheater(true);
+                }
+                else if (target === "stage" ||
+                    target === "bay2" ||
+                    target === "visual") {
+                    setTheater(false);
+                    shell?.classList.remove("focus-bay1", "focus-bay3");
+                    shell?.classList.add("focus-bay2");
+                }
+                else if (target === "comms" ||
+                    target === "transcript" ||
+                    target === "bay3") {
+                    setTheater(false);
+                    shell?.classList.remove("focus-bay1", "focus-bay2");
+                    shell?.classList.add("focus-bay3");
+                }
+                else if (target === "magi" ||
+                    target === "routing" ||
+                    target === "bay1") {
+                    setTheater(false);
+                    shell?.classList.remove("focus-bay2", "focus-bay3");
+                    shell?.classList.add("focus-bay1");
+                }
+                else if (target === "overview" ||
+                    target === "grid" ||
+                    target === "split") {
+                    setTheater(false);
+                    shell?.classList.remove("focus-bay1", "focus-bay2", "focus-bay3");
+                }
+            }
             else if (msg.type === "error") {
                 stopActivity();
                 const pending = turnForClip(msg.id);
@@ -1260,16 +1294,14 @@ function connect() {
                 statusEl.classList.add("error");
             }
         }
-        else {
-            if (event.data instanceof ArrayBuffer) {
-                receiveAudioChunk(event.data);
-            }
-            else if (event.data instanceof Blob) {
-                void event.data.arrayBuffer().then((bytes) => {
-                    if (current())
-                        receiveAudioChunk(bytes);
-                });
-            }
+        else if (event.data instanceof ArrayBuffer) {
+            receiveAudioChunk(event.data);
+        }
+        else if (event.data instanceof Blob) {
+            void event.data.arrayBuffer().then((bytes) => {
+                if (current())
+                    receiveAudioChunk(bytes);
+            });
         }
     };
 }
@@ -1728,6 +1760,29 @@ catch {
 }
 applyTheater();
 // Space toggles talk/send, Escape discards — but not while typing anywhere.
+function toggleBayFocus(bayNum) {
+    const shell = document.querySelector("#shell");
+    if (!shell)
+        return;
+    const focusClass = `focus-bay${bayNum}`;
+    const isFocused = shell.classList.contains(focusClass);
+    shell.classList.remove("focus-bay1", "focus-bay2", "focus-bay3");
+    if (!isFocused) {
+        shell.classList.add(focusClass);
+    }
+}
+document.addEventListener("click", (e) => {
+    const maxBtn = e.target?.closest("[data-max]");
+    if (maxBtn) {
+        const target = maxBtn.dataset.max;
+        if (target === "bay1")
+            toggleBayFocus(1);
+        else if (target === "bay2")
+            toggleBayFocus(2);
+        else if (target === "bay3")
+            toggleBayFocus(3);
+    }
+});
 document.addEventListener("keydown", (e) => {
     // `select` and `button` included: after picking a route the select keeps
     // focus, and Space then started a recording instead of opening the
@@ -1742,6 +1797,15 @@ document.addEventListener("keydown", (e) => {
     else if (e.code === "Escape" && (isRecording() || starting)) {
         stopRecording(false);
     }
+    else if (e.code === "Digit1" || e.code === "KeyM") {
+        toggleBayFocus(1);
+    }
+    else if (e.code === "Digit2" || e.code === "KeyV") {
+        toggleBayFocus(2);
+    }
+    else if (e.code === "Digit3" || e.code === "KeyC") {
+        toggleBayFocus(3);
+    }
     else if (e.code === "KeyT" && !isRecording() && !starting) {
         // Not mid-recording: pulling Send and Discard off the screen while the
         // caller is holding a clip is the one thing this must never do. The
@@ -1749,10 +1813,16 @@ document.addEventListener("keydown", (e) => {
         // arming that has not had a diagram to act on yet.
         setTheater(!wantsTheater);
     }
-    else if (e.code === "Escape" && inTheater()) {
-        // Only once discard has had its refusal: Escape is the universal way out
-        // of a full-screen anything, but it belongs to the recording first.
-        setTheater(false);
+    else if (e.code === "Escape") {
+        const shell = document.querySelector("#shell");
+        if (shell?.classList.contains("focus-bay1") ||
+            shell?.classList.contains("focus-bay2") ||
+            shell?.classList.contains("focus-bay3")) {
+            shell.classList.remove("focus-bay1", "focus-bay2", "focus-bay3");
+        }
+        else if (inTheater()) {
+            setTheater(false);
+        }
     }
 });
 handsFreeBtn.disabled = true;
@@ -1770,6 +1840,16 @@ window.addEventListener("pagehide", () => {
 try {
     initMissionClock("missionClock");
     globalThis.synchroController = initSynchro("synchroCanvas");
+    const emergencyBtn = document.querySelector("#emergencyToggle");
+    emergencyBtn?.addEventListener("click", () => {
+        const isEmergency = document.documentElement.getAttribute("data-mode") === "emergency";
+        if (isEmergency) {
+            document.documentElement.removeAttribute("data-mode");
+        }
+        else {
+            document.documentElement.setAttribute("data-mode", "emergency");
+        }
+    });
 }
 catch {
     // Tactical canvas and mission clock enhancements degrade gracefully
