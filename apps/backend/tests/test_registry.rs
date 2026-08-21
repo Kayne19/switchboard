@@ -92,6 +92,17 @@ fn host_canonicalization_and_descriptions_never_resolve() {
 }
 
 #[test]
+fn operator_prompt_catalog_contains_transfer_targets() {
+    let mut alpha = project("alpha", &["a"]);
+    alpha.description = "Alpha project".into();
+    alpha.host = Some("scriptorium".into());
+    alpha.cwd = "/srv/alpha".into();
+    let prompt = Registry::new(vec![alpha]).operator_prompt_catalog();
+    assert!(prompt.contains("alpha (also: a)"));
+    assert!(prompt.contains("Alpha project [scriptorium:/srv/alpha]"));
+}
+
+#[test]
 fn duplicate_and_overlapping_keys_are_ambiguous() {
     let registry = Registry::new(vec![
         project("proj-a", &["shared-alias"]),

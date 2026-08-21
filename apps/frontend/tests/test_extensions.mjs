@@ -373,14 +373,7 @@ async function operatorExtensionBehavior() {
 		const extension = await loadExtension("extensions/operator-switchboard.ts");
 		const pi = fakePi();
 		extension.default(pi);
-		assert.deepEqual(
-			[...pi.tools.keys()],
-			["list_projects", "transfer_to_project"],
-		);
-		const listed = await pi.tools.get("list_projects").execute("call", {});
-		assert.match(listed.content[0].text, /alpha/);
-		assert.match(listed.content[0].text, /scriptorium:\/srv\/alpha/);
-		assert.deepEqual(listed.details, { count: 1 });
+		assert.deepEqual([...pi.tools.keys()], ["transfer_to_project"]);
 		const transferred = await pi.tools
 			.get("transfer_to_project")
 			.execute("call", { project: "alpha", intent: "Audit it" });
@@ -391,26 +384,8 @@ async function operatorExtensionBehavior() {
 	}
 }
 
-async function operatorExtensionBrokenRegistry() {
-	process.env.SWITCHBOARD_PROJECTS_FILE = join(
-		tmpdir(),
-		`missing-switchboard-registry-${process.pid}.json`,
-	);
-	try {
-		const extension = await loadExtension("extensions/operator-switchboard.ts");
-		const pi = fakePi();
-		extension.default(pi);
-		const listed = await pi.tools.get("list_projects").execute("call", {});
-		assert.deepEqual(listed.details, {});
-		assert.match(listed.content[0].text, /empty or unreadable/);
-	} finally {
-		delete process.env.SWITCHBOARD_PROJECTS_FILE;
-	}
-}
-
 await agentExtensionBehavior();
 await agentExtensionFallbacks();
 await agentExtensionHttpFailures();
 await operatorExtensionBehavior();
-await operatorExtensionBrokenRegistry();
 console.log("ok — extension tools and fallbacks");

@@ -1,8 +1,9 @@
 /**
  * Switchboard tools for the operator leg.
  *
- * The operator is a phone operator, not an engineer: these two tools are the
- * only ones it has (the session runs with --no-builtin-tools).
+ * The operator is a phone operator, not an engineer: its transfer tool is the
+ * only tool it has (the session runs with --no-builtin-tools). The project
+ * catalog is injected into the system prompt before the session starts.
  *
  * Your own model is not one of the things that can change on this call: the
  * operator is the leg the caller lands on when a swap goes wrong, so it always
@@ -15,73 +16,14 @@
  * Keeping the decision on the switchboard side means a confused operator cannot
  * strand the caller on a leg that does not exist.
  *
- * The project list is read from the same registry file the switchboard uses
- * (rendered by ansible/roles/damocles), so the two can never disagree.
  */
 
 // @ts-expect-error Pi supplies these modules on the project host, not in this app's npm tree.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 // @ts-expect-error Pi supplies these modules on the project host, not in this app's npm tree.
 import { Type } from "typebox";
-import { readFileSync } from "node:fs";
-
-const REGISTRY_PATH =
-	process.env.SWITCHBOARD_PROJECTS_FILE ?? "/etc/switchboard/projects.json";
-
-interface RegistryEntry {
-	id: string;
-	description?: string;
-	aliases?: string[];
-	host?: string;
-	cwd?: string;
-}
-
-function loadProjects(): RegistryEntry[] {
-	try {
-		const raw = JSON.parse(readFileSync(REGISTRY_PATH, "utf-8"));
-		const entries = Array.isArray(raw) ? raw : (raw.projects ?? []);
-		return entries.filter((entry: RegistryEntry) => entry && entry.id);
-	} catch (err) {
-		// A missing or broken registry is not fatal — the operator can still
-		// talk, it just has nowhere to send anyone, and should say so.
-		return [];
-	}
-}
 
 export default function operatorSwitchboard(pi: ExtensionAPI) {
-	pi.registerTool({
-		name: "list_projects",
-		label: "List projects",
-		description:
-			"List the projects the caller can be connected to, with what each one is and where it lives. Use this when you are not sure a project exists, or when the caller asks what is available.",
-		parameters: Type.Object({}),
-		async execute() {
-			const projects = loadProjects();
-			if (projects.length === 0) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: "The project registry is empty or unreadable. Tell the caller there is nowhere to connect them yet.",
-						},
-					],
-					details: {},
-				};
-			}
-			const lines = projects.map((p) => {
-				const where = p.host ? `${p.host}:${p.cwd ?? "?"}` : (p.cwd ?? "local");
-				const aliases = p.aliases?.length
-					? ` (also: ${p.aliases.join(", ")})`
-					: "";
-				return `- ${p.id}${aliases} — ${p.description ?? "no description"} [${where}]`;
-			});
-			return {
-				content: [{ type: "text", text: lines.join("\n") }],
-				details: { count: projects.length },
-			};
-		},
-	});
-
 	pi.registerTool({
 		name: "transfer_to_project",
 		label: "Transfer",
@@ -90,7 +32,7 @@ export default function operatorSwitchboard(pi: ExtensionAPI) {
 		parameters: Type.Object({
 			project: Type.String({
 				description:
-					"Which project to connect to. Use the project id from list_projects when you know it; otherwise pass the caller's own words and the switchboard will match them.",
+					"Which project to connect to. Use an exact id from the available project catalog when you know it; otherwise pass the caller's own words and the switchboard will match them.",
 			}),
 			intent: Type.Optional(
 				Type.String({

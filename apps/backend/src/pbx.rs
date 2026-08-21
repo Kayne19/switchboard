@@ -635,10 +635,12 @@ impl Switchboard {
             }
         }
         if self.operator.is_none() {
+            let catalog = self.registry.operator_prompt_catalog();
             let argv = local_argv(
                 &self.pi_binary,
                 self.operator_model.as_deref(),
                 Some(std::path::Path::new(&self.operator_system_prompt)).filter(|p| p.exists()),
+                Some(&catalog),
                 self.operator_extension.as_deref(),
                 &["--no-builtin-tools".into(), "--no-session".into()],
             )?;

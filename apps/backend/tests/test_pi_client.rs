@@ -81,12 +81,16 @@ fn builds_local_rpc_argv() {
         "pi",
         Some("anthropic/opus"),
         None,
+        Some("catalog"),
         Some("/tmp/ext.ts"),
         &["--no-session".into()],
     )
     .unwrap();
     assert_eq!(&args[..3], ["pi", "--mode", "rpc"]);
     assert!(args.contains(&"--no-session".into()));
+    assert!(args
+        .windows(2)
+        .any(|pair| pair == ["--system-prompt", "catalog"]));
 }
 
 #[test]

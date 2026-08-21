@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
@@ -294,6 +295,41 @@ impl Registry {
 
     pub fn catalog(&self) -> Vec<serde_json::Value> {
         self.projects.iter().map(Project::public).collect()
+    }
+
+    pub fn operator_prompt_catalog(&self) -> String {
+        let mut prompt = String::from(
+            "Available projects for transfer. Use the exact project id with transfer_to_project; aliases are included for recognition.\n",
+        );
+        if self.projects.is_empty() {
+            prompt.push_str("- No projects are currently configured.\n");
+            return prompt;
+        }
+        for project in &self.projects {
+            let aliases = if project.aliases.is_empty() {
+                String::new()
+            } else {
+                format!(" (also: {})", project.aliases.join(", "))
+            };
+            let location = format!(
+                "{}:{}",
+                project.canonical_host().unwrap_or("damocles"),
+                project.cwd
+            );
+            let _ = writeln!(
+                prompt,
+                "- {}{} - {} [{}]",
+                project.id,
+                aliases,
+                if project.description.is_empty() {
+                    "no description"
+                } else {
+                    &project.description
+                },
+                location
+            );
+        }
+        prompt
     }
 
     pub fn ids(&self) -> Vec<String> {

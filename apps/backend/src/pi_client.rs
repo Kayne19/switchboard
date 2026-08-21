@@ -998,6 +998,7 @@ pub fn local_argv(
     binary: &str,
     model: Option<&str>,
     system_prompt_file: Option<&Path>,
+    system_prompt_suffix: Option<&str>,
     extension: Option<&str>,
     extra_args: &[String],
 ) -> Result<Vec<String>, PiSessionError> {
@@ -1005,13 +1006,23 @@ pub fn local_argv(
     if let Some(model) = model {
         argv.extend(["--model".into(), model.into()]);
     }
-    if let Some(path) = system_prompt_file {
-        let prompt = std::fs::read_to_string(path).map_err(|error| {
+    let mut prompt = match system_prompt_file {
+        Some(path) => Some(std::fs::read_to_string(path).map_err(|error| {
             PiSessionError(format!(
                 "could not read system prompt {}: {error}",
                 path.display()
             ))
-        })?;
+        })?),
+        None => None,
+    };
+    if let Some(suffix) = system_prompt_suffix {
+        let prompt = prompt.get_or_insert_default();
+        if !prompt.is_empty() {
+            prompt.push_str("\n\n");
+        }
+        prompt.push_str(suffix);
+    }
+    if let Some(prompt) = prompt {
         argv.extend(["--system-prompt".into(), prompt]);
     }
     if let Some(extension) = extension {

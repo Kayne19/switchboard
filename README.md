@@ -20,7 +20,7 @@ Two kinds of leg, both a `pi --mode rpc` process driven over stdin/stdout:
 
 | leg | runs | tools | lifetime |
 |---|---|---|---|
-| operator | on damocles | `list_projects`, `transfer_to_project` only (`--no-builtin-tools`) | persistent — it is the home base |
+| operator | on damocles | `transfer_to_project` only (`--no-builtin-tools`); project catalog is in its system prompt | persistent — it is the home base |
 | project | on the host in the registry entry, `cd`'d into that project's directory | its normal coding tools | created on transfer, destroyed on return (never resident at startup) |
 
 ## Startup prewarm
@@ -208,10 +208,10 @@ free when they come back.
 ## Adding a project
 
 Edit `switchboard_projects` in `ansible/roles/damocles/defaults/main.yml` and
-open a PR. The deploy re-renders `/etc/switchboard/projects.json`, which both
-this service and the operator's `list_projects` tool read, so they cannot
-disagree. Aliases are matched against a speech-to-text transcript, so be
-generous with them.
+open a PR. The deploy re-renders `/etc/switchboard/projects.json`, which the
+service loads into the operator's system-prompt catalog and uses for routing,
+so the operator and switchboard cannot disagree. Aliases are matched against
+a speech-to-text transcript, so be generous with them.
 
 A project host needs three things, none of which this repo can do for hosts it
 does not manage:
