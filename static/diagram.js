@@ -46,42 +46,30 @@ const withSemanticClassDefs = (srcRaw) => {
 const applyTheme = () => {
     if (!mermaid)
         return;
-    const dark = matchMedia("(prefers-color-scheme: dark)").matches;
     mermaid.initialize({
         startOnLoad: false,
         theme: "base",
-        // Unset variables are derived from primaryColor, which lands somewhere
-        // muddy. The ones that carry the look are set outright.
+        // Derived from the tactical command station design system:
+        // JetBrains Mono, wire-cyan edges, void background, and crisp node borders.
         themeVariables: {
-            darkMode: dark,
-            background: css("--bg"),
+            darkMode: true,
+            background: css("--void"),
             primaryColor: css("--surface"),
             primaryBorderColor: css("--line"),
             primaryTextColor: css("--text"),
             secondaryColor: css("--surface-alt"),
             secondaryBorderColor: css("--line"),
             tertiaryColor: css("--surface-alt"),
-            lineColor: css("--muted"),
+            lineColor: css("--wire-cyan"),
             textColor: css("--text"),
             mainBkg: css("--surface"),
             nodeBorder: css("--line"),
             clusterBkg: css("--surface-alt"),
             clusterBorder: css("--line"),
-            edgeLabelBackground: css("--bg"),
-            // The page's own font, so a node label and a transcript line are set
-            // in the same type. 16px rather than 14: the diagram has a whole
-            // ultrawide to spread into now and a legibility floor holding it up on
-            // a phone, and 14px was chosen back when the picture was squeezed into
-            // a 660px column and every pixel of width was worth a pixel of text.
-            // It is one value for both schemes — only the colours are conditional
-            // — so a re-initialise on a light/dark switch cannot resize the type
-            // out from under a fit.
-            fontFamily: "system-ui, sans-serif",
-            fontSize: "16px",
+            edgeLabelBackground: css("--void"),
+            fontFamily: "JetBrains Mono, ui-monospace, monospace",
+            fontSize: "14px",
         },
-        // Both of these are what make `<img>` inside a node label work. The
-        // source comes from our own agent over our own socket, so the sanitizer
-        // is not guarding a trust boundary here.
         securityLevel: "antiscript",
         flowchart: { htmlLabels: true, curve: "basis", useMaxWidth: true },
     });

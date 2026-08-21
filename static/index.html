@@ -343,6 +343,57 @@
         cursor: grabbing;
       }
 
+      /* Tactical Mermaid SVG Styling */
+      #stageCanvas svg text {
+        font-family: var(--font-mono) !important;
+        font-size: 0.76rem !important;
+        letter-spacing: 0.04em;
+        fill: var(--text) !important;
+      }
+
+      #stageCanvas svg .node rect,
+      #stageCanvas svg .node circle,
+      #stageCanvas svg .node polygon,
+      #stageCanvas svg .node path {
+        stroke-width: 1.5px !important;
+        rx: 2px !important;
+        ry: 2px !important;
+      }
+
+      #stageCanvas svg .flowchart-link {
+        stroke: var(--wire-cyan) !important;
+        stroke-width: 1.5px !important;
+      }
+
+      #stageCanvas svg .marker {
+        fill: var(--wire-cyan) !important;
+        stroke: var(--wire-cyan) !important;
+      }
+
+      #stageCanvas svg .edgeLabel {
+        font-family: var(--font-mono) !important;
+        font-size: 0.72rem !important;
+        background: var(--void) !important;
+        color: var(--nerv-amber) !important;
+      }
+
+      #stageCanvas svg .cluster rect {
+        stroke: var(--line) !important;
+        stroke-dasharray: 4 2;
+        rx: 2px;
+      }
+
+      #stageCanvas svg g.active :is(rect, circle, polygon, path) {
+        stroke: var(--wire-cyan) !important;
+        filter: drop-shadow(0 0 6px var(--wire-cyan-glow)) !important;
+      }
+
+      #stageCanvas svg g.focus :is(rect, circle, polygon, path) {
+        stroke: var(--nerv-amber) !important;
+        stroke-width: 2px !important;
+        filter: drop-shadow(0 0 8px var(--nerv-amber-glow)) !important;
+      }
+
       #stageZoom {
         display: none;
         gap: 6px;
