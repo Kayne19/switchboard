@@ -544,9 +544,7 @@ const waves = (nodes: DiagramNode[], edges: DiagramEdge[]): WaveOrder => {
 	// wire pointing at it, or a shortcut edge makes it appear before the wire
 	// running the long way round has even started drawing. Kahn's order, so a
 	// node is only placed once all of its incoming edges are accounted for.
-	const rank = new Map<string, number>(
-		[...keyed.keys()].map((key) => [key, 0]),
-	);
+	const rank = new Map<string, number>([...keyed.keys()].map((key) => [key, 0]));
 	const left = new Map(indegree);
 	const queue = [...keyed.keys()].filter((k) => !left.get(k));
 	// A graph that is all cycle has no source to start from, so one node is
@@ -796,9 +794,7 @@ let currentMsg: BrowserMessage | null = null;
 const clearGraphFocus = () => {
 	if (!currentSvgEl) return;
 	const allNodes = Array.from(
-		currentSvgEl.querySelectorAll(
-			".node, .actor, .statediagram-state, .cluster",
-		),
+		currentSvgEl.querySelectorAll(".node, .actor, .statediagram-state, .cluster"),
 	);
 	const allEdges = Array.from(
 		currentSvgEl.querySelectorAll(
