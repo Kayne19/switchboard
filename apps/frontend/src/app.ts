@@ -1396,11 +1396,7 @@ function connect() {
 				const shell = document.querySelector<HTMLElement>("#shell");
 				if (target === "theater") {
 					setTheater(true);
-				} else if (
-					target === "stage" ||
-					target === "bay2" ||
-					target === "visual"
-				) {
+				} else if (target === "stage" || target === "bay2" || target === "visual") {
 					setTheater(false);
 					shell?.classList.remove("focus-bay1", "focus-bay3");
 					shell?.classList.add("focus-bay2");
@@ -1412,11 +1408,7 @@ function connect() {
 					setTheater(false);
 					shell?.classList.remove("focus-bay1", "focus-bay2");
 					shell?.classList.add("focus-bay3");
-				} else if (
-					target === "magi" ||
-					target === "routing" ||
-					target === "bay1"
-				) {
+				} else if (target === "magi" || target === "routing" || target === "bay1") {
 					setTheater(false);
 					shell?.classList.remove("focus-bay2", "focus-bay3");
 					shell?.classList.add("focus-bay1");

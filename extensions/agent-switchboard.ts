@@ -634,6 +634,85 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 	});
 
 	pi.registerTool({
+		name: "view",
+		label: "View",
+		description:
+			"Control the spatial viewport on the caller's screen. Use this when the caller asks to 'pull up', 'show', 'maximize', or 'fullscreen' a specific section (e.g. 'pull up the architecture', 'show the diff', 'maximize the transcript', 'overview', 'theater').\n\n" +
+			"Targets:\n" +
+			"- `stage`: Expands the visual stage (diagrams, diffs, plans) to dominant screen width.\n" +
+			"- `comms`: Maximizes the comms dispatch log with large distance-readable typography (ideal for email summaries).\n" +
+			"- `magi`: Maximizes the MAGI fleet routing matrix and subsystem status gauges.\n" +
+			"- `theater`: Gives the stage 100% of the viewport, hiding all side chrome.\n" +
+			"- `overview`: Restores the balanced 3-bay command matrix.",
+		parameters: Type.Object({
+			target: Type.String({
+				description:
+					"The spatial view target to pull up on screen: 'stage', 'comms', 'magi', 'theater', or 'overview'.",
+			}),
+			reason: Type.Optional(
+				Type.String({
+					description: "Brief reason for switching spatial focus.",
+				}),
+			),
+		}),
+		async execute(_toolCallId, params) {
+			const viewUrl = DIAGRAM_URL
+				? DIAGRAM_URL.replace(/\/diagram$/, "/view")
+				: "";
+			if (!viewUrl) {
+				return {
+					content: [
+						{ type: "text", text: "No screen view URL available." },
+					],
+					details: {},
+					isError: true,
+				};
+			}
+			try {
+				const resp = await fetch(viewUrl, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						target: params.target,
+						reason: params.reason ?? "",
+						...(SESSION_TOKEN ? { token: SESSION_TOKEN } : {}),
+					}),
+					signal: AbortSignal.timeout(10_000),
+				});
+				if (!resp.ok) {
+					return {
+						content: [
+							{ type: "text", text: await refusal(resp, "view") },
+						],
+						details: {},
+						isError: true,
+					};
+				}
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Viewport switched to ${params.target}.`,
+						},
+					],
+					details: {},
+				};
+			} catch (err) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Could not switch view: ${err}`,
+						},
+					],
+					details: {},
+					isError: true,
+				};
+			}
+		},
+	});
+
+	pi.registerTool({
 		name: "return_to_operator",
 		label: "Back to operator",
 		description:

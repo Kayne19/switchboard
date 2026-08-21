@@ -275,7 +275,6 @@ The backend and project agents can transmit a lightweight spatial control messag
 
 When an agent invokes the `diagram`, `diff`, or `plan` tool, the visual stage automatically brings Bay 02 into active focus. This ensures that callers never have to physically touch the iPad or mouse to view what was just discussed.
 
-
 To ensure continuous development without breaking call control or test suites:
 
 ### Phase 1: Style & Component Foundation

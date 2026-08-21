@@ -128,7 +128,7 @@ export function initSynchro(canvasId: string): SynchroController {
 			syncRate = 42.0 + Math.sin(phase * 5) * 12.0;
 		}
 
-		const amp = (h * 0.38) * (0.2 + currentLevel * 0.8);
+		const amp = h * 0.38 * (0.2 + currentLevel * 0.8);
 
 		// 2. Central Polar Synchro Radar Reticle
 		ctx.save();
@@ -158,18 +158,30 @@ export function initSynchro(canvasId: string): SynchroController {
 
 		// Left flank equalizer
 		for (let i = 0; i < barCount; i++) {
-			const barHeight = Math.sin(phase * 1.6 + i * 0.35) * amp * 0.85 * (0.3 + currentLevel);
+			const barHeight =
+				Math.sin(phase * 1.6 + i * 0.35) * amp * 0.85 * (0.3 + currentLevel);
 			const x = 12 * dpr + i * (barWidth + barGap);
 			ctx.fillStyle = secondaryColor;
-			ctx.fillRect(x, midY - Math.abs(barHeight) / 2, barWidth, Math.abs(barHeight) + 2);
+			ctx.fillRect(
+				x,
+				midY - Math.abs(barHeight) / 2,
+				barWidth,
+				Math.abs(barHeight) + 2,
+			);
 		}
 
 		// Right flank equalizer
 		for (let i = 0; i < barCount; i++) {
-			const barHeight = Math.cos(phase * 1.8 + i * 0.45) * amp * 0.85 * (0.3 + currentLevel);
+			const barHeight =
+				Math.cos(phase * 1.8 + i * 0.45) * amp * 0.85 * (0.3 + currentLevel);
 			const x = w - 12 * dpr - (barCount - i) * (barWidth + barGap);
 			ctx.fillStyle = primaryColor;
-			ctx.fillRect(x, midY - Math.abs(barHeight) / 2, barWidth, Math.abs(barHeight) + 2);
+			ctx.fillRect(
+				x,
+				midY - Math.abs(barHeight) / 2,
+				barWidth,
+				Math.abs(barHeight) + 2,
+			);
 		}
 
 		// 4. Central Harmonic Curves (EVA Synchro Waves)
@@ -184,7 +196,8 @@ export function initSynchro(canvasId: string): SynchroController {
 		const endX = w - 85 * dpr;
 		for (let x = startX; x <= endX; x += 3 * dpr) {
 			const normX = ((x - startX) / (endX - startX)) * Math.PI * 4;
-			const y = midY + Math.sin(normX + phase) * amp * Math.cos(normX * 0.5 + phase * 0.7);
+			const y =
+				midY + Math.sin(normX + phase) * amp * Math.cos(normX * 0.5 + phase * 0.7);
 			if (x === startX) ctx.moveTo(x, y);
 			else ctx.lineTo(x, y);
 		}
@@ -196,7 +209,9 @@ export function initSynchro(canvasId: string): SynchroController {
 		ctx.beginPath();
 		for (let x = startX; x <= endX; x += 3 * dpr) {
 			const normX = ((x - startX) / (endX - startX)) * Math.PI * 3.2;
-			const y = midY + Math.cos(normX - phase * 1.2) * amp * 0.75 * Math.sin(normX * 0.7 + phase);
+			const y =
+				midY +
+				Math.cos(normX - phase * 1.2) * amp * 0.75 * Math.sin(normX * 0.7 + phase);
 			if (x === startX) ctx.moveTo(x, y);
 			else ctx.lineTo(x, y);
 		}

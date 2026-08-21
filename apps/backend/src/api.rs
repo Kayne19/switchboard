@@ -448,6 +448,10 @@ impl AppState {
                 "/diagram",
                 post(diagram).layer(DefaultBodyLimit::max(64 * 1024)),
             )
+            .route(
+                "/view",
+                post(view).layer(DefaultBodyLimit::max(16 * 1024)),
+            )
             .route("/ws", get(ws))
             .with_state(self);
         if let Some(service) = static_dir {
@@ -1837,6 +1841,66 @@ async fn diagram(State(state): State<AppState>, Json(mut req): Json<Diagram>) ->
     let delivered = emit_json(&state, value);
     Json(delivery_response(delivered)).into_response()
 }
+#[derive(Debug, Deserialize)]
+struct ViewRequest {
+    #[serde(default)]
+    target: String,
+    #[serde(default)]
+    reason: String,
+    #[serde(default)]
+    token: String,
+}
+
+async fn view(State(state): State<AppState>, Json(req): Json<ViewRequest>) -> Response {
+    promote_candidate_for_token(&state, &req.token);
+    if let Err(error) = state.0.coordinator.accept_side_effect(&req.token) {
+        let detail = match error {
+            crate::lifecycle::LifecycleError::CandidateSideEffect => {
+                "the caller's screen is not live until this transfer completes: switch view again on your next turn"
+            }
+            _ => "this leg is no longer on the call: stop retrying, nothing you send reaches the caller",
+        };
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({"delivered":false, "code":"invalid_leg", "detail":detail})),
+        )
+            .into_response();
+    }
+    let target = req.target.trim().to_ascii_lowercase();
+    if !matches!(
+        target.as_str(),
+        "stage"
+            | "bay2"
+            | "visual"
+            | "comms"
+            | "transcript"
+            | "bay3"
+            | "magi"
+            | "routing"
+            | "bay1"
+            | "overview"
+            | "grid"
+            | "split"
+            | "theater"
+    ) {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({
+                "delivered": false,
+                "detail": "target must be one of: stage, comms, magi, overview, theater"
+            })),
+        )
+            .into_response();
+    }
+    let value = json!({
+        "type": "view",
+        "target": target,
+        "reason": req.reason,
+    });
+    let delivered = emit_json(&state, value);
+    Json(delivery_response(delivered)).into_response()
+}
+
 fn delivery_response(delivered: bool) -> Value {
     if delivered {
         json!({"delivered":true})

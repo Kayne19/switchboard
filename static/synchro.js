@@ -108,7 +108,7 @@ export function initSynchro(canvasId) {
             glowColor = "rgba(255, 34, 34, 0.85)";
             syncRate = 42.0 + Math.sin(phase * 5) * 12.0;
         }
-        const amp = (h * 0.38) * (0.2 + currentLevel * 0.8);
+        const amp = h * 0.38 * (0.2 + currentLevel * 0.8);
         // 2. Central Polar Synchro Radar Reticle
         ctx.save();
         ctx.strokeStyle = "rgba(255, 154, 0, 0.15)";
@@ -167,7 +167,8 @@ export function initSynchro(canvasId) {
         ctx.beginPath();
         for (let x = startX; x <= endX; x += 3 * dpr) {
             const normX = ((x - startX) / (endX - startX)) * Math.PI * 3.2;
-            const y = midY + Math.cos(normX - phase * 1.2) * amp * 0.75 * Math.sin(normX * 0.7 + phase);
+            const y = midY +
+                Math.cos(normX - phase * 1.2) * amp * 0.75 * Math.sin(normX * 0.7 + phase);
             if (x === startX)
                 ctx.moveTo(x, y);
             else

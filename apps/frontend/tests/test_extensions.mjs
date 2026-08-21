@@ -93,6 +93,7 @@ async function agentExtensionBehavior() {
 				"plan",
 				"timeline",
 				"diff",
+				"view",
 				"return_to_operator",
 				"transfer_to_project",
 				"set_model",
@@ -167,6 +168,17 @@ async function agentExtensionBehavior() {
 			source: "@@ -1,2 +1,2 @@\n-old\n+new",
 			title: "Code diff",
 			notes: "",
+			token: "leg-token",
+		});
+
+		const viewed = await pi.tools.get("view").execute("call", {
+			target: "stage",
+			reason: "Display architecture",
+		});
+		assert.equal(viewed.content[0].text, "Viewport switched to stage.");
+		assert.deepEqual(requests.at(-1).body, {
+			target: "stage",
+			reason: "Display architecture",
 			token: "leg-token",
 		});
 
