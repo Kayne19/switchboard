@@ -121,8 +121,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 			(process.env.SWITCHBOARD_PERSONA ?? ""),
 		parameters: Type.Object({
 			text: Type.String({
-				description:
-					"What to say, written the way a person would say it out loud.",
+				description: "What to say, written the way a person would say it out loud.",
 			}),
 		}),
 		async execute(_toolCallId, params) {
@@ -131,7 +130,8 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 					content: [
 						{
 							type: "text",
-							text: "No SWITCHBOARD_SPEAK_URL is set, so nothing was spoken. Put your answer in your written reply instead — the switchboard will read it out.",
+							text:
+								"No SWITCHBOARD_SPEAK_URL is set, so nothing was spoken. Put your answer in your written reply instead — the switchboard will read it out.",
 						},
 					],
 					details: {},
@@ -231,7 +231,8 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 					content: [
 						{
 							type: "text",
-							text: "No SWITCHBOARD_DIAGRAM_URL is set, so there is no screen to draw on. Describe the structure in words instead.",
+							text:
+								"No SWITCHBOARD_DIAGRAM_URL is set, so there is no screen to draw on. Describe the structure in words instead.",
 						},
 					],
 					details: {},
@@ -343,7 +344,8 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 					content: [
 						{
 							type: "text",
-							text: "No SWITCHBOARD_DIAGRAM_URL is set, so there is no screen to show a plan on. Describe the steps in words instead.",
+							text:
+								"No SWITCHBOARD_DIAGRAM_URL is set, so there is no screen to show a plan on. Describe the steps in words instead.",
 						},
 					],
 					details: {},
@@ -441,8 +443,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 					),
 					ms: Type.Optional(
 						Type.Number({
-							description:
-								"Duration in milliseconds for this hop (0 to 86400000).",
+							description: "Duration in milliseconds for this hop (0 to 86400000).",
 						}),
 					),
 				}),
@@ -466,7 +467,8 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 					content: [
 						{
 							type: "text",
-							text: "No SWITCHBOARD_DIAGRAM_URL is set, so there is no screen to show a timeline on. Describe the timeline in words instead.",
+							text:
+								"No SWITCHBOARD_DIAGRAM_URL is set, so there is no screen to show a timeline on. Describe the timeline in words instead.",
 						},
 					],
 					details: {},
@@ -484,7 +486,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 							label: item.label,
 							state: item.state ?? "todo",
 							...(item.detail ? { detail: item.detail } : {}),
-							...(item.ms !== undefined ? { ms: item.ms } : {}),
+							...(item.ms === undefined ? {} : { ms: item.ms }),
 						})),
 						title: params.title ?? "",
 						notes: params.notes ?? "",
@@ -567,7 +569,8 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 					content: [
 						{
 							type: "text",
-							text: "No SWITCHBOARD_DIAGRAM_URL is set, so there is no screen to show a diff on. Describe the changes in words instead.",
+							text:
+								"No SWITCHBOARD_DIAGRAM_URL is set, so there is no screen to show a diff on. Describe the changes in words instead.",
 						},
 					],
 					details: {},
@@ -661,9 +664,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 				: "";
 			if (!viewUrl) {
 				return {
-					content: [
-						{ type: "text", text: "No screen view URL available." },
-					],
+					content: [{ type: "text", text: "No screen view URL available." }],
 					details: {},
 					isError: true,
 				};
@@ -681,9 +682,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 				});
 				if (!resp.ok) {
 					return {
-						content: [
-							{ type: "text", text: await refusal(resp, "view") },
-						],
+						content: [{ type: "text", text: await refusal(resp, "view") }],
 						details: {},
 						isError: true,
 					};
@@ -730,7 +729,8 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 				content: [
 					{
 						type: "text",
-						text: "Handing the caller back to the operator. Say a short goodbye and nothing else.",
+						text:
+							"Handing the caller back to the operator. Say a short goodbye and nothing else.",
 					},
 				],
 				details: { summary: params.summary ?? "" },
@@ -745,8 +745,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 			"Put the caller straight through to another project's agent, without going back through the operator. Call this when they ask to be sent somewhere else and name a project you were told exists \u2014 the transfer is silent, and the target project addresses the request immediately without a greeting, so say nothing alongside this call. Pass what they want done as `intent`. If you are not sure the project exists, use `return_to_operator` instead.",
 		parameters: Type.Object({
 			project: Type.String({
-				description:
-					"Which project to connect them to, by the id you were given.",
+				description: "Which project to connect them to, by the id you were given.",
 			}),
 			intent: Type.Optional(
 				Type.String({
