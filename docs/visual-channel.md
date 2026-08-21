@@ -6,6 +6,16 @@
 
 The visual stage exists to answer questions that are expensive to ask or answer out loud over audio. Visual payloads must compose with speech rather than compete with it (e.g., "I am on step three of five" is effective spoken prose because the screen presents the full plan).
 
+The stage exists only while there is something real to show. With no artifact,
+it collapses and conversation becomes the workspace. The same canonical views
+(`auto`, `visual`, `comms`, `system`, `theater`) are controlled by visible
+buttons and the agent's `view` tool. Explicit caller focus remains pinned until
+the caller returns to Auto. The browser reports the resulting `screen_state`,
+so an agent can inspect what is visible rather than assuming its request won.
+
+`docs/frontend-command-station-architecture.md` is the product contract for
+this composition behavior.
+
 ## Implemented Capabilities
 
 ### 1. Multi-Form Mermaid Guidance
@@ -13,7 +23,7 @@ The visual stage exists to answer questions that are expensive to ask or answer 
 The `diagram` tool explicitly prompts project agents to select appropriate diagram forms:
 
 | Form | Primary Use Case |
-|---|---|
+| --- | --- |
 | `flowchart TD` | Architecture, call trees, process flows |
 | `sequenceDiagram` | Leg handoffs, caller → operator → agent sequences |
 | `stateDiagram-v2` | Leg lifecycle and state machines |

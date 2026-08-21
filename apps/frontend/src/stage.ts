@@ -88,6 +88,10 @@ export function showStageError(text: string): void {
 	stageError.textContent = text;
 }
 
+function announceStageChange(): void {
+	document.dispatchEvent?.(new Event("switchboard:stage-change"));
+}
+
 export interface Frame {
 	seq: number;
 	msg: BrowserMessage;
@@ -105,6 +109,7 @@ export function markStale(): void {
 	cursorSeq = null;
 	cursorEvicted = false;
 	updateHistoryUI();
+	announceStageChange();
 }
 
 export function historyState(): {
@@ -118,7 +123,10 @@ export function historyState(): {
 	let evicted = false;
 	let index = -1;
 
-	if (!live) {
+	if (live) {
+		cursorEvicted = false;
+		index = historyRing.length > 0 ? historyRing.length - 1 : -1;
+	} else {
 		index = historyRing.findIndex((f) => f.seq === cursorSeq);
 		if (index === -1) {
 			cursorEvicted = true;
@@ -130,9 +138,6 @@ export function historyState(): {
 		if (cursorEvicted && index === 0) {
 			evicted = true;
 		}
-	} else {
-		cursorEvicted = false;
-		index = historyRing.length > 0 ? historyRing.length - 1 : -1;
 	}
 
 	const behind = live ? 0 : historyRing.length - 1 - (index >= 0 ? index : 0);
@@ -246,6 +251,7 @@ async function renderCurrentFrame(): Promise<void> {
 		: historyRing[st.index];
 	if (!frame) return;
 
+	document.body.dataset.visualKind = frame.msg.kind!;
 	const renderer = renderers.get(frame.msg.kind!);
 	if (renderer) {
 		await renderer({ ...frame.msg, replay: true });
@@ -262,6 +268,7 @@ async function renderCurrentFrame(): Promise<void> {
 			stageTitle.textContent = currentTitle + captionSuffix;
 		}
 	}
+	announceStageChange();
 }
 
 const GLYPHS: Record<string, string> = {
@@ -397,11 +404,9 @@ export function renderRows(
 					detailText = "—";
 				}
 			}
-		} else {
-			if (barDiv) {
+		} else if (barDiv) {
 				barDiv.remove();
 			}
-		}
 
 		if (li.getAttribute("data-state") !== state) {
 			li.setAttribute("data-state", state);
@@ -412,11 +417,9 @@ export function renderRows(
 				li.setAttribute("aria-current", "step");
 			}
 			activeElement = li;
-		} else {
-			if (li.hasAttribute("aria-current")) {
+		} else if (li.hasAttribute("aria-current")) {
 				li.removeAttribute("aria-current");
 			}
-		}
 
 		if (idxSpan.textContent !== idxText) idxSpan.textContent = idxText;
 		if (glyphSpan.textContent !== glyphText) glyphSpan.textContent = glyphText;
@@ -490,7 +493,7 @@ export function registerRenderer(kind: string, fn: RendererFn): void {
 	const queued = pending.get(kind);
 	if (queued) {
 		pending.delete(kind);
-		void fn(queued);
+		void Promise.resolve(fn(queued)).then(announceStageChange);
 	}
 }
 
@@ -509,11 +512,13 @@ export async function renderVisual(raw: BrowserMessage): Promise<void> {
 		historyRing.shift();
 	}
 
+	document.body.dataset.visualKind = kind;
 	document.body.classList.remove("stage-stale");
 	document.body.classList.add("has-diagram");
 
 	if (cursorSeq !== null) {
 		updateHistoryUI();
+		announceStageChange();
 		return;
 	}
 
@@ -525,9 +530,16 @@ export async function renderVisual(raw: BrowserMessage): Promise<void> {
 	} else {
 		pending.set(kind, msg);
 		if (kind === "mermaid") {
+			setCaption(msg.title || "Diagram", msg.notes);
 			const checkUnavailable = () => {
 				if (!renderers.has("mermaid") && pending.has("mermaid")) {
-					showStageError("Diagram renderer unavailable");
+					setCaption(msg.title || "Diagram", msg.notes);
+					const source = document.createElement("pre");
+					source.className = "mermaid-source";
+					source.textContent = msg.source || "";
+					stageCanvas.replaceChildren(source);
+					showStageError("Diagram renderer unavailable; showing source.");
+					announceStageChange();
 				}
 			};
 			if (document.readyState === "complete") {
@@ -543,4 +555,5 @@ export async function renderVisual(raw: BrowserMessage): Promise<void> {
 			}
 		}
 	}
+	announceStageChange();
 }

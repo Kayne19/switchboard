@@ -17,6 +17,7 @@ const {
 	clipHeader,
 	decodeServerMessage,
 	helloMessage,
+	screenStateMessage,
 	sttChunkHeader,
 	sttEndHeader,
 	sttStartHeader,
@@ -86,6 +87,17 @@ assert.deepEqual(JSON.parse(helloMessage()).capabilities, {
 });
 if (previousMediaSource === undefined) delete globalThis.MediaSource;
 else globalThis.MediaSource = previousMediaSource;
+assert.deepEqual(
+	JSON.parse(screenStateMessage("visual", true, "diff", "Auth changes", false)),
+	{
+		type: "screen_state",
+		view: "visual",
+		has_visual: true,
+		visual_kind: "diff",
+		title: "Auth changes",
+		stale: false,
+	},
+);
 assert.deepEqual(
 	JSON.parse(
 		sttStartHeader({ id: "abc", mime: "audio/webm;codecs=opus", epoch: 4 }),

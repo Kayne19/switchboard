@@ -10,7 +10,7 @@ edit anything here on the box — it is overwritten on every deploy.
 
 ## The call path
 
-```
+```text
 browser mic --webm/opus--> /ws --faster-whisper--> transcript
     --> Switchboard.handle()  ── the active leg is either the operator or a project
     --> reply text --ElevenLabs--> mp3 --> /ws --> playback
@@ -19,7 +19,7 @@ browser mic --webm/opus--> /ws --faster-whisper--> transcript
 Two kinds of leg, both a `pi --mode rpc` process driven over stdin/stdout:
 
 | leg | runs | tools | lifetime |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | operator | on damocles | `transfer_to_project` only (`--no-builtin-tools`); project catalog is in its system prompt | persistent — it is the home base |
 | project | on the host in the registry entry, `cd`'d into that project's directory | its normal coding tools | created on transfer, destroyed on return (never resident at startup) |
 
@@ -64,23 +64,30 @@ switchboard connects to has none of that.
 
 ## Showing rather than saying
 
-Some answers are a shape, not a sentence. An architecture read out loud is a
-list of nouns; the same thing drawn is understood at a glance. So a project
-agent also gets `diagram`, which puts a Mermaid diagram on the caller's page
-while the agent is still working.
+Some answers are a shape, not a sentence. Project agents can push Mermaid
+diagrams, live plans, timelines, and diffs to the caller's page while they are
+still working. These use `POST /diagram` and the browser's existing WebSocket,
+just as `speak` uses `POST /speak`; visual output does not change routing or
+speech synthesis.
 
-It is `speak` with a different payload, for the same reason `speak` exists: it
-has to land *mid-turn*, so it POSTs to `/diagram` and the service broadcasts on
-the socket the browser is already holding, rather than waiting for the RPC
-stream to settle. Nothing in the routing layer knows it happened — a diagram
-changes neither the route nor whether a reply gets synthesized, so unlike a
-transfer it is not a signal.
+The visual stage is not a permanent empty dashboard panel. It appears when an
+artifact exists and collapses completely when it does not. The caller can focus
+Visual, Comms, System, or Theater by touch or by asking the agent. A caller's
+explicit selection remains pinned until they return to Auto, so an agent cannot
+pull the screen away from something they chose to read.
 
-The page renders it: Mermaid 11 from a CDN, a dark neon theme, HTML labels on so
-an agent can put an image inside a node, and a staggered reveal on top. The
-source is parsed before anything is swapped in, so a malformed diagram fails on
-the screen that can show the error instead of blanking a good diagram already
-up. Details and the deliberate omissions are in `docs/diagram-tool.md`.
+The browser reports its rendered `screen_state` over the WebSocket. Calling the
+agent's `view` tool without a target returns the active view, artifact kind and
+title, stale status, and browser connection state; calling it with a target
+requests the same workspace change exposed by the visible controls. This lets
+the agent know what the caller can actually see instead of guessing.
+
+Mermaid source is validated and sanitized before rendering; structured plans,
+timelines, and diffs are written with `textContent`. A malformed diagram keeps
+the previous visual, and an unavailable Mermaid renderer shows its source rather
+than leaving a blank screen. The product and layout contract is in
+`docs/frontend-command-station-architecture.md`; payload details are in
+`docs/diagram-tool.md`.
 
 ## Who decides where the caller goes
 
@@ -232,7 +239,7 @@ test it manually and then fails with "command not found" for the switchboard.
 ## Files
 
 | file | what it is |
-|---|---|
+| --- | --- |
 | `legacy/backend/main.py` | compatibility FastAPI app; not the active service |
 | `legacy/backend/pbx.py` | legacy routing state, transfers, session lifecycle |
 | `legacy/backend/piclient.py` | legacy pi RPC protocol — one turn in, text and signals out |

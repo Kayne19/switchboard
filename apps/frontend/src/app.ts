@@ -3,6 +3,7 @@ import {
 	decodeServerMessage,
 	helloMessage,
 	postJson,
+	screenStateMessage,
 	sttChunkHeader,
 	sttEndHeader,
 	sttStartHeader,
@@ -92,6 +93,7 @@ const player = getElement<HTMLAudioElement>("player");
 const handsFreeBtn = getElement<HTMLButtonElement>("handsFreeBtn");
 const handsFreeStatusEl = getElement<HTMLElement>("handsFreeStatus");
 const handsFreeLeaseEl = getElement<HTMLElement>("handsFreeLease");
+const presenceEl = getElement<HTMLElement>("presenceState");
 
 let ws: WebSocket | null = null;
 let mediaRecorder: MediaRecorder | null = null;
@@ -258,6 +260,7 @@ function startActivity(label: string) {
 	activityWho.textContent = label || "working";
 	activityList.textContent = "";
 	activityEl.classList.remove("hidden");
+	presenceEl.textContent = "INTELLIGENCE WORKING";
 	turnStarted = Date.now();
 	clearIntervalSafe(clockTimer);
 	const tick = () => {
@@ -273,6 +276,7 @@ function stopActivity() {
 	clearIntervalSafe(clockTimer);
 	clockTimer = null;
 	activityEl.classList.add("hidden");
+	presenceEl.textContent = "INTELLIGENCE ONLINE";
 }
 
 function addActivity(msg: ActivityMessage) {
@@ -524,6 +528,14 @@ function cleanupOwner(owner: PlaybackOwner): void {
 function notifyPlaybackChange(): void {
 	if (typeof maybeCompleteResponseBarrier === "function")
 		maybeCompleteResponseBarrier();
+	const recording = document?.body?.classList?.contains("recording") ?? false;
+	const ctrl = (
+		globalThis as unknown as { synchroController?: SynchroController }
+	).synchroController;
+	if (ctrl && !recording) {
+		ctrl.setMode(isPlaying ? "receiving" : "idle");
+		ctrl.setLevel(isPlaying ? 0.65 : 0.04);
+	}
 }
 
 function consumeOwner(owner: PlaybackOwner): void {
@@ -564,6 +576,7 @@ function attemptPlay(owner: PlaybackOwner): void {
 	owner.paused = false;
 	owner.seeked = false;
 	isPlaying = true;
+	notifyPlaybackChange();
 	const attempt = ++playAttemptToken;
 	owner.pendingAttempt = attempt;
 	let result: Promise<void>;
@@ -583,6 +596,7 @@ function attemptPlay(owner: PlaybackOwner): void {
 				return;
 			owner.pendingAttempt = null;
 			isPlaying = !owner.paused;
+			notifyPlaybackChange();
 		},
 		(error) => playFailed(owner, attempt, error),
 	);
@@ -637,6 +651,7 @@ function playNext(): void {
 		owner.paused = true;
 		owner.awaitingEnded = owner.seeked && terminalSeek();
 		isPlaying = false;
+		notifyPlaybackChange();
 		statusEl.textContent = owner.awaitingEnded
 			? "Audio finishing — click anywhere on this page to continue."
 			: "Audio paused — click anywhere on this page to resume.";
@@ -700,8 +715,10 @@ function queueMseFallback(utterance: MseUtterance): void {
 function msePlay(): void {
 	if (!mseActive || mseActive.failed || isPlaying) return;
 	isPlaying = true;
+	notifyPlaybackChange();
 	Promise.resolve(player.play()).catch((error) => {
 		isPlaying = false;
+		notifyPlaybackChange();
 		statusEl.textContent =
 			"Audio blocked by the browser — click anywhere on this page once, then it will play (" +
 			errorName(error) +
@@ -754,6 +771,7 @@ function mseFail(utterance: MseUtterance, error: unknown): void {
 	utterance.failed = true;
 	if (mseActive === utterance) {
 		isPlaying = false;
+		notifyPlaybackChange();
 		if (utterance.endedHandler)
 			player.removeEventListener("ended", utterance.endedHandler);
 		player.pause();
@@ -802,6 +820,7 @@ function mseStartNext(): void {
 		player.removeEventListener("ended", utterance.endedHandler!);
 		mseActive = null;
 		isPlaying = false;
+		notifyPlaybackChange();
 		if (utterance.url) URL.revokeObjectURL(utterance.url);
 		mseStartNext();
 		if (typeof maybeCompleteResponseBarrier === "function")
@@ -827,6 +846,7 @@ function clearMsePlayback(): void {
 	msePending = null;
 	mseReplayBytes = 0;
 	isPlaying = false;
+	notifyPlaybackChange();
 	player.pause();
 	player.removeAttribute("src");
 	player.load();
@@ -1221,6 +1241,7 @@ function connect() {
 		if (!current()) return;
 		statusEl.textContent = idleText;
 		statusEl.classList.remove("error");
+		presenceEl.textContent = "INTELLIGENCE ONLINE";
 		btn.disabled = false;
 		handsFreeBtn.disabled = false;
 		outbox.forEach((clip) => (clip.sent = false));
@@ -1228,6 +1249,7 @@ function connect() {
 		streamingSelected = false;
 		try {
 			socket.send(helloMessage());
+			reportWorkspaceState(true);
 		} catch {
 			socket.close();
 			return;
@@ -1248,6 +1270,7 @@ function connect() {
 		updateOutboxUI();
 		statusEl.textContent = "Disconnected. Reconnecting...";
 		statusEl.classList.add("error");
+		presenceEl.textContent = "LINK RECOVERING";
 		btn.disabled = true;
 		handsFreeBtn.disabled = true;
 		clearTimeoutSafe(reconnectTimer);
@@ -1260,6 +1283,7 @@ function connect() {
 		if (!current()) return;
 		statusEl.textContent = "Connection error.";
 		statusEl.classList.add("error");
+		presenceEl.textContent = "LINK FAULT";
 		handsFreeBtn.disabled = true;
 	};
 
@@ -1389,37 +1413,12 @@ function connect() {
 			} else if (msg.type === "status") {
 				setRoute(msg);
 			} else if (msg.type === "diagram") {
-				void renderVisual(msg);
+				void renderVisual(msg).then(() => reportWorkspaceState());
 			} else if (msg.type === "view") {
-				const target =
-					typeof msg.target === "string" ? msg.target.toLowerCase() : "";
-				const shell = document.querySelector<HTMLElement>("#shell");
-				if (target === "theater") {
-					setTheater(true);
-				} else if (target === "stage" || target === "bay2" || target === "visual") {
-					setTheater(false);
-					shell?.classList.remove("focus-bay1", "focus-bay3");
-					shell?.classList.add("focus-bay2");
-				} else if (
-					target === "comms" ||
-					target === "transcript" ||
-					target === "bay3"
-				) {
-					setTheater(false);
-					shell?.classList.remove("focus-bay1", "focus-bay2");
-					shell?.classList.add("focus-bay3");
-				} else if (target === "magi" || target === "routing" || target === "bay1") {
-					setTheater(false);
-					shell?.classList.remove("focus-bay2", "focus-bay3");
-					shell?.classList.add("focus-bay1");
-				} else if (
-					target === "overview" ||
-					target === "grid" ||
-					target === "split"
-				) {
-					setTheater(false);
-					shell?.classList.remove("focus-bay1", "focus-bay2", "focus-bay3");
-				}
+				setWorkspaceView(
+					typeof msg.target === "string" ? msg.target : "",
+					"agent",
+				);
 			} else if (msg.type === "error") {
 				stopActivity();
 				const pending = turnForClip(msg.id);
@@ -1804,130 +1803,145 @@ retryBtn.addEventListener("click", () => {
 	connect();
 });
 
-// Theater mode hides the entire voice interface and gives the screen to the
-// diagram. One rule keeps it safe: the wish and the state are separate, and
-// the state is only ever entered when there is a diagram to look at. Without
-// one #stage is display:none, so hiding the column too would leave a blank
-// page with nothing on it to press. Asking for theater early — by shortcut on
-// an empty page, or by a stored preference on a cold load — arms it instead,
-// and the next diagram arrives in theater.
-const THEATER_KEY = "switchboard.theater";
+type WorkspaceView = "auto" | "system" | "visual" | "comms" | "theater";
+type ViewSource = "agent" | "user";
+
 const theaterExit = getElement<HTMLButtonElement>("theaterExit");
-let wantsTheater = false;
-// Where the transcript was parked on the way in. A display:none ancestor
-// reports a scrollHeight of zero, so every scroll-to-bottom that ran while
-// the column was hidden was a no-op and the log would come back pinned to
-// the top of the call.
-let logWasAtBottom = true;
+const stageZoom = getElement<HTMLElement>("stageZoom");
+let requestedWorkspaceView: WorkspaceView = "auto";
+let userPinnedView = false;
+let previousWorkspaceFocus: HTMLElement | null = null;
 
-const hasDiagram = () => document.body.classList.contains("has-diagram");
-const inTheater = () => document.body.classList.contains("theater");
+const hasVisual = () => document.body.classList.contains("has-diagram");
+let lastScreenState = "";
 
-let previousTheaterFocus: HTMLElement | null = null;
-
-function applyTheater() {
-	const active = wantsTheater && hasDiagram();
-	const theaterBtn = document.querySelector<HTMLButtonElement>(
-		'[data-stage="theater"]',
+function reportWorkspaceState(force = false): void {
+	if (!ws || ws.readyState !== WebSocket.OPEN) return;
+	const payload = screenStateMessage(
+		document.body.classList.contains("theater")
+			? "theater"
+			: document.body.dataset.view || "auto",
+		hasVisual(),
+		document.body.dataset.visualKind || "",
+		document.getElementById("stageTitle")?.textContent || "",
+		document.body.classList.contains("stage-stale"),
 	);
-	if (theaterBtn) {
-		theaterBtn.setAttribute("aria-pressed", active ? "true" : "false");
+	if (!force && payload === lastScreenState) return;
+	lastScreenState = payload;
+	try {
+		ws.send(payload);
+	} catch {
+		/* The reconnect snapshot reports it again. */
 	}
-	if (active === inTheater()) return;
-	if (active) {
-		logWasAtBottom =
-			logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
-		previousTheaterFocus =
+}
+
+function normalizeWorkspaceTarget(target: string): WorkspaceView | null {
+	switch (target.trim().toLowerCase()) {
+		case "auto":
+		case "overview":
+		case "grid":
+		case "split":
+			return "auto";
+		case "system":
+		case "magi":
+		case "routing":
+		case "bay1":
+			return "system";
+		case "visual":
+		case "stage":
+		case "bay2":
+			return "visual";
+		case "comms":
+		case "transcript":
+		case "bay3":
+			return "comms";
+		case "theater":
+			return "theater";
+		default:
+			return null;
+	}
+}
+
+function applyWorkspaceView(): void {
+	const effective =
+		(requestedWorkspaceView === "visual" || requestedWorkspaceView === "theater") &&
+		!hasVisual()
+			? "auto"
+			: requestedWorkspaceView;
+	const theater = effective === "theater";
+	const wasTheater = document.body.classList.contains("theater");
+
+	document.body.dataset.view = theater ? "visual" : effective;
+	document.body.classList.toggle("theater", theater);
+	document
+		.querySelectorAll<HTMLButtonElement>("[data-view]")
+		.forEach((control) => {
+			control.setAttribute(
+				"aria-pressed",
+				control.dataset.view === effective ? "true" : "false",
+			);
+		});
+
+	if (theater && !wasTheater) {
+		previousWorkspaceFocus =
 			document.activeElement instanceof HTMLElement
 				? document.activeElement
 				: null;
-	}
-	document.body.classList.toggle("theater", active);
-	if (active) {
 		theaterExit.focus();
-	} else {
-		if (previousTheaterFocus && document.body.contains(previousTheaterFocus)) {
-			previousTheaterFocus.focus();
-		} else if (theaterBtn) {
-			theaterBtn.focus();
+	} else if (!theater && wasTheater) {
+		if (previousWorkspaceFocus && document.body.contains(previousWorkspaceFocus)) {
+			previousWorkspaceFocus.focus();
 		}
-		if (logWasAtBottom) logEl.scrollTop = logEl.scrollHeight;
+		logEl.scrollTop = logEl.scrollHeight;
 	}
-	// Nothing to say to the diagram from here. The canvas has just changed
-	// size by most of a screen, but the SVG is sized absolutely — off its own
-	// viewBox rather than off the panel — so the zoom is still the zoom, and
-	// the ResizeObserver in the module script is what re-fits it. Which is
-	// also what keeps the two scripts uncoupled: with the CDN down there is no
-	// diagram to fit and nothing on this side goes looking for one.
+	reportWorkspaceState();
 }
 
-function setTheater(on: boolean): void {
-	wantsTheater = on;
-	try {
-		localStorage.setItem(THEATER_KEY, on ? "1" : "0");
-	} catch {
-		/* Private-mode Safari throws on write. The mode still works, it just
-       does not survive a reload. */
-	}
-	applyTheater();
+function setWorkspaceView(target: string, source: ViewSource): void {
+	const next = normalizeWorkspaceTarget(target);
+	if (!next || (source === "agent" && userPinnedView)) return;
+	requestedWorkspaceView = next;
+	if (source === "user") userPinnedView = next !== "auto";
+	applyWorkspaceView();
 }
 
-// renderDiagram lives in the other script and owns has-diagram; watching the
-// class is how this side hears about a diagram without reaching into it.
-// Re-entrant by nature — applyTheater writes a class too — which the
-// no-change guard above turns into a cheap no-op.
-new MutationObserver(applyTheater).observe(document.body, {
+document.addEventListener("switchboard:stage-change", () =>
+	reportWorkspaceState(),
+);
+
+new MutationObserver(applyWorkspaceView).observe(document.body, {
 	attributes: true,
 	attributeFilter: ["class"],
 });
 
-const stageZoom = getElement<HTMLElement>("stageZoom");
 stageZoom.addEventListener("click", (e: MouseEvent) => {
 	const target = e.target;
-	if (target instanceof HTMLElement) {
-		if (target.dataset.stage === "theater") setTheater(true);
-		if (target.id === "historyBack") historyBack();
-		if (target.id === "historyForward") historyForward();
-		if (target.id === "historyLive") historyLive();
-	}
+	if (!(target instanceof HTMLElement)) return;
+	if (target.id === "historyBack") historyBack();
+	if (target.id === "historyForward") historyForward();
+	if (target.id === "historyLive") historyLive();
 });
-theaterExit.addEventListener("click", () => setTheater(false));
 
-try {
-	wantsTheater = localStorage.getItem(THEATER_KEY) === "1";
-} catch {
-	/* Reading it throws in the same places writing it does. */
-}
-applyTheater();
-
-// Space toggles talk/send, Escape discards — but not while typing anywhere.
-function toggleBayFocus(bayNum: 1 | 2 | 3): void {
-	const shell = document.querySelector<HTMLElement>("#shell");
-	if (!shell) return;
-	const focusClass = `focus-bay${bayNum}`;
-	const isFocused = shell.classList.contains(focusClass);
-	shell.classList.remove("focus-bay1", "focus-bay2", "focus-bay3");
-	if (!isFocused) {
-		shell.classList.add(focusClass);
-	}
-}
+theaterExit.addEventListener("click", () => setWorkspaceView("auto", "user"));
 
 document.addEventListener("click", (e) => {
-	const maxBtn = (e.target as HTMLElement | null)?.closest<HTMLButtonElement>(
-		"[data-max]",
+	const control = (e.target as HTMLElement | null)?.closest<HTMLButtonElement>(
+		"[data-view]",
 	);
-	if (maxBtn) {
-		const target = maxBtn.dataset.max;
-		if (target === "bay1") toggleBayFocus(1);
-		else if (target === "bay2") toggleBayFocus(2);
-		else if (target === "bay3") toggleBayFocus(3);
+	if (!control?.dataset.view) return;
+	const next = normalizeWorkspaceTarget(control.dataset.view);
+	if (next && userPinnedView && requestedWorkspaceView === next) {
+		setWorkspaceView("auto", "user");
+	} else {
+		setWorkspaceView(control.dataset.view, "user");
 	}
 });
 
+applyWorkspaceView();
+
+// Space owns voice. Escape first protects a recording, then returns the
+// workspace to its automatic composition.
 document.addEventListener("keydown", (e) => {
-	// `select` and `button` included: after picking a route the select keeps
-	// focus, and Space then started a recording instead of opening the
-	// dropdown.
 	if (
 		e.target instanceof HTMLElement &&
 		e.target.matches("input, textarea, select, button")
@@ -1939,28 +1953,15 @@ document.addEventListener("keydown", (e) => {
 	} else if (e.code === "Escape" && (isRecording() || starting)) {
 		stopRecording(false);
 	} else if (e.code === "Digit1" || e.code === "KeyM") {
-		toggleBayFocus(1);
+		setWorkspaceView("system", "user");
 	} else if (e.code === "Digit2" || e.code === "KeyV") {
-		toggleBayFocus(2);
+		setWorkspaceView("visual", "user");
 	} else if (e.code === "Digit3" || e.code === "KeyC") {
-		toggleBayFocus(3);
-	} else if (e.code === "KeyT" && !isRecording() && !starting) {
-		// Not mid-recording: pulling Send and Discard off the screen while the
-		// caller is holding a clip is the one thing this must never do. The
-		// wish is what toggles, not the state, so a second press cancels an
-		// arming that has not had a diagram to act on yet.
-		setTheater(!wantsTheater);
+		setWorkspaceView("comms", "user");
+	} else if (e.code === "KeyT" && hasVisual()) {
+		setWorkspaceView("theater", "user");
 	} else if (e.code === "Escape") {
-		const shell = document.querySelector<HTMLElement>("#shell");
-		if (
-			shell?.classList.contains("focus-bay1") ||
-			shell?.classList.contains("focus-bay2") ||
-			shell?.classList.contains("focus-bay3")
-		) {
-			shell.classList.remove("focus-bay1", "focus-bay2", "focus-bay3");
-		} else if (inTheater()) {
-			setTheater(false);
-		}
+		setWorkspaceView("auto", "user");
 	}
 });
 
@@ -1981,17 +1982,6 @@ try {
 	(
 		globalThis as unknown as { synchroController?: SynchroController }
 	).synchroController = initSynchro("synchroCanvas");
-	const emergencyBtn =
-		document.querySelector<HTMLButtonElement>("#emergencyToggle");
-	emergencyBtn?.addEventListener("click", () => {
-		const isEmergency =
-			document.documentElement.getAttribute("data-mode") === "emergency";
-		if (isEmergency) {
-			document.documentElement.removeAttribute("data-mode");
-		} else {
-			document.documentElement.setAttribute("data-mode", "emergency");
-		}
-	});
 } catch {
 	// Tactical canvas and mission clock enhancements degrade gracefully
 }

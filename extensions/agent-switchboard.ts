@@ -640,21 +640,23 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 		name: "view",
 		label: "View",
 		description:
-			"Control the spatial viewport on the caller's screen. Use this when the caller asks to 'pull up', 'show', 'maximize', or 'fullscreen' a specific section (e.g. 'pull up the architecture', 'show the diff', 'maximize the transcript', 'overview', 'theater').\n\n" +
+			"Inspect or direct the caller's live screen. Call with no target when what is already visible matters. Set a target when the caller asks to pull up, focus, maximize, dismiss, or return to something. The caller can also click around; their explicit focus wins until they dismiss it.\n\n" +
 			"Targets:\n" +
-			"- `stage`: Expands the visual stage (diagrams, diffs, plans) to dominant screen width.\n" +
-			"- `comms`: Maximizes the comms dispatch log with large distance-readable typography (ideal for email summaries).\n" +
-			"- `magi`: Maximizes the MAGI fleet routing matrix and subsystem status gauges.\n" +
-			"- `theater`: Gives the stage 100% of the viewport, hiding all side chrome.\n" +
-			"- `overview`: Restores the balanced 3-bay command matrix.",
+			"- `visual`: Focuses the current diagram, diff, plan, or timeline.\n" +
+			"- `comms`: Focuses the conversation and live tool activity.\n" +
+			"- `system`: Focuses the active project, model, and route controls.\n" +
+			"- `theater`: Gives the current visual the entire display.\n" +
+			"- `auto`: Returns composition to the screen's content-aware default.",
 		parameters: Type.Object({
-			target: Type.String({
-				description:
-					"The spatial view target to pull up on screen: 'stage', 'comms', 'magi', 'theater', or 'overview'.",
-			}),
+			target: Type.Optional(
+				Type.String({
+					description:
+						"Optional screen target: 'visual', 'comms', 'system', 'theater', or 'auto'. Omit to inspect the current screen.",
+				}),
+			),
 			reason: Type.Optional(
 				Type.String({
-					description: "Brief reason for switching spatial focus.",
+					description: "Brief reason for changing focus.",
 				}),
 			),
 		}),
@@ -674,7 +676,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
-						target: params.target,
+						target: params.target ?? "",
 						reason: params.reason ?? "",
 						...(SESSION_TOKEN ? { token: SESSION_TOKEN } : {}),
 					}),
@@ -687,21 +689,51 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 						isError: true,
 					};
 				}
+				const data = (await resp.json()) as {
+					delivered?: boolean;
+					screen?: {
+						view?: string;
+						has_visual?: boolean;
+						visual_kind?: string;
+						title?: string;
+						stale?: boolean;
+						connected?: boolean;
+					};
+				};
+				if (!params.target) {
+					const screen = data.screen ?? {};
+					let visual = "no visual";
+					if (screen.has_visual) {
+						visual = `${screen.stale ? "stale " : ""}${screen.visual_kind || "visual"}`;
+						if (screen.title) visual += ` titled '${screen.title}'`;
+					}
+					const connection =
+						screen.connected === false ? "No browser is connected; last report" : "Screen";
+					return {
+						content: [
+							{
+								type: "text",
+								text: `${connection} is in ${screen.view || "auto"} view with ${visual}.`,
+							},
+						],
+						details: { screen },
+					};
+				}
 				return {
 					content: [
 						{
 							type: "text",
-							text: `Viewport switched to ${params.target}.`,
+							text: `Requested ${params.target} view. The caller's pinned view may take precedence.`,
 						},
 					],
-					details: {},
+					details: { target: params.target },
 				};
 			} catch (err) {
 				return {
 					content: [
 						{
 							type: "text",
-							text: `Could not switch view: ${err}`,
+							text: `Could not inspect or switch view: ${err}`,
 						},
 					],
 					details: {},

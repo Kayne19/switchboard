@@ -71,12 +71,22 @@ async function agentExtensionBehavior() {
 	const requests = [];
 	const previousFetch = globalThis.fetch;
 	globalThis.fetch = async (url, options) => {
-		requests.push({
-			url: String(url),
-			options,
-			body: JSON.parse(options.body),
-		});
-		return new Response(JSON.stringify({ delivered: true }), {
+		const body = JSON.parse(options.body);
+		requests.push({ url: String(url), options, body });
+		const response =
+			String(url).endsWith("/view") && !body.target
+				? {
+						delivered: true,
+						screen: {
+							view: "comms",
+							has_visual: true,
+							visual_kind: "diff",
+							title: "Code changes",
+							stale: false,
+						},
+					}
+				: { delivered: true };
+		return new Response(JSON.stringify(response), {
 			status: 200,
 			headers: { "Content-Type": "application/json" },
 		});
@@ -175,12 +185,22 @@ async function agentExtensionBehavior() {
 			target: "stage",
 			reason: "Display architecture",
 		});
-		assert.equal(viewed.content[0].text, "Viewport switched to stage.");
+		assert.equal(
+			viewed.content[0].text,
+			"Requested stage view. The caller's pinned view may take precedence.",
+		);
 		assert.deepEqual(requests.at(-1).body, {
 			target: "stage",
 			reason: "Display architecture",
 			token: "leg-token",
 		});
+
+		const inspected = await pi.tools.get("view").execute("call", {});
+		assert.equal(
+			inspected.content[0].text,
+			"Screen is in comms view with diff titled 'Code changes'.",
+		);
+		assert.equal(inspected.details.screen.visual_kind, "diff");
 
 		const returned = await pi.tools
 			.get("return_to_operator")

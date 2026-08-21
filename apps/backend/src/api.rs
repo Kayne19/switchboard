@@ -48,6 +48,7 @@ pub struct AppInner {
     pub accepted_clips: Mutex<(HashSet<String>, VecDeque<String>)>,
     stream_clips: Mutex<HashMap<String, StreamClipState>>,
     pub last_diagram: Arc<Mutex<Option<Value>>>,
+    pub screen_state: Mutex<Value>,
     pub active_session: Arc<Mutex<Option<PiSession>>>,
     activity_clock: ActivityClock,
     live_leg: LiveLegState,
@@ -422,6 +423,13 @@ impl AppState {
             accepted_clips: Mutex::new((HashSet::new(), VecDeque::new())),
             stream_clips: Mutex::new(HashMap::new()),
             last_diagram,
+            screen_state: Mutex::new(json!({
+                "view": "auto",
+                "has_visual": false,
+                "visual_kind": "",
+                "title": "",
+                "stale": false,
+            })),
             active_session,
             activity_clock,
             live_leg,
@@ -1864,14 +1872,23 @@ async fn view(State(state): State<AppState>, Json(req): Json<ViewRequest>) -> Re
             .into_response();
     }
     let target = req.target.trim().to_ascii_lowercase();
+    if target.is_empty() {
+        let mut screen = state.0.screen_state.lock().await.clone();
+        if let Some(screen) = screen.as_object_mut() {
+            screen.insert("connected".into(), state.0.delivery.connected().into());
+        }
+        return Json(json!({"delivered": true, "screen": screen})).into_response();
+    }
     if !matches!(
         target.as_str(),
-        "stage"
+        "auto"
+            | "stage"
             | "bay2"
             | "visual"
             | "comms"
             | "transcript"
             | "bay3"
+            | "system"
             | "magi"
             | "routing"
             | "bay1"
@@ -1884,7 +1901,7 @@ async fn view(State(state): State<AppState>, Json(req): Json<ViewRequest>) -> Re
             axum::http::StatusCode::BAD_REQUEST,
             Json(json!({
                 "delivered": false,
-                "detail": "target must be one of: stage, comms, magi, overview, theater"
+                "detail": "target must be one of: auto, visual, comms, system, theater"
             })),
         )
             .into_response();
@@ -2422,6 +2439,40 @@ async fn handle_text_frame(
             if should_cancel {
                 let _ = state.0.stt_stream.try_cancel(id.to_owned(), generation);
             }
+            Ok(())
+        }
+        Some("screen_state") => {
+            let Some(view) = command
+                .get("view")
+                .and_then(Value::as_str)
+                .filter(|view| matches!(*view, "auto" | "system" | "visual" | "comms" | "theater"))
+            else {
+                return send_json(
+                    state,
+                    epoch,
+                    json!({"type":"error", "message":"Invalid screen view."}),
+                )
+                .await;
+            };
+            let title = command
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .chars()
+                .take(200)
+                .collect::<String>();
+            let visual_kind = command
+                .get("visual_kind")
+                .and_then(Value::as_str)
+                .filter(|kind| matches!(*kind, "" | "mermaid" | "plan" | "timeline" | "diff"))
+                .unwrap_or("");
+            *state.0.screen_state.lock().await = json!({
+                "view": view,
+                "has_visual": command.get("has_visual").and_then(Value::as_bool).unwrap_or(false),
+                "visual_kind": visual_kind,
+                "title": title,
+                "stale": command.get("stale").and_then(Value::as_bool).unwrap_or(false),
+            });
             Ok(())
         }
         Some("ping") => {

@@ -29,6 +29,16 @@ export function helloMessage() {
         },
     });
 }
+export function screenStateMessage(view, hasVisual, visualKind, title, stale) {
+    return JSON.stringify({
+        type: "screen_state",
+        view,
+        has_visual: hasVisual,
+        visual_kind: visualKind,
+        title,
+        stale,
+    });
+}
 export function sttStartHeader(clip) {
     return JSON.stringify({
         type: "stt_start",

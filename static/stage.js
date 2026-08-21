@@ -66,6 +66,9 @@ export function setCaption(title, notes) {
 export function showStageError(text) {
     stageError.textContent = text;
 }
+function announceStageChange() {
+    document.dispatchEvent?.(new Event("switchboard:stage-change"));
+}
 const HISTORY_CAP = 8;
 const historyRing = [];
 let nextSeq = 0;
@@ -77,12 +80,17 @@ export function markStale() {
     cursorSeq = null;
     cursorEvicted = false;
     updateHistoryUI();
+    announceStageChange();
 }
 export function historyState() {
     const live = cursorSeq === null;
     let evicted = false;
     let index = -1;
-    if (!live) {
+    if (live) {
+        cursorEvicted = false;
+        index = historyRing.length > 0 ? historyRing.length - 1 : -1;
+    }
+    else {
         index = historyRing.findIndex((f) => f.seq === cursorSeq);
         if (index === -1) {
             cursorEvicted = true;
@@ -94,10 +102,6 @@ export function historyState() {
         if (cursorEvicted && index === 0) {
             evicted = true;
         }
-    }
-    else {
-        cursorEvicted = false;
-        index = historyRing.length > 0 ? historyRing.length - 1 : -1;
     }
     const behind = live ? 0 : historyRing.length - 1 - (index >= 0 ? index : 0);
     return {
@@ -208,6 +212,7 @@ async function renderCurrentFrame() {
         : historyRing[st.index];
     if (!frame)
         return;
+    document.body.dataset.visualKind = frame.msg.kind;
     const renderer = renderers.get(frame.msg.kind);
     if (renderer) {
         await renderer({ ...frame.msg, replay: true });
@@ -222,6 +227,7 @@ async function renderCurrentFrame() {
             stageTitle.textContent = currentTitle + captionSuffix;
         }
     }
+    announceStageChange();
 }
 const GLYPHS = {
     done: "✓",
@@ -341,10 +347,8 @@ export function renderRows(kind, items) {
                 }
             }
         }
-        else {
-            if (barDiv) {
-                barDiv.remove();
-            }
+        else if (barDiv) {
+            barDiv.remove();
         }
         if (li.getAttribute("data-state") !== state) {
             li.setAttribute("data-state", state);
@@ -355,10 +359,8 @@ export function renderRows(kind, items) {
             }
             activeElement = li;
         }
-        else {
-            if (li.hasAttribute("aria-current")) {
-                li.removeAttribute("aria-current");
-            }
+        else if (li.hasAttribute("aria-current")) {
+            li.removeAttribute("aria-current");
         }
         if (idxSpan.textContent !== idxText)
             idxSpan.textContent = idxText;
@@ -409,7 +411,7 @@ export function registerRenderer(kind, fn) {
     const queued = pending.get(kind);
     if (queued) {
         pending.delete(kind);
-        void fn(queued);
+        void Promise.resolve(fn(queued)).then(announceStageChange);
     }
 }
 export async function renderVisual(raw) {
@@ -424,10 +426,12 @@ export async function renderVisual(raw) {
     if (historyRing.length > HISTORY_CAP) {
         historyRing.shift();
     }
+    document.body.dataset.visualKind = kind;
     document.body.classList.remove("stage-stale");
     document.body.classList.add("has-diagram");
     if (cursorSeq !== null) {
         updateHistoryUI();
+        announceStageChange();
         return;
     }
     updateHistoryUI();
@@ -438,9 +442,16 @@ export async function renderVisual(raw) {
     else {
         pending.set(kind, msg);
         if (kind === "mermaid") {
+            setCaption(msg.title || "Diagram", msg.notes);
             const checkUnavailable = () => {
                 if (!renderers.has("mermaid") && pending.has("mermaid")) {
-                    showStageError("Diagram renderer unavailable");
+                    setCaption(msg.title || "Diagram", msg.notes);
+                    const source = document.createElement("pre");
+                    source.className = "mermaid-source";
+                    source.textContent = msg.source || "";
+                    stageCanvas.replaceChildren(source);
+                    showStageError("Diagram renderer unavailable; showing source.");
+                    announceStageChange();
                 }
             };
             if (document.readyState === "complete") {
@@ -453,4 +464,5 @@ export async function renderVisual(raw) {
             }
         }
     }
+    announceStageChange();
 }

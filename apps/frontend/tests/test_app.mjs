@@ -483,6 +483,7 @@ const statusEl = { textContent: "", classList: { add() {} } };
 const player = globalThis.__msePlayer;
 function errorName(error) { return error instanceof Error ? error.name : "unknown error"; }
 function playNext() { globalThis.__mseFallbackPlays = (globalThis.__mseFallbackPlays || 0) + 1; }
+function notifyPlaybackChange() {}
 ${source.slice(start, end)}
 export { audioQueue, mseQueue, receiveAudioStart, receiveAudioChunk, receiveAudioDone };`,
 				"msePlayback",
@@ -1030,9 +1031,30 @@ export { setRoute, post };`;
 	}
 }
 
+async function workspaceTargetRegressions() {
+	const start = source.indexOf("function normalizeWorkspaceTarget(");
+	const end = source.indexOf("function applyWorkspaceView(", start);
+	assert.ok(start >= 0 && end > start, "workspace target normalizer is present");
+	const encoded = Buffer.from(
+		compile(
+			`${source.slice(start, end)}\nexport { normalizeWorkspaceTarget };`,
+			"workspaceTargets",
+		),
+	).toString("base64");
+	const { normalizeWorkspaceTarget } = await import(
+		`data:text/javascript;base64,${encoded}#workspaceTargets`
+	);
+	assert.equal(normalizeWorkspaceTarget("stage"), "visual");
+	assert.equal(normalizeWorkspaceTarget("MAGI"), "system");
+	assert.equal(normalizeWorkspaceTarget("transcript"), "comms");
+	assert.equal(normalizeWorkspaceTarget("overview"), "auto");
+	assert.equal(normalizeWorkspaceTarget("unknown"), null);
+}
+
 await audioPlaybackRegressions();
 await mseStreamingRegressions();
 await recorderLifecycleRegressions();
 await modelPickerRegressions();
 await pickerRequestRegressions();
-console.log("ok — app audio lifecycle, playback ordering, and model picker");
+await workspaceTargetRegressions();
+console.log("ok — app audio lifecycle, playback ordering, picker, and workspace");

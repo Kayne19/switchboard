@@ -49,6 +49,23 @@ export function helloMessage(): string {
 	});
 }
 
+export function screenStateMessage(
+	view: string,
+	hasVisual: boolean,
+	visualKind: string,
+	title: string,
+	stale: boolean,
+): string {
+	return JSON.stringify({
+		type: "screen_state",
+		view,
+		has_visual: hasVisual,
+		visual_kind: visualKind,
+		title,
+		stale,
+	});
+}
+
 export function sttStartHeader(clip: {
 	id: string;
 	mime: string;

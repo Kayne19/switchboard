@@ -7,7 +7,7 @@ A project agent can push a diagram or a structured plan to the caller's page mid
 `speak` already solved this problem. A tool that has to reach the browser *during* a turn cannot wait for the RPC stream to settle, so it does not use the RPC stream: it POSTs to this service and the service broadcasts on the socket the browser is already holding. `diagram` and `plan` reuse that pattern with different payloads over the same endpoint, preserving the environment file contract without introducing new environment variables.
 
 | piece | `speak` | `diagram` / `plan` |
-|---|---|---|
+| --- | --- | --- |
 | env var handed to the agent | `SWITCHBOARD_SPEAK_URL` | `SWITCHBOARD_DIAGRAM_URL` |
 | endpoint | `POST /speak` | `POST /diagram` |
 | broadcast | `{"type":"spoken"}` + mp3 bytes | `{"type":"diagram", ...}` |
@@ -89,16 +89,18 @@ The agent extension passes `source: ""` on plan and timeline payloads to maintai
 
 ## Visual System & Style Grammar
 
-The stage visual theme is **precision instrument / obsidian console**, using a light-default graphite/indigo palette.
+The stage uses Switchboard's restrained NERV instrument language: black
+surfaces, hard boundaries, compressed headings, monospace data, and motion only
+when state changes. Styling never invents telemetry.
 
 ### Design Tokens
 
-- `--bg`, `--surface`, `--surface-alt`, `--line`, `--text`
-- `--accent`: Indigo interface accent (focus rings, buttons, reveal edge flash)
-- `--ok`: Green (`#1f7a4d` light / `#5fbd8b` dark) for completed work
-- `--energy`: Cyan (`#0b6f7d` light / `#5ee0f2` dark) for the active causal path
-- `--hold`: Amber (`#8a5300` light / `#f2b45e` dark) for blocked/held state
-- `--danger`: Red (`#b91c1c` light / `#f87171` dark) for errors
+- `--void`, `--panel`, `--panel-hi`, `--line`, `--text`, `--steel`: surfaces and text
+- `--amber`: active controls and institutional labels
+- `--cyan`: information flow and the active causal path
+- `--ok`: completed work
+- `--hold`: blocked or held state
+- `--danger`: recording, errors, and destructive actions
 
 ### Mermaid Semantic Classes
 
@@ -122,9 +124,10 @@ Plan rows render into `<ol class="plan">` inside `#stageCanvas`:
 
 ## Client Architecture & Stage Shell
 
-- `web/stage.ts` manages stage state, element references, body classes (`has-diagram`, `stage-structured`, `stage-stale`), and renderer registration.
-- **Pending payload queue**: Visual messages arriving before a renderer registers (e.g. while Mermaid CDN imports load) are queued and automatically flushed upon renderer registration.
-- **Stale visual provenance**: Route changes invoke `markStale()`, adding the `stage-stale` body class (72% opacity and a "From the previous leg — " provenance caption) instead of erasing the visual.
+- `apps/frontend/src/stage.ts` manages stage state, element references, body classes (`has-diagram`, `stage-structured`, `stage-stale`), history, and renderer registration.
+- **Adaptive composition**: Without a visual, the stage collapses completely. New visual content appears in the shared workspace and may receive automatic focus unless the caller pinned another view.
+- **Pending payload queue**: Visual messages arriving before a renderer registers (e.g. while Mermaid CDN imports load) are queued and automatically flushed upon renderer registration. If loading fails, the source is shown as a readable fallback rather than a blank stage.
+- **Stale visual provenance**: Route changes invoke `markStale()`, adding the `stage-stale` body class and a "From the previous leg" provenance caption instead of presenting old content as current.
 
 ## Deployment & Homelab Dependency
 

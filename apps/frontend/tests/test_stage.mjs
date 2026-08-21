@@ -34,6 +34,7 @@ class FakeElement {
 		this.children = [];
 		this.parentNode = null;
 		this.attributes = new Map();
+		this.dataset = {};
 		this.classList = new FakeClassList();
 		this._textContent = "";
 		this.style = {

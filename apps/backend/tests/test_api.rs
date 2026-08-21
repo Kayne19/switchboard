@@ -145,6 +145,38 @@ async fn http_contract_exposes_status_health_and_page_controls() {
 }
 
 #[tokio::test]
+async fn browser_screen_state_is_available_to_the_agent_view_tool() {
+    let state = state();
+    let connection = state.0.delivery.register();
+    let mut pending_header = None;
+    let mut pending_chunk = None;
+    handle_text_frame(
+        &state,
+        connection.epoch,
+        &mut pending_header,
+        &mut pending_chunk,
+        &json!({
+            "type": "screen_state",
+            "view": "comms",
+            "has_visual": true,
+            "visual_kind": "diff",
+            "title": "Authentication changes",
+            "stale": false,
+        })
+        .to_string(),
+    )
+    .await
+    .unwrap();
+
+    let (code, response) =
+        request_json(&state, Method::POST, "/view", Some(json!({"target":""}))).await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(response["screen"]["view"], "comms");
+    assert_eq!(response["screen"]["visual_kind"], "diff");
+    assert_eq!(response["screen"]["title"], "Authentication changes");
+}
+
+#[tokio::test]
 async fn diagram_contract_is_live_and_replayed() {
     let state = state();
     let mut events = state.0.events.subscribe();
