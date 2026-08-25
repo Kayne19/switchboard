@@ -95,6 +95,63 @@ const handsFreeStatusEl = getElement<HTMLElement>("handsFreeStatus");
 const handsFreeLeaseEl = getElement<HTMLElement>("handsFreeLease");
 const presenceEl = getElement<HTMLElement>("presenceState");
 
+const RUNTIME_BRIDGE_SOURCE = "switchboard-legacy-runtime";
+
+function publishBridgeMessage(kind: string, payload: unknown): void {
+	if (window.parent === window) return;
+	window.parent.postMessage(
+		{ source: RUNTIME_BRIDGE_SOURCE, kind, payload },
+		window.location.origin,
+	);
+}
+
+function bridgeOptions(select: HTMLSelectElement): Array<{
+	value: string;
+	label: string;
+}> {
+	return Array.from(select.options).map((option) => ({
+		value: option.value,
+		label: option.textContent || option.value,
+	}));
+}
+
+function bridgeState(): Record<string, unknown> {
+	return {
+		connected: !btn.disabled,
+		recording: !sendBtn.classList.contains("hidden"),
+		status: statusEl.textContent || "",
+		handsFree: handsFreeBtn.getAttribute("aria-pressed") === "true",
+		handsFreeStatus: handsFreeStatusEl.textContent || "",
+		handsFreeLease: handsFreeLeaseEl.textContent || "",
+		route: routeSelect.value,
+		routes: bridgeOptions(routeSelect),
+		model: modelSelect.value,
+		models: bridgeOptions(modelSelect),
+		thinking: thinkingSelect.value,
+		thinkingLevels: bridgeOptions(thinkingSelect),
+		onProject: !hangupBtn.classList.contains("hidden"),
+		modelDisabled: modelSelect.disabled,
+		thinkingDisabled: thinkingSelect.disabled,
+	};
+}
+
+let bridgeStateQueued = false;
+function publishBridgeState(): void {
+	if (bridgeStateQueued || window.parent === window) return;
+	bridgeStateQueued = true;
+	queueMicrotask(() => {
+		bridgeStateQueued = false;
+		publishBridgeMessage("state", bridgeState());
+	});
+}
+
+function publishServerMessage(message: BrowserMessage): void {
+	publishBridgeMessage("server", message);
+	document.dispatchEvent(
+		new CustomEvent("switchboard:server-message", { detail: message }),
+	);
+}
+
 let ws: WebSocket | null = null;
 let mediaRecorder: MediaRecorder | null = null;
 let activeRecording: {
@@ -1292,6 +1349,7 @@ function connect() {
 		if (typeof event.data === "string") {
 			const msg = decodeServerMessage(event.data);
 			if (!msg) return;
+			publishServerMessage(msg);
 			if (msg.type === "hello_ack") {
 				streamingSelected = msg.stt_streaming === true;
 				mseEnabled = msg.mse_mp3 === true && mseRuntimeSupported();
@@ -1415,10 +1473,7 @@ function connect() {
 			} else if (msg.type === "diagram") {
 				void renderVisual(msg).then(() => reportWorkspaceState());
 			} else if (msg.type === "view") {
-				setWorkspaceView(
-					typeof msg.target === "string" ? msg.target : "",
-					"agent",
-				);
+				setWorkspaceView(typeof msg.target === "string" ? msg.target : "", "agent");
 			} else if (msg.type === "error") {
 				stopActivity();
 				const pending = turnForClip(msg.id);
@@ -1864,7 +1919,8 @@ function normalizeWorkspaceTarget(target: string): WorkspaceView | null {
 
 function applyWorkspaceView(): void {
 	const effective =
-		(requestedWorkspaceView === "visual" || requestedWorkspaceView === "theater") &&
+		(requestedWorkspaceView === "visual" ||
+			requestedWorkspaceView === "theater") &&
 		!hasVisual()
 			? "auto"
 			: requestedWorkspaceView;
@@ -1889,7 +1945,10 @@ function applyWorkspaceView(): void {
 				: null;
 		theaterExit.focus();
 	} else if (!theater && wasTheater) {
-		if (previousWorkspaceFocus && document.body.contains(previousWorkspaceFocus)) {
+		if (
+			previousWorkspaceFocus &&
+			document.body.contains(previousWorkspaceFocus)
+		) {
 			previousWorkspaceFocus.focus();
 		}
 		logEl.scrollTop = logEl.scrollHeight;
@@ -1977,6 +2036,82 @@ window.addEventListener("pagehide", () => {
 	handsFreeController?.disable("Hands-free stopped when the page was left.");
 	clearResponseBarrier();
 });
+
+if (window.parent !== window) {
+	document.documentElement.dataset.switchboardBridge = "ready";
+	const bridgeTargets = [
+		btn,
+		cancelBtn,
+		sendBtn,
+		statusEl,
+		handsFreeBtn,
+		handsFreeStatusEl,
+		handsFreeLeaseEl,
+		routeSelect,
+		modelSelect,
+		thinkingSelect,
+		hangupBtn,
+	];
+	const bridgeObserver = new MutationObserver(publishBridgeState);
+	for (const target of bridgeTargets) {
+		bridgeObserver.observe(target, {
+			attributes: true,
+			childList: true,
+			characterData: true,
+			subtree: true,
+		});
+	}
+	window.addEventListener("message", (event: MessageEvent) => {
+		if (event.origin !== window.location.origin) return;
+		const data = event.data as {
+			source?: string;
+			command?: string;
+			value?: string;
+		};
+		if (data?.source !== "switchboard-v17" || !data.command) return;
+		const select = (control: HTMLSelectElement) => {
+			if (typeof data.value !== "string") return;
+			control.value = data.value;
+			control.dispatchEvent(new Event("change", { bubbles: true }));
+		};
+		switch (data.command) {
+			case "talk":
+				btn.click();
+				break;
+			case "send":
+				sendBtn.click();
+				break;
+			case "cancel":
+				cancelBtn.click();
+				break;
+			case "hands-free":
+				handsFreeBtn.click();
+				break;
+			case "hangup":
+				hangupBtn.click();
+				break;
+			case "retry":
+				retryBtn.click();
+				break;
+			case "route":
+				select(routeSelect);
+				break;
+			case "model":
+				select(modelSelect);
+				break;
+			case "thinking":
+				select(thinkingSelect);
+				break;
+			case "state":
+				publishBridgeState();
+				break;
+		}
+	});
+	window.addEventListener("load", () => {
+		publishBridgeMessage("ready", null);
+		publishBridgeState();
+	});
+}
 try {
 	initMissionClock("missionClock");
 	(

@@ -754,7 +754,7 @@ const partialMsSummary = stageModule.timelineSummary([
 assert.equal(partialMsSummary, "2 hops");
 
 // 19. Mobile stage cap can shrink the canvas below its desktop minimum.
-const pageHtml = readFileSync("static/index.html", "utf8");
+const pageHtml = readFileSync("static/legacy/index.html", "utf8");
 assert.match(
 	pageHtml,
 	/@media \(max-width: 1080px\)[\s\S]*body:not\(\.theater\) #stageCanvas\s*\{\s*min-height:\s*0;/,

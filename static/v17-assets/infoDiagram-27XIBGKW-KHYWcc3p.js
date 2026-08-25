@@ -1,0 +1,3 @@
+import{_ as e,l as s,D as o,d as i}from"./mermaid.core-Bb9Rwu3Y.js";import{p as g}from"./cynefin-OW5HDTMX-B6p1bGLK.js";import"./index-BUX-9sSZ.js";var p={parse:e(async r=>{const a=await g("info",r);s.debug(a)},"parse")},d={version:"11.17.2"},v=e(()=>d.version,"getVersion"),m={getVersion:v},c=e((r,a,n)=>{s.debug(`rendering info diagram
+`+r);const t=o(a);i(t,100,400,!0),t.append("g").append("text").attr("x",100).attr("y",40).attr("class","version").attr("font-size",32).style("text-anchor","middle").text(`v${n}`)},"draw"),l={draw:c},b={parser:p,db:m,renderer:l};export{b as diagram};
+//# sourceMappingURL=infoDiagram-27XIBGKW-KHYWcc3p.js.map

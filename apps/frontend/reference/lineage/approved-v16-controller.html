@@ -1,0 +1,1373 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Switchboard V16 Controller</title><style>
+  :root {
+    --black:#000;
+    --red:#C61522;
+    --orange:#F15A24;
+    --amber:#FFB000;
+    --green:#7FD63D;
+    --cyan:#5ED6D8;
+    --paper:#E8E6DF;
+    --muted:#8C8C86;
+    --dim:#3E3E3A;
+    --panel:rgba(7,7,7,.84);
+    --orange-rgb:241,90,36;
+    --green-rgb:127,214,61;
+    --cyan-rgb:94,214,216;
+    --amber-rgb:255,176,0;
+    --type-accent:#D2A6FF;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}
+  body{font-family:"Arial Narrow","Liberation Sans Narrow","Helvetica Neue",Arial,sans-serif;color:var(--paper)}
+  button,input{font:inherit}
+  .stage{position:relative;width:100vw;height:100vh;height:100dvh;background:#000;overflow:hidden;isolation:isolate;container-type:size;container-name:stage}
+  .scene{position:absolute;inset:0;display:none;background:#000}
+  .scene.active{display:block}
+  .tech{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;text-transform:uppercase;letter-spacing:.14em;font-size:clamp(8px,.64vw,12px);line-height:1.45}
+  .micro{font-size:clamp(7px,.49vw,10px);letter-spacing:.17em}
+  .muted{color:var(--muted)} .orange{color:var(--orange)} .green{color:var(--green)} .cyan{color:var(--cyan)}
+  .logo{position:absolute;color:var(--red);transform-origin:50% 18%}
+  .logo svg{display:block;width:100%;height:auto;overflow:visible}
+  .frame-svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+  .frame-svg path,.frame-svg line{vector-effect:non-scaling-stroke}
+  .void-label{position:absolute;color:rgba(232,230,223,.31)}
+
+  /* 1. IDLE */
+  #idle .logo{width:min(23vw,370px);left:50%;top:50%;transform:translate(-50%,-50%);animation:suspended 7.2s ease-in-out infinite}
+  @keyframes suspended{
+    0%,100%{transform:translate(-50%,-50%) translateY(-8px) rotate(-.18deg)}
+    50%{transform:translate(-50%,-50%) translateY(9px) rotate(.18deg)}
+  }
+
+  /* 2. LISTENING */
+  #listening .logo{width:min(23vw,370px);left:50%;top:48.4%;transform:translate(-50%,-50%);animation:listen-awake 1.7s ease-in-out infinite alternate}
+  @keyframes listen-awake{
+    from{transform:translate(-50%,-50%) translateY(4px) scale(1);color:var(--red)}
+    to{transform:translate(-50%,-50%) translateY(-7px) scale(1.006);color:var(--red)}
+  }
+  #listening .glint-layer{position:absolute;left:50%;top:48.4%;width:min(23vw,370px);aspect-ratio:944/1133;transform:translate(-50%,-50%);pointer-events:none;opacity:.92}
+  #listening .glint-layer svg{display:block;width:100%;height:100%;overflow:visible}
+  #listening .voice-strip{position:absolute;left:50%;top:73.6%;width:min(18vw,290px);height:31px;transform:translateX(-50%);display:flex;align-items:center;justify-content:center;gap:4px;opacity:.78}
+  #listening .voice-strip i{display:block;width:2px;height:5px;background:var(--orange);animation:voicebar 1.05s ease-in-out infinite;transform-origin:center}
+  #listening .voice-strip i:nth-child(2n){animation-delay:-.38s}
+  #listening .voice-strip i:nth-child(3n){animation-delay:-.73s}
+  #listening .voice-strip i:nth-child(5n){animation-delay:-.18s}
+  @keyframes voicebar{0%,100%{height:3px;opacity:.32}35%{height:18px;opacity:.9}62%{height:8px;opacity:.58}}
+  #listening .listen-status{position:absolute;left:50%;top:78.1%;transform:translateX(-50%);color:rgba(232,230,223,.37);white-space:nowrap}
+  #listening .blade-trace{position:absolute;left:50%;top:22.5%;width:1px;height:54%;background:linear-gradient(to bottom,transparent,rgba(var(--orange-rgb),.13),transparent);transform:translateX(8px);opacity:.45;animation:trace-pulse 2.2s ease-in-out infinite}
+  @keyframes trace-pulse{0%,100%{opacity:.13}50%{opacity:.55}}
+
+  /* shared corner marks */
+  .corner-a,.corner-b{position:absolute;pointer-events:none}
+  .corner-a{left:5.3%;top:6.1%;width:25%;height:12%;color:rgba(var(--orange-rgb),.48)}
+  .corner-b{right:4.4%;bottom:6.4%;width:18%;height:10%;color:rgba(var(--green-rgb),.30)}
+  .corner-a svg,.corner-b svg{width:100%;height:100%}
+
+  /* 3. CONVERSATION */
+  #conversation .logo{width:min(14.2vw,228px);left:50%;top:7.4%;transform:translateX(-50%)}
+  /* The conversation page no longer has a permanent decorative squiggle. Voice activity is represented by the live indicator only. */
+  #conversation .voice-halo{display:none!important}
+  #conversation .answer-shell{position:absolute;left:50%;top:55.4%;width:min(61vw,980px);height:min(31vh,310px);transform:translate(-50%,-50%);background:rgba(4,4,4,.76);clip-path:polygon(0 0,95.2% 0,100% 13%,100% 100%,5.4% 100%,0 85%)}
+  #conversation .answer-shell::before{content:"";position:absolute;inset:0;clip-path:inherit;background:linear-gradient(135deg,rgba(var(--orange-rgb),.62),rgba(var(--orange-rgb),.18) 42%,rgba(232,230,223,.25) 70%,rgba(var(--green-rgb),.28));z-index:-2}
+  #conversation .answer-shell::after{content:"";position:absolute;inset:1px;clip-path:inherit;background:#000;z-index:-1}
+  #conversation .answer{position:absolute;left:7.6%;right:7.6%;top:50%;transform:translateY(-50%);font-family:"Helvetica Neue",Arial,sans-serif;font-size:clamp(22px,2.15vw,39px);line-height:1.31;letter-spacing:-.025em;color:#ECEAE4}
+  #conversation .answer .accent{color:var(--orange)}
+  #conversation .answer-tag{position:absolute;left:3.2%;top:8.5%;color:rgba(232,230,223,.30)}
+  #conversation .answer-index{position:absolute;right:3.2%;bottom:8.5%;color:rgba(232,230,223,.24)}
+  #conversation .side-index{position:absolute;right:4.6%;top:39%;color:rgba(232,230,223,.30);writing-mode:vertical-rl}
+  #conversation .channel-label{position:absolute;left:7%;bottom:10.4%;color:rgba(232,230,223,.31)}
+  #conversation .transcript-toggle{position:absolute;left:50%;bottom:7.8%;transform:translateX(-50%);padding:8px 12px;border:0;background:transparent;color:rgba(232,230,223,.38);cursor:pointer;transition:color .16s ease,letter-spacing .16s ease;text-transform:uppercase}
+  #conversation .transcript-toggle:hover{color:var(--orange);letter-spacing:.21em}
+  #conversation .transcript-toggle::before,#conversation .transcript-toggle::after{content:"";display:inline-block;width:18px;height:1px;background:currentColor;vertical-align:middle;margin:0 9px;opacity:.45}
+
+  #conversation .transcript-panel{position:absolute;inset:0;background:#000;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .28s ease,visibility .28s ease}
+  #conversation.expanded .transcript-panel{opacity:1;visibility:visible;pointer-events:auto}
+  #conversation.expanded>.corner-a,#conversation.expanded>.corner-b,#conversation.expanded>.logo,#conversation.expanded>.voice-halo,#conversation.expanded>.answer-shell,#conversation.expanded>.side-index,#conversation.expanded>.channel-label,#conversation.expanded>.transcript-toggle{opacity:0;pointer-events:none;transition:opacity .18s ease}
+  .chat-logo{position:absolute;left:5.4%;top:7.4%;width:min(5vw,80px);color:var(--red)} .chat-logo svg{width:100%}
+  .chat-header{position:absolute;left:12%;top:7.7%;color:rgba(232,230,223,.43)}
+  .chat-frame{position:absolute;left:12%;top:15.5%;width:76%;height:67%;border-top:1px solid rgba(var(--orange-rgb),.33);border-bottom:1px solid rgba(232,230,223,.15)}
+  .chat-line{position:relative;padding:24px 0 27px 118px;border-bottom:1px solid rgba(232,230,223,.08);font-family:"Helvetica Neue",Arial,sans-serif;font-size:clamp(16px,1.28vw,23px);line-height:1.5;color:#DDDAD4}
+  .chat-line .who{position:absolute;left:0;top:27px;color:rgba(232,230,223,.30)}
+  .chat-line.ai{font-size:clamp(17px,1.42vw,25px)}
+  .chat-input{position:absolute;left:12%;right:12%;bottom:7.2%;height:54px;border:1px solid rgba(232,230,223,.17);background:#050505;color:var(--paper);padding:0 18px;outline:none}
+  .chat-input:focus{border-color:rgba(var(--orange-rgb),.55)}
+  .chat-close{position:absolute;right:5.3%;top:7.4%;border:0;background:none;color:rgba(232,230,223,.34);cursor:pointer;padding:8px}.chat-close:hover{color:var(--orange)}
+
+  /* 4. TRAINING */
+  #training .run-label{position:absolute;left:5.2%;top:7.2%;color:var(--orange);font-weight:700}
+  #training .frame{position:absolute;left:5.1%;top:10.8%;width:69.4%;height:64.8%}
+  #training .frame svg{width:100%;height:100%}
+  #training .chart{position:absolute;left:8.2%;top:17.4%;width:62.7%;height:50.4%}
+  #training .chart svg{width:100%;height:100%;overflow:visible}
+  #training .chart-title{position:absolute;left:8.3%;top:12.9%;color:rgba(232,230,223,.80)}
+  #training .axis-y{position:absolute;left:5.1%;top:22%;writing-mode:vertical-rl;transform:rotate(180deg);color:rgba(232,230,223,.27)}
+  #training .right-presence{position:absolute;right:5.1%;top:10.8%;width:17.8%;height:25.2%;display:flex;align-items:center;justify-content:center}
+  #training .right-presence .logo{position:relative;left:auto;top:auto;width:min(12vw,194px);transform:none}
+  #training .logo-caption{position:absolute;right:5.1%;top:34.5%;width:17.8%;text-align:center;color:rgba(232,230,223,.34)}
+  #training .metric-block{position:absolute;right:5.1%;top:41.2%;width:17.8%;height:34.4%}
+  #training .metric{position:relative;height:19%;border-top:1px solid rgba(232,230,223,.12);padding-top:7px}
+  #training .metric .label{position:absolute;left:0;top:8px;color:rgba(232,230,223,.36)}
+  #training .metric .value{position:absolute;right:0;top:2px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:clamp(14px,1.25vw,22px)}
+  #training .metric .primary{color:var(--orange)} #training .metric .good{color:var(--green)}
+  #training .status-line{position:absolute;left:5.2%;bottom:8.4%;width:69.4%;height:8.5%}
+  #training .status-line .big{position:absolute;left:0;top:2%;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:clamp(20px,2.1vw,34px);color:var(--paper)}
+  #training .status-line .small{position:absolute;left:0;bottom:0;color:rgba(232,230,223,.34)}
+  #training .progress{position:absolute;left:23.5%;top:14%;width:49%;height:6px;background:rgba(232,230,223,.10)}
+  #training .progress>i{display:block;width:51.25%;height:100%;background:var(--orange)}
+  #training .progress-label{position:absolute;left:23.5%;top:43%;color:rgba(232,230,223,.36)}
+  #training .annotation{position:absolute;left:44.1%;top:25.6%;width:25.5%;min-height:11%;padding:1.2% 1.35% 1.1%;border:1px solid rgba(var(--orange-rgb),.48);background:rgba(0,0,0,.80);clip-path:polygon(0 0,94% 0,100% 23%,100% 100%,0 100%)}
+  #training .annotation::before{content:"";position:absolute;left:-18.5%;top:48%;width:18.5%;height:1px;background:rgba(var(--orange-rgb),.6)}
+  #training .annotation::after{content:"";position:absolute;right:-.4%;top:3.6%;width:8.1%;height:1px;background:rgba(var(--orange-rgb),.64);transform:rotate(31deg);transform-origin:right center}
+  #training .annotation .speech{font-family:"Helvetica Neue",Arial,sans-serif;font-size:clamp(12px,1.1vw,18px);line-height:1.35;color:#EAE7E0}
+  #training .annotation strong{color:var(--orange);font-weight:600}
+  #training .annotation .tag{margin-bottom:7px;color:rgba(232,230,223,.34)}
+  #training .bottom-meta{position:absolute;right:5.1%;bottom:8.5%;width:17.8%;text-align:right;color:rgba(232,230,223,.28)}
+
+  /* 5. ARCHITECTURE */
+  #architecture .title{position:absolute;left:5.2%;top:6.8%;color:var(--orange);font-weight:700}
+  #architecture .sub{position:absolute;left:5.2%;top:10%;color:rgba(232,230,223,.33)}
+  #architecture .arch-canvas{position:absolute;left:4.9%;top:15%;width:68.5%;height:72%}
+  #architecture .arch-canvas svg{width:100%;height:100%;overflow:visible}
+  #architecture .arch-presence{position:absolute;right:5%;top:9.2%;width:17.5%;height:22.5%;display:flex;align-items:center;justify-content:center;color:var(--red)}
+  #architecture .arch-presence svg{width:min(10.8vw,174px);height:auto}
+  #architecture .presence-caption{position:absolute;right:5%;top:31.8%;width:17.5%;text-align:center;color:rgba(232,230,223,.34)}
+  #architecture .arch-note{position:absolute;right:5%;top:39%;width:18%;border-top:1px solid rgba(var(--orange-rgb),.46);padding-top:14px;font-family:"Helvetica Neue",Arial,sans-serif;font-size:clamp(13px,1.05vw,18px);line-height:1.45;color:#DCD9D2}
+  #architecture .arch-note strong{color:var(--orange);font-weight:500}
+  #architecture .arch-meta{position:absolute;right:5%;bottom:10%;width:18%;color:rgba(232,230,223,.27)}
+  .flow-pulse{animation:flowdash 2.2s linear infinite}
+  @keyframes flowdash{to{stroke-dashoffset:-28}}
+
+  /* 6. EMAIL */
+  #email .email-frame{position:absolute;left:8%;top:8.5%;width:66%;height:82%}
+  #email .email-frame svg{width:100%;height:100%}
+  #email .mail-meta{position:absolute;left:11.2%;top:13.2%;color:rgba(232,230,223,.34)}
+  #email .subject{position:absolute;left:11.2%;top:22.2%;width:56%;font-family:"Helvetica Neue",Arial,sans-serif;font-size:clamp(25px,2.4vw,43px);line-height:1.1;letter-spacing:-.025em;color:#ECEAE4}
+  #email .mail-body{position:absolute;left:11.2%;top:34%;width:56%;font-family:"Helvetica Neue",Arial,sans-serif;font-size:clamp(15px,1.28vw,22px);line-height:1.63;color:#CFCBC4}
+  #email .mail-body p{margin:0 0 1.05em}
+  #email .email-presence{position:absolute;right:5.4%;top:9.2%;width:17.5%;height:22.5%;display:flex;align-items:center;justify-content:center;color:var(--red)}
+  #email .email-presence svg{width:min(10.8vw,174px);height:auto}
+  #email .presence-caption{position:absolute;right:5.4%;top:31.8%;width:17.5%;text-align:center;color:rgba(232,230,223,.34)}
+  #email .email-note{position:absolute;right:5.4%;top:39%;width:17.5%;border-top:1px solid rgba(var(--green-rgb),.38);padding-top:14px;font-family:"Helvetica Neue",Arial,sans-serif;font-size:clamp(13px,1.02vw,18px);line-height:1.46;color:#D5D2CB}
+  #email .email-note .tag{margin-bottom:9px;color:rgba(232,230,223,.31)}
+  #email .mail-footer{position:absolute;right:5.4%;bottom:9.4%;width:17.5%;text-align:right;color:rgba(232,230,223,.27)}
+
+  /* 6-8. CODE FRAME STUDIES: same clean code composition, border treatment only. */
+  .code-scene .code-title{position:absolute;left:5.2%;top:6.8%;color:var(--orange);font-weight:700}
+  .code-scene .code-file{position:absolute;left:5.2%;top:10%;color:rgba(232,230,223,.34)}
+  .code-scene .code-shell{position:absolute;left:5.1%;top:15.5%;width:67%;height:69%}
+  .code-scene .code-border{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+  .code-scene .code-body{position:absolute;inset:0;padding:27px 34px 30px 56px;overflow:hidden}
+  .code-scene pre{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:clamp(11px,.93vw,16px);line-height:1.72;color:#D9D7D1;tab-size:2;counter-reset:line}
+  .code-scene .code-line{position:relative;display:block;white-space:pre}
+  .code-scene .code-line::before{counter-increment:line;content:counter(line);position:absolute;left:-38px;width:24px;text-align:right;color:rgba(232,230,223,.18)}
+  .code-scene .hot{background:linear-gradient(90deg,rgba(var(--orange-rgb),.075),rgba(var(--orange-rgb),.018) 76%,transparent);box-shadow:inset 2px 0 0 rgba(var(--orange-rgb),.62)}
+  .code-scene .code-presence{position:absolute;right:5%;top:9.2%;width:17.5%;height:22.5%;display:flex;align-items:center;justify-content:center;color:var(--red)}
+  .code-scene .code-presence svg{width:min(10.8vw,174px);height:auto}
+  .code-scene .presence-caption{position:absolute;right:5%;top:31.8%;width:17.5%;text-align:center;color:rgba(232,230,223,.34)}
+  .code-scene .code-note{position:absolute;right:5%;top:39%;width:17.5%;border-top:1px solid rgba(var(--green-rgb),.38);padding-top:14px;font-family:"Helvetica Neue",Arial,sans-serif;font-size:clamp(13px,1.02vw,18px);line-height:1.46;color:#D5D2CB}
+  .code-scene .code-note .tag{margin-bottom:9px;color:rgba(232,230,223,.31)}
+  .code-scene .code-note strong{color:var(--orange);font-weight:500}
+  .code-scene .code-meta{position:absolute;right:5%;bottom:9.7%;width:17.5%;text-align:right;color:rgba(232,230,223,.26)}
+  .kw{color:var(--orange)}.fn{color:var(--green)}.str{color:var(--cyan)}.cm{color:#686862}.num{color:var(--amber)}.type{color:var(--type-accent)}
+
+  /* 6. Minimal interrupted instrument frame. */
+  #code .border-primary{stroke:rgba(var(--orange-rgb),.55)}
+  #code .border-secondary{stroke:rgba(232,230,223,.17)}
+  /* Keep code inside a protected content field, independent of the decorative perimeter. */
+  #code .code-body{
+    inset:16px 30px 20px 20px;
+    padding:14px 18px 34px 42px;
+    overflow:hidden;
+    /* Match the raised lower-left rail: content disappears only behind that corner. */
+    clip-path:polygon(0 0,100% 0,100% 100%,14% 100%,9.5% 94.5%,0 94.5%);
+  }
+  #code pre{font-size:clamp(9px,.86vw,15px);line-height:1.66}
+
+  /* 7. Single cut-corner frame, still restrained. */
+  #code-cut .border-primary{stroke:rgba(var(--orange-rgb),.52)}
+  #code-cut .border-secondary{stroke:rgba(232,230,223,.18)}
+
+  /* 8. Open corner brackets, least box-like option. */
+  #code-brackets .border-primary{stroke:rgba(var(--orange-rgb),.58)}
+  #code-brackets .border-secondary{stroke:rgba(232,230,223,.18)}
+  .palette-toast{position:fixed;right:3.2vw;bottom:3.2vh;z-index:50;color:rgba(232,230,223,.72);background:#000;border-left:1px solid var(--orange);padding:9px 12px 8px;opacity:0;transform:translateY(5px);pointer-events:none;transition:opacity .16s ease,transform .16s ease}
+  .palette-toast.show{opacity:1;transform:translateY(0)}
+  .scene-toast{position:fixed;left:3.2vw;bottom:3.2vh;z-index:50;color:rgba(232,230,223,.72);background:#000;border-left:1px solid var(--orange);padding:9px 12px 8px;opacity:0;transform:translateY(5px);pointer-events:none;transition:opacity .16s ease,transform .16s ease}
+  .scene-toast.show{opacity:1;transform:translateY(0)}
+  /* static screenshot mode */
+  body.static *{animation:none!important;transition:none!important}
+
+  /* Persistent presence motion on content scenes. Animate the SVG, not the positioned container. */
+  #conversation>.logo>svg,
+  #training .right-presence .logo>svg,
+  #architecture .arch-presence>svg,
+  #email .email-presence>svg,
+  .code-scene .code-presence>svg{
+    animation:presence-suspend 6.8s ease-in-out infinite;
+    transform-origin:50% 18%;
+  }
+  @keyframes presence-suspend{
+    0%,100%{transform:translateY(-3px) rotate(-.10deg)}
+    50%{transform:translateY(4px) rotate(.10deg)}
+  }
+
+  /* Global listening indicator. It is positioned under whichever presence glyph was tapped. */
+  #globalVoiceIndicator{position:fixed;z-index:60;width:138px;height:44px;opacity:0;pointer-events:none;transform-origin:50% 50%;clip-path:inset(0 42% 0 42%);transition:opacity .20s ease,transform .28s cubic-bezier(.22,.61,.36,1),clip-path .28s cubic-bezier(.22,.61,.36,1);transform:translate(-50%,4px) scaleX(.58)}
+  body.listening-active #globalVoiceIndicator{opacity:.86;clip-path:inset(0 0 0 0);transform:translate(-50%,0) scaleX(1)}
+  #globalVoiceIndicator .bars{height:22px;display:flex;justify-content:center;align-items:center;gap:4px}
+  #globalVoiceIndicator i{display:block;width:2px;height:4px;background:var(--orange);animation:voicebar 1.05s ease-in-out infinite;transform-origin:center}
+  #globalVoiceIndicator i:nth-child(2n){animation-delay:-.38s}#globalVoiceIndicator i:nth-child(3n){animation-delay:-.73s}#globalVoiceIndicator i:nth-child(5n){animation-delay:-.18s}
+  #globalVoiceIndicator .label{text-align:center;color:rgba(232,230,223,.38);font-size:8px;line-height:1.25;letter-spacing:.16em;white-space:nowrap;margin-top:3px}
+  #globalVoiceIndicator.compact{width:118px;height:36px}
+  #globalVoiceIndicator.compact .bars{height:17px;gap:3px}
+  #globalVoiceIndicator.compact .label{font-size:7px;line-height:1.2;margin-top:2px}
+  .scene .presence-caption,.scene .logo-caption{transition:opacity .18s ease}
+  body.listening-active .scene.active .presence-caption,
+  body.listening-active .scene.active .logo-caption,
+  body.voice-exiting .scene.active .presence-caption,
+  body.voice-exiting .scene.active .logo-caption{opacity:0}
+
+  
+
+  /* Portrait is a different composition, not a squeezed desktop layout. */
+  @container stage (max-aspect-ratio: 1/1){
+    .tech{font-size:clamp(8px,1.35vw,11px)}
+    .micro{font-size:clamp(7px,1.08vw,9px)}
+    .corner-a{left:4%;top:3.8%;width:34%;height:9%}.corner-b{right:4%;bottom:4%;width:27%;height:7%}
+
+    #idle .logo,#listening .logo{width:min(42vw,350px)}
+    #listening .voice-strip{width:min(36vw,270px);top:72%}
+    #listening .listen-status{top:76.2%}
+
+    /* Conversation: stable type size, lower presence, clean separation. */
+    #conversation>.logo{width:min(24vw,190px);left:50%;top:10.5%;transform:translateX(-50%)}
+    #conversation .voice-halo{top:34%;width:min(26vw,190px);height:20px}
+    #conversation .answer-shell{width:88vw;height:31vh;top:53%;clip-path:polygon(0 0,94% 0,100% 12%,100% 100%,5% 100%,0 86%)}
+    #conversation .answer{left:7%;right:7%;font-size:clamp(18px,3.35vw,28px);line-height:1.34}
+    #conversation .answer-tag{left:4%;top:6.5%}
+    #conversation .answer-index{right:4%;bottom:6.5%}
+    #conversation .side-index{display:none}
+    #conversation .channel-label{left:7%;bottom:9.5%}
+    #conversation .transcript-toggle{bottom:6.1%}
+    .chat-logo{left:6%;top:5.5%;width:min(10vw,72px)}
+    .chat-header{left:19%;top:6%}.chat-close{right:6%;top:6%}
+    .chat-frame{left:7%;top:14%;width:86%;height:69%}
+    .chat-line{padding:19px 0 22px 82px;font-size:clamp(14px,2.2vw,19px)}
+    .chat-line.ai{font-size:clamp(15px,2.4vw,20px)}
+    .chat-line .who{top:22px}
+    .chat-input{left:7%!important;width:86%!important;bottom:7%!important}
+
+    /* Training: visual first, then a real lower information band with metrics + presence. */
+    #training .run-label{left:5%;top:4.5%}
+    #training .frame{left:5%;top:8%;width:90%;height:46%}
+    #training .chart{left:9%;top:14%;width:82%;height:33%}
+    #training .chart-title{left:9%;top:10.7%}
+    #training .axis-y{left:5.2%;top:17%}
+    #training .annotation{left:49%;top:27%;width:42%;min-height:0;padding:11px 12px 10px;clip-path:polygon(0 0,92% 0,100% 22%,100% 100%,0 100%)}
+    #training .annotation::before{left:-14%;width:14%}
+    #training .annotation .speech{font-size:clamp(11px,1.8vw,14px);line-height:1.3}
+    #training .metric-block{display:grid;grid-template-columns:1fr 1fr;gap:0 16px;left:6%;right:auto;top:61%;width:57%;height:24%}
+    #training .metric{display:block;width:auto;height:auto;margin:0;min-height:42px}
+    #training .metric .value{font-size:clamp(14px,2.4vw,20px)}
+    #training .right-presence{right:5%;top:60%;width:28%;height:19%;display:flex}
+    #training .right-presence .logo{width:min(22vw,165px)}
+    #training .logo-caption{right:5%;top:78.6%;width:28%}
+    #training .status-line{left:6%;bottom:5.5%;width:88%;height:8.5%}
+    #training .status-line .big{font-size:clamp(18px,3.2vw,26px)}
+    #training .progress{left:44%;top:15%;width:52%;height:5px}
+    #training .progress-label{left:44%;top:43%}
+    #training .bottom-meta{right:5%;bottom:2.1%;width:28%}
+
+    /* Architecture: 16:9-ish map on top, explanation and presence form the lower band. */
+    #architecture .title{left:5%;top:4.3%}#architecture .sub{left:5%;top:7.2%}
+    #architecture .arch-canvas{left:3.5%;top:10.5%;width:93%;height:49%}
+    #architecture .arch-note{left:6%;right:auto;top:66%;width:61%;padding-top:12px;font-size:clamp(14px,2.25vw,18px);line-height:1.42}
+    #architecture .arch-presence{right:5%;top:64%;width:25%;height:19%}
+    #architecture .arch-presence svg{width:min(20vw,155px)}
+    #architecture .presence-caption{display:block;right:5%;top:82%;width:25%}
+    #architecture .arch-meta{right:5%;bottom:5.2%;width:25%;text-align:right}
+
+    /* Email: document owns the top; summary and presence are intentionally paired below it. */
+    #email .email-frame{left:5%;top:6%;width:90%;height:58%}
+    #email .mail-meta{left:9%;top:9.5%;width:82%}
+    #email .subject{left:9%;top:16%;width:82%;font-size:clamp(23px,4vw,32px);line-height:1.08}
+    #email .mail-body{left:9%!important;top:27%!important;width:82%!important;font-size:clamp(13px,2.15vw,17px);line-height:1.48}
+    #email .mail-body p{margin-bottom:.82em}
+    #email .email-note{left:7%;right:auto;top:69%;width:61%;padding-top:12px;font-size:clamp(14px,2.15vw,18px);line-height:1.42}
+    #email .email-presence{display:flex;right:5%;top:67.5%;width:25%;height:18%}
+    #email .email-presence svg{width:min(20vw,155px)}
+    #email .presence-caption{display:block;right:5%;top:84%;width:25%}
+    #email .mail-footer{right:5%;bottom:4.8%;width:25%}
+
+    /* Code: preserve readable code surface, then pair commentary and Damocles below it. */
+    .code-scene .code-title{left:5%;top:4.2%}.code-scene .code-file{left:5%;top:7.1%}
+    .code-scene .code-shell{left:5%;top:10.5%;width:90%;height:54%}
+    .code-scene .code-body{inset:12px 16px 16px 12px;padding:12px 12px 14px 38px;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+    .code-scene .code-body::-webkit-scrollbar{display:none}
+    .code-scene pre{font-size:clamp(12.5px,1.8vw,15px);line-height:1.58;min-width:650px}
+    .code-scene .code-line::before{left:-32px;width:21px}
+    .code-scene .code-note{left:7%;right:auto;top:69%;width:61%;padding-top:12px;font-size:clamp(14px,2.15vw,18px);line-height:1.42}
+    .code-scene .code-presence{display:flex;right:5%;top:67%;width:25%;height:18%}
+    .code-scene .code-presence svg{width:min(20vw,155px)}
+    .code-scene .presence-caption{display:block;right:5%;top:83.6%;width:25%}
+    .code-scene .code-meta{right:5%;bottom:4.7%;width:25%}
+  }
+
+  
+
+
+  /* V9 responsive corrections + focus interaction */
+  .portrait-graph{display:none}
+  .focusable{cursor:zoom-in}
+
+  /* Make the training footer collision-proof at every width. */
+  #training .status-line{display:grid;grid-template-columns:minmax(205px,31%) 1fr;grid-template-rows:1fr 1fr;column-gap:24px;align-items:center}
+  #training .status-line .big,#training .status-line .small,#training .progress,#training .progress-label{position:static;left:auto;top:auto;bottom:auto;width:auto}
+  #training .status-line .big{grid-column:1;grid-row:1;align-self:end;white-space:nowrap}
+  #training .status-line .small{grid-column:1;grid-row:2;align-self:start;white-space:nowrap}
+  #training .progress{grid-column:2;grid-row:1;align-self:end;margin-bottom:7px;height:6px}
+  #training .progress-label{grid-column:2;grid-row:2;align-self:start}
+
+  
+
+  
+
+  /* Tall composition is selected purely by geometry. */
+  @container stage (max-aspect-ratio: 1/1){
+    .landscape-graph{display:none!important}
+    .portrait-graph{display:block!important}
+
+    /* Conversation presence is one coherent stack, not a tiny logo detached from speech. */
+    #conversation>.logo{width:clamp(150px,27vw,210px);top:7.8%}
+    #conversation .answer-shell{top:54.5%}
+    #conversation .answer{font-size:clamp(20px,3.8vw,30px);line-height:1.33}
+    #conversation .channel-label{left:5%;bottom:5.1%}
+    #conversation .transcript-toggle{bottom:5.1%}
+
+    /* Keep the training annotation useful without obscuring most of the graph. */
+    #training .annotation{left:55%;top:28%;width:35%;max-height:17%;overflow:hidden;padding:10px 11px 9px}
+    #training .annotation::before{left:-12%;width:12%}
+    #training .metric-block{top:60.5%}
+    #training .right-presence{top:59.5%}
+    #training .status-line{left:6%;width:88%;bottom:5.6%;grid-template-columns:minmax(150px,38%) 1fr;column-gap:12px}
+    #training .status-line .big{font-size:clamp(17px,3.1vw,25px)}
+    #training .status-line .small{font-size:clamp(7px,1vw,9px)}
+    #training .bottom-meta{bottom:2.1%}
+
+    /* The diagram itself reflows vertically in portrait. */
+    #architecture .portrait-graph{left:6%;top:10.5%;width:88%;height:50%}
+    #architecture .arch-note{top:66%;width:58%}
+    #architecture .arch-presence{top:64%;width:27%}
+    #architecture .presence-caption{top:82%;width:27%}
+    #architecture .arch-meta{bottom:4.7%;width:27%}
+
+    /* Intentional paired footers remove the accidental empty corner. */
+    #architecture::after,#email::after,.code-scene::after{position:absolute;left:6%;bottom:4.7%;white-space:pre;color:rgba(232,230,223,.25);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;text-transform:uppercase;letter-spacing:.16em;font-size:clamp(7px,1.05vw,9px);line-height:1.45}
+    #architecture::after{content:"VIEW / ROUTING TRACE\A GRAPH / ADAPTIVE"}
+    #email::after{content:"MAIL / SOURCE\A READER / ACTIVE"}
+    .code-scene::after{content:"SOURCE / CONTEXT\A READER / ACTIVE"}
+
+    #email .email-note{width:58%}
+    #email .email-presence{width:27%}
+    #email .presence-caption{width:27%}
+    #email .mail-footer{width:27%;bottom:4.7%}
+
+    .code-scene .code-note{width:58%}
+    .code-scene .code-presence{width:27%}
+    .code-scene .presence-caption{width:27%}
+    .code-scene .code-meta{width:27%;bottom:4.7%}
+  }
+
+  
+
+  /* Full-screen object focus. Same mechanism can later be invoked by the agent. */
+  .focus-overlay{position:fixed;inset:0;z-index:100;background:#000;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .2s ease,visibility .2s ease}
+  .focus-overlay.open{opacity:1;visibility:visible;pointer-events:auto}
+  .focus-header{position:absolute;left:4%;right:4%;top:3.5%;height:34px;border-bottom:1px solid rgba(var(--orange-rgb),.34);color:rgba(232,230,223,.52)}
+  .focus-close{position:absolute;right:0;top:-8px;border:0;background:#000;color:rgba(232,230,223,.42);padding:8px;cursor:pointer}
+  .focus-close:hover{color:var(--orange)}
+  .focus-content{position:absolute;left:5%;right:5%;top:10%;bottom:9%;overflow:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .focus-content::-webkit-scrollbar{display:none}
+  .focus-footer{position:absolute;left:4%;bottom:3.5%;color:rgba(232,230,223,.28)}
+  .focus-chart{position:absolute;left:50%;top:50%;width:min(90vw,1300px);aspect-ratio:2/1;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center}
+  .focus-chart svg{width:100%;height:100%;overflow:visible}
+  .focus-diagram{position:absolute;inset:2%}.focus-diagram svg{width:100%;height:100%;overflow:visible}
+  .focus-document{max-width:980px;margin:3vh auto 8vh;padding:0 3vw}
+  .focus-document .f-meta{color:rgba(232,230,223,.36);margin-bottom:4vh}
+  .focus-document .f-subject{font-family:"Helvetica Neue",Arial,sans-serif;font-size:clamp(28px,4vw,62px);line-height:1.06;letter-spacing:-.035em;color:#ECEAE4;margin-bottom:5vh}
+  .focus-document .f-body{font-family:"Helvetica Neue",Arial,sans-serif;font-size:clamp(17px,1.7vw,26px);line-height:1.62;color:#CFCBC4}
+  .focus-document .f-body p{margin:0 0 1.15em}
+  .focus-summary{max-width:860px;margin:18vh auto 0;border-top:1px solid rgba(var(--orange-rgb),.5);padding-top:22px;font-family:"Helvetica Neue",Arial,sans-serif;font-size:clamp(20px,2.4vw,36px);line-height:1.42;color:#E4E1DA}
+  .focus-summary .tag{margin-bottom:16px;color:rgba(232,230,223,.35)}
+  .focus-summary strong{color:var(--orange);font-weight:600}
+  .focus-summary .speech{font:inherit;line-height:inherit;color:inherit}
+  .focus-metrics{max-width:900px;margin:10vh auto;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 42px}
+  .focus-metrics .metric{border-top:1px solid rgba(232,230,223,.15);padding:18px 0;min-height:88px}
+  .focus-metrics .label{color:rgba(232,230,223,.36);font-family:ui-monospace,monospace;font-size:12px;letter-spacing:.14em;text-transform:uppercase}
+  .focus-metrics .value{font-family:ui-monospace,monospace;font-size:clamp(28px,4vw,56px);margin-top:7px}
+  .focus-code{min-width:max-content;padding:4vh 5vw 8vh}
+  .focus-code pre{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:clamp(14px,1.5vw,22px);line-height:1.7;color:#D9D7D1;counter-reset:line}
+  .focus-code .code-line{position:relative;display:block;white-space:pre;padding-left:42px}
+  .focus-code .code-line::before{counter-increment:line;content:counter(line);position:absolute;left:0;width:26px;text-align:right;color:rgba(232,230,223,.2)}
+  .focus-code .hot{background:linear-gradient(90deg,rgba(var(--orange-rgb),.08),transparent 80%);box-shadow:inset 2px 0 0 rgba(var(--orange-rgb),.65)}
+
+
+  /* V11: shared composition primitives. These are deliberately generic so fixes propagate. */
+  :root{
+    --presence-logo-desktop:min(12vw,190px);
+    --presence-logo-portrait:min(22vw,170px);
+    --safe-code-pad-x:18px;
+    --safe-code-pad-y:14px;
+  }
+
+  /* One focus contract: focused content preserves its semantic colors. */
+  .focus-metrics .primary{color:var(--orange)!important}
+  .focus-metrics .good{color:var(--green)!important}
+  .focus-overlay .orange{color:var(--orange)!important}
+  .focus-overlay .green{color:var(--green)!important}
+  .focus-overlay .cyan{color:var(--cyan)!important}
+
+  /* Conversation presence is centered in the free band above the response, not positioned by its top edge. */
+  #conversation>.logo{
+    top:24%;
+    transform:translate(-50%,-50%);
+  }
+
+  /* Code is a reusable viewport primitive: content never crosses the decorative rail. */
+  .code-scene .code-shell{overflow:hidden}
+  .code-scene .code-border{z-index:2}
+  .code-scene .code-body,
+  #code .code-body,
+  #code-cut .code-body,
+  #code-brackets .code-body{
+    z-index:1;
+    overflow:auto;
+    overscroll-behavior:contain;
+    scrollbar-width:none;
+    -webkit-overflow-scrolling:touch;
+    contain:paint;
+  }
+  .code-scene .code-body::-webkit-scrollbar{display:none}
+
+  /* The selected rails frame has a raised lower-left corner. Keep scrolling content inside that exact silhouette. */
+  #code .code-body{
+    clip-path:polygon(0 0,100% 0,100% 100%,14% 100%,9.5% 94.5%,0 94.5%);
+    padding-bottom:34px;
+  }
+
+  /* Documents use the same bounded-scroll primitive as code. Nothing scrolls unless content exceeds its field. */
+  #email .mail-body{
+    bottom:14%;
+    overflow-y:auto;
+    overflow-x:hidden;
+    overscroll-behavior:contain;
+    scrollbar-width:none;
+    -webkit-overflow-scrolling:touch;
+    padding-right:10px;
+    contain:paint;
+  }
+  #email .mail-body::-webkit-scrollbar{display:none}
+
+  /* Shared presence sizing for content scenes. */
+  #architecture .arch-presence svg,
+  #email .email-presence svg,
+  .code-scene .code-presence svg{width:var(--presence-logo-desktop)}
+
+  @container stage (max-aspect-ratio: 1/1){
+    #conversation>.logo{
+      width:clamp(160px,27vw,215px);
+      top:24%;
+      transform:translate(-50%,-50%);
+    }
+    /* Raise the callout so it points toward the event rather than covering it. */
+    #training .annotation{top:21.5%;}
+
+    /* Shared portrait code typography. ID-specific old rules are intentionally overridden here. */
+    #code pre,#code-cut pre,#code-brackets pre{
+      font-size:clamp(15px,1.8vw,18px);
+      line-height:1.52;
+      min-width:max-content;
+    }
+    #architecture .arch-presence svg,
+    #email .email-presence svg,
+    .code-scene .code-presence svg{width:var(--presence-logo-portrait)}
+    #training .right-presence .logo{width:min(24vw,178px)}
+    #email .mail-body{bottom:38%!important}
+  }
+
+  
+
+  
+
+  
+
+
+
+  /* V14 FLUID GEOMETRY
+     No device classes and no width/height breakpoints. Layout is driven by the
+     actual stage geometry. The scene uses one shared horizontal rail contract,
+     then re-composes when the stage becomes taller than it is wide. */
+  .scene{
+    --edge:5cqw;
+    --rail:19cqw;
+    --scene-gap:clamp(1.25rem,3.2cqw,4.5rem);
+    --main-w:calc(100cqw - var(--edge) - var(--edge) - var(--rail) - var(--scene-gap));
+    --presence-size:min(12cqw,21cqh);
+  }
+
+  .tech{font-size:clamp(.5rem,.64cqw,.75rem)}
+  .micro{font-size:clamp(.44rem,.49cqw,.625rem)}
+
+  /* Shared landscape composition contract. Main content and presence rail are
+     separated mathematically, so they cannot drift into one another. */
+  #training .frame{left:var(--edge);width:var(--main-w)}
+  #training .status-line{left:var(--edge);width:var(--main-w)}
+  #training .right-presence,#training .logo-caption,#training .metric-block,#training .bottom-meta{
+    right:var(--edge);width:var(--rail)
+  }
+  #training .right-presence .logo{width:var(--presence-size)}
+  #training .chart{left:calc(var(--edge) + 3.1cqw);width:calc(var(--main-w) - 6.7cqw)}
+  #training .chart-title{left:calc(var(--edge) + 3.2cqw)}
+  #training .axis-y{left:var(--edge)}
+  #training .status-line{
+    grid-template-columns:minmax(max-content,31%) minmax(0,1fr);
+    column-gap:var(--scene-gap)
+  }
+
+  #architecture .arch-canvas{left:var(--edge);width:var(--main-w)}
+  #architecture .arch-presence,#architecture .presence-caption,#architecture .arch-note,#architecture .arch-meta{
+    right:var(--edge);width:var(--rail)
+  }
+  #architecture .arch-presence svg{width:var(--presence-size)}
+
+  #email .email-frame{left:var(--edge);width:var(--main-w)}
+  #email .mail-meta,#email .subject,#email .mail-body{
+    left:calc(var(--edge) + 3.2cqw);
+    width:calc(var(--main-w) - 6.4cqw)
+  }
+  #email .email-presence,#email .presence-caption,#email .email-note,#email .mail-footer{
+    right:var(--edge);width:var(--rail)
+  }
+  #email .email-presence svg{width:var(--presence-size)}
+
+  .code-scene .code-shell{left:var(--edge);width:var(--main-w)}
+  .code-scene .code-title,.code-scene .code-file{left:var(--edge)}
+  .code-scene .code-presence,.code-scene .presence-caption,.code-scene .code-note,.code-scene .code-meta{
+    right:var(--edge);width:var(--rail)
+  }
+  .code-scene .code-presence svg{width:var(--presence-size)}
+  .code-scene pre{font-size:clamp(.72rem,min(.92cqw,1.72cqh),1rem)}
+
+  /* Conversation presence is centered inside the actual free band between the
+     upper registration line and the answer object. */
+  #conversation>.logo{
+    width:min(14.5cqw,29cqh);
+    left:50%;
+    top:25cqh;
+    transform:translate(-50%,-50%)
+  }
+
+  /* Tall composition is selected by shape alone. This works the same in an
+     browser window, embedded panel, rotated display, or any future viewport. */
+  @container stage (max-aspect-ratio: 1/1){
+    .scene{
+      --edge:5cqw;
+      --rail:28cqw;
+      --scene-gap:5cqw;
+      --presence-size:min(24cqw,16cqh);
+    }
+
+    #idle .logo,#listening .logo{width:min(42cqw,34cqh)}
+
+    #conversation>.logo{width:min(27cqw,20cqh);top:23cqh}
+    #conversation .answer-shell{width:88cqw;height:31cqh;top:53cqh}
+    #conversation .answer{font-size:clamp(1.08rem,min(3.35cqw,2.7cqh),1.75rem)}
+
+    #training .frame{left:5cqw;top:8cqh;width:90cqw;height:46cqh}
+    #training .chart{left:9cqw;top:14cqh;width:82cqw;height:33cqh}
+    #training .chart-title{left:9cqw;top:10.7cqh}
+    #training .axis-y{left:5.2cqw;top:17cqh}
+    #training .annotation{left:49cqw;top:20.5cqh;width:42cqw}
+    #training .metric-block{left:6cqw;right:auto;top:61cqh;width:57cqw;height:24cqh}
+    #training .right-presence{right:5cqw;top:60cqh;width:28cqw;height:19cqh}
+    #training .logo-caption{right:5cqw;top:78.6cqh;width:28cqw}
+    #training .status-line{left:6cqw;bottom:5.5cqh;width:88cqw;height:8.5cqh;grid-template-columns:minmax(max-content,38%) minmax(0,1fr);column-gap:2.2cqw}
+    #training .bottom-meta{right:5cqw;bottom:2.1cqh;width:28cqw}
+
+    #architecture .arch-canvas{left:3.5cqw;top:10.5cqh;width:93cqw;height:49cqh}
+    #architecture .arch-note{left:6cqw;right:auto;top:66cqh;width:61cqw}
+    #architecture .arch-presence{right:5cqw;top:64cqh;width:25cqw;height:19cqh}
+    #architecture .presence-caption{right:5cqw;top:82cqh;width:25cqw}
+    #architecture .arch-meta{right:5cqw;bottom:5.2cqh;width:25cqw}
+    #architecture .arch-presence svg{width:min(22cqw,15cqh)}
+
+    #email .email-frame{left:5cqw;top:6cqh;width:90cqw;height:58cqh}
+    #email .mail-meta{left:9cqw;top:9.5cqh;width:82cqw}
+    #email .subject{left:9cqw;top:16cqh;width:82cqw;font-size:clamp(1.45rem,min(4cqw,3.2cqh),2rem)}
+    #email .mail-body{left:9cqw!important;top:27cqh!important;width:82cqw!important;bottom:38cqh!important;font-size:clamp(.82rem,min(2.15cqw,1.75cqh),1.1rem)}
+    #email .email-note{left:7cqw;right:auto;top:69cqh;width:61cqw}
+    #email .email-presence{right:5cqw;top:67.5cqh;width:25cqw;height:18cqh}
+    #email .presence-caption{right:5cqw;top:84cqh;width:25cqw}
+    #email .mail-footer{right:5cqw;bottom:4.8cqh;width:25cqw}
+    #email .email-presence svg{width:min(22cqw,15cqh)}
+
+    .code-scene .code-title{left:5cqw;top:4.2cqh}
+    .code-scene .code-file{left:5cqw;top:7.1cqh}
+    .code-scene .code-shell{left:5cqw;top:10.5cqh;width:90cqw;height:54cqh}
+    .code-scene .code-note{left:7cqw;right:auto;top:69cqh;width:61cqw}
+    .code-scene .code-presence{right:5cqw;top:67cqh;width:25cqw;height:18cqh}
+    .code-scene .presence-caption{right:5cqw;top:83.6cqh;width:25cqw}
+    .code-scene .code-meta{right:5cqw;bottom:4.7cqh;width:25cqw}
+    .code-scene .code-presence svg{width:min(22cqw,15cqh)}
+    #code pre,#code-cut pre,#code-brackets pre{font-size:clamp(.82rem,min(1.85cqw,1.65cqh),1.12rem);line-height:1.52;min-width:max-content}
+  }
+
+  /* Extremely wide stages become height-constrained. Reduce only vertical
+     occupancy, based on aspect ratio rather than guessing a device. */
+  @container stage (min-aspect-ratio: 2/1){
+    #training .frame{top:9cqh;height:60cqh}
+    #training .chart{top:16cqh;height:44cqh}
+    #training .right-presence{top:7cqh;height:23cqh}
+    #training .metric-block{top:38cqh;height:38cqh}
+    #training .status-line{bottom:4cqh;height:13cqh}
+    #architecture .arch-canvas{top:14cqh;height:74cqh}
+    #email .email-frame{top:6cqh;height:86cqh}
+    .code-scene .code-shell{top:14cqh;height:75cqh}
+  }
+
+  /* V14.1: voice presence is anchored to the logo, not to nearby content.
+     The logo container stays still; only the artwork inside it floats. */
+  #idle .logo{animation:none!important;transform:translate(-50%,-50%)}
+  #idle .logo>svg{
+    animation:idle-presence-suspend 7.2s ease-in-out infinite;
+    transform-origin:50% 18%;
+  }
+  @keyframes idle-presence-suspend{
+    0%,100%{transform:translateY(-8px) rotate(-.18deg)}
+    50%{transform:translateY(9px) rotate(.18deg)}
+  }
+
+  /* The selected code viewport follows the actual lower-left rail geometry.
+     JS updates these points from the SVG path on every resize. */
+  #code .code-body{
+    clip-path:var(--rail-code-clip, polygon(0 0,100% 0,100% 100%,100% 100%,0 100%));
+  }
+
+
+  /* V14.3: let the selected code viewport use nearly the full frame height.
+     The irregular top-right and lower-left silhouette is still computed from
+     the actual frame geometry, so expanding the viewport does not weaken the
+     corner masking. */
+  #code .code-body{
+    inset:max(3px,.35cqh) max(18px,1.6cqw) max(3px,.35cqh) max(14px,1.05cqw);
+  }
+
+  /* V14.2: final fluid geometry polish. */
+
+  /* One footer baseline is part of the scene grammar, not a page-by-page guess. */
+  .scene{--meta-baseline:8.5cqh}
+  #training .bottom-meta,
+  #architecture .arch-meta,
+  #email .mail-footer,
+  .code-scene .code-meta{bottom:var(--meta-baseline)!important}
+
+  /* Conversation reserves enough room for Damocles + the fixed-offset voice
+     indicator as one presence group. */
+  #conversation>.logo{margin-top:var(--conversation-presence-shift,0px)}
+
+  @container stage (max-aspect-ratio:1/1){
+    .scene{--meta-baseline:4.7cqh}
+    #training .status-line{bottom:8.5cqh}
+  }
+
+  /* The code viewport silhouette is generated from the same frame polygon as
+     both the lower-left rise and the top-right indent. */
+  #code .code-body{
+    clip-path:var(--rail-code-clip,polygon(0 0,100% 0,100% 100%,0 100%));
+  }
+
+  /* V15 renderer/debug surfaces */
+  #sceneHost{position:absolute;inset:0}
+  #sceneHost>.scene{display:block}
+  .ir-drawer{position:fixed;z-index:95;right:1.2rem;top:1.2rem;width:min(46vw,620px);height:min(76vh,760px);display:none;background:rgba(0,0,0,.96);border:1px solid rgba(var(--orange-rgb),.48);clip-path:polygon(0 0,96% 0,100% 4%,100% 100%,0 100%);padding:42px 18px 18px;overflow:auto;box-shadow:0 0 0 1px rgba(232,230,223,.04) inset}
+  body.ir-open .ir-drawer{display:block}
+  .ir-title{position:absolute;left:18px;top:14px;color:var(--orange)}
+  .ir-drawer pre{margin:0;color:#BEBBB4;font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
+  .ir-hint{position:fixed;left:1.2rem;top:1.2rem;z-index:70;color:rgba(232,230,223,.18);pointer-events:none}
+  body.static .ir-hint{display:none}
+  .renderer-badge{position:fixed;left:50%;top:1.1rem;transform:translateX(-50%);z-index:70;color:rgba(232,230,223,.16);pointer-events:none}
+  body.static .renderer-badge{display:none}
+  .diagram-node text{pointer-events:none}
+  .focus-content .focus-code{overflow:auto;max-width:100%;max-height:72vh}
+  .focus-content .focus-code pre{white-space:pre;min-width:max-content}
+
+  /* V16 dev-only controller sandbox. Runtime protocol stays intentionally tiny. */
+  .controller-toggle{position:fixed;right:3.2vw;top:3vh;z-index:90;border:1px solid rgba(var(--orange-rgb),.32);background:#000;color:rgba(232,230,223,.45);padding:7px 10px;cursor:pointer}
+  .controller-toggle:hover{color:var(--orange);border-color:rgba(var(--orange-rgb),.65)}
+  .controller-panel{position:fixed;right:3.2vw;top:8vh;width:min(390px,88vw);max-height:82vh;overflow:auto;z-index:89;background:rgba(0,0,0,.96);border:1px solid rgba(var(--orange-rgb),.35);padding:14px;transform:translateX(calc(100% + 5vw));transition:transform .2s ease;box-shadow:0 0 0 1px rgba(232,230,223,.04) inset}
+  body.ctrl-open .controller-panel{transform:none}
+  .controller-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:12px;color:var(--orange)}
+  .controller-ops{color:rgba(232,230,223,.34);margin-top:3px}
+  .controller-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin:10px 0 12px}
+  .controller-panel button{border:1px solid rgba(232,230,223,.14);background:#050505;color:rgba(232,230,223,.68);padding:9px 8px;cursor:pointer;text-align:left}
+  .controller-panel button:hover{border-color:rgba(var(--orange-rgb),.55);color:var(--orange)}
+  .controller-panel textarea{width:100%;height:116px;resize:vertical;background:#030303;border:1px solid rgba(232,230,223,.14);color:#DAD7D1;padding:10px;outline:none;font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .controller-panel textarea:focus{border-color:rgba(var(--orange-rgb),.5)}
+  .controller-send{display:flex;gap:7px;margin-top:7px}.controller-send button{flex:1}
+  .controller-state{margin-top:12px;border-top:1px solid rgba(232,230,223,.1);padding-top:9px;color:rgba(232,230,223,.35);white-space:pre-wrap}
+  .controller-error{color:#F05B55!important}
+  @container stage (aspect-ratio < 1/1){.controller-toggle{right:4vw;top:2.3vh}.controller-panel{right:4vw;top:7vh;width:92vw;max-height:84vh}}
+
+</style></head><body><div class="stage">
+  <div id="sceneHost"></div>
+  <div id="globalVoiceIndicator" aria-hidden="true"><div class="bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="label tech micro">VOICE STREAM / ACTIVE</div></div>
+  <div class="focus-overlay" id="focusOverlay" aria-hidden="true"><div class="focus-header tech micro"><span id="focusLabel">FOCUS / PRIMARY</span><button class="focus-close tech micro">RETURN / ESC</button></div><div class="focus-content" id="focusContent"></div><div class="focus-footer tech micro">DISPLAY / FOCUS MODE <span class="muted">&nbsp;•&nbsp; INPUT / TOUCH + VOICE</span></div></div>
+  <div class="palette-toast tech micro" id="paletteToast">PALETTE / NERV RED</div>
+  <div class="scene-toast tech micro" id="sceneToast">01 / IDLE</div>
+  
+  <button class="controller-toggle tech micro" id="controllerToggle">CTRL</button>
+  <aside class="controller-panel" id="controllerPanel" aria-label="Controller sandbox">
+    <div class="controller-head tech micro"><div>V16 / ACTION CONTROLLER<div class="controller-ops">6 OPS / SHOW · HIDE · SAY · FOCUS · LISTEN · CLEAR</div></div><button id="controllerClose">CLOSE</button></div>
+    <div class="controller-grid tech micro">
+      <button data-ctrl="training">LOAD TRAINING</button><button data-ctrl="gpu">+ GPU</button>
+      <button data-ctrl="focus">FOCUS LOSS</button><button data-ctrl="say">ANNOTATE</button>
+      <button data-ctrl="compare">+ PREVIOUS RUN</button><button data-ctrl="hide-gpu">− GPU</button>
+      <button data-ctrl="listen">LISTEN</button><button data-ctrl="clear">CLEAR</button>
+    </div>
+    <textarea id="controllerInput" spellcheck="false">{"op":"show","id":"gpu","type":"metric","data":{"label":"GPU","value":"94%"}}</textarea>
+    <div class="controller-send tech micro"><button id="controllerSend">DISPATCH JSON</button><button id="controllerDemo">RUN DEMO</button></div>
+    <div class="controller-state tech micro" id="controllerState">STATE / IDLE</div>
+  </aside>
+  <div class="renderer-badge tech micro">V16 / SCENE CONTROLLER</div>
+  <div class="ir-hint tech micro">1–6 PRESETS / L LISTEN / J IR / C CTRL</div>
+  <aside class="ir-drawer" id="irDrawer"><div class="ir-title tech micro">CURRENT SCENE / JSON IR</div><pre id="irJson"></pre></aside>
+</div><script>
+const logoSVG=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 944 1133" aria-label="Switchboard glyph"><g fill="currentColor" shape-rendering="geometricPrecision"><polygon points="393,465 440,512 440,976 393,929"/><polygon points="461,533 479,551 479,1015 461,997"/><polygon points="442,176 460,176 460,440 442,422"/><polygon points="451,75 435,106 405,135 428,155 442,179 460,179 474,155 497,135 467,106"/><polygon points="235,327 335,327 707,699 641,699 335,393 301,393"/></g><polygon points="451,115 467,135 451,154 435,135" fill="#000"/></svg>`;
+const SCENES={
+  "idle": {
+    "id": "idle",
+    "layout": "idle",
+    "label": "IDLE",
+    "presence": {
+      "state": "idle",
+      "context": "GENERAL"
+    }
+  },
+  "conversation": {
+    "id": "conversation",
+    "layout": "conversation",
+    "label": "CONVERSATION",
+    "presence": {
+      "state": "speaking",
+      "context": "TRAINING DISCUSSION"
+    },
+    "response": {
+      "tag": "CURRENT RESPONSE / 01",
+      "segments": [
+        {
+          "text": "The divergence begins around "
+        },
+        {
+          "text": "epoch 32",
+          "accent": true
+        },
+        {
+          "text": ". Training loss keeps falling, but validation loss turns upward, so I’d inspect the learning-rate transition and the first batches after it."
+        }
+      ]
+    },
+    "channel": {
+      "name": "VOICE",
+      "mode": "HANDS-FREE"
+    },
+    "transcript": [
+      {
+        "speaker": "YOU",
+        "text": "How did the training run go?"
+      },
+      {
+        "speaker": "DAMOCLES",
+        "text": "The run is still healthy overall, but validation divergence begins around epoch 32."
+      },
+      {
+        "speaker": "YOU",
+        "text": "What would you check first?"
+      },
+      {
+        "speaker": "DAMOCLES",
+        "text": "I’d inspect the learning-rate transition and the first batches immediately after it. The training curve itself is still descending normally."
+      }
+    ]
+  },
+  "training": {
+    "id": "training",
+    "layout": "chart",
+    "label": "TRAINING",
+    "title": "RUN / GRAPE-AMODAL-04",
+    "subtitle": "TRAINING / LOSS TRACE / LIVE",
+    "presence": {
+      "state": "active",
+      "context": "TRAINING RUN"
+    },
+    "primary": {
+      "type": "line-chart",
+      "xLabel": "EPOCH",
+      "yLabel": "LOSS",
+      "xMax": 40,
+      "yMin": 0.08,
+      "yMax": 0.3,
+      "series": [
+        {
+          "name": "TRAIN LOSS",
+          "semantic": "green",
+          "values": [
+            0.277,
+            0.262,
+            0.249,
+            0.236,
+            0.225,
+            0.214,
+            0.204,
+            0.195,
+            0.186,
+            0.178,
+            0.17,
+            0.162,
+            0.155,
+            0.148,
+            0.142,
+            0.136,
+            0.131,
+            0.126,
+            0.121,
+            0.117,
+            0.113,
+            0.11,
+            0.108,
+            0.106,
+            0.105,
+            0.1041
+          ]
+        },
+        {
+          "name": "VAL LOSS",
+          "semantic": "orange",
+          "values": [
+            0.284,
+            0.269,
+            0.254,
+            0.24,
+            0.227,
+            0.216,
+            0.206,
+            0.197,
+            0.189,
+            0.181,
+            0.175,
+            0.169,
+            0.164,
+            0.159,
+            0.155,
+            0.152,
+            0.15,
+            0.151,
+            0.154,
+            0.158,
+            0.164,
+            0.171,
+            0.179,
+            0.188,
+            0.197,
+            0.1832
+          ]
+        }
+      ],
+      "marker": {
+        "x": 32,
+        "series": "VAL LOSS"
+      }
+    },
+    "annotation": {
+      "tag": "OBSERVATION / EPOCH 32+",
+      "segments": [
+        {
+          "text": "Validation loss turns upward here while training loss continues down. I’d inspect the "
+        },
+        {
+          "text": "learning-rate transition",
+          "accent": true,
+          "bold": true
+        },
+        {
+          "text": " and the first batches after it."
+        }
+      ]
+    },
+    "metrics": [
+      {
+        "label": "VAL LOSS",
+        "value": "0.1832",
+        "semantic": "orange"
+      },
+      {
+        "label": "TRAIN LOSS",
+        "value": "0.1041",
+        "semantic": "green"
+      },
+      {
+        "label": "LEARNING RATE",
+        "value": "1.2e-4"
+      },
+      {
+        "label": "GPU",
+        "value": "91%"
+      },
+      {
+        "label": "ETA",
+        "value": "01:42:18"
+      }
+    ],
+    "progress": {
+      "label": "EPOCH 41 / 80",
+      "detail": "ACTIVE / OPTIMIZER STEP 18442",
+      "value": 0.5125,
+      "text": "51.25% COMPLETE"
+    },
+    "meta": {
+      "primary": "DISPLAY / COMPOSED",
+      "secondary": "PRIMARY / LOSS TRACE"
+    }
+  },
+  "architecture": {
+    "id": "architecture",
+    "layout": "diagram",
+    "label": "ARCHITECTURE",
+    "title": "SYSTEM / CONTROL TRANSFER",
+    "subtitle": "SWITCHBOARD → PROJECT SESSION / ROUTING TRACE",
+    "presence": {
+      "state": "active",
+      "context": "SYSTEM MAP"
+    },
+    "graph": {
+      "nodes": [
+        {
+          "id": "damocles",
+          "label": "DAMOCLES",
+          "sub": "FRONT DESK / OPERATOR",
+          "detail": "CONTEXT / GENERAL",
+          "semantic": "orange"
+        },
+        {
+          "id": "session",
+          "label": "PROJECT SESSION",
+          "sub": "HEADLESS PI / SSH",
+          "detail": "CONTEXT / SWITCHBOARD",
+          "semantic": "paper"
+        },
+        {
+          "id": "planner",
+          "label": "PLANNER",
+          "sub": "PLAN IR / GENERATE",
+          "semantic": "green"
+        },
+        {
+          "id": "implementer",
+          "label": "IMPLEMENTER",
+          "sub": "PATCH / EXECUTE",
+          "semantic": "cyan"
+        },
+        {
+          "id": "pool",
+          "label": "SUBAGENT POOL",
+          "sub": "DELEGATED EXECUTION / PARALLEL",
+          "semantic": "paper"
+        }
+      ],
+      "edges": [
+        {
+          "from": "damocles",
+          "to": "session",
+          "semantic": "orange",
+          "active": true
+        },
+        {
+          "from": "session",
+          "to": "planner",
+          "semantic": "orange",
+          "active": true
+        },
+        {
+          "from": "session",
+          "to": "implementer",
+          "semantic": "orange"
+        },
+        {
+          "from": "planner",
+          "to": "pool",
+          "semantic": "green"
+        },
+        {
+          "from": "implementer",
+          "to": "pool",
+          "semantic": "cyan"
+        }
+      ]
+    },
+    "note": {
+      "tag": "CURRENT EXPLANATION / 01",
+      "segments": [
+        {
+          "text": "The voice does not change. "
+        },
+        {
+          "text": "Context moves.",
+          "accent": true,
+          "bold": true
+        },
+        {
+          "text": " Damocles routes the session into the project directory, then the project orchestrator delegates work without exposing those internal handoffs to you."
+        }
+      ]
+    },
+    "meta": {
+      "primary": "DISPLAY / SYSTEM MAP",
+      "secondary": "TRACE / ACTIVE ROUTE"
+    }
+  },
+  "email": {
+    "id": "email",
+    "layout": "document",
+    "label": "EMAIL",
+    "presence": {
+      "state": "active",
+      "context": "MAIL"
+    },
+    "document": {
+      "kind": "email",
+      "source": "MAIL / INBOX",
+      "from": "PROF. ARDEN",
+      "timestamp": "23 AUG 2026 / 01:14",
+      "subject": "Re: revised segmentation results and September submission",
+      "paragraphs": [
+        "Kayne,",
+        "I reviewed the new figures. The hidden-region results are much easier to follow now, and I agree that the residual correction should stay framed as a lightweight final-stage adjustment rather than a second model.",
+        "Please send me the updated draft once you have the new seed runs in place. I would also tighten the related-work paragraph before submission.",
+        "Best,\nArden"
+      ]
+    },
+    "note": {
+      "tag": "DAMOCLES / SUMMARY",
+      "segments": [
+        {
+          "text": "No action is required immediately. The only concrete request is to send the updated draft after the additional seed runs and tighten related work before submission."
+        }
+      ]
+    },
+    "meta": {
+      "primary": "CONTENT / ORIGINAL EMAIL",
+      "secondary": "CHROME / SWITCHBOARD"
+    }
+  },
+  "code": {
+    "id": "code",
+    "layout": "code",
+    "label": "CODE",
+    "title": "SOURCE / ROUTER",
+    "file": "apps/backend/src/session/router.ts / L41–57",
+    "presence": {
+      "state": "active",
+      "context": "CODE REVIEW"
+    },
+    "source": {
+      "language": "typescript",
+      "highlight": [
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "text": "export async function routeSession(request: RouteRequest) {\n  const project = await resolveProject(request.project);\n  const target = project.session ?? await createSession(project);\n\n  if (request.mode === \"coding\") {\n    await handoffContext({\n      source: request.context,\n      destination: target,\n      preserveVoice: true,\n    });\n  }\n\n  return attachTransport(target, {\n    ssh: project.host,\n    cwd: project.path,\n  });\n}"
+    },
+    "note": {
+      "tag": "DAMOCLES / L45–51",
+      "segments": [
+        {
+          "text": "This is the actual handoff boundary. "
+        },
+        {
+          "text": "The executor changes; the voice does not.",
+          "accent": true,
+          "bold": true
+        },
+        {
+          "text": " The rest of the function is transport plumbing."
+        }
+      ]
+    },
+    "meta": {
+      "primary": "FRAME / INTERRUPTED RAILS",
+      "secondary": "DISPLAY / SOURCE"
+    }
+  }
+};
+const ORDER=['idle','conversation','training','architecture','email','code'];
+const params=new URLSearchParams(location.search);
+const sceneHost=document.getElementById('sceneHost');
+const stage=document.querySelector('.stage');
+const sceneToast=document.getElementById('sceneToast');
+const paletteToast=document.getElementById('paletteToast');
+const focusOverlay=document.getElementById('focusOverlay');
+const focusContent=document.getElementById('focusContent');
+const focusLabel=document.getElementById('focusLabel');
+const irDrawer=document.getElementById('irDrawer');
+const irJson=document.getElementById('irJson');
+const globalVoiceIndicator=document.getElementById('globalVoiceIndicator');
+let currentId='idle',currentScene=null,sceneToastTimer,toastTimer,listeningAnchor=null,listeningExitTimer=null,gestureHandledAt=0;
+let geometryRefreshToken=0;
+const rateRampTokens=new WeakMap();
+
+if(params.get('static')==='1')document.body.classList.add('static');
+
+const palettes={
+ q:{name:'NERV RED',red:'#C61522',orange:'#F15A24',orangeRgb:'241,90,36',green:'#7FD63D',greenRgb:'127,214,61',cyan:'#5ED6D8',cyanRgb:'94,214,216',amber:'#FFB000',amberRgb:'255,176,0',type:'#D2A6FF'},
+ w:{name:'VIOLET',red:'#8E59E8',orange:'#A86BFF',orangeRgb:'168,107,255',green:'#78D7A0',greenRgb:'120,215,160',cyan:'#69D4F0',cyanRgb:'105,212,240',amber:'#E8B65B',amberRgb:'232,182,91',type:'#D9C1FF'},
+ e:{name:'COBALT',red:'#3277E8',orange:'#4B91FF',orangeRgb:'75,145,255',green:'#74D39A',greenRgb:'116,211,154',cyan:'#58CFEE',cyanRgb:'88,207,238',amber:'#EAB750',amberRgb:'234,183,80',type:'#B8CBFF'},
+ r:{name:'CRIMSON / VIOLET',red:'#C61522',orange:'#8F63FF',orangeRgb:'143,99,255',green:'#A98AFF',greenRgb:'169,138,255',cyan:'#62D2E1',cyanRgb:'98,210,225',amber:'#F0A944',amberRgb:'240,169,68',type:'#D9C4FF'},
+ t:{name:'INDIGO',red:'#5960E8',orange:'#7775FF',orangeRgb:'119,117,255',green:'#87D16D',greenRgb:'135,209,109',cyan:'#6AD2DF',cyanRgb:'106,210,223',amber:'#E8AD4A',amberRgb:'232,173,74',type:'#C4C7FF'},
+ y:{name:'MAGENTA',red:'#CF347F',orange:'#EB4F9A',orangeRgb:'235,79,154',green:'#81D577',greenRgb:'129,213,119',cyan:'#62D2D8',cyanRgb:'98,210,216',amber:'#EFB24A',amberRgb:'239,178,74',type:'#F0BCD8'},
+ i:{name:'ICE',red:'#2CBBD8',orange:'#4DCCE9',orangeRgb:'77,204,233',green:'#79D49B',greenRgb:'121,212,155',cyan:'#6C9FFF',cyanRgb:'108,159,255',amber:'#D9C36B',amberRgb:'217,195,107',type:'#B8E8F4'},
+ o:{name:'PHOSPHOR',red:'#7FCC42',orange:'#99DF50',orangeRgb:'153,223,80',green:'#5DD18A',greenRgb:'93,209,138',cyan:'#59C9CE',cyanRgb:'89,201,206',amber:'#E4C14D',amberRgb:'228,193,77',type:'#C9EFB2'},
+ p:{name:'MONO',red:'#D8D7D1',orange:'#E8E6DF',orangeRgb:'232,230,223',green:'#AEB5A8',greenRgb:'174,181,168',cyan:'#B7C7C9',cyanRgb:'183,199,201',amber:'#C8BE9A',amberRgb:'200,190,154',type:'#D8D2E5'}
+};
+const paletteOrder=['q','w','e','r','t','y','i','o','p'];
+let currentPaletteKey=params.get('palette')||'q';
+
+function esc(s=''){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function rich(segments=[]){return segments.map(s=>{let t=esc(s.text);if(s.bold)t=`<strong>${t}</strong>`;if(s.accent)t=`<span class="accent">${t}</span>`;return t}).join('')}
+function logo(cls='logo'){return `<div class="${cls}" data-logo>${logoSVG}</div>`}
+function presenceCaption(context){return `VOICE / ACTIVE<br><span class="muted">CONTEXT / ${esc(context||'GENERAL')}</span>`}
+function metaBlock(meta){return `${esc(meta?.primary||'DISPLAY / COMPOSED')}<br><span class="muted">${esc(meta?.secondary||'TRACE / ACTIVE')}</span>`}
+
+function chartSvg(chart,preserve='none'){
+ const W=1000,H=500,pad={l:0,r:0,t:12,b:10};
+ const n=Math.max(...chart.series.map(s=>s.values.length));
+ const xAt=i=>pad.l+(i/(Math.max(1,n-1)))*(W-pad.l-pad.r);
+ const yAt=v=>pad.t+(1-(v-chart.yMin)/(chart.yMax-chart.yMin))*(H-pad.t-pad.b-12);
+ const gridY=[.3,.2,.1].filter(v=>v>=chart.yMin&&v<=chart.yMax);
+ let svg=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid ${preserve}">`;
+ svg+=`<g stroke="rgba(232,230,223,.105)" stroke-width="1">${gridY.map(v=>`<line x1="0" y1="${yAt(v)}" x2="1000" y2="${yAt(v)}"/>`).join('')}</g>`;
+ svg+=`<g stroke="rgba(232,230,223,.065)" stroke-width="1">${[.125,.25,.375,.5,.625,.75,.875].map(f=>`<line x1="${W*f}" y1="0" x2="${W*f}" y2="500"/>`).join('')}</g>`;
+ chart.series.forEach(s=>{const pts=s.values.map((v,i)=>`${xAt(i).toFixed(1)},${yAt(v).toFixed(1)}`).join(' ');svg+=`<polyline points="${pts}" fill="none" stroke="var(--${s.semantic||'orange'})" stroke-width="${s.semantic==='orange'?2.5:2.1}"/>`});
+ if(chart.marker){const idx=Math.round((chart.marker.x/chart.xMax)*(n-1));const series=chart.series.find(s=>s.name===chart.marker.series)||chart.series[0];const mx=xAt(idx),my=yAt(series.values[idx]);svg+=`<line x1="${mx}" y1="0" x2="${mx}" y2="500" stroke="rgba(var(--amber-rgb),.55)" stroke-width="1" stroke-dasharray="4 5"/><circle cx="${mx}" cy="${my}" r="4.5" fill="#000" stroke="var(--orange)" stroke-width="2"/>`}
+ svg+=`<g fill="rgba(232,230,223,.30)" font-family="ui-monospace,monospace" font-size="11" letter-spacing="1.4"><text x="0" y="498">0</text><text x="242" y="498">10</text><text x="492" y="498">20</text><text x="742" y="498">30</text><text x="970" y="498">40</text>${gridY.map(v=>`<text x="8" y="${Math.max(13,yAt(v)-6)}">${v.toFixed(2)}</text>`).join('')}</g></svg>`;
+ return svg;
+}
+
+function metricHtml(metrics){return metrics.map(m=>`<div class="metric"><div class="label tech micro">${esc(m.label)}</div><div class="value ${m.semantic==='orange'?'primary':m.semantic==='green'?'good':''}">${esc(m.value)}</div></div>`).join('')}
+
+function computeLevels(graph){
+ const incoming=new Map(graph.nodes.map(n=>[n.id,0]));graph.edges.forEach(e=>incoming.set(e.to,(incoming.get(e.to)||0)+1));
+ const level=new Map(),q=graph.nodes.filter(n=>(incoming.get(n.id)||0)===0).map(n=>n.id);q.forEach(id=>level.set(id,0));
+ while(q.length){const id=q.shift(),l=level.get(id)||0;for(const e of graph.edges.filter(e=>e.from===id)){level.set(e.to,Math.max(level.get(e.to)||0,l+1));incoming.set(e.to,incoming.get(e.to)-1);if(incoming.get(e.to)===0)q.push(e.to)}}
+ graph.nodes.forEach(n=>{if(!level.has(n.id))level.set(n.id,0)});return level;
+}
+function graphLayout(graph,orientation){
+ const vb=orientation==='portrait'?{w:760,h:980}:{w:1200,h:700};const levels=computeLevels(graph),max=Math.max(...levels.values());
+ const groups=[];for(let i=0;i<=max;i++)groups.push(graph.nodes.filter(n=>levels.get(n.id)===i));
+ const pos=new Map();
+ if(orientation==='landscape'){
+   const x0=70,x1=915,nodeW=245,nodeH=104;groups.forEach((g,li)=>{const x=x0+(li/Math.max(1,max))*x1;const usable=520;g.forEach((n,j)=>{const y=140+(j+1)*(usable/(g.length+1))-nodeH/2;pos.set(n.id,{x,y,w:nodeW,h:nodeH})})});
+ }else{
+   const y0=90,y1=700,nodeW=300,nodeH=106;groups.forEach((g,li)=>{const y=y0+(li/Math.max(1,max))*y1;const span=570;g.forEach((n,j)=>{const x=80+(j+1)*(span/(g.length+1))-nodeW/2;pos.set(n.id,{x,y,w:nodeW,h:nodeH})})});
+ }
+ return {vb,pos};
+}
+function edgePath(a,b,orientation){
+ if(orientation==='landscape'){const x1=a.x+a.w,y1=a.y+a.h/2,x2=b.x,y2=b.y+b.h/2,m=(x1+x2)/2;return `M${x1} ${y1} H${m} V${y2} H${x2}`}
+ const x1=a.x+a.w/2,y1=a.y+a.h,x2=b.x+b.w/2,y2=b.y,m=(y1+y2)/2;return `M${x1} ${y1} V${m} H${x2} V${y2}`
+}
+function diagramSvg(graph,orientation='landscape'){
+ const {vb,pos}=graphLayout(graph,orientation);let s=`<svg viewBox="0 0 ${vb.w} ${vb.h}">`;
+ s+=`<g fill="none" stroke="rgba(232,230,223,.10)" stroke-width="1"><path d="M40 42 H${vb.w*.46} L${vb.w*.49} 70 H${vb.w-45}"/><path d="M70 ${vb.h-48} H${vb.w*.75} L${vb.w*.78} ${vb.h-76} H${vb.w-40}"/></g>`;
+ for(const e of graph.edges){const a=pos.get(e.from),b=pos.get(e.to),sem=e.semantic||'paper',stroke=sem==='paper'?'rgba(232,230,223,.28)':`var(--${sem})`;const path=edgePath(a,b,orientation);s+=`<path d="${path}" fill="none" stroke="${stroke}" stroke-opacity=".55" stroke-width="1.4"/>`;if(e.active)s+=`<path d="${path}" class="flow-pulse" fill="none" stroke="var(--amber)" stroke-opacity=".52" stroke-width="1.2" stroke-dasharray="7 8"/>`}
+ s+=`<g font-family="ui-monospace,monospace">`;
+ for(const n of graph.nodes){const p=pos.get(n.id),sem=n.semantic||'paper',stroke=sem==='paper'?'rgba(232,230,223,.28)':`rgba(var(--${sem}-rgb),.50)`,text=sem==='paper'?'#E8E6DF':`var(--${sem})`;s+=`<g class="diagram-node" transform="translate(${p.x} ${p.y})"><path d="M0 0 H${p.w-22} L${p.w} 22 V${p.h} H0 Z" fill="#000" stroke="${stroke}"/><text x="20" y="34" fill="${text}" font-size="${orientation==='portrait'?15:13}" letter-spacing="2">${esc(n.label)}</text><text x="20" y="64" fill="rgba(232,230,223,.48)" font-size="${orientation==='portrait'?12:11}">${esc(n.sub||'')}</text>${n.detail?`<text x="20" y="85" fill="rgba(232,230,223,.28)" font-size="10">${esc(n.detail)}</text>`:''}</g>`}
+ s+=`</g></svg>`;return s;
+}
+
+function highlightLine(line){
+ const re=/("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|\b(export|async|function|const|await|if|return|true|false)\b|\b([A-Z][A-Za-z0-9_]*)\b|\b([a-zA-Z_$][\w$]*)(?=\()/g;
+ let out='',last=0,m;while((m=re.exec(line))){out+=esc(line.slice(last,m.index));const token=esc(m[0]);out+=m[1]?`<span class="str">${token}</span>`:m[2]?`<span class="kw">${token}</span>`:m[3]?`<span class="type">${token}</span>`:`<span class="fn">${token}</span>`;last=m.index+m[0].length}out+=esc(line.slice(last));return out;
+}
+function codeHtml(source){const hot=new Set(source.highlight||[]);return source.text.split('\n').map((line,i)=>`<span class="code-line ${hot.has(i+1)?'hot':''}">${highlightLine(line)}</span>`).join('\n')}
+
+function renderIdle(scene){return `<section class="scene active" id="idle">${logo()}</section>`}
+function renderConversation(scene){
+ const transcript=scene.transcript.map(m=>`<div class="chat-line ${m.speaker==='DAMOCLES'?'ai':''}"><span class="who tech micro ${m.speaker==='DAMOCLES'?'orange':''}">${esc(m.speaker)}</span>${esc(m.text)}</div>`).join('');
+ return `<section class="scene active" id="conversation"><div class="corner-a"><svg viewBox="0 0 320 140" preserveAspectRatio="none"><path d="M0 36 H52 V0 M52 16 H220 L250 46 H320" fill="none" stroke="currentColor" stroke-width="1"/></svg></div><div class="corner-b"><svg viewBox="0 0 260 110" preserveAspectRatio="none"><path d="M260 64 H202 V110 M202 91 H50 L18 59 H0" fill="none" stroke="currentColor" stroke-width="1"/></svg></div>${logo()}<div class="answer-shell"><div class="answer-tag tech micro">${esc(scene.response.tag)}</div><div class="answer">${rich(scene.response.segments)}</div><div class="answer-index tech micro">VOICE / OUTPUT ACTIVE</div></div><div class="side-index tech micro">CONTEXT / ${esc(scene.presence.context)}</div><div class="channel-label tech micro">CHANNEL / ${esc(scene.channel.name)}<br><span class="muted">MODE / ${esc(scene.channel.mode)}</span></div><button class="transcript-toggle tech micro" data-action="open-transcript">Transcript hidden</button><div class="transcript-panel"><div class="chat-logo">${logoSVG}</div><div class="chat-header tech micro">DAMOCLES / CONVERSATION<br><span class="muted">TRANSCRIPT / EXPANDED</span></div><button class="chat-close tech micro" data-action="close-transcript">Collapse transcript</button><div class="chat-frame">${transcript}</div><input class="chat-input tech" placeholder="TYPE TO DAMOCLES" aria-label="Message Damocles"/></div></section>`
+}
+function renderTraining(scene){
+ const p=scene.progress;
+ return `<section class="scene active" id="training"><div class="run-label tech">${esc(scene.title)}</div><div class="chart-title tech micro">${esc(scene.subtitle)}</div><div class="axis-y tech micro">${esc(scene.primary.yLabel)}</div><div class="frame"><svg viewBox="0 0 1000 620" preserveAspectRatio="none"><path d="M0 36 V0 H788 L812 24 H1000 V78" fill="none" stroke="rgba(var(--orange-rgb),.64)" stroke-width="1.2"/><path d="M1000 128 V620 H922" fill="none" stroke="rgba(var(--orange-rgb),.34)"/><path d="M864 620 H112 L88 596 H0 V532" fill="none" stroke="rgba(232,230,223,.32)"/><path d="M0 478 V126" fill="none" stroke="rgba(232,230,223,.15)"/></svg></div><div class="chart focusable" data-focus="training-chart">${chartSvg(scene.primary)}</div><div class="annotation focusable" data-focus="summary"><div class="tag tech micro">${esc(scene.annotation.tag)}</div><div class="speech">${rich(scene.annotation.segments)}</div></div><div class="right-presence">${logo()}</div><div class="logo-caption tech micro">${presenceCaption(scene.presence.context)}</div><div class="metric-block focusable" data-focus="training-metrics">${metricHtml(scene.metrics)}</div><div class="status-line"><div class="big">${esc(p.label)}</div><div class="small tech micro">${esc(p.detail)}</div><div class="progress"><i style="width:${Math.max(0,Math.min(1,p.value))*100}%"></i></div><div class="progress-label tech micro">${esc(p.text)}</div></div><div class="bottom-meta tech micro">${metaBlock(scene.meta)}</div></section>`
+}
+function renderArchitecture(scene){return `<section class="scene active" id="architecture"><div class="title tech">${esc(scene.title)}</div><div class="sub tech micro">${esc(scene.subtitle)}</div><div class="arch-canvas landscape-graph focusable" data-focus="architecture">${diagramSvg(scene.graph,'landscape')}</div><div class="arch-canvas portrait-graph focusable" data-focus="architecture">${diagramSvg(scene.graph,'portrait')}</div><div class="arch-presence" data-logo>${logoSVG}</div><div class="presence-caption tech micro">${presenceCaption(scene.presence.context)}</div><div class="arch-note focusable" data-focus="summary"><div class="tech micro" style="color:rgba(232,230,223,.32);margin-bottom:10px">${esc(scene.note.tag)}</div>${rich(scene.note.segments)}</div><div class="arch-meta tech micro">${metaBlock(scene.meta)}</div></section>`}
+function renderEmail(scene){const d=scene.document,paras=d.paragraphs.map(p=>`<p>${esc(p).replace(/\n/g,'<br>')}</p>`).join('');return `<section class="scene active" id="email"><div class="email-frame focusable" data-focus="email"><svg viewBox="0 0 1000 800" preserveAspectRatio="none"><path d="M0 52 V0 H792 L820 28 H1000 V110" fill="none" stroke="rgba(var(--orange-rgb),.55)"/><path d="M1000 162 V800 H900" fill="none" stroke="rgba(232,230,223,.20)"/><path d="M845 800 H126 L98 772 H0 V700" fill="none" stroke="rgba(232,230,223,.23)"/><path d="M0 640 V132" fill="none" stroke="rgba(232,230,223,.12)"/></svg></div><div class="mail-meta tech micro">${esc(d.source)}<br><span class="muted">FROM / ${esc(d.from)} &nbsp;&nbsp; ${esc(d.timestamp)}</span></div><div class="subject focusable" data-focus="email">${esc(d.subject)}</div><div class="mail-body focusable" data-focus="email">${paras}</div><div class="email-presence" data-logo>${logoSVG}</div><div class="presence-caption tech micro">${presenceCaption(scene.presence.context)}</div><div class="email-note focusable" data-focus="summary"><div class="tag tech micro">${esc(scene.note.tag)}</div>${rich(scene.note.segments)}</div><div class="mail-footer tech micro">${metaBlock(scene.meta)}</div></section>`}
+function renderCode(scene){return `<section class="scene active code-scene" id="code"><div class="code-title tech">${esc(scene.title)}</div><div class="code-file tech micro">${esc(scene.file)}</div><div class="code-shell focusable" data-focus="code"><svg class="code-border" viewBox="0 0 1000 700" preserveAspectRatio="none" fill="none" stroke-width="1"><path class="border-primary" d="M2 88 V2 H245 M306 2 H864 L902 40 H998 V102"/><path class="border-secondary" d="M998 162 V566 M998 626 V698 H806 M744 698 H172 L142 668 H2 V602"/><path class="border-secondary" d="M2 536 V154" opacity=".68"/></svg><div class="code-body"><pre><code>${codeHtml(scene.source)}</code></pre></div></div><div class="code-presence" data-logo>${logoSVG}</div><div class="presence-caption tech micro">${presenceCaption(scene.presence.context)}</div><div class="code-note focusable" data-focus="summary"><div class="tag tech micro">${esc(scene.note.tag)}</div>${rich(scene.note.segments)}</div><div class="code-meta tech micro">${metaBlock(scene.meta)}</div></section>`}
+
+const renderers={idle:renderIdle,conversation:renderConversation,chart:renderTraining,diagram:renderArchitecture,document:renderEmail,code:renderCode};
+function renderScene(input,{announce=false,persist=true}={}){
+ const scene=typeof input==='string'?SCENES[input]:input;if(!scene)throw new Error('Unknown scene');
+ if(document.body.classList.contains('listening-active'))setListening(false);
+ currentScene=structuredClone(scene);currentId=scene.id||'custom';
+ const fn=renderers[currentScene.layout];if(!fn)throw new Error(`No renderer for layout ${currentScene.layout}`);
+ sceneHost.innerHTML=fn(currentScene);irJson.textContent=JSON.stringify(currentScene,null,2);
+ if(persist){const p=new URLSearchParams(location.search);p.set('scene',currentId);history.replaceState(null,'','?'+p.toString())}
+ if(announce)announceScene(currentId);
+ scheduleGeometryRefresh();return currentScene;
+}
+function announceScene(id){const i=ORDER.indexOf(id);sceneToast.textContent=`${String(Math.max(0,i)+1).padStart(2,'0')} / ${(SCENES[id]?.label||id).toUpperCase()}`;clearTimeout(sceneToastTimer);sceneToast.classList.add('show');sceneToastTimer=setTimeout(()=>sceneToast.classList.remove('show'),900)}
+function setPalette(key,quiet=false){key=palettes[key]?key:'q';currentPaletteKey=key;const pal=palettes[key],root=document.documentElement.style;root.setProperty('--red',pal.red);root.setProperty('--orange',pal.orange);root.setProperty('--orange-rgb',pal.orangeRgb);root.setProperty('--green',pal.green);root.setProperty('--green-rgb',pal.greenRgb);root.setProperty('--cyan',pal.cyan);root.setProperty('--cyan-rgb',pal.cyanRgb);root.setProperty('--amber',pal.amber);root.setProperty('--amber-rgb',pal.amberRgb);root.setProperty('--type-accent',pal.type);paletteToast.textContent='PALETTE / '+pal.name;if(!quiet){clearTimeout(toastTimer);paletteToast.classList.add('show');toastTimer=setTimeout(()=>paletteToast.classList.remove('show'),1000)}}
+
+function rampPresenceRate(anchor,targetRate,duration=520){if(!anchor)return;const candidates=[anchor,anchor.querySelector?.('svg')].filter(Boolean);let owner=null,anim=null;for(const c of candidates){anim=c.getAnimations().find(a=>['presence-suspend','suspended','idle-presence-suspend'].includes(a.animationName));if(anim){owner=c;break}}if(!anim||!owner)return;const token={};rateRampTokens.set(owner,token);const startRate=anim.playbackRate||1,start=performance.now(),ease=t=>t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2;const step=now=>{if(rateRampTokens.get(owner)!==token)return;const t=Math.min(1,(now-start)/duration);anim.updatePlaybackRate(startRate+(targetRate-startRate)*ease(t));if(t<1)requestAnimationFrame(step)};requestAnimationFrame(step)}
+function updateConversationPresenceGeometry(){const scene=document.getElementById('conversation'),logo=scene?.querySelector(':scope > .logo'),answer=scene?.querySelector('.answer-shell');if(!scene||!logo||!answer)return;scene.style.setProperty('--conversation-presence-shift','0px');const lr=logo.getBoundingClientRect(),ar=answer.getBoundingClientRect(),indicatorHeight=44,gap=Math.max(6,Math.min(12,lr.height*.045)),safe=Math.max(8,Math.min(16,lr.height*.055));const requiredBottom=lr.bottom+gap+indicatorHeight+safe,shift=Math.min(0,ar.top-requiredBottom);scene.style.setProperty('--conversation-presence-shift',`${shift.toFixed(2)}px`)}
+function positionVoiceIndicator(anchor){if(!anchor)return;const scene=anchor.closest('.scene');if(scene?.id==='conversation')updateConversationPresenceGeometry();const r=anchor.getBoundingClientRect(),compact=scene?.id!=='conversation'&&scene?.id!=='idle',gap=Math.max(6,Math.min(12,r.height*.045));globalVoiceIndicator.classList.toggle('compact',compact);globalVoiceIndicator.style.left=(r.left+r.width/2)+'px';globalVoiceIndicator.style.top=(r.bottom+gap)+'px'}
+function setListening(on,anchor=null){const previous=listeningAnchor;if(listeningExitTimer){clearTimeout(listeningExitTimer);listeningExitTimer=null}if(on){document.body.classList.remove('voice-exiting');document.body.classList.add('listening-active');listeningAnchor=anchor||document.querySelector('.scene [data-logo]:not(.chat-logo)');rampPresenceRate(listeningAnchor,3,560);positionVoiceIndicator(listeningAnchor)}else{document.body.classList.remove('listening-active');document.body.classList.add('voice-exiting');if(previous)rampPresenceRate(previous,1,620);listeningExitTimer=setTimeout(()=>{document.body.classList.remove('voice-exiting');listeningAnchor=null;globalVoiceIndicator.classList.remove('compact')},300)}}
+
+function clipPolygonToRect(poly,rect){const edges=[{inside:p=>p.x>=rect.left,intersect:(a,b)=>{const t=(rect.left-a.x)/(b.x-a.x);return{x:rect.left,y:a.y+t*(b.y-a.y)}}},{inside:p=>p.x<=rect.right,intersect:(a,b)=>{const t=(rect.right-a.x)/(b.x-a.x);return{x:rect.right,y:a.y+t*(b.y-a.y)}}},{inside:p=>p.y>=rect.top,intersect:(a,b)=>{const t=(rect.top-a.y)/(b.y-a.y);return{x:a.x+t*(b.x-a.x),y:rect.top}}},{inside:p=>p.y<=rect.bottom,intersect:(a,b)=>{const t=(rect.bottom-a.y)/(b.y-a.y);return{x:a.x+t*(b.x-a.x),y:rect.bottom}}}];let out=poly;for(const edge of edges){const input=out;out=[];if(!input.length)break;let a=input[input.length-1];for(const b of input){const ain=edge.inside(a),bin=edge.inside(b);if(bin){if(!ain)out.push(edge.intersect(a,b));out.push(b)}else if(ain)out.push(edge.intersect(a,b));a=b}}return out}
+function updateCodeClip(){const shell=document.querySelector('#code .code-shell'),body=document.querySelector('#code .code-body');if(!shell||!body)return;const s=shell.getBoundingClientRect(),b=body.getBoundingClientRect();if(!s.width||!s.height||!b.width||!b.height)return;const frameSvg=[[2,2],[864,2],[902,40],[998,40],[998,698],[172,698],[142,668],[2,668]],framePx=frameSvg.map(([x,y])=>({x:s.left+x/1000*s.width,y:s.top+y/700*s.height})),clipped=clipPolygonToRect(framePx,{left:b.left,top:b.top,right:b.right,bottom:b.bottom});if(clipped.length<3)return;body.style.setProperty('--rail-code-clip',`polygon(${clipped.map(pt=>`${(((pt.x-b.left)/b.width)*100).toFixed(3)}% ${(((pt.y-b.top)/b.height)*100).toFixed(3)}%`).join(',')})`)}
+function refreshGeometry(){updateConversationPresenceGeometry();if(document.body.classList.contains('listening-active'))positionVoiceIndicator(listeningAnchor);updateCodeClip()}
+function scheduleGeometryRefresh(){const token=++geometryRefreshToken;requestAnimationFrame(()=>requestAnimationFrame(()=>{if(token===geometryRefreshToken)refreshGeometry()}))}
+
+function setTranscript(open){const c=document.getElementById('conversation');if(!c)return;c.classList.toggle('expanded',open);if(open&&document.body.classList.contains('listening-active'))setListening(false)}
+function openFocus(kind,source=null){focusContent.innerHTML='';let node=null,label='FOCUS / PRIMARY';if(kind==='training-chart'){label='FOCUS / LOSS TRACE';node=document.createElement('div');node.className='focus-chart';node.innerHTML=chartSvg(currentScene.primary,'meet')}else if(kind==='training-metrics'){label='FOCUS / RUN METRICS';node=document.createElement('div');node.className='focus-metrics';node.innerHTML=metricHtml(currentScene.metrics)}else if(kind==='architecture'){label='FOCUS / SYSTEM MAP';node=document.createElement('div');node.className='focus-diagram';node.innerHTML=diagramSvg(currentScene.graph,innerWidth>=innerHeight?'landscape':'portrait')}else if(kind==='email'){label='FOCUS / MAIL';const d=currentScene.document;node=document.createElement('div');node.className='focus-document';node.innerHTML=`<div class="f-meta tech micro">${esc(d.source)}<br><span class="muted">FROM / ${esc(d.from)} &nbsp;&nbsp; ${esc(d.timestamp)}</span></div><div class="f-subject">${esc(d.subject)}</div><div class="f-body">${d.paragraphs.map(p=>`<p>${esc(p).replace(/\n/g,'<br>')}</p>`).join('')}</div>`}else if(kind==='summary'){label='FOCUS / EXPLANATION';node=document.createElement('div');node.className='focus-summary';node.innerHTML=source?.innerHTML||''}else if(kind==='code'){label='FOCUS / SOURCE';node=document.createElement('div');node.className='focus-code';node.innerHTML=`<pre><code>${codeHtml(currentScene.source)}</code></pre>`}if(!node)return;focusLabel.textContent=label;focusContent.appendChild(node);focusOverlay.classList.add('open');focusOverlay.setAttribute('aria-hidden','false');if(document.body.classList.contains('listening-active'))setListening(false)}
+function closeFocus(){focusOverlay.classList.remove('open');focusOverlay.setAttribute('aria-hidden','true');focusContent.innerHTML=''}
+function deepMerge(a,b){if(Array.isArray(b))return structuredClone(b);if(!b||typeof b!=='object')return b;const out=structuredClone(a||{});for(const [k,v] of Object.entries(b))out[k]=v&&typeof v==='object'&&!Array.isArray(v)?deepMerge(out[k],v):structuredClone(v);return out}
+function patchScene(patch){return renderScene(deepMerge(currentScene,patch),{persist:false})}
+function toggleIR(force){document.body.classList.toggle('ir-open',force??!document.body.classList.contains('ir-open'))}
+
+
+/* --------------------------------------------------------------------------
+   V16 CONTROLLER
+   Model-facing protocol is intentionally six operations only:
+   show, hide, say, focus, listen, clear.
+   Layout names, pixels, breakpoints, and renderer internals never cross this API.
+   -------------------------------------------------------------------------- */
+const controllerState={objects:{},speech:null};
+const controllerPanel=document.getElementById('controllerPanel');
+const controllerToggle=document.getElementById('controllerToggle');
+const controllerClose=document.getElementById('controllerClose');
+const controllerInput=document.getElementById('controllerInput');
+const controllerSend=document.getElementById('controllerSend');
+const controllerDemo=document.getElementById('controllerDemo');
+const controllerStateEl=document.getElementById('controllerState');
+let controllerDemoToken=0,controllerPreset='idle';
+const clone=x=>structuredClone(x);
+const textSegments=text=>[{text:String(text||'')}];
+function controllerObjects(){return Object.values(controllerState.objects)}
+function setControllerObject(o){if(!o?.id||!o?.type)throw new Error('show requires id + type');controllerState.objects[o.id]=clone(o)}
+function controllerSummary(){const ids=controllerObjects().map(o=>o.id+':'+o.type);controllerStateEl.classList.remove('controller-error');controllerStateEl.textContent='STATE / '+(ids.length?ids.join(' · '):'IDLE')+(controllerState.speech?'\nSAY / '+controllerState.speech.text:'')}
+function defaultNote(context='CURRENT CONTEXT'){return{tag:'DAMOCLES / '+context,segments:textSegments('Ready.') }}
+function semanticSeries(series,prefix=''){return (series||[]).map(s=>({...clone(s),name:prefix?prefix+' '+s.name:s.name}))}
+function composeControllerScene(){
+ const all=controllerObjects();
+ if(!all.length&&!controllerState.speech)return clone(SCENES.idle);
+ const lastPrimary=[...all].reverse().find(o=>o.role==='primary');
+ const primary=lastPrimary||[...all].reverse().find(o=>['chart','diagram','document','code','message'].includes(o.type));
+ if(!primary){return{...clone(SCENES.conversation),id:'controller',label:'CONTROLLER',response:{tag:'CURRENT RESPONSE / LIVE',segments:textSegments(controllerState.speech?.text||'Nothing is currently displayed.')},transcript:[]}}
+ if(primary.type==='message'){
+   const base=clone(SCENES.conversation),d=primary.data||{};base.id='controller';base.label='CONVERSATION';base.presence.context=d.context||'GENERAL';base.response={tag:d.tag||'CURRENT RESPONSE / LIVE',segments:d.segments||textSegments(d.text||controllerState.speech?.text||'')};base.transcript=d.transcript||[];return base;
+ }
+ if(primary.type==='chart'){
+   const base=clone(SCENES.training),charts=all.filter(o=>o.type==='chart'),metrics=all.filter(o=>o.type==='metric').map(o=>clone(o.data)),progress=all.find(o=>o.type==='progress');
+   base.id='controller';base.label='COMPOSED';base.title=primary.data?.title||'DISPLAY / LIVE DATA';base.subtitle=primary.data?.subtitle||'TRACE / COMPOSED';
+   const merged=clone(primary.data);merged.series=[];for(const ch of charts){const prefix=ch.id===primary.id?'':(ch.data?.compareLabel||ch.id.toUpperCase());merged.series.push(...semanticSeries(ch.data?.series,prefix))}base.primary=merged;
+   base.metrics=metrics.length?metrics:[];if(progress)base.progress=clone(progress.data);else base.progress={label:'LIVE',detail:'STREAM / ACTIVE',value:0,text:'NO COMPLETION TARGET'};
+   const note=all.find(o=>o.type==='note');const speech=controllerState.speech;if(speech?.at)base.primary.marker=clone(speech.at);base.annotation= speech?{tag:speech.target?'DAMOCLES / '+speech.target.toUpperCase():'DAMOCLES / OBSERVATION',segments:textSegments(speech.text)}:(note?clone(note.data):defaultNote('OBSERVATION'));
+   base.presence.context=primary.data?.context||'LIVE DATA';base.meta={primary:'DISPLAY / COMPOSED',secondary:charts.length>1?'COMPARE / ACTIVE':'PRIMARY / TRACE'};return base;
+ }
+ if(primary.type==='diagram'){
+   const base=clone(SCENES.architecture),note=all.find(o=>o.type==='note');base.id='controller';base.label='DIAGRAM';base.title=primary.data?.title||'SYSTEM / DIAGRAM';base.subtitle=primary.data?.subtitle||'GRAPH / COMPOSED';base.graph=clone(primary.data?.graph||primary.data);base.note=controllerState.speech?{tag:'DAMOCLES / EXPLANATION',segments:textSegments(controllerState.speech.text)}:(note?clone(note.data):defaultNote('EXPLANATION'));base.presence.context=primary.data?.context||'SYSTEM MAP';return base;
+ }
+ if(primary.type==='document'){
+   const base=clone(SCENES.email),note=all.find(o=>o.type==='note');base.id='controller';base.label='DOCUMENT';base.document=clone(primary.data);base.note=controllerState.speech?{tag:'DAMOCLES / SUMMARY',segments:textSegments(controllerState.speech.text)}:(note?clone(note.data):defaultNote('SUMMARY'));base.presence.context=primary.data?.context||'DOCUMENT';return base;
+ }
+ if(primary.type==='code'){
+   const base=clone(SCENES.code),note=all.find(o=>o.type==='note');base.id='controller';base.label='CODE';base.title=primary.data?.title||'SOURCE / LIVE';base.file=primary.data?.file||'SOURCE';base.source=clone(primary.data?.source||primary.data);base.note=controllerState.speech?{tag:'DAMOCLES / EXPLANATION',segments:textSegments(controllerState.speech.text)}:(note?clone(note.data):defaultNote('EXPLANATION'));base.presence.context=primary.data?.context||'SOURCE';return base;
+ }
+ return clone(SCENES.idle);
+}
+function renderControllerState({announce=false}={}){closeFocus();const scene=composeControllerScene();renderScene(scene,{announce,persist:false});controllerSummary();return scene}
+function loadControllerPreset(name){
+ controllerPreset=SCENES[name]?name:'idle';controllerState.objects={};controllerState.speech=null;const s=SCENES[controllerPreset];
+ if(name==='conversation')setControllerObject({op:'show',id:'message',type:'message',role:'primary',data:{segments:clone(s.response.segments),transcript:clone(s.transcript),context:s.presence.context}});
+ else if(name==='training'){setControllerObject({id:'loss',type:'chart',role:'primary',data:{...clone(s.primary),title:s.title,subtitle:s.subtitle,context:s.presence.context}});s.metrics.forEach((m,i)=>setControllerObject({id:'metric-'+i,type:'metric',data:clone(m)}));setControllerObject({id:'progress',type:'progress',data:clone(s.progress)});setControllerObject({id:'note',type:'note',data:clone(s.annotation)});}
+ else if(name==='architecture'){setControllerObject({id:'system-map',type:'diagram',role:'primary',data:{graph:clone(s.graph),title:s.title,subtitle:s.subtitle,context:s.presence.context}});setControllerObject({id:'note',type:'note',data:clone(s.note)});}
+ else if(name==='email'){setControllerObject({id:'mail',type:'document',role:'primary',data:clone(s.document)});setControllerObject({id:'note',type:'note',data:clone(s.note)});}
+ else if(name==='code'){setControllerObject({id:'source',type:'code',role:'primary',data:{source:clone(s.source),title:s.title,file:s.file,context:s.presence.context}});setControllerObject({id:'note',type:'note',data:clone(s.note)});}
+ renderControllerState();announceScene(name);
+}
+function focusControllerObject(id){
+ const o=controllerState.objects[id];if(!o)return false;
+ const map={chart:'training-chart',metric:'training-metrics',diagram:'architecture',document:'email',code:'code'};const kind=map[o.type];if(kind){openFocus(kind);return true}
+ const note=document.querySelector('[data-focus="summary"]');if(note){openFocus('summary',note);return true}return false;
+}
+function dispatchController(action){
+ if(Array.isArray(action)){action.forEach(dispatchController);return clone(controllerState)}
+ if(!action||typeof action!=='object')throw new Error('action must be an object');const op=String(action.op||'').toLowerCase();
+ if(op==='show'){const o=action.object||action;setControllerObject({id:o.id,type:o.type,role:o.role,data:o.data||{}});renderControllerState()}
+ else if(op==='hide'){delete controllerState.objects[action.id];if(controllerState.speech?.target===action.id)controllerState.speech=null;renderControllerState()}
+ else if(op==='say'){controllerState.speech={text:String(action.text||''),target:action.target||null,at:action.at?clone(action.at):null};renderControllerState()}
+ else if(op==='focus'){if(action.id==null){closeFocus()}else focusControllerObject(action.id)}
+ else if(op==='listen'){setListening(Boolean(action.on));controllerSummary()}
+ else if(op==='clear'){controllerState.objects={};controllerState.speech=null;setListening(false);renderControllerState()}
+ else throw new Error('unknown op: '+op);
+ return clone(controllerState);
+}
+function controllerExample(which){
+ if(which==='training')return loadControllerPreset('training');
+ if(which==='gpu')return dispatchController({op:'show',id:'gpu',type:'metric',data:{label:'GPU',value:'94%'}});
+ if(which==='focus')return dispatchController({op:'focus',id:'loss'});
+ if(which==='say')return dispatchController({op:'say',target:'loss',at:{x:32,series:'VAL LOSS'},text:'Validation begins diverging here. The training curve is still descending normally.'});
+ if(which==='compare'){const base=clone(SCENES.training.primary);base.series=[{name:'VAL LOSS',semantic:'cyan',values:[.292,.278,.263,.249,.237,.226,.216,.207,.199,.192,.186,.181,.177,.174,.172,.171,.172,.174,.177,.181,.186,.192,.199,.207,.216,.224]}];base.compareLabel='PREV';return dispatchController({op:'show',id:'previous',type:'chart',role:'compare',data:base});}
+ if(which==='hide-gpu')return dispatchController({op:'hide',id:'gpu'});
+ if(which==='listen')return dispatchController({op:'listen',on:!document.body.classList.contains('listening-active')});
+ if(which==='clear')return dispatchController({op:'clear'});
+}
+async function runControllerDemo(){const token=++controllerDemoToken;loadControllerPreset('training');const steps=['gpu','say','compare','hide-gpu'];for(const step of steps){await new Promise(r=>setTimeout(r,850));if(token!==controllerDemoToken)return;controllerExample(step)}}
+function toggleController(force){document.body.classList.toggle('ctrl-open',force??!document.body.classList.contains('ctrl-open'))}
+controllerToggle.addEventListener('click',()=>toggleController());controllerClose.addEventListener('click',()=>toggleController(false));
+controllerPanel.addEventListener('click',e=>{const b=e.target.closest('[data-ctrl]');if(b)controllerExample(b.dataset.ctrl)});
+controllerSend.addEventListener('click',()=>{try{const a=JSON.parse(controllerInput.value);dispatchController(a)}catch(err){controllerStateEl.classList.add('controller-error');controllerStateEl.textContent='ERROR / '+err.message}});
+controllerDemo.addEventListener('click',runControllerDemo);
+
+focusOverlay.querySelector('.focus-close').addEventListener('click',closeFocus);focusOverlay.addEventListener('click',e=>{if(e.target===focusOverlay)closeFocus()});
+document.addEventListener('click',e=>{const act=e.target.closest('[data-action]')?.dataset.action;if(act==='open-transcript'){setTranscript(true);return}if(act==='close-transcript'){setTranscript(false);return}const f=e.target.closest('[data-focus]');if(f&&!focusOverlay.classList.contains('open')){openFocus(f.dataset.focus,f);return}const l=e.target.closest('[data-logo]');if(l&&!l.closest('.chat-logo')&&Date.now()-gestureHandledAt>350)setListening(!document.body.classList.contains('listening-active'),l)});
+
+let touchStartX=0,touchStartY=0,touchTracking=false;const gestureExclusion='button,input,textarea,select,a,.transcript-panel,.code-body,.mail-body,.focus-overlay,.ir-drawer';document.addEventListener('touchstart',e=>{if(e.touches.length!==1||e.target.closest(gestureExclusion)){touchTracking=false;return}touchTracking=true;touchStartX=e.touches[0].clientX;touchStartY=e.touches[0].clientY},{passive:true});document.addEventListener('touchmove',e=>{if(!touchTracking||e.touches.length!==1)return;const dx=e.touches[0].clientX-touchStartX,dy=e.touches[0].clientY-touchStartY;if(Math.max(Math.abs(dx),Math.abs(dy))>14)e.preventDefault()},{passive:false});document.addEventListener('touchend',e=>{if(!touchTracking)return;touchTracking=false;const t=e.changedTouches[0],dx=t.clientX-touchStartX,dy=t.clientY-touchStartY,ax=Math.abs(dx),ay=Math.abs(dy);if(Math.max(ax,ay)<58)return;gestureHandledAt=Date.now();if(ax>ay){let i=ORDER.indexOf(controllerPreset);i=(i+(dx<0?1:-1)+ORDER.length)%ORDER.length;loadControllerPreset(ORDER[i])}else{let i=paletteOrder.indexOf(currentPaletteKey);i=(i+(dy<0?1:-1)+paletteOrder.length)%paletteOrder.length;setPalette(paletteOrder[i])}},{passive:true});
+
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&focusOverlay.classList.contains('open')){closeFocus();return}if(e.key==='Escape'&&document.getElementById('conversation')?.classList.contains('expanded')){setTranscript(false);return}const n=Number(e.key);if(n>=1&&n<=ORDER.length){loadControllerPreset(ORDER[n-1]);return}const k=e.key.toLowerCase();if(palettes[k]){setPalette(k);return}if(k==='l'){setListening(!document.body.classList.contains('listening-active'));return}if(k==='j'){toggleIR();return}if(k==='c'){toggleController();return}});
+window.addEventListener('resize',scheduleGeometryRefresh);window.addEventListener('pageshow',scheduleGeometryRefresh);window.addEventListener('load',scheduleGeometryRefresh);if(window.ResizeObserver){const ro=new ResizeObserver(scheduleGeometryRefresh);ro.observe(stage)}if(document.fonts?.ready)document.fonts.ready.then(scheduleGeometryRefresh);
+
+window.SwitchboardRenderer={
+ scenes:SCENES,
+ render:(scene)=>renderScene(scene),
+ patch:patchScene,
+ getScene:()=>structuredClone(currentScene),
+ setListening,
+ focus:openFocus,
+ closeFocus,
+ toggleIR,
+ setPalette
+};
+window.SwitchboardController={
+ dispatch:dispatchController,
+ run:(actions)=>dispatchController(actions),
+ load:loadControllerPreset,
+ state:()=>clone(controllerState),
+ protocol:['show','hide','say','focus','listen','clear']
+};
+setPalette('q',true);loadControllerPreset(SCENES[params.get('scene')]?params.get('scene'):'idle');if(params.get('transcript')==='1')setTranscript(true);scheduleGeometryRefresh();
+</script></body></html>

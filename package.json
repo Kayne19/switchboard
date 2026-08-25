@@ -3,14 +3,38 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "tsc --noEmit --project tsconfig.json",
-    "build": "tsc --project tsconfig.json && node scripts/copy_wake_assets.mjs",
-    "test": "npm run build && node apps/frontend/tests/test_protocol.mjs && node apps/frontend/tests/test_diagram_waves.mjs && node apps/frontend/tests/test_stage.mjs && node apps/frontend/tests/test_extensions.mjs && node apps/frontend/tests/test_app.mjs && node apps/frontend/tests/test_hands_free.mjs"
+    "check": "npm run check:legacy && npm run typecheck",
+    "check:legacy": "tsc --noEmit --project tsconfig.json",
+    "typecheck": "tsc --noEmit --project apps/frontend/tsconfig.app.json --pretty false && tsc --noEmit --project apps/frontend/tsconfig.node.json --pretty false",
+    "build": "npm run build:legacy && npm run build:v17",
+    "build:legacy": "tsc --project tsconfig.json && node scripts/copy_wake_assets.mjs",
+    "build:v17": "npm run typecheck && node scripts/clean_v17_assets.mjs && vite build --config apps/frontend/vite.config.ts",
+    "dev": "vite --config apps/frontend/vite.config.ts",
+    "preview": "vite preview --config apps/frontend/vite.config.ts",
+    "test": "npm run build && npm run test:legacy && npm run test:v17",
+    "test:legacy": "node apps/frontend/tests/test_protocol.mjs && node apps/frontend/tests/test_diagram_waves.mjs && node apps/frontend/tests/test_stage.mjs && node apps/frontend/tests/test_extensions.mjs && node apps/frontend/tests/test_app.mjs && node apps/frontend/tests/test_hands_free.mjs",
+    "test:v17": "node apps/frontend/scripts/verify-syntax.mjs && vitest run --root apps/frontend tests/unit && node apps/frontend/scripts/verify-design-lock.mjs",
+    "test:visual": "playwright test --config apps/frontend/playwright.config.ts",
+    "test:integration": "playwright test --config apps/frontend/playwright.production.config.ts"
   },
   "devDependencies": {
-    "typescript": "5.7.2"
+    "@playwright/test": "1.62.1",
+    "@types/react": "19.1.10",
+    "@types/react-dom": "19.1.7",
+    "@vitejs/plugin-react": "5.0.2",
+    "jsdom": "26.1.0",
+    "typescript": "5.9.2",
+    "vite": "7.3.6",
+    "vitest": "3.2.7"
   },
   "dependencies": {
-    "openwakeword-wasm-browser": "0.1.1"
+    "mermaid": "^11.0.0",
+    "motion": "12.23.12",
+    "openwakeword-wasm-browser": "0.1.1",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  },
+  "engines": {
+    "node": ">=22.12.0"
   }
 }
