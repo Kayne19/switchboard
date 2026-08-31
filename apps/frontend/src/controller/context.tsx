@@ -1,7 +1,25 @@
-import { createContext, type Dispatch, type ReactNode, useCallback, useContext, useMemo, useReducer, useState } from 'react';
-import { controllerReducer, createInitialState } from './reducer';
-import type { ControllerAction, ControllerState, FixtureName } from './types';
-import { fixtures } from '../fixtures/scenes';
+import {
+  createContext,
+  type Dispatch,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useMemo,
+  useReducer,
+  useState,
+} from "react";
+import { controllerReducer, createInitialState } from "./reducer";
+import type { ControllerAction, ControllerState, FixtureName } from "./types";
+import { fixtures } from "../fixtures/scenes";
+
+// The isolated voice transport registers itself here so the on-screen Damocles
+// presence can drive a call turn. It is absent in demo mode, where the presence
+// only toggles a visual listening state.
+export interface VoiceRuntime {
+  // Start a call turn, or finish the active one (the transport owns the
+  // start/send/retry policy behind this single affordance).
+  toggleTurn: () => void;
+}
 
 interface ControllerContextValue {
   state: ControllerState;
@@ -11,36 +29,70 @@ interface ControllerContextValue {
   fixture: FixtureName;
   transcriptOpen: boolean;
   setTranscriptOpen: (open: boolean) => void;
+  voiceRuntime: VoiceRuntime | null;
+  registerVoiceRuntime: (runtime: VoiceRuntime | null) => void;
 }
 
 const ControllerContext = createContext<ControllerContextValue | null>(null);
 
 export function ControllerProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(controllerReducer, undefined, createInitialState);
-  const [fixture, setFixture] = useState<FixtureName>('idle');
+  const [state, dispatch] = useReducer(
+    controllerReducer,
+    undefined,
+    createInitialState,
+  );
+  const [fixture, setFixture] = useState<FixtureName>("idle");
   const [transcriptOpen, setTranscriptOpen] = useState(false);
+  const [voiceRuntime, setVoiceRuntime] = useState<VoiceRuntime | null>(null);
+
+  const registerVoiceRuntime = useCallback((runtime: VoiceRuntime | null) => {
+    setVoiceRuntime(runtime);
+  }, []);
 
   const run = useCallback((actions: readonly ControllerAction[]) => {
     for (const action of actions) dispatch(action);
   }, []);
 
   const loadFixture = useCallback((name: FixtureName) => {
-    dispatch({ op: 'clear' });
+    dispatch({ op: "clear" });
     setTranscriptOpen(false);
     setFixture(name);
     for (const action of fixtures[name]) dispatch(action);
   }, []);
 
   const value = useMemo(
-    () => ({ state, dispatch, run, loadFixture, fixture, transcriptOpen, setTranscriptOpen }),
-    [state, run, loadFixture, fixture, transcriptOpen],
+    () => ({
+      state,
+      dispatch,
+      run,
+      loadFixture,
+      fixture,
+      transcriptOpen,
+      setTranscriptOpen,
+      voiceRuntime,
+      registerVoiceRuntime,
+    }),
+    [
+      state,
+      run,
+      loadFixture,
+      fixture,
+      transcriptOpen,
+      voiceRuntime,
+      registerVoiceRuntime,
+    ],
   );
 
-  return <ControllerContext.Provider value={value}>{children}</ControllerContext.Provider>;
+  return (
+    <ControllerContext.Provider value={value}>
+      {children}
+    </ControllerContext.Provider>
+  );
 }
 
 export function useController(): ControllerContextValue {
   const value = useContext(ControllerContext);
-  if (!value) throw new Error('useController must be used inside ControllerProvider');
+  if (!value)
+    throw new Error("useController must be used inside ControllerProvider");
   return value;
 }
