@@ -1057,4 +1057,6 @@ await recorderLifecycleRegressions();
 await modelPickerRegressions();
 await pickerRequestRegressions();
 await workspaceTargetRegressions();
-console.log("ok — app audio lifecycle, playback ordering, picker, and workspace");
+console.log(
+	"ok — app audio lifecycle, playback ordering, picker, and workspace",
+);

@@ -381,8 +381,7 @@ export function renderRows(
 			}
 			if (typeof item.ms === "number") {
 				barDiv.removeAttribute("data-dur");
-				const fillPct =
-					maxMs > 0 ? Math.min(1, Math.max(0, item.ms / maxMs)) : 0;
+				const fillPct = maxMs > 0 ? Math.min(1, Math.max(0, item.ms / maxMs)) : 0;
 				barDiv.style.setProperty("--dur", String(fillPct));
 				if (fillPct > 0) {
 					let fillI = barDiv.querySelector("i");
@@ -405,8 +404,8 @@ export function renderRows(
 				}
 			}
 		} else if (barDiv) {
-				barDiv.remove();
-			}
+			barDiv.remove();
+		}
 
 		if (li.getAttribute("data-state") !== state) {
 			li.setAttribute("data-state", state);
@@ -418,8 +417,8 @@ export function renderRows(
 			}
 			activeElement = li;
 		} else if (li.hasAttribute("aria-current")) {
-				li.removeAttribute("aria-current");
-			}
+			li.removeAttribute("aria-current");
+		}
 
 		if (idxSpan.textContent !== idxText) idxSpan.textContent = idxText;
 		if (glyphSpan.textContent !== glyphText) glyphSpan.textContent = glyphText;
@@ -434,9 +433,7 @@ export function renderRows(
 	}
 
 	if (activeElement) {
-		const reducedMotion = matchMedia(
-			"(prefers-reduced-motion: reduce)",
-		).matches;
+		const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 		activeElement.scrollIntoView({
 			block: "nearest",
 			behavior: reducedMotion ? "auto" : "smooth",
@@ -545,13 +542,9 @@ export async function renderVisual(raw: BrowserMessage): Promise<void> {
 			if (document.readyState === "complete") {
 				setTimeout(checkUnavailable, 1000);
 			} else {
-				window.addEventListener(
-					"load",
-					() => setTimeout(checkUnavailable, 1000),
-					{
-						once: true,
-					},
-				);
+				window.addEventListener("load", () => setTimeout(checkUnavailable, 1000), {
+					once: true,
+				});
 			}
 		}
 	}

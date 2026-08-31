@@ -1,5 +1,8 @@
 # switchboard
 
+For Kayne's engineering preferences and project memory, read `BRAIN.md` and
+load only the scopes it routes you to.
+
 The voice front door for the lab: a caller reaches an operator agent, the
 operator patches them through to a project's coding agent running in that
 project's own directory, and that agent hands them back when they are done.

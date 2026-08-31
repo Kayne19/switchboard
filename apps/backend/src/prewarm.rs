@@ -71,7 +71,6 @@ pub enum CatalogState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrepareSource {
     Startup,
-    Legacy,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,7 +133,6 @@ pub struct PrewarmInner {
     ssh_program: String,
     agent_extension_file: Option<String>,
     remote_cache_dir: String,
-    _pi_binary: String,
     registry: Registry,
 
     transports: RwLock<HashMap<String, Arc<Mutex<HostTransportInner>>>>,
@@ -233,7 +231,6 @@ impl Prewarm {
             ssh_program: config.ssh_program.clone(),
             agent_extension_file: config.agent_extension.clone(),
             remote_cache_dir: config.remote_cache_dir.clone(),
-            _pi_binary: config.pi_binary.clone(),
             registry: registry.clone(),
 
             transports: RwLock::new(HashMap::new()),

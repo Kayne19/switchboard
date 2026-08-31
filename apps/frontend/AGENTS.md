@@ -1,6 +1,6 @@
 # Agent Instructions: Switchboard Frontend
 
-Read `DESIGN_SYSTEM.md`, `ARCHITECTURE.md`, `PROTOCOL.md`, and `MIGRATION_CHECKLIST.md` before changing this frontend.
+Read `DESIGN_SYSTEM.md`, `ARCHITECTURE.md`, and `PROTOCOL.md` before changing this frontend.
 
 ## Default behavior
 

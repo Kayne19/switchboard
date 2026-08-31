@@ -90,7 +90,6 @@ Read these files before modifying the implementation:
 2. [DESIGN_SYSTEM.md](./DESIGN_SYSTEM.md)
 3. [ARCHITECTURE.md](./ARCHITECTURE.md)
 4. [INTEGRATION.md](./INTEGRATION.md)
-5. [MIGRATION_CHECKLIST.md](./MIGRATION_CHECKLIST.md)
 
 ## Prebuilt preview
 

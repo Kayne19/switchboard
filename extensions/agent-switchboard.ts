@@ -708,7 +708,9 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 						if (screen.title) visual += ` titled '${screen.title}'`;
 					}
 					const connection =
-						screen.connected === false ? "No browser is connected; last report" : "Screen";
+						screen.connected === false
+							? "No browser is connected; last report"
+							: "Screen";
 					return {
 						content: [
 							{
