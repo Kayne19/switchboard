@@ -1,142 +1,86 @@
-# The `diagram` tool & Visual Stage
+# The `display` channel & Visual Stage
 
-A project agent can push a diagram or a structured plan to the caller's page mid-turn, the same way it pushes speech. The caller sees it render while the agent is still working.
+A project agent pushes anything it wants the caller to *see* — a diagram, a chart, a metric, a progress list, a document, code, or a plain note — to the caller's page mid-turn, the same way it pushes speech. The caller sees it render while the agent is still working. **The agent chooses what to show and how it is composed; the page owns the pixels.** `docs/visual-channel.md` is the product/capability companion to this wire contract.
 
 ## Why it is shaped like `speak`
 
-`speak` already solved this problem. A tool that has to reach the browser *during* a turn cannot wait for the RPC stream to settle, so it does not use the RPC stream: it POSTs to this service and the service broadcasts on the socket the browser is already holding. `diagram` and `plan` reuse that pattern with different payloads over the same endpoint, preserving the environment file contract without introducing new environment variables.
+`speak` already solved this problem. A tool that must reach the browser *during* a turn cannot wait for the RPC stream to settle, so it POSTs to this service and the service broadcasts on the socket the browser is already holding. `display` reuses that pattern, preserving the environment-file contract without a new endpoint or a new variable.
 
-| piece | `speak` | `diagram` / `plan` |
+| piece | `speak` | `display` |
 | --- | --- | --- |
-| env var handed to the agent | `SWITCHBOARD_SPEAK_URL` | `SWITCHBOARD_DIAGRAM_URL` |
-| endpoint | `POST /speak` | `POST /diagram` |
-| broadcast | `{"type":"spoken"}` + mp3 bytes | `{"type":"diagram", ...}` |
+| env var handed to the agent | `SWITCHBOARD_SPEAK_URL` | `SWITCHBOARD_DIAGRAM_URL` (**unchanged**) |
+| endpoint | `POST /speak` | `POST /diagram` (**unchanged** — name kept for compatibility) |
+| broadcast | `{"type":"spoken"}` + mp3 bytes | `{"type":"display","action":{...}}` |
 
-The tool is deliberately **not** a `SIGNAL_TOOL` in `piclient.py`. Signals exist so `pbx.py` can swing the route or suppress a re-synthesis; a visual payload changes neither. Nothing in the routing layer needs to know it happened.
+`display` **replaces** the old per-kind `diagram`/`plan`/`timeline`/`diff` tools with one general tool. The endpoint path and the env var are unchanged; only the payload changed — from a per-kind body to a protocol action. The tool is still deliberately **not** a `SIGNAL_TOOL` in `piclient.py` (a visual changes neither routing nor re-synthesis).
 
-## Endpoint & Payload Contract
+## The action protocol
 
-The `POST /diagram` endpoint accepts four visual payload kinds (`mermaid`, `plan`, `timeline`, `diff`):
+Every call is a protocol action:
 
-### 1. Mermaid diagram payload
-
-```json
-{ "kind": "mermaid", "source": "flowchart TD\n  A --> B", "title": "call path", "notes": "optional" }
+```ts
+{ op, id, type, role, data, text, target, at }
 ```
 
-`kind` defaults to `"mermaid"` if omitted or blank. For backward compatibility with legacy WebSocket clients, a Mermaid diagram broadcasts an exact 4-key JSON frame (`{"type":"diagram", "source":..., "title":..., "notes":...}`).
+- **ops** (one per call): `show | focus | hide | clear | say`. There is **no** `listen` on this channel.
+- **content types** (for `show`): `chart | metric | progress | diagram | document | code | note`. `message` is a runtime-owned transcript, **not** a display type.
+- **roles** (composition slot): `primary | compare | secondary | ambient`.
+- **`id`**: agent-owned and stable across updates (re-send the same `id` to replace the object). The runtime reserves its own ID namespace for conversation/presence.
+- **`target`**: the object id for `focus`/`hide`/`say` (`clear` takes none).
+- **`at`**: client clock; `null` means "now".
 
-### 2. Structured plan payload
-
+### show (create or update)
 ```json
-{
-  "kind": "plan",
-  "source": "",
-  "items": [
-    { "label": "Parse configuration", "state": "done", "detail": "config.toml" },
-    { "label": "Compile TypeScript assets", "state": "active", "detail": "web/stage.ts" },
-    { "label": "Run test suite", "state": "todo" }
-  ],
-  "title": "Build pipeline",
-  "notes": "optional"
-}
+{ "op":"show", "id":"arch", "type":"diagram", "role":"primary",
+  "data":{ "kind":"mermaid", "source":"flowchart TD\n  A --> B" } }
+```
+### focus / hide / clear / say
+```json
+{ "op":"focus", "target":"arch" }
+{ "op":"hide",  "target":"arch" }
+{ "op":"clear" }
+{ "op":"say",   "target":"arch", "text":"watch the red edge" }
 ```
 
-### 3. Timeline payload
+## Content types
 
-```json
-{
-  "kind": "timeline",
-  "source": "",
-  "items": [
-    { "label": "Caller connected", "state": "done", "ms": 120 },
-    { "label": "Routed to agent", "state": "active", "ms": 450, "detail": "damocles" }
-  ],
-  "title": "Call Timeline",
-  "notes": "optional"
-}
-```
+| type | `data` shape (excess fields rejected) | what the page renders |
+| --- | --- | --- |
+| `chart` | `{ kind: "bar"\|"line"\|"pie"\|"spark", series: [{label, values[], color?}], labels?, unit? }` | SVG chart |
+| `metric` | `{ label, value, unit?, trend? }` | numeric gauge |
+| `progress` | `{ items: [{label, state, note?}], note? }` | plan/checklist rail |
+| `diagram` | `{ kind: "mermaid", source }` | Mermaid graph (semantic classes only) |
+| `document` | `{ blocks: [{ heading?, paragraph?, bullets?, code? }] }` | document blocks |
+| `code` | `{ language?, lines: [{ text, op?: "add"\|"del"\|"ctx" }] }` | diff/code view |
+| `note` | `{ text }` | plain aside (the agent's own words) |
 
-### 4. Diff payload
+A composition is a set of `show`s with distinct `id`s and roles — e.g. a `diagram` as `primary`, a `note` as `secondary`, a `metric` as `ambient`. The page lays the roles out; the agent never sends coordinates.
 
-```json
-{
-  "kind": "diff",
-  "source": "@@ -1,2 +1,2 @@\n-old line\n+new line",
-  "title": "Code changes",
-  "notes": "optional"
-}
-```
+## Validation & caps (one source, mirrored)
 
-The agent extension passes `source: ""` on plan and timeline payloads to maintain compatibility with legacy backends expecting a string `source` field.
+The **canonical** validation is `apps/frontend/src/controller/validation.ts`. The backend holds a Rust mirror, `apps/backend/src/visual_protocol.rs`, so a malformed action is rejected at the wire (HTTP 400, before any socket fan-out) and the frontend re-validates on receipt and replay. The mirrors are asserted equivalent by tests in both languages.
 
-### Server Validation & Caps
+- `id` ≤ 128 UTF-16 code units; `text` ≤ 50,000.
+- `chart`/`metric`/`progress` enforce exact data shapes; chart values and progress states must be finite / in the allowed set.
+- **256 KB** serialized action cap (the transport remains 64 KB per request).
+- **Recursive layout-field rejection**: `layout`, `style`, `css`, `className`, `width`, `height`, `left`, `right`, `top`, `bottom` anywhere in an action are rejected — the page owns geometry.
+- **Reserved IDs**: the runtime's conversation/presence namespace cannot be displayed or addressed.
+- Rejections return `{"delivered":false,"detail":"<reason>"}` and are **not** broadcast.
 
-- **Body cap**: `64 KB` maximum (`DefaultBodyLimit::max(64 * 1024)`).
-- **Title / Notes**: `title` ≤ 200 bytes, `notes` ≤ 300 bytes.
-- **Mermaid source**: non-empty, ≤ 20,000 bytes.
-- **Plan / Timeline items**: 1 to 40 items per payload.
-- **Item fields**: `label` 1..=200 bytes, `detail` ≤ 300 bytes, `state` in `{"done", "active", "todo", "blocked"}` (defaults to `"todo"` if omitted or blank). `ms` ≤ 86,400,000 (timeline only).
-- **Diff source**: non-empty, ≤ 20,000 bytes, ≤ 600 lines, must contain at least one `@@` hunk header.
-- **Active constraint**: at most 1 item may be `active` at a time.
-- Rejections return HTTP 400 with `{"delivered": false, "detail": "<limit hit>"}` which is surfaced directly to the agent.
+## Endpoint
 
-## Trust Exposure & Boundary
+`POST /diagram` (64 KB body cap, `SWITCHBOARD_TOKEN` bearer auth). Body = the action object plus `token`. Success returns `{"delivered":true,"action":{...}}` and broadcasts `{"type":"display","action":{...}}` (token stripped).
 
-- **Mermaid exposure**: `securityLevel: "antiscript"` is set in Mermaid configuration to prevent script execution while supporting rich node labels. Because the agent reads repositories it did not write, Mermaid diagrams pass through sanitized rendering.
-- **Structured safety**: Structured kinds (`plan`, `timeline`, `diff`) do **not** inherit raw HTML rendering risks. Items and code lines are written to the DOM exclusively via `textContent` (never `innerHTML`). Server caps bound storage and replay sizes in `last_diagram`.
-- **Palette enforcement**: The server validates Mermaid source lines and rejects custom `classDef`, `style`, `linkStyle`, `%%{init}`, `class` statements, unknown `:::class` names, or multiple `:::active` declarations. The page strictly owns the color palette.
+## Replay & state
 
-## Visual System & Style Grammar
+- **`last_display`**: the last successful action. New browser sockets replay it (re-validated before applying).
+- **`screen_state`**: `has_visual`/`visual_kind` track the visible object — `show` sets them, `clear` clears them; `say`/`focus`/`hide` leave them as-is. The agent inspects `screen_state` via `view` rather than assuming its request landed.
 
-The stage uses Switchboard's restrained NERV instrument language: black
-surfaces, hard boundaries, compressed headings, monospace data, and motion only
-when state changes. Styling never invents telemetry.
+## Trust & safety
 
-### Design Tokens
+- **Raw HTML / arbitrary markup is refused** — every type renders from structured data via `textContent` (never `innerHTML`); Mermaid runs with `securityLevel: "antiscript"`.
+- **No new endpoint, no new env var** — the whole channel multiplexes over `POST /diagram` and the existing socket, so the Switchboard↔homelab env contract is unchanged.
 
-- `--void`, `--panel`, `--panel-hi`, `--line`, `--text`, `--steel`: surfaces and text
-- `--amber`: active controls and institutional labels
-- `--cyan`: information flow and the active causal path
-- `--ok`: completed work
-- `--hold`: blocked or held state
-- `--danger`: recording, errors, and destructive actions
+## Deployment
 
-### Mermaid Semantic Classes
-
-Agents style nodes using four semantic classes mapped to page tokens:
-
-- `:::active`: Active causal path (2px cyan stroke)
-- `:::done`: Completed node (1px green stroke)
-- `:::blocked`: Blocked node (1px amber stroke)
-- `:::muted`: De-emphasized node (1px muted stroke)
-
-### Plan Visual Grammar
-
-Plan rows render into `<ol class="plan">` inside `#stageCanvas`:
-
-- **Left rail**: 3px vertical rail (`::before`), colored by state (`--ok`, `--energy`, `--hold`, `--line`).
-- **Ordinal**: `.idx` (`ui-monospace`, `0.72rem`, `tabular-nums`) displaying step numbers (`01`, `02`).
-- **Glyph**: State glyph (`✓` done, `▸` active, `·` todo, `!` blocked).
-- **Label**: `system-ui` interface type.
-- **Detail**: Monospace (`ui-monospace`, `0.78rem`) for paths, symbols, counts, and durations.
-- **Active row**: Receives `--rail-active-wash` background. In dark mode, the rail features a single localized bloom `drop-shadow(0 0 6px var(--bloom))`.
-
-## Client Architecture & Stage Shell
-
-- `apps/frontend/src/stage.ts` manages stage state, element references, body classes (`has-diagram`, `stage-structured`, `stage-stale`), history, and renderer registration.
-- **Adaptive composition**: Without a visual, the stage collapses completely. New visual content appears in the shared workspace and may receive automatic focus unless the caller pinned another view.
-- **Pending payload queue**: Visual messages arriving before a renderer registers (e.g. while Mermaid CDN imports load) are queued and automatically flushed upon renderer registration. If loading fails, the source is shown as a readable fallback rather than a blank stage.
-- **Stale visual provenance**: Route changes invoke `markStale()`, adding the `stage-stale` body class and a "From the previous leg" provenance caption instead of presenting old content as current.
-
-## Deployment & Homelab Dependency
-
-`extensions/agent-switchboard.ts` is the authoritative reference copy in this repository. However, production project hosts receive extensions rendered from Ansible templates in the homelab repository (`switchboard_projects`).
-
-- Extension updates land on project hosts (`damocles`) only through a homelab PR cutover.
-- Structured tools send `source: ""` so legacy backends can deserialize the shared request without an HTTP 422.
-- If a legacy endpoint returns HTTP 422 or 404, the extension refusal helper names the unavailable screen and provides an action-specific fallback:
-  - diagram: `this deployment has no diagram screen; describe the steps in words`
-  - plan: `this deployment has no plan screen; describe the steps in words`
-  - timeline: `this deployment has no timeline screen; describe the timeline in words`
-  - diff: `this deployment has no diff screen; describe the changes in words`
+Backend, browser build, and extension move in a **single container** and redeploy together (no dual-emit shims, no version matrix). The extension is the only cross-boundary artifact (it ships via a homelab PR). Rollback is a plain revert of the commit.

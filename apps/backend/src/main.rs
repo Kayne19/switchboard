@@ -8,6 +8,7 @@ pub mod pbx;
 pub mod pi_client;
 pub mod prewarm;
 pub mod registry;
+pub mod visual_protocol;
 
 use std::collections::HashMap;
 use std::env;

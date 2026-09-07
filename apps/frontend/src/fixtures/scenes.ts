@@ -130,3 +130,20 @@ export const previousRunAction: ControllerAction = {
     series: [{ name: 'VAL LOSS', semantic: 'cyan', values: [0.292,0.278,0.263,0.249,0.237,0.226,0.216,0.207,0.199,0.192,0.186,0.181,0.177,0.174,0.172,0.171,0.172,0.174,0.177,0.181,0.186,0.192,0.199,0.207,0.216,0.224] }],
   },
 };
+
+export const composedFixture: ControllerAction[] = [
+    { op: 'show', id: 'composed-diagram', type: 'diagram', role: 'primary', data: {
+      title: 'COMPOSED / SYSTEM FLOW', nodes: [
+        { id: 'input', label: 'INPUT', state: 'done', semantic: 'green' },
+        { id: 'active', label: 'ACTIVE NODE', state: 'active', semantic: 'cyan' },
+        { id: 'output', label: 'OUTPUT', state: 'todo', semantic: 'paper' },
+      ], edges: [
+        { from: 'input', to: 'active', label: 'route', semantic: 'cyan' },
+        { from: 'active', to: 'output', label: 'emit', semantic: 'cyan' },
+      ],
+    } },
+    { op: 'show', id: 'composed-note', type: 'note', role: 'secondary', data: {
+      tag: 'COMPOSED / NOTE', segments: [{ text: 'The active path is highlighted from the single active node.' }],
+    } },
+    { op: 'show', id: 'composed-metric', type: 'metric', role: 'ambient', data: { label: 'THROUGHPUT', value: '98.4%', semantic: 'green' } },
+  ];

@@ -12,12 +12,11 @@ const objectTypes = new Set<SceneObjectType>([
   'diagram',
   'document',
   'code',
-  'message',
   'note',
 ]);
 
 const objectRoles = new Set<SceneObjectRole>(['primary', 'compare', 'secondary', 'ambient']);
-const operations = new Set(['show', 'hide', 'say', 'focus', 'listen', 'clear']);
+const operations = new Set(['show', 'hide', 'say', 'focus', 'clear']);
 
 const MAX_ID_LENGTH = 128;
 const MAX_TEXT_LENGTH = 50_000;
@@ -55,10 +54,23 @@ function validateSpeechAnchor(value: unknown): value is SpeechState['at'] {
   return Object.keys(value).every((key) => key === 'x' || key === 'series');
 }
 
-function rejectModelLayoutFields(action: Record<string, unknown>): string | null {
+function rejectModelLayoutFields(value: unknown): string | null {
   const forbidden = ['layout', 'style', 'css', 'className', 'width', 'height', 'left', 'right', 'top', 'bottom'];
-  const found = forbidden.find((key) => key in action);
-  return found ? `model-controlled layout field is forbidden: ${found}` : null;
+  if (Array.isArray(value)) {
+    for (const item of value) { const found = rejectModelLayoutFields(item); if (found) return found; }
+    return null;
+  }
+  if (!isRecord(value)) return null;
+  const found = forbidden.find((key) => key in value);
+  if (found) return `model-controlled layout field is forbidden: ${found}`;
+  for (const item of Object.values(value)) { const nested = rejectModelLayoutFields(item); if (nested) return nested; }
+  return null;
+}
+
+function hasNonFiniteNumber(value: unknown): boolean {
+  if (typeof value === 'number') return !Number.isFinite(value);
+  if (Array.isArray(value)) return value.some(hasNonFiniteNumber);
+  return isRecord(value) && Object.values(value).some(hasNonFiniteNumber);
 }
 
 export function validateControllerAction(value: unknown): ActionValidationResult {
@@ -79,6 +91,9 @@ export function validateControllerAction(value: unknown): ActionValidationResult
         return { ok: false, error: 'show.role is unknown' };
       }
       if (!isRecord(value.data)) return { ok: false, error: 'show.data must be an object' };
+      if ((value.type === 'chart' || value.type === 'progress') && hasNonFiniteNumber(value.data)) {
+        return { ok: false, error: 'show.data contains a non-finite number' };
+      }
       return {
         ok: true,
         action: {
@@ -111,13 +126,9 @@ export function validateControllerAction(value: unknown): ActionValidationResult
       };
     }
     case 'focus':
-      return isOptionalIdentifier(value.id)
+      return isIdentifier(value.id)
         ? { ok: true, action: { op: 'focus', id: value.id } }
-        : { ok: false, error: 'focus.id is invalid' };
-    case 'listen':
-      return typeof value.on === 'boolean'
-        ? { ok: true, action: { op: 'listen', on: value.on } }
-        : { ok: false, error: 'listen.on must be boolean' };
+        : { ok: false, error: 'focus.id must be a non-empty identifier' };
     case 'clear':
       return { ok: true, action: { op: 'clear' } };
     default:

@@ -1089,7 +1089,7 @@ button {
 }
 
 /* Geometry-driven portrait recomposition */
-@container stage (max-aspect-ratio: 1 / 1) {
+@container stage (max-aspect-ratio: 1/1) {
   .tech {
     font-size: clamp(8px, 1.35cqw, 11px);
   }
@@ -1317,7 +1317,7 @@ button {
 }
 
 /* Height-limited landscape, including phones and shallow split-screen windows */
-@container stage (min-aspect-ratio: 2 / 1) {
+@container stage (min-aspect-ratio: 2/1) {
   .scene--content {
     --edge: clamp(20px, 3.4cqw, 66px);
     --rail: clamp(190px, 15cqw, 300px);

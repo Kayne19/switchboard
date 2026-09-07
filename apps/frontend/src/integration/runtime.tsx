@@ -1,13 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useController } from "../controller/context";
-import type {
-  CodeData,
-  ControllerAction,
-  DiagramData,
-  MessageData,
-  ProgressData,
-  Semantic,
-} from "../controller/types";
+import type { ControllerAction, MessageData } from "../controller/types";
+import { validateControllerAction } from "../controller/validation";
 
 const LEGACY_SOURCE = "switchboard-legacy-runtime";
 const V17_SOURCE = "switchboard-v17";
@@ -65,58 +59,14 @@ function text(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-function semanticForState(value: unknown): Semantic {
-  if (value === "done") return "green";
-  if (value === "active") return "cyan";
-  if (value === "blocked") return "amber";
-  return "muted";
-}
-
 function normalizeHistory(raw: unknown): TranscriptLine[] {
   if (!Array.isArray(raw)) return [];
   return raw.flatMap((entry) => {
     if (!entry || typeof entry !== "object") return [];
     const item = entry as Record<string, unknown>;
     const body = text(item.text);
-    if (!body) return [];
-    return [
-      {
-        speaker: item.role === "caller" ? "CALLER" : "DAMOCLES",
-        text: body,
-        id: text(item.id) || undefined,
-      },
-    ];
+    return body ? [{ speaker: item.role === "caller" ? "CALLER" : "DAMOCLES", text: body, id: text(item.id) || undefined }] : [];
   });
-}
-
-function linearDiagram(message: ServerMessage): DiagramData {
-  const items = Array.isArray(message.items)
-    ? message.items.filter((item): item is Record<string, unknown> =>
-        Boolean(item && typeof item === "object"),
-      )
-    : [];
-  const nodes = items.map((item, index) => ({
-    id: `step-${index + 1}`,
-    label: text(item.label) || `STEP ${index + 1}`,
-    sub: text(item.detail),
-    detail: typeof item.ms === "number" ? `${item.ms}ms` : undefined,
-    semantic: semanticForState(item.state),
-  }));
-  return {
-    title:
-      text(message.title) ||
-      (message.kind === "timeline" ? "CALL PATH / TIMELINE" : "PLAN / LIVE"),
-    subtitle:
-      message.kind === "timeline" ? "SEQUENCE / LIVE" : "EXECUTION / LIVE",
-    context: text(message.notes) || "LIVE WORK",
-    nodes,
-    edges: nodes.slice(1).map((node, index) => ({
-      from: nodes[index].id,
-      to: node.id,
-      semantic: node.semantic,
-      active: node.semantic === "cyan",
-    })),
-  };
 }
 
 function isRuntimeState(value: unknown): value is RuntimeState {
@@ -252,88 +202,9 @@ export function RuntimeIntegration() {
           if (detail) dispatch({ op: "say", text: detail });
           break;
         }
-        case "diagram": {
-          const kind = text(message.kind) || "mermaid";
-          if (kind === "diff") {
-            const data: CodeData = {
-              title: text(message.title) || "CHANGESET / LIVE",
-              file: "UNIFIED DIFF",
-              context: text(message.notes) || "LIVE WORK",
-              source: { language: "diff", text: text(message.source) },
-            };
-            const action: ControllerAction = {
-              op: "show",
-              id: "live-visual",
-              type: "code",
-              role: "primary",
-              data,
-            };
-            visualActionRef.current = action;
-            visualActiveRef.current = true;
-            dispatch({ op: "hide", id: "conversation" });
-            dispatch(action);
-          } else {
-            const data: DiagramData =
-              kind === "plan" || kind === "timeline"
-                ? linearDiagram(message)
-                : {
-                    title: text(message.title) || "SYSTEM / DIAGRAM",
-                    subtitle: "MERMAID / LIVE",
-                    context: text(message.notes) || "LIVE WORK",
-                    source: text(message.source),
-                    nodes: [],
-                    edges: [],
-                  };
-            const action: ControllerAction = {
-              op: "show",
-              id: "live-visual",
-              type: "diagram",
-              role: "primary",
-              data,
-            };
-            visualActionRef.current = action;
-            visualActiveRef.current = true;
-            dispatch({ op: "hide", id: "conversation" });
-            dispatch(action);
-            if (
-              (kind === "plan" || kind === "timeline") &&
-              Array.isArray(message.items)
-            ) {
-              const active = message.items.find(
-                (item) =>
-                  item &&
-                  typeof item === "object" &&
-                  (item as Record<string, unknown>).state === "active",
-              );
-              const activeIndex = active
-                ? message.items.indexOf(active)
-                : message.items.length;
-              const progress: ProgressData = {
-                label: kind === "timeline" ? "ACTIVE HOP" : "PLAN PROGRESS",
-                detail:
-                  active && typeof active === "object"
-                    ? text((active as Record<string, unknown>).label)
-                    : "COMPLETE",
-                value: message.items.length
-                  ? Math.min(1, Math.max(0, activeIndex / message.items.length))
-                  : 0,
-                text: `${activeIndex}/${message.items.length}`,
-              };
-              dispatch({
-                op: "show",
-                id: "live-progress",
-                type: "progress",
-                role: "secondary",
-                data: progress,
-              });
-            }
-          }
-          if (text(message.notes))
-            dispatch({
-              op: "say",
-              target: "live-visual",
-              text: text(message.notes),
-            });
+        case "display": {
+          const result = validateControllerAction(message.action);
+          if (result.ok) dispatch(result.action);
           break;
         }
         case "view": {

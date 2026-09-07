@@ -46,11 +46,13 @@ export interface DiagramNode {
   sub?: string;
   detail?: string;
   semantic?: Semantic;
+  state?: 'done' | 'active' | 'todo' | 'blocked';
 }
 
 export interface DiagramEdge {
   from: string;
   to: string;
+  label?: string;
   semantic?: Semantic;
   active?: boolean;
 }

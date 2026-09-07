@@ -12,7 +12,7 @@ use axum::{
     Json, Router,
 };
 use futures_util::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
@@ -47,7 +47,7 @@ pub struct AppInner {
     turn_rx: Mutex<Option<mpsc::Receiver<(String, String, u64)>>>,
     pub accepted_clips: Mutex<(HashSet<String>, VecDeque<String>)>,
     stream_clips: Mutex<HashMap<String, StreamClipState>>,
-    pub last_diagram: Arc<Mutex<Option<Value>>>,
+    pub last_display: Arc<Mutex<Option<Value>>>,
     pub screen_state: Mutex<Value>,
     pub active_session: Arc<Mutex<Option<PiSession>>>,
     activity_clock: ActivityClock,
@@ -343,7 +343,7 @@ impl AppState {
         let (clips, clip_rx) = mpsc::channel(8);
         let (turns, turn_rx) = mpsc::channel(64);
         let (shutdown, _) = watch::channel(false);
-        let last_diagram = Arc::new(Mutex::new(None));
+        let last_display = Arc::new(Mutex::new(None));
         let delivery = DeliveryState::new();
         let speech_deadline = speaker.speech_deadline;
         let coordinator = Coordinator::new(switchboard.status());
@@ -377,12 +377,12 @@ impl AppState {
         });
         let route_events = events.clone();
         let route_delivery = delivery.clone();
-        let route_diagram = last_diagram.clone();
+        let route_display = last_display.clone();
         let route_coordinator = coordinator.clone();
         let route_callback: RouteCallback = Arc::new(move |status| {
             let events = route_events.clone();
             let delivery = route_delivery.clone();
-            let diagram = route_diagram.clone();
+            let diagram = route_display.clone();
             let coordinator = route_coordinator.clone();
             Box::pin(async move {
                 let generation = coordinator.generation();
@@ -422,7 +422,7 @@ impl AppState {
             turn_rx: Mutex::new(Some(turn_rx)),
             accepted_clips: Mutex::new((HashSet::new(), VecDeque::new())),
             stream_clips: Mutex::new(HashMap::new()),
-            last_diagram,
+            last_display,
             screen_state: Mutex::new(json!({
                 "view": "auto",
                 "has_visual": false,
@@ -1571,225 +1571,14 @@ async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Respons
 
     Json(json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})).into_response()
 }
-#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
-pub struct VisualItem {
-    #[serde(default)]
-    pub label: String,
-    #[serde(default)]
-    pub state: String,
-    #[serde(default)]
-    pub detail: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ms: Option<u64>,
-}
-
-#[derive(Deserialize)]
-struct Diagram {
-    #[serde(default)]
-    source: String,
-    #[serde(default)]
-    kind: String,
-    #[serde(default)]
-    items: Vec<VisualItem>,
-    #[serde(default)]
-    token: String,
-    #[serde(default)]
-    title: String,
-    #[serde(default)]
-    notes: String,
-}
-
-fn starts_with_keyword(line: &str, kw: &str) -> bool {
-    if let Some(head) = line.get(..kw.len()) {
-        if head.eq_ignore_ascii_case(kw) {
-            let rest = &line[kw.len()..];
-            return rest.is_empty()
-                || rest.starts_with(|c: char| c.is_whitespace() || c == ':' || c == '{');
-        }
-    }
-    false
-}
-
-fn validate_visual(req: &mut Diagram) -> Result<(), String> {
-    if req.title.len() > 200 {
-        return Err("title exceeds maximum limit of 200 bytes".into());
-    }
-    if req.notes.len() > 300 {
-        return Err("notes exceeds maximum limit of 300 bytes".into());
-    }
-
-    let kind = req.kind.trim();
-    match kind {
-        "" | "mermaid" => {
-            if req.source.trim().is_empty() {
-                return Err("mermaid source must not be empty".into());
-            }
-            if req.source.len() > 20000 {
-                return Err("mermaid source exceeds maximum limit of 20000 bytes".into());
-            }
-
-            let legal_classes = "legal classes: active, done, blocked, muted";
-            let mut active_count = 0;
-
-            for line in req.source.lines() {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                if trimmed.starts_with("%%") && !trimmed.starts_with("%%{init") {
-                    continue;
-                }
-
-                if starts_with_keyword(trimmed, "click") {
-                    return Err(
-                        "prohibited click directive in mermaid source (node selection is provided by the page)"
-                            .into(),
-                    );
-                }
-
-                if starts_with_keyword(trimmed, "classDef")
-                    || starts_with_keyword(trimmed, "style")
-                    || starts_with_keyword(trimmed, "linkStyle")
-                    || trimmed.starts_with("%%{init")
-                {
-                    return Err(format!(
-                        "prohibited styling directive in mermaid source ({})",
-                        legal_classes
-                    ));
-                }
-
-                if starts_with_keyword(trimmed, "class") {
-                    return Err(format!(
-                        "prohibited class statement in mermaid source ({})",
-                        legal_classes
-                    ));
-                }
-
-                let mut remainder = trimmed;
-                while let Some(pos) = remainder.find(":::") {
-                    let after = &remainder[pos + 3..];
-                    let name_end = after
-                        .find(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
-                        .unwrap_or(after.len());
-                    let class_name = &after[..name_end];
-                    if class_name.is_empty() {
-                        remainder = after;
-                        continue;
-                    }
-                    match class_name {
-                        "active" => {
-                            active_count += 1;
-                        }
-                        "done" | "blocked" | "muted" => {}
-                        _ => {
-                            return Err(format!(
-                                "invalid class :::{}, only :::active, :::done, :::blocked, :::muted are permitted ({})",
-                                class_name, legal_classes
-                            ));
-                        }
-                    }
-                    remainder = &after[name_end..];
-                }
-            }
-
-            if active_count > 1 {
-                return Err(format!(
-                    "at most one node may be :::active ({})",
-                    legal_classes
-                ));
-            }
-
-            Ok(())
-        }
-        "plan" | "timeline" => {
-            if req.items.is_empty() {
-                return Err(format!("{kind} requires at least 1 item"));
-            }
-            if req.items.len() > 40 {
-                return Err(format!("{kind} items exceed maximum limit of 40"));
-            }
-
-            let mut active_count = 0;
-            for (idx, item) in req.items.iter_mut().enumerate() {
-                if item.label.is_empty() {
-                    return Err(format!("{kind} item {} label must not be empty", idx + 1));
-                }
-                if item.label.len() > 200 {
-                    return Err(format!(
-                        "{kind} item {} label exceeds maximum limit of 200 bytes",
-                        idx + 1
-                    ));
-                }
-                if item.detail.len() > 300 {
-                    return Err(format!(
-                        "{kind} item {} detail exceeds maximum limit of 300 bytes",
-                        idx + 1
-                    ));
-                }
-                if let Some(ms) = item.ms {
-                    if kind == "plan" {
-                        return Err("ms is only valid on a timeline".into());
-                    }
-                    if ms > 86_400_000 {
-                        return Err(format!(
-                            "timeline item {} ms exceeds maximum limit of 86400000",
-                            idx + 1
-                        ));
-                    }
-                }
-                if item.state.trim().is_empty() {
-                    item.state = "todo".to_string();
-                }
-                match item.state.as_str() {
-                    "done" | "todo" | "blocked" => {}
-                    "active" => {
-                        active_count += 1;
-                    }
-                    _ => {
-                        return Err(format!(
-                            "invalid {kind} item state '{}', must be one of: done, active, todo, blocked",
-                            item.state
-                        ));
-                    }
-                }
-            }
-
-            if active_count > 1 {
-                return Err(format!("{kind} has more than one active item"));
-            }
-
-            Ok(())
-        }
-        "diff" => {
-            if req.source.trim().is_empty() {
-                return Err("diff source must not be empty".into());
-            }
-            if req.source.len() > 20000 {
-                return Err("diff source exceeds maximum limit of 20000 bytes".into());
-            }
-            if req.source.lines().count() > 600 {
-                return Err("diff exceeds maximum limit of 600 lines".into());
-            }
-            if !req.source.lines().any(|l| l.trim_start().starts_with("@@")) {
-                return Err("diff source must contain at least one @@ hunk header".into());
-            }
-
-            Ok(())
-        }
-        _ => Err(format!(
-            "unknown visual kind '{}', must be one of: mermaid, plan, timeline, diff",
-            req.kind
-        )),
-    }
-}
-
-async fn diagram(State(state): State<AppState>, Json(mut req): Json<Diagram>) -> Response {
+async fn diagram(
+    State(state): State<AppState>,
+    Json(req): Json<crate::visual_protocol::DisplayRequest>,
+) -> Response {
     promote_candidate_for_token(&state, &req.token);
     if let Err(error) = state.0.coordinator.accept_side_effect(&req.token) {
         let detail = match error {
-            crate::lifecycle::LifecycleError::CandidateSideEffect => {
-                "the caller's screen is not live until this transfer completes: draw it again on your next turn"
-            }
+            crate::lifecycle::LifecycleError::CandidateSideEffect => "the caller's screen is not live until this transfer completes: draw it again on your next turn",
             _ => "this leg is no longer on the call: stop retrying, nothing you send reaches the caller",
         };
         return (
@@ -1798,51 +1587,48 @@ async fn diagram(State(state): State<AppState>, Json(mut req): Json<Diagram>) ->
         )
             .into_response();
     }
-    if let Err(detail) = validate_visual(&mut req) {
-        return (
-            axum::http::StatusCode::BAD_REQUEST,
-            Json(json!({"delivered":false, "detail":detail})),
-        )
-            .into_response();
+    let raw = match serde_json::to_value(&req) {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({"delivered":false,"detail":"invalid action"})),
+            )
+                .into_response()
+        }
+    };
+    let value = match crate::visual_protocol::validate(&req, &raw) {
+        Ok(action) => json!({"type":"display", "action": action}),
+        Err(detail) => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({"delivered":false,"detail":detail})),
+            )
+                .into_response()
+        }
+    };
+    *state.0.last_display.lock().await = Some(value.clone());
+    // Keep the status snapshot truthful for clients that query it between events.
+    if let Some(action) = value.get("action") {
+        let mut screen = state.0.screen_state.lock().await;
+        if let Some(obj) = screen.as_object_mut() {
+            let op = action.get("op").and_then(Value::as_str).unwrap_or("");
+            if op == "show" {
+                obj.insert("has_visual".into(), true.into());
+                obj.insert(
+                    "visual_kind".into(),
+                    action
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .into(),
+                );
+            } else if op == "clear" {
+                obj.insert("has_visual".into(), false.into());
+                obj.insert("visual_kind".into(), "".into());
+            }
+        }
     }
-    let effective_kind = if req.kind.trim().is_empty() {
-        "mermaid"
-    } else {
-        req.kind.trim()
-    };
-    let value = if effective_kind == "plan" {
-        json!({
-            "type": "diagram",
-            "kind": "plan",
-            "items": req.items,
-            "title": req.title,
-            "notes": req.notes,
-        })
-    } else if effective_kind == "timeline" {
-        json!({
-            "type": "diagram",
-            "kind": "timeline",
-            "items": req.items,
-            "title": req.title,
-            "notes": req.notes,
-        })
-    } else if effective_kind == "diff" {
-        json!({
-            "type": "diagram",
-            "kind": "diff",
-            "source": req.source,
-            "title": req.title,
-            "notes": req.notes,
-        })
-    } else {
-        json!({
-            "type": "diagram",
-            "source": req.source,
-            "title": req.title,
-            "notes": req.notes,
-        })
-    };
-    *state.0.last_diagram.lock().await = Some(value.clone());
     let delivered = emit_json(&state, value);
     Json(delivery_response(delivered)).into_response()
 }
@@ -2124,7 +1910,7 @@ async fn send_snapshot_sink(
     for event in initial {
         send_event_sink(sink, event).await?;
     }
-    if let Some(diagram) = state.0.last_diagram.lock().await.clone() {
+    if let Some(diagram) = state.0.last_display.lock().await.clone() {
         send_event_sink(sink, Event::Json(diagram)).await?;
     }
     Ok(())

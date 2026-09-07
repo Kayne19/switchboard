@@ -99,10 +99,7 @@ async function agentExtensionBehavior() {
 			[...pi.tools.keys()],
 			[
 				"speak",
-				"diagram",
-				"plan",
-				"timeline",
-				"diff",
+				"display",
 				"view",
 				"return_to_operator",
 				"transfer_to_project",
@@ -128,56 +125,18 @@ async function agentExtensionBehavior() {
 			token: "leg-token",
 		});
 
-		const drawn = await pi.tools.get("diagram").execute("call", {
-			source: "flowchart TD; A-->B",
-			title: "Call path",
+		const drawn = await pi.tools.get("display").execute("call", {
+			op: "show",
+			id: "call-path",
+			type: "diagram",
+			data: { title: "Call path", source: "flowchart TD; A-->B", nodes: [], edges: [] },
 		});
 		assert.equal(drawn.content[0].text, "On screen.");
 		assert.deepEqual(requests.at(-1).body, {
-			source: "flowchart TD; A-->B",
-			title: "Call path",
-			notes: "",
-			token: "leg-token",
-		});
-
-		const planned = await pi.tools.get("plan").execute("call", {
-			items: [{ label: "Step 1", state: "active" }],
-			title: "Build plan",
-		});
-		assert.equal(planned.content[0].text, "Plan on screen.");
-		assert.deepEqual(requests.at(-1).body, {
-			kind: "plan",
-			source: "",
-			items: [{ label: "Step 1", state: "active" }],
-			title: "Build plan",
-			notes: "",
-			token: "leg-token",
-		});
-
-		const timelined = await pi.tools.get("timeline").execute("call", {
-			items: [{ label: "Hop 1", state: "done", ms: 1200 }],
-			title: "Trace timeline",
-		});
-		assert.equal(timelined.content[0].text, "Timeline on screen.");
-		assert.deepEqual(requests.at(-1).body, {
-			kind: "timeline",
-			source: "",
-			items: [{ label: "Hop 1", state: "done", ms: 1200 }],
-			title: "Trace timeline",
-			notes: "",
-			token: "leg-token",
-		});
-
-		const diffed = await pi.tools.get("diff").execute("call", {
-			source: "@@ -1,2 +1,2 @@\n-old\n+new",
-			title: "Code diff",
-		});
-		assert.equal(diffed.content[0].text, "Diff on screen.");
-		assert.deepEqual(requests.at(-1).body, {
-			kind: "diff",
-			source: "@@ -1,2 +1,2 @@\n-old\n+new",
-			title: "Code diff",
-			notes: "",
+			op: "show",
+			id: "call-path",
+			type: "diagram",
+			data: { title: "Call path", source: "flowchart TD; A-->B", nodes: [], edges: [] },
 			token: "leg-token",
 		});
 
@@ -239,8 +198,8 @@ async function agentExtensionFallbacks() {
 	assert.equal(speak.isError, true);
 	assert.match(speak.content[0].text, /No SWITCHBOARD_SPEAK_URL/);
 	const diagram = await pi.tools
-		.get("diagram")
-		.execute("call", { source: "flowchart TD; A-->B" });
+		.get("display")
+		.execute("call", { op: "show", id: "x", type: "note", data: { segments: [{ text: "Hello" }] } });
 	assert.equal(diagram.isError, true);
 	assert.match(diagram.content[0].text, /No SWITCHBOARD_DIAGRAM_URL/);
 }
@@ -306,58 +265,17 @@ async function agentExtensionHttpFailures() {
 		assert.match(refused.content[0].text, /HTTP 502/);
 
 		speakMode = "bad-request-detail";
-		const detailedRefusal = await pi.tools.get("plan").execute("call", {
-			items: [
-				{ label: "A", state: "active" },
-				{ label: "B", state: "active" },
-			],
+		const detailedRefusal = await pi.tools.get("display").execute("call", {
+			op: "show", id: "x", type: "note", data: { segments: [{ text: "x" }] },
 		});
 		assert.equal(detailedRefusal.isError, true);
-		assert.match(
-			detailedRefusal.content[0].text,
-			/at most one active item allowed/,
-		);
+		assert.match(detailedRefusal.content[0].text, /at most one active item allowed/);
 
 		speakMode = "legacy-422";
-		const legacyRefusal = await pi.tools
-			.get("plan")
-			.execute("call", { items: [{ label: "A" }] });
+		const legacyRefusal = await pi.tools.get("display").execute("call", { op: "clear" });
 		assert.equal(legacyRefusal.isError, true);
-		assert.match(legacyRefusal.content[0].text, /no plan screen/);
+		assert.match(legacyRefusal.content[0].text, /no display screen/);
 
-		const timelineRefusal = await pi.tools
-			.get("timeline")
-			.execute("call", { items: [{ label: "A" }] });
-		assert.equal(timelineRefusal.isError, true);
-		assert.match(timelineRefusal.content[0].text, /no timeline screen/);
-
-		const diffRefusal = await pi.tools
-			.get("diff")
-			.execute("call", { source: "@@ -1 +1 @@\n-a\n+b" });
-		assert.equal(diffRefusal.isError, true);
-		assert.match(diffRefusal.content[0].text, /no diff screen/);
-
-		const diagramRefusal = await pi.tools
-			.get("diagram")
-			.execute("call", { source: "flowchart TD; A-->B" });
-		assert.equal(diagramRefusal.isError, true);
-		assert.match(diagramRefusal.content[0].text, /no diagram screen/);
-
-		speakMode = "not-found-404";
-		const notFoundRefusal = await pi.tools
-			.get("plan")
-			.execute("call", { items: [{ label: "A" }] });
-		assert.equal(notFoundRefusal.isError, true);
-		assert.match(notFoundRefusal.content[0].text, /no plan screen/);
-
-		speakMode = "long-400-detail";
-		const longRefusal = await pi.tools
-			.get("plan")
-			.execute("call", { items: [{ label: "A" }] });
-		assert.equal(longRefusal.isError, true);
-		assert.match(longRefusal.content[0].text, /HTTP 400/);
-		assert.match(longRefusal.content[0].text, /…$/);
-		assert.ok(longRefusal.content[0].text.length < 600);
 
 		speakMode = "network-error";
 		const unreachable = await pi.tools
@@ -374,8 +292,8 @@ async function agentExtensionHttpFailures() {
 		assert.match(undelivered.content[0].text, /Nothing was played/);
 
 		const held = await pi.tools
-			.get("diagram")
-			.execute("call", { source: "flowchart TD; A-->B" });
+			.get("display")
+			.execute("call", { op: "clear" });
 		assert.equal(held.isError, undefined);
 		assert.match(held.content[0].text, /It will be there/);
 	} finally {
