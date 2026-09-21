@@ -476,15 +476,16 @@ impl Coordinator {
         let (abandoned_candidate, route, next) = self.linearize(|state| {
             let abandoned = state.candidate.take().is_some();
             let route = state.route.clone();
+            let next_token = format!("{}-rescue-{}", state.leg.token, state.leg.generation + 1);
             if state.phase == Phase::Shutdown {
-                state.leg = LegIdentity::new(state.leg.token.clone(), state.leg.generation + 1);
+                state.leg = LegIdentity::new(next_token, state.leg.generation + 1);
                 self.refresh_locked(state);
                 return (abandoned, route, state.leg.clone());
             }
             state.phase = Phase::Quiescing;
             state.operation = None;
             state.terminal_reason = Some(reason.into());
-            state.leg = LegIdentity::new(state.leg.token.clone(), state.leg.generation + 1);
+            state.leg = LegIdentity::new(next_token, state.leg.generation + 1);
             self.refresh_locked(state);
             (abandoned, route, state.leg.clone())
         });
@@ -574,17 +575,16 @@ impl Coordinator {
             if matches!(state.phase, Phase::Starting | Phase::Intro) {
                 return Err(LifecycleError::CandidateSideEffect);
             }
-            if token.is_empty() {
-                if state.route == OPERATOR {
+            if matches!(state.phase, Phase::Quiescing | Phase::Shutdown) {
+                return Err(LifecycleError::StaleLeg);
+            }
+            if state.route == OPERATOR {
+                if token.is_empty() || token == state.leg.token {
                     return Ok(());
                 }
                 return Err(LifecycleError::StaleLeg);
             }
-            if state.route == OPERATOR
-                || state.leg.token != token
-                || state.operation.is_none()
-                || matches!(state.phase, Phase::Quiescing | Phase::Shutdown)
-            {
+            if token.is_empty() || state.leg.token != token || state.operation.is_none() {
                 return Err(LifecycleError::StaleLeg);
             }
             Ok(())
@@ -787,7 +787,8 @@ impl Coordinator {
             }
             state.phase = Phase::Quiescing;
             state.operation = None;
-            state.leg = LegIdentity::new(state.leg.token.clone(), state.leg.generation + 1);
+            let next_token = format!("{}-idle-{}", state.leg.token, state.leg.generation + 1);
+            state.leg = LegIdentity::new(next_token, state.leg.generation + 1);
             self.refresh_locked(state);
             Some(state.leg.clone())
         })
@@ -800,7 +801,9 @@ impl Coordinator {
             } else {
                 state.phase = Phase::Shutdown;
                 state.operation = None;
-                state.leg = LegIdentity::new(state.leg.token.clone(), state.leg.generation + 1);
+                let next_token =
+                    format!("{}-shutdown-{}", state.leg.token, state.leg.generation + 1);
+                state.leg = LegIdentity::new(next_token, state.leg.generation + 1);
                 self.refresh_locked(state);
                 true
             }

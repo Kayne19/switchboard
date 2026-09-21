@@ -60,35 +60,44 @@ test("production adapter maps backend traffic into semantic scenes", async ({
   );
 
   await publish(page, "server", {
-    type: "diagram",
-    kind: "plan",
-    title: "Frontend cutover",
-    notes: "Transport stays isolated.",
-    items: [
-      { label: "Connect transport", state: "done" },
-      { label: "Render V17", state: "active" },
-    ],
+    type: "display",
+    action: {
+      op: "show",
+      id: "live-route",
+      type: "diagram",
+      role: "primary",
+      data: {
+        mode: "graph",
+        title: "Live route",
+        nodes: [
+          { id: "browser", label: "Browser" },
+          { id: "agent", label: "Project agent", state: "active" },
+        ],
+        edges: [{ from: "browser", to: "agent", label: "route" }],
+      },
+    },
   });
   await expect(page.locator('[data-scene="architecture"]')).toBeVisible();
-  await expect(page.locator('[data-testid="diagram"]')).toContainText(
-    "Render V17",
-  );
-
-  await publish(page, "server", {
-    type: "diagram",
-    title: "Live route",
-    source: "flowchart TD\n  Browser[Browser] --> Agent[Project agent]",
-  });
   await expect(page.locator('[data-testid="diagram"] svg')).toBeVisible();
   await expect(page.locator('[data-testid="diagram"]')).toContainText(
     "Project agent",
   );
 
   await publish(page, "server", {
-    type: "diagram",
-    kind: "diff",
-    title: "Live changes",
-    source: "@@ -1 +1 @@\n-old shell\n+new shell",
+    type: "display",
+    action: {
+      op: "show",
+      id: "live-route",
+      type: "code",
+      role: "primary",
+      data: {
+        title: "Live changes",
+        file: "patch.diff",
+        source: {
+          text: "@@ -1 +1 @@\n-old shell\n+new shell",
+        },
+      },
+    },
   });
   await expect(page.locator('[data-scene="code"]')).toBeVisible();
   await expect(page.locator('[data-testid="code"]')).toContainText(

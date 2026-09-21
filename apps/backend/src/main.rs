@@ -51,6 +51,10 @@ pub struct Config {
 }
 
 impl Config {
+    pub fn display_url(&self) -> &str {
+        &self.diagram_url
+    }
+
     pub fn from_env() -> Self {
         let (values, env_file) = Self::values_from_env();
         Self::from_values(&values, env_file)
@@ -122,7 +126,7 @@ impl Config {
             session: get(values, "SWITCHBOARD_SESSION", ""),
             speak_url: get(values, "SWITCHBOARD_SPEAK_URL", ""),
             state_url: get(values, "SWITCHBOARD_STATE_URL", ""),
-            diagram_url: get(values, "SWITCHBOARD_DIAGRAM_URL", ""),
+            diagram_url: get(values, "SWITCHBOARD_DISPLAY_URL", ""),
             environment: values.clone(),
         }
     }
@@ -384,7 +388,7 @@ async fn main() {
         config.model_swaps,
         callback_url(&config.speak_url, "speak"),
         callback_url(&config.state_url, "leg-state"),
-        callback_url(&config.diagram_url, "diagram"),
+        callback_url(config.display_url(), "display"),
         config.persona.clone(),
         config.environment.clone(),
     );

@@ -5,6 +5,7 @@ import { FocusLayer } from "./FocusLayer";
 import {
   ArchitectureScene,
   CodeScene,
+  ComposedScene,
   ConversationScene,
   DocumentScene,
   IdleScene,
@@ -55,6 +56,9 @@ export function SceneRenderer() {
             <DocumentScene key="document" {...shared} />
           ) : null}
           {kind === "code" ? <CodeScene key="code" {...shared} /> : null}
+          {kind === "composed" ? (
+            <ComposedScene key="composed" {...shared} />
+          ) : null}
         </AnimatePresence>
         <FocusLayer
           object={focusedObject}

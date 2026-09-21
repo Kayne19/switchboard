@@ -64,11 +64,12 @@ switchboard connects to has none of that.
 
 ## Showing rather than saying
 
-Some answers are a shape, not a sentence. Project agents can push Mermaid
-diagrams, live plans, timelines, and diffs to the caller's page while they are
-still working. These use `POST /diagram` and the browser's existing WebSocket,
-just as `speak` uses `POST /speak`; visual output does not change routing or
-speech synthesis.
+Some answers are a shape, not a sentence. Project agents push structured
+display actions (`show`, `hide`, `say`, `focus`, `clear`) across seven content
+types (`chart`, `metric`, `progress`, `diagram`, `document`, `code`, `note`)
+to the caller's page mid-turn. These use `POST /display` and the browser's
+existing WebSocket, just as `speak` uses `POST /speak`; display output does not
+change routing or speech synthesis.
 
 The visual stage is not a permanent empty dashboard panel. It appears when an
 artifact exists and collapses completely when it does not. The caller can focus
@@ -82,12 +83,10 @@ title, stale status, and browser connection state; calling it with a target
 requests the same workspace change exposed by the visible controls. This lets
 the agent know what the caller can actually see instead of guessing.
 
-Mermaid source is validated and sanitized before rendering; structured plans,
-timelines, and diffs are written with `textContent`. A malformed diagram keeps
-the previous visual, and an unavailable Mermaid renderer shows its source rather
-than leaving a blank screen. The product and layout contract is in
-`docs/frontend-command-station-architecture.md`; payload details are in
-`docs/diagram-tool.md`.
+Display actions are strictly validated before acceptance; structured graphs,
+tables, and text are sanitized by the browser renderer. The product and layout
+contract is in `docs/frontend-command-station-architecture.md`; payload details
+are in `diagram-tool.md` and `docs/visual-channel.md`.
 
 ## Who decides where the caller goes
 
@@ -174,7 +173,7 @@ operator is never re-dialled for this; its level is a deployed setting.
 
 Project callbacks carry `SWITCHBOARD_SESSION_TOKEN`, an opaque token freshly
 created for each process and distinct from the persistent Pi session ID. It
-rejects stale speech, diagram, and thinking callbacks after a redial; it is a
+rejects stale speech, display, and thinking callbacks after a redial; it is a
 correlation value, not authentication. A failed `/speak` delivery is reported
 as an extension tool error, so the written reply remains eligible for fallback
 synthesis rather than being suppressed by a tool-start event.
@@ -255,9 +254,9 @@ test it manually and then fails with "command not found" for the switchboard.
 | `docs/hands-free.md` | hands-free lifecycle, asset provenance, and license obligations |
 | `apps/backend/src/` | Rust service: API, routing, pi sessions, registry, models, history, audio |
 | `extensions/*.ts` | plain TypeScript pi extensions; homelab templates remain authoritative until cutover |
-| `docs/diagram-tool.md` | the `diagram` tool: payload, rendering, layout, and what was left out |
+| `docs: diagram-tool.md` | the `display` tool: payload, operations, layout, and composition |
 | `legacy/tests/` | Python compatibility tests (`python3 -m unittest discover -s legacy/tests`) |
-| `apps/frontend/tests/` | Node browser/diagram and pi-extension tests |
+| `apps/frontend/tests/` | Node browser, display, and pi-extension tests |
 
 ## Agent persona deployment contract
 

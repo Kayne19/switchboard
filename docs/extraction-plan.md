@@ -139,3 +139,8 @@ and it makes the move itself a pure relocation.
 - **A bad tag is now a two-step rollback**: put the old tag back here, PR, merge.
   Slower than reverting a file. Acceptable, but know it before an outage.
 - **The service restart drops a live call.** Already true today.
+- **Display channel cutover coordination.** The display transport replaced the
+  legacy diagram endpoint with `POST /display` and `SWITCHBOARD_DISPLAY_URL`
+  without compatibility aliases. Deploying this change requires bumping
+  `switchboard_version` in `ansible/roles/damocles/defaults/main.yml` and
+  updating `switchboard.env.j2` simultaneously via a Homelab PR.
