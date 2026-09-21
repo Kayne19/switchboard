@@ -2,85 +2,96 @@
 
 A project agent pushes anything it wants the caller to *see* — a diagram, a chart, a metric, a progress list, a document, code, or a plain note — to the caller's page mid-turn, the same way it pushes speech. The caller sees it render while the agent is still working. **The agent chooses what to show and how it is composed; the page owns the pixels.** `docs/visual-channel.md` is the product/capability companion to this wire contract.
 
-## Why it is shaped like `speak`
+## Wire shape and transport
 
-`speak` already solved this problem. A tool that must reach the browser *during* a turn cannot wait for the RPC stream to settle, so it POSTs to this service and the service broadcasts on the socket the browser is already holding. `display` reuses that pattern, preserving the environment-file contract without a new endpoint or a new variable.
+The agent tool `display` posts an envelope containing the current leg token and the canonical `DisplayAction`:
 
-| piece | `speak` | `display` |
-| --- | --- | --- |
-| env var handed to the agent | `SWITCHBOARD_SPEAK_URL` | `SWITCHBOARD_DIAGRAM_URL` (**unchanged**) |
-| endpoint | `POST /speak` | `POST /diagram` (**unchanged** — name kept for compatibility) |
-| broadcast | `{"type":"spoken"}` + mp3 bytes | `{"type":"display","action":{...}}` |
+| piece | contract |
+| --- | --- |
+| env var handed to the agent | `SWITCHBOARD_DISPLAY_URL` |
+| intake endpoint | `POST /display` (outer envelope: `{ token, action }`) |
+| view endpoint | Derived via `new URL("/view", DISPLAY_URL)` |
+| broadcast | `{"type":"display","action":<normalized>}` |
 
-`display` **replaces** the old per-kind `diagram`/`plan`/`timeline`/`diff` tools with one general tool. The endpoint path and the env var are unchanged; only the payload changed — from a per-kind body to a protocol action. The tool is still deliberately **not** a `SIGNAL_TOOL` in `piclient.py` (a visual changes neither routing nor re-synthesis).
+`display` replaces separate per-kind tools with a single semantic tool. The parameters passed to `display` represent exactly one `DisplayAction`.
 
-## The action protocol
+## The DisplayAction v1 protocol
 
-Every call is a protocol action:
+Every action is a discriminated union member:
 
 ```ts
-{ op, id, type, role, data, text, target, at }
+type DisplayAction =
+  | { op: 'show'; id: string; type: AgentObjectType; role?: SceneObjectRole; data: unknown }
+  | { op: 'hide'; id: string }
+  | { op: 'focus'; id: string }
+  | { op: 'say'; text: string; target?: string; at?: { x?: number; series?: string } | null }
+  | { op: 'clear' };
 ```
 
-- **ops** (one per call): `show | focus | hide | clear | say`. There is **no** `listen` on this channel.
-- **content types** (for `show`): `chart | metric | progress | diagram | document | code | note`. `message` is a runtime-owned transcript, **not** a display type.
+- **ops** (one per call): `show | focus | hide | clear | say`. There is **no** `listen` on this public channel (`listen` is internal-only).
+- **content types** (for `show`): `chart | metric | progress | diagram | document | code | note`. `message` is a runtime-owned transcript, **not** an agent display type.
 - **roles** (composition slot): `primary | compare | secondary | ambient`.
-- **`id`**: agent-owned and stable across updates (re-send the same `id` to replace the object). The runtime reserves its own ID namespace for conversation/presence.
-- **`target`**: the object id for `focus`/`hide`/`say` (`clear` takes none).
-- **`at`**: client clock; `null` means "now".
+- **`id`**: agent-owned and stable across updates (re-sending the same `id` replaces the object in place). Agent IDs must not begin with the reserved `__runtime/` namespace.
+- **`target`**: the object id to anchor a `say` action (must not begin with `__runtime/`).
+- **`at`**: speech anchor object containing at least one of `x` (finite number) and `series` (string <= 128 UTF-16 code units), or explicit `null`; omitted `at` normalizes to `null`.
 
 ### show (create or update)
 ```json
-{ "op":"show", "id":"arch", "type":"diagram", "role":"primary",
-  "data":{ "kind":"mermaid", "source":"flowchart TD\n  A --> B" } }
+{
+  "op": "show",
+  "id": "arch",
+  "type": "diagram",
+  "role": "primary",
+  "data": {
+    "mode": "graph",
+    "nodes": [
+      { "id": "a", "label": "Client" },
+      { "id": "b", "label": "Server" }
+    ],
+    "edges": [
+      { "from": "a", "to": "b", "label": "HTTP" }
+    ]
+  }
+}
 ```
+
 ### focus / hide / clear / say
 ```json
-{ "op":"focus", "target":"arch" }
-{ "op":"hide",  "target":"arch" }
-{ "op":"clear" }
-{ "op":"say",   "target":"arch", "text":"watch the red edge" }
+{ "op": "focus", "id": "arch" }
+{ "op": "hide",  "id": "arch" }
+{ "op": "clear" }
+{ "op": "say",   "text": "watch the connection edge", "target": "arch", "at": { "series": "HTTP" } }
 ```
 
 ## Content types
 
-| type | `data` shape (excess fields rejected) | what the page renders |
+| type | `data` shape (`additionalProperties: false`) | what the page renders |
 | --- | --- | --- |
-| `chart` | `{ kind: "bar"\|"line"\|"pie"\|"spark", series: [{label, values[], color?}], labels?, unit? }` | SVG chart |
-| `metric` | `{ label, value, unit?, trend? }` | numeric gauge |
-| `progress` | `{ items: [{label, state, note?}], note? }` | plan/checklist rail |
-| `diagram` | `{ kind: "mermaid", source }` | Mermaid graph (semantic classes only) |
-| `document` | `{ blocks: [{ heading?, paragraph?, bullets?, code? }] }` | document blocks |
-| `code` | `{ language?, lines: [{ text, op?: "add"\|"del"\|"ctx" }] }` | diff/code view |
-| `note` | `{ text }` | plain aside (the agent's own words) |
+| `chart` | `{ series: [{ name, values[], semantic? }], title?, subtitle?, context?, xLabel?, yLabel?, xMax?, yMin?, yMax?, marker?, compareLabel? }` | SVG chart |
+| `metric` | `{ label, value, semantic? }` | numeric gauge |
+| `progress` | `{ label, value, detail?, text? }` | progress indicator |
+| `diagram` | `{ mode: "graph", nodes: [{ id, label, sub?, detail?, semantic?, state? }], edges: [{ from, to, label?, semantic?, active? }], title?, subtitle?, context? }` | SVG semantic graph |
+| `document` | `{ subject, paragraphs: string[], kind?: "email"\|"document", context?, source?, from?, timestamp? }` | document reader |
+| `code` | `{ source: { text, language?, highlight? }, title?, file?, context? }` | syntax/diff view |
+| `note` | `{ segments: [{ text, accent?, bold?, semantic? }], tag? }` | plain aside |
 
-A composition is a set of `show`s with distinct `id`s and roles — e.g. a `diagram` as `primary`, a `note` as `secondary`, a `metric` as `ambient`. The page lays the roles out; the agent never sends coordinates.
+A composed scene is built from multiple `show` actions with distinct `id`s and roles (e.g. `diagram` as `primary`, `note` as `secondary`, `metric` as `ambient`). The page owns layout, geometry, and styling.
 
-## Validation & caps (one source, mirrored)
+### Diagram v1 rules
+- Diagram data requires `mode: "graph"`. Mermaid source (`source`) is rejected/deferred in v1.
+- `nodes`: 1 to 100 items. Node IDs must be unique strings (1-128 UTF-16 code units).
+- `edges`: 0 to 200 items. Both `from` and `to` endpoints must exist in `nodes`. Self-loops (`from === to`) and duplicate `(from, to)` pairs are rejected.
 
-The **canonical** validation is `apps/frontend/src/controller/validation.ts`. The backend holds a Rust mirror, `apps/backend/src/visual_protocol.rs`, so a malformed action is rejected at the wire (HTTP 400, before any socket fan-out) and the frontend re-validates on receipt and replay. The mirrors are asserted equivalent by tests in both languages.
+## Canonical schema & validation rules
 
-- `id` ≤ 128 UTF-16 code units; `text` ≤ 50,000.
-- `chart`/`metric`/`progress` enforce exact data shapes; chart values and progress states must be finite / in the allowed set.
-- **256 KB** serialized action cap (the transport remains 64 KB per request).
-- **Recursive layout-field rejection**: `layout`, `style`, `css`, `className`, `width`, `height`, `left`, `right`, `top`, `bottom` anywhere in an action are rejected — the page owns geometry.
-- **Reserved IDs**: the runtime's conversation/presence namespace cannot be displayed or addressed.
-- Rejections return `{"delivered":false,"detail":"<reason>"}` and are **not** broadcast.
+The canonical contract is defined in `docs/display-action-v1.schema.json` and exercised by `apps/frontend/tests/fixtures/display-actions.json`. Both the TypeScript frontend validator (`apps/frontend/src/controller/validation.ts`) and the Rust backend validator (`apps/backend/src/visual_protocol.rs`) enforce identical rules:
 
-## Endpoint
+- **Action size**: Serialized action JSON must not exceed **48,000 UTF-8 bytes** (HTTP request body <= 64 KiB).
+- **String caps (UTF-16 code units)**: `id` <= 128; `text` <= 50,000; short labels/tags <= 128; titles/details <= 256. Astral Unicode characters (such as emojis) count as 2 UTF-16 code units.
+- **Numbers**: All numbers must be finite; `NaN`, `Infinity`, and `-Infinity` are rejected.
+- **Layout rejection**: Recursive rejection of `layout`, `style`, `css`, `className`, `width`, `height`, `left`, `right`, `top`, `bottom`.
+- **Reserved namespace**: Agent IDs must not begin with `__runtime/`.
+- **Safety**: Raw HTML/JS markup (`<script`, `<iframe`, `javascript:`, etc.) and external resource URLs (`http://`, `https://`, `//`) are rejected.
+- **Unknown fields**: All schema branches specify `additionalProperties: false`; unexpected fields are rejected.
 
-`POST /diagram` (64 KB body cap, `SWITCHBOARD_TOKEN` bearer auth). Body = the action object plus `token`. Success returns `{"delivered":true,"action":{...}}` and broadcasts `{"type":"display","action":{...}}` (token stripped).
-
-## Replay & state
-
-- **`last_display`**: the last successful action. New browser sockets replay it (re-validated before applying).
-- **`screen_state`**: `has_visual`/`visual_kind` track the visible object — `show` sets them, `clear` clears them; `say`/`focus`/`hide` leave them as-is. The agent inspects `screen_state` via `view` rather than assuming its request landed.
-
-## Trust & safety
-
-- **Raw HTML / arbitrary markup is refused** — every type renders from structured data via `textContent` (never `innerHTML`); Mermaid runs with `securityLevel: "antiscript"`.
-- **No new endpoint, no new env var** — the whole channel multiplexes over `POST /diagram` and the existing socket, so the Switchboard↔homelab env contract is unchanged.
-
-## Deployment
-
-Backend, browser build, and extension move in a **single container** and redeploy together (no dual-emit shims, no version matrix). The extension is the only cross-boundary artifact (it ships via a homelab PR). Rollback is a plain revert of the commit.
+Rejections return `{"delivered":false,"detail":"<reason>"}` and are neither stored in display state nor broadcast.

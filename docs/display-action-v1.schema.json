@@ -1,0 +1,810 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://switchboard.internal/schemas/display-action-v1.json",
+  "title": "DisplayAction",
+  "description": "Canonical Switchboard DisplayAction v1 specification.",
+  "oneOf": [
+    {
+      "$ref": "#/definitions/ShowChartAction"
+    },
+    {
+      "$ref": "#/definitions/ShowMetricAction"
+    },
+    {
+      "$ref": "#/definitions/ShowProgressAction"
+    },
+    {
+      "$ref": "#/definitions/ShowDiagramAction"
+    },
+    {
+      "$ref": "#/definitions/ShowDocumentAction"
+    },
+    {
+      "$ref": "#/definitions/ShowCodeAction"
+    },
+    {
+      "$ref": "#/definitions/ShowNoteAction"
+    },
+    {
+      "$ref": "#/definitions/HideAction"
+    },
+    {
+      "$ref": "#/definitions/FocusAction"
+    },
+    {
+      "$ref": "#/definitions/SayAction"
+    },
+    {
+      "$ref": "#/definitions/ClearAction"
+    }
+  ],
+  "definitions": {
+    "Identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^(?!__runtime/).+$"
+    },
+    "Role": {
+      "type": "string",
+      "enum": [
+        "primary",
+        "compare",
+        "secondary",
+        "ambient"
+      ]
+    },
+    "Semantic": {
+      "type": "string",
+      "enum": [
+        "red",
+        "orange",
+        "green",
+        "cyan",
+        "amber",
+        "paper",
+        "muted"
+      ]
+    },
+    "ChartSeries": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "semantic": {
+          "$ref": "#/definitions/Semantic"
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "values"
+      ],
+      "additionalProperties": false
+    },
+    "ChartMarker": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "series": {
+          "type": "string",
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "x"
+      ],
+      "additionalProperties": false
+    },
+    "ChartData": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "subtitle": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "context": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "xLabel": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "yLabel": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "xMax": {
+          "type": "number"
+        },
+        "yMin": {
+          "type": "number"
+        },
+        "yMax": {
+          "type": "number"
+        },
+        "series": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ChartSeries"
+          }
+        },
+        "marker": {
+          "$ref": "#/definitions/ChartMarker"
+        },
+        "compareLabel": {
+          "type": "string",
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "series"
+      ],
+      "additionalProperties": false
+    },
+    "MetricData": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "value": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "semantic": {
+          "$ref": "#/definitions/Semantic"
+        }
+      },
+      "required": [
+        "label",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "ProgressData": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "value": {
+          "type": "number"
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "label",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "DiagramNode": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "sub": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "semantic": {
+          "$ref": "#/definitions/Semantic"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "done",
+            "active",
+            "todo",
+            "blocked"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "additionalProperties": false
+    },
+    "DiagramEdge": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "to": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "semantic": {
+          "$ref": "#/definitions/Semantic"
+        },
+        "active": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "additionalProperties": false
+    },
+    "DiagramData": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "subtitle": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "context": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "graph"
+          ]
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DiagramNode"
+          },
+          "minItems": 1,
+          "maxItems": 100
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DiagramEdge"
+          },
+          "maxItems": 200
+        }
+      },
+      "required": [
+        "mode",
+        "nodes",
+        "edges"
+      ],
+      "additionalProperties": false
+    },
+    "DocumentData": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "email",
+            "document"
+          ]
+        },
+        "context": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "source": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "from": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "timestamp": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "subject": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "paragraphs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 50000
+          }
+        }
+      },
+      "required": [
+        "subject",
+        "paragraphs"
+      ],
+      "additionalProperties": false
+    },
+    "CodeSource": {
+      "type": "object",
+      "properties": {
+        "language": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 50000
+        },
+        "highlight": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "CodeData": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "file": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "context": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "source": {
+          "$ref": "#/definitions/CodeSource"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "additionalProperties": false
+    },
+    "RichSegment": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "maxLength": 50000
+        },
+        "accent": {
+          "type": "boolean"
+        },
+        "bold": {
+          "type": "boolean"
+        },
+        "semantic": {
+          "$ref": "#/definitions/Semantic"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "NoteData": {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "segments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RichSegment"
+          }
+        }
+      },
+      "required": [
+        "segments"
+      ],
+      "additionalProperties": false
+    },
+    "ShowChartAction": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "show"
+          ]
+        },
+        "id": {
+          "$ref": "#/definitions/Identifier"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "chart"
+          ]
+        },
+        "role": {
+          "$ref": "#/definitions/Role"
+        },
+        "data": {
+          "$ref": "#/definitions/ChartData"
+        }
+      },
+      "required": [
+        "op",
+        "id",
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "ShowMetricAction": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "show"
+          ]
+        },
+        "id": {
+          "$ref": "#/definitions/Identifier"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "metric"
+          ]
+        },
+        "role": {
+          "$ref": "#/definitions/Role"
+        },
+        "data": {
+          "$ref": "#/definitions/MetricData"
+        }
+      },
+      "required": [
+        "op",
+        "id",
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "ShowProgressAction": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "show"
+          ]
+        },
+        "id": {
+          "$ref": "#/definitions/Identifier"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "progress"
+          ]
+        },
+        "role": {
+          "$ref": "#/definitions/Role"
+        },
+        "data": {
+          "$ref": "#/definitions/ProgressData"
+        }
+      },
+      "required": [
+        "op",
+        "id",
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "ShowDiagramAction": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "show"
+          ]
+        },
+        "id": {
+          "$ref": "#/definitions/Identifier"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "diagram"
+          ]
+        },
+        "role": {
+          "$ref": "#/definitions/Role"
+        },
+        "data": {
+          "$ref": "#/definitions/DiagramData"
+        }
+      },
+      "required": [
+        "op",
+        "id",
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "ShowDocumentAction": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "show"
+          ]
+        },
+        "id": {
+          "$ref": "#/definitions/Identifier"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "document"
+          ]
+        },
+        "role": {
+          "$ref": "#/definitions/Role"
+        },
+        "data": {
+          "$ref": "#/definitions/DocumentData"
+        }
+      },
+      "required": [
+        "op",
+        "id",
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "ShowCodeAction": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "show"
+          ]
+        },
+        "id": {
+          "$ref": "#/definitions/Identifier"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "code"
+          ]
+        },
+        "role": {
+          "$ref": "#/definitions/Role"
+        },
+        "data": {
+          "$ref": "#/definitions/CodeData"
+        }
+      },
+      "required": [
+        "op",
+        "id",
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "ShowNoteAction": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "show"
+          ]
+        },
+        "id": {
+          "$ref": "#/definitions/Identifier"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "note"
+          ]
+        },
+        "role": {
+          "$ref": "#/definitions/Role"
+        },
+        "data": {
+          "$ref": "#/definitions/NoteData"
+        }
+      },
+      "required": [
+        "op",
+        "id",
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "HideAction": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "hide"
+          ]
+        },
+        "id": {
+          "$ref": "#/definitions/Identifier"
+        }
+      },
+      "required": [
+        "op",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "FocusAction": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "focus"
+          ]
+        },
+        "id": {
+          "$ref": "#/definitions/Identifier"
+        }
+      },
+      "required": [
+        "op",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "SpeechAnchor": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "series": {
+          "type": "string",
+          "maxLength": 128
+        }
+      },
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "x"
+          ]
+        },
+        {
+          "required": [
+            "series"
+          ]
+        }
+      ]
+    },
+    "SayAction": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "say"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50000
+        },
+        "target": {
+          "$ref": "#/definitions/Identifier"
+        },
+        "at": {
+          "oneOf": [
+            {
+              "$ref": "#/definitions/SpeechAnchor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "ClearAction": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "clear"
+          ]
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "additionalProperties": false
+    },
+    "DisplayEnvelope": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string"
+        },
+        "action": {
+          "$ref": "#"
+        }
+      },
+      "required": [
+        "token",
+        "action"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

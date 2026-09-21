@@ -1,21 +1,3 @@
-export type VisualKind = "mermaid" | "plan" | "timeline" | "diff";
-
-export interface VisualItem {
-	label: string;
-	state?: "done" | "active" | "todo" | "blocked" | string;
-	detail?: string;
-	ms?: number;
-}
-
-export interface DiagramMessage extends BrowserMessage {
-	type: "diagram";
-	kind?: VisualKind;
-	source?: string;
-	items?: VisualItem[];
-	title?: string;
-	notes?: string;
-}
-
 export function decodeServerMessage(text: string): BrowserMessage | null {
 	try {
 		const value: unknown = JSON.parse(text);
@@ -52,9 +34,12 @@ export function helloMessage(): string {
 export function screenStateMessage(
 	view: string,
 	hasVisual: boolean,
-	visualKind: string,
+	visualKind: string | null,
 	title: string,
 	stale: boolean,
+	generation?: number,
+	pinned?: boolean,
+	objectIds?: string[],
 ): string {
 	return JSON.stringify({
 		type: "screen_state",
@@ -63,6 +48,9 @@ export function screenStateMessage(
 		visual_kind: visualKind,
 		title,
 		stale,
+		...(generation !== undefined ? { generation } : {}),
+		...(pinned !== undefined ? { pinned } : {}),
+		...(objectIds !== undefined ? { object_ids: objectIds } : {}),
 	});
 }
 

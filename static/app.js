@@ -1,7 +1,8 @@
-import { clipHeader, decodeServerMessage, helloMessage, postJson, screenStateMessage, sttChunkHeader, sttEndHeader, sttStartHeader, sttCancelHeader, } from "./protocol.js";
+import { clipHeader, decodeServerMessage, helloMessage, postJson, sttChunkHeader, sttEndHeader, sttStartHeader, sttCancelHeader, } from "./protocol.js";
 import { HandsFreeController, PLAYBACK_DRAIN_DEBOUNCE_MS, } from "./hands_free.js";
-import { historyBack, historyForward, historyLive, markStale, renderVisual, } from "./stage.js";
-import "./diff.js";
+function markStale() {
+    document.body.classList.add("stage-stale");
+}
 import { initMissionClock, initSynchro, } from "./synchro.js";
 function getElement(id) {
     const element = document.getElementById(id);
@@ -144,6 +145,9 @@ let streamingSelected = false;
 // is the earliest knowable moment; the server cannot see it, because upload and
 // transcription both happen afterwards.
 let turnEpoch = 0;
+// The destination route the browser has been told is connecting, or null.
+// Clips recorded while this is set are addressed to the incoming leg.
+let transferEra = null;
 let socketGeneration = 0;
 let snapshotReady = false;
 let heartbeatSequence = 0;
@@ -429,6 +433,21 @@ function renderHistory(entries = []) {
             appendTurn(pendingEntry(clip));
     });
     logEl.scrollTop = logEl.scrollHeight;
+}
+// A flat transcript would keep reading as the previous leg's conversation
+// after a handoff. Mark the seam so the caller can see where one leg ends
+// and the next begins.
+function appendRouteDivider(label) {
+    const divider = document.createElement("div");
+    divider.className = "turn divider";
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = `\u2014 ${label} \u2014`;
+    divider.appendChild(meta);
+    const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
+    logEl.appendChild(divider);
+    if (atBottom)
+        logEl.scrollTop = logEl.scrollHeight;
 }
 function cleanupOwner(owner) {
     if (playbackOwner === owner)
@@ -870,6 +889,7 @@ function setRoute(msg) {
     const currentRoute = msg.route || "operator";
     if (lastRoute !== undefined && lastRoute !== currentRoute) {
         markStale();
+        appendRouteDivider(msg.label || currentRoute);
     }
     lastRoute = currentRoute;
     const onProject = Boolean(msg.route && msg.route !== "operator");
@@ -1050,6 +1070,21 @@ function flushOutbox() {
         ws.close();
     }
 }
+// A clip recorded while the browser knew a transfer was in flight is
+// addressed to the leg being started, not to the leg that was live. Re-stamp
+// those to the new generation so the flush that follows delivers them. Any
+// other stale clip is left to be discarded: that is the server's safety
+// invariant for speech begun before the transfer was known.
+function restampStaleClips(clips, generation) {
+    let resubmitted = 0;
+    for (const clip of clips) {
+        if (clip.epoch !== generation && clip.transferEra) {
+            clip.epoch = generation;
+            resubmitted += 1;
+        }
+    }
+    return resubmitted;
+}
 function stopHeartbeat() {
     clearTimeoutSafe(heartbeatTimer);
     clearTimeoutSafe(pongDeadlineTimer);
@@ -1106,7 +1141,8 @@ function connect() {
             previous.readyState === WebSocket.CONNECTING))
         previous.close();
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const socket = new WebSocket(`${proto}://${location.host}/ws`);
+    const wsParam = new URLSearchParams(location.search).get("ws");
+    const socket = new WebSocket(wsParam || `${proto}://${location.host}/ws`);
     snapshotReady = false;
     ws = socket;
     socket.binaryType = "arraybuffer";
@@ -1184,6 +1220,7 @@ function connect() {
                 // currently playing clip from the old leg. Do this before allowing
                 // reconnect retry, otherwise a pre-rescue clip can cross the barrier.
                 if (typeof msg.generation === "number") {
+                    const resubmitted = restampStaleClips(outbox, msg.generation);
                     handsFreeController?.epochChanged();
                     clearResponseBarrier();
                     setOutbox(outbox.filter((clip) => clip.epoch === msg.generation));
@@ -1191,12 +1228,40 @@ function connect() {
                     turnEpoch = msg.generation;
                     audioEpoch = msg.generation;
                     snapshotReady = true;
+                    if (transferEra) {
+                        transferEra = null;
+                        if (resubmitted > 0) {
+                            statusEl.textContent =
+                                `The line changed while you were talking; ` +
+                                    `sending ${resubmitted} clip(s) along...`;
+                            statusEl.classList.remove("error");
+                        }
+                    }
                     flushOutbox();
                     audioQueue.length = 0;
                     clearMsePlayback();
                     if (playbackOwner)
                         cleanupOwner(playbackOwner);
                     isPlaying = false;
+                }
+            }
+            else if (msg.type === "candidate") {
+                // A new leg is being started. Speech recorded from here until the
+                // epoch moves is addressed to that leg, not to the one on screen.
+                transferEra = msg.route && msg.route !== "operator" ? msg.route : null;
+                if (transferEra) {
+                    statusEl.textContent = `Connecting to ${transferEra}\u2026`;
+                    statusEl.classList.remove("error");
+                    startActivity(`Connecting to ${transferEra}`);
+                }
+            }
+            else if (msg.type === "candidate_cleared") {
+                // The transfer was rolled back or interrupted. The epoch did not
+                // move, so queued clips keep their stamp and stay on this leg.
+                transferEra = null;
+                if (statusEl.textContent.startsWith("Connecting to ")) {
+                    statusEl.textContent = idleText;
+                    statusEl.classList.remove("error");
                 }
             }
             else if (msg.type === "audio_start") {
@@ -1300,6 +1365,7 @@ function connect() {
             else if (msg.type === "reply") {
                 stopActivity();
                 statusEl.textContent = idleText;
+                transferEra = null;
                 appendTurn({
                     role: "agent",
                     text: msg.text || "(nothing said)",
@@ -1308,10 +1374,10 @@ function connect() {
                 });
             }
             else if (msg.type === "status") {
+                // A settled status means any in-flight transfer is over, one way
+                // or the other.
+                transferEra = null;
                 setRoute(msg);
-            }
-            else if (msg.type === "diagram") {
-                void renderVisual(msg).then(() => reportWorkspaceState());
             }
             else if (msg.type === "view") {
                 setWorkspaceView(typeof msg.target === "string" ? msg.target : "", "agent");
@@ -1432,6 +1498,10 @@ async function startRecording() {
     const recordingStreaming = typeof streamingSelected !== "undefined" &&
         streamingSelected &&
         (recorder.mimeType || "") === "audio/webm;codecs=opus";
+    // Set when a transfer was already in flight as this recording began. The
+    // clip is re-stamped to the new epoch when the transfer lands, so the
+    // caller's words reach the leg they were speaking to.
+    const recordingTransferEra = transferEra;
     let streamReleased = false;
     const releaseStream = () => {
         if (streamReleased)
@@ -1448,6 +1518,7 @@ async function startRecording() {
         streaming: recordingStreaming,
         chunks,
         sequence: 0,
+        transferEra: recordingTransferEra,
     };
     activeRecording = recording;
     recorder.ondataavailable = (e) => {
@@ -1510,6 +1581,7 @@ async function startRecording() {
             mime: blob.type,
             created: Date.now(),
             epoch: recordingEpoch,
+            transferEra: recordingTransferEra ?? undefined,
             sent: false,
             streaming: recording.streaming,
             chunks: recording.streaming ? chunks : undefined,
@@ -1600,6 +1672,7 @@ function submitHandsFreeClip(audio, mime, epoch) {
         mime: mime || audio.type || "audio/webm",
         created: Date.now(),
         epoch,
+        transferEra: transferEra ?? undefined,
         sent: false,
         streaming: false,
     };
@@ -1706,21 +1779,8 @@ let userPinnedView = false;
 let previousWorkspaceFocus = null;
 const hasVisual = () => document.body.classList.contains("has-diagram");
 let lastScreenState = "";
-function reportWorkspaceState(force = false) {
-    if (!ws || ws.readyState !== WebSocket.OPEN)
-        return;
-    const payload = screenStateMessage(document.body.classList.contains("theater")
-        ? "theater"
-        : document.body.dataset.view || "auto", hasVisual(), document.body.dataset.visualKind || "", document.getElementById("stageTitle")?.textContent || "", document.body.classList.contains("stage-stale"));
-    if (!force && payload === lastScreenState)
-        return;
-    lastScreenState = payload;
-    try {
-        ws.send(payload);
-    }
-    catch {
-        /* The reconnect snapshot reports it again. */
-    }
+function reportWorkspaceState(_force = false) {
+    // Obsolete in V17: screen state is derived and reported by V17 over the bridge.
 }
 function normalizeWorkspaceTarget(target) {
     switch (target.trim().toLowerCase()) {
@@ -1793,17 +1853,7 @@ new MutationObserver(applyWorkspaceView).observe(document.body, {
     attributes: true,
     attributeFilter: ["class"],
 });
-stageZoom.addEventListener("click", (e) => {
-    const target = e.target;
-    if (!(target instanceof HTMLElement))
-        return;
-    if (target.id === "historyBack")
-        historyBack();
-    if (target.id === "historyForward")
-        historyForward();
-    if (target.id === "historyLive")
-        historyLive();
-});
+stageZoom.addEventListener("click", () => { });
 theaterExit.addEventListener("click", () => setWorkspaceView("auto", "user"));
 document.addEventListener("click", (e) => {
     const control = e.target?.closest("[data-view]");
@@ -1922,6 +1972,17 @@ if (window.parent !== window) {
                 break;
             case "thinking":
                 select(thinkingSelect);
+                break;
+            case "screen_state":
+                if (ws &&
+                    ws.readyState === WebSocket.OPEN &&
+                    data.value &&
+                    typeof data.value === "object") {
+                    ws.send(JSON.stringify({
+                        type: "screen_state",
+                        ...data.value,
+                    }));
+                }
                 break;
             case "state":
                 publishBridgeState();

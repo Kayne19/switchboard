@@ -75,13 +75,14 @@ Write black-box compatibility tests before replacing a component.
 - `POST /thinking`
 - `POST /leg-state`
 - `POST /speak`
-- `POST /diagram`
+- `POST /display`
+- `POST /view`
 - WebSocket `/ws`
 
-The WebSocket carries the existing JSON control messages and binary audio
-frames. Preserve route/activity/audio message shapes, ordering, reconnect
-behavior, and the fact that `/speak` and `/diagram` reach the browser during a
-still-running agent turn.
+The WebSocket carries JSON control/display messages and binary audio frames.
+Preserve route/activity/audio/display message shapes, ordering, reconnect
+behavior with DisplayProjection replay, and the fact that `/speak` and
+`/display` reach the browser during a still-running agent turn.
 
 ### pi RPC
 
@@ -136,7 +137,7 @@ SWITCHBOARD_HISTORY_LIMIT
 SWITCHBOARD_SESSION
 SWITCHBOARD_SPEAK_URL
 SWITCHBOARD_STATE_URL
-SWITCHBOARD_DIAGRAM_URL
+SWITCHBOARD_DISPLAY_URL
 SWITCHBOARD_STT_COMMAND
 SWITCHBOARD_STT_STREAM_COMMAND (optional long-lived framed worker)
 SWITCHBOARD_SPEECH_DEADLINE_MS
@@ -163,13 +164,13 @@ in `/healthz`; it is not a claim that Rust Whisper matches the deployed
 faster-whisper model yet.
 
 `SWITCHBOARD_SESSION`, `SWITCHBOARD_SPEAK_URL`,
-`SWITCHBOARD_STATE_URL`, and `SWITCHBOARD_DIAGRAM_URL` are passed to project
+`SWITCHBOARD_STATE_URL`, and `SWITCHBOARD_DISPLAY_URL` are passed to project
 agents. They are not merely internal implementation details.
 
 Each project process also receives `SWITCHBOARD_SESSION_TOKEN`, a fresh opaque
 per-process callback correlation token distinct from the persistent Pi session
-ID. The service validates it for thinking, speech, and diagram callbacks to
-reject stale redial work. It is a correlation value, not authentication, and a
+ID, rotated on every generation change. The service validates it for thinking,
+speech, display, and view callbacks to reject stale redial or rescued work. It is a correlation value, not authentication, and a
 deployment must not treat it as a secret.
 
 ### Registry and model behavior
@@ -299,7 +300,7 @@ captured pi streams, including failure streams.
 - Port HTTP/WebSocket handlers only after the state machine has fixture tests.
 
 **Exit:** black-box tests pass against both Python and Rust services for normal
-calls, transfers, mid-turn speak/diagram, model swaps, hangs, and failures.
+calls, transfers, mid-turn speak/display, model swaps, hangs, and failures.
 
 ### Phase 5: audio and TTS
 
@@ -323,6 +324,8 @@ In homelab, in a separate reviewed change:
   registry path, SSH config, and secret handling;
 - pin the binary release by tag/checksum, never a floating branch;
 - update extension and prompt paths only after the Rust service can read them;
+- update environment templates to configure `SWITCHBOARD_DISPLAY_URL` and drop
+  the legacy diagram endpoint without backwards-compatibility shims;
 - verify `--check --diff`, health, a local operator call, a remote project call,
   hangup, model swap, and rollback before removing Python dependencies.
 
@@ -379,6 +382,10 @@ The following acceptance gates deliberately remain outside this repository:
   repository currently has no tag that can serve as the pinned cutover);
 - merge the separate homelab change that pins that release, moves the rendered
   persona contract, updates the unit, and retains a one-change Python rollback;
+- merge the separate homelab change that updates the environment contract to
+  `SWITCHBOARD_DISPLAY_URL`, deploys matching extensions from that release, and
+  verifies no legacy diagram variables or endpoints remain (tracked via
+  `docs/deployment-cutover-reference.md`);
 - benchmark the configured STT sidecar or Rust Whisper candidate against the
   deployed faster-whisper model on damocles;
 - run the live microphone/WebM, browser playback, local operator, remote SSH

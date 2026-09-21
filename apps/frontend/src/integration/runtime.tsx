@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { deriveScreenState } from "../app/sceneModel";
 import { useController } from "../controller/context";
-import type { ControllerAction, MessageData } from "../controller/types";
+import type { MessageData, ScreenStateReport } from "../controller/types";
+import { RUNTIME_CONVERSATION_ID } from "../controller/types";
 import { validateControllerAction } from "../controller/validation";
 
 const LEGACY_SOURCE = "switchboard-legacy-runtime";
@@ -65,7 +67,15 @@ function normalizeHistory(raw: unknown): TranscriptLine[] {
     if (!entry || typeof entry !== "object") return [];
     const item = entry as Record<string, unknown>;
     const body = text(item.text);
-    return body ? [{ speaker: item.role === "caller" ? "CALLER" : "DAMOCLES", text: body, id: text(item.id) || undefined }] : [];
+    return body
+      ? [
+          {
+            speaker: item.role === "caller" ? "CALLER" : "DAMOCLES",
+            text: body,
+            id: text(item.id) || undefined,
+          },
+        ]
+      : [];
   });
 }
 
@@ -74,20 +84,39 @@ function isRuntimeState(value: unknown): value is RuntimeState {
 }
 
 export function RuntimeIntegration() {
-  const { dispatch, registerVoiceRuntime } = useController();
+  const { state, dispatch, registerVoiceRuntime } = useController();
   const frameRef = useRef<HTMLIFrameElement>(null);
   const transcriptRef = useRef<TranscriptLine[]>([]);
   const currentResponseRef = useRef("");
-  const visualActionRef = useRef<ControllerAction | null>(null);
-  const visualActiveRef = useRef(false);
+  const iframeReadyRef = useRef(false);
+  const generationRef = useRef(0);
+  const pendingReportRef = useRef<ScreenStateReport | null>(null);
+  const inFlightReportRef = useRef<ScreenStateReport | null>(null);
   const [runtime, setRuntime] = useState<RuntimeState>(initialRuntime);
 
-  const command = useCallback((name: string, value?: string) => {
+  const command = useCallback((name: string, value?: unknown) => {
     frameRef.current?.contentWindow?.postMessage(
       { source: V17_SOURCE, command: name, value },
       window.location.origin,
     );
   }, []);
+
+  const sendReport = useCallback(
+    (report: ScreenStateReport) => {
+      inFlightReportRef.current = report;
+      command("screen_state", report);
+    },
+    [command],
+  );
+
+  const handleScreenStateAck = useCallback(() => {
+    inFlightReportRef.current = null;
+    if (pendingReportRef.current) {
+      const next = pendingReportRef.current;
+      pendingReportRef.current = null;
+      sendReport(next);
+    }
+  }, [sendReport]);
 
   const showConversation = useCallback(
     (response?: string) => {
@@ -109,14 +138,11 @@ export function RuntimeIntegration() {
         },
         transcript: transcriptRef.current,
       };
-      visualActiveRef.current = false;
-      dispatch({ op: "hide", id: "live-visual" });
-      dispatch({ op: "hide", id: "live-progress" });
       dispatch({
-        op: "show",
-        id: "conversation",
+        op: "runtime_show",
+        id: RUNTIME_CONVERSATION_ID,
         type: "message",
-        role: "primary",
+        role: "secondary",
         data: message,
       });
     },
@@ -139,13 +165,16 @@ export function RuntimeIntegration() {
 
     const handleServer = (message: ServerMessage) => {
       switch (message.type) {
-        case "epoch":
+        case "epoch": {
           transcriptRef.current = [];
           currentResponseRef.current = "";
-          visualActionRef.current = null;
-          visualActiveRef.current = false;
-          dispatch({ op: "clear" });
+          generationRef.current =
+            typeof message.generation === "number" ? message.generation : 0;
+          inFlightReportRef.current = null;
+          pendingReportRef.current = null;
+          dispatch({ op: "epoch_reset" });
           break;
+        }
         case "history": {
           transcriptRef.current = normalizeHistory(message.entries);
           const latest = [...transcriptRef.current]
@@ -163,7 +192,7 @@ export function RuntimeIntegration() {
             text: body,
             id: text(message.id) || undefined,
           });
-          if (!visualActiveRef.current) showConversation();
+          showConversation();
           break;
         }
         case "spoken": {
@@ -178,18 +207,24 @@ export function RuntimeIntegration() {
             id: text(item.id) || undefined,
           });
           currentResponseRef.current = body;
-          if (visualActiveRef.current)
-            dispatch({ op: "say", target: "live-visual", text: body });
-          else showConversation(body);
+          showConversation(body);
+          dispatch({
+            op: "runtime_say",
+            target: RUNTIME_CONVERSATION_ID,
+            text: body,
+          });
           break;
         }
         case "reply": {
           const body = text(message.text) || "(No spoken response.)";
           appendTranscript({ speaker: "DAMOCLES", text: body });
           currentResponseRef.current = body;
-          if (visualActiveRef.current)
-            dispatch({ op: "say", target: "live-visual", text: body });
-          else showConversation(body);
+          showConversation(body);
+          dispatch({
+            op: "runtime_say",
+            target: RUNTIME_CONVERSATION_ID,
+            text: body,
+          });
           break;
         }
         case "thinking":
@@ -199,38 +234,31 @@ export function RuntimeIntegration() {
           const detail = [text(message.label), text(message.detail)]
             .filter(Boolean)
             .join(" / ");
-          if (detail) dispatch({ op: "say", text: detail });
+          if (detail) dispatch({ op: "runtime_say", text: detail });
           break;
         }
         case "display": {
           const result = validateControllerAction(message.action);
-          if (result.ok) dispatch(result.action);
+          if (result.ok) {
+            dispatch(result.action);
+          }
           break;
         }
         case "view": {
           const target = text(message.target);
           if (target === "comms") {
             showConversation();
-          } else if (
-            (target === "visual" || target === "theater") &&
-            visualActionRef.current
-          ) {
-            visualActiveRef.current = true;
-            dispatch({ op: "hide", id: "conversation" });
-            dispatch(visualActionRef.current);
-            dispatch({
-              op: "focus",
-              id: target === "theater" ? "live-visual" : null,
-            });
-          } else {
-            dispatch({ op: "focus", id: null });
           }
+          dispatch({ op: "set_view", view: target });
+          break;
+        }
+        case "screen_state_ack": {
+          handleScreenStateAck();
           break;
         }
         case "error": {
           const body = text(message.message) || "The line reported an error.";
-          if (currentResponseRef.current) dispatch({ op: "say", text: body });
-          else showConversation(body);
+          dispatch({ op: "runtime_say", text: body });
           break;
         }
       }
@@ -245,11 +273,11 @@ export function RuntimeIntegration() {
       };
       if (packet?.source !== LEGACY_SOURCE) return;
       if (packet.kind === "state" && isRuntimeState(packet.payload)) {
-        const state = packet.payload;
-        setRuntime((current) => ({ ...current, ...state }));
+        const runtimeState = packet.payload;
+        setRuntime((current) => ({ ...current, ...runtimeState }));
         dispatch({
           op: "listen",
-          on: Boolean(state.recording || state.handsFree),
+          on: Boolean(runtimeState.recording || runtimeState.handsFree),
         });
       } else if (
         packet.kind === "server" &&
@@ -258,16 +286,46 @@ export function RuntimeIntegration() {
       ) {
         handleServer(packet.payload as ServerMessage);
       } else if (packet.kind === "ready") {
+        iframeReadyRef.current = true;
         command("state");
+        if (pendingReportRef.current && !inFlightReportRef.current) {
+          const report = pendingReportRef.current;
+          pendingReportRef.current = null;
+          sendReport(report);
+        }
+      } else if (packet.kind === "screen_state_ack") {
+        handleScreenStateAck();
       }
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [command, dispatch, showConversation]);
+  }, [command, dispatch, handleScreenStateAck, sendReport, showConversation]);
 
-  // The on-screen Damocles presence is the only call affordance in the approved
-  // design, so register the transport's turn control for it to drive. The
-  // transport owns the start/send/retry policy behind the single toggle.
+  // Derive screen state and queue/send across the bridge
+  useEffect(() => {
+    const report = deriveScreenState(state, generationRef.current);
+    const serialized = JSON.stringify(report);
+    const inFlightSerialized = inFlightReportRef.current
+      ? JSON.stringify(inFlightReportRef.current)
+      : null;
+
+    if (serialized === inFlightSerialized) {
+      return;
+    }
+
+    if (!iframeReadyRef.current) {
+      pendingReportRef.current = report;
+      return;
+    }
+
+    if (inFlightReportRef.current) {
+      pendingReportRef.current = report;
+      return;
+    }
+
+    sendReport(report);
+  }, [state, sendReport]);
+
   useEffect(() => {
     const toggleTurn = () => {
       if (!runtime.connected) {
@@ -280,13 +338,19 @@ export function RuntimeIntegration() {
     return () => registerVoiceRuntime(null);
   }, [command, registerVoiceRuntime, runtime.connected, runtime.recording]);
 
-  // No visible chrome: the isolated voice runtime lives in a hidden iframe and
-  // reaches the UI only through the controller (see handleServer above).
+  const wsParam =
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("ws")
+      : null;
+  const iframeSrc = import.meta.env.DEV
+    ? "about:blank"
+    : `/legacy/index.html?runtime=1${wsParam ? `&ws=${encodeURIComponent(wsParam)}` : ""}`;
+
   return (
     <iframe
       ref={frameRef}
       className="runtime-frame"
-      src={import.meta.env.DEV ? "about:blank" : "/legacy/index.html?runtime=1"}
+      src={iframeSrc}
       title="Switchboard voice runtime"
       allow="microphone; autoplay"
       aria-hidden="true"

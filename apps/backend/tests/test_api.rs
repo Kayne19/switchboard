@@ -159,7 +159,7 @@ async fn browser_screen_state_is_available_to_the_agent_view_tool() {
             "type": "screen_state",
             "view": "comms",
             "has_visual": true,
-            "visual_kind": "diff",
+            "visual_kind": "document",
             "title": "Authentication changes",
             "stale": false,
         })
@@ -172,703 +172,8 @@ async fn browser_screen_state_is_available_to_the_agent_view_tool() {
         request_json(&state, Method::POST, "/view", Some(json!({"target":""}))).await;
     assert_eq!(code, StatusCode::OK);
     assert_eq!(response["screen"]["view"], "comms");
-    assert_eq!(response["screen"]["visual_kind"], "diff");
+    assert_eq!(response["screen"]["visual_kind"], "document");
     assert_eq!(response["screen"]["title"], "Authentication changes");
-}
-
-#[tokio::test]
-#[ignore = "obsolete legacy visual protocol test"]
-async fn diagram_contract_is_live_and_replayed() {
-    let state = state();
-    let mut events = state.0.events.subscribe();
-    let payload = json!({
-        "source":"flowchart TD; A-->B",
-        "title":"Path",
-        "notes":"One hop"
-    });
-    let (code, response) =
-        request_json(&state, Method::POST, "/diagram", Some(payload.clone())).await;
-    assert_eq!(code, StatusCode::OK);
-    assert_eq!(
-        response,
-        json!({"delivered":false, "reason":"no browser connected"})
-    );
-    let Event::Json(event) = events.recv().await.unwrap() else {
-        panic!("diagram should be a JSON event")
-    };
-    assert_eq!(
-        event,
-        json!({"type":"diagram", "source":"flowchart TD; A-->B", "title":"Path", "notes":"One hop"})
-    );
-    assert_eq!(*state.0.last_display.lock().await, Some(event));
-}
-
-#[tokio::test]
-#[ignore = "obsolete legacy visual protocol test"]
-async fn visual_plan_payload_validates_and_replays() {
-    let state = state();
-    let mut events = state.0.events.subscribe();
-    let payload = json!({
-        "kind": "plan",
-        "items": [
-            {"label": "Inspect code", "state": "done", "detail": "1 file"},
-            {"label": "Write tests", "state": "active", "detail": "apps/backend/src/api.rs"},
-            {"label": "Verify build", "state": "todo", "detail": ""},
-            {"label": "Deploy stage", "state": "blocked", "detail": "waiting"}
-        ],
-        "title": "Implementation Plan",
-        "notes": "Step 2 of 4"
-    });
-    let (code, response) =
-        request_json(&state, Method::POST, "/diagram", Some(payload.clone())).await;
-    assert_eq!(code, StatusCode::OK);
-    assert_eq!(
-        response,
-        json!({"delivered":false, "reason":"no browser connected"})
-    );
-    let Event::Json(event) = events.recv().await.unwrap() else {
-        panic!("plan visual should be a JSON event")
-    };
-    let expected_event = json!({
-        "type": "diagram",
-        "kind": "plan",
-        "items": [
-            {"label": "Inspect code", "state": "done", "detail": "1 file"},
-            {"label": "Write tests", "state": "active", "detail": "apps/backend/src/api.rs"},
-            {"label": "Verify build", "state": "todo", "detail": ""},
-            {"label": "Deploy stage", "state": "blocked", "detail": "waiting"}
-        ],
-        "title": "Implementation Plan",
-        "notes": "Step 2 of 4"
-    });
-    assert_eq!(event, expected_event);
-    assert_eq!(*state.0.last_display.lock().await, Some(expected_event));
-}
-
-#[tokio::test]
-#[ignore = "obsolete legacy visual protocol test"]
-async fn visual_plan_omitted_state_defaults_to_todo() {
-    let state = state();
-    let mut events = state.0.events.subscribe();
-    let payload = json!({
-        "kind": "plan",
-        "items": [
-            {"label": "Step without state"}
-        ]
-    });
-    let (code, _) = request_json(&state, Method::POST, "/diagram", Some(payload)).await;
-    assert_eq!(code, StatusCode::OK);
-    let Event::Json(event) = events.recv().await.unwrap() else {
-        panic!("expected json event")
-    };
-    assert_eq!(event["items"][0]["state"], "todo");
-}
-
-#[tokio::test]
-#[ignore = "obsolete legacy visual protocol test"]
-async fn visual_whitespace_kind_defaults_to_mermaid() {
-    let state = state();
-    let payload = json!({
-        "kind": "   ",
-        "source": "flowchart TD; A-->B"
-    });
-    let (code, _) = request_json(&state, Method::POST, "/diagram", Some(payload)).await;
-    assert_eq!(code, StatusCode::OK);
-}
-
-#[tokio::test]
-#[ignore = "obsolete legacy visual protocol test"]
-async fn visual_mermaid_validation_enforces_semantic_classes() {
-    let state = state();
-
-    // 1. classDef line reject
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({
-            "source": "flowchart TD\nclassDef hot fill:#2a0d1a\nA:::hot"
-        })),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert_eq!(res["delivered"], false);
-    let detail = res["detail"].as_str().unwrap();
-    assert!(
-        detail.contains("active")
-            && detail.contains("done")
-            && detail.contains("blocked")
-            && detail.contains("muted")
-    );
-
-    // 2. %%{init line reject
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({
-            "source": "%%{init: {'theme': 'dark'}}%%\nflowchart TD\nA"
-        })),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert_eq!(res["delivered"], false);
-    let detail = res["detail"].as_str().unwrap();
-    assert!(
-        detail.contains("active")
-            && detail.contains("done")
-            && detail.contains("blocked")
-            && detail.contains("muted")
-    );
-
-    // 3. :::glow reject (unknown class name)
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({
-            "source": "flowchart TD\nA:::glow"
-        })),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert_eq!(res["delivered"], false);
-    let detail = res["detail"].as_str().unwrap();
-    assert!(
-        detail.contains("active")
-            && detail.contains("done")
-            && detail.contains("blocked")
-            && detail.contains("muted")
-    );
-
-    // 4. two :::active reject
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({
-            "source": "flowchart TD\nA:::active\nB:::active"
-        })),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert_eq!(res["delivered"], false);
-    let detail = res["detail"].as_str().unwrap();
-    assert!(
-        detail.contains("active")
-            && detail.contains("done")
-            && detail.contains("blocked")
-            && detail.contains("muted")
-    );
-
-    // 5. Clean source accept (one active, other legal classes)
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({
-            "source": "flowchart TD\nA:::active --> B:::done\nB --> C:::blocked\nC --> D:::muted"
-        })),
-    )
-    .await;
-    assert_eq!(code, StatusCode::OK);
-    assert_eq!(res["delivered"], false);
-}
-
-#[tokio::test]
-#[ignore = "obsolete legacy visual protocol test"]
-async fn visual_rejects_oversized_plan() {
-    let state = state();
-
-    // 41 items
-    let items: Vec<_> = (0..41)
-        .map(|i| json!({"label": format!("Item {i}"), "state": "todo"}))
-        .collect();
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({"kind": "plan", "items": items})),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert_eq!(res["delivered"], false);
-    assert!(res["detail"].as_str().unwrap().contains("40"));
-
-    // Label > 200 bytes
-    let long_label = "a".repeat(201);
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({"kind": "plan", "items": [{"label": long_label, "state": "todo"}]})),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert_eq!(res["delivered"], false);
-    assert!(res["detail"].as_str().unwrap().contains("200"));
-
-    // Detail > 300 bytes
-    let long_detail = "b".repeat(301);
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({"kind": "plan", "items": [{"label": "Step", "detail": long_detail, "state": "todo"}]})),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert_eq!(res["delivered"], false);
-    assert!(res["detail"].as_str().unwrap().contains("300"));
-
-    // Two active items in plan
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({"kind": "plan", "items": [{"label": "Step 1", "state": "active"}, {"label": "Step 2", "state": "active"}]})),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert_eq!(res["delivered"], false);
-    assert!(res["detail"].as_str().unwrap().contains("active"));
-}
-
-#[tokio::test]
-#[ignore = "obsolete legacy visual protocol test"]
-async fn visual_validation_field_limits_and_preservation() {
-    let state = state();
-
-    // 1. First establish a valid diagram in state
-    let valid_payload = json!({
-        "source": "flowchart TD; A-->B",
-        "title": "Initial",
-        "notes": "Valid"
-    });
-    let (code, _) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(valid_payload.clone()),
-    )
-    .await;
-    assert_eq!(code, StatusCode::OK);
-    let initial_diagram = state.0.last_display.lock().await.clone();
-    assert!(initial_diagram.is_some());
-
-    // 2. Empty plan items reject
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({"kind": "plan", "items": []})),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert!(res["detail"]
-        .as_str()
-        .unwrap()
-        .contains("requires at least 1 item"));
-
-    // 3. Plan item empty label reject
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({"kind": "plan", "items": [{"label": "", "state": "todo"}]})),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert!(res["detail"]
-        .as_str()
-        .unwrap()
-        .contains("label must not be empty"));
-
-    // 4. Plan item invalid state reject
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({"kind": "plan", "items": [{"label": "Step", "state": "invalid_state"}]})),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert!(res["detail"]
-        .as_str()
-        .unwrap()
-        .contains("invalid plan item state"));
-
-    // 5. Oversized mermaid source reject (> 20,000 bytes)
-    let huge_mermaid = "flowchart TD\nA-->B; ".repeat(1500);
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({"source": huge_mermaid})),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert!(res["detail"].as_str().unwrap().contains("20000"));
-
-    // 6. Title > 200 bytes reject
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({"source": "flowchart TD; A", "title": "a".repeat(201)})),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert!(res["detail"].as_str().unwrap().contains("200"));
-
-    // 7. Notes > 300 bytes reject
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({"source": "flowchart TD; A", "notes": "b".repeat(301)})),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert!(res["detail"].as_str().unwrap().contains("300"));
-
-    // 8. Non-ASCII Mermaid input should validate or reject safely without panicking
-    let (code, _) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({"source": "flowchart TD\n  A[中文abc] --> B"})),
-    )
-    .await;
-    assert_eq!(code, StatusCode::OK);
-
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({"source": "flowchart TD\n  click 中文"})),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert!(res["detail"]
-        .as_str()
-        .unwrap()
-        .contains("prohibited click directive"));
-
-    // 9. Assert that after all failed validations, last_display was preserved
-    let last = state.0.last_display.lock().await.clone().unwrap();
-    assert_eq!(
-        last["source"].as_str().unwrap(),
-        "flowchart TD\n  A[中文abc] --> B"
-    );
-}
-
-#[tokio::test]
-#[ignore = "obsolete legacy visual protocol test"]
-async fn visual_backward_frames_format() {
-    let state = state();
-
-    // 1. Absent kind defaults to 4-key Mermaid broadcast format
-    let (code, _) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({"source": "flowchart TD; X-->Y", "title": "Mermaid1", "notes": "notes1"})),
-    )
-    .await;
-    assert_eq!(code, StatusCode::OK);
-    let diagram1 = state.0.last_display.lock().await.clone().unwrap();
-    let obj1 = diagram1.as_object().unwrap();
-    assert_eq!(obj1.len(), 4);
-    assert_eq!(obj1.get("type").unwrap(), "diagram");
-    assert_eq!(obj1.get("source").unwrap(), "flowchart TD; X-->Y");
-    assert_eq!(obj1.get("title").unwrap(), "Mermaid1");
-    assert_eq!(obj1.get("notes").unwrap(), "notes1");
-    assert!(!obj1.contains_key("kind"));
-    assert!(!obj1.contains_key("items"));
-
-    // 2. Explicit kind: "mermaid" also outputs 4-key frame
-    let (code, _) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({"kind": "mermaid", "source": "flowchart TD; X-->Y", "title": "Mermaid2", "notes": "notes2"})),
-    )
-    .await;
-    assert_eq!(code, StatusCode::OK);
-    let diagram2 = state.0.last_display.lock().await.clone().unwrap();
-    let obj2 = diagram2.as_object().unwrap();
-    assert_eq!(obj2.len(), 4);
-    assert!(!obj2.contains_key("kind"));
-
-    // 3. Explicit kind: "plan" outputs 5-key Plan frame
-    let (code, _) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({
-            "kind": "plan",
-            "items": [{"label": "Task", "state": "active"}],
-            "title": "PlanTitle",
-            "notes": "PlanNotes"
-        })),
-    )
-    .await;
-    assert_eq!(code, StatusCode::OK);
-    let diagram3 = state.0.last_display.lock().await.clone().unwrap();
-    let obj3 = diagram3.as_object().unwrap();
-    assert_eq!(obj3.len(), 5);
-    assert_eq!(obj3.get("type").unwrap(), "diagram");
-    assert_eq!(obj3.get("kind").unwrap(), "plan");
-    assert_eq!(obj3.get("title").unwrap(), "PlanTitle");
-    assert_eq!(obj3.get("notes").unwrap(), "PlanNotes");
-    assert!(obj3.contains_key("items"));
-
-    // 4. Explicit kind: "timeline" outputs 5-key Timeline frame
-    let (code, _) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({
-            "kind": "timeline",
-            "items": [{"label": "Step 1", "state": "done", "ms": 1200}],
-            "title": "TimelineTitle",
-            "notes": "TimelineNotes"
-        })),
-    )
-    .await;
-    assert_eq!(code, StatusCode::OK);
-    let diagram4 = state.0.last_display.lock().await.clone().unwrap();
-    let obj4 = diagram4.as_object().unwrap();
-    assert_eq!(obj4.len(), 5);
-    assert_eq!(obj4.get("type").unwrap(), "diagram");
-    assert_eq!(obj4.get("kind").unwrap(), "timeline");
-    assert_eq!(obj4.get("title").unwrap(), "TimelineTitle");
-    assert_eq!(obj4.get("notes").unwrap(), "TimelineNotes");
-    assert!(obj4.contains_key("items"));
-
-    // 5. Explicit kind: "diff" outputs 5-key Diff frame
-    let (code, _) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({
-            "kind": "diff",
-            "source": "@@ -1,2 +1,2 @@\n-old\n+new",
-            "title": "DiffTitle",
-            "notes": "DiffNotes"
-        })),
-    )
-    .await;
-    assert_eq!(code, StatusCode::OK);
-    let diagram5 = state.0.last_display.lock().await.clone().unwrap();
-    let obj5 = diagram5.as_object().unwrap();
-    assert_eq!(obj5.len(), 5);
-    assert_eq!(obj5.get("type").unwrap(), "diagram");
-    assert_eq!(obj5.get("kind").unwrap(), "diff");
-    assert_eq!(obj5.get("source").unwrap(), "@@ -1,2 +1,2 @@\n-old\n+new");
-    assert_eq!(obj5.get("title").unwrap(), "DiffTitle");
-    assert_eq!(obj5.get("notes").unwrap(), "DiffNotes");
-}
-
-#[tokio::test]
-#[ignore = "obsolete legacy visual protocol test"]
-async fn visual_timeline_and_diff_validation() {
-    let state = state();
-
-    // 1. Timeline item ms bound reject (> 86400000)
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({
-            "kind": "timeline",
-            "items": [{"label": "Step 1", "ms": 86400001}]
-        })),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert!(res["detail"].as_str().unwrap().contains("86400000"));
-
-    // 2. Plan item with ms reject
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({
-            "kind": "plan",
-            "items": [{"label": "Step 1", "ms": 100}]
-        })),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert!(res["detail"]
-        .as_str()
-        .unwrap()
-        .contains("ms is only valid on a timeline"));
-
-    // 3. Diff source empty reject
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({
-            "kind": "diff",
-            "source": "   "
-        })),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert!(res["detail"]
-        .as_str()
-        .unwrap()
-        .contains("diff source must not be empty"));
-
-    // 4. Diff line limit reject (> 600 lines)
-    let many_lines = (0..601)
-        .map(|i| format!("line {i}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({
-            "kind": "diff",
-            "source": format!("@@ -1,601 +1,601 @@\n{many_lines}")
-        })),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert!(res["detail"].as_str().unwrap().contains("600 lines"));
-
-    // 5. Diff missing @@ hunk header reject
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({
-            "kind": "diff",
-            "source": "--- a/file\n+++ b/file\n+line"
-        })),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert!(res["detail"].as_str().unwrap().contains("@@ hunk header"));
-
-    // 6. Prohibited click directive in mermaid reject
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({
-            "source": "flowchart TD\nA-->B\nclick A callAlert"
-        })),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert!(res["detail"]
-        .as_str()
-        .unwrap()
-        .contains("prohibited click directive"));
-}
-
-#[tokio::test]
-async fn visual_rejects_oversized_body() {
-    let state = state();
-    let huge_source = "a".repeat(65 * 1024);
-    let request = Request::builder()
-        .method(Method::POST)
-        .uri("/diagram")
-        .header("content-type", "application/json")
-        .body(Body::from(json!({"source": huge_source}).to_string()))
-        .unwrap();
-    let response = state.clone().router(None).oneshot(request).await.unwrap();
-    assert!(
-        response.status() == StatusCode::PAYLOAD_TOO_LARGE
-            || response.status() == StatusCode::BAD_REQUEST
-    );
-}
-
-#[tokio::test]
-#[ignore = "obsolete legacy visual protocol test"]
-async fn visual_boundary_limits_and_case_insensitivity() {
-    let state = state();
-
-    // 1. Title exactly 200 bytes & notes exactly 300 bytes accepted
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({
-            "source": "flowchart TD; A-->B",
-            "title": "a".repeat(200),
-            "notes": "b".repeat(300)
-        })),
-    )
-    .await;
-    assert_eq!(code, StatusCode::OK);
-    assert_eq!(res["delivered"], false);
-
-    // 2. Timeline ms exactly 86,400,000 accepted
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({
-            "kind": "timeline",
-            "items": [{"label": "Step 1", "ms": 86_400_000}]
-        })),
-    )
-    .await;
-    assert_eq!(code, StatusCode::OK);
-    assert_eq!(res["delivered"], false);
-
-    // 3. Diff source with exactly 600 lines accepted
-    let diff_600 = format!(
-        "@@ -1,600 +1,600 @@\n{}",
-        (0..599)
-            .map(|i| format!("+line {i}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({
-            "kind": "diff",
-            "source": diff_600
-        })),
-    )
-    .await;
-    assert_eq!(code, StatusCode::OK);
-    assert_eq!(res["delivered"], false);
-
-    // 4. Mixed-case prohibited Mermaid directives rejected
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({
-            "source": "flowchart TD\nA-->B\nCLICK A callAlert"
-        })),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert!(res["detail"].as_str().unwrap().contains("click"));
-
-    let (code, res) = request_json(
-        &state,
-        Method::POST,
-        "/diagram",
-        Some(json!({
-            "source": "flowchart TD\nCLASSDEF hot fill:#fff\nA:::hot"
-        })),
-    )
-    .await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert!(res["detail"].as_str().unwrap().contains("legal classes"));
 }
 
 #[tokio::test]
@@ -1445,8 +750,40 @@ async fn shutdown_notifies_upgraded_connections_before_reaping_the_pbx() {
 async fn display_protocol_validation_and_composition() {
     let state = state();
     let mut events = state.0.events.subscribe();
-    let show = json!({"op":"show","id":"main","type":"diagram","role":"primary","data":{"nodes":[],"edges":[]}});
-    let (code, _) = request_json(&state, Method::POST, "/diagram", Some(show)).await;
+
+    // 1. Conformance check against canonical fixtures
+    let fixtures_str = std::fs::read_to_string("apps/frontend/tests/fixtures/display-actions.json")
+        .expect("canonical display-actions.json fixtures must load");
+    let fixtures: Value = serde_json::from_str(&fixtures_str).unwrap();
+
+    for case in fixtures["valid"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let action = &case["action"];
+        let expected = &case["normalized"];
+        let validated = crate::visual_protocol::validate_action(action)
+            .unwrap_or_else(|e| panic!("valid case '{name}' failed validation: {e}"));
+        assert_eq!(
+            &validated, expected,
+            "normalized mismatch for valid case '{name}'"
+        );
+    }
+
+    // 2. Composed scene HTTP intake and replay
+    let show = json!({
+        "token": "operator",
+        "action": {
+            "op": "show",
+            "id": "main",
+            "type": "diagram",
+            "role": "primary",
+            "data": {
+                "mode": "graph",
+                "nodes": [{"id": "n1", "label": "Start"}],
+                "edges": []
+            }
+        }
+    });
+    let (code, _) = request_json(&state, Method::POST, "/display", Some(show)).await;
     assert_eq!(code, StatusCode::OK);
     let Event::Json(event) = events.recv().await.unwrap() else {
         panic!("expected event")
@@ -1455,15 +792,38 @@ async fn display_protocol_validation_and_composition() {
     assert_eq!(event["action"]["id"], "main");
     assert_eq!(*state.0.last_display.lock().await, Some(event));
     for (id, role) in [("compare", "compare"), ("secondary", "secondary")] {
-        let (code, _) = request_json(&state, Method::POST, "/diagram", Some(json!({"op":"show","id":id,"type":"metric","role":role,"data":{"label":id,"value":"1"}}))).await;
+        let (code, _) = request_json(
+            &state,
+            Method::POST,
+            "/display",
+            Some(json!({
+                "token": "operator",
+                "action": {
+                    "op": "show",
+                    "id": id,
+                    "type": "metric",
+                    "role": role,
+                    "data": {"label": id, "value": "1"}
+                }
+            })),
+        )
+        .await;
         assert_eq!(code, StatusCode::OK);
         assert!(matches!(events.recv().await.unwrap(), Event::Json(_)));
     }
     let (code, _) = request_json(
         &state,
         Method::POST,
-        "/diagram",
-        Some(json!({"op":"say","text":"point","target":"main","at":{"x":2.0,"series":"a"}})),
+        "/display",
+        Some(json!({
+            "token": "operator",
+            "action": {
+                "op": "say",
+                "text": "point",
+                "target": "main",
+                "at": {"x": 2.0, "series": "a"}
+            }
+        })),
     )
     .await;
     assert_eq!(code, StatusCode::OK);
@@ -1473,25 +833,569 @@ async fn display_protocol_validation_and_composition() {
 #[tokio::test]
 async fn display_protocol_rejects_invalid_actions() {
     let state = state();
-    let bad = [
-        json!({"op":"listen"}),
-        json!({"op":"show","id":"x","type":"message","data":{}}),
-        json!({"op":"show","id":"x","type":"chart","data":{"width":2}}),
-        json!({"op":"show","type":"chart","data":{}}),
-    ];
-    for body in bad {
+
+    let fixtures_str = std::fs::read_to_string("apps/frontend/tests/fixtures/display-actions.json")
+        .expect("canonical display-actions.json fixtures must load");
+    let fixtures: Value = serde_json::from_str(&fixtures_str).unwrap();
+
+    for case in fixtures["invalid"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let action = &case["action"];
+        let result = crate::visual_protocol::validate_action(action);
+        assert!(
+            result.is_err(),
+            "invalid case '{name}' should have been rejected by validate_action"
+        );
+
+        let (code, _) = request_json(
+            &state,
+            Method::POST,
+            "/display",
+            Some(json!({"token": "operator", "action": action.clone()})),
+        )
+        .await;
         assert_eq!(
-            request_json(&state, Method::POST, "/diagram", Some(body))
-                .await
-                .0,
-            StatusCode::BAD_REQUEST
+            code,
+            StatusCode::BAD_REQUEST,
+            "HTTP /display should reject invalid case '{name}'"
         );
     }
-    let oversized = json!({"op":"say","text":"x".repeat(50_001)});
+
+    let oversized =
+        json!({"token": "operator", "action": {"op": "say", "text": "x".repeat(50_001)}});
     assert_eq!(
-        request_json(&state, Method::POST, "/diagram", Some(oversized))
+        request_json(&state, Method::POST, "/display", Some(oversized))
             .await
             .0,
         StatusCode::BAD_REQUEST
     );
+}
+
+#[tokio::test]
+async fn display_projection_hide_clears_focus() {
+    let state = state();
+    let mut events = state.0.events.subscribe();
+
+    // 1. Show primary chart
+    let show_chart = json!({
+        "token": "operator",
+        "action": {
+            "op": "show",
+            "id": "chart-1",
+            "type": "chart",
+            "role": "primary",
+            "data": {
+                "title": "Latency",
+                "series": [{"name": "p95", "values": [10.0, 20.0, 30.0]}]
+            }
+        }
+    });
+    let (code, _) = request_json(&state, Method::POST, "/display", Some(show_chart)).await;
+    assert_eq!(code, StatusCode::OK);
+    let _ = events.recv().await.unwrap();
+
+    // 2. Show secondary document
+    let show_doc = json!({
+        "token": "operator",
+        "action": {
+            "op": "show",
+            "id": "doc-1",
+            "type": "document",
+            "role": "secondary",
+            "data": {
+                "subject": "Release Notes",
+                "paragraphs": ["Initial release."]
+            }
+        }
+    });
+    let (code, _) = request_json(&state, Method::POST, "/display", Some(show_doc)).await;
+    assert_eq!(code, StatusCode::OK);
+    let _ = events.recv().await.unwrap();
+
+    // 3. Focus chart-1
+    let focus_chart = json!({
+        "token": "operator",
+        "action": {
+            "op": "focus",
+            "id": "chart-1"
+        }
+    });
+    let (code, _) = request_json(&state, Method::POST, "/display", Some(focus_chart)).await;
+    assert_eq!(code, StatusCode::OK);
+    let _ = events.recv().await.unwrap();
+
+    // 4. Say targeting chart-1
+    let say_chart = json!({
+        "token": "operator",
+        "action": {
+            "op": "say",
+            "text": "Notice the p95 spike here.",
+            "target": "chart-1",
+            "at": {"x": 20.0}
+        }
+    });
+    let (code, _) = request_json(&state, Method::POST, "/display", Some(say_chart)).await;
+    assert_eq!(code, StatusCode::OK);
+    let _ = events.recv().await.unwrap();
+
+    // Verify projection state under gate
+    {
+        let gate = state.0.display_gate.lock().await;
+        assert_eq!(gate.projection.order, vec!["chart-1", "doc-1"]);
+        assert_eq!(gate.projection.focus_id.as_deref(), Some("chart-1"));
+        assert!(gate.projection.speech.is_some());
+        assert_eq!(
+            gate.projection.speech.as_ref().unwrap().target.as_deref(),
+            Some("chart-1")
+        );
+    }
+
+    // 5. Hide chart-1 -> must remove chart-1, clear focus, and clear speech targeting chart-1
+    let hide_chart = json!({
+        "token": "operator",
+        "action": {
+            "op": "hide",
+            "id": "chart-1"
+        }
+    });
+    let (code, _) = request_json(&state, Method::POST, "/display", Some(hide_chart)).await;
+    assert_eq!(code, StatusCode::OK);
+    let _ = events.recv().await.unwrap();
+
+    {
+        let gate = state.0.display_gate.lock().await;
+        assert_eq!(gate.projection.order, vec!["doc-1"]);
+        assert!(!gate.projection.objects.contains_key("chart-1"));
+        assert!(gate.projection.objects.contains_key("doc-1"));
+        assert_eq!(
+            gate.projection.focus_id, None,
+            "hide must clear focus when focused object is hidden"
+        );
+        assert!(
+            gate.projection.speech.is_none(),
+            "hide must clear speech targeting the hidden object"
+        );
+
+        let snapshot = gate.projection.snapshot_actions();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0]["id"], "doc-1");
+    }
+
+    // 6. Idempotent hide: hiding chart-1 again does not fail or alter projection
+    let hide_again = json!({
+        "token": "operator",
+        "action": {
+            "op": "hide",
+            "id": "chart-1"
+        }
+    });
+    let (code, _) = request_json(&state, Method::POST, "/display", Some(hide_again)).await;
+    assert_eq!(code, StatusCode::OK);
+    {
+        let gate = state.0.display_gate.lock().await;
+        assert_eq!(gate.projection.order, vec!["doc-1"]);
+    }
+
+    // 7. General say without target: hiding doc-1 should NOT clear speech that is not targeted at doc-1
+    let general_say = json!({
+        "token": "operator",
+        "action": {
+            "op": "say",
+            "text": "General announcement.",
+            "target": null,
+            "at": null
+        }
+    });
+    let (code, _) = request_json(&state, Method::POST, "/display", Some(general_say)).await;
+    assert_eq!(code, StatusCode::OK);
+
+    let hide_doc = json!({
+        "token": "operator",
+        "action": {
+            "op": "hide",
+            "id": "doc-1"
+        }
+    });
+    let (code, _) = request_json(&state, Method::POST, "/display", Some(hide_doc)).await;
+    assert_eq!(code, StatusCode::OK);
+
+    {
+        let gate = state.0.display_gate.lock().await;
+        assert!(gate.projection.objects.is_empty());
+        assert!(
+            gate.projection.speech.is_some(),
+            "non-targeted speech must be preserved when an object is hidden"
+        );
+        assert_eq!(
+            gate.projection.speech.as_ref().unwrap().text,
+            "General announcement."
+        );
+    }
+}
+
+#[tokio::test]
+async fn display_projection_generation_race() {
+    let state = state();
+
+    // Initial operator leg: token is "operator", generation is 0.
+    let valid_display = json!({
+        "token": "operator",
+        "action": {
+            "op": "show",
+            "id": "chart-init",
+            "type": "metric",
+            "role": "primary",
+            "data": {"label": "cpu", "value": "10%"}
+        }
+    });
+    let (code, _) = request_json(&state, Method::POST, "/display", Some(valid_display)).await;
+    assert_eq!(code, StatusCode::OK);
+
+    let valid_view = json!({
+        "token": "operator",
+        "target": "visual",
+        "reason": "inspect"
+    });
+    let (code, _) = request_json(&state, Method::POST, "/view", Some(valid_view)).await;
+    assert_eq!(code, StatusCode::OK);
+
+    // Now rescue occurs: bumps generation and rotates leg token!
+    let next_leg = state.0.coordinator.begin_rescue("operator rescue");
+    assert_eq!(next_leg.generation, 1);
+    assert_ne!(next_leg.token, "operator");
+
+    // Stale token from earlier generation must be rejected with 409 CONFLICT!
+    let stale_display = json!({
+        "token": "operator",
+        "action": {
+            "op": "show",
+            "id": "chart-stale",
+            "type": "metric",
+            "role": "primary",
+            "data": {"label": "cpu", "value": "99%"}
+        }
+    });
+    let (code, resp) = request_json(&state, Method::POST, "/display", Some(stale_display)).await;
+    assert_eq!(code, StatusCode::CONFLICT);
+    assert_eq!(resp["code"], "invalid_leg");
+
+    // Verify stale display DID NOT mutate projection
+    {
+        let gate = state.0.display_gate.lock().await;
+        assert!(!gate.projection.objects.contains_key("chart-stale"));
+    }
+
+    // Stale token on /view must also be rejected with 409 CONFLICT!
+    let stale_view = json!({
+        "token": "operator",
+        "target": "theater",
+        "reason": "late"
+    });
+    let (code, resp) = request_json(&state, Method::POST, "/view", Some(stale_view)).await;
+    assert_eq!(code, StatusCode::CONFLICT);
+    assert_eq!(resp["code"], "invalid_leg");
+
+    // Un-quiesce route back to operator so new calls can proceed with rotated token
+    state
+        .0
+        .coordinator
+        .publish_status(json!({"type": "status", "route": "operator"}));
+    let current_token = state.0.coordinator.current_identity().token;
+
+    let fresh_display = json!({
+        "token": current_token,
+        "action": {
+            "op": "show",
+            "id": "chart-fresh",
+            "type": "metric",
+            "role": "primary",
+            "data": {"label": "cpu", "value": "25%"}
+        }
+    });
+    let (code, _) = request_json(&state, Method::POST, "/display", Some(fresh_display)).await;
+    assert_eq!(code, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn display_projection_snapshot_watermark() {
+    let state = state();
+
+    // 1. Post two display actions to set up projection state
+    for id in ["obj-1", "obj-2"] {
+        let (code, _) = request_json(
+            &state,
+            Method::POST,
+            "/display",
+            Some(json!({
+                "token": "operator",
+                "action": {
+                    "op": "show",
+                    "id": id,
+                    "type": "metric",
+                    "role": "primary",
+                    "data": {"label": id, "value": "100"}
+                }
+            })),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+    }
+
+    // 2. Connect a WebSocket client
+    let (mut connection, snapshot_actions, watermark) = state.register_connection().await;
+
+    // Snapshot contains obj-1 and obj-2
+    assert_eq!(snapshot_actions.len(), 2);
+    assert_eq!(snapshot_actions[0]["id"], "obj-1");
+    assert_eq!(snapshot_actions[1]["id"], "obj-2");
+
+    // 3. Publish a fresh display action with sequence > watermark
+    let (code, _) = request_json(
+        &state,
+        Method::POST,
+        "/display",
+        Some(json!({
+            "token": "operator",
+            "action": {
+                "op": "show",
+                "id": "obj-3",
+                "type": "metric",
+                "role": "secondary",
+                "data": {"label": "obj-3", "value": "300"}
+            }
+        })),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+
+    // In delivery connection receiver:
+    // The fresh event obj-3 is queued in connection.receiver with sequence > watermark
+    let frame = connection.receiver.recv().await.unwrap();
+    match frame {
+        DeliveryFrame::Event { sequence, event } => {
+            assert!(sequence > watermark);
+            let Event::Json(val) = event else {
+                panic!("expected json event")
+            };
+            assert_eq!(val["type"], "display");
+            assert_eq!(val["action"]["id"], "obj-3");
+        }
+        _ => panic!("expected event frame"),
+    }
+}
+
+#[tokio::test]
+async fn display_projection_route_reset() {
+    let state = state();
+
+    // Populate projection with objects, focus, speech
+    let show = json!({
+        "token": "operator",
+        "action": {
+            "op": "show",
+            "id": "scene-obj",
+            "type": "metric",
+            "role": "primary",
+            "data": {"label": "v", "value": "1"}
+        }
+    });
+    let (code, _) = request_json(&state, Method::POST, "/display", Some(show)).await;
+    assert_eq!(code, StatusCode::OK);
+
+    let focus = json!({
+        "token": "operator",
+        "action": {"op": "focus", "id": "scene-obj"}
+    });
+    let (code, _) = request_json(&state, Method::POST, "/display", Some(focus)).await;
+    assert_eq!(code, StatusCode::OK);
+
+    // Check that projection is populated
+    {
+        let gate = state.0.display_gate.lock().await;
+        assert_eq!(gate.projection.order.len(), 1);
+        assert_eq!(gate.projection.focus_id.as_deref(), Some("scene-obj"));
+    }
+
+    // Trigger route reset by invoking announce_route on switchboard
+    state.0.switchboard.lock().await.announce_route().await;
+
+    // Verify projection is empty and snapshot returns empty
+    {
+        let gate = state.0.display_gate.lock().await;
+        assert!(gate.projection.objects.is_empty());
+        assert!(gate.projection.order.is_empty());
+        assert_eq!(gate.projection.focus_id, None);
+        assert!(gate.projection.speech.is_none());
+        assert_eq!(gate.screen_state["stale"], true);
+        assert!(gate.projection.snapshot_actions().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn display_projection_screen_state_retirement() {
+    let state = state();
+    let (conn1, _, _) = state.register_connection().await;
+    let epoch1 = conn1.epoch;
+
+    let mut pending_header = None;
+    let mut pending_chunk = None;
+
+    let current_gen = state.0.coordinator.generation();
+
+    // 1. Connection 1 sends valid screen_state report
+    handle_text_frame(
+        &state,
+        epoch1,
+        &mut pending_header,
+        &mut pending_chunk,
+        &json!({
+            "type": "screen_state",
+            "view": "visual",
+            "pinned": false,
+            "has_visual": true,
+            "visual_kind": "chart",
+            "object_ids": ["chart-1"],
+            "title": "CPU Metrics",
+            "stale": false,
+            "generation": current_gen,
+        })
+        .to_string(),
+    )
+    .await
+    .unwrap();
+
+    // Verify view tool sees the active report
+    let (code, resp) = request_json(
+        &state,
+        Method::POST,
+        "/view",
+        Some(json!({"token": "operator", "target": ""})),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(resp["screen"]["view"], "visual");
+    assert_eq!(resp["screen"]["visual_kind"], "chart");
+    assert_eq!(resp["screen"]["stale"], false);
+
+    // 2. Connection 1 is retired (browser disconnects)
+    state.retire_connection(epoch1).await;
+    let (code, resp) = request_json(
+        &state,
+        Method::POST,
+        "/view",
+        Some(json!({"token": "operator", "target": ""})),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(
+        resp["screen"]["stale"], true,
+        "retiring active connection must mark screen report stale"
+    );
+
+    // 4. Late report from retired connection 1 must be ignored!
+    handle_text_frame(
+        &state,
+        epoch1,
+        &mut pending_header,
+        &mut pending_chunk,
+        &json!({
+            "type": "screen_state",
+            "view": "theater",
+            "pinned": true,
+            "has_visual": true,
+            "visual_kind": "diagram",
+            "object_ids": ["diag-1"],
+            "title": "Late Report",
+            "stale": false,
+            "generation": current_gen,
+        })
+        .to_string(),
+    )
+    .await
+    .unwrap();
+
+    // Verify late report was ignored
+    let (_, resp) = request_json(
+        &state,
+        Method::POST,
+        "/view",
+        Some(json!({"token": "operator", "target": ""})),
+    )
+    .await;
+    assert_eq!(
+        resp["screen"]["view"], "visual",
+        "report from retired epoch must be ignored"
+    );
+    assert_eq!(resp["screen"]["stale"], true);
+
+    // 5. Connect connection 2 (epoch 2)
+    let (conn2, _, _) = state.register_connection().await;
+    let epoch2 = conn2.epoch;
+
+    // Report with stale generation must be ignored!
+    handle_text_frame(
+        &state,
+        epoch2,
+        &mut pending_header,
+        &mut pending_chunk,
+        &json!({
+            "type": "screen_state",
+            "view": "theater",
+            "pinned": false,
+            "has_visual": true,
+            "visual_kind": "chart",
+            "object_ids": ["chart-2"],
+            "title": "Stale Gen Report",
+            "stale": false,
+            "generation": 999,
+        })
+        .to_string(),
+    )
+    .await
+    .unwrap();
+
+    let (_, resp) = request_json(
+        &state,
+        Method::POST,
+        "/view",
+        Some(json!({"token": "operator", "target": ""})),
+    )
+    .await;
+    assert_eq!(
+        resp["screen"]["view"], "visual",
+        "report with stale generation must be ignored"
+    );
+
+    // Report with current generation from active connection 2 succeeds
+    handle_text_frame(
+        &state,
+        epoch2,
+        &mut pending_header,
+        &mut pending_chunk,
+        &json!({
+            "type": "screen_state",
+            "view": "theater",
+            "pinned": false,
+            "has_visual": true,
+            "visual_kind": "chart",
+            "object_ids": ["chart-2"],
+            "title": "Fresh Report",
+            "stale": false,
+            "generation": current_gen,
+        })
+        .to_string(),
+    )
+    .await
+    .unwrap();
+
+    let (_, resp) = request_json(
+        &state,
+        Method::POST,
+        "/view",
+        Some(json!({"token": "operator", "target": ""})),
+    )
+    .await;
+    assert_eq!(resp["screen"]["view"], "theater");
+    assert_eq!(resp["screen"]["title"], "Fresh Report");
+    assert_eq!(resp["screen"]["stale"], false);
 }

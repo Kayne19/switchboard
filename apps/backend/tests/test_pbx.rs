@@ -821,3 +821,52 @@ async fn no_live_setup_when_prewarm_attached() {
 
     let _ = std::fs::remove_dir_all(temp_dir);
 }
+
+#[tokio::test]
+async fn display_pbx_env_and_token_rotation() {
+    let board = Switchboard::new(
+        Registry::new(vec![]),
+        "pi".into(),
+        None,
+        "".into(),
+        None,
+        None,
+        None,
+        "medium".into(),
+        ".cache".into(),
+        true,
+        "".into(),
+        "".into(),
+        "http://127.0.0.1:8765/display".into(),
+        "".into(),
+        HashMap::new(),
+    );
+
+    assert_eq!(board.display_url, "http://127.0.0.1:8765/display");
+
+    // Verify agent_env passes SWITCHBOARD_DISPLAY_URL
+    let env = board.agent_env("test-leg-token-123");
+    assert_eq!(
+        env.get("SWITCHBOARD_DISPLAY_URL").map(String::as_str),
+        Some("http://127.0.0.1:8765/display")
+    );
+    assert_eq!(
+        env.get("SWITCHBOARD_SESSION_TOKEN").map(String::as_str),
+        Some("test-leg-token-123")
+    );
+
+    // Verify token rotation
+    let rotated_env = board.agent_env("test-rotated-token-456");
+    assert_eq!(
+        rotated_env
+            .get("SWITCHBOARD_SESSION_TOKEN")
+            .map(String::as_str),
+        Some("test-rotated-token-456")
+    );
+    assert_eq!(
+        rotated_env
+            .get("SWITCHBOARD_DISPLAY_URL")
+            .map(String::as_str),
+        Some("http://127.0.0.1:8765/display")
+    );
+}

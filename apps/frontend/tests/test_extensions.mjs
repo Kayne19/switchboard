@@ -6,12 +6,15 @@ import ts from "typescript";
 
 const typeboxStub = `
 const Type = {
-  Object: (shape) => shape,
-  String: (options = {}) => options,
-  Number: (options = {}) => options,
-  Optional: (value) => value,
-  Boolean: (options = {}) => options,
-  Array: (items) => items,
+  Object: (properties, options = {}) => ({ type: "object", properties, ...options }),
+  Union: (anyOf, options = {}) => ({ type: "union", anyOf, ...options }),
+  Literal: (value, options = {}) => ({ type: "literal", const: value, ...options }),
+  String: (options = {}) => ({ type: "string", ...options }),
+  Number: (options = {}) => ({ type: "number", ...options }),
+  Boolean: (options = {}) => ({ type: "boolean", ...options }),
+  Array: (items, options = {}) => ({ type: "array", items, ...options }),
+  Optional: (schema) => ({ ...schema, optional: true }),
+  Null: () => ({ type: "null" }),
 };`;
 let moduleNumber = 0;
 
@@ -64,7 +67,7 @@ function fakePi(thinking = "high") {
 async function agentExtensionBehavior() {
 	process.env.SWITCHBOARD_SPEAK_URL = "http://switchboard.test/speak";
 	process.env.SWITCHBOARD_STATE_URL = "http://switchboard.test/leg-state";
-	process.env.SWITCHBOARD_DIAGRAM_URL = "http://switchboard.test/diagram";
+	process.env.SWITCHBOARD_DISPLAY_URL = "http://switchboard.test/display";
 	process.env.SWITCHBOARD_PERSONA = "Sound calm and direct.";
 	process.env.SWITCHBOARD_SESSION_TOKEN = "leg-token";
 
@@ -108,6 +111,37 @@ async function agentExtensionBehavior() {
 		);
 		assert.match(pi.tools.get("speak").description, /Sound calm and direct/);
 
+		// Schema inspection on display tool
+		const displayTool = pi.tools.get("display");
+		const schema = displayTool.parameters;
+		assert.equal(schema.type, "union", "display parameters must be a TypeBox Union");
+		assert.ok(Array.isArray(schema.anyOf), "union must contain anyOf array");
+		assert.equal(schema.anyOf.length, 11, "union must have 11 action branches");
+
+		for (const branch of schema.anyOf) {
+			assert.equal(branch.type, "object", "every action branch must be an object");
+			assert.equal(branch.additionalProperties, false, "every action branch must have additionalProperties: false");
+		}
+
+		// Verify diagram data is structured graph only with mode: 'graph' and no source field
+		const diagramBranch = schema.anyOf.find((b) => b.properties?.type?.const === "diagram");
+		assert.ok(diagramBranch, "diagram branch must be defined in union");
+		assert.equal(diagramBranch.properties.data.properties.mode.const, "graph", "diagram data mode must be graph");
+		assert.equal(diagramBranch.properties.data.properties.source, undefined, "diagram data must not define source");
+		assert.equal(diagramBranch.properties.data.additionalProperties, false, "diagram data must have additionalProperties: false");
+
+		// Verify say branch structure
+		const sayBranch = schema.anyOf.find((b) => b.properties?.op?.const === "say");
+		assert.ok(sayBranch, "say branch must be defined in union");
+		assert.ok(sayBranch.properties.text, "say must define text");
+		assert.ok(sayBranch.properties.at, "say must define at anchor");
+
+		// Verify no obsolete per-kind tools exist
+		const obsoleteTools = ["diagram", "plan", "timeline", "diff", "listen"];
+		for (const oldTool of obsoleteTools) {
+			assert.ok(!pi.tools.has(oldTool), `obsolete tool '${oldTool}' must not be registered`);
+		}
+
 		await pi.handlers.get("session_start")();
 		await pi.handlers.get("thinking_level_select")();
 		assert.equal(requests[0].url, process.env.SWITCHBOARD_STATE_URL);
@@ -125,20 +159,18 @@ async function agentExtensionBehavior() {
 			token: "leg-token",
 		});
 
-		const drawn = await pi.tools.get("display").execute("call", {
-			op: "show",
-			id: "call-path",
-			type: "diagram",
-			data: { title: "Call path", source: "flowchart TD; A-->B", nodes: [], edges: [] },
-		});
-		assert.equal(drawn.content[0].text, "On screen.");
-		assert.deepEqual(requests.at(-1).body, {
-			op: "show",
-			id: "call-path",
-			type: "diagram",
-			data: { title: "Call path", source: "flowchart TD; A-->B", nodes: [], edges: [] },
-			token: "leg-token",
-		});
+		// Run every canonical valid fixture through display tool
+		const fixtures = JSON.parse(readFileSync("apps/frontend/tests/fixtures/display-actions.json", "utf8"));
+		for (const testCase of fixtures.valid) {
+			const res = await displayTool.execute("call", testCase.action);
+			assert.equal(res.isError, undefined, `display execution for fixture '${testCase.name}' should succeed`);
+			assert.equal(res.content[0].text, "On screen.");
+			assert.equal(requests.at(-1).url, process.env.SWITCHBOARD_DISPLAY_URL);
+			assert.deepEqual(requests.at(-1).body, {
+				action: testCase.action,
+				token: "leg-token",
+			});
+		}
 
 		const viewed = await pi.tools.get("view").execute("call", {
 			target: "stage",
@@ -148,6 +180,7 @@ async function agentExtensionBehavior() {
 			viewed.content[0].text,
 			"Requested stage view. The caller's pinned view may take precedence.",
 		);
+		assert.equal(requests.at(-1).url, "http://switchboard.test/view");
 		assert.deepEqual(requests.at(-1).body, {
 			target: "stage",
 			reason: "Display architecture",
@@ -188,6 +221,7 @@ async function agentExtensionBehavior() {
 async function agentExtensionFallbacks() {
 	delete process.env.SWITCHBOARD_SPEAK_URL;
 	delete process.env.SWITCHBOARD_STATE_URL;
+	delete process.env.SWITCHBOARD_DISPLAY_URL;
 	delete process.env.SWITCHBOARD_DIAGRAM_URL;
 	delete process.env.SWITCHBOARD_PERSONA;
 	delete process.env.SWITCHBOARD_SESSION_TOKEN;
@@ -197,22 +231,22 @@ async function agentExtensionFallbacks() {
 	const speak = await pi.tools.get("speak").execute("call", { text: "Hello" });
 	assert.equal(speak.isError, true);
 	assert.match(speak.content[0].text, /No SWITCHBOARD_SPEAK_URL/);
-	const diagram = await pi.tools
+	const display = await pi.tools
 		.get("display")
 		.execute("call", { op: "show", id: "x", type: "note", data: { segments: [{ text: "Hello" }] } });
-	assert.equal(diagram.isError, true);
-	assert.match(diagram.content[0].text, /No SWITCHBOARD_DIAGRAM_URL/);
+	assert.equal(display.isError, true);
+	assert.match(display.content[0].text, /No SWITCHBOARD_DISPLAY_URL/);
 }
 
 async function agentExtensionHttpFailures() {
 	process.env.SWITCHBOARD_SPEAK_URL = "http://switchboard.test/speak";
 	process.env.SWITCHBOARD_STATE_URL = "http://switchboard.test/leg-state";
-	process.env.SWITCHBOARD_DIAGRAM_URL = "http://switchboard.test/diagram";
+	process.env.SWITCHBOARD_DISPLAY_URL = "http://switchboard.test/display";
 	const previousFetch = globalThis.fetch;
 	let speakMode = "http-error";
 	globalThis.fetch = async (url) => {
 		if (String(url).endsWith("leg-state")) throw new Error("page went away");
-		if (String(url).endsWith("diagram")) {
+		if (String(url).endsWith("display")) {
 			if (speakMode === "bad-request-detail") {
 				return new Response(
 					JSON.stringify({
@@ -275,7 +309,6 @@ async function agentExtensionHttpFailures() {
 		const legacyRefusal = await pi.tools.get("display").execute("call", { op: "clear" });
 		assert.equal(legacyRefusal.isError, true);
 		assert.match(legacyRefusal.content[0].text, /no display screen/);
-
 
 		speakMode = "network-error";
 		const unreachable = await pi.tools

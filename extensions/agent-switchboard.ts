@@ -37,7 +37,7 @@ declare const process: { env: Record<string, string | undefined> };
 
 const SPEAK_URL = process.env.SWITCHBOARD_SPEAK_URL ?? "";
 const STATE_URL = process.env.SWITCHBOARD_STATE_URL ?? "";
-const DIAGRAM_URL = process.env.SWITCHBOARD_DIAGRAM_URL ?? "";
+const DISPLAY_URL = process.env.SWITCHBOARD_DISPLAY_URL ?? "";
 const SESSION_TOKEN = process.env.SWITCHBOARD_SESSION_TOKEN ?? "";
 const parsedSpeechDeadline = Number.parseInt(
 	process.env.SWITCHBOARD_SPEECH_DEADLINE_MS ?? "25000",
@@ -199,46 +199,328 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 		},
 	});
 
+	const SemanticType = Type.Union([
+		Type.Literal("red"),
+		Type.Literal("orange"),
+		Type.Literal("green"),
+		Type.Literal("cyan"),
+		Type.Literal("amber"),
+		Type.Literal("paper"),
+		Type.Literal("muted"),
+	]);
+
+	const ChartSeriesType = Type.Object(
+		{
+			name: Type.String({ maxLength: 128 }),
+			semantic: Type.Optional(SemanticType),
+			values: Type.Array(Type.Number()),
+		},
+		{ additionalProperties: false },
+	);
+
+	const ChartDataType = Type.Object(
+		{
+			title: Type.Optional(Type.String({ maxLength: 256 })),
+			subtitle: Type.Optional(Type.String({ maxLength: 256 })),
+			context: Type.Optional(Type.String({ maxLength: 256 })),
+			xLabel: Type.Optional(Type.String({ maxLength: 128 })),
+			yLabel: Type.Optional(Type.String({ maxLength: 128 })),
+			xMax: Type.Optional(Type.Number()),
+			yMin: Type.Optional(Type.Number()),
+			yMax: Type.Optional(Type.Number()),
+			series: Type.Array(ChartSeriesType),
+			marker: Type.Optional(
+				Type.Object(
+					{
+						x: Type.Number(),
+						series: Type.Optional(Type.String({ maxLength: 128 })),
+					},
+					{ additionalProperties: false },
+				),
+			),
+			compareLabel: Type.Optional(Type.String({ maxLength: 128 })),
+		},
+		{ additionalProperties: false },
+	);
+
+	const MetricDataType = Type.Object(
+		{
+			label: Type.String({ maxLength: 128 }),
+			value: Type.String({ maxLength: 128 }),
+			semantic: Type.Optional(SemanticType),
+		},
+		{ additionalProperties: false },
+	);
+
+	const ProgressDataType = Type.Object(
+		{
+			label: Type.String({ maxLength: 128 }),
+			detail: Type.Optional(Type.String({ maxLength: 256 })),
+			value: Type.Number(),
+			text: Type.Optional(Type.String({ maxLength: 128 })),
+		},
+		{ additionalProperties: false },
+	);
+
+	const DiagramNodeType = Type.Object(
+		{
+			id: Type.String({ minLength: 1, maxLength: 128 }),
+			label: Type.String({ maxLength: 256 }),
+			sub: Type.Optional(Type.String({ maxLength: 256 })),
+			detail: Type.Optional(Type.String({ maxLength: 256 })),
+			semantic: Type.Optional(SemanticType),
+			state: Type.Optional(
+				Type.Union([
+					Type.Literal("done"),
+					Type.Literal("active"),
+					Type.Literal("todo"),
+					Type.Literal("blocked"),
+				]),
+			),
+		},
+		{ additionalProperties: false },
+	);
+
+	const DiagramEdgeType = Type.Object(
+		{
+			from: Type.String({ minLength: 1, maxLength: 128 }),
+			to: Type.String({ minLength: 1, maxLength: 128 }),
+			label: Type.Optional(Type.String({ maxLength: 256 })),
+			semantic: Type.Optional(SemanticType),
+			active: Type.Optional(Type.Boolean()),
+		},
+		{ additionalProperties: false },
+	);
+
+	const DiagramDataType = Type.Object(
+		{
+			title: Type.Optional(Type.String({ maxLength: 256 })),
+			subtitle: Type.Optional(Type.String({ maxLength: 256 })),
+			context: Type.Optional(Type.String({ maxLength: 256 })),
+			mode: Type.Literal("graph"),
+			nodes: Type.Array(DiagramNodeType, { minItems: 1, maxItems: 100 }),
+			edges: Type.Array(DiagramEdgeType, { maxItems: 200 }),
+		},
+		{ additionalProperties: false },
+	);
+
+	const DocumentDataType = Type.Object(
+		{
+			kind: Type.Optional(
+				Type.Union([Type.Literal("email"), Type.Literal("document")]),
+			),
+			context: Type.Optional(Type.String({ maxLength: 256 })),
+			source: Type.Optional(Type.String({ maxLength: 256 })),
+			from: Type.Optional(Type.String({ maxLength: 128 })),
+			timestamp: Type.Optional(Type.String({ maxLength: 128 })),
+			subject: Type.String({ maxLength: 256 }),
+			paragraphs: Type.Array(Type.String()),
+		},
+		{ additionalProperties: false },
+	);
+
+	const CodeDataType = Type.Object(
+		{
+			title: Type.Optional(Type.String({ maxLength: 256 })),
+			file: Type.Optional(Type.String({ maxLength: 256 })),
+			context: Type.Optional(Type.String({ maxLength: 256 })),
+			source: Type.Object(
+				{
+					language: Type.Optional(Type.String({ maxLength: 64 })),
+					text: Type.String({ maxLength: 50000 }),
+					highlight: Type.Optional(Type.Array(Type.Number())),
+				},
+				{ additionalProperties: false },
+			),
+		},
+		{ additionalProperties: false },
+	);
+
+	const RichSegmentType = Type.Object(
+		{
+			text: Type.String({ maxLength: 50000 }),
+			accent: Type.Optional(Type.Boolean()),
+			bold: Type.Optional(Type.Boolean()),
+			semantic: Type.Optional(SemanticType),
+		},
+		{ additionalProperties: false },
+	);
+
+	const NoteDataType = Type.Object(
+		{
+			tag: Type.Optional(Type.String({ maxLength: 128 })),
+			segments: Type.Array(RichSegmentType),
+		},
+		{ additionalProperties: false },
+	);
+
+	const RoleType = Type.Union([
+		Type.Literal("primary"),
+		Type.Literal("compare"),
+		Type.Literal("secondary"),
+		Type.Literal("ambient"),
+	]);
+
+	const ShowChartAction = Type.Object(
+		{
+			op: Type.Literal("show"),
+			id: Type.String({ minLength: 1, maxLength: 128 }),
+			type: Type.Literal("chart"),
+			role: Type.Optional(RoleType),
+			data: ChartDataType,
+		},
+		{ additionalProperties: false },
+	);
+
+	const ShowMetricAction = Type.Object(
+		{
+			op: Type.Literal("show"),
+			id: Type.String({ minLength: 1, maxLength: 128 }),
+			type: Type.Literal("metric"),
+			role: Type.Optional(RoleType),
+			data: MetricDataType,
+		},
+		{ additionalProperties: false },
+	);
+
+	const ShowProgressAction = Type.Object(
+		{
+			op: Type.Literal("show"),
+			id: Type.String({ minLength: 1, maxLength: 128 }),
+			type: Type.Literal("progress"),
+			role: Type.Optional(RoleType),
+			data: ProgressDataType,
+		},
+		{ additionalProperties: false },
+	);
+
+	const ShowDiagramAction = Type.Object(
+		{
+			op: Type.Literal("show"),
+			id: Type.String({ minLength: 1, maxLength: 128 }),
+			type: Type.Literal("diagram"),
+			role: Type.Optional(RoleType),
+			data: DiagramDataType,
+		},
+		{ additionalProperties: false },
+	);
+
+	const ShowDocumentAction = Type.Object(
+		{
+			op: Type.Literal("show"),
+			id: Type.String({ minLength: 1, maxLength: 128 }),
+			type: Type.Literal("document"),
+			role: Type.Optional(RoleType),
+			data: DocumentDataType,
+		},
+		{ additionalProperties: false },
+	);
+
+	const ShowCodeAction = Type.Object(
+		{
+			op: Type.Literal("show"),
+			id: Type.String({ minLength: 1, maxLength: 128 }),
+			type: Type.Literal("code"),
+			role: Type.Optional(RoleType),
+			data: CodeDataType,
+		},
+		{ additionalProperties: false },
+	);
+
+	const ShowNoteAction = Type.Object(
+		{
+			op: Type.Literal("show"),
+			id: Type.String({ minLength: 1, maxLength: 128 }),
+			type: Type.Literal("note"),
+			role: Type.Optional(RoleType),
+			data: NoteDataType,
+		},
+		{ additionalProperties: false },
+	);
+
+	const HideAction = Type.Object(
+		{
+			op: Type.Literal("hide"),
+			id: Type.String({ minLength: 1, maxLength: 128 }),
+		},
+		{ additionalProperties: false },
+	);
+
+	const FocusAction = Type.Object(
+		{
+			op: Type.Literal("focus"),
+			id: Type.String({ minLength: 1, maxLength: 128 }),
+		},
+		{ additionalProperties: false },
+	);
+
+	const SpeechAnchorType = Type.Union([
+		Type.Object(
+			{
+				x: Type.Number(),
+				series: Type.Optional(Type.String({ maxLength: 128 })),
+			},
+			{ additionalProperties: false },
+		),
+		Type.Object(
+			{
+				x: Type.Optional(Type.Number()),
+				series: Type.String({ maxLength: 128 }),
+			},
+			{ additionalProperties: false },
+		),
+	]);
+
+	const SayAction = Type.Object(
+		{
+			op: Type.Literal("say"),
+			text: Type.String({ minLength: 1, maxLength: 50000 }),
+			target: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+			at: Type.Optional(Type.Union([SpeechAnchorType, Type.Null()])),
+		},
+		{ additionalProperties: false },
+	);
+
+	const ClearAction = Type.Object(
+		{
+			op: Type.Literal("clear"),
+		},
+		{ additionalProperties: false },
+	);
+
+	const DisplayActionType = Type.Union([
+		ShowChartAction,
+		ShowMetricAction,
+		ShowProgressAction,
+		ShowDiagramAction,
+		ShowDocumentAction,
+		ShowCodeAction,
+		ShowNoteAction,
+		HideAction,
+		FocusAction,
+		SayAction,
+		ClearAction,
+	]);
+
 	pi.registerTool({
 		name: "display",
 		label: "Display",
 		description:
 			"Show semantic content on the caller's screen. Use one action per call with op show, hide, say, focus, or clear. You can show chart, metric, progress, diagram, document, code, or note objects; compose a scene with roles (primary, compare, secondary, ambient). Reuse a stable id to update an object in place so the renderer can animate continuity. Use short, meaningful labels and let the renderer decide layout: never send markup, CSS, coordinates, or styling. The live transcript is system-owned, so message is not available; use note for on-screen asides and speak for words.",
-		parameters: Type.Object({
-			op: Type.String({
-				enum: ["show", "hide", "say", "focus", "clear"],
-				description: "Action: show, hide, say, focus, or clear.",
-			}),
-			id: Type.Optional(Type.String({ description: "Stable object id (required for show, hide, and focus)." })),
-			type: Type.Optional(Type.String({
-				enum: ["chart", "metric", "progress", "diagram", "document", "code", "note"],
-				description: "Object type for show: chart, metric, progress, diagram, document, code, or note.",
-			})),
-			role: Type.Optional(Type.String({
-				enum: ["primary", "compare", "secondary", "ambient"],
-				description: "Scene role for show: primary, compare, secondary, or ambient.",
-			})),
-			data: Type.Optional(Type.Object({}, { additionalProperties: true })),
-			text: Type.Optional(Type.String({ description: "Text for a say action." })),
-			target: Type.Optional(Type.String({ description: "Optional object id to anchor a say action." })),
-			at: Type.Optional(Type.Object({
-				x: Type.Optional(Type.Number()),
-				series: Type.Optional(Type.String()),
-			})),
-		}),
+		parameters: DisplayActionType,
 		async execute(_toolCallId, params) {
-			if (!DIAGRAM_URL) {
+			if (!DISPLAY_URL) {
 				return {
-					content: [{ type: "text", text: "No SWITCHBOARD_DIAGRAM_URL is set, so there is no display screen. Describe it in words instead." }],
+					content: [{ type: "text", text: "No SWITCHBOARD_DISPLAY_URL is set, so there is no display screen. Describe it in words instead." }],
 					details: {},
 					isError: true,
 				};
 			}
 			try {
-				const resp = await fetch(DIAGRAM_URL, {
+				const resp = await fetch(DISPLAY_URL, {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ ...params, ...(SESSION_TOKEN ? { token: SESSION_TOKEN } : {}) }),
+					body: JSON.stringify({ action: params, ...(SESSION_TOKEN ? { token: SESSION_TOKEN } : {}) }),
 					signal: AbortSignal.timeout(30_000),
 				});
 				if (!resp.ok) {
@@ -248,7 +530,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 				if (data.delivered === false) {
 					return {
 						content: [{ type: "text", text: `Nobody is looking: ${data.reason ?? "no browser connected"}. It will be there if they open the page.` }],
-						details: {},
+					details: {},
 					};
 				}
 				return { content: [{ type: "text", text: "On screen." }], details: {} };
@@ -283,8 +565,8 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 			),
 		}),
 		async execute(_toolCallId, params) {
-			const viewUrl = DIAGRAM_URL
-				? DIAGRAM_URL.replace(/\/diagram$/, "/view")
+			const viewUrl = DISPLAY_URL
+				? new URL("/view", DISPLAY_URL).toString()
 				: "";
 			if (!viewUrl) {
 				return {

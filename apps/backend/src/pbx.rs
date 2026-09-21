@@ -334,7 +334,7 @@ pub struct Switchboard {
     pub model_swaps: bool,
     pub speak_url: String,
     pub state_url: String,
-    pub diagram_url: String,
+    pub display_url: String,
     pub persona: String,
     pub env: HashMap<String, String>,
     speech_deadline_ms: u64,
@@ -370,7 +370,7 @@ impl Switchboard {
         model_swaps: bool,
         speak_url: String,
         state_url: String,
-        diagram_url: String,
+        display_url: String,
         persona: String,
         env: HashMap<String, String>,
     ) -> Self {
@@ -405,7 +405,7 @@ impl Switchboard {
             model_swaps,
             speak_url,
             state_url,
-            diagram_url,
+            display_url,
             persona,
             env,
             speech_deadline_ms,
@@ -441,7 +441,7 @@ impl Switchboard {
         self.route_callback = callback;
     }
 
-    async fn announce_route(&self) {
+    pub async fn announce_route(&self) {
         if let Some(callback) = &self.route_callback {
             let callback = Arc::clone(callback);
             let status = self.status();
@@ -1433,7 +1433,7 @@ impl Switchboard {
             }
         };
         // Silently returning None here costs the agent its `speak` and
-        // `diagram` tools and quietly rewrites its system prompt to use the
+        // `display` tools and quietly rewrites its system prompt to use the
         // sentinel instead — a large behavior change from one unset path.
         let Some(source) = self.agent_extension_file.as_deref() else {
             tracing::warn!(
@@ -1574,7 +1574,7 @@ impl Switchboard {
         Some(staged)
     }
 
-    fn agent_env(&self, session_token: &str) -> HashMap<String, String> {
+    pub fn agent_env(&self, session_token: &str) -> HashMap<String, String> {
         let mut e = HashMap::from([
             (String::from("SWITCHBOARD_SESSION"), String::from("1")),
             (
@@ -1589,7 +1589,7 @@ impl Switchboard {
         for (key, value) in [
             ("SWITCHBOARD_SPEAK_URL", &self.speak_url),
             ("SWITCHBOARD_STATE_URL", &self.state_url),
-            ("SWITCHBOARD_DIAGRAM_URL", &self.diagram_url),
+            ("SWITCHBOARD_DISPLAY_URL", &self.display_url),
             ("SWITCHBOARD_PERSONA", &self.persona),
         ] {
             if !value.is_empty() {

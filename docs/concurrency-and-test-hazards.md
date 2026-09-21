@@ -56,13 +56,23 @@ A client cannot use this to reach a leg it should not: the epoch is only ever
 learned from the server, and any value that does not match the current one gets
 the clip dropped. A wrong number can discard speech, never misroute it.
 
-What this trades away: an utterance begun after a transfer but before the browser
-learns the new epoch is discarded, and the caller has to repeat it. That window
-is one message delivery, and every bump is browser-initiated — `/hangup`,
-`/connect`, and `/thinking` off the operator leg — so the tab is already awake
-and waiting on that exchange when it happens. An agent-initiated
-`transfer_to_project` does not bump the epoch at all. Losing a word to a race the
-caller just started is much cheaper than running it against the wrong project.
+What this trades away: speech that started before the browser learned of a
+change is discarded, and the caller has to repeat it. Browser-initiated bumps
+(`/hangup`, `/connect`, `/thinking` off the operator leg) are one message
+delivery away, so the tab is already awake and waiting on that exchange.
+
+An agent-initiated `transfer_to_project` bumps the epoch at *adoption*, not at
+startup: the generation stays put while the new leg is starting, and the route
+callback announces the new epoch (with the status) the moment the leg is live.
+That leaves a window — ssh, process start, intro turn — in which the browser
+still holds the old epoch. The server closes it by emitting a
+`{"type":"candidate"}` event when a candidate leg begins and
+`{"type":"candidate_cleared"}` when adoption, rollback, or rescue ends it. The
+browser marks clips recorded while a candidate is in flight as addressed to the
+incoming leg and re-stamps them to the new epoch when the `epoch` event
+arrives, so the caller's words reach the new leg as a fresh turn. Any clip
+without that mark keeps the discard: a wrong number can only lose speech,
+never misroute it.
 
 ## Delivery and picker ordering
 

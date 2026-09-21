@@ -1,6 +1,6 @@
 # Visual Channel Capabilities & Deferred Proposals
 
-`docs/diagram-tool.md` is the wire contract for the **general `display` channel**; this document records the implemented capabilities, the composition model, deferred proposals, and refused patterns.
+`diagram-tool.md` is the wire contract for the **general `display` channel**; this document records the implemented capabilities, the composition model, deferred proposals, and refused patterns.
 
 ## Core Principle
 
@@ -21,22 +21,21 @@ this composition behavior.
 The agent has **one** `display` tool (not a per-kind menu). A call is a protocol
 action — `op` + `id` + `type` + `role` + `data` — and the agent decides freely
 what to show and how to compose it. The page owns pixels, theme, and layout; the
-agent sends semantics. See `docs/diagram-tool.md` for the full action protocol.
+agent sends semantics. See `diagram-tool.md` for the full action protocol.
 
 ### Content types (the agent's palette)
 
 | type | use |
 | --- | --- |
-| `diagram` | relationships and structure — **Mermaid is one diagram `kind`** (`flowchart`, `sequenceDiagram`, `stateDiagram-v2`, `timeline`/`gantt`, `gitGraph`, `erDiagram`, `mindmap`) |
+| `diagram` | relationships and structure — structured graph data (`mode: "graph"`, nodes and edges with semantic states) |
 | `chart` | quantitative trends (`bar`, `line`, `pie`, `spark`) |
 | `metric` | a single tracked value with trend |
-| `progress` | the old `plan`/`timeline` checklists (steps, states, optional durations) |
+| `progress` | checklists, steps, states, and optional durations |
 | `document` | headings, paragraphs, bullets, code blocks |
-| `code` | the old `diff` view (`add`/`del`/`ctx` lines) |
+| `code` | code and diff views (`add`/`del`/`ctx` lines) |
 | `note` | the agent's own words, without pretending to be the transcript |
 
-Mermaid node styling stays restricted to the four semantic classes
-(`:::active`, `:::done`, `:::blocked`, `:::muted`), enforced server-side.
+Diagram node styling stays restricted to semantic classes and states, enforced server-side.
 
 ### Composition & focus
 
@@ -65,10 +64,10 @@ an agent can verify its own display via `view`.
 - **General Raw HTML / Arbitrary Markup**: refused. Arbitrary HTML exposes the
   page (which holds active WebRTC / WebSocket call state) to XSS via prompt
   injection from external repositories. All display renders from structured data
-  controlled by client code, written via `textContent`; Mermaid runs
-  `antiscript`.
+  controlled by client code, written via `textContent`.
 - **Layout / style fields from the agent**: refused. Any `layout`, `style`, `css`,
   `className`, or geometry field in an action is rejected — the page owns pixels.
-- **Adding Environment Variables or Endpoint Overheads**: refused. The whole
-  channel multiplexes over `POST /diagram` and the existing socket so the
-  environment-file contract between Switchboard and `homelab` is unchanged.
+- **Ad-hoc or unversioned transport sprawl**: refused. The display channel is
+  exposed cleanly via dedicated `POST /display` and `SWITCHBOARD_DISPLAY_URL`,
+  validating every action at the boundary and reusing the existing browser
+  WebSocket for live delivery.
