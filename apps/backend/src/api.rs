@@ -346,7 +346,7 @@ impl AppState {
         let last_display = Arc::new(Mutex::new(None));
         let delivery = DeliveryState::new();
         let speech_deadline = speaker.speech_deadline;
-        let coordinator = Coordinator::new(switchboard.status());
+        let mut coordinator = Coordinator::new(switchboard.status());
         let live_leg = switchboard.live_leg_state();
         let activity_events = events.clone();
         let activity_delivery = delivery.clone();
@@ -375,6 +375,28 @@ impl AppState {
                 delivery.publish(event);
             })
         });
+        let candidate_events = events.clone();
+        let candidate_delivery = delivery.clone();
+        coordinator.set_candidate_callback(Arc::new(
+            move |notice: &crate::lifecycle::CandidateNotice| {
+                // The callback fires under the coordinator's lock: publish
+                // non-blockingly and never re-enter the coordinator here.
+                let event = Event::Json(if notice.active {
+                    json!({
+                        "type": "candidate",
+                        "route": notice.route,
+                        "generation": notice.generation,
+                    })
+                } else {
+                    json!({
+                        "type": "candidate_cleared",
+                        "generation": notice.generation,
+                    })
+                });
+                let _ = candidate_events.send(event.clone());
+                candidate_delivery.publish(event);
+            },
+        ));
         let route_events = events.clone();
         let route_delivery = delivery.clone();
         let route_display = last_display.clone();

@@ -71,7 +71,9 @@ export function ConversationScene({ state, onToggleListening, transcriptOpen, se
   const object = primaryObject(state);
   if (!object) return <IdleScene state={state} onToggleListening={onToggleListening} />;
   const message = cast.message(object).data;
-  const segments = state.speech ? [{ text: state.speech.text }] : message.segments;
+  // Status/activity speech is rendered as an annotation elsewhere; it must not
+  // replace the conversation's latest committed response.
+  const segments = message.segments;
 
   return (
     <motion.section className="scene scene--conversation" data-scene="conversation" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>

@@ -12,6 +12,97 @@ fn coordinator() -> Coordinator {
     }))
 }
 
+fn coordinator_with_notices() -> (Coordinator, Arc<std::sync::Mutex<Vec<CandidateNotice>>>) {
+    let notices = Arc::new(std::sync::Mutex::new(Vec::<CandidateNotice>::new()));
+    let recorded = notices.clone();
+    let mut coordinator = coordinator();
+    coordinator.set_candidate_callback(Arc::new(move |notice| {
+        recorded.lock().unwrap().push(notice.clone());
+    }));
+    (coordinator, notices)
+}
+
+fn alpha_candidate() -> CandidateLeg {
+    CandidateLeg::new(
+        "alpha",
+        "alpha",
+        "pi-session",
+        "cand",
+        "anthropic/opus",
+        "medium",
+    )
+}
+
+#[test]
+fn candidate_notices_track_startup_adopt_rollback_and_rescue() {
+    let (coordinator, notices) = coordinator_with_notices();
+    coordinator.begin_candidate(alpha_candidate()).unwrap();
+    assert_eq!(
+        *notices.lock().unwrap(),
+        vec![CandidateNotice {
+            route: "alpha".into(),
+            generation: 0,
+            active: true,
+        }]
+    );
+    // A rescue abandons the in-flight startup and must clear the notice.
+    coordinator.begin_rescue("page rescue");
+    assert_eq!(
+        *notices.lock().unwrap(),
+        vec![
+            CandidateNotice {
+                route: "alpha".into(),
+                generation: 0,
+                active: true,
+            },
+            CandidateNotice {
+                route: "operator".into(),
+                generation: 1,
+                active: false,
+            },
+        ]
+    );
+    assert!(coordinator.candidate_identity().is_none());
+
+    let (coordinator, notices) = coordinator_with_notices();
+    coordinator.begin_candidate(alpha_candidate()).unwrap();
+    coordinator.adopt_candidate().unwrap();
+    assert_eq!(
+        *notices.lock().unwrap(),
+        vec![
+            CandidateNotice {
+                route: "alpha".into(),
+                generation: 0,
+                active: true
+            },
+            CandidateNotice {
+                route: "alpha".into(),
+                generation: 1,
+                active: false
+            },
+        ]
+    );
+
+    let (coordinator, notices) = coordinator_with_notices();
+    coordinator.begin_candidate(alpha_candidate()).unwrap();
+    assert!(coordinator.rollback_startup("startup failed"));
+    assert_eq!(
+        *notices.lock().unwrap(),
+        vec![
+            CandidateNotice {
+                route: "alpha".into(),
+                generation: 0,
+                active: true
+            },
+            CandidateNotice {
+                route: "operator".into(),
+                generation: 0,
+                active: false,
+            },
+        ]
+    );
+}
+
 #[test]
 fn prompt_and_steer_share_one_operation_identity() {
     let coordinator = coordinator();

@@ -644,6 +644,7 @@ let activeRecording = null;
 let starting = false;
 let startCancelled = false;
 let turnEpoch = 0;
+let transferEra = null;
 let clipSequence = 0;
 let outbox = [];
 const btn = globalThis.__btn;
@@ -1051,12 +1052,42 @@ async function workspaceTargetRegressions() {
 	assert.equal(normalizeWorkspaceTarget("unknown"), null);
 }
 
+async function transferEpochRegressions() {
+	const start = source.indexOf("function restampStaleClips(");
+	const end = source.indexOf("function stopHeartbeat(", start);
+	assert.ok(
+		start >= 0 && end > start,
+		"transfer-era restamp helper is present",
+	);
+	const encoded = Buffer.from(
+		compile(
+			`${source.slice(start, end)}\nexport { restampStaleClips };`,
+			"restampStale",
+		),
+	).toString("base64");
+	const { restampStaleClips } = await import(
+		`data:text/javascript;base64,${encoded}#restampStale`
+	);
+	const transferClip = { id: "a", epoch: 3, transferEra: "alpha", sent: false };
+	const preClip = { id: "b", epoch: 3, sent: false };
+	const currentClip = { id: "c", epoch: 4, sent: false };
+	const resubmitted = restampStaleClips(
+		[transferClip, preClip, currentClip],
+		4,
+	);
+	assert.equal(resubmitted, 1, "only the transfer-era clip is re-stamped");
+	assert.equal(transferClip.epoch, 4, "transfer-era clip follows the new leg");
+	assert.equal(preClip.epoch, 3, "pre-transfer speech keeps the server's discard");
+	assert.equal(currentClip.epoch, 4);
+}
+
 await audioPlaybackRegressions();
 await mseStreamingRegressions();
 await recorderLifecycleRegressions();
 await modelPickerRegressions();
 await pickerRequestRegressions();
 await workspaceTargetRegressions();
+await transferEpochRegressions();
 console.log(
-	"ok — app audio lifecycle, playback ordering, picker, and workspace",
+	"ok — app audio lifecycle, playback ordering, picker, workspace, and transfer epochs",
 );

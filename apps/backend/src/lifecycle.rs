@@ -108,6 +108,19 @@ impl CandidateLeg {
     }
 }
 
+/// Notice to the presentation layer that a candidate leg began or ended.
+/// The browser shows "connecting to {route}" while a notice is active and
+/// resubmits speech recorded during that window once the epoch moves; the
+/// clear notice arrives on adoption, rollback, and rescue.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CandidateNotice {
+    pub route: String,
+    pub generation: u64,
+    pub active: bool,
+}
+
+pub type CandidateCallback = Arc<dyn Fn(&CandidateNotice) + Send + Sync>;
+
 #[derive(Clone, Debug)]
 pub struct CatalogPublication {
     pub project: String,
@@ -306,6 +319,7 @@ pub struct Coordinator {
     state: Arc<Mutex<CallLifecycle>>,
     projection: Arc<RwLock<Arc<StatusProjection>>>,
     next_operation: Arc<AtomicU64>,
+    on_candidate: Arc<Mutex<Option<CandidateCallback>>>,
 }
 
 impl Coordinator {
@@ -316,6 +330,28 @@ impl Coordinator {
             state: Arc::new(Mutex::new(lifecycle)),
             projection,
             next_operation: Arc::new(AtomicU64::new(1)),
+            on_candidate: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Registers a synchronous, non-blocking notice of candidate-leg
+    /// transitions. The callback fires while the coordinator's state lock is
+    /// held and must not call back into the coordinator.
+    pub fn set_candidate_callback(&mut self, callback: CandidateCallback) {
+        *self
+            .on_candidate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(callback);
+    }
+
+    fn notify_candidate(&self, notice: &CandidateNotice) {
+        let callback = self
+            .on_candidate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        if let Some(callback) = callback {
+            callback(notice);
         }
     }
 
@@ -434,19 +470,31 @@ impl Coordinator {
 
     pub fn begin_rescue(&self, reason: impl Into<String>) -> LegIdentity {
         let trace = crate::diagnostic::DiagnosticTrace::global();
-        let next = self.linearize(|state| {
+        // A rescue abandons any in-flight startup: a rescued candidate must
+        // never be adopted, and the browser must stop showing "connecting".
+        // The clear notice carries the post-rescue generation.
+        let (abandoned_candidate, route, next) = self.linearize(|state| {
+            let abandoned = state.candidate.take().is_some();
+            let route = state.route.clone();
             if state.phase == Phase::Shutdown {
                 state.leg = LegIdentity::new(state.leg.token.clone(), state.leg.generation + 1);
                 self.refresh_locked(state);
-                return state.leg.clone();
+                return (abandoned, route, state.leg.clone());
             }
             state.phase = Phase::Quiescing;
             state.operation = None;
             state.terminal_reason = Some(reason.into());
             state.leg = LegIdentity::new(state.leg.token.clone(), state.leg.generation + 1);
             self.refresh_locked(state);
-            state.leg.clone()
+            (abandoned, route, state.leg.clone())
         });
+        if abandoned_candidate {
+            self.notify_candidate(&CandidateNotice {
+                route,
+                generation: next.generation,
+                active: false,
+            });
+        }
         trace.record("lifecycle", "rescue", next.generation, "");
         next
     }
@@ -496,7 +544,13 @@ impl Coordinator {
                 status_value: state.status_value.clone(),
             });
             state.phase = Phase::Starting;
+            let route = candidate.route.clone();
             state.candidate = Some(candidate);
+            self.notify_candidate(&CandidateNotice {
+                route,
+                generation: state.leg.generation,
+                active: true,
+            });
             Ok(())
         })
     }
@@ -611,6 +665,11 @@ impl Coordinator {
                     Phase::Active
                 };
             }
+            self.notify_candidate(&CandidateNotice {
+                route: state.route.clone(),
+                generation: state.leg.generation,
+                active: false,
+            });
             self.refresh_locked(state);
             true
         })
@@ -620,6 +679,7 @@ impl Coordinator {
         self.linearize(|state| {
             let candidate = state.candidate.take().ok_or(LifecycleError::NoCandidate)?;
             let identity = candidate.identity.clone();
+            let route = candidate.route.clone();
             state.route = candidate.route;
             state.project = Some(candidate.project.clone());
             state.persistent_session_id = candidate.persistent_session_id;
@@ -643,6 +703,11 @@ impl Coordinator {
                 project: candidate.project,
                 generation: identity.generation,
                 catalog,
+            });
+            self.notify_candidate(&CandidateNotice {
+                route,
+                generation: identity.generation,
+                active: false,
             });
             self.refresh_locked(state);
             Ok(identity)
@@ -672,6 +737,11 @@ impl Coordinator {
                 } else {
                     Phase::Active
                 };
+                self.notify_candidate(&CandidateNotice {
+                    route: state.route.clone(),
+                    generation: state.leg.generation,
+                    active: false,
+                });
                 self.refresh_locked(state);
                 return true;
             }
@@ -695,6 +765,11 @@ impl Coordinator {
             state.terminal_reason = Some(reason.into());
             state.catalog = previous.catalog;
             state.status_value = previous.status_value;
+            self.notify_candidate(&CandidateNotice {
+                route: state.route.clone(),
+                generation: state.leg.generation,
+                active: false,
+            });
             self.refresh_locked(state);
             true
         })
