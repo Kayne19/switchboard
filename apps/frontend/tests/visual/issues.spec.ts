@@ -101,7 +101,8 @@ test('primary metric is a compact angular card and uses its configured caption',
   expect(style.metricHeight).toBeLessThan(style.mainHeight * 0.55);
 });
 
-test('progress fill width matches its numeric value', async ({ page }) => {
+// A value is a percentage, so `1` is one percent, never a full bar (#33).
+test('progress value of 1 fills one percent, not the whole bar', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openController(page);
   await page.evaluate(() => {
@@ -110,7 +111,7 @@ test('progress fill width matches its numeric value', async ({ page }) => {
     dispatch({ op: 'clear' });
     dispatch({
       op: 'show', id: 'deploy-progress', type: 'progress', role: 'primary',
-      data: { label: 'DEPLOY', value: 65, text: '65% COMPLETE' },
+      data: { label: 'DEPLOY', value: 1 },
     });
   });
 
@@ -118,8 +119,9 @@ test('progress fill width matches its numeric value', async ({ page }) => {
     const track = element.querySelector<HTMLElement>('.progress-primitive__track')!;
     const fill = element.querySelector<HTMLElement>('.progress-primitive__fill')!;
     return fill.getBoundingClientRect().width / track.getBoundingClientRect().width;
-  })).toBeCloseTo(0.65, 2);
-  await expect(page.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '65');
+  })).toBeCloseTo(0.01, 2);
+  await expect(page.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '1');
+  await expect(page.locator('.progress-primitive__text')).toHaveText('1% COMPLETE');
 });
 
 test('explicit anchored note survives later chat messages', async ({ page }) => {

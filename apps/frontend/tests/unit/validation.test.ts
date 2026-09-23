@@ -17,6 +17,13 @@ describe('progress value normalization', () => {
     expect(normalizeProgressValue(150)).toBe(100);
   });
 
+  // The backend's normalize_progress_value rounds the same way; its test
+  // pins the same cases.
+  it('rounds to two decimal places', () => {
+    expect(normalizeProgressValue(33.333)).toBe(33.33);
+    expect(normalizeProgressValue(66.666)).toBe(66.67);
+  });
+
   it('rejects non-finite progress values in show actions', () => {
     for (const val of [NaN, Infinity, -Infinity]) {
       const result = validateControllerAction({

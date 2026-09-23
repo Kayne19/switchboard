@@ -1064,6 +1064,14 @@ mod tests {
         assert_eq!(progress_value(json!(150)), json!(100));
     }
 
+    // The browser's normalizeProgressValue rounds the same way; its test
+    // pins the same cases.
+    #[test]
+    fn rounds_progress_values_to_two_decimal_places() {
+        assert_eq!(progress_value(json!(33.333)), json!(33.33));
+        assert_eq!(progress_value(json!(66.666)), json!(66.67));
+    }
+
     #[test]
     fn rejects_non_finite_progress_values() {
         for non_finite in [json!("NaN"), json!("Infinity"), json!("-Infinity")] {
