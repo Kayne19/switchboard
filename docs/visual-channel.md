@@ -97,12 +97,20 @@ pub struct ConfirmState {
 ```
 
 Every `screen_state` report folds its `applied_seq` / `rejected` into this
-watch as a running per-generation maximum. A route callback (a leg transfer)
-resets it — `generation` moves to the new value, `watermark` goes back to
-`None`, `rejection` clears — the same reset the projection itself gets
-(`objects` / `order` / `focus_id` / `speech` cleared) — so a confirmation
-left over from the leg that just transferred away can never satisfy a wait
-started by the leg that replaced it.
+watch as a running per-generation maximum. Moving to a new leg resets it —
+`generation` moves to the new value, `watermark` goes back to `None`,
+`rejection` clears — the same reset the projection itself gets (`objects` /
+`order` / `focus_id` / `speech` cleared) — so a confirmation left over from
+the leg that just transferred away can never satisfy a wait started by the
+leg that replaced it.
+
+That reset happens once per leg, keyed by route and generation
+(`DisplayGateState::scene_leg`). A transfer is announced twice — by candidate
+promotion when the incoming agent first shows life, and by the route callback
+when the PBX settles after the intro turn — and only the first announcement
+resets the scene and sends the `epoch`. The second restates the status and
+leaves the new agent's first drawing, and its confirmation, alone. See
+`LegAnnouncer` in `apps/backend/src/api.rs`.
 
 **`POST /display`'s result.** After publishing the action and stamping its
 `seq`, the handler waits up to ~2.5s (`DISPLAY_CONFIRM_DEADLINE_MS`) for that
