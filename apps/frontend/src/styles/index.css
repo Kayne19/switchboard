@@ -844,18 +844,28 @@ button {
 .metric-row {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  /* The value is capped so an unbroken model string can never squeeze the
+     label to zero and spill across it; what does not fit truncates. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 55%);
   align-items: center;
   min-height: 0;
   padding: clamp(8px, 1.25cqh, 14px) 0;
   border-top: 1px solid rgba(232, 230, 223, 0.13);
 }
 .metric-row__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: rgba(232, 230, 223, 0.4);
 }
 .metric-row__value {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: clamp(15px, 1.28cqw, 23px);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Generic composed workspaces */
@@ -931,6 +941,9 @@ button {
   font-size: clamp(42px, 6cqw, 94px);
   line-height: 0.92;
   letter-spacing: -0.06em;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .content-rail__details {
   min-width: 0;

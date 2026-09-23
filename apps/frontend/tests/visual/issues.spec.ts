@@ -260,3 +260,60 @@ test('long caption cannot grow into the response text at minimum box height', as
     await fixtureServer.stop();
   }
 });
+
+test('long metric labels and values stay on one line and clear of each other', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openController(page);
+  await page.evaluate(() => {
+    const dispatch = window.SwitchboardController?.dispatch;
+    if (!dispatch) throw new Error('controller unavailable');
+    dispatch({ op: 'clear' });
+    dispatch({
+      op: 'show', id: 'map', type: 'diagram', role: 'primary',
+      data: {
+        mode: 'graph', title: 'SYSTEM MAP',
+        nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+        edges: [{ from: 'a', to: 'b' }],
+      },
+    });
+    dispatch({
+      op: 'show', id: 'model', type: 'metric', role: 'secondary',
+      data: { label: 'ACTIVE MODEL', value: 'GPT openAI-codex-gpt5-mini-2026-07-09' },
+    });
+    dispatch({
+      op: 'show', id: 'provenance', type: 'metric', role: 'secondary',
+      data: { label: 'MODEL / FAMILY / BASELINE / CHECKPOINT / EPOCH / BATCH / SEED / SHARD', value: 'OK' },
+    });
+  });
+
+  const rows = page.locator('.metric-row');
+  await expect(rows.first()).toBeVisible();
+  await expect(rows).toHaveCount(2);
+  for (let i = 0; i < 2; i += 1) {
+    const row = rows.nth(i);
+    const geometry = await row.evaluate((el) => {
+      const label = el.querySelector<HTMLElement>('.metric-row__label')!;
+      const value = el.querySelector<HTMLElement>('.metric-row__value')!;
+      const rowBox = el.getBoundingClientRect();
+      const labelBox = label.getBoundingClientRect();
+      const valueBox = value.getBoundingClientRect();
+      const overlap = !(
+        valueBox.left >= labelBox.right - 1 || labelBox.left >= valueBox.right - 1 ||
+        valueBox.top >= labelBox.bottom - 1 || labelBox.top >= valueBox.bottom - 1
+      );
+      return {
+        overlap,
+        contained:
+          labelBox.left >= rowBox.left - 1 && labelBox.right <= rowBox.right + 1 &&
+          valueBox.left >= rowBox.left - 1 && valueBox.right <= rowBox.right + 1 &&
+          valueBox.top >= rowBox.top - 1 && valueBox.bottom <= rowBox.bottom + 1,
+        singleLine:
+          labelBox.height <= parseFloat(getComputedStyle(label).fontSize) * 1.7 &&
+          valueBox.height <= parseFloat(getComputedStyle(value).fontSize) * 1.7,
+      };
+    });
+    expect(geometry.overlap).toBe(false);
+    expect(geometry.contained).toBe(true);
+    expect(geometry.singleLine).toBe(true);
+  }
+});
