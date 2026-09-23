@@ -97,8 +97,12 @@ function sceneCaption(object: SceneObject, fallback: string): string {
 
 function chartAnnotationStyle(note: NoteData | null, chart: SceneObject<ChartData>): CSSProperties | undefined {
   if (note?.anchor?.target !== chart.id || note.anchor.x === undefined) return undefined;
-  const xMax = chart.data.xMax ?? Math.max(1, ...chart.data.series.map((series) => series.values.length - 1));
-  const ratio = Math.min(0.76, Math.max(0.24, note.anchor.x / Math.max(1, xMax)));
+  const maxCount = Math.max(2, ...chart.data.series.map((series) => series.values.length));
+  const xMax = chart.data.xMax ?? maxCount - 1;
+  const pad = { left: 74, right: 28 };
+  const width = 1000;
+  const xSvg = pad.left + (note.anchor.x / xMax) * (width - pad.left - pad.right);
+  const ratio = Math.min(0.79, Math.max(0.21, xSvg / width));
   return { '--annotation-anchor-x': `${ratio * 100}%` } as CSSProperties;
 }
 
@@ -285,7 +289,10 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
                 <ObjectMotion key={chart.id} objectId={chart.id} className="chart-object">
                   <TechFrame variant="panel" />
                   <FocusableSurface onActivate={() => onFocus(chart.id)} ariaLabel={`Expand ${chart.data.title ?? 'chart'}`}>
-                    <ChartPrimitive data={chart.data} />
+                    <ChartPrimitive
+                      data={chart.data}
+                      annotation={note?.anchor?.target === chart.id && note.anchor.x !== undefined ? note.anchor : undefined}
+                    />
                   </FocusableSurface>
                   {chart.role === 'compare' ? <div className="compare-label tech micro">COMPARE / {chart.data.compareLabel ?? 'RUN'}</div> : null}
                 </ObjectMotion>

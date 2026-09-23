@@ -14,7 +14,15 @@ export function chartSeriesColor(series: ChartSeries, index: number): string {
 
 function niceTicks(min:number,max:number,count=4){return Array.from({length:count},(_,i)=>max-((max-min)*i)/(count-1));}
 
-export function ChartPrimitive({ data, focused = false }: { data: ChartData; focused?: boolean }) {
+export function ChartPrimitive({
+  data,
+  focused = false,
+  annotation,
+}: {
+  data: ChartData;
+  focused?: boolean;
+  annotation?: { x?: number; series?: string };
+}) {
   const reduced = useReducedMotion();
   const clipId = useId().replace(/:/g,'');
   const width=1000,height=500,pad={left:74,right:28,top:34,bottom:54};
@@ -30,6 +38,17 @@ export function ChartPrimitive({ data, focused = false }: { data: ChartData; foc
   const markerIndex=data.marker && markerSeries ? Math.round((data.marker.x/xMax)*Math.max(0,markerSeries.values.length-1)) : 0;
   const markerValue=markerSeries?.values[Math.min((markerSeries?.values.length ?? 1)-1,markerIndex)];
 
+  const hasAnnotation = annotation?.x !== undefined;
+  const pointerSeries = hasAnnotation
+    ? (annotation.series ? data.series.find((series) => series.name === annotation.series) ?? data.series[0] : data.series[0])
+    : undefined;
+  const pointerIndex = hasAnnotation && pointerSeries
+    ? Math.round((annotation.x! / xMax) * Math.max(0, pointerSeries.values.length - 1))
+    : 0;
+  const pointerValue = pointerSeries?.values[Math.min((pointerSeries?.values.length ?? 1) - 1, Math.max(0, pointerIndex))];
+  const pointerX = hasAnnotation ? xAtEpoch(annotation.x!) : 0;
+  const pointerY = pointerValue != null ? yAt(pointerValue) : undefined;
+
   return <div className={`chart-primitive${focused?' chart-primitive--focused':''}`} data-testid="chart">
     <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label={data.title ?? 'Chart'}>
       <defs><clipPath id={clipId}><rect x={pad.left} y={pad.top} width={width-pad.left-pad.right} height={height-pad.top-pad.bottom}/></clipPath></defs>
@@ -39,7 +58,35 @@ export function ChartPrimitive({ data, focused = false }: { data: ChartData; foc
       </g>
       <g clipPath={`url(#${clipId})`}>
         {seriesPaths.map((series,index)=><motion.path className="chart-series" key={series.name} d={series.path} fill="none" stroke={chartSeriesColor(series, index)} strokeWidth={focused?3:2.3} vectorEffect="non-scaling-stroke" initial={reduced?undefined:{pathLength:0,opacity:0}} animate={{pathLength:1,opacity:1}} transition={{duration:.62,delay:index*.08,ease:[.22,.61,.36,1]}}/>)}
-        {data.marker && markerValue != null ? <motion.g initial={{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}><line x1={xAtEpoch(data.marker.x)} y1={pad.top} x2={xAtEpoch(data.marker.x)} y2={height-pad.bottom} stroke="rgba(var(--orange-rgb),.34)" strokeDasharray="6 8"/><circle cx={xAtEpoch(data.marker.x)} cy={yAt(markerValue)} r={focused?7:5} fill="#000" stroke="var(--orange)" strokeWidth="2"/></motion.g> : null}
+        {data.marker && markerValue != null ? (
+          <motion.g initial={{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}>
+            <line x1={xAtEpoch(data.marker.x)} y1={pad.top} x2={xAtEpoch(data.marker.x)} y2={height-pad.bottom} stroke="rgba(var(--orange-rgb),.34)" strokeDasharray="6 8"/>
+            {!hasAnnotation ? <circle cx={xAtEpoch(data.marker.x)} cy={yAt(markerValue)} r={focused?7:5} fill="#000" stroke="var(--orange)" strokeWidth="2"/> : null}
+          </motion.g>
+        ) : null}
+        {hasAnnotation && pointerY != null ? (
+          <motion.g className="chart-pointer" initial={reduced ? undefined : { opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}>
+            <line
+              className="chart-pointer__stem"
+              x1={pointerX}
+              y1={0}
+              x2={pointerX}
+              y2={pointerY}
+              stroke="rgba(var(--orange-rgb), 0.75)"
+              strokeWidth="1.5"
+              vectorEffect="non-scaling-stroke"
+            />
+            <circle
+              className="chart-pointer__marker"
+              cx={pointerX}
+              cy={pointerY}
+              r={focused ? 7 : 5}
+              fill="#000"
+              stroke="var(--orange)"
+              strokeWidth="2"
+            />
+          </motion.g>
+        ) : null}
       </g>
       <text className="chart-axis-label" x={width/2} y={height-2} textAnchor="middle">{data.xLabel ?? 'X'}</text>
       <text className="chart-axis-label" transform={`translate(17 ${height/2}) rotate(-90)`} textAnchor="middle">{data.yLabel ?? 'Y'}</text>

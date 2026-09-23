@@ -60,3 +60,47 @@ describe('chart series colors', () => {
     );
   });
 });
+
+
+describe('chart pointer', () => {
+  it('draws a pointer reaching the real series point when anchor has x', () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() =>
+      root.render(
+        <ChartPrimitive
+          data={data}
+          annotation={{ x: 1, series: 'GAMMA' }}
+        />,
+      ),
+    );
+
+    const pointer = host.querySelector('.chart-pointer');
+    expect(pointer).not.toBeNull();
+    const stem = host.querySelector<SVGLineElement>('.chart-pointer__stem');
+    const marker = host.querySelector<SVGCircleElement>('.chart-pointer__marker');
+    expect(stem).not.toBeNull();
+    expect(marker).not.toBeNull();
+    expect(stem?.getAttribute('y2')).toBe(marker?.getAttribute('cy'));
+    expect(stem?.getAttribute('x1')).toBe(marker?.getAttribute('cx'));
+    expect(stem?.getAttribute('x2')).toBe(marker?.getAttribute('cx'));
+  });
+
+  it('draws no pointer when anchor does not have x', () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() =>
+      root.render(
+        <ChartPrimitive
+          data={data}
+          annotation={{ series: 'GAMMA' }}
+        />,
+      ),
+    );
+
+    const pointer = host.querySelector('.chart-pointer');
+    expect(pointer).toBeNull();
+  });
+});

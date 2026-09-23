@@ -786,13 +786,7 @@ button {
 }
 .training-note--anchored::after {
   content: "";
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  width: 1px;
-  height: clamp(18px, 8cqh, 76px);
-  background: linear-gradient(rgba(var(--orange-rgb), 0.65), transparent);
-  pointer-events: none;
+  display: none;
 }
 .training-progress {
   min-height: 64px;
