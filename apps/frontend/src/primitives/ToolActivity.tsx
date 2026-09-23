@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'motion/react';
 import type { ActivityState } from '../controller/types';
-import { ACTIVITY_LINGER_MS, useLingeringValue } from '../hooks/useLingeringValue';
+import { ACTIVITY_LINGER_MS, ACTIVITY_MINIMUM_MS, useLingeringValue } from '../hooks/useLingeringValue';
 
 /**
  * The last tool the project agent used: a compact status panel, separate
@@ -9,7 +9,7 @@ import { ACTIVITY_LINGER_MS, useLingeringValue } from '../hooks/useLingeringValu
  * itself when there is no recent activity.
  */
 export function ToolActivity({ activity, placement = 'rail' }: { activity: ActivityState | null; placement?: 'rail' | 'conversation' }) {
-  const shown = useLingeringValue(activity, ACTIVITY_LINGER_MS);
+  const shown = useLingeringValue(activity, ACTIVITY_LINGER_MS, ACTIVITY_MINIMUM_MS);
   const running = shown === activity;
   return (
     <AnimatePresence initial={false}>
