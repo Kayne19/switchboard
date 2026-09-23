@@ -813,7 +813,10 @@ button {
   overflow: hidden;
 }
 .progress-primitive__fill {
-  width: 100%;
+  /* The stylesheet holds the pre-animation state; the motion value drives
+     the real width. Filling from an empty track, so a slow first paint never
+     flashes a full bar that the number does not describe. */
+  width: 0%;
   height: 100%;
   background: var(--orange);
   transform-origin: left center;

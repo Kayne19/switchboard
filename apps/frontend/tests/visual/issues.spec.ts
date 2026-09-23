@@ -203,3 +203,26 @@ test('long current response scrolls above configurable lower-right caption', asy
     await fixtureServer.stop();
   }
 });
+
+
+
+test('progress value sent as a percentage fills the matching width', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openController(page);
+  await page.evaluate(() => {
+    const dispatch = window.SwitchboardController?.dispatch;
+    if (!dispatch) throw new Error('controller unavailable');
+    dispatch({ op: 'clear' });
+    dispatch({
+      op: 'show', id: 'deploy-progress-pct', type: 'progress', role: 'primary',
+      data: { label: 'DEPLOY', value: 65, text: '65% COMPLETE' },
+    });
+  });
+
+  await expect.poll(() => page.locator('.progress-primitive').evaluate((element) => {
+    const track = element.querySelector<HTMLElement>('.progress-primitive__track')!;
+    const fill = element.querySelector<HTMLElement>('.progress-primitive__fill')!;
+    return fill.getBoundingClientRect().width / track.getBoundingClientRect().width;
+  })).toBeCloseTo(0.65, 2);
+  await expect(page.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '65');
+});

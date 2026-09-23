@@ -16,6 +16,19 @@ import type {
   SpeechState,
 } from './types';
 
+/**
+ * Progress values arrive as either a 0–1 ratio or a 0–100 percentage,
+ * depending on which model filled the field. The renderer stores a 0–1
+ * ratio, so a value above 1 is read as a percentage and scaled down;
+ * values outside 0–100 are clamped to the nearest end. A value of exactly
+ * 1 stays a ratio (a full bar), so `1` and `100` land on the same fill.
+ */
+export function normalizeProgressValue(value: number): number {
+  const bounded = Math.min(100, Math.max(0, value));
+  const ratio = bounded > 1 ? bounded / 100 : bounded;
+  return Math.round(ratio * 10000) / 10000;
+}
+
 const ALLOWED_OPERATIONS = new Set(['show', 'hide', 'say', 'focus', 'clear']);
 const ALLOWED_OBJECT_TYPES = new Set([
   'chart',
@@ -284,10 +297,11 @@ function validateProgressData(data: Record<string, unknown>): { ok: true; data: 
   if (typeof data.value !== 'number' || !Number.isFinite(data.value)) {
     return { ok: false, error: 'progress.value must be a finite number' };
   }
+  const value = normalizeProgressValue(data.value);
 
   const result: ProgressData = {
     label: data.label as string,
-    value: data.value,
+    value,
   };
 
   if (data.detail !== undefined) {
