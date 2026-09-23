@@ -120,6 +120,10 @@
           "type": "string",
           "maxLength": 256
         },
+        "caption": {
+          "type": "string",
+          "maxLength": 128
+        },
         "xLabel": {
           "type": "string",
           "maxLength": 128
@@ -169,6 +173,10 @@
         },
         "semantic": {
           "$ref": "#/definitions/Semantic"
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 128
         }
       },
       "required": [
@@ -192,6 +200,10 @@
           "type": "number"
         },
         "text": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "caption": {
           "type": "string",
           "maxLength": 128
         }
@@ -286,6 +298,10 @@
           "type": "string",
           "maxLength": 256
         },
+        "caption": {
+          "type": "string",
+          "maxLength": 128
+        },
         "mode": {
           "type": "string",
           "enum": [
@@ -328,6 +344,10 @@
         "context": {
           "type": "string",
           "maxLength": 256
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 128
         },
         "source": {
           "type": "string",
@@ -397,6 +417,10 @@
           "type": "string",
           "maxLength": 256
         },
+        "caption": {
+          "type": "string",
+          "maxLength": 128
+        },
         "source": {
           "$ref": "#/definitions/CodeSource"
         }
@@ -440,10 +464,40 @@
           "items": {
             "$ref": "#/definitions/RichSegment"
           }
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "anchor": {
+          "$ref": "#/definitions/NoteAnchor"
         }
       },
       "required": [
         "segments"
+      ],
+      "additionalProperties": false
+    },
+    "NoteAnchor": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "$ref": "#/definitions/Identifier"
+        },
+        "x": {
+          "type": "number"
+        },
+        "series": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "node": {
+          "type": "string",
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "target"
       ],
       "additionalProperties": false
     },

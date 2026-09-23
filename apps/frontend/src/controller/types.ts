@@ -17,6 +17,7 @@ export interface ChartData {
   title?: string;
   subtitle?: string;
   context?: string;
+  caption?: string;
   xLabel?: string;
   yLabel?: string;
   xMax?: number;
@@ -31,6 +32,7 @@ export interface MetricData {
   label: string;
   value: string;
   semantic?: Semantic;
+  caption?: string;
 }
 
 export interface ProgressData {
@@ -38,6 +40,7 @@ export interface ProgressData {
   detail?: string;
   value: number;
   text?: string;
+  caption?: string;
 }
 
 export interface DiagramNode {
@@ -61,6 +64,7 @@ export interface DiagramData {
   title?: string;
   subtitle?: string;
   context?: string;
+  caption?: string;
   mode: 'graph';
   /** @deprecated Deferred / rejected in v1 action contract */
   source?: string;
@@ -71,6 +75,7 @@ export interface DiagramData {
 export interface DocumentData {
   kind?: 'email' | 'document';
   context?: string;
+  caption?: string;
   source?: string;
   from?: string;
   timestamp?: string;
@@ -88,12 +93,14 @@ export interface CodeData {
   title?: string;
   file?: string;
   context?: string;
+  caption?: string;
   source: CodeSourceData;
 }
 
 export interface MessageData {
   context?: string;
   tag?: string;
+  caption?: string;
   segments: RichSegment[];
   channel?: { name: string; mode: string };
   transcript?: Array<{ speaker: string; text: string }>;
@@ -102,6 +109,13 @@ export interface MessageData {
 export interface NoteData {
   tag?: string;
   segments: RichSegment[];
+  caption?: string;
+  anchor?: {
+    target: string;
+    x?: number;
+    series?: string;
+    node?: string;
+  };
 }
 
 export type AgentObjectType =

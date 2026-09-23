@@ -50,4 +50,43 @@ describe('display protocol validation', () => {
     expect(() => assertControllerAction({ op: 'listen', on: true })).toThrow(/unknown operation/);
     expect(() => assertControllerAction({ op: 'show', id: '__runtime/x', type: 'metric', data: { label: 'L', value: '1' } })).toThrow(/reserved identifier namespace/);
   });
+
+  it('validates persistent note anchors and configurable captions', () => {
+    const valid = validateControllerAction({
+      op: 'show',
+      id: 'spike-note',
+      type: 'note',
+      role: 'secondary',
+      data: {
+        tag: 'LOOK HERE',
+        caption: 'ANNOTATION / VALIDATION SPIKE',
+        segments: [{ text: 'Validation turns upward here.' }],
+        anchor: { target: 'loss-chart', x: 32, series: 'VAL LOSS' },
+      },
+    });
+    expect(valid).toEqual({
+      ok: true,
+      action: {
+        op: 'show',
+        id: 'spike-note',
+        type: 'note',
+        role: 'secondary',
+        data: {
+          tag: 'LOOK HERE',
+          caption: 'ANNOTATION / VALIDATION SPIKE',
+          segments: [{ text: 'Validation turns upward here.' }],
+          anchor: { target: 'loss-chart', x: 32, series: 'VAL LOSS' },
+        },
+      },
+    });
+
+    expect(validateControllerAction({
+      op: 'show', id: 'bad-note', type: 'note',
+      data: { segments: [{ text: 'No target.' }], anchor: { x: 3 } },
+    })).toMatchObject({ ok: false });
+    expect(validateControllerAction({
+      op: 'show', id: 'bad-note', type: 'note',
+      data: { segments: [{ text: 'Reserved.' }], anchor: { target: '__runtime/conversation' } },
+    })).toMatchObject({ ok: false });
+  });
 });

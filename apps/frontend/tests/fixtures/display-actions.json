@@ -327,6 +327,12 @@
         "role": "ambient",
         "data": {
           "tag": "NOTE",
+          "caption": "ANNOTATION / VALIDATION",
+          "anchor": {
+            "target": "loss-chart",
+            "x": 32,
+            "series": "VAL LOSS"
+          },
           "segments": [
             {
               "text": "Observing convergence.",
@@ -343,6 +349,12 @@
         "role": "ambient",
         "data": {
           "tag": "NOTE",
+          "caption": "ANNOTATION / VALIDATION",
+          "anchor": {
+            "target": "loss-chart",
+            "x": 32,
+            "series": "VAL LOSS"
+          },
           "segments": [
             {
               "text": "Observing convergence.",

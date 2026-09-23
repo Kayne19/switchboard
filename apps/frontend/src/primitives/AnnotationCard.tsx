@@ -20,9 +20,17 @@ export function AnnotationCard({ data, onFocus, onOpenHistory }: AnnotationCardP
   // expand, so its body opens the conversation it came from.
   const activate = onFocus ?? onOpenHistory;
   return (
-    <div className="annotation-card">
+    <div className="annotation-card" data-anchor-target={data.anchor?.target}>
       <div className="annotation-card__header">
         <span className="annotation-card__tag tech micro">{data.tag ?? 'DAMOCLES / EXPLANATION'}</span>
+        {data.anchor ? (
+          <span className="annotation-card__anchor tech micro">
+            TARGET / {data.anchor.target}
+            {data.anchor.node ? ` / NODE ${data.anchor.node}` : ''}
+            {data.anchor.x !== undefined ? ` / X ${data.anchor.x}` : ''}
+            {data.anchor.series ? ` / ${data.anchor.series}` : ''}
+          </span>
+        ) : null}
         {onOpenHistory ? (
           <button type="button" className="annotation-card__history tech micro" onClick={onOpenHistory} aria-label="Open conversation history">
             HISTORY

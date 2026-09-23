@@ -50,7 +50,7 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
     { op: 'show', id: 'gpu', type: 'metric', data: { label: 'GPU', value: '91%' } },
     { op: 'show', id: 'eta', type: 'metric', data: { label: 'ETA', value: '01:42:18' } },
     { op: 'show', id: 'progress', type: 'progress', data: { label: 'EPOCH 41 / 80', detail: 'ACTIVE / OPTIMIZER STEP 18442', value: 0.5125, text: '51.25% COMPLETE' } },
-    { op: 'show', id: 'training-note', type: 'note', data: { tag: 'OBSERVATION / EPOCH 32+', segments: [
+    { op: 'show', id: 'training-note', type: 'note', data: { tag: 'OBSERVATION / EPOCH 32+', anchor: { target: 'loss', x: 32, series: 'VAL LOSS' }, segments: [
       { text: 'Validation loss turns upward here while training loss continues down. I would inspect the ' },
       { text: 'learning-rate transition', accent: true, bold: true },
       { text: ' and the first batches after it.' },

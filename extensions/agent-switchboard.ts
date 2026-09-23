@@ -223,6 +223,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 			title: Type.Optional(Type.String({ maxLength: 256 })),
 			subtitle: Type.Optional(Type.String({ maxLength: 256 })),
 			context: Type.Optional(Type.String({ maxLength: 256 })),
+			caption: Type.Optional(Type.String({ maxLength: 128 })),
 			xLabel: Type.Optional(Type.String({ maxLength: 128 })),
 			yLabel: Type.Optional(Type.String({ maxLength: 128 })),
 			xMax: Type.Optional(Type.Number()),
@@ -248,6 +249,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 			label: Type.String({ maxLength: 128 }),
 			value: Type.String({ maxLength: 128 }),
 			semantic: Type.Optional(SemanticType),
+			caption: Type.Optional(Type.String({ maxLength: 128 })),
 		},
 		{ additionalProperties: false },
 	);
@@ -258,6 +260,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 			detail: Type.Optional(Type.String({ maxLength: 256 })),
 			value: Type.Number(),
 			text: Type.Optional(Type.String({ maxLength: 128 })),
+			caption: Type.Optional(Type.String({ maxLength: 128 })),
 		},
 		{ additionalProperties: false },
 	);
@@ -297,6 +300,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 			title: Type.Optional(Type.String({ maxLength: 256 })),
 			subtitle: Type.Optional(Type.String({ maxLength: 256 })),
 			context: Type.Optional(Type.String({ maxLength: 256 })),
+			caption: Type.Optional(Type.String({ maxLength: 128 })),
 			mode: Type.Literal("graph"),
 			nodes: Type.Array(DiagramNodeType, { minItems: 1, maxItems: 100 }),
 			edges: Type.Array(DiagramEdgeType, { maxItems: 200 }),
@@ -310,6 +314,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 				Type.Union([Type.Literal("email"), Type.Literal("document")]),
 			),
 			context: Type.Optional(Type.String({ maxLength: 256 })),
+			caption: Type.Optional(Type.String({ maxLength: 128 })),
 			source: Type.Optional(Type.String({ maxLength: 256 })),
 			from: Type.Optional(Type.String({ maxLength: 128 })),
 			timestamp: Type.Optional(Type.String({ maxLength: 128 })),
@@ -324,6 +329,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 			title: Type.Optional(Type.String({ maxLength: 256 })),
 			file: Type.Optional(Type.String({ maxLength: 256 })),
 			context: Type.Optional(Type.String({ maxLength: 256 })),
+			caption: Type.Optional(Type.String({ maxLength: 128 })),
 			source: Type.Object(
 				{
 					language: Type.Optional(Type.String({ maxLength: 64 })),
@@ -350,6 +356,18 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 		{
 			tag: Type.Optional(Type.String({ maxLength: 128 })),
 			segments: Type.Array(RichSegmentType),
+			caption: Type.Optional(Type.String({ maxLength: 128 })),
+			anchor: Type.Optional(
+				Type.Object(
+					{
+						target: Type.String({ minLength: 1, maxLength: 128 }),
+						x: Type.Optional(Type.Number()),
+						series: Type.Optional(Type.String({ maxLength: 128 })),
+						node: Type.Optional(Type.String({ maxLength: 128 })),
+					},
+					{ additionalProperties: false },
+				),
+			),
 		},
 		{ additionalProperties: false },
 	);
@@ -506,7 +524,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 		name: "display",
 		label: "Display",
 		description:
-			"Show semantic content on the caller's screen. Use one action per call with op show, hide, say, focus, or clear. You can show chart, metric, progress, diagram, document, code, or note objects; compose a scene with roles (primary, compare, secondary, ambient). Reuse a stable id to update an object in place so the renderer can animate continuity. Use short, meaningful labels and let the renderer decide layout: never send markup, CSS, coordinates, or styling. The live transcript is system-owned, so message is not available; use note for on-screen asides and speak for words." +
+			"Show semantic content on the caller's screen. Use one action per call with op show, hide, say, focus, or clear. You can show chart, metric, progress, diagram, document, code, or note objects; compose a scene with roles (primary, compare, secondary, ambient). Reuse a stable id to update an object in place so the renderer can animate continuity. Use caption for the scene's small supporting label. A note can carry anchor:{target,x?,series?,node?} to attach it to a visual object. Use short, meaningful labels and let the renderer decide layout: never send markup, CSS, pixel geometry, or styling. The live transcript is system-owned, so message is not available; use note for persistent on-screen annotations and speak for words." +
 			"\n\nShapes: chart: {series:[{name,values:[n]}]} | metric: {label,value} | " +
 			"progress: {label,value} | diagram: {mode:\"graph\",nodes:[{id,label}],edges:[{from,to}]} | " +
 			"document: {subject,paragraphs:[str]} | code: {source:{text}} | note: {segments:[{text}]}. " +

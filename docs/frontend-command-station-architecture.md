@@ -152,6 +152,12 @@ Structured payloads are rendered with client-side components; arbitrary agent
 HTML or scripts are not accepted. Structured diagrams and text are validated
 server-side.
 
+Notes are persistent visual annotations, not a second copy of conversation
+output. Spoken/chat responses may occupy the transient explanation surface only
+when no explicit note owns it. Notes can identify a semantic target in another
+artifact, and only an explicit note update, hide, or clear changes them. Small
+scene captions are content metadata rather than hard-coded instrumentation.
+
 See `diagram-tool.md` for payload limits and `docs/visual-channel.md` for
 implemented visual forms.
 

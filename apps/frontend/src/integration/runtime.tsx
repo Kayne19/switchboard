@@ -61,6 +61,7 @@ export function RuntimeIntegration() {
   const [callRuntime, setCallRuntime] = useState<CallRuntime | null>(null);
   const transcriptRef = useRef<TranscriptLine[]>([]);
   const currentResponseRef = useRef("");
+  const currentCaptionRef = useRef("");
   const transportReadyRef = useRef(false);
   const generationRef = useRef(0);
   const pendingReportRef = useRef<ScreenStateReport | null>(null);
@@ -100,14 +101,17 @@ export function RuntimeIntegration() {
   }, [sendReport]);
 
   const showConversation = useCallback(
-    (response?: string) => {
+    (response?: string, caption?: string) => {
       if (response !== undefined) currentResponseRef.current = response;
+      if (caption) currentCaptionRef.current = caption;
+      const responseCount = transcriptRef.current.filter((entry) => entry.speaker === "DAMOCLES").length;
       const message: MessageData = {
         context:
           runtime.route === "operator"
             ? "OPERATOR LINE"
             : `PROJECT / ${runtime.route.toUpperCase()}`,
         tag: "CURRENT RESPONSE / LIVE",
+        caption: currentCaptionRef.current || `VOICE / ${String(Math.max(1, responseCount)).padStart(2, "0")}`,
         segments: [
           {
             text: currentResponseRef.current || "Line open. Speak when ready.",
@@ -151,6 +155,7 @@ export function RuntimeIntegration() {
         case "epoch": {
           transcriptRef.current = [];
           currentResponseRef.current = "";
+          currentCaptionRef.current = "";
           generationRef.current =
             typeof message.generation === "number" ? message.generation : 0;
           transportReadyRef.current = true;
@@ -191,7 +196,7 @@ export function RuntimeIntegration() {
             id: text(item.id) || undefined,
           });
           currentResponseRef.current = body;
-          showConversation(body);
+          showConversation(body, text(item.caption) || text(message.caption));
           dispatch({
             op: "runtime_say",
             target: RUNTIME_CONVERSATION_ID,
@@ -203,7 +208,7 @@ export function RuntimeIntegration() {
           const body = text(message.text) || "(No spoken response.)";
           appendTranscript({ speaker: "DAMOCLES", text: body });
           currentResponseRef.current = body;
-          showConversation(body);
+          showConversation(body, text(message.caption));
           dispatch({
             op: "runtime_say",
             target: RUNTIME_CONVERSATION_ID,

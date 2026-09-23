@@ -150,6 +150,28 @@ fn check_unknown_keys(
     Ok(())
 }
 
+fn copy_optional_string(
+    data: &Map<String, Value>,
+    out: &mut Map<String, Value>,
+    key: &str,
+    max_len: usize,
+    field_name: &str,
+) -> Result<(), String> {
+    let Some(value) = data.get(key) else {
+        return Ok(());
+    };
+    let text = value
+        .as_str()
+        .ok_or_else(|| format!("{field_name} must be a string"))?;
+    if utf16_len(text) > max_len {
+        return Err(format!(
+            "{field_name} exceeds maximum length of {max_len} UTF-16 code units"
+        ));
+    }
+    out.insert(key.into(), text.into());
+    Ok(())
+}
+
 fn is_valid_semantic(s: &str) -> bool {
     matches!(
         s,
@@ -164,6 +186,7 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
             "title",
             "subtitle",
             "context",
+            "caption",
             "xLabel",
             "yLabel",
             "xMax",
@@ -230,7 +253,12 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
             out.insert(k.into(), s.into());
         }
     }
-    for (k, max_len) in [("xLabel", 128), ("yLabel", 128), ("compareLabel", 128)] {
+    for (k, max_len) in [
+        ("caption", 128),
+        ("xLabel", 128),
+        ("yLabel", 128),
+        ("compareLabel", 128),
+    ] {
         if let Some(v) = data.get(k) {
             let s = v.as_str().ok_or(format!("chart.{k} must be a string"))?;
             if utf16_len(s) > max_len {
@@ -277,7 +305,11 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
 }
 
 fn validate_metric_data(data: &Map<String, Value>) -> Result<Value, String> {
-    check_unknown_keys(data, &["label", "value", "semantic"], "metric data")?;
+    check_unknown_keys(
+        data,
+        &["label", "value", "semantic", "caption"],
+        "metric data",
+    )?;
     let label = data
         .get("label")
         .and_then(Value::as_str)
@@ -302,11 +334,16 @@ fn validate_metric_data(data: &Map<String, Value>) -> Result<Value, String> {
         }
         out.insert("semantic".into(), sem.into());
     }
+    copy_optional_string(data, &mut out, "caption", 128, "metric.caption")?;
     Ok(Value::Object(out))
 }
 
 fn validate_progress_data(data: &Map<String, Value>) -> Result<Value, String> {
-    check_unknown_keys(data, &["label", "detail", "value", "text"], "progress data")?;
+    check_unknown_keys(
+        data,
+        &["label", "detail", "value", "text", "caption"],
+        "progress data",
+    )?;
     let label = data
         .get("label")
         .and_then(Value::as_str)
@@ -338,6 +375,7 @@ fn validate_progress_data(data: &Map<String, Value>) -> Result<Value, String> {
         }
         out.insert("text".into(), t.into());
     }
+    copy_optional_string(data, &mut out, "caption", 128, "progress.caption")?;
     Ok(Value::Object(out))
 }
 
@@ -347,7 +385,9 @@ fn validate_diagram_data(data: &Map<String, Value>) -> Result<Value, String> {
     }
     check_unknown_keys(
         data,
-        &["title", "subtitle", "context", "mode", "nodes", "edges"],
+        &[
+            "title", "subtitle", "context", "caption", "mode", "nodes", "edges",
+        ],
         "diagram data",
     )?;
 
@@ -522,6 +562,7 @@ fn validate_diagram_data(data: &Map<String, Value>) -> Result<Value, String> {
             out.insert(k.into(), s.into());
         }
     }
+    copy_optional_string(data, &mut out, "caption", 128, "diagram.caption")?;
 
     Ok(Value::Object(out))
 }
@@ -532,6 +573,7 @@ fn validate_document_data(data: &Map<String, Value>) -> Result<Value, String> {
         &[
             "kind",
             "context",
+            "caption",
             "source",
             "from",
             "timestamp",
@@ -598,12 +640,17 @@ fn validate_document_data(data: &Map<String, Value>) -> Result<Value, String> {
             out.insert(k.into(), s.into());
         }
     }
+    copy_optional_string(data, &mut out, "caption", 128, "document.caption")?;
 
     Ok(Value::Object(out))
 }
 
 fn validate_code_data(data: &Map<String, Value>) -> Result<Value, String> {
-    check_unknown_keys(data, &["title", "file", "context", "source"], "code data")?;
+    check_unknown_keys(
+        data,
+        &["title", "file", "context", "caption", "source"],
+        "code data",
+    )?;
     let source_obj = data
         .get("source")
         .and_then(Value::as_object)
@@ -662,12 +709,13 @@ fn validate_code_data(data: &Map<String, Value>) -> Result<Value, String> {
             out.insert(k.into(), s.into());
         }
     }
+    copy_optional_string(data, &mut out, "caption", 128, "code.caption")?;
 
     Ok(Value::Object(out))
 }
 
 fn validate_note_data(data: &Map<String, Value>) -> Result<Value, String> {
-    check_unknown_keys(data, &["tag", "segments"], "note data")?;
+    check_unknown_keys(data, &["tag", "segments", "caption", "anchor"], "note data")?;
     let segs_arr = data
         .get("segments")
         .and_then(Value::as_array)
@@ -719,6 +767,37 @@ fn validate_note_data(data: &Map<String, Value>) -> Result<Value, String> {
             return Err("note.tag exceeds maximum length of 128 UTF-16 code units".into());
         }
         out.insert("tag".into(), t.into());
+    }
+    copy_optional_string(data, &mut out, "caption", 128, "note.caption")?;
+
+    if let Some(anchor_value) = data.get("anchor") {
+        let anchor = anchor_value
+            .as_object()
+            .ok_or("note.anchor must be an object")?;
+        check_unknown_keys(anchor, &["target", "x", "series", "node"], "note anchor")?;
+        let target = anchor
+            .get("target")
+            .and_then(Value::as_str)
+            .ok_or("note.anchor.target must be a non-empty identifier")?;
+        let target = check_identifier(target, "note.anchor.target")?;
+        let mut clean_anchor = Map::new();
+        clean_anchor.insert("target".into(), target.into());
+        if let Some(x) = anchor.get("x") {
+            if !x.is_number() || !x.as_f64().is_some_and(f64::is_finite) {
+                return Err("note.anchor.x must be a finite number".into());
+            }
+            clean_anchor.insert("x".into(), x.clone());
+        }
+        for key in ["series", "node"] {
+            copy_optional_string(
+                anchor,
+                &mut clean_anchor,
+                key,
+                128,
+                &format!("note.anchor.{key}"),
+            )?;
+        }
+        out.insert("anchor".into(), Value::Object(clean_anchor));
     }
 
     Ok(Value::Object(out))
@@ -900,5 +979,47 @@ pub fn validate(req: &DisplayRequest, raw: &Value) -> Result<Value, String> {
         validate_action(&Value::Object(clean))
     } else {
         validate_action(raw)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_action;
+    use serde_json::json;
+
+    #[test]
+    fn normalizes_note_anchor_and_caption() {
+        let action = json!({
+            "op": "show",
+            "id": "spike-note",
+            "type": "note",
+            "role": "secondary",
+            "data": {
+                "tag": "LOOK HERE",
+                "caption": "ANNOTATION / VALIDATION SPIKE",
+                "segments": [{"text": "Validation turns upward here."}],
+                "anchor": {"target": "loss-chart", "x": 32, "series": "VAL LOSS"}
+            }
+        });
+
+        assert_eq!(validate_action(&action), Ok(action));
+    }
+
+    #[test]
+    fn rejects_note_anchor_without_a_target() {
+        let action = json!({
+            "op": "show",
+            "id": "spike-note",
+            "type": "note",
+            "data": {
+                "segments": [{"text": "No target."}],
+                "anchor": {"x": 32}
+            }
+        });
+
+        assert_eq!(
+            validate_action(&action),
+            Err("note.anchor.target must be a non-empty identifier".into())
+        );
     }
 }

@@ -33,7 +33,7 @@ agent sends semantics. See `diagram-tool.md` for the full action protocol.
 | `progress` | checklists, steps, states, and optional durations |
 | `document` | headings, paragraphs, bullets, code blocks |
 | `code` | code and diff views (`add`/`del`/`ctx` lines) |
-| `note` | the agent's own words, without pretending to be the transcript |
+| `note` | a persistent annotation, independent from the live transcript |
 
 Diagram node styling stays restricted to semantic classes and states, enforced server-side.
 
@@ -45,6 +45,14 @@ agent can `focus` a region, `hide` an object, `say` an aside on it, or `clear`
 the whole stage — one action per call. The old bespoke `plan`/`timeline`/`diff`
 renderers are gone; `progress`, `document`, and `code` are the general primitives
 that subsume them.
+
+Notes are durable objects rather than a mirror of the latest chat response.
+They change only through an explicit `show` update to their stable id, `hide`,
+or `clear`. A note may carry a semantic `anchor` naming another object's id and
+an optional chart `x`/`series` or diagram `node`; the browser owns the resulting
+placement. Every visual payload may also provide a short `caption` for the
+scene's supporting corner label, so that label describes real content instead
+of fixed decorative text.
 
 ### Replay & state
 

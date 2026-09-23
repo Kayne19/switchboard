@@ -1,4 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react';
+import type { CSSProperties } from 'react';
 import type {
   ChartData,
   CodeData,
@@ -51,11 +52,34 @@ function ConversationCorners() {
   );
 }
 
-function noteFromSpeech(state: ControllerState, fallback?: SceneObject<NoteData>): NoteData | null {
-  if (state.speech) {
-    return { tag: 'DAMOCLES / EXPLANATION', segments: [{ text: state.speech.text }] };
-  }
-  return fallback?.data ?? null;
+function annotationForScene(state: ControllerState, noteObject?: SceneObject<NoteData>): NoteData | null {
+  // Notes are durable display objects. A later chat response may supply a
+  // transient explanation only when no note is present; it must never mutate
+  // or visually replace an explicit note.
+  if (noteObject) return noteObject.data;
+  if (!state.speech) return null;
+  return { tag: 'DAMOCLES / EXPLANATION', segments: [{ text: state.speech.text }] };
+}
+
+function noteForTarget(
+  notes: Array<SceneObject<NoteData>>,
+  targetId: string,
+): SceneObject<NoteData> | undefined {
+  return notes.find((note) => note.data.anchor?.target === targetId)
+    ?? notes.find((note) => !note.data.anchor)
+    ?? notes[0];
+}
+
+function sceneCaption(object: SceneObject, fallback: string): string {
+  const caption = (object.data as { caption?: unknown }).caption;
+  return typeof caption === 'string' && caption.trim() ? caption : fallback;
+}
+
+function chartAnnotationStyle(note: NoteData | null, chart: SceneObject<ChartData>): CSSProperties | undefined {
+  if (note?.anchor?.target !== chart.id || note.anchor.x === undefined) return undefined;
+  const xMax = chart.data.xMax ?? Math.max(1, ...chart.data.series.map((series) => series.values.length - 1));
+  const ratio = Math.min(0.76, Math.max(0.24, note.anchor.x / Math.max(1, xMax)));
+  return { '--annotation-anchor-x': `${ratio * 100}%` } as CSSProperties;
 }
 
 interface ExplanationProps {
@@ -75,7 +99,11 @@ function RailNote({ note, noteObject, onFocus, onOpenHistory }: ExplanationProps
     <AnimatePresence initial={false}>
       {note ? (
         <ObjectMotion key="rail-note" objectId={noteObject?.id ?? 'speech-note'} className="rail-note" layout="position">
-          <AnnotationCard data={note} onFocus={noteObject ? () => onFocus(noteObject.id) : undefined} onOpenHistory={onOpenHistory} />
+          <AnnotationCard
+            data={note}
+            onFocus={noteObject ? () => onFocus(noteObject.id) : undefined}
+            onOpenHistory={noteObject ? undefined : onOpenHistory}
+          />
         </ObjectMotion>
       ) : null}
     </AnimatePresence>
@@ -130,8 +158,8 @@ export function ConversationScene({ state, onToggleListening, setTranscriptOpen 
       <ObjectMotion objectId={object?.id ?? "conversation"} className="conversation-answer">
         <TechFrame variant="answer" />
         <div className="conversation-answer__tag tech micro">{message.tag ?? 'CURRENT RESPONSE / 01'}</div>
-        <div className="conversation-answer__text"><RichText segments={segments} /></div>
-        <div className="conversation-answer__index tech micro">VOICE / 01</div>
+        <div className="conversation-answer__text"><div className="conversation-answer__text-inner"><RichText segments={segments} /></div></div>
+        <div className="conversation-answer__index tech micro">{message.caption ?? `${message.channel?.name ?? 'VOICE'} / LIVE`}</div>
       </ObjectMotion>
 
       <div className="conversation-channel tech micro">
@@ -148,10 +176,10 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
   const charts = objectsOfType<ChartData>(state, 'chart');
   const metrics = objectsOfType<MetricData>(state, 'metric');
   const progress = objectsOfType<ProgressData>(state, 'progress')[0];
-  const noteObject = objectsOfType<NoteData>(state, 'note')[0];
-  const note = noteFromSpeech(state, noteObject);
   const primary = charts.find((chart) => chart.role === 'primary') ?? charts[0];
   if (!primary) return <IdleScene state={state} onToggleListening={onToggleListening} />;
+  const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), primary.id);
+  const note = annotationForScene(state, noteObject);
 
   return (
     <motion.section className="scene scene--content scene--training" data-scene="training" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -177,8 +205,16 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
           </div>
           <AnimatePresence initial={false}>
             {note ? (
-              <motion.div key="training-note" className="training-note" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
-                <AnnotationCard data={note} onFocus={noteObject ? () => onFocus(noteObject.id) : undefined} onOpenHistory={onOpenHistory} />
+              <motion.div
+                key="training-note"
+                className={`training-note${note.anchor?.target === primary.id ? ' training-note--anchored' : ''}`}
+                style={chartAnnotationStyle(note, primary)}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.2 }}
+              >
+                <AnnotationCard data={note} onFocus={noteObject ? () => onFocus(noteObject.id) : undefined} onOpenHistory={noteObject ? undefined : onOpenHistory} />
               </motion.div>
             ) : null}
           </AnimatePresence>
@@ -202,7 +238,7 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
           <MetricsPrimitive metrics={metrics} />
         </motion.aside>
       </div>
-      <SceneFooter left="DISPLAY / COMPOSED" right="PRIMARY / LOSS TRACE" />
+      <SceneFooter left="DISPLAY / COMPOSED" right={sceneCaption(primary, 'PRIMARY / LOSS TRACE')} />
     </motion.section>
   );
 }
@@ -211,8 +247,9 @@ export function ArchitectureScene({ state, onToggleListening, onFocus, onOpenHis
   const primaryObjectValue = primaryObject(state);
   if (!primaryObjectValue) return <IdleScene state={state} onToggleListening={onToggleListening} />;
   const diagram = cast.diagram(primaryObjectValue);
-  const noteObject = objectsOfType<NoteData>(state, 'note')[0];
-  const note = noteFromSpeech(state, noteObject);
+  const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), diagram.id);
+  const note = annotationForScene(state, noteObject);
+  const metrics = objectsOfType<MetricData>(state, 'metric');
 
   return (
     <motion.section className="scene scene--content scene--architecture" data-scene="architecture" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -229,10 +266,15 @@ export function ArchitectureScene({ state, onToggleListening, onFocus, onOpenHis
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={diagram.data.context ?? 'SYSTEM MAP'} size="rail" activity={state.activity} />
-          <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
+          {metrics.length > 0 || note ? (
+            <div className="content-rail__details">
+              {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
+              <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
+            </div>
+          ) : null}
         </motion.aside>
       </div>
-      <SceneFooter left="DISPLAY / SYSTEM MAP" right="TRACE / ACTIVE ROUTE" />
+      <SceneFooter left="DISPLAY / SYSTEM MAP" right={sceneCaption(diagram, 'TRACE / ACTIVE ROUTE')} />
     </motion.section>
   );
 }
@@ -241,8 +283,9 @@ export function DocumentScene({ state, onToggleListening, onFocus, onOpenHistory
   const primaryObjectValue = primaryObject(state);
   if (!primaryObjectValue) return <IdleScene state={state} onToggleListening={onToggleListening} />;
   const document = cast.document(primaryObjectValue);
-  const noteObject = objectsOfType<NoteData>(state, 'note')[0];
-  const note = noteFromSpeech(state, noteObject);
+  const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), document.id);
+  const note = annotationForScene(state, noteObject);
+  const metrics = objectsOfType<MetricData>(state, 'metric');
 
   return (
     <motion.section className="scene scene--content scene--document" data-scene="document" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -258,10 +301,15 @@ export function DocumentScene({ state, onToggleListening, onFocus, onOpenHistory
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={document.data.context ?? 'DOCUMENT'} size="rail" activity={state.activity} />
-          <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
+          {metrics.length > 0 || note ? (
+            <div className="content-rail__details">
+              {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
+              <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
+            </div>
+          ) : null}
         </motion.aside>
       </div>
-      <SceneFooter left="CONTENT / ORIGINAL EMAIL" right="CHROME / SWITCHBOARD" />
+      <SceneFooter left="CONTENT / ORIGINAL EMAIL" right={sceneCaption(document, 'CHROME / SWITCHBOARD')} />
     </motion.section>
   );
 }
@@ -270,8 +318,9 @@ export function CodeScene({ state, onToggleListening, onFocus, onOpenHistory }: 
   const primaryObjectValue = primaryObject(state);
   if (!primaryObjectValue) return <IdleScene state={state} onToggleListening={onToggleListening} />;
   const code = cast.code(primaryObjectValue);
-  const noteObject = objectsOfType<NoteData>(state, 'note')[0];
-  const note = noteFromSpeech(state, noteObject);
+  const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), code.id);
+  const note = annotationForScene(state, noteObject);
+  const metrics = objectsOfType<MetricData>(state, 'metric');
 
   return (
     <motion.section className="scene scene--content scene--code" data-scene="code" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -287,10 +336,15 @@ export function CodeScene({ state, onToggleListening, onFocus, onOpenHistory }: 
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={code.data.context ?? 'SOURCE'} size="rail" activity={state.activity} />
-          <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
+          {metrics.length > 0 || note ? (
+            <div className="content-rail__details">
+              {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
+              <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
+            </div>
+          ) : null}
         </motion.aside>
       </div>
-      <SceneFooter left="FRAME / INTERRUPTED RAILS" right="DISPLAY / SOURCE" />
+      <SceneFooter left="FRAME / INTERRUPTED RAILS" right={sceneCaption(code, 'DISPLAY / SOURCE')} />
     </motion.section>
   );
 }
@@ -300,10 +354,13 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
   const primary = comp.primary;
   if (!primary) return <IdleScene state={state} onToggleListening={onToggleListening} />;
 
-  const noteObject = comp.allAgentObjects.find((o) => o.type === 'note') as SceneObject<NoteData> | undefined;
-  const note = noteFromSpeech(state, noteObject);
+  const noteObjects = comp.allAgentObjects.filter((object) => object.type === 'note') as Array<SceneObject<NoteData>>;
+  const noteObject = noteForTarget(noteObjects, primary.id);
+  const note = annotationForScene(state, noteObject);
   const metrics = comp.allAgentObjects.filter((o) => o.type === 'metric') as Array<SceneObject<MetricData>>;
   const progressList = comp.allAgentObjects.filter((o) => o.type === 'progress') as Array<SceneObject<ProgressData>>;
+  const railMetrics = primary.type === 'metric' ? metrics.filter((metric) => metric.id !== primary.id) : metrics;
+  const railNote = noteObject?.id === primary.id ? null : note;
 
   const renderPrimaryPrimitive = () => {
     switch (primary.type) {
@@ -316,7 +373,7 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
       case 'code':
         return <CodeViewport data={(primary as SceneObject<CodeData>).data} />;
       case 'metric':
-        return <MetricsPrimitive metrics={[primary as SceneObject<MetricData>]} />;
+        return <MetricsPrimitive metrics={[primary as SceneObject<MetricData>]} variant="primary" />;
       case 'progress':
         return <ProgressPrimitive data={(primary as SceneObject<ProgressData>).data} />;
       case 'note':
@@ -336,8 +393,8 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
         <div className="scene-heading__sub tech micro">{subtitle}</div>
       </div>
       <div className="content-grid">
-        <motion.div className="content-main composed-main" layout>
-          <ObjectMotion objectId={primary.id} className="composed-primary-object">
+        <motion.div className={`content-main composed-main${primary.type === 'metric' ? ' composed-main--metric-primary' : ''}`} layout>
+          <ObjectMotion objectId={primary.id} className={`composed-primary-object composed-primary-object--${primary.type}`}>
             <TechFrame variant="panel" />
             <FocusableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
               {renderPrimaryPrimitive()}
@@ -373,13 +430,15 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
             size="rail"
             activity={state.activity}
           />
-          {metrics.length > 0 && primary.type !== 'metric' ? (
-            <MetricsPrimitive metrics={metrics} />
+          {railMetrics.length > 0 || railNote ? (
+            <div className="content-rail__details">
+              {railMetrics.length > 0 ? <MetricsPrimitive metrics={railMetrics} /> : null}
+              <RailNote note={railNote} noteObject={noteObject?.id === primary.id ? undefined : noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
+            </div>
           ) : null}
-          <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
         </motion.aside>
       </div>
-      <SceneFooter left="DISPLAY / COMPOSED" right="SYSTEM / ACTIVE" />
+      <SceneFooter left="DISPLAY / COMPOSED" right={sceneCaption(primary, 'SYSTEM / ACTIVE')} />
     </motion.section>
   );
 }

@@ -34,6 +34,8 @@ type DisplayAction =
 - **`id`**: agent-owned and stable across updates (re-sending the same `id` replaces the object in place). Agent IDs must not begin with the reserved `__runtime/` namespace.
 - **`target`**: the object id to anchor a `say` action (must not begin with `__runtime/`).
 - **`at`**: speech anchor object containing at least one of `x` (finite number) and `series` (string <= 128 UTF-16 code units), or explicit `null`; omitted `at` normalizes to `null`.
+- **`caption`**: optional content-owned supporting text (<= 128 UTF-16 code units) rendered in the scene's small corner label. It is available on every `show` data shape.
+- **`note.anchor`**: optional persistent annotation target `{ target, x?, series?, node? }`. `target` is another display object id; the remaining fields identify a semantic location inside a chart or diagram without prescribing pixels.
 
 ### show (create or update)
 ```json
@@ -67,15 +69,17 @@ type DisplayAction =
 
 | type | `data` shape (`additionalProperties: false`) | what the page renders |
 | --- | --- | --- |
-| `chart` | `{ series: [{ name, values[], semantic? }], title?, subtitle?, context?, xLabel?, yLabel?, xMax?, yMin?, yMax?, marker?, compareLabel? }` | SVG chart |
-| `metric` | `{ label, value, semantic? }` | numeric gauge |
-| `progress` | `{ label, value, detail?, text? }` | progress indicator |
-| `diagram` | `{ mode: "graph", nodes: [{ id, label, sub?, detail?, semantic?, state? }], edges: [{ from, to, label?, semantic?, active? }], title?, subtitle?, context? }` | SVG semantic graph |
-| `document` | `{ subject, paragraphs: string[], kind?: "email"\|"document", context?, source?, from?, timestamp? }` | document reader |
-| `code` | `{ source: { text, language?, highlight? }, title?, file?, context? }` | syntax/diff view |
-| `note` | `{ segments: [{ text, accent?, bold?, semantic? }], tag? }` | plain aside |
+| `chart` | `{ series: [{ name, values[], semantic? }], title?, subtitle?, context?, caption?, xLabel?, yLabel?, xMax?, yMin?, yMax?, marker?, compareLabel? }` | SVG chart |
+| `metric` | `{ label, value, semantic?, caption? }` | numeric gauge |
+| `progress` | `{ label, value, detail?, text?, caption? }` | progress indicator |
+| `diagram` | `{ mode: "graph", nodes: [{ id, label, sub?, detail?, semantic?, state? }], edges: [{ from, to, label?, semantic?, active? }], title?, subtitle?, context?, caption? }` | SVG semantic graph |
+| `document` | `{ subject, paragraphs: string[], kind?: "email"\|"document", context?, caption?, source?, from?, timestamp? }` | document reader |
+| `code` | `{ source: { text, language?, highlight? }, title?, file?, context?, caption? }` | syntax/diff view |
+| `note` | `{ segments: [{ text, accent?, bold?, semantic? }], tag?, caption?, anchor?: { target, x?, series?, node? } }` | persistent annotation |
 
 A composed scene is built from multiple `show` actions with distinct `id`s and roles (e.g. `diagram` as `primary`, `note` as `secondary`, `metric` as `ambient`). The page owns layout, geometry, and styling.
+
+Notes have their own display lifecycle. A chat or spoken response does not update an existing note; only another `show` using the note's stable id, `hide`, or `clear` changes it. An anchored note is selected for the visual object it targets and, when the target exposes the requested semantic coordinate, is placed near that location by the page.
 
 ### Diagram v1 rules
 - Diagram data requires `mode: "graph"`. Mermaid source (`source`) is rejected/deferred in v1.

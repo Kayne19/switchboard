@@ -171,7 +171,7 @@ function checkString(val: unknown, maxLen: number, name: string): string | null 
 }
 
 function validateChartData(data: Record<string, unknown>): { ok: true; data: ChartData } | { ok: false; error: string } {
-  const allowed = new Set(['title', 'subtitle', 'context', 'xLabel', 'yLabel', 'xMax', 'yMin', 'yMax', 'series', 'marker', 'compareLabel']);
+  const allowed = new Set(['title', 'subtitle', 'context', 'caption', 'xLabel', 'yLabel', 'xMax', 'yMin', 'yMax', 'series', 'marker', 'compareLabel']);
   const unknownKey = checkUnknownKeys(data, allowed, 'chart data');
   if (unknownKey) return { ok: false, error: unknownKey };
 
@@ -208,7 +208,7 @@ function validateChartData(data: Record<string, unknown>): { ok: true; data: Cha
       result[k] = data[k] as string;
     }
   }
-  for (const k of ['xLabel', 'yLabel', 'compareLabel'] as const) {
+  for (const k of ['caption', 'xLabel', 'yLabel', 'compareLabel'] as const) {
     if (data[k] !== undefined) {
       const err = checkString(data[k], 128, `chart.${k}`);
       if (err) return { ok: false, error: err };
@@ -244,7 +244,7 @@ function validateChartData(data: Record<string, unknown>): { ok: true; data: Cha
 }
 
 function validateMetricData(data: Record<string, unknown>): { ok: true; data: MetricData } | { ok: false; error: string } {
-  const allowed = new Set(['label', 'value', 'semantic']);
+  const allowed = new Set(['label', 'value', 'semantic', 'caption']);
   const unknownKey = checkUnknownKeys(data, allowed, 'metric data');
   if (unknownKey) return { ok: false, error: unknownKey };
 
@@ -257,18 +257,24 @@ function validateMetricData(data: Record<string, unknown>): { ok: true; data: Me
     return { ok: false, error: 'invalid metric.semantic' };
   }
 
+  const result: MetricData = {
+    label: data.label as string,
+    value: data.value as string,
+    ...(data.semantic !== undefined ? { semantic: data.semantic as Semantic } : {}),
+  };
+  if (data.caption !== undefined) {
+    const err = checkString(data.caption, 128, 'metric.caption');
+    if (err) return { ok: false, error: err };
+    result.caption = data.caption as string;
+  }
   return {
     ok: true,
-    data: {
-      label: data.label as string,
-      value: data.value as string,
-      ...(data.semantic !== undefined ? { semantic: data.semantic as Semantic } : {}),
-    },
+    data: result,
   };
 }
 
 function validateProgressData(data: Record<string, unknown>): { ok: true; data: ProgressData } | { ok: false; error: string } {
-  const allowed = new Set(['label', 'detail', 'value', 'text']);
+  const allowed = new Set(['label', 'detail', 'value', 'text', 'caption']);
   const unknownKey = checkUnknownKeys(data, allowed, 'progress data');
   if (unknownKey) return { ok: false, error: unknownKey };
 
@@ -294,6 +300,11 @@ function validateProgressData(data: Record<string, unknown>): { ok: true; data: 
     if (err) return { ok: false, error: err };
     result.text = data.text as string;
   }
+  if (data.caption !== undefined) {
+    const err = checkString(data.caption, 128, 'progress.caption');
+    if (err) return { ok: false, error: err };
+    result.caption = data.caption as string;
+  }
 
   return { ok: true, data: result };
 }
@@ -302,7 +313,7 @@ function validateDiagramData(data: Record<string, unknown>): { ok: true; data: D
   if ('source' in data) {
     return { ok: false, error: 'diagram data source field is forbidden in v1' };
   }
-  const allowed = new Set(['title', 'subtitle', 'context', 'mode', 'nodes', 'edges']);
+  const allowed = new Set(['title', 'subtitle', 'context', 'caption', 'mode', 'nodes', 'edges']);
   const unknownKey = checkUnknownKeys(data, allowed, 'diagram data');
   if (unknownKey) return { ok: false, error: unknownKey };
 
@@ -416,12 +427,17 @@ function validateDiagramData(data: Record<string, unknown>): { ok: true; data: D
       result[k] = data[k] as string;
     }
   }
+  if (data.caption !== undefined) {
+    const err = checkString(data.caption, 128, 'diagram.caption');
+    if (err) return { ok: false, error: err };
+    result.caption = data.caption as string;
+  }
 
   return { ok: true, data: result };
 }
 
 function validateDocumentData(data: Record<string, unknown>): { ok: true; data: DocumentData } | { ok: false; error: string } {
-  const allowed = new Set(['kind', 'context', 'source', 'from', 'timestamp', 'subject', 'paragraphs']);
+  const allowed = new Set(['kind', 'context', 'caption', 'source', 'from', 'timestamp', 'subject', 'paragraphs']);
   const unknownKey = checkUnknownKeys(data, allowed, 'document data');
   if (unknownKey) return { ok: false, error: unknownKey };
 
@@ -459,12 +475,17 @@ function validateDocumentData(data: Record<string, unknown>): { ok: true; data: 
       result[k] = data[k] as string;
     }
   }
+  if (data.caption !== undefined) {
+    const err = checkString(data.caption, 128, 'document.caption');
+    if (err) return { ok: false, error: err };
+    result.caption = data.caption as string;
+  }
 
   return { ok: true, data: result };
 }
 
 function validateCodeData(data: Record<string, unknown>): { ok: true; data: CodeData } | { ok: false; error: string } {
-  const allowed = new Set(['title', 'file', 'context', 'source']);
+  const allowed = new Set(['title', 'file', 'context', 'caption', 'source']);
   const unknownKey = checkUnknownKeys(data, allowed, 'code data');
   if (unknownKey) return { ok: false, error: unknownKey };
 
@@ -500,12 +521,17 @@ function validateCodeData(data: Record<string, unknown>): { ok: true; data: Code
       result[k] = data[k] as string;
     }
   }
+  if (data.caption !== undefined) {
+    const err = checkString(data.caption, 128, 'code.caption');
+    if (err) return { ok: false, error: err };
+    result.caption = data.caption as string;
+  }
 
   return { ok: true, data: result };
 }
 
 function validateNoteData(data: Record<string, unknown>): { ok: true; data: NoteData } | { ok: false; error: string } {
-  const allowed = new Set(['tag', 'segments']);
+  const allowed = new Set(['tag', 'segments', 'caption', 'anchor']);
   const unknownKey = checkUnknownKeys(data, allowed, 'note data');
   if (unknownKey) return { ok: false, error: unknownKey };
 
@@ -542,6 +568,33 @@ function validateNoteData(data: Record<string, unknown>): { ok: true; data: Note
     const err = checkString(data.tag, 128, 'note.tag');
     if (err) return { ok: false, error: err };
     result.tag = data.tag as string;
+  }
+  if (data.caption !== undefined) {
+    const err = checkString(data.caption, 128, 'note.caption');
+    if (err) return { ok: false, error: err };
+    result.caption = data.caption as string;
+  }
+  if (data.anchor !== undefined) {
+    if (!isRecord(data.anchor)) return { ok: false, error: 'note.anchor must be an object' };
+    const anchorUnknown = checkUnknownKeys(data.anchor, new Set(['target', 'x', 'series', 'node']), 'note anchor');
+    if (anchorUnknown) return { ok: false, error: anchorUnknown };
+    const target = checkIdentifier(data.anchor.target, 'note.anchor.target');
+    if (!target.ok) return target;
+    const anchor: NonNullable<NoteData['anchor']> = { target: target.id };
+    if (data.anchor.x !== undefined) {
+      if (typeof data.anchor.x !== 'number' || !Number.isFinite(data.anchor.x)) {
+        return { ok: false, error: 'note.anchor.x must be a finite number' };
+      }
+      anchor.x = data.anchor.x;
+    }
+    for (const key of ['series', 'node'] as const) {
+      if (data.anchor[key] !== undefined) {
+        const err = checkString(data.anchor[key], 128, `note.anchor.${key}`);
+        if (err) return { ok: false, error: err };
+        anchor[key] = data.anchor[key] as string;
+      }
+    }
+    result.anchor = anchor;
   }
 
   return { ok: true, data: result };
