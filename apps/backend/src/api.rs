@@ -175,6 +175,26 @@ impl DisplayProjection {
         }
         actions
     }
+
+    pub fn summary(&self) -> (bool, Option<String>, Option<String>, Vec<String>) {
+        let has_visual = !self.order.is_empty();
+        let primary_id = self
+            .focus_id
+            .clone()
+            .filter(|id| self.objects.contains_key(id))
+            .or_else(|| self.order.last().cloned());
+        let primary = primary_id.as_ref().and_then(|id| self.objects.get(id));
+        let kind = primary.map(|o| o.object_type.clone());
+        let title = primary.and_then(|o| {
+            o.data
+                .get("title")
+                .or_else(|| o.data.get("subject"))
+                .or_else(|| o.data.get("label"))
+                .and_then(Value::as_str)
+                .map(String::from)
+        });
+        (has_visual, kind, title, self.order.clone())
+    }
 }
 
 pub struct DisplayGateState {
@@ -2055,14 +2075,31 @@ async fn view(State(state): State<AppState>, Json(req): Json<ViewRequest>) -> Re
     }
 
     if target.is_empty() {
-        let mut screen = gate.screen_state.clone();
+        let (has_visual, kind, title, object_ids) = gate.projection.summary();
+        let view = gate
+            .screen_state
+            .get("view")
+            .and_then(Value::as_str)
+            .unwrap_or("auto")
+            .to_string();
         let connected = state.0.delivery.connected();
-        if !connected {
-            screen["stale"] = json!(true);
-        }
-        if let Some(screen_map) = screen.as_object_mut() {
-            screen_map.insert("connected".into(), connected.into());
-        }
+        let confirm = state.0.display_confirm.borrow().clone();
+        // Nothing is on screen, so there is nothing outstanding to confirm:
+        // a fresh call or an emptied stage is trivially "confirmed" without
+        // ever having heard from the browser in this generation.
+        let confirmed = !has_visual
+            || (confirm.generation == permit_generation
+                && confirm.watermark.is_some_and(|w| w >= gate.watermark));
+        let screen = json!({
+            "view": view,
+            "has_visual": has_visual,
+            "visual_kind": kind,
+            "title": title.unwrap_or_default(),
+            "object_ids": object_ids,
+            "confirmed": confirmed,
+            "connected": connected,
+            "stale": !confirmed,
+        });
         return Json(json!({"delivered": true, "screen": screen})).into_response();
     }
 

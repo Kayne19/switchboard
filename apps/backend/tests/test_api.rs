@@ -185,8 +185,61 @@ async fn browser_screen_state_is_available_to_the_agent_view_tool() {
         request_json(&state, Method::POST, "/view", Some(json!({"target":""}))).await;
     assert_eq!(code, StatusCode::OK);
     assert_eq!(response["screen"]["view"], "comms");
-    assert_eq!(response["screen"]["visual_kind"], "document");
-    assert_eq!(response["screen"]["title"], "Authentication changes");
+    assert_eq!(response["screen"]["has_visual"], false);
+    assert_eq!(response["screen"]["visual_kind"], Value::Null);
+    assert_eq!(response["screen"]["confirmed"], true);
+}
+
+#[tokio::test]
+async fn view_reports_requested_diagram_as_unconfirmed_until_the_browser_acks() {
+    let state = state();
+    let (mut connection, _s, _w) = state.register_connection().await;
+    let epoch = connection.epoch;
+
+    let handle = post_display_in_task(&state, diagram_show()).await;
+    let DeliveryFrame::Event { sequence, .. } = connection.receiver.recv().await.unwrap() else {
+        panic!("expected a display event")
+    };
+
+    // Before the ack, view says diagram-but-not-confirmed.
+    let (_c, before) =
+        request_json(&state, Method::POST, "/view", Some(json!({"target":""}))).await;
+    let screen = before.get("screen").unwrap();
+    assert_eq!(
+        screen.get("visual_kind").and_then(Value::as_str),
+        Some("diagram")
+    );
+    assert_eq!(
+        screen.get("confirmed").and_then(Value::as_bool),
+        Some(false)
+    );
+
+    // After the ack, confirmed flips true.
+    handle_text_frame(
+        &state,
+        epoch,
+        &mut None,
+        &mut None,
+        &json!({"type":"screen_state","view":"auto","has_visual":true,
+               "visual_kind":"diagram","applied_seq":sequence})
+        .to_string(),
+    )
+    .await
+    .unwrap();
+    let _ = timeout(Duration::from_secs(2), handle)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let (_c, after) = request_json(&state, Method::POST, "/view", Some(json!({"target":""}))).await;
+    assert_eq!(
+        after
+            .get("screen")
+            .unwrap()
+            .get("confirmed")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
 }
 
 #[tokio::test]
@@ -1382,7 +1435,7 @@ async fn display_projection_screen_state_retirement() {
     .await;
     assert_eq!(code, StatusCode::OK);
     assert_eq!(resp["screen"]["view"], "visual");
-    assert_eq!(resp["screen"]["visual_kind"], "chart");
+    assert_eq!(resp["screen"]["visual_kind"], Value::Null);
     assert_eq!(resp["screen"]["stale"], false);
 
     // 2. Connection 1 is retired (browser disconnects)
@@ -1396,8 +1449,12 @@ async fn display_projection_screen_state_retirement() {
     .await;
     assert_eq!(code, StatusCode::OK);
     assert_eq!(
-        resp["screen"]["stale"], true,
-        "retiring active connection must mark screen report stale"
+        resp["screen"]["connected"], false,
+        "retiring the only connection must report the browser as disconnected"
+    );
+    assert_eq!(
+        resp["screen"]["stale"], false,
+        "nothing was ever displayed, so an empty stage stays trivially confirmed"
     );
 
     // 4. Late report from retired connection 1 must be ignored!
@@ -1434,7 +1491,7 @@ async fn display_projection_screen_state_retirement() {
         resp["screen"]["view"], "visual",
         "report from retired epoch must be ignored"
     );
-    assert_eq!(resp["screen"]["stale"], true);
+    assert_eq!(resp["screen"]["connected"], false);
 
     // 5. Connect connection 2 (epoch 2)
     let (conn2, _, _) = state.register_connection().await;
@@ -1504,7 +1561,9 @@ async fn display_projection_screen_state_retirement() {
     )
     .await;
     assert_eq!(resp["screen"]["view"], "theater");
-    assert_eq!(resp["screen"]["title"], "Fresh Report");
+    // Title is projection-derived, not echoed from the browser's report: no
+    // display action was posted, so there is nothing to title.
+    assert_eq!(resp["screen"]["title"], "");
     assert_eq!(resp["screen"]["stale"], false);
 }
 
