@@ -962,6 +962,13 @@ button {
   padding: clamp(16px, 1.8cqw, 32px);
   clip-path: polygon(0 0, calc(100% - 24px) 0, 100% 24px, 100% 100%, 20px 100%, 0 calc(100% - 20px));
 }
+.metrics--primary.metrics--cluster .metric-row[role="button"] {
+  cursor: zoom-in;
+}
+.metrics--primary.metrics--cluster .metric-row[role="button"]:focus-visible {
+  outline: 1px solid var(--orange);
+  outline-offset: 4px;
+}
 .metrics--primary .metric-row::before {
   content: "";
   position: absolute;

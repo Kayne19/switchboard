@@ -469,21 +469,32 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
       <div className="content-grid">
         <motion.div className={`content-main composed-main${isMetricPrimary ? ' composed-main--metric-primary' : ''}`} layout>
           <ObjectMotion
-            objectId={primary.id}
+            objectId={primaryMetrics.length > 1 ? 'primary-metric-cluster' : primary.id}
+            layoutId={primaryMetrics.length > 1 ? 'switchboard-primary-metric-cluster' : undefined}
             className={`composed-primary-object composed-primary-object--${primary.type}${primaryMetrics.length > 1 ? ' composed-primary-object--cluster' : ''}`}
           >
             <TechFrame variant="panel" />
-            <FocusableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
-              {isMetricPrimary ? (
+            {primaryMetrics.length > 1 ? (
+              <div className="focusable-content">
                 <MetricsPrimitive
-                  metrics={primaryMetrics.length > 0 ? primaryMetrics : [primary as SceneObject<MetricData>]}
+                  metrics={primaryMetrics}
                   variant="primary"
                   onFocus={onFocus}
                 />
-              ) : (
-                composedPrimitive(primary, 'primary')
-              )}
-            </FocusableSurface>
+              </div>
+            ) : (
+              <FocusableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
+                {isMetricPrimary ? (
+                  <MetricsPrimitive
+                    metrics={primaryMetrics.length > 0 ? primaryMetrics : [primary as SceneObject<MetricData>]}
+                    variant="primary"
+                    onFocus={onFocus}
+                  />
+                ) : (
+                  composedPrimitive(primary, 'primary')
+                )}
+              </FocusableSurface>
+            )}
           </ObjectMotion>
           {auxObjects.length > 0 ? (
             <div className="composed-aux">

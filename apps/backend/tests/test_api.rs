@@ -461,6 +461,31 @@ fn primary_metric_cluster_semantics_and_stable_claim_order() {
     assert_eq!(projection.summary().2.as_deref(), Some("MEM"));
 }
 
+#[test]
+fn snapshot_actions_emits_primary_metrics_in_claim_order_even_if_created_earlier() {
+    let mut projection = DisplayProjection::default();
+    let show_metric = |id: &str, label: &str, role: Option<&str>| {
+        let mut action =
+            json!({"op":"show", "id":id, "type":"metric", "data":{"label":label, "value":"10"}});
+        if let Some(role) = role {
+            action["role"] = json!(role);
+        }
+        action
+    };
+
+    // Show m-sec as secondary, show m-prim as primary, then re-show m-sec claiming primary
+    projection.apply(&show_metric("m-sec", "SECONDARY", Some("secondary")), 1);
+    projection.apply(&show_metric("m-prim", "PRIMARY", Some("primary")), 2);
+    projection.apply(&show_metric("m-sec", "SECONDARY", Some("primary")), 3);
+
+    let replay = projection.snapshot_actions();
+    assert_eq!(replay.len(), 2);
+    assert_eq!(replay[0]["id"], "m-prim");
+    assert_eq!(replay[0]["role"], "primary");
+    assert_eq!(replay[1]["id"], "m-sec");
+    assert_eq!(replay[1]["role"], "primary");
+}
+
 #[tokio::test]
 async fn delivery_registration_captures_live_events_for_snapshot_barrier() {
     let delivery = DeliveryState::new();

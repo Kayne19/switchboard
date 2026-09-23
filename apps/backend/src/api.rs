@@ -180,7 +180,43 @@ impl DisplayProjection {
 
     pub fn snapshot_actions(&self) -> Vec<Value> {
         let mut actions = Vec::new();
+
+        // Primary objects replay in claim order (primary_claimed_at, position in self.order)
+        // so reconnecting clients preserve exact cluster order, while non-primary objects
+        // preserve creation order.
+        let mut sorted_primaries: Vec<&SceneObject> = self
+            .objects
+            .values()
+            .filter(|o| o.role.as_deref() == Some("primary"))
+            .collect();
+        sorted_primaries.sort_by_key(|o| {
+            (
+                o.primary_claimed_at.unwrap_or(u64::MAX),
+                self.order
+                    .iter()
+                    .position(|id| id == &o.id)
+                    .unwrap_or(usize::MAX),
+            )
+        });
+        let mut primary_iter = sorted_primaries.into_iter();
+
+        let mut replay_order = Vec::with_capacity(self.order.len());
         for id in &self.order {
+            if let Some(obj) = self.objects.get(id) {
+                if obj.role.as_deref() == Some("primary") {
+                    if let Some(next_primary) = primary_iter.next() {
+                        replay_order.push(&next_primary.id);
+                    }
+                } else {
+                    replay_order.push(id);
+                }
+            }
+        }
+        for remaining in primary_iter {
+            replay_order.push(&remaining.id);
+        }
+
+        for id in replay_order {
             if let Some(obj) = self.objects.get(id) {
                 let mut map = serde_json::Map::new();
                 map.insert("op".into(), "show".into());
