@@ -40,8 +40,8 @@ export function buildCompositionModel(state: ControllerState): CompositionModel 
     .map((id) => state.agentObjects[id])
     .filter((obj): obj is SceneObject => Boolean(obj));
 
-  // Determine primary:
-  // "one deterministic primary (first explicit primary, else first non-ambient by order)"
+  // Determine primary: the object holding role "primary" (the reducer lets
+  // only the latest claimant keep it), else the first non-ambient by order.
   let primary: SceneObject | null = null;
   const explicitPrimary = allAgentObjects.find((obj) => obj.role === 'primary');
   if (explicitPrimary) {

@@ -134,16 +134,25 @@ rule to pick the object a `visual_kind` / `title` answer is about:
 1. the focused object, if `focus` names one and it is still on stage;
 2. otherwise the composition **primary**, computed over the objects
    currently on stage in the order they were `show`n:
-   1. the first object with `role: "primary"`;
+   1. the object with `role: "primary"`;
    2. else the first object that is not `role: "ambient"` (an unset role
       counts as non-ambient);
    3. else the first object shown, if any is on stage at all.
 
+At most one object holds `role: "primary"`. A `show` that carries
+`role: "primary"` takes the role from whichever object held it, and that
+object stays on stage with `role: "secondary"` — so the latest explicit claim
+wins, and hiding it hands the viewport back by rule 2. A `show` that names no
+role keeps the object's current role, so updating an object never moves the
+primary. The browser's reducer (`controller/reducer.ts`) and
+`DisplayProjection::apply` both apply this demotion, which is also what a
+reconnecting browser's snapshot replays.
+
 Focus always overrides the composition primary, for both `visual_kind` and
 `title` — an agent that calls `focus` on an ambient or secondary object
 still gets that object reported back. Absent a focus, `role: "primary"`
-wins regardless of show order, and a later `show` never displaces an
-earlier non-ambient object just by being more recent. The backend's `/view`
+wins regardless of show order, and a later `show` without that role never
+displaces an earlier non-ambient object just by being more recent. The backend's `/view`
 intent and the browser's own `screen_state` report are computed by the same
 rule, so they agree on every composed scene, not just the common single-object
 or single-`role:"primary"` case.

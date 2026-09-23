@@ -324,7 +324,10 @@ export function RuntimeIntegration() {
       if (runtime.recording) callRuntime.send();
       else callRuntime.talk();
     };
-    registerVoiceRuntime({ toggleTurn });
+    registerVoiceRuntime({
+      toggleTurn,
+      sendText: (text) => callRuntime.sendText(text),
+    });
     return () => registerVoiceRuntime(null);
   }, [callRuntime, registerVoiceRuntime, runtime.connected, runtime.recording]);
 

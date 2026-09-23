@@ -260,6 +260,38 @@ describe("CallRuntime connection", () => {
   });
 });
 
+describe("CallRuntime typed turns", () => {
+  it("sends a typed turn stamped with the epoch the server announced", async () => {
+    const { runtime } = makeRuntime();
+    const socket = await connectAt(runtime, 7);
+    expect(runtime.sendText("  deploy the branch  ")).toBe(true);
+    const frame = socket.sentJson().at(-1);
+    expect(frame).toMatchObject({ type: "typed_turn", generation: 7, text: "deploy the branch" });
+    expect(typeof frame?.id).toBe("string");
+    expect(runtime.sendText("again")).toBe(true);
+    expect(socket.sentJson().at(-1)?.id).not.toBe(frame?.id);
+    runtime.dispose();
+  });
+
+  it("refuses a typed turn it cannot deliver or that says nothing", async () => {
+    const { runtime } = makeRuntime();
+    runtime.start();
+    expect(runtime.sendText("hello")).toBe(false);
+    const socket = FakeSocket.latest();
+    socket.open();
+    // Open, but the server has not announced the epoch the turn must carry.
+    expect(runtime.sendText("hello")).toBe(false);
+    socket.receive({ type: "hello_ack", version: 1 });
+    socket.receive({ type: "epoch", generation: 2 });
+    await settle();
+    expect(runtime.sendText("   ")).toBe(false);
+    expect(socket.sentJson().some((frame) => frame.type === "typed_turn")).toBe(false);
+    socket.drop();
+    expect(runtime.sendText("hello")).toBe(false);
+    runtime.dispose();
+  });
+});
+
 describe("CallRuntime voice clips", () => {
   it("sends a push-to-talk clip once the snapshot epoch arrives", async () => {
     const { runtime, latestState } = makeRuntime();

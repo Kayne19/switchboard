@@ -112,6 +112,25 @@ export function clipHeader(clip: {
 	});
 }
 
+/// A turn the caller typed instead of spoke.
+///
+/// It is a transcript that needs no transcription, and it carries the same
+/// epoch guard as a clip: the epoch the browser held when the caller sent it.
+/// The server drops it if a transfer has moved the epoch on since, and echoes
+/// it back as a `transcript` frame with the same id when it is taken.
+export function typedTurnMessage(turn: {
+	id: string;
+	epoch: number;
+	text: string;
+}): string {
+	return JSON.stringify({
+		type: "typed_turn",
+		id: turn.id,
+		generation: turn.epoch,
+		text: turn.text,
+	});
+}
+
 export async function postJson(
 	url: string,
 	body: Record<string, unknown>,

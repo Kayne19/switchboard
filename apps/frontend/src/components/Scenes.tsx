@@ -30,18 +30,22 @@ interface SceneProps {
   state: ControllerState;
   onToggleListening: () => void;
   onFocus: (id: string | null) => void;
-  transcriptOpen: boolean;
+  /** Opens the conversation history drawer; absent while there is no conversation. */
+  onOpenHistory?: () => void;
   setTranscriptOpen: (open: boolean) => void;
 }
 
-function CornerMarks() {
+// The conversation's corner accents, from #conversation .corner-a / .corner-b
+// in reference/lineage/approved-v16-controller.html. They belong to this
+// composition only; the content scenes are framed by their objects instead.
+function ConversationCorners() {
   return (
     <>
-      <svg className="corner-mark corner-mark--top" viewBox="0 0 420 120" preserveAspectRatio="none" aria-hidden="true">
-        <path d="M 0 118 V 18 H 248 L 286 0 H 420" />
+      <svg className="corner-mark corner-mark--top" viewBox="0 0 320 140" preserveAspectRatio="none" aria-hidden="true">
+        <path d="M0 36 H52 V0 M52 16 H220 L250 46 H320" />
       </svg>
-      <svg className="corner-mark corner-mark--bottom" viewBox="0 0 360 100" preserveAspectRatio="none" aria-hidden="true">
-        <path d="M 360 0 V 78 H 118 L 82 100 H 0" />
+      <svg className="corner-mark corner-mark--bottom" viewBox="0 0 260 110" preserveAspectRatio="none" aria-hidden="true">
+        <path d="M260 64 H202 V110 M202 91 H50 L18 59 H0" />
       </svg>
     </>
   );
@@ -52,6 +56,30 @@ function noteFromSpeech(state: ControllerState, fallback?: SceneObject<NoteData>
     return { tag: 'DAMOCLES / EXPLANATION', segments: [{ text: state.speech.text }] };
   }
   return fallback?.data ?? null;
+}
+
+interface ExplanationProps {
+  note: NoteData | null;
+  noteObject?: SceneObject<NoteData>;
+  onFocus: (id: string | null) => void;
+  onOpenHistory?: () => void;
+}
+
+// The explanation beside content, shared by every rail composition. It stays
+// mounted while its words change, so an update patches the text in place;
+// it resolves in and out only when an explanation appears or goes away. Its
+// layout animates position only: animating its size on a text change scales
+// the text while it reflows, which reads as a twitch.
+function RailNote({ note, noteObject, onFocus, onOpenHistory }: ExplanationProps) {
+  return (
+    <AnimatePresence initial={false}>
+      {note ? (
+        <ObjectMotion key="rail-note" objectId={noteObject?.id ?? 'speech-note'} className="rail-note" layout="position">
+          <AnnotationCard data={note} onFocus={noteObject ? () => onFocus(noteObject.id) : undefined} onOpenHistory={onOpenHistory} />
+        </ObjectMotion>
+      ) : null}
+    </AnimatePresence>
+  );
 }
 
 export function IdleScene({ state, onToggleListening }: Pick<SceneProps, 'state' | 'onToggleListening'>) {
@@ -67,7 +95,7 @@ export function IdleScene({ state, onToggleListening }: Pick<SceneProps, 'state'
   );
 }
 
-export function ConversationScene({ state, onToggleListening, transcriptOpen, setTranscriptOpen }: SceneProps) {
+export function ConversationScene({ state, onToggleListening, setTranscriptOpen }: SceneProps) {
   const comp = buildCompositionModel(state);
   const object =
     comp.runtimeConversation ??
@@ -88,7 +116,7 @@ export function ConversationScene({ state, onToggleListening, transcriptOpen, se
 
   return (
     <motion.section className="scene scene--conversation" data-scene="conversation" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <CornerMarks />
+      <ConversationCorners />
       <div className="conversation-presence-band">
         <DamoclesPresence
           listening={state.listening}
@@ -100,7 +128,7 @@ export function ConversationScene({ state, onToggleListening, transcriptOpen, se
       </div>
 
       <ObjectMotion objectId={object?.id ?? "conversation"} className="conversation-answer">
-        <TechFrame variant="panel" />
+        <TechFrame variant="answer" />
         <div className="conversation-answer__tag tech micro">{message.tag ?? 'CURRENT RESPONSE / 01'}</div>
         <div className="conversation-answer__text"><RichText segments={segments} /></div>
         <div className="conversation-answer__index tech micro">VOICE / 01</div>
@@ -112,31 +140,11 @@ export function ConversationScene({ state, onToggleListening, transcriptOpen, se
       <button className="transcript-toggle tech micro" type="button" onClick={() => setTranscriptOpen(true)}>
         TRANSCRIPT HIDDEN
       </button>
-
-      <AnimatePresence>
-        {transcriptOpen ? (
-          <motion.div className="transcript" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.24 }}>
-            <div className="transcript__header tech micro">
-              <span>CONVERSATION / HISTORY</span>
-              <button type="button" onClick={() => setTranscriptOpen(false)}>RETURN / ESC</button>
-            </div>
-            <div className="transcript__body">
-              {(message.transcript ?? []).map((line, index) => (
-                <div className={`transcript-line${line.speaker === 'DAMOCLES' ? ' transcript-line--ai' : ''}`} key={`${index}-${line.speaker}`}>
-                  <span className="transcript-line__speaker tech micro">{line.speaker}</span>
-                  <span>{line.text}</span>
-                </div>
-              ))}
-            </div>
-            <input className="transcript__input" placeholder="TYPE OR SPEAK" aria-label="Conversation input" />
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
     </motion.section>
   );
 }
 
-export function TrainingScene({ state, onToggleListening, onFocus }: SceneProps) {
+export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory }: SceneProps) {
   const charts = objectsOfType<ChartData>(state, 'chart');
   const metrics = objectsOfType<MetricData>(state, 'metric');
   const progress = objectsOfType<ProgressData>(state, 'progress')[0];
@@ -147,7 +155,6 @@ export function TrainingScene({ state, onToggleListening, onFocus }: SceneProps)
 
   return (
     <motion.section className="scene scene--content scene--training" data-scene="training" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <CornerMarks />
       <div className="scene-heading">
         <div className="scene-heading__title tech">{primary.data.title ?? 'TRAINING / RUN'}</div>
         <div className="scene-heading__sub tech micro">{primary.data.subtitle ?? 'LOSS TRACE / LIVE'}</div>
@@ -168,11 +175,13 @@ export function TrainingScene({ state, onToggleListening, onFocus }: SceneProps)
               ))}
             </AnimatePresence>
           </div>
-          {note ? (
-            <motion.div className="training-note" layout initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-              <AnnotationCard data={note} onFocus={noteObject ? () => onFocus(noteObject.id) : undefined} />
-            </motion.div>
-          ) : null}
+          <AnimatePresence initial={false}>
+            {note ? (
+              <motion.div key="training-note" className="training-note" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
+                <AnnotationCard data={note} onFocus={noteObject ? () => onFocus(noteObject.id) : undefined} onOpenHistory={onOpenHistory} />
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
           {progress ? (
             <ObjectMotion objectId={progress.id} className="training-progress">
               <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
@@ -197,7 +206,7 @@ export function TrainingScene({ state, onToggleListening, onFocus }: SceneProps)
   );
 }
 
-export function ArchitectureScene({ state, onToggleListening, onFocus }: SceneProps) {
+export function ArchitectureScene({ state, onToggleListening, onFocus, onOpenHistory }: SceneProps) {
   const primaryObjectValue = primaryObject(state);
   if (!primaryObjectValue) return <IdleScene state={state} onToggleListening={onToggleListening} />;
   const diagram = cast.diagram(primaryObjectValue);
@@ -206,21 +215,20 @@ export function ArchitectureScene({ state, onToggleListening, onFocus }: ScenePr
 
   return (
     <motion.section className="scene scene--content scene--architecture" data-scene="architecture" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <CornerMarks />
       <div className="scene-heading">
         <div className="scene-heading__title tech">{diagram.data.title ?? 'SYSTEM / DIAGRAM'}</div>
         <div className="scene-heading__sub tech micro">{diagram.data.subtitle ?? 'GRAPH / COMPOSED'}</div>
       </div>
       <div className="content-grid">
         <ObjectMotion objectId={diagram.id} className="content-main diagram-object">
-          <TechFrame variant="open" />
+          <TechFrame variant="rails" />
           <FocusableSurface onActivate={() => onFocus(diagram.id)} ariaLabel="Expand diagram">
             <DiagramPrimitive data={diagram.data} />
           </FocusableSurface>
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={diagram.data.context ?? 'SYSTEM MAP'} size="rail" />
-          {note ? <ObjectMotion objectId={noteObject?.id ?? 'speech-note'} className="rail-note"><AnnotationCard data={note} onFocus={noteObject ? () => onFocus(noteObject.id) : undefined} /></ObjectMotion> : null}
+          <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
         </motion.aside>
       </div>
       <SceneFooter left="DISPLAY / SYSTEM MAP" right="TRACE / ACTIVE ROUTE" />
@@ -228,7 +236,7 @@ export function ArchitectureScene({ state, onToggleListening, onFocus }: ScenePr
   );
 }
 
-export function DocumentScene({ state, onToggleListening, onFocus }: SceneProps) {
+export function DocumentScene({ state, onToggleListening, onFocus, onOpenHistory }: SceneProps) {
   const primaryObjectValue = primaryObject(state);
   if (!primaryObjectValue) return <IdleScene state={state} onToggleListening={onToggleListening} />;
   const document = cast.document(primaryObjectValue);
@@ -237,7 +245,6 @@ export function DocumentScene({ state, onToggleListening, onFocus }: SceneProps)
 
   return (
     <motion.section className="scene scene--content scene--document" data-scene="document" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <CornerMarks />
       <div className="scene-heading">
         <div className="scene-heading__title tech">DOCUMENT / {document.data.kind?.toUpperCase() ?? 'CONTENT'}</div>
         <div className="scene-heading__sub tech micro">CONTENT / ORIGINAL</div>
@@ -250,7 +257,7 @@ export function DocumentScene({ state, onToggleListening, onFocus }: SceneProps)
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={document.data.context ?? 'DOCUMENT'} size="rail" />
-          {note ? <ObjectMotion objectId={noteObject?.id ?? 'speech-note'} className="rail-note"><AnnotationCard data={note} onFocus={noteObject ? () => onFocus(noteObject.id) : undefined} /></ObjectMotion> : null}
+          <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
         </motion.aside>
       </div>
       <SceneFooter left="CONTENT / ORIGINAL EMAIL" right="CHROME / SWITCHBOARD" />
@@ -258,7 +265,7 @@ export function DocumentScene({ state, onToggleListening, onFocus }: SceneProps)
   );
 }
 
-export function CodeScene({ state, onToggleListening, onFocus }: SceneProps) {
+export function CodeScene({ state, onToggleListening, onFocus, onOpenHistory }: SceneProps) {
   const primaryObjectValue = primaryObject(state);
   if (!primaryObjectValue) return <IdleScene state={state} onToggleListening={onToggleListening} />;
   const code = cast.code(primaryObjectValue);
@@ -267,7 +274,6 @@ export function CodeScene({ state, onToggleListening, onFocus }: SceneProps) {
 
   return (
     <motion.section className="scene scene--content scene--code" data-scene="code" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <CornerMarks />
       <div className="scene-heading">
         <div className="scene-heading__title tech">{code.data.title ?? 'SOURCE / LIVE'}</div>
         <div className="scene-heading__sub tech micro">{code.data.file ?? 'SOURCE'}</div>
@@ -280,7 +286,7 @@ export function CodeScene({ state, onToggleListening, onFocus }: SceneProps) {
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={code.data.context ?? 'SOURCE'} size="rail" />
-          {note ? <ObjectMotion objectId={noteObject?.id ?? 'speech-note'} className="rail-note"><AnnotationCard data={note} onFocus={noteObject ? () => onFocus(noteObject.id) : undefined} /></ObjectMotion> : null}
+          <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
         </motion.aside>
       </div>
       <SceneFooter left="FRAME / INTERRUPTED RAILS" right="DISPLAY / SOURCE" />
@@ -288,7 +294,7 @@ export function CodeScene({ state, onToggleListening, onFocus }: SceneProps) {
   );
 }
 
-export function ComposedScene({ state, onToggleListening, onFocus }: SceneProps) {
+export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory }: SceneProps) {
   const comp = buildCompositionModel(state);
   const primary = comp.primary;
   if (!primary) return <IdleScene state={state} onToggleListening={onToggleListening} />;
@@ -324,7 +330,6 @@ export function ComposedScene({ state, onToggleListening, onFocus }: SceneProps)
 
   return (
     <motion.section className="scene scene--content scene--composed" data-scene="composed" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <CornerMarks />
       <div className="scene-heading">
         <div className="scene-heading__title tech">{title}</div>
         <div className="scene-heading__sub tech micro">{subtitle}</div>
@@ -369,11 +374,7 @@ export function ComposedScene({ state, onToggleListening, onFocus }: SceneProps)
           {metrics.length > 0 && primary.type !== 'metric' ? (
             <MetricsPrimitive metrics={metrics} />
           ) : null}
-          {note ? (
-            <ObjectMotion objectId={noteObject?.id ?? 'speech-note'} className="rail-note">
-              <AnnotationCard data={note} onFocus={noteObject ? () => onFocus(noteObject.id) : undefined} />
-            </ObjectMotion>
-          ) : null}
+          <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
         </motion.aside>
       </div>
       <SceneFooter left="DISPLAY / COMPOSED" right="SYSTEM / ACTIVE" />

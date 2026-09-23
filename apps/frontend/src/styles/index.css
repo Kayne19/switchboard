@@ -124,33 +124,35 @@ button {
 }
 .focusable-content:focus-visible,
 .damocles-presence__button:focus-visible,
-.annotation-card--button:focus-visible,
+.annotation-card__history:focus-visible,
 .transcript-toggle:focus-visible {
   outline: 1px solid var(--orange);
   outline-offset: 4px;
 }
 
+/* Conversation corner accents: placement from #conversation .corner-a/b in
+   the approved v16 composition. */
 .corner-mark {
   position: absolute;
   z-index: 1;
   pointer-events: none;
   fill: none;
-  stroke: rgba(var(--orange-rgb), 0.42);
+  stroke: rgba(var(--orange-rgb), 0.48);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
 .corner-mark--top {
-  top: 4.8cqh;
-  left: 4.2cqw;
-  width: min(29cqw, 460px);
-  height: 9cqh;
+  top: 6.1cqh;
+  left: 5.3cqw;
+  width: 25cqw;
+  height: 12cqh;
 }
 .corner-mark--bottom {
-  right: 4.2cqw;
-  bottom: 4.5cqh;
-  width: min(23cqw, 390px);
-  height: 8cqh;
-  stroke: rgba(127, 214, 61, 0.28);
+  right: 4.4cqw;
+  bottom: 6.4cqh;
+  width: 18cqw;
+  height: 10cqh;
+  stroke: rgba(127, 214, 61, 0.3);
 }
 
 .tech-frame {
@@ -161,6 +163,17 @@ button {
   height: 100%;
   pointer-events: none;
   overflow: visible;
+}
+.tech-frame__path {
+  fill: none;
+  vector-effect: non-scaling-stroke;
+  animation: tech-frame-resolve 0.36s cubic-bezier(0.22, 0.61, 0.36, 1)
+    backwards;
+}
+@keyframes tech-frame-resolve {
+  from {
+    opacity: 0;
+  }
 }
 
 /* Shared Damocles presence */
@@ -186,6 +199,10 @@ button {
 }
 .damocles-presence__button {
   display: grid;
+  /* The column is the presence width, whatever the signal row holds. An auto
+     column grew to fit the voice indicator or caption on narrow geometries,
+     and the glyph, sized from the column, grew and slid off-centre with it. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) var(--signal-height);
   width: 100%;
   padding: 0;
@@ -299,7 +316,6 @@ button {
   width: min(62cqw, 1000px);
   height: min(31cqh, 330px);
   min-height: 180px;
-  background: rgba(2, 2, 2, 0.9);
   z-index: 2;
 }
 .conversation-answer__tag {
@@ -409,21 +425,57 @@ button {
 .transcript-line__speaker {
   color: rgba(232, 230, 223, 0.34);
 }
-.transcript__input {
+.transcript__composer {
   position: absolute;
   left: 7cqw;
   right: 7cqw;
   bottom: 5cqh;
+  display: flex;
+  align-items: stretch;
   height: 6cqh;
   min-height: 48px;
   border: 1px solid rgba(232, 230, 223, 0.17);
   background: #050505;
+}
+.transcript__composer:focus-within {
+  border-color: rgba(var(--orange-rgb), 0.56);
+}
+.transcript__input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
   color: var(--paper);
   padding: 0 18px;
   outline: none;
 }
-.transcript__input:focus {
-  border-color: rgba(var(--orange-rgb), 0.56);
+.transcript__input:disabled {
+  color: rgba(232, 230, 223, 0.3);
+}
+.transcript__send {
+  flex: none;
+  padding: 0 18px;
+  border: 0;
+  border-left: 1px solid rgba(232, 230, 223, 0.1);
+  background: transparent;
+  color: rgba(232, 230, 223, 0.42);
+  cursor: pointer;
+  transition: color 0.16s ease;
+}
+.transcript__send:hover:not(:disabled),
+.transcript__send:focus-visible {
+  color: var(--orange);
+  outline: none;
+}
+.transcript__send:disabled {
+  color: rgba(232, 230, 223, 0.18);
+  cursor: default;
+}
+.transcript__status {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  color: var(--amber);
 }
 
 /* Shared content composition */
@@ -500,6 +552,8 @@ button {
 
 .annotation-card {
   position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   width: 100%;
   height: 100%;
   min-height: 0;
@@ -511,20 +565,74 @@ button {
   text-align: left;
   overflow: hidden;
 }
-.annotation-card--button {
-  cursor: zoom-in;
+.annotation-card__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: clamp(8px, 1cqh, 13px);
 }
 .annotation-card__tag {
-  margin-bottom: clamp(8px, 1cqh, 13px);
   color: rgba(232, 230, 223, 0.35);
 }
+.annotation-card__history {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(232, 230, 223, 0.42);
+  cursor: pointer;
+  transition: color 0.16s ease;
+}
+.annotation-card__history:hover {
+  color: var(--orange);
+}
+.annotation-card__body {
+  height: 100%;
+  min-height: 0;
+}
+.annotation-card__body--history {
+  cursor: pointer;
+}
+/* Long explanations scroll inside the card; short ones never show a bar. */
 .annotation-card__text {
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
   font-family: "Helvetica Neue", Arial, sans-serif;
   font-size: clamp(13px, 1.06cqw, 18px);
   line-height: 1.48;
 }
 .annotation-card__text strong {
   font-weight: 600;
+}
+
+/* Markdown read from spoken and explanatory text */
+.rich-text__paragraph,
+.rich-text__list {
+  margin: 0 0 0.55em;
+}
+.rich-text__paragraph:last-child,
+.rich-text__list:last-child {
+  margin-bottom: 0;
+}
+.rich-text__list {
+  padding-left: 1.25em;
+}
+.rich-text__list li {
+  margin: 0.12em 0;
+}
+.rich-text__list li::marker {
+  color: rgba(var(--orange-rgb), 0.72);
+}
+.rich-text__code {
+  padding: 0.05em 0.3em;
+  background: rgba(232, 230, 223, 0.08);
+  color: var(--paper);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.86em;
 }
 
 /* Training */
@@ -604,11 +712,15 @@ button {
   z-index: 5;
   left: clamp(22px, 3cqw, 52px);
   top: clamp(24px, 4cqh, 46px);
+  display: flex;
+  flex-direction: column;
   width: min(42%, 520px);
   max-height: 34%;
   background: #000;
 }
 .training-note .annotation-card {
+  height: auto;
+  min-height: 0;
   padding: clamp(10px, 1cqw, 16px) clamp(12px, 1.2cqw, 18px)
     clamp(10px, 1cqw, 16px);
   border: 1px solid rgba(var(--orange-rgb), 0.33);
@@ -694,6 +806,39 @@ button {
   width: 100%;
   height: 100%;
   overflow: visible;
+}
+/* Entry motion stays in CSS on elements that carry no SVG positioning
+   transform: a CSS transform on a translated node group replaces its
+   transform attribute and stacks every node in one corner. */
+.diagram-edge {
+  animation: diagram-edge-resolve 0.24s ease-out backwards;
+}
+.diagram-edge--active {
+  animation:
+    diagram-edge-resolve 0.24s ease-out backwards,
+    diagram-edge-flow 2.2s linear infinite;
+}
+.diagram-node__body {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: diagram-node-resolve 0.28s cubic-bezier(0.22, 0.61, 0.36, 1)
+    backwards;
+}
+@keyframes diagram-edge-resolve {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes diagram-edge-flow {
+  to {
+    stroke-dashoffset: -36;
+  }
+}
+@keyframes diagram-node-resolve {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
 }
 .diagram-node-label {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -782,15 +927,17 @@ button {
   position: absolute;
   z-index: 1;
   inset: clamp(8px, 1.1cqh, 16px) clamp(8px, 1cqw, 16px);
+  /* The inside of the approved code frame (TechFrame "code"), so source
+     never crosses the rails as it scrolls. */
   clip-path: polygon(
     0 0,
-    85% 0,
-    91% 9.2%,
-    100% 9.2%,
+    86.4% 0,
+    90.2% 5.7%,
+    100% 5.7%,
     100% 100%,
-    15.5% 100%,
-    10.2% 90%,
-    0 90%
+    17.2% 100%,
+    14.2% 95.4%,
+    0 95.4%
   );
   background: #000;
   overflow: hidden;
@@ -911,6 +1058,7 @@ button {
 .focus-layer__content--note .annotation-card {
   height: auto;
   min-height: 220px;
+  max-height: 76vh;
   padding: 3cqh 0;
   overflow: visible;
 }
@@ -1085,16 +1233,16 @@ button {
     font-size: clamp(7px, 1.08cqw, 9px);
   }
   .corner-mark--top {
-    top: 3.4cqh;
+    top: 3.8cqh;
     left: 4cqw;
-    width: 42cqw;
-    height: 7cqh;
+    width: 34cqw;
+    height: 9cqh;
   }
   .corner-mark--bottom {
     right: 4cqw;
-    bottom: 3.5cqh;
-    width: 34cqw;
-    height: 6cqh;
+    bottom: 4cqh;
+    width: 27cqw;
+    height: 7cqh;
   }
 
   .damocles-presence--idle {
@@ -1147,7 +1295,7 @@ button {
   .transcript__body {
     height: 72cqh;
   }
-  .transcript__input {
+  .transcript__composer {
     left: 6cqw;
     right: 6cqw;
     bottom: 4cqh;
@@ -1340,6 +1488,11 @@ button {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .tech-frame__path,
+  .diagram-edge,
+  .diagram-node__body {
+    animation: none !important;
+  }
   *,
   *::before,
   *::after {
