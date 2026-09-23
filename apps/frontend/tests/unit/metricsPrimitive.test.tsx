@@ -73,4 +73,9 @@ describe('MetricsPrimitive', () => {
     expect(header!.querySelector('.metrics__tag')?.textContent).toBe('TELEMETRY');
     expect(header!.querySelector('.metrics__index')?.textContent).toBe('EDGE / P95');
   });
+
+  it('returns null when variant is rail and metrics list is empty', () => {
+    const host = renderMetrics([], 'rail');
+    expect(host.querySelector('.metrics')).toBeNull();
+  });
 });

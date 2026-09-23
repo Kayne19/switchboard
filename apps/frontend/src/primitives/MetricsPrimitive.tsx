@@ -7,6 +7,9 @@ interface MetricsPrimitiveProps {
 }
 
 export function MetricsPrimitive({ metrics, variant = 'list' }: MetricsPrimitiveProps) {
+  if (variant === 'rail' && metrics.length === 0) {
+    return null;
+  }
   const isRail = variant === 'rail';
   return (
     <motion.div className={`metrics metrics--${variant}`} layout data-testid="metrics">

@@ -19,9 +19,12 @@ export function useLingeringValue<T>(value: T | null, lingerMs: number, minimumM
       setLastShown(value);
       return;
     }
+    if (lastShown === null) {
+      return;
+    }
     const minimumRemaining = Math.max(0, minimumMs - (Date.now() - shownAt.current));
     const timer = setTimeout(() => setLastShown(null), Math.max(lingerMs, minimumRemaining));
     return () => clearTimeout(timer);
-  }, [value, lingerMs, minimumMs]);
+  }, [value, lingerMs, minimumMs, lastShown]);
   return value ?? lastShown;
 }

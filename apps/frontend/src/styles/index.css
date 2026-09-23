@@ -968,6 +968,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: clamp(12px, 2cqh, 22px);
+  padding-bottom: clamp(48px, 8cqh, 72px);
   /* The response and the note are the column's only shrinkable surfaces.
      Each keeps a readable floor, and a rail too short for everything
      scrolls instead of collapsing them or running onto the footer. */
