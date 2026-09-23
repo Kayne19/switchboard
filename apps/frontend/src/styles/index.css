@@ -180,6 +180,10 @@ button {
 .damocles-presence {
   --presence-width: min(12cqw, 16cqh, 196px);
   --signal-height: clamp(34px, 5.2cqh, 50px);
+  /* The sword's own axis: the line through its pommel and grip, x = 451 of
+     the glyph's 944 units (DamoclesGlyph.tsx). The diagonal hilt pulls the
+     glyph's box to the right of it, so centring on the box looks off. */
+  --glyph-axis: calc(451 / 944 * 100%);
   position: relative;
   width: var(--presence-width);
   min-width: 0;
@@ -221,7 +225,7 @@ button {
 .damocles-presence__float {
   width: 100%;
   aspect-ratio: 944 / 1133;
-  transform-origin: 50% 18%;
+  transform-origin: var(--glyph-axis) 18%;
   will-change: transform;
 }
 .damocles-presence__float svg {
@@ -230,25 +234,34 @@ button {
   height: 100%;
   overflow: visible;
 }
+/* The signal is centred on the sword's axis. It is a flex row because a
+   flex item wider than its line overflows evenly on both sides; an auto
+   grid column instead grows to the right and drags its content off-axis. */
 .damocles-presence__signal {
   position: relative;
   width: max(100%, 128px);
   height: var(--signal-height);
-  left: 50%;
+  left: var(--glyph-axis);
   transform: translateX(-50%);
-  display: grid;
-  place-items: center;
+  display: flex;
+  justify-content: center;
+  align-items: center;
   color: var(--paper);
   overflow: visible;
 }
 .damocles-presence__caption {
-  width: 100%;
+  flex: none;
+  width: max-content;
   text-align: center;
   color: rgba(232, 230, 223, 0.54);
   white-space: nowrap;
 }
+/* Sized to its content, never narrower than the bars need: a label wider
+   than a fixed indicator pushed the whole block to one side. */
 .voice-indicator {
-  width: 138px;
+  flex: none;
+  width: max-content;
+  min-width: 138px;
   height: 42px;
   display: grid;
   grid-template-rows: 24px 16px;
@@ -256,7 +269,7 @@ button {
   transform-origin: 50% 50%;
 }
 .voice-indicator--compact {
-  width: 118px;
+  min-width: 118px;
   height: 36px;
   grid-template-rows: 20px 14px;
 }
@@ -380,7 +393,11 @@ button {
   color: var(--orange);
   letter-spacing: 0.21em;
 }
+/* One typography for everything said in the history, typed turns included:
+   the caller's lines and the input they type into share a face and size. */
 .transcript {
+  --transcript-font: "Helvetica Neue", Arial, sans-serif;
+  --transcript-size: clamp(15px, 1.32cqw, 23px);
   position: absolute;
   inset: 0;
   z-index: 30;
@@ -414,8 +431,8 @@ button {
   gap: 2cqw;
   padding: 2.4cqh 0;
   border-bottom: 1px solid rgba(232, 230, 223, 0.08);
-  font-family: "Helvetica Neue", Arial, sans-serif;
-  font-size: clamp(15px, 1.32cqw, 23px);
+  font-family: var(--transcript-font);
+  font-size: var(--transcript-size);
   line-height: 1.5;
   color: #d9d6d0;
 }
@@ -440,6 +457,9 @@ button {
 .transcript__composer:focus-within {
   border-color: rgba(var(--orange-rgb), 0.56);
 }
+/* The field set its own type before: it inherited the page's condensed
+   display stack at 16px, so typed text never matched the lines around it and
+   its proportions depended on which narrow face the device had installed. */
 .transcript__input {
   flex: 1;
   min-width: 0;
@@ -448,6 +468,11 @@ button {
   color: var(--paper);
   padding: 0 18px;
   outline: none;
+  font-family: var(--transcript-font);
+  font-size: var(--transcript-size);
+  font-stretch: normal;
+  letter-spacing: normal;
+  line-height: 1.5;
 }
 .transcript__input:disabled {
   color: rgba(232, 230, 223, 0.3);
@@ -817,6 +842,19 @@ button {
   animation:
     diagram-edge-resolve 0.24s ease-out backwards,
     diagram-edge-flow 2.2s linear infinite;
+}
+.diagram-edge-label-group {
+  animation: diagram-edge-resolve 0.24s ease-out backwards;
+}
+/* The layout measures labels in this face at this size before drawing them
+   (diagramLayout.ts); change one and the other must follow. */
+.diagram-edge-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+.diagram-edge-label__backing {
+  fill: #000;
 }
 .diagram-node__body {
   transform-box: fill-box;
@@ -1290,6 +1328,7 @@ button {
     bottom: 6.2cqh;
   }
   .transcript {
+    --transcript-size: clamp(14px, 2.5cqw, 19px);
     padding: 5cqh 6cqw;
   }
   .transcript__body {
@@ -1304,7 +1343,9 @@ button {
     grid-template-columns: 74px 1fr;
     gap: 12px;
     padding: 2cqh 0;
-    font-size: clamp(14px, 2.5cqw, 19px);
+  }
+  .transcript-line--ai {
+    font-size: var(--transcript-size);
   }
 
   .scene--content {
@@ -1490,6 +1531,7 @@ button {
 @media (prefers-reduced-motion: reduce) {
   .tech-frame__path,
   .diagram-edge,
+  .diagram-edge-label-group,
   .diagram-node__body {
     animation: none !important;
   }

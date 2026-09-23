@@ -1,9 +1,15 @@
 import { AnimatePresence, motion } from 'motion/react';
+import type { ActivityState } from '../controller/types';
 import { useFloatingMotion } from '../hooks/useFloatingMotion';
+import { useLingeringValue } from '../hooks/useLingeringValue';
 import { DamoclesGlyph } from './DamoclesGlyph';
 import { VoiceIndicator } from './VoiceIndicator';
 
 export type PresenceSize = 'idle' | 'conversation' | 'rail' | 'compact';
+
+// How long the caption keeps naming a tool after it finishes, so a run of
+// short calls reads as one steady status.
+const ACTIVITY_LINGER_MS = 1200;
 
 export function DamoclesPresence({
   listening,
@@ -13,6 +19,7 @@ export function DamoclesPresence({
   showCaption = true,
   interactive = true,
   layoutId = 'damocles-presence',
+  activity = null,
 }: {
   listening: boolean;
   onToggleListening?: () => void;
@@ -21,7 +28,10 @@ export function DamoclesPresence({
   showCaption?: boolean;
   interactive?: boolean;
   layoutId?: string;
+  /** The tool the agent is running; the caption names it in place of the voice line. */
+  activity?: ActivityState | null;
 }) {
+  const shownActivity = useLingeringValue(activity, ACTIVITY_LINGER_MS);
   const { y, rotate } = useFloatingMotion({ listening, amplitude: size === 'idle' ? 8.5 : size === 'conversation' ? 5.5 : 4 });
   const content = (
     <>
@@ -33,8 +43,8 @@ export function DamoclesPresence({
           {listening ? (
             <VoiceIndicator key="voice" compact={size === 'compact' || size === 'rail'} />
           ) : showCaption ? (
-            <motion.div key="caption" className="damocles-presence__caption tech micro" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.16 }}>
-              VOICE / ACTIVE<br/><span className="muted">CONTEXT / {context}</span>
+            <motion.div key="caption" className="damocles-presence__caption tech micro" title={shownActivity?.detail || undefined} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.16 }}>
+              {shownActivity ? `WORKING / ${shownActivity.tool || 'TOOL'}` : 'VOICE / ACTIVE'}<br/><span className="muted">CONTEXT / {context}</span>
             </motion.div>
           ) : null}
         </AnimatePresence>

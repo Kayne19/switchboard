@@ -68,6 +68,8 @@ export function RuntimeIntegration() {
   const appliedSeqRef = useRef(0);
   const pendingRejectionRef = useRef<{ seq: number; reason: string } | null>(null);
   const handleServerRef = useRef<(message: ServerMessage) => void>(() => {});
+  const activityToolRef = useRef<string | null>(null);
+  activityToolRef.current = state.activity?.tool ?? null;
   const handleStateRef = useRef<(runtimeState: RuntimeState) => void>(() => {});
   const [reportNonce, setReportNonce] = useState(0);
   const [runtime, setRuntime] = useState<RuntimeState>(INITIAL_RUNTIME_STATE);
@@ -213,10 +215,19 @@ export function RuntimeIntegration() {
           dispatch({ op: "listen", on: false });
           break;
         case "activity": {
-          const detail = [text(message.label), text(message.detail)]
-            .filter(Boolean)
-            .join(" / ");
-          if (detail) dispatch({ op: "runtime_say", text: detail });
+          // A tool call is status, not explanation. It used to go out as
+          // speech, so every call flashed its tool text over what Damocles
+          // had said and then left the bare leg label behind; it now goes to
+          // the activity surface and never touches speech.
+          const tool = text(message.tool);
+          if (message.state === "start") {
+            dispatch({
+              op: "runtime_activity",
+              activity: { label: text(message.label), tool, detail: text(message.detail) },
+            });
+          } else if (message.state === "end" && activityToolRef.current === tool) {
+            dispatch({ op: "runtime_activity", activity: null });
+          }
           break;
         }
         case "display": {

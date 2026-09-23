@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createLayers } from '../../src/primitives/DiagramPrimitive';
+import { createLayers } from '../../src/primitives/diagramLayout';
 import type { DiagramEdge, DiagramNode } from '../../src/controller/types';
 
 function layerIds(nodes: DiagramNode[], edges: DiagramEdge[]) {

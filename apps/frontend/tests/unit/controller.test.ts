@@ -220,6 +220,23 @@ describe('controller reducer & ownership', () => {
     expect(sceneKind(state)).toBe('architecture');
   });
 
+  it('keeps tool activity apart from speech', () => {
+    const activity = { label: 'switchboard', tool: 'read', detail: 'apps/backend/src/api.rs' };
+    const state = reduceActions(createInitialState(), [
+      { op: 'runtime_say', target: RUNTIME_CONVERSATION_ID, text: 'The route is on screen.' },
+      { op: 'runtime_activity', activity },
+    ]);
+    expect(state.activity).toEqual(activity);
+    // Activity is status, not explanation: what Damocles said stays current.
+    expect(state.speech?.text).toBe('The route is on screen.');
+
+    const carried = reduceActions(state, [diagramAction, { op: 'focus', id: 'sys-arch' }]);
+    expect(carried.activity).toEqual(activity);
+    expect(controllerReducer(carried, { op: 'runtime_activity', activity: null }).activity).toBeNull();
+    expect(controllerReducer(carried, { op: 'runtime_reset' }).activity).toBeNull();
+    expect(controllerReducer(carried, { op: 'epoch_reset' }).activity).toBeNull();
+  });
+
   it('does not let a runtime object take the agent primary', () => {
     const state = reduceActions(createInitialState(), [
       diagramAction,
