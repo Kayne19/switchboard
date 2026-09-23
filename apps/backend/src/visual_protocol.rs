@@ -338,17 +338,16 @@ fn validate_metric_data(data: &Map<String, Value>) -> Result<Value, String> {
     Ok(Value::Object(out))
 }
 
-/// A progress value is read as a 0-1 ratio when it is <= 1 and as a
-/// 0-100 percentage above that; out-of-range values clamp to the nearest
-/// end. `1` and `100` both land on a full bar.
+/// A progress value is a 0-100 percentage. Out-of-range values clamp
+/// to [0, 100], and values are rounded to two decimal places.
 fn normalize_progress_value(value: f64) -> Value {
     let bounded = value.clamp(0.0, 100.0);
-    let ratio = if bounded > 1.0 {
-        bounded / 100.0
+    let rounded = (bounded * 100.0).round() / 100.0;
+    if rounded.fract() == 0.0 {
+        (rounded as i64).into()
     } else {
-        bounded
-    };
-    ((ratio * 10000.0).round() / 10000.0).into()
+        rounded.into()
+    }
 }
 
 fn validate_progress_data(data: &Map<String, Value>) -> Result<Value, String> {
@@ -374,9 +373,9 @@ fn validate_progress_data(data: &Map<String, Value>) -> Result<Value, String> {
 
     let mut out = Map::new();
     out.insert("label".into(), label.into());
-    // Values arrive as either a 0-1 ratio or a 0-100 percentage; the
-    // browser stores a 0-1 ratio, so the projection applies the same
-    // normalization to keep both sides of the socket in agreement.
+    // Values arrive as a 0-100 percentage; the projection applies
+    // the same normalization as the browser to keep both sides of the
+    // socket in agreement.
     out.insert("value".into(), normalize_progress_value(val));
 
     if let Some(detail) = data.get("detail") {
@@ -1055,17 +1054,26 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_progress_percentage_values_to_ratios() {
-        assert_eq!(progress_value(json!(65)), json!(0.65));
-        assert_eq!(progress_value(json!(67)), json!(0.67));
-        assert_eq!(progress_value(json!(100)), json!(1.0));
+    fn normalizes_progress_percentage_values() {
+        assert_eq!(progress_value(json!(0)), json!(0));
+        assert_eq!(progress_value(json!(1)), json!(1));
+        assert_eq!(progress_value(json!(1.02)), json!(1.02));
+        assert_eq!(progress_value(json!(65)), json!(65));
+        assert_eq!(progress_value(json!(100)), json!(100));
+        assert_eq!(progress_value(json!(-5)), json!(0));
+        assert_eq!(progress_value(json!(150)), json!(100));
     }
 
     #[test]
-    fn keeps_progress_ratio_values_and_clamps_out_of_range() {
-        assert_eq!(progress_value(json!(0)), json!(0.0));
-        assert_eq!(progress_value(json!(1)), json!(1.0));
-        assert_eq!(progress_value(json!(150)), json!(1.0));
-        assert_eq!(progress_value(json!(-3)), json!(0.0));
+    fn rejects_non_finite_progress_values() {
+        for non_finite in [json!("NaN"), json!("Infinity"), json!("-Infinity")] {
+            let action = json!({
+                "op": "show",
+                "id": "deploy",
+                "type": "progress",
+                "data": { "label": "DEPLOY", "value": non_finite }
+            });
+            assert!(validate_action(&action).is_err());
+        }
     }
 }

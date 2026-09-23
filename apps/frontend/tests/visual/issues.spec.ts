@@ -110,7 +110,7 @@ test('progress fill width matches its numeric value', async ({ page }) => {
     dispatch({ op: 'clear' });
     dispatch({
       op: 'show', id: 'deploy-progress', type: 'progress', role: 'primary',
-      data: { label: 'DEPLOY', value: 0.65, text: '65% COMPLETE' },
+      data: { label: 'DEPLOY', value: 65, text: '65% COMPLETE' },
     });
   });
 
