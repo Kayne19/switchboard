@@ -695,6 +695,39 @@ button {
   height: 100%;
   overflow: visible;
 }
+/* Entry motion stays in CSS on elements that carry no SVG positioning
+   transform: a CSS transform on a translated node group replaces its
+   transform attribute and stacks every node in one corner. */
+.diagram-edge {
+  animation: diagram-edge-resolve 0.24s ease-out backwards;
+}
+.diagram-edge--active {
+  animation:
+    diagram-edge-resolve 0.24s ease-out backwards,
+    diagram-edge-flow 2.2s linear infinite;
+}
+.diagram-node__body {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: diagram-node-resolve 0.28s cubic-bezier(0.22, 0.61, 0.36, 1)
+    backwards;
+}
+@keyframes diagram-edge-resolve {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes diagram-edge-flow {
+  to {
+    stroke-dashoffset: -36;
+  }
+}
+@keyframes diagram-node-resolve {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+}
 .diagram-node-label {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 15px;
@@ -1340,6 +1373,10 @@ button {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .diagram-edge,
+  .diagram-node__body {
+    animation: none !important;
+  }
   *,
   *::before,
   *::after {
