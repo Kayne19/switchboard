@@ -226,3 +226,37 @@ test('progress value sent as a percentage fills the matching width', async ({ pa
   })).toBeCloseTo(0.65, 2);
   await expect(page.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '65');
 });
+
+
+test('long caption cannot grow into the response text at minimum box height', async ({ page }) => {
+  const fixtureServer = new DisplayFixtureServer({ initialGeneration: 9 });
+  const { wsUrl } = await fixtureServer.start();
+  const reply = Array.from({ length: 18 }, (_, index) => `Response paragraph ${index + 1} remains readable.`).join('\n\n');
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 420 });
+    await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+    await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === 'hello')).toBe(true);
+    fixtureServer.broadcast({
+      type: 'spoken',
+      entry: { role: 'agent', text: reply, id: 'reply-long', caption: 'MODEL / GPT OPENAI-CODEX / PROJECT / BAY-2 / REVIEWER' },
+    });
+
+    const response = page.locator('.conversation-answer__text');
+    const caption = page.locator('.conversation-answer__index');
+    await expect(response).toBeVisible();
+    const geometry = await response.evaluate((element) => {
+      const responseBox = element.getBoundingClientRect();
+      const captionBox = document.querySelector<HTMLElement>('.conversation-answer__index')!.getBoundingClientRect();
+      return {
+        overflowY: getComputedStyle(element).overflowY,
+        scrollable: element.scrollHeight > element.clientHeight,
+        separated: responseBox.bottom <= captionBox.top + 1,
+        captionLines: Math.round(captionBox.height / Math.max(1, parseFloat(getComputedStyle(document.querySelector<HTMLElement>('.conversation-answer__index')!).lineHeight))),
+      };
+    });
+    expect(geometry).toEqual({ overflowY: 'auto', scrollable: true, separated: true, captionLines: 1 });
+  } finally {
+    await fixtureServer.stop();
+  }
+});

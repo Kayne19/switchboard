@@ -343,6 +343,13 @@ button {
   z-index: 2;
   right: 4.3%;
   bottom: 8%;
+  /* The lower-right caption is an explicit boundary for the response area.
+     It stays on one contained line, so a long channel/model caption can
+     never grow up into the text. */
+  max-width: 44%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: rgba(232, 230, 223, 0.28);
 }
 .conversation-answer__text {
@@ -351,7 +358,10 @@ button {
   left: 7.5%;
   right: 7.5%;
   top: 18%;
-  bottom: 18%;
+  /* The 18% floor clears the lower-right caption at full box height; the
+     26px floor keeps that clearance when the box sits at its minimum
+     height, where 18% alone would let the last line flow beneath it. */
+  bottom: max(18%, 26px);
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
