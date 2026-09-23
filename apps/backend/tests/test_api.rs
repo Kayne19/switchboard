@@ -873,6 +873,98 @@ async fn queued_turn_from_before_page_rescue_never_reaches_the_new_leg() {
     assert!(worker.await.unwrap_err().is_cancelled());
 }
 
+async fn next_event_of(events: &mut broadcast::Receiver<Event>, event_type: &str) -> Value {
+    timeout(Duration::from_secs(1), async {
+        loop {
+            if let Ok(Event::Json(value)) = events.recv().await {
+                if value["type"] == event_type {
+                    return value;
+                }
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("no {event_type} event"))
+}
+
+#[tokio::test]
+async fn typed_turn_is_logged_echoed_and_queued_like_a_transcript() {
+    let state = state();
+    let mut events = state.0.events.subscribe();
+    let connection = state.0.delivery.register();
+    let generation = state.0.coordinator.generation();
+    let frame = json!({"type":"typed_turn", "id":"typed-1", "generation":generation, "text":"  deploy it  "});
+    handle_text_frame(
+        &state,
+        connection.epoch,
+        &mut None,
+        &mut None,
+        &frame.to_string(),
+    )
+    .await
+    .unwrap();
+
+    let echo = next_event_of(&mut events, "transcript").await;
+    assert_eq!(echo["id"], "typed-1");
+    assert_eq!(echo["text"], "deploy it");
+    let entries = state.0.transcript_log.lock().await.entries();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].text, "deploy it");
+    assert_eq!(entries[0].role, CALLER);
+    assert_eq!(entries[0].id.as_deref(), Some("typed-1"));
+    let mut turns = state.0.turn_rx.lock().await.take().unwrap();
+    let (id, text, turn_generation) = turns.try_recv().expect("typed turn is queued");
+    assert_eq!(
+        (id.as_str(), text.as_str(), turn_generation),
+        ("typed-1", "deploy it", generation)
+    );
+}
+
+#[tokio::test]
+async fn typed_turn_from_a_retired_epoch_is_dropped() {
+    let state = state();
+    let mut events = state.0.events.subscribe();
+    let connection = state.0.delivery.register();
+    let old_generation = state.0.coordinator.generation();
+    state.0.coordinator.begin_rescue("test rescue");
+    let frame = json!({"type":"typed_turn", "id":"typed-old", "generation":old_generation, "text":"stale words"});
+    handle_text_frame(
+        &state,
+        connection.epoch,
+        &mut None,
+        &mut None,
+        &frame.to_string(),
+    )
+    .await
+    .unwrap();
+
+    let stale = next_event_of(&mut events, "error").await;
+    assert_eq!(stale["code"], "stale_epoch");
+    assert_eq!(stale["id"], "typed-old");
+    assert!(state.0.transcript_log.lock().await.entries().is_empty());
+}
+
+#[tokio::test]
+async fn malformed_typed_turns_are_refused_on_the_connection() {
+    let state = state();
+    let mut connection = state.0.delivery.register();
+    let epoch = connection.epoch;
+    let generation = state.0.coordinator.generation();
+    for frame in [
+        json!({"type":"typed_turn", "id":"t", "generation":generation, "text":"   "}),
+        json!({"type":"typed_turn", "id":"t", "generation":generation, "text":"x".repeat(MAX_TYPED_TURN_CHARS + 1)}),
+        json!({"type":"typed_turn", "id":"", "generation":generation, "text":"hi"}),
+        json!({"type":"typed_turn", "id":"t", "text":"hi"}),
+    ] {
+        handle_text_frame(&state, epoch, &mut None, &mut None, &frame.to_string())
+            .await
+            .unwrap();
+        let reply = next_delivery(&mut connection).await;
+        assert_eq!(reply["type"], "error", "{frame}");
+    }
+    assert!(state.0.transcript_log.lock().await.entries().is_empty());
+}
+
 #[test]
 fn clip_headers_carry_an_optional_capture_epoch() {
     let header = |value: Value| parse_clip_header(value.as_object().unwrap());

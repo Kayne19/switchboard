@@ -425,21 +425,57 @@ button {
 .transcript-line__speaker {
   color: rgba(232, 230, 223, 0.34);
 }
-.transcript__input {
+.transcript__composer {
   position: absolute;
   left: 7cqw;
   right: 7cqw;
   bottom: 5cqh;
+  display: flex;
+  align-items: stretch;
   height: 6cqh;
   min-height: 48px;
   border: 1px solid rgba(232, 230, 223, 0.17);
   background: #050505;
+}
+.transcript__composer:focus-within {
+  border-color: rgba(var(--orange-rgb), 0.56);
+}
+.transcript__input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
   color: var(--paper);
   padding: 0 18px;
   outline: none;
 }
-.transcript__input:focus {
-  border-color: rgba(var(--orange-rgb), 0.56);
+.transcript__input:disabled {
+  color: rgba(232, 230, 223, 0.3);
+}
+.transcript__send {
+  flex: none;
+  padding: 0 18px;
+  border: 0;
+  border-left: 1px solid rgba(232, 230, 223, 0.1);
+  background: transparent;
+  color: rgba(232, 230, 223, 0.42);
+  cursor: pointer;
+  transition: color 0.16s ease;
+}
+.transcript__send:hover:not(:disabled),
+.transcript__send:focus-visible {
+  color: var(--orange);
+  outline: none;
+}
+.transcript__send:disabled {
+  color: rgba(232, 230, 223, 0.18);
+  cursor: default;
+}
+.transcript__status {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  color: var(--amber);
 }
 
 /* Shared content composition */
@@ -1259,7 +1295,7 @@ button {
   .transcript__body {
     height: 72cqh;
   }
-  .transcript__input {
+  .transcript__composer {
     left: 6cqw;
     right: 6cqw;
     bottom: 4cqh;

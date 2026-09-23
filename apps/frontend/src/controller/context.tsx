@@ -19,6 +19,9 @@ export interface VoiceRuntime {
   // Start a call turn, or finish the active one (the transport owns the
   // start/send/retry policy behind this single affordance).
   toggleTurn: () => void;
+  // Send a typed turn to the agent on the line. False means it was not put
+  // on the wire (the line is down) and the caller should keep the text.
+  sendText: (text: string) => boolean;
 }
 
 interface ControllerContextValue {

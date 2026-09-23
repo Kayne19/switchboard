@@ -67,6 +67,7 @@ export function SceneRenderer() {
           open={transcriptOpen}
           lines={conversation?.data.transcript ?? []}
           onClose={() => setTranscriptOpen(false)}
+          onSend={voiceRuntime?.sendText}
         />
         <FocusLayer
           object={focusedObject}

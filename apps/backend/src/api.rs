@@ -2425,6 +2425,29 @@ fn parse_clip_header(command: &serde_json::Map<String, Value>) -> Option<ClipHea
     Some((id.to_owned(), mime, generation))
 }
 
+/// The longest turn a caller may type, the same bound `/speak` puts on text.
+const MAX_TYPED_TURN_CHARS: usize = 16 * 1024;
+
+/// A turn the caller typed: `(id, generation, text)`.
+///
+/// Unlike a clip header, the generation is required. Every browser that can
+/// send a typed turn also stamps its epoch, so there is no older client to
+/// fall back for, and a turn without one could not be checked against a
+/// transfer that landed after the caller sent it.
+fn parse_typed_turn(command: &serde_json::Map<String, Value>) -> Option<(String, u64, String)> {
+    let id = command
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty() && id.chars().count() <= 128)?;
+    let generation = command.get("generation").and_then(Value::as_u64)?;
+    let text = command
+        .get("text")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty() && text.chars().count() <= MAX_TYPED_TURN_CHARS)?;
+    Some((id.to_owned(), generation, text.to_owned()))
+}
+
 async fn handle_text_frame(
     state: &AppState,
     epoch: u64,
@@ -2822,6 +2845,27 @@ async fn handle_text_frame(
                 json!({"type":"pong", "nonce":command.get("nonce"), "time":command.get("time")}),
             )
             .await
+        }
+        Some("typed_turn") => {
+            let Some((id, generation, text)) = parse_typed_turn(command) else {
+                return send_json(
+                    state,
+                    epoch,
+                    json!({"type":"error", "id":command.get("id"), "message":"That message could not be sent."}),
+                )
+                .await;
+            };
+            tracing::info!(turn = %id, generation, chars = text.chars().count(), "typed turn");
+            // A typed turn is a transcript that needs no transcription, so it
+            // takes the same path as a streamed one: epoch check, log, echo,
+            // then steer or queue. It runs off this reader because that path
+            // waits on `operation_transition`, which a transfer can hold for
+            // seconds, and the reader must keep answering pings meanwhile.
+            let state = state.clone();
+            tokio::spawn(
+                async move { route_final_transcript(&state, &id, generation, text).await },
+            );
+            Ok(())
         }
         Some("clip") => {
             let Some(header) = parse_clip_header(command) else {

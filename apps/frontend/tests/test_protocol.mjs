@@ -22,6 +22,7 @@ const {
 	sttEndHeader,
 	sttStartHeader,
 	sttCancelHeader,
+	typedTurnMessage,
 	postJson,
 } = await import(`data:text/javascript;base64,${encoded}`);
 
@@ -72,6 +73,11 @@ assert.deepEqual(
 assert.equal(
 	JSON.parse(clipHeader({ id: "abc", mime: "", epoch: 0 })).generation,
 	0,
+);
+// A typed turn carries the same epoch guard as a clip.
+assert.deepEqual(
+	JSON.parse(typedTurnMessage({ id: "t1", epoch: 0, text: "hello" })),
+	{ type: "typed_turn", id: "t1", generation: 0, text: "hello" },
 );
 assert.deepEqual(JSON.parse(helloMessage()), {
 	type: "hello",

@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { MessageData } from '../controller/types';
 import { RichText } from '../primitives/RichText';
 
@@ -9,13 +9,18 @@ interface TranscriptDrawerProps {
   open: boolean;
   lines: TranscriptLine[];
   onClose: () => void;
+  /**
+   * Sends a typed turn to the agent on the line and reports whether it went
+   * out. Absent when no call runtime is connected to this page.
+   */
+  onSend?: (text: string) => boolean;
 }
 
 // The conversation history, opened over whichever scene is showing: from the
 // conversation scene's transcript toggle or from an explanation card beside
 // content. It belongs to the stage rather than to one scene so that opening it
 // never swaps the scene underneath.
-export function TranscriptDrawer({ open, lines, onClose }: TranscriptDrawerProps) {
+export function TranscriptDrawer({ open, lines, onClose, onSend }: TranscriptDrawerProps) {
   return (
     <AnimatePresence>
       {open ? (
@@ -33,7 +38,7 @@ export function TranscriptDrawer({ open, lines, onClose }: TranscriptDrawerProps
             <button type="button" onClick={onClose}>RETURN / ESC</button>
           </div>
           <TranscriptBody lines={lines} />
-          <input className="transcript__input" placeholder="TYPE OR SPEAK" aria-label="Conversation input" />
+          <TranscriptComposer onSend={onSend} />
         </motion.div>
       ) : null}
     </AnimatePresence>
@@ -42,7 +47,8 @@ export function TranscriptDrawer({ open, lines, onClose }: TranscriptDrawerProps
 
 function TranscriptBody({ lines }: { lines: TranscriptLine[] }) {
   const bodyRef = useRef<HTMLDivElement>(null);
-  // The newest turn is the one the caller opened the history to see.
+  // The newest turn is the one the caller opened the history to see, and a
+  // typed turn arrives here as the server's echo of it.
   useEffect(() => {
     const body = bodyRef.current;
     if (body) body.scrollTop = body.scrollHeight;
@@ -57,5 +63,50 @@ function TranscriptBody({ lines }: { lines: TranscriptLine[] }) {
         </div>
       ))}
     </div>
+  );
+}
+
+// The draft stays in the field until the runtime has put it on the socket, so
+// a turn typed while the line is down is not lost; the transcript shows it
+// once the server echoes it back.
+function TranscriptComposer({ onSend }: { onSend?: (text: string) => boolean }) {
+  const [draft, setDraft] = useState('');
+  const [notSent, setNotSent] = useState(false);
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!onSend || !draft.trim()) return;
+    if (onSend(draft)) {
+      setDraft('');
+      setNotSent(false);
+    } else {
+      setNotSent(true);
+    }
+  };
+
+  return (
+    <form className="transcript__composer" onSubmit={submit}>
+      <input
+        className="transcript__input"
+        value={draft}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          setNotSent(false);
+        }}
+        placeholder={onSend ? 'TYPE OR SPEAK' : 'LINE OFFLINE'}
+        aria-label="Conversation input"
+        autoComplete="off"
+        enterKeyHint="send"
+        disabled={!onSend}
+      />
+      <button className="transcript__send tech micro" type="submit" disabled={!onSend || !draft.trim()}>
+        SEND
+      </button>
+      {notSent ? (
+        <div className="transcript__status tech micro" role="status">
+          NOT SENT / LINE DOWN
+        </div>
+      ) : null}
+    </form>
   );
 }

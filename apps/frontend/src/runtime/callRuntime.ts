@@ -25,6 +25,7 @@ import {
   sttChunkHeader,
   sttEndHeader,
   sttStartHeader,
+  typedTurnMessage,
 } from "../protocol";
 import type { ScreenStateReport } from "../controller/types";
 import { AudioPlayback } from "./audioPlayback";
@@ -324,6 +325,27 @@ export class CallRuntime {
       this.setStatus("Could not hang up: " + errorText(err), true);
     } finally {
       this.hangupPending = false;
+    }
+  }
+
+  /**
+   * Sends a turn the caller typed. Like a clip, it carries the epoch this page
+   * holds now, so a transfer that lands before it arrives drops it rather than
+   * handing it to the new leg. Returns false, having sent nothing, while the
+   * line is down or before the server has announced the epoch; the text is
+   * then still the caller's to resend. The server echoes a taken turn as a
+   * `transcript` frame with the same id.
+   */
+  sendText(text: string): boolean {
+    const body = text.trim();
+    if (!body || !this.snapshotReady) return false;
+    const socket = this.openSocket();
+    if (!socket) return false;
+    try {
+      socket.send(typedTurnMessage({ id: this.newClipId(), epoch: this.turnEpoch, text: body }));
+      return true;
+    } catch {
+      return false;
     }
   }
 
