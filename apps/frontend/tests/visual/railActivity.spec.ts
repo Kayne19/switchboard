@@ -65,3 +65,54 @@ for (const viewport of viewports) {
     }
   });
 }
+
+test('the shared content rail keeps one semantic surface order', async ({ page }) => {
+  const fixtureServer = new DisplayFixtureServer({ initialGeneration: 40 });
+  const { wsUrl } = await fixtureServer.start();
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+    await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === 'hello')).toBe(true);
+    fixtureServer.broadcast({
+      type: 'display',
+      action: {
+        op: 'show', id: 'map', type: 'diagram', role: 'primary',
+        data: {
+          mode: 'graph', title: 'SYSTEM MAP',
+          nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+          edges: [{ from: 'a', to: 'b' }],
+        },
+      },
+    });
+    fixtureServer.broadcast({ type: 'activity', state: 'start', tool: 'shell', label: 'Working', detail: 'npm test' });
+    fixtureServer.broadcast({
+      type: 'display',
+      action: { op: 'show', id: 'deploy', type: 'progress', role: 'secondary', data: { label: 'DEPLOY', value: 40 } },
+    });
+    fixtureServer.broadcast({
+      type: 'display',
+      action: { op: 'show', id: 'note', type: 'note', role: 'secondary', data: { segments: [{ text: 'The active path is healthy.' }] } },
+    });
+    fixtureServer.broadcast({ type: 'spoken', entry: { role: 'agent', text: 'I am checking it now.', id: 'reply-1' } });
+    fixtureServer.broadcast({
+      type: 'display',
+      action: { op: 'show', id: 'latency', type: 'metric', role: 'secondary', data: { label: 'LATENCY', value: '182 ms' } },
+    });
+
+    await expect(page.locator('.content-rail__details > *')).toHaveCount(5);
+    const surfaces = await page.locator('.content-rail__details > *').evaluateAll((children) => (
+      children.map((child) => {
+        if (child.classList.contains('metrics')) return 'metrics';
+        if (child.classList.contains('live-chat-card')) return 'chat';
+        if (child.classList.contains('rail-note')) return 'note';
+        if (child.classList.contains('rail-progress')) return 'progress';
+        if (child.classList.contains('tool-activity')) return 'activity';
+        return child.className;
+      })
+    ));
+    expect(surfaces).toEqual(['metrics', 'chat', 'note', 'progress', 'activity']);
+  } finally {
+    await fixtureServer.stop();
+  }
+});

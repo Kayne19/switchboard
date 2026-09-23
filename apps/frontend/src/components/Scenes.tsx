@@ -156,17 +156,17 @@ interface RailDetailsProps {
   onOpenHistory?: () => void;
 }
 
-// The details column beside every content visual: the live response, the
-// metrics, the note, any progress the main column has no slot for, and the
-// tool activity. It is a permanent slot; an empty one renders nothing, and
+// The details column beside every content visual: the metrics, live response,
+// note, any progress the main column has no slot for, and tool activity. It is
+// a permanent slot; an empty one renders nothing, and
 // the activity panel can linger after its end without the wrapper
 // unmounting it first.
 function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, onOpenHistory }: RailDetailsProps) {
   const liveMessage = liveChatMessage(state);
   return (
     <div className="content-rail__details">
-      {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
       {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
+      {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
       <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
       <RailProgress progressList={progressList} onFocus={onFocus} />
       <ToolActivity activity={state.activity} />
