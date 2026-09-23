@@ -8,6 +8,12 @@ const semanticColor: Record<Semantic,string> = {
 
 const fallbackSeriesSemantics: Semantic[] = ['green', 'orange', 'cyan', 'amber', 'paper', 'muted'];
 
+// The chart's viewBox is a fixed geometry that the annotation leader maps
+// through, so the scene and the primitive share the constants instead of
+// re-declaring them.
+export const CHART_VIEW_WIDTH = 1000;
+export const CHART_VIEW_HEIGHT = 500;
+
 export function chartSeriesColor(series: ChartSeries, index: number): string {
   return semanticColor[series.semantic ?? fallbackSeriesSemantics[index % fallbackSeriesSemantics.length]];
 }
@@ -21,11 +27,11 @@ export function ChartPrimitive({
 }: {
   data: ChartData;
   focused?: boolean;
-  annotation?: { x?: number; series?: string };
+  annotation?: { x?: number; series?: string; cardEdge?: { x: number; y: number } };
 }) {
   const reduced = useReducedMotion();
   const clipId = useId().replace(/:/g,'');
-  const width=1000,height=500,pad={left:74,right:28,top:34,bottom:54};
+  const width=CHART_VIEW_WIDTH,height=CHART_VIEW_HEIGHT,pad={left:74,right:28,top:34,bottom:54};
   const yMin=data.yMin ?? Math.min(...data.series.flatMap(series=>series.values));
   const yMax=data.yMax ?? Math.max(...data.series.flatMap(series=>series.values));
   const maxCount=Math.max(2,...data.series.map(series=>series.values.length));
@@ -48,6 +54,20 @@ export function ChartPrimitive({
   const pointerValue = pointerSeries?.values[Math.min((pointerSeries?.values.length ?? 1) - 1, Math.max(0, pointerIndex))];
   const pointerX = hasAnnotation ? xAtEpoch(annotation.x!) : 0;
   const pointerY = pointerValue != null ? yAt(pointerValue) : undefined;
+  // The annotation's leader starts at the note card's measured edge (viewBox
+  // units, supplied by the scene) so the stem always leaves the card and
+  // reaches the point. Until the card is measured, it starts at the plot
+  // top, never at the frame's outer border.
+  const stemStartX = annotation?.cardEdge?.x ?? pointerX;
+  const stemStartY = annotation?.cardEdge?.y ?? pad.top;
+  // The pointer takes over the marker's point only when it lands on that
+  // exact x and series; any other annotation leaves the marker circle up so
+  // the progress point is never hidden behind the note's leader.
+  const annotationOnMarker =
+    hasAnnotation &&
+    annotation.x === data.marker?.x &&
+    pointerSeries != null &&
+    pointerSeries.name === markerSeries?.name;
 
   return <div className={`chart-primitive${focused?' chart-primitive--focused':''}`} data-testid="chart">
     <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label={data.title ?? 'Chart'}>
@@ -61,15 +81,15 @@ export function ChartPrimitive({
         {data.marker && markerValue != null ? (
           <motion.g initial={{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}>
             <line x1={xAtEpoch(data.marker.x)} y1={pad.top} x2={xAtEpoch(data.marker.x)} y2={height-pad.bottom} stroke="rgba(var(--orange-rgb),.34)" strokeDasharray="6 8"/>
-            {!hasAnnotation ? <circle cx={xAtEpoch(data.marker.x)} cy={yAt(markerValue)} r={focused?7:5} fill="#000" stroke="var(--orange)" strokeWidth="2"/> : null}
+            {annotationOnMarker ? null : <circle className="chart-marker__point" cx={xAtEpoch(data.marker.x)} cy={yAt(markerValue)} r={focused?7:5} fill="#000" stroke="var(--orange)" strokeWidth="2"/>}
           </motion.g>
         ) : null}
         {hasAnnotation && pointerY != null ? (
           <motion.g className="chart-pointer" initial={reduced ? undefined : { opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}>
             <line
               className="chart-pointer__stem"
-              x1={pointerX}
-              y1={0}
+              x1={stemStartX}
+              y1={stemStartY}
               x2={pointerX}
               y2={pointerY}
               stroke="rgba(var(--orange-rgb), 0.75)"

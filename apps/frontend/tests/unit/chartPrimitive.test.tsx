@@ -104,3 +104,52 @@ describe('chart pointer', () => {
     expect(pointer).toBeNull();
   });
 });
+
+
+describe('marker and annotation interaction', () => {
+  const markerData: ChartData = {
+    series: [
+      { name: 'LOSS', values: [4, 3, 2, 1] },
+      { name: 'VALID', values: [2, 2, 1, 1] },
+    ],
+    xMax: 3,
+    marker: { x: 3, series: 'LOSS' },
+  };
+
+  function renderWith(data: ChartData, annotation?: { x?: number; series?: string; cardEdge?: { x: number; y: number } }) {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root.render(<ChartPrimitive data={data} annotation={annotation} />));
+  }
+
+  it('keeps the marker point when the annotation points elsewhere', () => {
+    renderWith(markerData, { x: 1, series: 'VALID' });
+    expect(host.querySelector('.chart-pointer__marker')).not.toBeNull();
+    expect(host.querySelector('.chart-marker__point')).not.toBeNull();
+  });
+
+  it('hides the marker point only when the annotation lands on that exact point', () => {
+    renderWith(markerData, { x: 3, series: 'LOSS' });
+    expect(host.querySelector('.chart-marker__point')).toBeNull();
+    expect(host.querySelector('.chart-pointer__marker')).not.toBeNull();
+  });
+
+  it('leaves the measured card edge and reaches the point when the card edge is supplied', () => {
+    renderWith(markerData, { x: 1, series: 'VALID', cardEdge: { x: 400, y: 90 } });
+    const stem = host.querySelector<SVGLineElement>('.chart-pointer__stem');
+    const marker = host.querySelector<SVGCircleElement>('.chart-pointer__marker');
+    expect(stem?.getAttribute('x1')).toBe('400');
+    expect(stem?.getAttribute('y1')).toBe('90');
+    expect(stem?.getAttribute('x2')).toBe(marker?.getAttribute('cx'));
+    expect(stem?.getAttribute('y2')).toBe(marker?.getAttribute('cy'));
+  });
+
+  it('starts the leader at the plot top, not the frame border, until the card is measured', () => {
+    renderWith(markerData, { x: 1, series: 'VALID' });
+    const stem = host.querySelector<SVGLineElement>('.chart-pointer__stem');
+    const marker = host.querySelector<SVGCircleElement>('.chart-pointer__marker');
+    expect(stem?.getAttribute('y1')).toBe('34');
+    expect(stem?.getAttribute('x1')).toBe(marker?.getAttribute('cx'));
+  });
+});

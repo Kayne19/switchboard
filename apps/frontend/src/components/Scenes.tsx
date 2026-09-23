@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react';
-import { useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import type {
   ChartData,
   CodeData,
@@ -15,7 +15,7 @@ import type {
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
 import { buildCompositionModel, cast, objectsOfType, primaryObject } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
-import { ChartPrimitive } from '../primitives/ChartPrimitive';
+import { CHART_VIEW_HEIGHT, CHART_VIEW_WIDTH, ChartPrimitive } from '../primitives/ChartPrimitive';
 import { CodeViewport } from '../primitives/CodeViewport';
 import { DamoclesPresence } from '../primitives/DamoclesPresence';
 import { DiagramPrimitive } from '../primitives/DiagramPrimitive';
@@ -99,11 +99,62 @@ function chartAnnotationStyle(note: NoteData | null, chart: SceneObject<ChartDat
   if (note?.anchor?.target !== chart.id || note.anchor.x === undefined) return undefined;
   const maxCount = Math.max(2, ...chart.data.series.map((series) => series.values.length));
   const xMax = chart.data.xMax ?? maxCount - 1;
-  const pad = { left: 74, right: 28 };
-  const width = 1000;
-  const xSvg = pad.left + (note.anchor.x / xMax) * (width - pad.left - pad.right);
-  const ratio = Math.min(0.79, Math.max(0.21, xSvg / width));
+  const xSvg = 74 + (note.anchor.x / xMax) * (CHART_VIEW_WIDTH - 74 - 28);
+  const ratio = Math.min(0.79, Math.max(0.21, xSvg / CHART_VIEW_WIDTH));
   return { '--annotation-anchor-x': `${ratio * 100}%` } as CSSProperties;
+}
+
+// The anchored note card is an HTML element the CSS clamps against the chart,
+// while the pointer is drawn in the chart's SVG viewBox. This hook measures
+// the card's on-screen position relative to the chart's rendered svg — the
+// same letterboxed geometry the renderer applies — and reports the card's
+// bottom-centre in viewBox units, so the leader leaves the card wherever the
+// CSS finally placed it.
+function useChartAnnotationCardEdge(
+  cardRef: RefObject<HTMLDivElement | null>,
+  resolveSvg: () => SVGSVGElement | null,
+  present: boolean,
+): { x: number; y: number } | undefined {
+  const [edge, setEdge] = useState<{ x: number; y: number } | undefined>(undefined);
+  const resolveRef = useRef(resolveSvg);
+  resolveRef.current = resolveSvg;
+
+  useEffect(() => {
+    if (!present) {
+      setEdge(undefined);
+      return;
+    }
+    const update = () => {
+      const card = cardRef.current;
+      const svg = resolveRef.current();
+      if (!card || !svg) {
+        setEdge(undefined);
+        return;
+      }
+      const cardRect = card.getBoundingClientRect();
+      const svgRect = svg.getBoundingClientRect();
+      if (svgRect.width === 0 || svgRect.height === 0) {
+        setEdge(undefined);
+        return;
+      }
+      const scale = Math.min(svgRect.width / CHART_VIEW_WIDTH, svgRect.height / CHART_VIEW_HEIGHT);
+      const offsetX = (svgRect.width - CHART_VIEW_WIDTH * scale) / 2;
+      const offsetY = (svgRect.height - CHART_VIEW_HEIGHT * scale) / 2;
+      setEdge({
+        x: (cardRect.left + cardRect.width / 2 - svgRect.left - offsetX) / scale,
+        y: (cardRect.bottom - svgRect.top - offsetY) / scale,
+      });
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    const card = cardRef.current;
+    if (card) observer.observe(card);
+    const svg = resolveRef.current();
+    if (svg) observer.observe(svg);
+    return () => observer.disconnect();
+  }, [cardRef, present]);
+
+  return edge;
 }
 
 interface ExplanationProps {
@@ -185,7 +236,7 @@ function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux') {
     case 'chart':
       return <ChartPrimitive data={(object as SceneObject<ChartData>).data} />;
     case 'diagram':
-      return <DiagramPrimitive data={(object as SceneObject<DiagramData>).data} />;
+      return <DiagramPrimitive data={(object as SceneObject<DiagramData>).data} id={object.id} />;
     case 'document':
       return <DocumentViewport data={(object as SceneObject<DocumentData>).data} />;
     case 'code':
@@ -273,6 +324,14 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
   if (!primary) return <IdleScene state={state} onToggleListening={onToggleListening} />;
   const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), primary.id);
   const note = annotationForScene(state, noteObject, liveChatMessage(state));
+  const anchoredNote = note?.anchor?.target === primary.id;
+  const noteRef = useRef<HTMLDivElement>(null);
+  const mainRef = useRef<HTMLDivElement>(null);
+  const cardEdge = useChartAnnotationCardEdge(
+    noteRef,
+    () => mainRef.current?.querySelector<SVGSVGElement>(`.chart-object[data-chart-id="${primary.id}"] svg`) ?? null,
+    Boolean(anchoredNote),
+  );
 
   return (
     <motion.section className="scene scene--content scene--training" data-scene="training" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -282,16 +341,20 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
       </div>
 
       <div className="content-grid">
-        <motion.div className="content-main training-main" layout>
+        <motion.div ref={mainRef} className="content-main training-main" layout>
           <div className={`training-charts${charts.length > 1 ? ' training-charts--compare' : ''}`}>
             <AnimatePresence mode="popLayout" initial={false}>
               {charts.map((chart) => (
-                <ObjectMotion key={chart.id} objectId={chart.id} className="chart-object">
+                <ObjectMotion key={chart.id} objectId={chart.id} className="chart-object" data-chart-id={chart.id}>
                   <TechFrame variant="panel" />
                   <FocusableSurface onActivate={() => onFocus(chart.id)} ariaLabel={`Expand ${chart.data.title ?? 'chart'}`}>
                     <ChartPrimitive
                       data={chart.data}
-                      annotation={note?.anchor?.target === chart.id && note.anchor.x !== undefined ? note.anchor : undefined}
+                      annotation={
+                        note?.anchor?.target === chart.id && note.anchor.x !== undefined
+                          ? { ...note.anchor, cardEdge: chart.id === primary.id ? cardEdge : undefined }
+                          : undefined
+                      }
                     />
                   </FocusableSurface>
                   {chart.role === 'compare' ? <div className="compare-label tech micro">COMPARE / {chart.data.compareLabel ?? 'RUN'}</div> : null}
@@ -303,6 +366,7 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
             {note ? (
               <motion.div
                 key="training-note"
+                ref={noteRef}
                 className={`training-note${note.anchor?.target === primary.id ? ' training-note--anchored' : ''}`}
                 style={chartAnnotationStyle(note, primary)}
                 initial={{ opacity: 0 }}
@@ -362,7 +426,7 @@ export function ArchitectureScene({ state, onToggleListening, onFocus, onOpenHis
         <ObjectMotion objectId={diagram.id} className="content-main diagram-object">
           <TechFrame variant="rails" />
           <FocusableSurface onActivate={() => onFocus(diagram.id)} ariaLabel="Expand diagram">
-            <DiagramPrimitive data={diagram.data} note={note} onCalloutChange={setCalloutPlaced} />
+            <DiagramPrimitive data={diagram.data} id={diagram.id} note={note} onCalloutChange={setCalloutPlaced} />
           </FocusableSurface>
         </ObjectMotion>
         <motion.aside className="content-rail" layout>

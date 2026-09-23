@@ -37,25 +37,46 @@ function wrapText(text: string, maxCharsPerLine = 32): string[] {
 export function DiagramPrimitive({
   data,
   focused = false,
+  id,
   note,
   onCalloutChange,
 }: {
   data: DiagramData;
   focused?: boolean;
+  /** This diagram's object id: an anchored note only belongs to it when its `anchor.target` matches. */
+  id: string;
   note?: NoteData | null;
   onCalloutChange?: (placed: boolean) => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const size = useElementSize(hostRef);
-  const portrait = size.height > size.width * 1.05;
-  const anchoredNodeId = note?.anchor?.node;
+  // Until the host has been measured, the first frame must already pick the
+  // right orientation: it falls back to the screen's own aspect ratio, so a
+  // portrait phone never flashes a landscape callout before the observer
+  // reports the real size.
+  const sizeMeasured = size.width > 0 && size.height > 0;
+  const portrait = sizeMeasured
+    ? size.height > size.width * 1.05
+    : window.innerHeight > window.innerWidth * 1.05;
+  // The anchor's target is part of the protocol: a note aimed at another
+  // object that happens to name one of this diagram's nodes is not ours.
+  const anchoredNodeId =
+    note?.anchor && note.anchor.target === id ? note.anchor.node : undefined;
   const hasAnchoredNode = Boolean(anchoredNodeId && data.nodes.some((n) => n.id === anchoredNodeId));
   const layout = useMemo(
     () => layoutDiagram(data, portrait ? 'portrait' : 'landscape', hasAnchoredNode ? anchoredNodeId : undefined),
     [data, portrait, hasAnchoredNode, anchoredNodeId],
   );
   const { nodeWidth, nodeHeight } = layout;
-  const calloutPlaced = Boolean(!portrait && layout.callout);
+  // The callout box fits three wrapped lines. A longer note is not
+  // truncated: it is treated as not fitting, so the note stays in the rail
+  // with the matching badge and nothing is silently lost.
+  const calloutLines =
+    hasAnchoredNode && note
+      ? wrapText(note.segments.map((segment) => segment.text).join(''), 32)
+      : [];
+  const calloutFits = calloutLines.length > 0 && calloutLines.length <= 3;
+  const calloutPlaced = Boolean(!portrait && layout.callout && calloutFits);
 
   useEffect(() => {
     onCalloutChange?.(calloutPlaced);
@@ -192,7 +213,7 @@ export function DiagramPrimitive({
                 </text>
               ) : null}
               <text x="14" y={note.tag ? 37 : 24} className="diagram-callout__text" fill="var(--paper)" fontSize="11" fontFamily="'Helvetica Neue', Arial, sans-serif" letterSpacing="-0.01em">
-                {wrapText(note.segments.map((s) => s.text).join(''), 32).slice(0, 3).map((line, idx) => (
+                {calloutLines.map((line, idx) => (
                   <tspan key={idx} x="14" dy={idx === 0 ? 0 : 15}>
                     {line}
                   </tspan>
