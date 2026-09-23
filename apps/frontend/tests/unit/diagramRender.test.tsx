@@ -70,6 +70,16 @@ describe('diagram rendering', () => {
     expect(edges[0].hasAttribute('stroke-dasharray')).toBe(false);
   });
 
+  it('paints edge labels after nodes, each on its own backing', () => {
+    render();
+    const groups = [...host.querySelectorAll('svg > g')].map((group) => group.getAttribute('class'));
+    expect(groups).toEqual(['diagram-edges', 'diagram-nodes', 'diagram-edge-labels']);
+    const labels = [...host.querySelectorAll('.diagram-edge-labels > g')];
+    expect(labels).toHaveLength(1);
+    expect(labels[0].firstElementChild?.getAttribute('class')).toBe('diagram-edge-label__backing');
+    expect(labels[0].lastElementChild?.textContent).toBe('call');
+  });
+
   it('sizes the active-edge glow to the drawing so straight edges keep their stroke', () => {
     render();
     // A bounding-box filter region has zero height on a horizontal edge.

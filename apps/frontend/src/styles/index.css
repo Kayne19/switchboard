@@ -818,6 +818,19 @@ button {
     diagram-edge-resolve 0.24s ease-out backwards,
     diagram-edge-flow 2.2s linear infinite;
 }
+.diagram-edge-label-group {
+  animation: diagram-edge-resolve 0.24s ease-out backwards;
+}
+/* The layout measures labels in this face at this size before drawing them
+   (diagramLayout.ts); change one and the other must follow. */
+.diagram-edge-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+.diagram-edge-label__backing {
+  fill: #000;
+}
 .diagram-node__body {
   transform-box: fill-box;
   transform-origin: center;
@@ -1490,6 +1503,7 @@ button {
 @media (prefers-reduced-motion: reduce) {
   .tech-frame__path,
   .diagram-edge,
+  .diagram-edge-label-group,
   .diagram-node__body {
     animation: none !important;
   }

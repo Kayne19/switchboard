@@ -1,6 +1,7 @@
 import { useMemo, useRef } from 'react';
-import type { DiagramData, DiagramEdge, DiagramNode, Semantic } from '../controller/types';
+import type { DiagramData, Semantic } from '../controller/types';
 import { useElementSize } from '../hooks/useElementSize';
+import { layoutDiagram, type Point } from './diagramLayout';
 
 const colors: Record<Semantic, string> = {
   red: 'var(--red)',
@@ -12,158 +13,30 @@ const colors: Record<Semantic, string> = {
   muted: 'var(--muted)',
 };
 
-type PositionedNode = DiagramNode & { x: number; y: number; layer: number; indexInLayer: number };
-
-export function createLayers(nodes: DiagramNode[], edges: DiagramEdge[]): DiagramNode[][] {
-  if (nodes.length === 0) return [];
-
-  const outgoing = new Map(nodes.map((node) => [node.id, [] as string[]]));
-  for (const edge of edges) {
-    if (outgoing.has(edge.from) && outgoing.has(edge.to)) {
-      outgoing.get(edge.from)?.push(edge.to);
-    }
-  }
-
-  // Collapse every feedback loop into one component before assigning depth.
-  // The resulting component graph is a DAG, so longest-path layering is both
-  // bounded and deterministic even for pure cycles and self-loops.
-  const visitIndex = new Map<string, number>();
-  const lowLink = new Map<string, number>();
-  const stack: string[] = [];
-  const onStack = new Set<string>();
-  const components: string[][] = [];
-  let nextVisitIndex = 0;
-
-  const findComponent = (id: string) => {
-    visitIndex.set(id, nextVisitIndex);
-    lowLink.set(id, nextVisitIndex);
-    nextVisitIndex += 1;
-    stack.push(id);
-    onStack.add(id);
-
-    for (const child of outgoing.get(id) ?? []) {
-      if (!visitIndex.has(child)) {
-        findComponent(child);
-        lowLink.set(id, Math.min(lowLink.get(id) ?? 0, lowLink.get(child) ?? 0));
-      } else if (onStack.has(child)) {
-        lowLink.set(id, Math.min(lowLink.get(id) ?? 0, visitIndex.get(child) ?? 0));
-      }
-    }
-
-    if (lowLink.get(id) !== visitIndex.get(id)) return;
-
-    const component: string[] = [];
-    while (stack.length > 0) {
-      const member = stack.pop();
-      if (!member) break;
-      onStack.delete(member);
-      component.push(member);
-      if (member === id) break;
-    }
-    components.push(component);
-  };
-
-  for (const node of nodes) {
-    if (!visitIndex.has(node.id)) findComponent(node.id);
-  }
-
-  const componentByNode = new Map<string, number>();
-  components.forEach((component, componentIndex) => {
-    for (const id of component) componentByNode.set(id, componentIndex);
-  });
-
-  const componentOutgoing = components.map(() => new Set<number>());
-  const componentIncoming = components.map(() => 0);
-  for (const [from, children] of outgoing) {
-    const fromComponent = componentByNode.get(from);
-    if (fromComponent === undefined) continue;
-    for (const child of children) {
-      const toComponent = componentByNode.get(child);
-      if (
-        toComponent === undefined ||
-        toComponent === fromComponent ||
-        componentOutgoing[fromComponent].has(toComponent)
-      ) {
-        continue;
-      }
-      componentOutgoing[fromComponent].add(toComponent);
-      componentIncoming[toComponent] += 1;
-    }
-  }
-
-  const componentDepth = components.map(() => 0);
-  const queue = componentIncoming.flatMap((count, index) => (count === 0 ? [index] : []));
-  for (let cursor = 0; cursor < queue.length; cursor += 1) {
-    const component = queue[cursor];
-    for (const child of componentOutgoing[component]) {
-      componentDepth[child] = Math.max(componentDepth[child], componentDepth[component] + 1);
-      componentIncoming[child] -= 1;
-      if (componentIncoming[child] === 0) queue.push(child);
-    }
-  }
-
-  const maxDepth = Math.max(...componentDepth);
-  const layers = Array.from({ length: maxDepth + 1 }, () => [] as DiagramNode[]);
-  for (const node of nodes) {
-    const component = componentByNode.get(node.id);
-    layers[component === undefined ? 0 : componentDepth[component]].push(node);
-  }
-  return layers;
-}
-
-function edgePath(from: PositionedNode, to: PositionedNode, portrait: boolean, nodeWidth: number, nodeHeight: number) {
-  if (portrait) {
-    const startY = from.y + nodeHeight / 2;
-    const endY = to.y - nodeHeight / 2;
-    const midY = (startY + endY) / 2;
-    return `M ${from.x} ${startY} V ${midY} H ${to.x} V ${endY}`;
-  }
-  const startX = from.x + nodeWidth / 2;
-  const endX = to.x - nodeWidth / 2;
-  const midX = (startX + endX) / 2;
-  return `M ${startX} ${from.y} H ${midX} V ${to.y} H ${endX}`;
-}
+const pathThrough = (points: Point[]) =>
+  points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
 
 export function DiagramPrimitive({ data, focused = false }: { data: DiagramData; focused?: boolean }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const size = useElementSize(hostRef);
   const portrait = size.height > size.width * 1.05;
-  const viewBox = portrait ? { width: 700, height: 1000 } : { width: 1000, height: 620 };
-  const nodeWidth = portrait ? 244 : 182;
-  const nodeHeight = portrait ? 98 : 88;
-  const layers = useMemo(() => createLayers(data.nodes, data.edges), [data.nodes, data.edges]);
-  const positioned = useMemo(() => {
-    const result: PositionedNode[] = [];
-    const padMain = portrait ? 110 : 112;
-    const mainSpan = (portrait ? viewBox.height : viewBox.width) - padMain * 2;
-    const layerStep = layers.length <= 1 ? 0 : mainSpan / (layers.length - 1);
-    layers.forEach((layerNodes, layerIndex) => {
-      const crossMax = portrait ? viewBox.width : viewBox.height;
-      const crossPad = portrait ? 96 : 82;
-      const usable = crossMax - crossPad * 2;
-      const step = layerNodes.length <= 1 ? 0 : usable / (layerNodes.length - 1);
-      layerNodes.forEach((node, index) => {
-        const cross = layerNodes.length === 1 ? crossMax / 2 : crossPad + index * step;
-        result.push({
-          ...node,
-          layer: layerIndex,
-          indexInLayer: index,
-          x: portrait ? cross : padMain + layerIndex * layerStep,
-          y: portrait ? padMain + layerIndex * layerStep : cross,
-        });
-      });
-    });
-    return result;
-  }, [layers, portrait, viewBox.height, viewBox.width]);
+  const layout = useMemo(() => layoutDiagram(data, portrait ? 'portrait' : 'landscape'), [data, portrait]);
+  const { nodeWidth, nodeHeight } = layout;
 
-  const byId = new Map(positioned.map((node) => [node.id, node]));
   const activeNodes = new Set(data.nodes.filter((node) => node.state === 'active').map((node) => node.id));
   const hasSingleActiveNode = activeNodes.size === 1;
+  const edges = layout.edges.map((laidOut, index) => {
+    const { edge } = laidOut;
+    const active = Boolean(
+      edge.active || (hasSingleActiveNode && (activeNodes.has(edge.from) || activeNodes.has(edge.to))),
+    );
+    return { ...laidOut, key: `${edge.from}-${edge.to}-${index}`, active, color: colors[edge.semantic ?? 'paper'] };
+  });
 
   return (
     <div ref={hostRef} className={`diagram-primitive${focused ? ' diagram-primitive--focused' : ''}`} data-testid="diagram">
       <svg
-        viewBox={`0 0 ${viewBox.width} ${viewBox.height}`}
+        viewBox={`0 0 ${layout.width} ${layout.height}`}
         preserveAspectRatio="xMidYMid meet"
         role="img"
         aria-label={data.title ?? 'System diagram'}
@@ -181,46 +54,32 @@ export function DiagramPrimitive({ data, focused = false }: { data: DiagramData;
           </filter>
         </defs>
         <g className="diagram-edges">
-          {data.edges.map((edge, index) => {
-            const from = byId.get(edge.from);
-            const to = byId.get(edge.to);
-            if (!from || !to) return null;
-            const active = Boolean(
-              edge.active || (hasSingleActiveNode && (activeNodes.has(edge.from) || activeNodes.has(edge.to))),
-            );
-            const color = colors[edge.semantic ?? 'paper'];
-            const d = edgePath(from, to, portrait, nodeWidth, nodeHeight);
-            const labelX = portrait ? (from.x + to.x) / 2 : (from.x + to.x) / 2;
-            const labelY = portrait ? (from.y + to.y) / 2 : (from.y + to.y) / 2;
+          {edges.map((edge, index) => {
+            const end = edge.points[edge.points.length - 1];
             return (
-              <g key={`${edge.from}-${edge.to}`}>
+              <g key={edge.key}>
                 <path
-                  className={`diagram-edge${active ? ' diagram-edge--active' : ''}`}
+                  className={`diagram-edge${edge.active ? ' diagram-edge--active' : ''}`}
                   style={{ animationDelay: `${index * 60}ms` }}
-                  d={d}
+                  d={pathThrough(edge.points)}
                   fill="none"
-                  stroke={color}
-                  strokeOpacity={active ? 0.85 : 0.48}
-                  strokeWidth={active ? 2 : 1.25}
-                  strokeDasharray={active ? '10 8' : undefined}
+                  stroke={edge.color}
+                  strokeOpacity={edge.active ? 0.85 : 0.48}
+                  strokeWidth={edge.active ? 2 : 1.25}
+                  strokeDasharray={edge.active ? '10 8' : undefined}
                   vectorEffect="non-scaling-stroke"
-                  filter={active ? 'url(#active-edge-glow)' : undefined}
+                  filter={edge.active ? 'url(#active-edge-glow)' : undefined}
                 />
-                <circle cx={to.x} cy={portrait ? to.y - nodeHeight / 2 : to.y} r="3" fill={color} opacity=".9" />
-                {edge.label ? (
-                  <text x={labelX} y={labelY - 6} textAnchor="middle" className="diagram-edge-label" fill={color}>
-                    {edge.label}
-                  </text>
-                ) : null}
+                <circle cx={end.x} cy={end.y} r="3" fill={edge.color} opacity=".9" />
               </g>
             );
           })}
         </g>
         <g className="diagram-nodes">
-          {positioned.map((node, index) => {
+          {layout.nodes.map(({ node, box }, index) => {
             const color = colors[node.semantic ?? 'paper'];
             return (
-              <g key={node.id} transform={`translate(${node.x - nodeWidth / 2} ${node.y - nodeHeight / 2})`}>
+              <g key={node.id} transform={`translate(${box.x} ${box.y})`}>
                 <g className="diagram-node__body" style={{ animationDelay: `${120 + index * 50}ms` }}>
                   <path
                     d={`M 0 14 L 14 0 H ${nodeWidth - 22} L ${nodeWidth} 22 V ${nodeHeight} H 18 L 0 ${nodeHeight - 18} Z`}
@@ -254,6 +113,20 @@ export function DiagramPrimitive({ data, focused = false }: { data: DiagramData;
               </g>
             );
           })}
+        </g>
+        {/* Labels paint last, each on a backing of its own, so no node or
+            crossing edge can cover the words on an edge. */}
+        <g className="diagram-edge-labels">
+          {edges.map((edge) =>
+            edge.label ? (
+              <g key={edge.key} className="diagram-edge-label-group" style={{ animationDelay: `${120 + edges.length * 50}ms` }}>
+                <rect className="diagram-edge-label__backing" {...edge.label.box} />
+                <text x={edge.label.x} y={edge.label.y} textAnchor="middle" dominantBaseline="central" className="diagram-edge-label" fill={edge.color}>
+                  {edge.label.text}
+                </text>
+              </g>
+            ) : null,
+          )}
         </g>
       </svg>
     </div>
