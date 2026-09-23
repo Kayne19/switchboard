@@ -397,3 +397,110 @@ test('secondary progress occupies the visible aux row in a composed workspace', 
   expect(geometry.insideStage).toBe(true);
   expect(geometry.size).toBe(true);
 });
+
+
+test('note and live chat output coexist; neither mutates the other', async ({ page }) => {
+  const fixtureServer = new DisplayFixtureServer({ initialGeneration: 7 });
+  const { wsUrl } = await fixtureServer.start();
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+    await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === 'hello')).toBe(true);
+    fixtureServer.broadcast({
+      type: 'display',
+      action: {
+        op: 'show', id: 'loss', type: 'chart', role: 'primary',
+        data: {
+          title: 'Validation loss', xMax: 40, yMin: 0, yMax: 1,
+          series: [{ name: 'VAL LOSS', values: [0.8, 0.5, 0.3, 0.45] }],
+        },
+      },
+    });
+    fixtureServer.broadcast({
+      type: 'display',
+      action: {
+        op: 'show', id: 'spike-note', type: 'note', role: 'secondary',
+        data: {
+          tag: 'LOOK HERE',
+          segments: [{ text: 'This annotation stays attached to the validation spike.' }],
+          anchor: { target: 'loss', x: 32, series: 'VAL LOSS' },
+        },
+      },
+    });
+
+    const note = page.locator('.training-note .annotation-card');
+    await expect(note).toContainText('This annotation stays attached to the validation spike.');
+
+    fixtureServer.broadcast({ type: 'spoken', entry: { role: 'agent', text: 'The spike is contained.', id: 'reply-1' } });
+    const live = page.locator('.live-chat-card');
+    await expect(live).toBeVisible();
+    await expect(live).toContainText('The spike is contained.');
+    await expect(note).toContainText('This annotation stays attached to the validation spike.');
+
+    const overlap = await page.evaluate(() => {
+      const noteBox = document.querySelector<HTMLElement>('.training-note')!.getBoundingClientRect();
+      const liveBox = document.querySelector<HTMLElement>('.live-chat-card')!.getBoundingClientRect();
+      return !(
+        noteBox.right <= liveBox.left || liveBox.right <= noteBox.left ||
+        noteBox.bottom <= liveBox.top || liveBox.bottom <= noteBox.top
+      );
+    });
+    expect(overlap, 'note and live card must not overlap').toBe(false);
+
+    fixtureServer.broadcast({ type: 'spoken', entry: { role: 'agent', text: 'A newer response replaces the live card only.', id: 'reply-2' } });
+    await expect(live).toContainText('A newer response replaces the live card only.');
+    await expect(note).toContainText('This annotation stays attached to the validation spike.');
+
+    fixtureServer.broadcast({ type: 'display', action: { op: 'hide', id: 'spike-note' } });
+    await expect(page.locator('.training-note')).toHaveCount(0);
+    await expect(live).toContainText('A newer response replaces the live card only.');
+  } finally {
+    await fixtureServer.stop();
+  }
+});
+
+
+test('long chat output scrolls inside the live card', async ({ page }) => {
+  const fixtureServer = new DisplayFixtureServer({ initialGeneration: 8 });
+  const { wsUrl } = await fixtureServer.start();
+  const reply = Array.from({ length: 24 }, (_, index) => `Card paragraph ${index + 1} stays readable. Card paragraph ${index + 1} stays readable.`).join('\n\n');
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+    await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === 'hello')).toBe(true);
+    fixtureServer.broadcast({
+      type: 'display',
+      action: {
+        op: 'show', id: 'map', type: 'diagram', role: 'primary',
+        data: {
+          mode: 'graph', title: 'SYSTEM MAP',
+          nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+          edges: [{ from: 'a', to: 'b' }],
+        },
+      },
+    });
+    fixtureServer.broadcast({ type: 'spoken', entry: { role: 'agent', text: reply, id: 'reply-long' } });
+
+    const card = page.locator('.live-chat-card');
+    await expect(card).toBeVisible();
+    const geometry = await card.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      const stage = document.querySelector<HTMLElement>('.stage')!.getBoundingClientRect();
+      const text = element.querySelector<HTMLElement>('.live-chat-card__text')!;
+      return {
+        insideStage:
+          box.left >= stage.left - 1 && box.top >= stage.top - 1 &&
+          box.right <= stage.right + 1 && box.bottom <= stage.bottom + 1,
+        overflowY: getComputedStyle(text).overflowY,
+        scrollable: text.scrollHeight > text.clientHeight,
+      };
+    });
+    expect(geometry.insideStage).toBe(true);
+    expect(geometry.overflowY).toBe('auto');
+    expect(geometry.scrollable).toBe(true);
+  } finally {
+    await fixtureServer.stop();
+  }
+});

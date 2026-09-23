@@ -29,7 +29,7 @@ test("tool activity never flashes over the explanation", async ({ page }) => {
       },
     });
     fixtureServer.broadcast({ type: "spoken", entry: { role: "agent", text: explanation, id: "reply-1" } });
-    const explanationText = page.locator(".rail-note .annotation-card__text");
+    const explanationText = page.locator(".live-chat-card__text");
     await expect(explanationText).toHaveText(explanation);
 
     // Record every state the explanation passes through, down to single
@@ -37,7 +37,7 @@ test("tool activity never flashes over the explanation", async ({ page }) => {
     await page.evaluate(() => {
       const seen: string[] = [];
       (window as unknown as { explanationStates: string[] }).explanationStates = seen;
-      const record = () => seen.push(document.querySelector(".rail-note .annotation-card__text")?.textContent ?? "<gone>");
+      const record = () => seen.push(document.querySelector(".live-chat-card__text")?.textContent ?? "<gone>");
       new MutationObserver(record).observe(document.querySelector(".stage")!, { subtree: true, childList: true, characterData: true });
     });
     const calls = [
@@ -153,7 +153,7 @@ test("explanations read Markdown, scroll, and open a history the caller can type
     fixtureServer.broadcast({ type: "spoken", entry: { role: "agent", text: longReply, id: "reply-1" } });
     await expect(page.locator('[data-scene="architecture"]')).toBeVisible();
 
-    const explanation = page.locator(".rail-note .annotation-card__text");
+    const explanation = page.locator(".live-chat-card__text");
     await expect(explanation.locator("strong")).toHaveText("route");
     await expect(explanation.locator("code")).toHaveText("route_final_transcript");
     await expect(explanation.locator("li")).toHaveCount(2);
@@ -164,7 +164,7 @@ test("explanations read Markdown, scroll, and open a history the caller can type
     }));
     expect(overflow).toEqual({ overflowY: "auto", scrollable: true });
 
-    await page.locator(".rail-note .annotation-card__history").click();
+    await page.locator(".live-chat-card__history").click();
     const drawer = page.getByRole("dialog", { name: "Conversation history" });
     await expect(drawer).toBeVisible();
     // The history opens over the scene rather than replacing it.

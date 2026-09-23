@@ -19,6 +19,7 @@ import { CodeViewport } from '../primitives/CodeViewport';
 import { DamoclesPresence } from '../primitives/DamoclesPresence';
 import { DiagramPrimitive } from '../primitives/DiagramPrimitive';
 import { DocumentViewport } from '../primitives/DocumentViewport';
+import { LiveChatCard } from '../primitives/LiveChatCard';
 import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
 import { ObjectMotion } from '../primitives/ObjectMotion';
 import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
@@ -52,11 +53,18 @@ function ConversationCorners() {
   );
 }
 
-function annotationForScene(state: ControllerState, noteObject?: SceneObject<NoteData>): NoteData | null {
+function annotationForScene(
+  state: ControllerState,
+  noteObject: SceneObject<NoteData> | undefined,
+  liveMessage: MessageData | null,
+): NoteData | null {
   // Notes are durable display objects. A later chat response may supply a
   // transient explanation only when no note is present; it must never mutate
-  // or visually replace an explicit note.
+  // or visually replace an explicit note. When the scene shows the live
+  // chat card, that card is the explanation surface, so the annotation slot
+  // carries the explicit note alone.
   if (noteObject) return noteObject.data;
+  if (liveMessage) return null;
   if (!state.speech) return null;
   return { tag: 'DAMOCLES / EXPLANATION', segments: [{ text: state.speech.text }] };
 }
@@ -68,6 +76,14 @@ function noteForTarget(
   return notes.find((note) => note.data.anchor?.target === targetId)
     ?? notes.find((note) => !note.data.anchor)
     ?? notes[0];
+}
+
+// The runtime conversation is the current assistant turn. When a content
+// scene shows it, the live chat card is that surface; the annotation slot
+// is left for durable notes.
+function liveChatMessage(state: ControllerState): MessageData | null {
+  const object = buildCompositionModel(state).runtimeConversation;
+  return object ? cast.message(object).data : null;
 }
 
 function sceneCaption(object: SceneObject, fallback: string): string {
@@ -179,7 +195,8 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
   const primary = charts.find((chart) => chart.role === 'primary') ?? charts[0];
   if (!primary) return <IdleScene state={state} onToggleListening={onToggleListening} />;
   const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), primary.id);
-  const note = annotationForScene(state, noteObject);
+  const liveMessage = liveChatMessage(state);
+  const note = annotationForScene(state, noteObject, liveMessage);
 
   return (
     <motion.section className="scene scene--content scene--training" data-scene="training" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -235,7 +252,12 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
             size="rail"
             activity={state.activity}
           />
-          <MetricsPrimitive metrics={metrics} />
+          {liveMessage || metrics.length > 0 ? (
+            <div className="content-rail__details">
+              {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
+              {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
+            </div>
+          ) : null}
         </motion.aside>
       </div>
       <SceneFooter left="DISPLAY / COMPOSED" right={sceneCaption(primary, 'PRIMARY / LOSS TRACE')} />
@@ -248,7 +270,8 @@ export function ArchitectureScene({ state, onToggleListening, onFocus, onOpenHis
   if (!primaryObjectValue) return <IdleScene state={state} onToggleListening={onToggleListening} />;
   const diagram = cast.diagram(primaryObjectValue);
   const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), diagram.id);
-  const note = annotationForScene(state, noteObject);
+  const liveMessage = liveChatMessage(state);
+  const note = annotationForScene(state, noteObject, liveMessage);
   const metrics = objectsOfType<MetricData>(state, 'metric');
   const progressList = objectsOfType<ProgressData>(state, 'progress');
 
@@ -267,19 +290,18 @@ export function ArchitectureScene({ state, onToggleListening, onFocus, onOpenHis
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={diagram.data.context ?? 'SYSTEM MAP'} size="rail" activity={state.activity} />
-          {metrics.length > 0 || note || progressList.length > 0 ? (
-            <div className="content-rail__details">
-              {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
-              <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
-              {progressList.map((progress) => (
-                <ObjectMotion key={progress.id} objectId={progress.id} className="rail-progress">
-                  <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
-                    <ProgressPrimitive data={progress.data} />
-                  </FocusableSurface>
-                </ObjectMotion>
-              ))}
-            </div>
-          ) : null}
+          <div className="content-rail__details">
+            {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
+            {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
+            <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
+            {progressList.map((progress) => (
+              <ObjectMotion key={progress.id} objectId={progress.id} className="rail-progress">
+                <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
+                  <ProgressPrimitive data={progress.data} />
+                </FocusableSurface>
+              </ObjectMotion>
+            ))}
+          </div>
         </motion.aside>
       </div>
       <SceneFooter left="DISPLAY / SYSTEM MAP" right={sceneCaption(diagram, 'TRACE / ACTIVE ROUTE')} />
@@ -292,7 +314,8 @@ export function DocumentScene({ state, onToggleListening, onFocus, onOpenHistory
   if (!primaryObjectValue) return <IdleScene state={state} onToggleListening={onToggleListening} />;
   const document = cast.document(primaryObjectValue);
   const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), document.id);
-  const note = annotationForScene(state, noteObject);
+  const liveMessage = liveChatMessage(state);
+  const note = annotationForScene(state, noteObject, liveMessage);
   const metrics = objectsOfType<MetricData>(state, 'metric');
   const progressList = objectsOfType<ProgressData>(state, 'progress');
 
@@ -310,19 +333,18 @@ export function DocumentScene({ state, onToggleListening, onFocus, onOpenHistory
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={document.data.context ?? 'DOCUMENT'} size="rail" activity={state.activity} />
-          {metrics.length > 0 || note || progressList.length > 0 ? (
-            <div className="content-rail__details">
-              {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
-              <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
-              {progressList.map((progress) => (
-                <ObjectMotion key={progress.id} objectId={progress.id} className="rail-progress">
-                  <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
-                    <ProgressPrimitive data={progress.data} />
-                  </FocusableSurface>
-                </ObjectMotion>
-              ))}
-            </div>
-          ) : null}
+          <div className="content-rail__details">
+            {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
+            {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
+            <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
+            {progressList.map((progress) => (
+              <ObjectMotion key={progress.id} objectId={progress.id} className="rail-progress">
+                <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
+                  <ProgressPrimitive data={progress.data} />
+                </FocusableSurface>
+              </ObjectMotion>
+            ))}
+          </div>
         </motion.aside>
       </div>
       <SceneFooter left="CONTENT / ORIGINAL EMAIL" right={sceneCaption(document, 'CHROME / SWITCHBOARD')} />
@@ -335,7 +357,8 @@ export function CodeScene({ state, onToggleListening, onFocus, onOpenHistory }: 
   if (!primaryObjectValue) return <IdleScene state={state} onToggleListening={onToggleListening} />;
   const code = cast.code(primaryObjectValue);
   const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), code.id);
-  const note = annotationForScene(state, noteObject);
+  const liveMessage = liveChatMessage(state);
+  const note = annotationForScene(state, noteObject, liveMessage);
   const metrics = objectsOfType<MetricData>(state, 'metric');
   const progressList = objectsOfType<ProgressData>(state, 'progress');
 
@@ -353,19 +376,18 @@ export function CodeScene({ state, onToggleListening, onFocus, onOpenHistory }: 
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={code.data.context ?? 'SOURCE'} size="rail" activity={state.activity} />
-          {metrics.length > 0 || note || progressList.length > 0 ? (
-            <div className="content-rail__details">
-              {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
-              <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
-              {progressList.map((progress) => (
-                <ObjectMotion key={progress.id} objectId={progress.id} className="rail-progress">
-                  <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
-                    <ProgressPrimitive data={progress.data} />
-                  </FocusableSurface>
-                </ObjectMotion>
-              ))}
-            </div>
-          ) : null}
+          <div className="content-rail__details">
+            {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
+            {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
+            <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
+            {progressList.map((progress) => (
+              <ObjectMotion key={progress.id} objectId={progress.id} className="rail-progress">
+                <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
+                  <ProgressPrimitive data={progress.data} />
+                </FocusableSurface>
+              </ObjectMotion>
+            ))}
+          </div>
         </motion.aside>
       </div>
       <SceneFooter left="FRAME / INTERRUPTED RAILS" right={sceneCaption(code, 'DISPLAY / SOURCE')} />
@@ -380,7 +402,8 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
 
   const noteObjects = comp.allAgentObjects.filter((object) => object.type === 'note') as Array<SceneObject<NoteData>>;
   const noteObject = noteForTarget(noteObjects, primary.id);
-  const note = annotationForScene(state, noteObject);
+  const liveMessage = liveChatMessage(state);
+  const note = annotationForScene(state, noteObject, liveMessage);
   const metrics = comp.allAgentObjects.filter((o) => o.type === 'metric') as Array<SceneObject<MetricData>>;
   const progressList = comp.allAgentObjects.filter((o) => o.type === 'progress') as Array<SceneObject<ProgressData>>;
   const railMetrics = primary.type === 'metric' ? metrics.filter((metric) => metric.id !== primary.id) : metrics;
@@ -476,8 +499,9 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
             size="rail"
             activity={state.activity}
           />
-          {railMetrics.length > 0 || railNote ? (
+          {liveMessage || railMetrics.length > 0 || railNote ? (
             <div className="content-rail__details">
+              {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
               {railMetrics.length > 0 ? <MetricsPrimitive metrics={railMetrics} /> : null}
               <RailNote note={railNote} noteObject={noteObject?.id === primary.id ? undefined : noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
             </div>

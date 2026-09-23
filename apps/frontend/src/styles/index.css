@@ -981,6 +981,65 @@ button {
   min-height: 0;
   padding-top: clamp(8px, 1cqh, 12px);
 }
+/* The live chat output: the current assistant turn in a contained
+   scrollable card. It grows with the rail and scrolls inside; the note
+   and the metrics keep their own space. */
+.live-chat-card {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: clamp(8px, 1cqh, 12px);
+  padding-top: clamp(10px, 1.2cqh, 14px);
+  border-top: 1px solid rgba(var(--orange-rgb), 0.48);
+}
+.content-rail__details > .live-chat-card {
+  flex: 1 1 auto;
+}
+.live-chat-card__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.live-chat-card__tag {
+  flex: none;
+  color: rgba(232, 230, 223, 0.35);
+}
+.live-chat-card__index {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.live-chat-card__history {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(232, 230, 223, 0.42);
+  cursor: pointer;
+  transition: color 0.16s ease;
+}
+.live-chat-card__history:hover {
+  color: var(--orange);
+}
+.live-chat-card__body {
+  height: 100%;
+  min-height: 0;
+}
+.live-chat-card__text {
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  font-size: clamp(13px, 1.06cqw, 18px);
+  line-height: 1.48;
+  padding-right: clamp(6px, 1cqw, 14px);
+}
 
 /* Diagram */
 .diagram-object {
