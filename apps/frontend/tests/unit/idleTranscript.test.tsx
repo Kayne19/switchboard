@@ -311,4 +311,22 @@ describe('the voice-free path from idle', () => {
     expect(input()).toBe(field);
     expect(document.activeElement).toBe(field);
   });
+
+  it('leaves focus where the caller moved it when the line drops and comes back', async () => {
+    click(host.querySelector('.transcript-reveal .transcript-toggle')!);
+    expect(document.activeElement).toBe(input());
+    const back = [...drawer()!.querySelectorAll('button')].find((button) => button.textContent === 'RETURN / ESC')!;
+    act(() => back.focus());
+    expect(document.activeElement).toBe(back);
+
+    // The runtime registers itself again on every connection change; the
+    // field is live throughout, so it has no reason to take focus back.
+    await act(async () => {
+      socket.readyState = 3;
+      socket.onclose?.({} as CloseEvent);
+    });
+    expect(drawer()).not.toBeNull();
+    expect(input().disabled).toBe(false);
+    expect(document.activeElement).toBe(back);
+  });
 });

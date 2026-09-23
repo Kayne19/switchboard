@@ -78,12 +78,16 @@ function TranscriptComposer({ onSend }: { onSend?: (text: string) => boolean }) 
   // so the field takes focus as the drawer mounts and they can type at once.
   // It runs in the commit of the opening click, still inside that gesture,
   // which is when a touch keyboard is allowed to come up. A field disabled
-  // for a line with no runtime cannot take focus and is left alone.
+  // for a line with no runtime cannot take focus and is left alone. It keys
+  // on the field turning live, not on `onSend` itself: the runtime registers
+  // a fresh `sendText` on every connection or recording change, and each of
+  // those must not pull focus back from wherever the caller has moved it.
+  const live = Boolean(onSend);
   useLayoutEffect(() => {
-    if (onSend) {
+    if (live) {
       inputRef.current?.focus({ preventScroll: true });
     }
-  }, [onSend]);
+  }, [live]);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
