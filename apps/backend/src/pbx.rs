@@ -933,7 +933,20 @@ impl Switchboard {
             (None, prepared)
         };
 
-        let catalog_ref = readiness.as_ref().and_then(|r| r.catalog.as_ref());
+        let catalog_fallback = readiness
+            .is_none()
+            .then(|| {
+                let key = crate::models::CatalogKey::for_project(&project);
+                self.catalogs
+                    .get(&key.to_key_string())
+                    .filter(|c| c.available)
+                    .cloned()
+            })
+            .flatten();
+        let catalog_ref = readiness
+            .as_ref()
+            .and_then(|r| r.catalog.as_ref())
+            .or(catalog_fallback.as_ref());
         let model = match self
             .select_transfer_model_resolved(
                 &project,
@@ -2033,6 +2046,7 @@ impl Switchboard {
     async fn return_operator_ctx(&mut self, context: &TransferContext, note: &str) -> Reply {
         self.drop_agent().await;
         let note = note.to_owned();
+        self.operator_note = Some(note.clone());
         let reply = self.handle_operator_ctx(context).await;
         if reply.error.is_some() {
             self.operator_note = Some(note);

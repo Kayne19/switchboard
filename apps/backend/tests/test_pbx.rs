@@ -870,3 +870,178 @@ async fn display_pbx_env_and_token_rotation() {
         Some("http://127.0.0.1:8765/display")
     );
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn return_to_operator_carries_handback_note() {
+    let root = std::env::temp_dir().join(format!(
+        "switchboard-handback-note-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let runtime = root.join("fake-pi");
+    crate::pi_client::write_executable_script(
+        &runtime,
+        r##"operator=0
+for arg in "$@"; do
+if [ "$arg" = "--no-builtin-tools" ]; then operator=1; fi
+done
+count=0
+while IFS= read -r line; do
+count=$((count + 1))
+if [ "$operator" -eq 1 ]; then
+    if [ "$count" -eq 1 ]; then
+        printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Connecting now."}}'
+        printf '%s\n' '{"type":"tool_execution_start","toolName":"transfer_to_project","args":{"project":"alpha","intent":"test","model":"anthropic/current"}}'
+    else
+        case "$line" in
+            *"work complete"*) marker="NOTE_DELIVERED" ;;
+            *) marker="NOTE_MISSING" ;;
+        esac
+        printf '%s\n' "{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_end\",\"content\":\"$marker\"}}"
+    fi
+else
+    if [ "$count" -eq 1 ]; then
+        printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Agent ready."}}'
+    else
+        printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Agent done."}}'
+        printf '%s\n' '{"type":"tool_execution_start","toolName":"return_to_operator","args":{"summary":"work complete"}}'
+    fi
+fi
+printf '%s\n' '{"type":"agent_settled"}'
+done
+"##,
+    );
+
+    let project = Project {
+        id: "alpha".into(),
+        description: "test project".into(),
+        aliases: vec!["alpha project".into()],
+        host: None,
+        cwd: root.to_string_lossy().into_owned(),
+        runtime: runtime.to_string_lossy().into_owned(),
+        model: None,
+        stage_extension: false,
+        extra_args: vec![],
+        prepare: String::new(),
+    };
+    // Use Switchboard::new directly so the operator process also uses the
+    // fake-pi binary (board_with hardcodes "pi" as the operator runtime).
+    let mut board = Switchboard::new(
+        Registry::new(vec![project.clone()]),
+        runtime.to_string_lossy().into_owned(),
+        None,
+        String::new(),
+        None,
+        None,
+        None,
+        "medium".into(),
+        ".cache/switchboard".into(),
+        true,
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        HashMap::new(),
+    );
+
+    // Pre-seed an available catalog so the transfer can resolve the bare
+    // model name (without this, load_catalog fetches an unavailable catalog
+    // from the fake-pi and the transfer fails with "no model was named").
+    board.catalogs.insert(
+        crate::models::CatalogKey::for_project(&project).to_key_string(),
+        ModelCatalog {
+            entries: vec![crate::models::CatalogEntry {
+                provider: "anthropic".into(),
+                model: "current".into(),
+                thinks: true,
+            }],
+            available: true,
+            diagnostic: None,
+        },
+    );
+
+    // Operator transfers to alpha.
+    let transfer_reply = board.handle("put me through").await;
+    assert_eq!(
+        board.route(),
+        "alpha",
+        "transfer failed; reply text: {:?}, error: {:?}",
+        transfer_reply.text,
+        transfer_reply.error
+    );
+
+    // Agent returns to operator with summary "work complete".
+    let return_reply = board.handle("we are done").await;
+    assert_eq!(board.route(), OPERATOR);
+    // The operator's second prompt must contain the handback note; the fake-pi
+    // emits NOTE_DELIVERED only if it saw "work complete" in that prompt line.
+    assert!(
+        return_reply.text.contains("NOTE_DELIVERED"),
+        "operator did not receive handback note; got: {:?}",
+        return_reply.text
+    );
+
+    board.shutdown().await;
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn non_prewarmed_transfer_resolves_bare_model() {
+    let (root, runtime) = fake_runtime();
+    let project = Project {
+        id: "alpha".into(),
+        description: "test project".into(),
+        aliases: vec![],
+        host: None,
+        cwd: root.to_string_lossy().into_owned(),
+        runtime: runtime.to_string_lossy().into_owned(),
+        model: None,
+        stage_extension: false,
+        extra_args: vec![],
+        prepare: String::new(),
+    };
+    let mut board = board_with(vec![project.clone()], true);
+
+    // Pre-seed the catalog so load_catalog (Vacant entry) skips the real fetch.
+    board.catalogs.insert(
+        crate::models::CatalogKey::for_project(&project).to_key_string(),
+        ModelCatalog {
+            entries: vec![crate::models::CatalogEntry {
+                provider: "anthropic".into(),
+                model: "current".into(),
+                thinks: true,
+            }],
+            available: true,
+            diagnostic: None,
+        },
+    );
+
+    let ctx = TransferContext {
+        exact_caller_transcript: "connect me".into(),
+        derived_intent: String::new(),
+        direct_page_transfer_context: None,
+        selected_project_id: None,
+        return_operator_note: None,
+        project_summary: None,
+    };
+
+    // Transfer with a bare model name — previously failed with
+    // "catalog unavailable to resolve bare model" on non-prewarm paths.
+    let reply = board.transfer_ctx(&ctx, "alpha", "current", "").await;
+    assert!(reply.error.is_none(), "transfer failed: {:?}", reply.error);
+    assert_eq!(board.route(), "alpha");
+    assert!(
+        board.model_spec.contains("anthropic/current"),
+        "model_spec did not resolve bare name; got: {:?}",
+        board.model_spec
+    );
+
+    board.shutdown().await;
+    std::fs::remove_dir_all(root).unwrap();
+}
