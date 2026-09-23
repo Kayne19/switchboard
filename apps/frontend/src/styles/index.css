@@ -199,6 +199,10 @@ button {
 }
 .damocles-presence__button {
   display: grid;
+  /* The column is the presence width, whatever the signal row holds. An auto
+     column grew to fit the voice indicator or caption on narrow geometries,
+     and the glyph, sized from the column, grew and slid off-centre with it. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) var(--signal-height);
   width: 100%;
   padding: 0;
