@@ -1399,3 +1399,21 @@ async fn display_projection_screen_state_retirement() {
     assert_eq!(resp["screen"]["title"], "Fresh Report");
     assert_eq!(resp["screen"]["stale"], false);
 }
+
+#[tokio::test]
+async fn display_frames_carry_the_delivery_sequence() {
+    let action = json!({"type":"display","action":{"op":"clear"}});
+    let stamped = stamp_display_seq(Event::Json(action), 7);
+    let Event::Json(value) = stamped else {
+        panic!("expected json event")
+    };
+    assert_eq!(value.get("seq").and_then(Value::as_u64), Some(7));
+    assert_eq!(value.get("type").and_then(Value::as_str), Some("display"));
+
+    // Non-display events are untouched.
+    let other = stamp_display_seq(Event::Json(json!({"type":"epoch","generation":3})), 9);
+    let Event::Json(value) = other else {
+        panic!("expected json event")
+    };
+    assert!(value.get("seq").is_none());
+}

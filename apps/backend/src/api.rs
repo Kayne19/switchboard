@@ -193,6 +193,20 @@ fn is_display_event(event: &Event) -> bool {
     }
 }
 
+fn stamp_display_seq(event: Event, sequence: u64) -> Event {
+    match event {
+        Event::Json(mut value) => {
+            if value.get("type").and_then(Value::as_str) == Some("display") {
+                if let Some(map) = value.as_object_mut() {
+                    map.insert("seq".into(), json!(sequence));
+                }
+            }
+            Event::Json(value)
+        }
+        other => other,
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState(pub Arc<AppInner>);
 pub struct AppInner {
@@ -2165,7 +2179,7 @@ async fn websocket(socket: WebSocket, state: AppState) {
     let mut frames = connection.receiver;
     let writer_state = state.clone();
     let mut writer = Box::pin(tokio::spawn(async move {
-        send_snapshot_sink(&mut sink, &writer_state, &snapshot_actions).await?;
+        send_snapshot_sink(&mut sink, &writer_state, &snapshot_actions, watermark).await?;
         while let Some(frame) = frames.recv().await {
             match frame {
                 DeliveryFrame::Event { sequence, event } => {
@@ -2178,7 +2192,7 @@ async fn websocket(socket: WebSocket, state: AppState) {
                         continue;
                     }
                     tracing::trace!(sequence, epoch, "delivering sequenced event");
-                    send_event_sink(&mut sink, event).await?
+                    send_event_sink(&mut sink, stamp_display_seq(event, sequence)).await?
                 }
                 DeliveryFrame::Message(message) => sink.send(message).await?,
             }
@@ -2229,6 +2243,7 @@ async fn send_snapshot_sink(
     sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
     state: &AppState,
     snapshot_actions: &[Value],
+    watermark: u64,
 ) -> Result<(), axum::Error> {
     let initial = [
         Event::Json(json!({"type":"epoch", "generation":state.0.coordinator.generation()})),
@@ -2243,7 +2258,10 @@ async fn send_snapshot_sink(
     for action in snapshot_actions {
         send_event_sink(
             sink,
-            Event::Json(json!({"type":"display", "action":action})),
+            stamp_display_seq(
+                Event::Json(json!({"type":"display", "action":action})),
+                watermark,
+            ),
         )
         .await?;
     }
