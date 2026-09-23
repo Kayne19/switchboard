@@ -214,9 +214,7 @@ export function ConversationScene({ state, onToggleListening, setTranscriptOpen 
   const comp = buildCompositionModel(state);
   const object =
     comp.runtimeConversation ??
-    (comp.primary?.type === 'message' ? comp.primary : null) ??
-    (state.objects['message'] as SceneObject<MessageData> | undefined) ??
-    null;
+    (comp.primary?.type === 'message' ? comp.primary : null);
   const fallbackMessage: MessageData = {
     context: 'OPERATOR LINE',
     tag: 'CURRENT RESPONSE / LIVE',
