@@ -145,6 +145,17 @@ export const RESERVED_RUNTIME_IDS = [
   RUNTIME_SPEECH_ID,
 ] as const;
 
+/**
+ * A tool the agent on the line is running, from the backend's `activity`
+ * events. It is status, kept apart from speech: it never replaces what
+ * Damocles last said.
+ */
+export interface ActivityState {
+  label: string;
+  tool: string;
+  detail: string;
+}
+
 export interface WorkspaceState {
   requestedView: string | null;
   effectiveView: string;
@@ -179,6 +190,7 @@ export interface ControllerState {
   speech: SpeechState | null;
 
   workspace: WorkspaceState;
+  activity: ActivityState | null;
   listening: boolean;
   focusId: string | null;
   revision: number;
@@ -201,6 +213,7 @@ export type RuntimeAction =
   | { op: 'runtime_show'; id: string; type: SceneObjectType; role?: SceneObjectRole; data: unknown }
   | { op: 'runtime_hide'; id: string }
   | { op: 'runtime_say'; text: string; target?: string | null; at?: SpeechState['at'] }
+  | { op: 'runtime_activity'; activity: ActivityState | null }
   | { op: 'runtime_reset' }
   | { op: 'epoch_reset' }
   | { op: 'set_view'; view: string | null }

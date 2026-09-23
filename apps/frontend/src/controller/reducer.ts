@@ -67,6 +67,7 @@ export function createInitialState(): ControllerState {
     order: [],
     speech: null,
     workspace: createInitialWorkspaceState(),
+    activity: null,
     listening: false,
     focusId: null,
     revision: 0,
@@ -127,6 +128,7 @@ function syncCombinedState(
     order,
     speech,
     workspace: updatedWorkspace,
+    activity: state.activity,
     focusId,
     listening,
     revision,
@@ -308,9 +310,12 @@ export function controllerReducer(state: ControllerState, action: ControllerActi
         revision,
       );
     }
+    case 'runtime_activity': {
+      return { ...state, activity: action.activity, revision };
+    }
     case 'runtime_reset': {
-      // Runtime reset removes runtime state; agent state is preserved
-      return syncCombinedState(
+      // Runtime reset removes runtime state, activity included; agent state is preserved
+      const reset = syncCombinedState(
         state,
         state.agentObjects,
         state.agentOrder,
@@ -323,6 +328,7 @@ export function controllerReducer(state: ControllerState, action: ControllerActi
         state.listening,
         revision,
       );
+      return { ...reset, activity: null };
     }
     case 'epoch_reset': {
       // Epoch reset clears both agent and runtime state

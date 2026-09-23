@@ -197,6 +197,7 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
             onToggleListening={onToggleListening}
             context={primary.data.context ?? 'TRAINING RUN'}
             size="rail"
+            activity={state.activity}
           />
           <MetricsPrimitive metrics={metrics} />
         </motion.aside>
@@ -227,7 +228,7 @@ export function ArchitectureScene({ state, onToggleListening, onFocus, onOpenHis
           </FocusableSurface>
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
-          <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={diagram.data.context ?? 'SYSTEM MAP'} size="rail" />
+          <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={diagram.data.context ?? 'SYSTEM MAP'} size="rail" activity={state.activity} />
           <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
         </motion.aside>
       </div>
@@ -256,7 +257,7 @@ export function DocumentScene({ state, onToggleListening, onFocus, onOpenHistory
           </FocusableSurface>
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
-          <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={document.data.context ?? 'DOCUMENT'} size="rail" />
+          <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={document.data.context ?? 'DOCUMENT'} size="rail" activity={state.activity} />
           <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
         </motion.aside>
       </div>
@@ -285,7 +286,7 @@ export function CodeScene({ state, onToggleListening, onFocus, onOpenHistory }: 
           </FocusableSurface>
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
-          <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={code.data.context ?? 'SOURCE'} size="rail" />
+          <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={code.data.context ?? 'SOURCE'} size="rail" activity={state.activity} />
           <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
         </motion.aside>
       </div>
@@ -370,6 +371,7 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
             onToggleListening={onToggleListening}
             context={(primary.data as any)?.context ?? 'COMPOSED'}
             size="rail"
+            activity={state.activity}
           />
           {metrics.length > 0 && primary.type !== 'metric' ? (
             <MetricsPrimitive metrics={metrics} />
