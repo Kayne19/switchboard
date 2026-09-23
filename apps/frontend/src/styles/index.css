@@ -343,6 +343,13 @@ button {
   z-index: 2;
   right: 4.3%;
   bottom: 8%;
+  /* The lower-right caption is an explicit boundary for the response area.
+     It stays on one contained line, so a long channel/model caption can
+     never grow up into the text. */
+  max-width: 44%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: rgba(232, 230, 223, 0.28);
 }
 .conversation-answer__text {
@@ -351,7 +358,10 @@ button {
   left: 7.5%;
   right: 7.5%;
   top: 18%;
-  bottom: 18%;
+  /* The 18% floor clears the lower-right caption at full box height; the
+     26px floor keeps that clearance when the box sits at its minimum
+     height, where 18% alone would let the last line flow beneath it. */
+  bottom: max(18%, 26px);
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
@@ -813,7 +823,10 @@ button {
   overflow: hidden;
 }
 .progress-primitive__fill {
-  width: 100%;
+  /* The stylesheet holds the pre-animation state; the motion value drives
+     the real width. Filling from an empty track, so a slow first paint never
+     flashes a full bar that the number does not describe. */
+  width: 0%;
   height: 100%;
   background: var(--orange);
   transform-origin: left center;
@@ -831,40 +844,66 @@ button {
 .metric-row {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  /* The value column hugs its value, capped so an unbroken model string can
+     never squeeze the label to zero and spill across it; what does not fit
+     truncates. A plain 55% track would always take its cap and pull short
+     values off the right edge. */
+  grid-template-columns: minmax(0, 1fr) fit-content(55%);
   align-items: center;
   min-height: 0;
   padding: clamp(8px, 1.25cqh, 14px) 0;
   border-top: 1px solid rgba(232, 230, 223, 0.13);
 }
 .metric-row__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: rgba(232, 230, 223, 0.4);
 }
 .metric-row__value {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: clamp(15px, 1.28cqw, 23px);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Generic composed workspaces */
 .composed-main {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  /* Row 2 is the aux strip: compare objects and secondary progress get an
+     explicit visible slot below the primary, so an accepted object is
+     never lost to the layout. */
+  grid-template-rows: minmax(0, 1fr) minmax(0, auto);
   gap: clamp(12px, 2cqh, 22px);
 }
+.composed-aux {
+  grid-row: 2;
+  min-width: 0;
+  min-height: clamp(96px, 15cqh, 210px);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: clamp(10px, 1.6cqw, 20px);
+}
 .composed-primary-object,
-.composed-compare-object {
+.composed-aux-object {
   position: relative;
   min-width: 0;
   min-height: 0;
 }
 .composed-primary-object > .focusable-content,
-.composed-compare-object > .focusable-content {
+.composed-aux-object > .focusable-content {
   position: relative;
   z-index: 1;
   width: 100%;
   height: 100%;
   min-height: 0;
   padding: clamp(16px, 2cqw, 32px);
+}
+.composed-aux-object > .focusable-content {
+  padding: clamp(12px, 1.4cqw, 22px);
 }
 .composed-main--metric-primary {
   grid-template-rows: auto;
@@ -918,6 +957,9 @@ button {
   font-size: clamp(42px, 6cqw, 94px);
   line-height: 0.92;
   letter-spacing: -0.06em;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .content-rail__details {
   min-width: 0;
@@ -926,12 +968,173 @@ button {
   display: flex;
   flex-direction: column;
   gap: clamp(12px, 2cqh, 22px);
+  /* The response and the note are the column's only shrinkable surfaces.
+     Each keeps a readable floor, and a rail too short for everything
+     scrolls instead of collapsing them or running onto the footer. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
 }
 .content-rail__details > .metrics {
   flex: none;
 }
 .content-rail__details > .rail-note {
   flex: 1 1 auto;
+  min-height: clamp(64px, 10cqh, 110px);
+}
+.content-rail__details > .rail-progress {
+  flex: none;
+  min-width: 0;
+}
+.rail-progress .progress-primitive,
+.composed-aux-object--progress .progress-primitive {
+  /* A rail or an aux cell is too narrow for the wide label | bar | text row:
+     the fixed label column and the gaps leave the bar no width at all. Here
+     the label takes its own line and the bar shares the next with the text. */
+  grid-template-columns: minmax(0, 1fr) fit-content(50%);
+  gap: 8px 12px;
+  min-height: 0;
+  padding-top: clamp(8px, 1cqh, 12px);
+}
+.rail-progress .progress-primitive__label,
+.composed-aux-object--progress .progress-primitive__label {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.rail-progress .progress-primitive__label > *,
+.composed-aux-object--progress .progress-primitive__label > *,
+.rail-progress .progress-primitive__text,
+.composed-aux-object--progress .progress-primitive__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-progress .progress-primitive__label strong,
+.composed-aux-object--progress .progress-primitive__label strong {
+  font-size: clamp(14px, 1.3cqw, 22px);
+}
+.rail-progress .progress-primitive__text,
+.composed-aux-object--progress .progress-primitive__text {
+  grid-column: 2;
+  justify-self: end;
+}
+/* The live chat output: the current assistant turn in a contained
+   scrollable card. It grows with the rail and scrolls inside; the note
+   and the metrics keep their own space. */
+.live-chat-card {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: clamp(8px, 1cqh, 12px);
+  padding-top: clamp(10px, 1.2cqh, 14px);
+  border-top: 1px solid rgba(var(--orange-rgb), 0.48);
+}
+.content-rail__details > .live-chat-card {
+  flex: 1 1 auto;
+  min-height: clamp(84px, 13cqh, 140px);
+}
+.live-chat-card__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.live-chat-card__tag {
+  flex: none;
+  color: rgba(232, 230, 223, 0.35);
+}
+.live-chat-card__index {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.live-chat-card__history {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(232, 230, 223, 0.42);
+  cursor: pointer;
+  transition: color 0.16s ease;
+}
+.live-chat-card__history:hover {
+  color: var(--orange);
+}
+.live-chat-card__body {
+  height: 100%;
+  min-height: 0;
+}
+.live-chat-card__text {
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  font-size: clamp(13px, 1.06cqw, 18px);
+  line-height: 1.48;
+  padding-right: clamp(6px, 1cqw, 14px);
+}
+/* The last tool the project agent used: a compact status panel that
+   updates in place as tool activity starts and ends. Long tool names and
+   details truncate; the panel never grows into neighbouring surfaces. */
+.tool-activity {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding-top: clamp(8px, 1.1cqh, 12px);
+  border-top: 1px solid rgba(232, 230, 223, 0.14);
+}
+.content-rail__details > .tool-activity {
+  flex: none;
+}
+.tool-activity__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.tool-activity__tag {
+  flex: none;
+  color: rgba(232, 230, 223, 0.35);
+}
+.tool-activity__status {
+  flex: none;
+}
+.tool-activity__status--running {
+  color: var(--orange);
+}
+.tool-activity__status--done {
+  color: rgba(232, 230, 223, 0.4);
+}
+.tool-activity__tool,
+.tool-activity__detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-activity__tool {
+  color: var(--paper);
+}
+/* In the conversation layout the panel sits in the channel row, clear of
+   the answer box and its lower-right caption. Its left edge stops short of
+   the centred transcript toggle, so it never sits over that control. */
+.tool-activity--conversation {
+  position: absolute;
+  z-index: 3;
+  left: calc(50% + 140px);
+  right: 6.2cqw;
+  bottom: 6.4cqh;
+  max-width: 360px;
+  margin-left: auto;
+  border-top: 0;
+  padding-top: 0;
 }
 
 /* Diagram */
@@ -1448,6 +1651,15 @@ button {
   }
   .transcript-toggle {
     bottom: 6.2cqh;
+  }
+  /* Too narrow to share the toggle's row: the panel takes the band between
+     the answer box and the channel row instead. */
+  .tool-activity--conversation {
+    left: 6cqw;
+    right: 6cqw;
+    bottom: 12cqh;
+    max-width: 420px;
+    margin-inline: auto;
   }
   .transcript {
     --transcript-size: clamp(14px, 2.5cqw, 19px);

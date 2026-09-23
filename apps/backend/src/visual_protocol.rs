@@ -338,6 +338,19 @@ fn validate_metric_data(data: &Map<String, Value>) -> Result<Value, String> {
     Ok(Value::Object(out))
 }
 
+/// A progress value is read as a 0-1 ratio when it is <= 1 and as a
+/// 0-100 percentage above that; out-of-range values clamp to the nearest
+/// end. `1` and `100` both land on a full bar.
+fn normalize_progress_value(value: f64) -> Value {
+    let bounded = value.clamp(0.0, 100.0);
+    let ratio = if bounded > 1.0 {
+        bounded / 100.0
+    } else {
+        bounded
+    };
+    ((ratio * 10000.0).round() / 10000.0).into()
+}
+
 fn validate_progress_data(data: &Map<String, Value>) -> Result<Value, String> {
     check_unknown_keys(
         data,
@@ -355,11 +368,16 @@ fn validate_progress_data(data: &Map<String, Value>) -> Result<Value, String> {
     let val = data
         .get("value")
         .filter(|v| v.is_number() && v.as_f64().is_some_and(f64::is_finite))
-        .ok_or("progress.value must be a finite number")?;
+        .ok_or("progress.value must be a finite number")?
+        .as_f64()
+        .unwrap();
 
     let mut out = Map::new();
     out.insert("label".into(), label.into());
-    out.insert("value".into(), val.clone());
+    // Values arrive as either a 0-1 ratio or a 0-100 percentage; the
+    // browser stores a 0-1 ratio, so the projection applies the same
+    // normalization to keep both sides of the socket in agreement.
+    out.insert("value".into(), normalize_progress_value(val));
 
     if let Some(detail) = data.get("detail") {
         let d = detail.as_str().ok_or("progress.detail must be a string")?;
@@ -985,7 +1003,7 @@ pub fn validate(req: &DisplayRequest, raw: &Value) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::validate_action;
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     #[test]
     fn normalizes_note_anchor_and_caption() {
@@ -1021,5 +1039,33 @@ mod tests {
             validate_action(&action),
             Err("note.anchor.target must be a non-empty identifier".into())
         );
+    }
+
+    fn progress_value(value: Value) -> Value {
+        let action = json!({
+            "op": "show",
+            "id": "deploy",
+            "type": "progress",
+            "data": { "label": "DEPLOY", "value": value, "text": "65% COMPLETE" }
+        });
+        match validate_action(&action) {
+            Ok(normalized) => normalized["data"]["value"].clone(),
+            Err(error) => panic!("expected progress action to validate, got: {error}"),
+        }
+    }
+
+    #[test]
+    fn normalizes_progress_percentage_values_to_ratios() {
+        assert_eq!(progress_value(json!(65)), json!(0.65));
+        assert_eq!(progress_value(json!(67)), json!(0.67));
+        assert_eq!(progress_value(json!(100)), json!(1.0));
+    }
+
+    #[test]
+    fn keeps_progress_ratio_values_and_clamps_out_of_range() {
+        assert_eq!(progress_value(json!(0)), json!(0.0));
+        assert_eq!(progress_value(json!(1)), json!(1.0));
+        assert_eq!(progress_value(json!(150)), json!(1.0));
+        assert_eq!(progress_value(json!(-3)), json!(0.0));
     }
 }

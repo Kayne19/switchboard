@@ -67,6 +67,17 @@ Remove content and return to the Damocles presence.
 ```
 
 
+## Value normalization
+
+`progress.value` is normalized before it reaches the renderer: values in
+0–1 are read as ratios, values in 1–100 as percentages, and values outside
+0–100 are clamped to the nearest end. Both `1` and `100` land on a full
+bar, so a value of exactly `1` always means complete, never one percent.
+The fill, the `aria-valuenow` (as a rounded percentage), and the reported
+state all derive from the normalized ratio, so a model that sends `65` for
+"65 percent" renders a 65% fill. The display tool asks models for
+percentages.
+
 ## Runtime boundary
 
 `src/controller/validation.ts` validates untrusted browser or WebSocket payloads before they reach the reducer. Internal React code remains strongly typed, while the external `window.SwitchboardController` boundary rejects unknown operations, malformed IDs, oversized payloads, and model-controlled layout fields.
