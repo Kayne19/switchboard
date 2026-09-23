@@ -393,7 +393,11 @@ button {
   color: var(--orange);
   letter-spacing: 0.21em;
 }
+/* One typography for everything said in the history, typed turns included:
+   the caller's lines and the input they type into share a face and size. */
 .transcript {
+  --transcript-font: "Helvetica Neue", Arial, sans-serif;
+  --transcript-size: clamp(15px, 1.32cqw, 23px);
   position: absolute;
   inset: 0;
   z-index: 30;
@@ -427,8 +431,8 @@ button {
   gap: 2cqw;
   padding: 2.4cqh 0;
   border-bottom: 1px solid rgba(232, 230, 223, 0.08);
-  font-family: "Helvetica Neue", Arial, sans-serif;
-  font-size: clamp(15px, 1.32cqw, 23px);
+  font-family: var(--transcript-font);
+  font-size: var(--transcript-size);
   line-height: 1.5;
   color: #d9d6d0;
 }
@@ -453,6 +457,9 @@ button {
 .transcript__composer:focus-within {
   border-color: rgba(var(--orange-rgb), 0.56);
 }
+/* The field set its own type before: it inherited the page's condensed
+   display stack at 16px, so typed text never matched the lines around it and
+   its proportions depended on which narrow face the device had installed. */
 .transcript__input {
   flex: 1;
   min-width: 0;
@@ -461,6 +468,11 @@ button {
   color: var(--paper);
   padding: 0 18px;
   outline: none;
+  font-family: var(--transcript-font);
+  font-size: var(--transcript-size);
+  font-stretch: normal;
+  letter-spacing: normal;
+  line-height: 1.5;
 }
 .transcript__input:disabled {
   color: rgba(232, 230, 223, 0.3);
@@ -1316,6 +1328,7 @@ button {
     bottom: 6.2cqh;
   }
   .transcript {
+    --transcript-size: clamp(14px, 2.5cqw, 19px);
     padding: 5cqh 6cqw;
   }
   .transcript__body {
@@ -1330,7 +1343,9 @@ button {
     grid-template-columns: 74px 1fr;
     gap: 12px;
     padding: 2cqh 0;
-    font-size: clamp(14px, 2.5cqw, 19px);
+  }
+  .transcript-line--ai {
+    font-size: var(--transcript-size);
   }
 
   .scene--content {

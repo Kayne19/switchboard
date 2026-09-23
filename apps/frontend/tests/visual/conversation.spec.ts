@@ -64,6 +64,62 @@ test("tool activity never flashes over the explanation", async ({ page }) => {
   }
 });
 
+test("the transcript input types in the transcript's own face at every size", async ({ page }) => {
+  const fixtureServer = new DisplayFixtureServer({ initialGeneration: 1 });
+  const { wsUrl } = await fixtureServer.start();
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+    await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === "hello")).toBe(true);
+    fixtureServer.broadcast({ type: "history", entries: [{ role: "caller", text: "Show me the call path.", id: "clip-1" }] });
+    await page.locator(".transcript-toggle").click();
+    const input = page.getByRole("textbox", { name: "Conversation input" });
+    await input.fill("Typed text keeps its proportions");
+
+    for (const [width, height] of [[1440, 900], [2560, 1080], [820, 1180], [600, 1000], [390, 844], [1440, 900]]) {
+      await page.setViewportSize({ width, height });
+      await page.waitForTimeout(250);
+      const where = `${width}x${height}`;
+      const sample = await page.evaluate(() => {
+        const field = document.querySelector<HTMLInputElement>(".transcript__input")!;
+        const line = document.querySelector(".transcript-line:not(.transcript-line--ai) .transcript-line__text")!;
+        const send = document.querySelector(".transcript__send")!;
+        const type = (element: Element) => {
+          const style = getComputedStyle(element);
+          return { family: style.fontFamily, size: style.fontSize, stretch: style.fontStretch, spacing: style.letterSpacing, weight: style.fontWeight };
+        };
+        // The rendered advance of the typed text in each element's font.
+        const advance = (element: Element, text: string) => {
+          const style = getComputedStyle(element);
+          const context = document.createElement("canvas").getContext("2d")!;
+          context.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+          return context.measureText(text).width;
+        };
+        const transformed: string[] = [];
+        for (let element: Element | null = field; element; element = element.parentElement) {
+          if (getComputedStyle(element).transform !== "none") transformed.push(element.className.toString());
+        }
+        const fieldBox = field.getBoundingClientRect();
+        const sendBox = send.getBoundingClientRect();
+        return {
+          field: type(field),
+          line: type(line),
+          advanceRatio: advance(field, field.value) / advance(line, field.value),
+          transformed,
+          aligned: Math.abs(fieldBox.top - sendBox.top) < 1 && Math.abs(fieldBox.bottom - sendBox.bottom) < 1,
+        };
+      });
+      expect(sample.field, where).toEqual(sample.line);
+      expect(sample.advanceRatio, where).toBeCloseTo(1, 3);
+      expect(sample.transformed, where).toEqual([]);
+      expect(sample.aligned, where).toBe(true);
+    }
+  } finally {
+    await fixtureServer.stop();
+  }
+});
+
 test("explanations read Markdown, scroll, and open a history the caller can type into", async ({ page }) => {
   const fixtureServer = new DisplayFixtureServer({ initialGeneration: 4 });
   const { wsUrl } = await fixtureServer.start();
