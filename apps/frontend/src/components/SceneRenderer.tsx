@@ -1,7 +1,8 @@
 import { AnimatePresence, LayoutGroup } from "motion/react";
-import { sceneKind } from "../app/sceneModel";
+import { buildCompositionModel, sceneKind } from "../app/sceneModel";
 import { useController } from "../controller/context";
 import { FocusLayer } from "./FocusLayer";
+import { TranscriptDrawer } from "./TranscriptDrawer";
 import {
   ArchitectureScene,
   CodeScene,
@@ -19,6 +20,7 @@ export function SceneRenderer() {
   const focusedObject = state.focusId
     ? (state.objects[state.focusId] ?? null)
     : null;
+  const conversation = buildCompositionModel(state).runtimeConversation;
   // When a live voice transport is present the Damocles presence drives a real
   // call turn; in demo mode it only toggles the visual listening state.
   const shared = {
@@ -28,7 +30,8 @@ export function SceneRenderer() {
         ? voiceRuntime.toggleTurn()
         : dispatch({ op: "listen", on: !state.listening }),
     onFocus: (id: string | null) => dispatch({ op: "focus", id }),
-    transcriptOpen,
+    // An explanation offers the history only when there is one to open.
+    onOpenHistory: conversation ? () => setTranscriptOpen(true) : undefined,
     setTranscriptOpen,
   };
 
@@ -60,6 +63,11 @@ export function SceneRenderer() {
             <ComposedScene key="composed" {...shared} />
           ) : null}
         </AnimatePresence>
+        <TranscriptDrawer
+          open={transcriptOpen}
+          lines={conversation?.data.transcript ?? []}
+          onClose={() => setTranscriptOpen(false)}
+        />
         <FocusLayer
           object={focusedObject}
           onClose={() => dispatch({ op: "focus", id: null })}

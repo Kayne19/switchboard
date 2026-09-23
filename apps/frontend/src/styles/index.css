@@ -124,7 +124,7 @@ button {
 }
 .focusable-content:focus-visible,
 .damocles-presence__button:focus-visible,
-.annotation-card--button:focus-visible,
+.annotation-card__history:focus-visible,
 .transcript-toggle:focus-visible {
   outline: 1px solid var(--orange);
   outline-offset: 4px;
@@ -539,9 +539,24 @@ button {
 .annotation-card__tag {
   color: rgba(232, 230, 223, 0.35);
 }
+.annotation-card__history {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(232, 230, 223, 0.42);
+  cursor: pointer;
+  transition: color 0.16s ease;
+}
+.annotation-card__history:hover {
+  color: var(--orange);
+}
 .annotation-card__body {
   height: 100%;
   min-height: 0;
+}
+.annotation-card__body--history {
+  cursor: pointer;
 }
 /* Long explanations scroll inside the card; short ones never show a bar. */
 .annotation-card__text {
