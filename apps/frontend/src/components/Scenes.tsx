@@ -250,6 +250,7 @@ export function ArchitectureScene({ state, onToggleListening, onFocus, onOpenHis
   const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), diagram.id);
   const note = annotationForScene(state, noteObject);
   const metrics = objectsOfType<MetricData>(state, 'metric');
+  const progressList = objectsOfType<ProgressData>(state, 'progress');
 
   return (
     <motion.section className="scene scene--content scene--architecture" data-scene="architecture" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -266,10 +267,17 @@ export function ArchitectureScene({ state, onToggleListening, onFocus, onOpenHis
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={diagram.data.context ?? 'SYSTEM MAP'} size="rail" activity={state.activity} />
-          {metrics.length > 0 || note ? (
+          {metrics.length > 0 || note || progressList.length > 0 ? (
             <div className="content-rail__details">
               {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
               <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
+              {progressList.map((progress) => (
+                <ObjectMotion key={progress.id} objectId={progress.id} className="rail-progress">
+                  <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
+                    <ProgressPrimitive data={progress.data} />
+                  </FocusableSurface>
+                </ObjectMotion>
+              ))}
             </div>
           ) : null}
         </motion.aside>
@@ -286,6 +294,7 @@ export function DocumentScene({ state, onToggleListening, onFocus, onOpenHistory
   const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), document.id);
   const note = annotationForScene(state, noteObject);
   const metrics = objectsOfType<MetricData>(state, 'metric');
+  const progressList = objectsOfType<ProgressData>(state, 'progress');
 
   return (
     <motion.section className="scene scene--content scene--document" data-scene="document" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -301,10 +310,17 @@ export function DocumentScene({ state, onToggleListening, onFocus, onOpenHistory
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={document.data.context ?? 'DOCUMENT'} size="rail" activity={state.activity} />
-          {metrics.length > 0 || note ? (
+          {metrics.length > 0 || note || progressList.length > 0 ? (
             <div className="content-rail__details">
               {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
               <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
+              {progressList.map((progress) => (
+                <ObjectMotion key={progress.id} objectId={progress.id} className="rail-progress">
+                  <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
+                    <ProgressPrimitive data={progress.data} />
+                  </FocusableSurface>
+                </ObjectMotion>
+              ))}
             </div>
           ) : null}
         </motion.aside>
@@ -321,6 +337,7 @@ export function CodeScene({ state, onToggleListening, onFocus, onOpenHistory }: 
   const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), code.id);
   const note = annotationForScene(state, noteObject);
   const metrics = objectsOfType<MetricData>(state, 'metric');
+  const progressList = objectsOfType<ProgressData>(state, 'progress');
 
   return (
     <motion.section className="scene scene--content scene--code" data-scene="code" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -336,10 +353,17 @@ export function CodeScene({ state, onToggleListening, onFocus, onOpenHistory }: 
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={code.data.context ?? 'SOURCE'} size="rail" activity={state.activity} />
-          {metrics.length > 0 || note ? (
+          {metrics.length > 0 || note || progressList.length > 0 ? (
             <div className="content-rail__details">
               {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
               <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
+              {progressList.map((progress) => (
+                <ObjectMotion key={progress.id} objectId={progress.id} className="rail-progress">
+                  <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
+                    <ProgressPrimitive data={progress.data} />
+                  </FocusableSurface>
+                </ObjectMotion>
+              ))}
             </div>
           ) : null}
         </motion.aside>
@@ -361,6 +385,12 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
   const progressList = comp.allAgentObjects.filter((o) => o.type === 'progress') as Array<SceneObject<ProgressData>>;
   const railMetrics = primary.type === 'metric' ? metrics.filter((metric) => metric.id !== primary.id) : metrics;
   const railNote = noteObject?.id === primary.id ? null : note;
+  // Compare objects and secondary progress share one visible aux row below
+  // the primary, so a secondary object is never accepted and then lost.
+  const auxObjects: SceneObject[] = [
+    ...comp.compare,
+    ...progressList.filter((p) => p.id !== primary.id),
+  ];
 
   const renderPrimaryPrimitive = () => {
     switch (primary.type) {
@@ -383,6 +413,27 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
     }
   };
 
+  const renderAuxPrimitive = (object: SceneObject) => {
+    switch (object.type) {
+      case 'chart':
+        return <ChartPrimitive data={(object as SceneObject<ChartData>).data} />;
+      case 'diagram':
+        return <DiagramPrimitive data={(object as SceneObject<DiagramData>).data} />;
+      case 'document':
+        return <DocumentViewport data={(object as SceneObject<DocumentData>).data} />;
+      case 'code':
+        return <CodeViewport data={(object as SceneObject<CodeData>).data} />;
+      case 'metric':
+        return <MetricsPrimitive metrics={[object as SceneObject<MetricData>]} />;
+      case 'progress':
+        return <ProgressPrimitive data={(object as SceneObject<ProgressData>).data} />;
+      case 'note':
+        return <AnnotationCard data={(object as SceneObject<NoteData>).data} />;
+      default:
+        return null;
+    }
+  };
+
   const title = (primary.data as any)?.title ?? (primary.data as any)?.subject ?? (primary.data as any)?.label ?? 'COMPOSED WORKSPACE';
   const subtitle = (primary.data as any)?.subtitle ?? 'STRUCTURED SCENE';
 
@@ -400,27 +451,22 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
               {renderPrimaryPrimitive()}
             </FocusableSurface>
           </ObjectMotion>
-          {comp.compare.map((cmp) => (
-            <ObjectMotion key={cmp.id} objectId={cmp.id} className="composed-compare-object">
-              <TechFrame variant="panel" />
-              <FocusableSurface onActivate={() => onFocus(cmp.id)} ariaLabel={`Expand compare ${cmp.type}`}>
-                {cmp.type === 'chart' ? <ChartPrimitive data={(cmp as SceneObject<ChartData>).data} /> : null}
-                {cmp.type === 'diagram' ? <DiagramPrimitive data={(cmp as SceneObject<DiagramData>).data} /> : null}
-                {cmp.type === 'document' ? <DocumentViewport data={(cmp as SceneObject<DocumentData>).data} /> : null}
-                {cmp.type === 'code' ? <CodeViewport data={(cmp as SceneObject<CodeData>).data} /> : null}
-                {cmp.type === 'metric' ? <MetricsPrimitive metrics={[cmp as SceneObject<MetricData>]} /> : null}
-                {cmp.type === 'progress' ? <ProgressPrimitive data={(cmp as SceneObject<ProgressData>).data} /> : null}
-                {cmp.type === 'note' ? <AnnotationCard data={(cmp as SceneObject<NoteData>).data} /> : null}
-              </FocusableSurface>
-            </ObjectMotion>
-          ))}
-          {progressList.filter(p => p.id !== primary.id && !comp.compare.some(c => c.id === p.id)).map(p => (
-            <ObjectMotion key={p.id} objectId={p.id} className="composed-progress">
-              <FocusableSurface onActivate={() => onFocus(p.id)} ariaLabel="Expand progress">
-                <ProgressPrimitive data={p.data} />
-              </FocusableSurface>
-            </ObjectMotion>
-          ))}
+          {auxObjects.length > 0 ? (
+            <div className="composed-aux">
+              {auxObjects.map((object) => (
+                <ObjectMotion
+                  key={object.id}
+                  objectId={object.id}
+                  className={`composed-aux-object composed-aux-object--${object.type}`}
+                >
+                  <TechFrame variant="panel" />
+                  <FocusableSurface onActivate={() => onFocus(object.id)} ariaLabel={`Expand ${object.type}`}>
+                    {renderAuxPrimitive(object)}
+                  </FocusableSurface>
+                </ObjectMotion>
+              ))}
+            </div>
+          ) : null}
         </motion.div>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence

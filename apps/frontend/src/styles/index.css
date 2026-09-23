@@ -871,23 +871,37 @@ button {
 /* Generic composed workspaces */
 .composed-main {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  /* Row 2 is the aux strip: compare objects and secondary progress get an
+     explicit visible slot below the primary, so an accepted object is
+     never lost to the layout. */
+  grid-template-rows: minmax(0, 1fr) minmax(0, auto);
   gap: clamp(12px, 2cqh, 22px);
 }
+.composed-aux {
+  grid-row: 2;
+  min-width: 0;
+  min-height: clamp(96px, 15cqh, 210px);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: clamp(10px, 1.6cqw, 20px);
+}
 .composed-primary-object,
-.composed-compare-object {
+.composed-aux-object {
   position: relative;
   min-width: 0;
   min-height: 0;
 }
 .composed-primary-object > .focusable-content,
-.composed-compare-object > .focusable-content {
+.composed-aux-object > .focusable-content {
   position: relative;
   z-index: 1;
   width: 100%;
   height: 100%;
   min-height: 0;
   padding: clamp(16px, 2cqw, 32px);
+}
+.composed-aux-object > .focusable-content {
+  padding: clamp(12px, 1.4cqw, 22px);
 }
 .composed-main--metric-primary {
   grid-template-rows: auto;
@@ -958,6 +972,14 @@ button {
 }
 .content-rail__details > .rail-note {
   flex: 1 1 auto;
+}
+.content-rail__details > .rail-progress {
+  flex: none;
+  min-width: 0;
+}
+.rail-progress .progress-primitive {
+  min-height: 0;
+  padding-top: clamp(8px, 1cqh, 12px);
 }
 
 /* Diagram */

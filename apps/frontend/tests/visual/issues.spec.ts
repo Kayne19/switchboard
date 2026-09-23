@@ -317,3 +317,83 @@ test('long metric labels and values stay on one line and clear of each other', a
     expect(geometry.singleLine).toBe(true);
   }
 });
+
+
+test('secondary progress is visible beside the primary diagram', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openController(page);
+  await page.evaluate(() => {
+    const dispatch = window.SwitchboardController?.dispatch;
+    if (!dispatch) throw new Error('controller unavailable');
+    dispatch({ op: 'clear' });
+    dispatch({
+      op: 'show', id: 'quality-map', type: 'diagram', role: 'primary',
+      data: {
+        mode: 'graph', title: 'QUALITY PATH',
+        nodes: [{ id: 'sample', label: 'SAMPLE' }, { id: 'score', label: 'SCORE' }],
+        edges: [{ from: 'sample', to: 'score' }],
+      },
+    });
+    dispatch({
+      op: 'show', id: 'deploy-progress', type: 'progress', role: 'secondary',
+      data: { label: 'Progress demo', value: 67, text: '67%' },
+    });
+  });
+
+  const progress = page.locator('.rail-progress .progress-primitive');
+  await expect(progress).toBeVisible();
+  const geometry = await progress.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const stage = document.querySelector<HTMLElement>('.stage')!.getBoundingClientRect();
+    return {
+      insideStage:
+        box.left >= stage.left - 1 && box.top >= stage.top - 1 &&
+        box.right <= stage.right + 1 && box.bottom <= stage.bottom + 1,
+      size: box.width > 40 && box.height > 20,
+    };
+  });
+  expect(geometry.insideStage).toBe(true);
+  expect(geometry.size).toBe(true);
+  // The fill animates from an empty track, so poll until it settles.
+  await expect.poll(() => progress.evaluate((element) => {
+    const track = element.querySelector<HTMLElement>('.progress-primitive__track')!;
+    const fill = element.querySelector<HTMLElement>('.progress-primitive__fill')!;
+    return fill.getBoundingClientRect().width / track.getBoundingClientRect().width;
+  })).toBeCloseTo(0.67, 2);
+});
+
+
+test('secondary progress occupies the visible aux row in a composed workspace', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openController(page);
+  await page.evaluate(() => {
+    const dispatch = window.SwitchboardController?.dispatch;
+    if (!dispatch) throw new Error('controller unavailable');
+    dispatch({ op: 'clear' });
+    dispatch({
+      op: 'show', id: 'throughput', type: 'metric', role: 'primary',
+      data: { label: 'THROUGHPUT', value: '98.4%', semantic: 'green' },
+    });
+    dispatch({
+      op: 'show', id: 'coverage', type: 'progress', role: 'secondary',
+      data: { label: 'COVERAGE', value: 67, text: '67%' },
+    });
+  });
+
+  const aux = page.locator('.composed-aux');
+  await expect(aux).toBeVisible();
+  const progress = aux.locator('.progress-primitive');
+  await expect(progress).toBeVisible();
+  const geometry = await progress.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const stage = document.querySelector<HTMLElement>('.stage')!.getBoundingClientRect();
+    return {
+      insideStage:
+        box.left >= stage.left - 1 && box.top >= stage.top - 1 &&
+        box.right <= stage.right + 1 && box.bottom <= stage.bottom + 1,
+      size: box.width > 40 && box.height > 20,
+    };
+  });
+  expect(geometry.insideStage).toBe(true);
+  expect(geometry.size).toBe(true);
+});
