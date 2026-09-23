@@ -137,6 +137,29 @@ async function agentExtensionBehavior() {
 		assert.ok(sayBranch.properties.text, "say must define text");
 		assert.ok(sayBranch.properties.at, "say must define at anchor");
 
+		// Problem #1: an undiscriminated union enumerates every branch's requirements
+		// on failure, so a wrong-shaped payload for one type surfaces every other
+		// type's fields too. The description must show each type's own shape so the
+		// model picks the right one before calling, and the schema must keep a
+		// literal `type` (and `op`) discriminator per show branch so real pi's
+		// TypeBox can narrow the error to the chosen branch.
+		assert.match(
+			displayTool.description,
+			/diagram:/,
+			"display description must include a per-type shape hint (e.g. 'diagram:')",
+		);
+
+		const showBranches = schema.anyOf.filter((b) => b.properties?.op?.const === "show");
+		const expectedShowTypes = ["chart", "metric", "progress", "diagram", "document", "code", "note"];
+		assert.equal(showBranches.length, expectedShowTypes.length, "there must be one show branch per displayable type");
+		for (const expectedType of expectedShowTypes) {
+			const branch = showBranches.find((b) => b.properties?.type?.const === expectedType);
+			assert.ok(branch, `show branch for type '${expectedType}' must be defined`);
+			assert.equal(branch.properties.type.type, "literal", `type discriminator for '${expectedType}' must be a TypeBox Literal`);
+			assert.equal(branch.properties.op.type, "literal", `op discriminator for '${expectedType}' must be a TypeBox Literal`);
+			assert.equal(branch.properties.op.const, "show", `op discriminator for '${expectedType}' must be literal 'show'`);
+		}
+
 		// Verify no obsolete per-kind tools exist
 		const obsoleteTools = ["diagram", "plan", "timeline", "diff", "listen"];
 		for (const oldTool of obsoleteTools) {

@@ -506,7 +506,11 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 		name: "display",
 		label: "Display",
 		description:
-			"Show semantic content on the caller's screen. Use one action per call with op show, hide, say, focus, or clear. You can show chart, metric, progress, diagram, document, code, or note objects; compose a scene with roles (primary, compare, secondary, ambient). Reuse a stable id to update an object in place so the renderer can animate continuity. Use short, meaningful labels and let the renderer decide layout: never send markup, CSS, coordinates, or styling. The live transcript is system-owned, so message is not available; use note for on-screen asides and speak for words.",
+			"Show semantic content on the caller's screen. Use one action per call with op show, hide, say, focus, or clear. You can show chart, metric, progress, diagram, document, code, or note objects; compose a scene with roles (primary, compare, secondary, ambient). Reuse a stable id to update an object in place so the renderer can animate continuity. Use short, meaningful labels and let the renderer decide layout: never send markup, CSS, coordinates, or styling. The live transcript is system-owned, so message is not available; use note for on-screen asides and speak for words." +
+			"\n\nShapes: chart: {series:[{name,values:[n]}]} | metric: {label,value} | " +
+			"progress: {label,value} | diagram: {mode:\"graph\",nodes:[{id,label}],edges:[{from,to}]} | " +
+			"document: {subject,paragraphs:[str]} | code: {source:{text}} | note: {segments:[{text}]}. " +
+			"Set type to the object you want; each type takes only its own shape.",
 		parameters: DisplayActionType,
 		async execute(_toolCallId, params) {
 			if (!DISPLAY_URL) {
