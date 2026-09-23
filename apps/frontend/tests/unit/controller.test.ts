@@ -310,12 +310,34 @@ describe('controller reducer & ownership', () => {
     expect(afterRuntimeReset.runtimeObjects).toEqual({});
     expect(afterRuntimeReset.runtimeSpeech).toBeNull();
 
-    // Epoch reset clears both
+    // Epoch reset is a new leg: the old agent's state goes, the call's
+    // conversation stays
     const afterEpochReset = controllerReducer(state, { op: 'epoch_reset' });
     expect(afterEpochReset.agentObjects).toEqual({});
-    expect(afterEpochReset.runtimeObjects).toEqual({});
+    expect(afterEpochReset.agentOrder).toEqual([]);
     expect(afterEpochReset.agentSpeech).toBeNull();
-    expect(afterEpochReset.runtimeSpeech).toBeNull();
+    expect(afterEpochReset.runtimeObjects[RUNTIME_CONVERSATION_ID]).toBeDefined();
+    expect(afterEpochReset.runtimeSpeech?.text).toBe('Damocles speaking');
+    expect(afterEpochReset.speech?.text).toBe('Damocles speaking');
+    expect(afterEpochReset.listening).toBe(true);
+    expect(sceneKind(afterEpochReset)).toBe('conversation');
+  });
+
+  it('lets a new leg release the agent view but not the caller pin', () => {
+    const agentDirected = reduceActions(createInitialState(), [
+      chartAction,
+      { op: 'set_view', view: 'theater' },
+      { op: 'focus', id: 'training-loss' },
+    ]);
+    const afterAgentLeg = controllerReducer(agentDirected, { op: 'epoch_reset' });
+    expect(afterAgentLeg.workspace.requestedView).toBeNull();
+    expect(afterAgentLeg.workspace.effectiveView).toBe('auto');
+    expect(afterAgentLeg.focusId).toBeNull();
+
+    const pinned = controllerReducer(agentDirected, { op: 'pin_view', view: 'system' });
+    const afterPinnedLeg = controllerReducer(pinned, { op: 'epoch_reset' });
+    expect(afterPinnedLeg.workspace.callerPinned).toBe(true);
+    expect(afterPinnedLeg.workspace.effectiveView).toBe('system');
   });
 
   it('routes IDs prefixed with __runtime/ into runtime namespace', () => {

@@ -153,9 +153,10 @@ export function RuntimeIntegration() {
     handleServerRef.current = (message: ServerMessage) => {
       switch (message.type) {
         case "epoch": {
-          transcriptRef.current = [];
-          currentResponseRef.current = "";
-          currentCaptionRef.current = "";
+          // The transcript and the last response belong to the call, so a
+          // handoff keeps them on screen; `epoch_reset` drops only what the
+          // old leg put there. A reconnect is followed by `history`, which
+          // replaces the transcript with the server's.
           generationRef.current =
             typeof message.generation === "number" ? message.generation : 0;
           transportReadyRef.current = true;
@@ -170,7 +171,13 @@ export function RuntimeIntegration() {
             .reverse()
             .find((entry) => entry.speaker === "DAMOCLES");
           currentResponseRef.current = latest?.text ?? "";
-          if (transcriptRef.current.length > 0) showConversation();
+          if (transcriptRef.current.length > 0) {
+            showConversation();
+          } else {
+            // The server has no call to show, so neither does the page.
+            currentCaptionRef.current = "";
+            dispatch({ op: "runtime_hide", id: RUNTIME_CONVERSATION_ID });
+          }
           break;
         }
         case "transcript": {
@@ -279,6 +286,15 @@ export function RuntimeIntegration() {
       });
     };
   }, [dispatch, handleScreenStateAck, showConversation]);
+
+  // The conversation names the leg it is on and stays mounted through a
+  // handoff, so a new route relabels it at once instead of leaving the old
+  // name up until the new agent's first words.
+  const conversationShownRef = useRef(false);
+  conversationShownRef.current = Boolean(state.runtimeObjects[RUNTIME_CONVERSATION_ID]);
+  useEffect(() => {
+    if (conversationShownRef.current) showConversation();
+  }, [showConversation]);
 
   useEffect(() => {
     const socketUrl = backendSocketUrl();

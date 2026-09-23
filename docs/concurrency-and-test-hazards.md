@@ -62,8 +62,8 @@ change is discarded, and the caller has to repeat it. Browser-initiated bumps
 delivery away, so the tab is already awake and waiting on that exchange.
 
 An agent-initiated `transfer_to_project` bumps the epoch at *adoption*, not at
-startup: the generation stays put while the new leg is starting, and the route
-callback announces the new epoch (with the status) the moment the leg is live.
+startup: the generation stays put while the new leg is starting, and the new
+epoch is announced (with the status) the moment the leg is live.
 That leaves a window — ssh, process start, intro turn — in which the browser
 still holds the old epoch. The server closes it by emitting a
 `{"type":"candidate"}` event when a candidate leg begins and
@@ -73,6 +73,33 @@ incoming leg and re-stamps them to the new epoch when the `epoch` event
 arrives, so the caller's words reach the new leg as a fresh turn. Any clip
 without that mark keeps the discard: a wrong number can only lose speech,
 never misroute it.
+
+### One scene reset per leg
+
+"The moment the leg is live" has two answers, and both used to announce it.
+Candidate promotion adopts the leg as soon as the incoming agent streams its
+first text or acts, which in practice is every transfer. The route callback
+fires later, once the PBX has finished the intro turn. Each cleared the display
+projection and sent an `epoch`, so the second one landed on a leg that was
+already talking: it wiped the first drawing, reset the confirmation watermark
+under it, and made the browser drop the audio of the new agent's first words
+(`resetForGeneration`). The browser also treated every `epoch` as a reason to
+unmount the conversation, so the caller watched conversation, idle page,
+conversation (issue #22).
+
+`LegAnnouncer` in `apps/backend/src/api.rs` owns both paths now. The scene is
+reset once per leg, keyed by route and generation, by whichever announcement
+gets there first; the later one only restates the status. Route is part of the
+key because a return to the operator keeps the generation and must still clear
+the project's scene. Promotion holds the display gate from adoption until the
+`epoch` is published, so a display from the new leg cannot be applied, and then
+wiped, ahead of its own reset.
+
+On the browser side an `epoch` drops what the old leg put on screen (its
+objects, speech, focus, activity, and any view it asked for) and keeps the
+conversation, which belongs to the call. The route label on it changes when the
+status arrives. A reconnect is followed by the history snapshot, which replaces
+the transcript and hides the conversation if the server has none.
 
 ## Delivery and picker ordering
 
