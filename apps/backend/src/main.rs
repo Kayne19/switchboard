@@ -15,6 +15,12 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
+/// The commit this binary was built from, stamped by `build.rs`: the
+/// `SWITCHBOARD_GIT_SHA` the build was given, else `git describe`, else
+/// `unknown`. Logged at startup and reported on `/healthz`, so a deploy can be
+/// checked against its pin with one request.
+pub const GIT_SHA: &str = env!("SWITCHBOARD_GIT_SHA");
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
     pub env_file: PathBuf,
@@ -344,7 +350,7 @@ async fn main() {
     // ElevenLabs key belongs.
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
-        git = env!("SWITCHBOARD_GIT_SHA"),
+        git = GIT_SHA,
         env_file = %config.env_file.display(),
         projects_file = %config.projects_file.display(),
         operator_prompt = %config.operator_prompt.display(),
