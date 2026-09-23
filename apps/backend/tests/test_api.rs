@@ -80,6 +80,19 @@ async fn request_json(
     (status, value)
 }
 
+async fn post_display_in_task(
+    state: &AppState,
+    body: Value,
+) -> tokio::task::JoinHandle<(StatusCode, Value)> {
+    let state = state.clone();
+    tokio::spawn(async move { request_json(&state, Method::POST, "/display", Some(body)).await })
+}
+
+fn diagram_show() -> Value {
+    json!({"action":{"op":"show","id":"d1","type":"diagram","data":{
+        "mode":"graph","nodes":[{"id":"a","label":"A"}],"edges":[]}}})
+}
+
 #[tokio::test]
 async fn http_contract_exposes_status_health_and_page_controls() {
     let state = state();
@@ -1117,6 +1130,82 @@ async fn display_projection_generation_race() {
 }
 
 #[tokio::test]
+async fn display_reports_rendered_only_after_the_browser_confirms() {
+    let state = state();
+    let (mut connection, _snapshot, _wm) = state.register_connection().await;
+    let epoch = connection.epoch;
+
+    let handle = post_display_in_task(&state, diagram_show()).await;
+
+    // The delivered display frame carries a seq the browser will echo.
+    let DeliveryFrame::Event { sequence, .. } = connection.receiver.recv().await.unwrap() else {
+        panic!("expected a display event")
+    };
+
+    // Browser confirms it rendered up to `sequence`.
+    handle_text_frame(
+        &state,
+        epoch,
+        &mut None,
+        &mut None,
+        &json!({"type":"screen_state","view":"auto","has_visual":true,
+               "visual_kind":"diagram","applied_seq":sequence})
+        .to_string(),
+    )
+    .await
+    .unwrap();
+
+    let (code, body) = timeout(Duration::from_secs(2), handle)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(body.get("rendered").and_then(Value::as_bool), Some(true));
+}
+
+#[tokio::test]
+async fn display_reports_unconfirmed_when_the_browser_stays_silent() {
+    let state = state();
+    let (connection, _s, _w) = state.register_connection().await;
+    let _ = connection.receiver; // keep the connection alive, never ack
+    let (code, body) = request_json(&state, Method::POST, "/display", Some(diagram_show())).await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(body.get("delivered").and_then(Value::as_bool), Some(true));
+    assert_eq!(body.get("rendered").and_then(Value::as_bool), Some(false));
+}
+
+#[tokio::test]
+async fn display_reports_rejection_from_the_browser() {
+    let state = state();
+    let (mut connection, _s, _w) = state.register_connection().await;
+    let epoch = connection.epoch;
+    let handle = post_display_in_task(&state, diagram_show()).await;
+    let DeliveryFrame::Event { sequence, .. } = connection.receiver.recv().await.unwrap() else {
+        panic!("expected a display event")
+    };
+    handle_text_frame(
+        &state,
+        epoch,
+        &mut None,
+        &mut None,
+        &json!({"type":"screen_state","view":"auto","has_visual":false,
+               "rejected":{"seq":sequence,"reason":"unsupported node shape"}})
+        .to_string(),
+    )
+    .await
+    .unwrap();
+    let (_code, body) = timeout(Duration::from_secs(2), handle)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(body.get("rejected").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        body.get("reason").and_then(Value::as_str),
+        Some("unsupported node shape")
+    );
+}
+
+#[tokio::test]
 async fn display_projection_snapshot_watermark() {
     let state = state();
 
@@ -1149,12 +1238,13 @@ async fn display_projection_snapshot_watermark() {
     assert_eq!(snapshot_actions[0]["id"], "obj-1");
     assert_eq!(snapshot_actions[1]["id"], "obj-2");
 
-    // 3. Publish a fresh display action with sequence > watermark
-    let (code, _) = request_json(
+    // 3. Publish a fresh display action with sequence > watermark. A browser
+    // is connected, so /display now waits for a render confirmation; ack it
+    // promptly from the connection so this test does not stall.
+    let epoch = connection.epoch;
+    let handle = post_display_in_task(
         &state,
-        Method::POST,
-        "/display",
-        Some(json!({
+        json!({
             "token": "operator",
             "action": {
                 "op": "show",
@@ -1163,15 +1253,14 @@ async fn display_projection_snapshot_watermark() {
                 "role": "secondary",
                 "data": {"label": "obj-3", "value": "300"}
             }
-        })),
+        }),
     )
     .await;
-    assert_eq!(code, StatusCode::OK);
 
     // In delivery connection receiver:
     // The fresh event obj-3 is queued in connection.receiver with sequence > watermark
     let frame = connection.receiver.recv().await.unwrap();
-    match frame {
+    let sequence = match frame {
         DeliveryFrame::Event { sequence, event } => {
             assert!(sequence > watermark);
             let Event::Json(val) = event else {
@@ -1179,9 +1268,28 @@ async fn display_projection_snapshot_watermark() {
             };
             assert_eq!(val["type"], "display");
             assert_eq!(val["action"]["id"], "obj-3");
+            sequence
         }
         _ => panic!("expected event frame"),
-    }
+    };
+
+    handle_text_frame(
+        &state,
+        epoch,
+        &mut None,
+        &mut None,
+        &json!({"type":"screen_state","view":"auto","has_visual":true,
+               "visual_kind":"metric","applied_seq":sequence})
+        .to_string(),
+    )
+    .await
+    .unwrap();
+
+    let (code, _) = timeout(Duration::from_secs(2), handle)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(code, StatusCode::OK);
 }
 
 #[tokio::test]

@@ -186,6 +186,18 @@ pub struct DisplayGateState {
     pub watermark: u64,
 }
 
+#[derive(Clone, Default)]
+pub struct ConfirmState {
+    pub generation: u64,
+    // `None` means "the browser has not confirmed anything in this
+    // generation yet" -- distinct from confirming sequence 0, which is a
+    // real, reachable sequence number.
+    pub watermark: Option<u64>,
+    pub rejection: Option<(u64, String)>,
+}
+
+const DISPLAY_CONFIRM_DEADLINE_MS: u64 = 2500;
+
 fn is_display_event(event: &Event) -> bool {
     match event {
         Event::Json(v) => v.get("type").and_then(Value::as_str) == Some("display"),
@@ -229,6 +241,7 @@ pub struct AppInner {
     pub last_display: Arc<Mutex<Option<Value>>>,
     pub screen_state: Mutex<Value>,
     pub display_gate: Arc<Mutex<DisplayGateState>>,
+    pub display_confirm: watch::Sender<ConfirmState>,
     pub active_session: Arc<Mutex<Option<PiSession>>>,
     activity_clock: ActivityClock,
     live_leg: LiveLegState,
@@ -638,17 +651,20 @@ impl AppState {
             report_generation: None,
             watermark: 0,
         }));
+        let (display_confirm_tx, _) = watch::channel(ConfirmState::default());
         let route_events = events.clone();
         let route_delivery = delivery.clone();
         let route_display = last_display.clone();
         let route_coordinator = coordinator.clone();
         let route_gate = display_gate.clone();
+        let route_confirm = display_confirm_tx.clone();
         let route_callback: RouteCallback = Arc::new(move |status| {
             let events = route_events.clone();
             let delivery = route_delivery.clone();
             let diagram = route_display.clone();
             let coordinator = route_coordinator.clone();
             let gate = route_gate.clone();
+            let route_confirm = route_confirm.clone();
             Box::pin(async move {
                 {
                     let mut g = gate.lock().await;
@@ -661,6 +677,11 @@ impl AppState {
                     g.report_generation = None;
                 }
                 let generation = coordinator.generation();
+                route_confirm.send_modify(|c| {
+                    c.generation = generation;
+                    c.watermark = None;
+                    c.rejection = None;
+                });
                 let epoch = Event::Json(json!({
                     "type": "epoch",
                     "generation": generation,
@@ -709,6 +730,7 @@ impl AppState {
                 "generation": 0,
             })),
             display_gate,
+            display_confirm: display_confirm_tx,
             active_session,
             activity_clock,
             live_leg,
@@ -1941,8 +1963,51 @@ async fn display(State(state): State<AppState>, body: axum::body::Bytes) -> Resp
     gate.projection.apply(&normalized_action, sequence);
     gate.watermark = sequence;
     *state.0.last_display.lock().await = Some(value);
+    drop(gate);
 
-    Json(delivery_response(delivered)).into_response()
+    if !delivered {
+        return Json(json!({"delivered": false, "reason": "no browser connected"})).into_response();
+    }
+
+    let mut confirm_rx = state.0.display_confirm.subscribe();
+    let deadline = tokio::time::sleep(std::time::Duration::from_millis(
+        DISPLAY_CONFIRM_DEADLINE_MS,
+    ));
+    tokio::pin!(deadline);
+    loop {
+        {
+            let c = confirm_rx.borrow_and_update();
+            if c.generation == permit_generation {
+                if let Some((rseq, reason)) = &c.rejection {
+                    if *rseq == sequence {
+                        return Json(json!({
+                            "delivered": true, "rendered": false,
+                            "rejected": true, "reason": reason
+                        }))
+                        .into_response();
+                    }
+                }
+                if c.watermark.is_some_and(|w| w >= sequence) {
+                    return Json(json!({"delivered": true, "rendered": true})).into_response();
+                }
+            } else if c.generation > permit_generation {
+                return Json(json!({
+                    "delivered": true, "rendered": false,
+                    "reason": "the caller's screen moved to a new leg before this was confirmed"
+                }))
+                .into_response();
+            }
+        }
+        tokio::select! {
+            changed = confirm_rx.changed() => { if changed.is_err() { break; } }
+            _ = &mut deadline => { break; }
+        }
+    }
+    Json(json!({
+        "delivered": true, "rendered": false,
+        "reason": "no confirmation from the browser"
+    }))
+    .into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -2656,6 +2721,32 @@ async fn handle_text_frame(
             gate.report_generation = Some(current_gen);
             *state.0.screen_state.lock().await = report;
             drop(gate);
+
+            let applied_seq = command.get("applied_seq").and_then(Value::as_u64);
+            let rejected = command
+                .get("rejected")
+                .and_then(Value::as_object)
+                .and_then(|m| {
+                    let seq = m.get("seq").and_then(Value::as_u64)?;
+                    let reason = m
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .unwrap_or("the caller's screen could not render it")
+                        .to_string();
+                    Some((seq, reason))
+                });
+            state.0.display_confirm.send_modify(|c| {
+                if c.generation != current_gen {
+                    c.generation = current_gen;
+                    c.watermark = None;
+                }
+                if let Some(seq) = applied_seq {
+                    if c.watermark.is_none_or(|w| seq > w) {
+                        c.watermark = Some(seq);
+                    }
+                }
+                c.rejection = rejected.clone();
+            });
 
             send_json(state, epoch, json!({"type":"screen_state_ack"})).await
         }
