@@ -526,11 +526,29 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 				if (!resp.ok) {
 					return { content: [{ type: "text", text: await refusal(resp, "display") }], details: {}, isError: true };
 				}
-				const data = (await resp.json()) as { delivered?: boolean; reason?: string };
+				const data = (await resp.json()) as {
+					delivered?: boolean;
+					rendered?: boolean;
+					rejected?: boolean;
+					reason?: string;
+				};
 				if (data.delivered === false) {
 					return {
 						content: [{ type: "text", text: `Nobody is looking: ${data.reason ?? "no browser connected"}. It will be there if they open the page.` }],
-					details: {},
+						details: {},
+					};
+				}
+				if (data.rejected) {
+					return {
+						content: [{ type: "text", text: `The caller's screen rejected it: ${data.reason ?? "invalid payload"}. Adjust the payload and try again.` }],
+						details: {},
+						isError: true,
+					};
+				}
+				if (data.rendered === false) {
+					return {
+						content: [{ type: "text", text: "Sent, but the caller's screen has not confirmed it — it may not be visible. It will appear if they have the page open." }],
+						details: {},
 					};
 				}
 				return { content: [{ type: "text", text: "On screen." }], details: {} };
@@ -602,28 +620,25 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 						title?: string;
 						stale?: boolean;
 						connected?: boolean;
+						confirmed?: boolean;
 					};
 				};
 				if (!params.target) {
 					const screen = data.screen ?? {};
-					let visual = "no visual";
-					if (screen.has_visual) {
-						visual = `${screen.stale ? "stale " : ""}${screen.visual_kind || "visual"}`;
-						if (screen.title) visual += ` titled '${screen.title}'`;
+					const kind = screen.visual_kind || "visual";
+					const titled = screen.title ? ` titled '${screen.title}'` : "";
+					let text: string;
+					if (!screen.has_visual) {
+						text = "Nothing is on the caller's screen right now.";
+					} else if (screen.confirmed) {
+						text = `Showing a ${kind}${titled} on the caller's screen.`;
+					} else {
+						text = `Requested a ${kind}${titled}, but the caller's screen has not confirmed it yet.`;
 					}
-					const connection =
-						screen.connected === false
-							? "No browser is connected; last report"
-							: "Screen";
-					return {
-						content: [
-							{
-								type: "text",
-								text: `${connection} is in ${screen.view || "auto"} view with ${visual}.`,
-							},
-						],
-						details: { screen },
-					};
+					if (screen.connected === false) {
+						text += " No browser is connected.";
+					}
+					return { content: [{ type: "text", text }], details: { screen } };
 				}
 				return {
 					content: [

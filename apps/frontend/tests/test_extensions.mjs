@@ -86,6 +86,7 @@ async function agentExtensionBehavior() {
 							visual_kind: "diff",
 							title: "Code changes",
 							stale: false,
+							confirmed: true,
 						},
 					}
 				: { delivered: true };
@@ -190,7 +191,7 @@ async function agentExtensionBehavior() {
 		const inspected = await pi.tools.get("view").execute("call", {});
 		assert.equal(
 			inspected.content[0].text,
-			"Screen is in comms view with diff titled 'Code changes'.",
+			"Showing a diff titled 'Code changes' on the caller's screen.",
 		);
 		assert.equal(inspected.details.screen.visual_kind, "diff");
 
@@ -334,6 +335,75 @@ async function agentExtensionHttpFailures() {
 	}
 }
 
+async function agentExtensionDisplayAndViewResults() {
+	process.env.SWITCHBOARD_DISPLAY_URL = "http://switchboard.test/display";
+	const previousFetch = globalThis.fetch;
+	let displayResponse = { delivered: true, rendered: true };
+	let viewResponse = { delivered: true, screen: {} };
+	globalThis.fetch = async (url) => {
+		const body = String(url).endsWith("/view") ? viewResponse : displayResponse;
+		return new Response(JSON.stringify(body), {
+			status: 200,
+			headers: { "Content-Type": "application/json" },
+		});
+	};
+	try {
+		const extension = await loadExtension("extensions/agent-switchboard.ts");
+		const pi = fakePi();
+		extension.default(pi);
+		const displayTool = pi.tools.get("display");
+		const viewTool = pi.tools.get("view");
+		const clearAction = { op: "clear" };
+
+		// delivered:true, rendered:true -> confirmed on screen, not an error.
+		displayResponse = { delivered: true, rendered: true };
+		const rendered = await displayTool.execute("call", clearAction);
+		assert.equal(rendered.isError, undefined);
+		assert.equal(rendered.content[0].text, "On screen.");
+
+		// delivered:true, rendered:false, no rejection -> honest "not confirmed", not an error.
+		displayResponse = {
+			delivered: true,
+			rendered: false,
+			reason: "no confirmation from the browser",
+		};
+		const unconfirmed = await displayTool.execute("call", clearAction);
+		assert.equal(unconfirmed.isError, undefined);
+		assert.match(unconfirmed.content[0].text, /has not confirmed/);
+
+		// delivered:true, rendered:false, rejected:true -> surfaces the reason and is an error.
+		displayResponse = {
+			delivered: true,
+			rendered: false,
+			rejected: true,
+			reason: "at most one active item allowed",
+		};
+		const rejected = await displayTool.execute("call", clearAction);
+		assert.equal(rejected.isError, true);
+		assert.match(rejected.content[0].text, /at most one active item allowed/);
+
+		// view with no target, has_visual true but confirmed:false -> "not yet confirmed", not "showing".
+		viewResponse = {
+			delivered: true,
+			screen: {
+				view: "comms",
+				has_visual: true,
+				visual_kind: "diagram",
+				title: "Flow",
+				confirmed: false,
+			},
+		};
+		const notYetConfirmed = await viewTool.execute("call", {});
+		assert.equal(
+			notYetConfirmed.content[0].text,
+			"Requested a diagram titled 'Flow', but the caller's screen has not confirmed it yet.",
+		);
+	} finally {
+		globalThis.fetch = previousFetch;
+		delete process.env.SWITCHBOARD_DISPLAY_URL;
+	}
+}
+
 async function operatorExtensionBehavior() {
 	const directory = mkdtempSync(join(tmpdir(), "switchboard-extension-"));
 	const registry = join(directory, "projects.json");
@@ -370,5 +440,6 @@ async function operatorExtensionBehavior() {
 await agentExtensionBehavior();
 await agentExtensionFallbacks();
 await agentExtensionHttpFailures();
+await agentExtensionDisplayAndViewResults();
 await operatorExtensionBehavior();
 console.log("ok — extension tools and fallbacks");
