@@ -1122,15 +1122,15 @@ button {
 .tool-activity__tool {
   color: var(--paper);
 }
-/* In the conversation layout the panel sits in the channel row, clear of
-   the answer box and its lower-right caption. Its left edge stops short of
-   the centred transcript toggle, so it never sits over that control. */
+/* In the conversation layout the panel sits above the fixed lower controls,
+   clear of the answer box, the centred transcript toggle, and the approved
+   lower-right corner mark. */
 .tool-activity--conversation {
   position: absolute;
   z-index: 3;
   left: calc(50% + 140px);
   right: 6.2cqw;
-  bottom: 6.4cqh;
+  bottom: 18cqh;
   max-width: 360px;
   margin-left: auto;
   border-top: 0;
