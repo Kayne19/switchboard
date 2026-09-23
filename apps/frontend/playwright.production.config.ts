@@ -13,10 +13,16 @@ export default defineConfig({
     baseURL: 'http://127.0.0.1:4174',
     colorScheme: 'dark',
     contextOptions: { reducedMotion: 'reduce' },
-    launchOptions: executablePath ? {
+    // A fake microphone lets the native runtime record without a device.
+    permissions: ['microphone'],
+    launchOptions: {
       executablePath,
-      args: ['--no-sandbox', '--disable-dev-shm-usage'],
-    } : undefined,
+      args: [
+        '--use-fake-ui-for-media-stream',
+        '--use-fake-device-for-media-stream',
+        ...(executablePath ? ['--no-sandbox', '--disable-dev-shm-usage'] : []),
+      ],
+    },
   },
   webServer: {
     command: 'npm --prefix ../.. run build && npm --prefix ../.. run preview -- --host 127.0.0.1 --port 4174',

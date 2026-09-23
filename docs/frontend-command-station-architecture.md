@@ -159,12 +159,11 @@ implemented visual forms.
 
 The running client architecture:
 
-- `static/index.html`: responsive shell, controls, and visual language
+- `static/index.html`: the built V17 shell and the wake-word import map
 - `apps/frontend/src/App.tsx`: V17 presentation and semantic scene rendering
 - `apps/frontend/src/controller/`: semantic state machine, reducer, and validation boundary
-- `apps/frontend/src/integration/runtime.tsx`: runtime bridge connecting display and audio transports
-- `apps/frontend/src/app.ts`: session state, audio, and workspace composition
-- `apps/frontend/src/synchro.ts`: state-driven waveform
+- `apps/frontend/src/integration/runtime.tsx`: connects the call runtime to the controller and reports screen state
+- `apps/frontend/src/runtime/`: backend WebSocket, push-to-talk, playback, and hands-free wiring
 - `apps/frontend/src/protocol.ts`: browser/server message contract
 - `extensions/agent-switchboard.ts`: agent-facing `display` and `view` tools
 - `apps/backend/src/api.rs`: WebSocket state and HTTP tool endpoints

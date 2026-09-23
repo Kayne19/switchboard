@@ -218,5 +218,5 @@ switch of the container from this tree.
   neighbourhood).
 - No new renderer in the legacy tree (it is on a deletion schedule).
 - No generic component library; no device-specific layout branches.
-- The voice runtime and hidden iframe belong to
-  `docs/legacy-iframe-rewrite-plan.md`; this plan leaves them alone.
+- The voice runtime and hidden iframe were out of scope here; they were later
+  replaced by the native runtime (`docs/display-reliability-and-native-frontend.md`).

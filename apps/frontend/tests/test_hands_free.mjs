@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import ts from "typescript";
 
 const source = readFileSync("apps/frontend/src/hands_free.ts", "utf8");
@@ -9,8 +9,12 @@ const detectorSource = readFileSync(
 );
 const wakeWordSource = readFileSync("apps/frontend/src/wake_word.ts", "utf8");
 const worklet = readFileSync("apps/frontend/src/vad-worklet.ts", "utf8");
-const app = readFileSync("apps/frontend/src/app.ts", "utf8");
-const html = readFileSync("static/legacy/index.html", "utf8");
+const runtime = readFileSync(
+	"apps/frontend/src/runtime/callRuntime.ts",
+	"utf8",
+);
+const pageSource = readFileSync("apps/frontend/index.html", "utf8");
+const page = readFileSync("static/index.html", "utf8");
 const packageRuntime = readFileSync(
 	"static/openwakeword/wake-word-engine.js",
 	"utf8",
@@ -161,16 +165,28 @@ assert.match(worklet, /this\.port\.onmessage/);
 assert.match(worklet, /this\.speaking = false/);
 assert.match(worklet, /postMessage\(\{ type: "audio", samples: frame \}/);
 assert.doesNotMatch(worklet, /postMessage\(\s*channel/);
-assert.match(app, /createWakeWordDetector/);
-assert.match(app, /import\("\.\/wake_word\.js"\)/);
+assert.match(runtime, /createWakeWordDetector/);
+assert.match(runtime, /import\("\.\.\/wake_word"\)/);
 assert.match(wakeWordSource, /import \{ WakeWordEngine \}/);
-assert.match(app, /final_response_audio_closed/);
-assert.match(app, /snapshotReady/);
-assert.match(app, /submitHandsFreeClip/);
-assert.match(html, /id="handsFreeBtn"[\s\S]*aria-pressed="false"/);
-assert.match(html, /id="handsFreeStatus"[\s\S]*aria-live="polite"/);
-assert.match(html, /"openwakeword-wasm-browser"/);
-assert.match(html, /"onnxruntime-web"/);
+assert.match(runtime, /final_response_audio_closed/);
+assert.match(runtime, /snapshotReady/);
+assert.match(runtime, /submitHandsFreeClip/);
+// The engine and ONNX Runtime load from the committed /openwakeword/ files
+// through the page's import map; the import map must precede the bundle.
+for (const html of [pageSource, page]) {
+	assert.match(html, /"openwakeword-wasm-browser": "\/openwakeword\/wake-word-engine\.js"/);
+	assert.match(html, /"onnxruntime-web": "\/openwakeword\/ort\/ort\.wasm\.bundle\.min\.mjs"/);
+}
+assert.ok(
+	page.indexOf('type="importmap"') < page.indexOf('type="module"'),
+	"the import map precedes the module script",
+);
+assert.equal(
+	readdirSync("static/v17-assets").some((file) => file.endsWith(".wasm")),
+	false,
+	"the bundle does not carry its own ONNX Runtime WASM",
+);
+assert.ok(statSync("static/vad-worklet.js").size > 0, "the VAD worklet is built");
 assert.match(packageRuntime, /from 'onnxruntime-web'/);
 assert.match(ortRuntime, /ONNX Runtime Web/);
 for (const asset of [
@@ -184,5 +200,5 @@ for (const asset of [
 	assert.ok(statSync(asset).size > 0, `${asset} is staged`);
 }
 console.log(
-	"ok - real wake adapter, PCM worklet, barrier, and accessible controls",
+	"ok - real wake adapter, PCM worklet, barrier, and wake-word import map",
 );

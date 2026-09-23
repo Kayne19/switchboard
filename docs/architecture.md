@@ -56,7 +56,7 @@ browser mic / page controls
           |
           +--> history / registry / models / coordinator
 
-web/ ---------------- browser protocol, capture, playback, rendering
+apps/frontend/ ------ browser: call runtime (socket, capture, playback) and rendering
 static/ ------------- committed browser build output
 extensions/ --------- Pi-side tool and callback adapters
 legacy/ ------------- compatibility baseline, not the active Rust service
@@ -134,13 +134,17 @@ configuration, not the browser protocol, turn epochs, or PBX lifecycle.
 
 ### 5. The browser owns presentation and capture
 
-`web/` owns:
+`apps/frontend/src/runtime/` owns the call:
 
 - microphone permission and capture
-- wake/VAD state when added
+- wake/VAD state (reusing `hands_free.ts` and the local wake detector)
 - WebSocket framing from the browser side
 - audio playback and MSE fallback
-- diagram rendering
+
+The React app around it (`src/integration/runtime.tsx`, `src/controller/`,
+`src/components/`) owns:
+
+- display and diagram rendering
 - status and route presentation
 
 The browser does not own:
@@ -156,7 +160,7 @@ reconnected, discarded, or replayed.
 
 ### 6. Protocols are contracts, not implementation details
 
-The browser/server WebSocket protocol is defined in `web/protocol.ts` and its
+The browser/server WebSocket protocol is defined in `apps/frontend/src/protocol.ts` and its
 Rust counterpart. Changes to message types, framing, MIME rules, sequence
 numbers, generations, or environment variables are public contract changes.
 
@@ -364,7 +368,9 @@ Switchboard is not currently a perfect hexagonal implementation:
 
 - `src/api.rs` is a thick application coordinator and knows several concrete
   audio/delivery structures.
-- `web/app.ts` contains substantial capture, protocol, playback, and UI state.
+- `apps/frontend/src/runtime/callRuntime.ts` still coordinates several
+  concerns (socket lifecycle, outbox, line requests, hands-free wiring); the
+  recorder and playback are separate modules, the rest is one class.
 - browser event variants and Rust delivery events are intentionally coupled at
   the wire boundary.
 - `Speaker` still contains ElevenLabs-specific request policy.

@@ -19,5 +19,12 @@ export default defineConfig({
     assetsDir: 'v17-assets',
     sourcemap: true,
     target: 'es2022',
+    rollupOptions: {
+      // The wake-word engine and ONNX Runtime are served as committed files
+      // under /openwakeword/ and resolved through the import map in
+      // index.html, so the bundle neither inlines them nor emits its own copy
+      // of the runtime's WASM.
+      external: ['openwakeword-wasm-browser'],
+    },
   },
 });

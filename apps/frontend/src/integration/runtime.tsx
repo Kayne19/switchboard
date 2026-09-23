@@ -1,3 +1,8 @@
+// Connects the page's call runtime (`runtime/callRuntime.ts`) to the scene
+// controller: backend messages become scene actions, runtime state drives the
+// listening presence, and the rendered scene goes back to the backend as
+// screen-state reports.
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { deriveScreenState } from "../app/sceneModel";
 import { interpretDisplayMessage } from "../app/displayMessage";
@@ -5,32 +10,11 @@ import { planReportDispatch, shouldClearRejectionOnSend } from "../app/reportDis
 import { useController } from "../controller/context";
 import type { MessageData, ScreenStateReport } from "../controller/types";
 import { RUNTIME_CONVERSATION_ID } from "../controller/types";
-
-const LEGACY_SOURCE = "switchboard-legacy-runtime";
-const V17_SOURCE = "switchboard-v17";
-
-interface SelectOption {
-  value: string;
-  label: string;
-}
-
-interface RuntimeState {
-  connected: boolean;
-  recording: boolean;
-  status: string;
-  handsFree: boolean;
-  handsFreeStatus: string;
-  handsFreeLease: string;
-  route: string;
-  routes: SelectOption[];
-  model: string;
-  models: SelectOption[];
-  thinking: string;
-  thinkingLevels: SelectOption[];
-  onProject: boolean;
-  modelDisabled: boolean;
-  thinkingDisabled: boolean;
-}
+import {
+  CallRuntime,
+  INITIAL_RUNTIME_STATE,
+  type RuntimeState,
+} from "../runtime/callRuntime";
 
 interface TranscriptLine {
   speaker: string;
@@ -39,24 +23,6 @@ interface TranscriptLine {
 }
 
 type ServerMessage = Record<string, unknown> & { type?: string; seq?: number };
-
-const initialRuntime: RuntimeState = {
-  connected: false,
-  recording: false,
-  status: "Connecting…",
-  handsFree: false,
-  handsFreeStatus: "Standby",
-  handsFreeLease: "",
-  route: "operator",
-  routes: [{ value: "operator", label: "Operator" }],
-  model: "",
-  models: [],
-  thinking: "",
-  thinkingLevels: [],
-  onProject: false,
-  modelDisabled: true,
-  thinkingDisabled: true,
-};
 
 function text(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -80,40 +46,46 @@ function normalizeHistory(raw: unknown): TranscriptLine[] {
   });
 }
 
-function isRuntimeState(value: unknown): value is RuntimeState {
-  return Boolean(value && typeof value === "object");
+// `?ws=` points the page at another backend. The dev server has no backend of
+// its own, so without one the call runtime stays down there.
+function backendSocketUrl(): string | null {
+  const wsParam = new URLSearchParams(window.location.search).get("ws");
+  if (wsParam) return wsParam;
+  if (import.meta.env.DEV) return null;
+  const proto = window.location.protocol === "https:" ? "wss" : "ws";
+  return `${proto}://${window.location.host}/ws`;
 }
 
 export function RuntimeIntegration() {
   const { state, dispatch, registerVoiceRuntime } = useController();
-  const frameRef = useRef<HTMLIFrameElement>(null);
+  const [callRuntime, setCallRuntime] = useState<CallRuntime | null>(null);
   const transcriptRef = useRef<TranscriptLine[]>([]);
   const currentResponseRef = useRef("");
-  const iframeReadyRef = useRef(false);
+  const transportReadyRef = useRef(false);
   const generationRef = useRef(0);
   const pendingReportRef = useRef<ScreenStateReport | null>(null);
   const inFlightReportRef = useRef<ScreenStateReport | null>(null);
   const appliedSeqRef = useRef(0);
   const pendingRejectionRef = useRef<{ seq: number; reason: string } | null>(null);
+  const handleServerRef = useRef<(message: ServerMessage) => void>(() => {});
+  const handleStateRef = useRef<(runtimeState: RuntimeState) => void>(() => {});
   const [reportNonce, setReportNonce] = useState(0);
-  const [runtime, setRuntime] = useState<RuntimeState>(initialRuntime);
+  const [runtime, setRuntime] = useState<RuntimeState>(INITIAL_RUNTIME_STATE);
 
-  const command = useCallback((name: string, value?: unknown) => {
-    frameRef.current?.contentWindow?.postMessage(
-      { source: V17_SOURCE, command: name, value },
-      window.location.origin,
-    );
-  }, []);
-
+  // A report the socket could not carry waits as the pending one, and the
+  // rejection it carries stays pending with it.
   const sendReport = useCallback(
     (report: ScreenStateReport) => {
+      if (!callRuntime?.sendScreenState(report)) {
+        pendingReportRef.current = report;
+        return;
+      }
       inFlightReportRef.current = report;
       if (shouldClearRejectionOnSend(report, pendingRejectionRef.current)) {
         pendingRejectionRef.current = null;
       }
-      command("screen_state", report);
     },
-    [command],
+    [callRuntime],
   );
 
   const handleScreenStateAck = useCallback(() => {
@@ -156,6 +128,8 @@ export function RuntimeIntegration() {
     [dispatch, runtime.handsFree, runtime.route],
   );
 
+  // The runtime is created once; these handlers are replaced as the scene
+  // callbacks they close over change.
   useEffect(() => {
     const appendTranscript = (line: TranscriptLine) => {
       const existing = line.id
@@ -170,14 +144,14 @@ export function RuntimeIntegration() {
       }
     };
 
-    const handleServer = (message: ServerMessage) => {
+    handleServerRef.current = (message: ServerMessage) => {
       switch (message.type) {
         case "epoch": {
           transcriptRef.current = [];
           currentResponseRef.current = "";
           generationRef.current =
             typeof message.generation === "number" ? message.generation : 0;
-          iframeReadyRef.current = true;
+          transportReadyRef.current = true;
           inFlightReportRef.current = null;
           pendingReportRef.current = null;
           dispatch({ op: "epoch_reset" });
@@ -280,41 +254,35 @@ export function RuntimeIntegration() {
       }
     };
 
-    const onMessage = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return;
-      const packet = event.data as {
-        source?: string;
-        kind?: string;
-        payload?: unknown;
-      };
-      if (event.source !== frameRef.current?.contentWindow) return;
-      if (packet?.source !== LEGACY_SOURCE) return;
-      if (packet.kind === "state" && isRuntimeState(packet.payload)) {
-        const runtimeState = packet.payload;
-        if (!runtimeState.connected) iframeReadyRef.current = false;
-        setRuntime((current) => ({ ...current, ...runtimeState }));
-        dispatch({
-          op: "listen",
-          on: Boolean(runtimeState.recording || runtimeState.handsFree),
-        });
-      } else if (
-        packet.kind === "server" &&
-        packet.payload &&
-        typeof packet.payload === "object"
-      ) {
-        handleServer(packet.payload as ServerMessage);
-      } else if (packet.kind === "ready") {
-        command("bridge_ready");
-        command("state");
-      } else if (packet.kind === "screen_state_ack") {
-        handleScreenStateAck();
-      }
+    handleStateRef.current = (runtimeState: RuntimeState) => {
+      if (!runtimeState.connected) transportReadyRef.current = false;
+      setRuntime(runtimeState);
+      dispatch({
+        op: "listen",
+        on: Boolean(runtimeState.recording || runtimeState.handsFree),
+      });
     };
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [command, dispatch, handleScreenStateAck, sendReport, showConversation]);
+  }, [dispatch, handleScreenStateAck, showConversation]);
 
-  // Derive screen state and queue/send across the bridge.
+  useEffect(() => {
+    const socketUrl = backendSocketUrl();
+    if (!socketUrl) return;
+    const runtimeForPage = new CallRuntime({
+      socketUrl,
+      onState: (runtimeState) => handleStateRef.current(runtimeState),
+      onServer: (message) => handleServerRef.current(message),
+      document,
+      window,
+    });
+    runtimeForPage.start();
+    setCallRuntime(runtimeForPage);
+    return () => {
+      runtimeForPage.dispose();
+      setCallRuntime(null);
+    };
+  }, []);
+
+  // Derive screen state and queue/send it over the socket.
   //
   // The rejection carried on `pendingRejectionRef` is merged into the
   // report by `planReportDispatch` but never cleared here -- only
@@ -330,7 +298,7 @@ export function RuntimeIntegration() {
 
     const action = planReportDispatch(baseReport, {
       inFlightReport: inFlightReportRef.current,
-      transportReady: iframeReadyRef.current,
+      transportReady: transportReadyRef.current,
       pendingRejection: pendingRejectionRef.current,
     });
 
@@ -344,35 +312,21 @@ export function RuntimeIntegration() {
     sendReport(action.report);
   }, [state, sendReport, reportNonce]);
 
+  // The Damocles presence is the call's one control: it starts a turn, sends
+  // the one being recorded, or forces a reconnect when the line is down.
   useEffect(() => {
+    if (!callRuntime) return;
     const toggleTurn = () => {
       if (!runtime.connected) {
-        command("retry");
+        callRuntime.retry();
         return;
       }
-      command(runtime.recording ? "send" : "talk");
+      if (runtime.recording) callRuntime.send();
+      else callRuntime.talk();
     };
     registerVoiceRuntime({ toggleTurn });
     return () => registerVoiceRuntime(null);
-  }, [command, registerVoiceRuntime, runtime.connected, runtime.recording]);
+  }, [callRuntime, registerVoiceRuntime, runtime.connected, runtime.recording]);
 
-  const wsParam =
-    typeof window !== "undefined"
-      ? new URLSearchParams(window.location.search).get("ws")
-      : null;
-  const iframeSrc = import.meta.env.DEV
-    ? "about:blank"
-    : `/legacy/index.html?runtime=1${wsParam ? `&ws=${encodeURIComponent(wsParam)}` : ""}`;
-
-  return (
-    <iframe
-      ref={frameRef}
-      className="runtime-frame"
-      src={iframeSrc}
-      title="Switchboard voice runtime"
-      allow="microphone; autoplay"
-      aria-hidden="true"
-      tabIndex={-1}
-    />
-  );
+  return null;
 }

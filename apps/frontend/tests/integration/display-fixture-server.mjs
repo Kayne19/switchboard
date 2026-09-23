@@ -8,6 +8,9 @@ export class DisplayFixtureServer {
     this.reports = [];
     this.retiredReports = [];
     this.acksSent = 0;
+    // Every text frame the browser sent, in order; binary frames appear as
+    // { binary: <byteLength> }.
+    this.frames = [];
     this.clients = new Set();
     this.httpServer = null;
     this.wss = null;
@@ -63,9 +66,14 @@ export class DisplayFixtureServer {
       this.wss.on('connection', (ws) => {
         this.clients.add(ws);
 
-        ws.on('message', (data) => {
+        ws.on('message', (data, isBinary) => {
+          if (isBinary) {
+            this.frames.push({ binary: data.length });
+            return;
+          }
           try {
             const msg = JSON.parse(data.toString());
+            this.frames.push(msg);
             if (msg.type === 'hello') {
               ws.send(JSON.stringify({
                 type: 'hello_ack',
@@ -94,6 +102,10 @@ export class DisplayFixtureServer {
                   action,
                 }));
               }
+            } else if (msg.type === 'ping') {
+              ws.send(JSON.stringify({ type: 'pong', nonce: msg.nonce, time: msg.time }));
+            } else if (msg.type === 'clip') {
+              ws.send(JSON.stringify({ type: 'accepted', id: msg.id, streaming: false }));
             } else if (msg.type === 'screen_state') {
               if (msg.generation === this.generation) {
                 this.reports.push(msg);

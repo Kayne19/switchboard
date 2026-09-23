@@ -1,16 +1,25 @@
 # Foreground hands-free listening
 
 Hands-free is an explicit, default-off mode on the foreground page. Push-to-talk
-remains manual: Talk/Space starts it, Send submits it, and Discard cancels it.
-The two capture modes share microphone ownership, so push-to-talk pauses and
-releases the hands-free graph.
+remains manual: the Damocles presence starts a turn and sends it. The two
+capture modes share microphone ownership, so push-to-talk pauses and releases
+the hands-free graph.
+
+The call runtime (`apps/frontend/src/runtime/callRuntime.ts`) owns the
+controller: `toggleHandsFree()` loads the detector on first use and enables or
+disables listening, and the controller's state is published as the runtime's
+`handsFree`, `handsFreeStatus`, and `handsFreeLease` fields. The approved V17
+design does not yet expose a hands-free control, so nothing on the page calls
+`toggleHandsFree()` today.
 
 ## Real wake-word detector
 
 Wake detection uses the pinned `openwakeword-wasm-browser@0.1.1` package with
 its `hey_jarvis_v0.1.onnx` model. The browser loads the package runtime, ONNX
 models, and ONNX Runtime Web WASM files from the committed `/openwakeword/`
-static paths. The import map and `ortWasmPath` are same-origin; this path does
+static paths through the import map in `apps/frontend/index.html`; Vite marks
+the package external, so the bundle carries neither the engine nor its own
+ONNX Runtime. The import map and `ortWasmPath` are same-origin; this path does
 not use a CDN or runtime dependency download.
 
 The package's public `start()` method owns its own microphone graph, which would
@@ -20,7 +29,7 @@ break PTT ownership and duplicate the controller's endpointing. The
 endpoint detector. Package inference is asynchronous and queued; reset stamps
 a new detector generation so stale work cannot open a wake grace period after a
 PTT pause, page rescue, or epoch change. Detector failures stop hands-free and
-are announced in the accessible status region. There is no acoustic wake
+are reported in `handsFreeStatus`. There is no acoustic wake
 heuristic fallback.
 
 ## Privacy boundary
