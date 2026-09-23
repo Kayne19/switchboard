@@ -140,40 +140,33 @@ caller-pin precedence above.
 
 ## Visual artifacts
 
-The visual channel currently supports:
+The visual channel supports seven content types: chart, metric, progress,
+diagram, document, code, and note.
 
-- Mermaid diagrams for relationships and flows
-- structured plans for live progress
-- timelines for ordered events and durations
-- unified diffs for code changes
+Artifacts arrive during an agent turn over `POST /display` and the existing
+WebSocket, so they can appear while work is still in progress. Lifecycle
+generation changes mark the previous artifact stale rather than silently
+presenting it as current.
 
-Artifacts arrive during an agent turn over `POST /diagram` and the existing
-WebSocket, so they can appear while work is still in progress. Route changes
-mark the previous artifact stale rather than silently presenting it as current.
-History controls let the caller inspect earlier artifacts and return to live.
+Structured payloads are rendered with client-side components; arbitrary agent
+HTML or scripts are not accepted. Structured diagrams and text are validated
+server-side.
 
-Structured payloads are rendered with `textContent`; arbitrary agent HTML is
-not accepted. Mermaid source is validated server-side. If the external Mermaid
-renderer is unavailable, the source remains visible instead of leaving a blank
-stage.
-
-See `docs/diagram-tool.md` for payload limits and `docs/visual-channel.md` for
+See `diagram-tool.md` for payload limits and `docs/visual-channel.md` for
 implemented visual forms.
 
 ## Current implementation map
 
-The running client remains deliberately small and framework-free:
+The running client architecture:
 
 - `static/index.html`: responsive shell, controls, and visual language
-- `apps/frontend/src/app.ts`: session state, audio, workspace composition, and
-  screen-state reporting
-- `apps/frontend/src/stage.ts`: visual state, history, provenance, and renderer
-  dispatch
-- `apps/frontend/src/diagram.ts`: Mermaid rendering
-- `apps/frontend/src/diff.ts`: diff rendering
+- `apps/frontend/src/App.tsx`: V17 presentation and semantic scene rendering
+- `apps/frontend/src/controller/`: semantic state machine, reducer, and validation boundary
+- `apps/frontend/src/integration/runtime.tsx`: runtime bridge connecting display and audio transports
+- `apps/frontend/src/app.ts`: session state, audio, and workspace composition
 - `apps/frontend/src/synchro.ts`: state-driven waveform
 - `apps/frontend/src/protocol.ts`: browser/server message contract
-- `extensions/agent-switchboard.ts`: agent-facing `view` and visual tools
+- `extensions/agent-switchboard.ts`: agent-facing `display` and `view` tools
 - `apps/backend/src/api.rs`: WebSocket state and HTTP tool endpoints
 
 The compiled browser output in `static/` is committed. Do not introduce a UI

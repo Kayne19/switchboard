@@ -38,7 +38,7 @@ for (const geometry of geometries) {
       if (!dispatch) throw new Error('controller unavailable');
       dispatch({ op: 'clear' });
       dispatch({ op: 'show', id: 'composed-diagram', type: 'diagram', role: 'primary', data: {
-        title: 'COMPOSED / SYSTEM FLOW', nodes: [{ id: 'input', label: 'INPUT' }, { id: 'active', label: 'ACTIVE', state: 'active' }, { id: 'output', label: 'OUTPUT' }], edges: [{ from: 'input', to: 'active', label: 'route' }, { from: 'active', to: 'output', label: 'emit' }]
+        mode: 'graph', title: 'COMPOSED / SYSTEM FLOW', nodes: [{ id: 'input', label: 'INPUT' }, { id: 'active', label: 'ACTIVE', state: 'active' }, { id: 'output', label: 'OUTPUT' }], edges: [{ from: 'input', to: 'active', label: 'route' }, { from: 'active', to: 'output', label: 'emit' }]
       }});
       dispatch({ op: 'show', id: 'composed-note', type: 'note', role: 'secondary', data: { tag: 'COMPOSED', segments: [{ text: 'Active path highlighted.' }] } });
       dispatch({ op: 'show', id: 'composed-metric', type: 'metric', role: 'ambient', data: { label: 'THROUGHPUT', value: '98.4%' } });

@@ -28,6 +28,233 @@ use tower_http::services::ServeDir;
 
 const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SceneObject {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub object_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    pub data: Value,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DisplaySpeech {
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<Value>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DisplayProjection {
+    pub objects: HashMap<String, SceneObject>,
+    pub order: Vec<String>,
+    pub focus_id: Option<String>,
+    pub speech: Option<DisplaySpeech>,
+    pub watermark: u64,
+}
+
+impl DisplayProjection {
+    pub fn apply(&mut self, action: &Value, sequence: u64) {
+        self.watermark = sequence;
+        let Some(op) = action.get("op").and_then(Value::as_str) else {
+            return;
+        };
+        match op {
+            "show" => {
+                let Some(id) = action.get("id").and_then(Value::as_str) else {
+                    return;
+                };
+                let Some(object_type) = action.get("type").and_then(Value::as_str) else {
+                    return;
+                };
+                let role = action.get("role").and_then(Value::as_str).map(String::from);
+                let data = action.get("data").cloned().unwrap_or(Value::Null);
+
+                if let Some(existing) = self.objects.get_mut(id) {
+                    existing.object_type = object_type.to_string();
+                    if role.is_some() {
+                        existing.role = role;
+                    }
+                    existing.data = data;
+                } else {
+                    self.objects.insert(
+                        id.to_string(),
+                        SceneObject {
+                            id: id.to_string(),
+                            object_type: object_type.to_string(),
+                            role,
+                            data,
+                        },
+                    );
+                    self.order.push(id.to_string());
+                }
+            }
+            "hide" => {
+                let Some(id) = action.get("id").and_then(Value::as_str) else {
+                    return;
+                };
+                if self.objects.remove(id).is_some() {
+                    self.order.retain(|item| item != id);
+                    if self.focus_id.as_deref() == Some(id) {
+                        self.focus_id = None;
+                    }
+                    if self.speech.as_ref().and_then(|s| s.target.as_deref()) == Some(id) {
+                        self.speech = None;
+                    }
+                }
+            }
+            "focus" => {
+                let Some(id) = action.get("id").and_then(Value::as_str) else {
+                    return;
+                };
+                if self.objects.contains_key(id) {
+                    self.focus_id = Some(id.to_string());
+                } else {
+                    self.focus_id = None;
+                }
+            }
+            "say" => {
+                let Some(text) = action.get("text").and_then(Value::as_str) else {
+                    return;
+                };
+                let target = action
+                    .get("target")
+                    .and_then(Value::as_str)
+                    .map(String::from);
+                let at = action.get("at").filter(|v| !v.is_null()).cloned();
+                self.speech = Some(DisplaySpeech {
+                    text: text.to_string(),
+                    target,
+                    at,
+                });
+            }
+            "clear" => {
+                self.objects.clear();
+                self.order.clear();
+                self.focus_id = None;
+                self.speech = None;
+            }
+            _ => {}
+        }
+    }
+
+    pub fn snapshot_actions(&self) -> Vec<Value> {
+        let mut actions = Vec::new();
+        for id in &self.order {
+            if let Some(obj) = self.objects.get(id) {
+                let mut map = serde_json::Map::new();
+                map.insert("op".into(), "show".into());
+                map.insert("id".into(), obj.id.clone().into());
+                map.insert("type".into(), obj.object_type.clone().into());
+                if let Some(r) = &obj.role {
+                    map.insert("role".into(), r.clone().into());
+                }
+                map.insert("data".into(), obj.data.clone());
+                actions.push(Value::Object(map));
+            }
+        }
+        if let Some(focus_id) = &self.focus_id {
+            actions.push(json!({"op": "focus", "id": focus_id}));
+        }
+        if let Some(speech) = &self.speech {
+            let mut map = serde_json::Map::new();
+            map.insert("op".into(), "say".into());
+            map.insert("text".into(), speech.text.clone().into());
+            if let Some(t) = &speech.target {
+                map.insert("target".into(), t.clone().into());
+            }
+            if let Some(at) = &speech.at {
+                map.insert("at".into(), at.clone());
+            } else {
+                map.insert("at".into(), Value::Null);
+            }
+            actions.push(Value::Object(map));
+        }
+        actions
+    }
+
+    // Mirrors the browser's `buildCompositionModel` in
+    // apps/frontend/src/app/sceneModel.ts exactly: the reporting object is
+    // the focused object if one is set and still on stage, else the
+    // composition primary -- the first object (in `order`) with
+    // role:"primary", else the first non-ambient object, else the first
+    // object overall. Keep the two in lockstep; see docs/visual-channel.md.
+    fn composition_primary(&self) -> Option<&SceneObject> {
+        self.order
+            .iter()
+            .filter_map(|id| self.objects.get(id))
+            .find(|object| object.role.as_deref() == Some("primary"))
+            .or_else(|| {
+                self.order
+                    .iter()
+                    .filter_map(|id| self.objects.get(id))
+                    .find(|object| object.role.as_deref() != Some("ambient"))
+            })
+            .or_else(|| self.order.iter().find_map(|id| self.objects.get(id)))
+    }
+
+    pub fn summary(&self) -> (bool, Option<String>, Option<String>, Vec<String>) {
+        let has_visual = !self.order.is_empty();
+        let focused = self.focus_id.as_ref().and_then(|id| self.objects.get(id));
+        let primary = focused.or_else(|| self.composition_primary());
+        let kind = primary.map(|o| o.object_type.clone());
+        let title = primary.and_then(|o| {
+            o.data
+                .get("title")
+                .or_else(|| o.data.get("subject"))
+                .or_else(|| o.data.get("label"))
+                .and_then(Value::as_str)
+                .map(String::from)
+        });
+        (has_visual, kind, title, self.order.clone())
+    }
+}
+
+pub struct DisplayGateState {
+    pub projection: DisplayProjection,
+    pub screen_state: Value,
+    pub active_epoch: Option<u64>,
+    pub report_epoch: Option<u64>,
+    pub report_generation: Option<u64>,
+    pub watermark: u64,
+}
+
+#[derive(Clone, Default)]
+pub struct ConfirmState {
+    pub generation: u64,
+    // `None` means "the browser has not confirmed anything in this
+    // generation yet" -- distinct from confirming sequence 0, which is a
+    // real, reachable sequence number.
+    pub watermark: Option<u64>,
+    pub rejection: Option<(u64, String)>,
+}
+
+const DISPLAY_CONFIRM_DEADLINE_MS: u64 = 2500;
+
+fn is_display_event(event: &Event) -> bool {
+    match event {
+        Event::Json(v) => v.get("type").and_then(Value::as_str) == Some("display"),
+        _ => false,
+    }
+}
+
+fn stamp_display_seq(event: Event, sequence: u64) -> Event {
+    match event {
+        Event::Json(mut value) => {
+            if value.get("type").and_then(Value::as_str) == Some("display") {
+                if let Some(map) = value.as_object_mut() {
+                    map.insert("seq".into(), json!(sequence));
+                }
+            }
+            Event::Json(value)
+        }
+        other => other,
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState(pub Arc<AppInner>);
 pub struct AppInner {
@@ -49,6 +276,8 @@ pub struct AppInner {
     stream_clips: Mutex<HashMap<String, StreamClipState>>,
     pub last_display: Arc<Mutex<Option<Value>>>,
     pub screen_state: Mutex<Value>,
+    pub display_gate: Arc<Mutex<DisplayGateState>>,
+    pub display_confirm: watch::Sender<ConfirmState>,
     pub active_session: Arc<Mutex<Option<PiSession>>>,
     activity_clock: ActivityClock,
     live_leg: LiveLegState,
@@ -110,17 +339,19 @@ const DELIVERY_QUEUE: usize = 256;
 struct DeliveryState {
     next_epoch: Arc<AtomicU64>,
     next_sequence: Arc<AtomicU64>,
+    active_epoch: Arc<AtomicU64>,
     connections: Arc<std::sync::Mutex<HashMap<u64, mpsc::Sender<DeliveryFrame>>>>,
 }
 
-enum DeliveryFrame {
+#[derive(Debug)]
+pub enum DeliveryFrame {
     Event { sequence: u64, event: Event },
     Message(Message),
 }
 
-struct DeliveryConnection {
-    epoch: u64,
-    receiver: mpsc::Receiver<DeliveryFrame>,
+pub struct DeliveryConnection {
+    pub epoch: u64,
+    pub receiver: mpsc::Receiver<DeliveryFrame>,
 }
 
 impl DeliveryState {
@@ -128,12 +359,14 @@ impl DeliveryState {
         Self {
             next_epoch: Arc::new(AtomicU64::new(1)),
             next_sequence: Arc::new(AtomicU64::new(0)),
+            active_epoch: Arc::new(AtomicU64::new(0)),
             connections: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
     fn register(&self) -> DeliveryConnection {
         let epoch = self.next_epoch.fetch_add(1, Ordering::Relaxed);
+        self.active_epoch.store(epoch, Ordering::Relaxed);
         let (sender, receiver) = mpsc::channel(DELIVERY_QUEUE);
         self.connections.lock().unwrap().insert(epoch, sender);
         DeliveryConnection { epoch, receiver }
@@ -141,9 +374,21 @@ impl DeliveryState {
 
     fn retire(&self, epoch: u64) {
         self.connections.lock().unwrap().remove(&epoch);
+        let _ = self
+            .active_epoch
+            .compare_exchange(epoch, 0, Ordering::Relaxed, Ordering::Relaxed);
     }
 
-    fn publish(&self, event: Event) -> bool {
+    fn active_epoch(&self) -> Option<u64> {
+        let ep = self.active_epoch.load(Ordering::Relaxed);
+        if ep == 0 {
+            None
+        } else {
+            Some(ep)
+        }
+    }
+
+    fn publish_sequenced(&self, event: Event) -> (bool, u64) {
         let sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
         let mut delivered = false;
         let mut dead = Vec::new();
@@ -164,7 +409,11 @@ impl DeliveryState {
                 connections.remove(&epoch);
             }
         }
-        delivered
+        (delivered, sequence)
+    }
+
+    fn publish(&self, event: Event) -> bool {
+        self.publish_sequenced(event).0
     }
 
     fn send(&self, epoch: u64, message: Message) -> bool {
@@ -312,6 +561,30 @@ pub struct Clip {
 }
 
 impl AppState {
+    pub async fn register_connection(&self) -> (DeliveryConnection, Vec<Value>, u64) {
+        let mut gate = self.0.display_gate.lock().await;
+        let connection = self.0.delivery.register();
+        let epoch = connection.epoch;
+        gate.active_epoch = Some(epoch);
+        gate.screen_state["stale"] = json!(true);
+        *self.0.screen_state.lock().await = gate.screen_state.clone();
+        let snapshot_actions = gate.projection.snapshot_actions();
+        let watermark = gate.watermark;
+        (connection, snapshot_actions, watermark)
+    }
+
+    pub async fn retire_connection(&self, epoch: u64) {
+        {
+            let mut gate = self.0.display_gate.lock().await;
+            if gate.active_epoch == Some(epoch) || gate.active_epoch.is_none() {
+                gate.active_epoch = None;
+                gate.screen_state["stale"] = json!(true);
+                *self.0.screen_state.lock().await = gate.screen_state.clone();
+            }
+        }
+        self.0.delivery.retire(epoch);
+    }
+
     pub fn new(
         switchboard: Switchboard,
         transcript_log: TranscriptLog,
@@ -397,17 +670,54 @@ impl AppState {
                 candidate_delivery.publish(event);
             },
         ));
+        let display_gate = Arc::new(Mutex::new(DisplayGateState {
+            projection: DisplayProjection::default(),
+            screen_state: json!({
+                "view": "auto",
+                "pinned": false,
+                "has_visual": false,
+                "visual_kind": Value::Null,
+                "object_ids": [],
+                "title": "",
+                "stale": false,
+                "generation": 0,
+            }),
+            active_epoch: None,
+            report_epoch: None,
+            report_generation: None,
+            watermark: 0,
+        }));
+        let (display_confirm_tx, _) = watch::channel(ConfirmState::default());
         let route_events = events.clone();
         let route_delivery = delivery.clone();
         let route_display = last_display.clone();
         let route_coordinator = coordinator.clone();
+        let route_gate = display_gate.clone();
+        let route_confirm = display_confirm_tx.clone();
         let route_callback: RouteCallback = Arc::new(move |status| {
             let events = route_events.clone();
             let delivery = route_delivery.clone();
             let diagram = route_display.clone();
             let coordinator = route_coordinator.clone();
+            let gate = route_gate.clone();
+            let route_confirm = route_confirm.clone();
             Box::pin(async move {
+                {
+                    let mut g = gate.lock().await;
+                    g.projection.objects.clear();
+                    g.projection.order.clear();
+                    g.projection.focus_id = None;
+                    g.projection.speech = None;
+                    g.screen_state["stale"] = json!(true);
+                    g.report_epoch = None;
+                    g.report_generation = None;
+                }
                 let generation = coordinator.generation();
+                route_confirm.send_modify(|c| {
+                    c.generation = generation;
+                    c.watermark = None;
+                    c.rejection = None;
+                });
                 let epoch = Event::Json(json!({
                     "type": "epoch",
                     "generation": generation,
@@ -447,11 +757,16 @@ impl AppState {
             last_display,
             screen_state: Mutex::new(json!({
                 "view": "auto",
+                "pinned": false,
                 "has_visual": false,
-                "visual_kind": "",
+                "visual_kind": Value::Null,
+                "object_ids": [],
                 "title": "",
                 "stale": false,
+                "generation": 0,
             })),
+            display_gate,
+            display_confirm: display_confirm_tx,
             active_session,
             activity_clock,
             live_leg,
@@ -475,8 +790,8 @@ impl AppState {
             .route("/leg-state", post(leg_state))
             .route("/speak", post(speak))
             .route(
-                "/diagram",
-                post(diagram).layer(DefaultBodyLimit::max(64 * 1024)),
+                "/display",
+                post(display).layer(DefaultBodyLimit::max(64 * 1024)),
             )
             .route("/view", post(view).layer(DefaultBodyLimit::max(16 * 1024)))
             .route("/ws", get(ws))
@@ -1593,14 +1908,64 @@ async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Respons
 
     Json(json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})).into_response()
 }
-async fn diagram(
-    State(state): State<AppState>,
-    Json(req): Json<crate::visual_protocol::DisplayRequest>,
-) -> Response {
-    promote_candidate_for_token(&state, &req.token);
-    if let Err(error) = state.0.coordinator.accept_side_effect(&req.token) {
+async fn display(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
+    let raw: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({"delivered":false, "detail":"invalid JSON payload"})),
+            )
+                .into_response();
+        }
+    };
+    let Some(map) = raw.as_object() else {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({"delivered":false, "detail":"request must be an object"})),
+        )
+            .into_response();
+    };
+
+    for k in map.keys() {
+        if k != "token" && k != "action" {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(
+                    json!({"delivered":false, "detail":format!("unknown field in envelope: {k}")}),
+                ),
+            )
+                .into_response();
+        }
+    }
+
+    let Some(action_val) = map.get("action") else {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({"delivered":false, "detail":"action is required"})),
+        )
+            .into_response();
+    };
+
+    let token = map.get("token").and_then(Value::as_str).unwrap_or("");
+
+    let normalized_action = match crate::visual_protocol::validate_action(action_val) {
+        Ok(act) => act,
+        Err(detail) => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({"delivered":false, "detail":detail})),
+            )
+                .into_response();
+        }
+    };
+
+    promote_candidate_for_token(&state, token);
+    if let Err(error) = state.0.coordinator.accept_side_effect(token) {
         let detail = match error {
-            crate::lifecycle::LifecycleError::CandidateSideEffect => "the caller's screen is not live until this transfer completes: draw it again on your next turn",
+            crate::lifecycle::LifecycleError::CandidateSideEffect => {
+                "the caller's screen is not live until this transfer completes: draw it again on your next turn"
+            }
             _ => "this leg is no longer on the call: stop retrying, nothing you send reaches the caller",
         };
         return (
@@ -1609,52 +1974,80 @@ async fn diagram(
         )
             .into_response();
     }
-    let raw = match serde_json::to_value(&req) {
-        Ok(v) => v,
-        Err(_) => {
-            return (
-                axum::http::StatusCode::BAD_REQUEST,
-                Json(json!({"delivered":false,"detail":"invalid action"})),
-            )
-                .into_response()
-        }
-    };
-    let value = match crate::visual_protocol::validate(&req, &raw) {
-        Ok(action) => json!({"type":"display", "action": action}),
-        Err(detail) => {
-            return (
-                axum::http::StatusCode::BAD_REQUEST,
-                Json(json!({"delivered":false,"detail":detail})),
-            )
-                .into_response()
-        }
-    };
-    *state.0.last_display.lock().await = Some(value.clone());
-    // Keep the status snapshot truthful for clients that query it between events.
-    if let Some(action) = value.get("action") {
-        let mut screen = state.0.screen_state.lock().await;
-        if let Some(obj) = screen.as_object_mut() {
-            let op = action.get("op").and_then(Value::as_str).unwrap_or("");
-            if op == "show" {
-                obj.insert("has_visual".into(), true.into());
-                obj.insert(
-                    "visual_kind".into(),
-                    action
-                        .get("type")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .into(),
-                );
-            } else if op == "clear" {
-                obj.insert("has_visual".into(), false.into());
-                obj.insert("visual_kind".into(), "".into());
+    let permit_generation = state.0.coordinator.generation();
+
+    let mut gate = state.0.display_gate.lock().await;
+    if state.0.coordinator.generation() != permit_generation
+        || state.0.coordinator.accept_side_effect(token).is_err()
+    {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({
+                "delivered": false,
+                "code": "invalid_leg",
+                "detail": "this leg is no longer on the call: stop retrying, nothing you send reaches the caller"
+            })),
+        )
+            .into_response();
+    }
+
+    let value = json!({"type":"display", "action": normalized_action});
+    let event = Event::Json(value.clone());
+    let _ = state.0.events.send(event.clone());
+    let (delivered, sequence) = state.0.delivery.publish_sequenced(event);
+
+    gate.projection.apply(&normalized_action, sequence);
+    gate.watermark = sequence;
+    *state.0.last_display.lock().await = Some(value);
+    drop(gate);
+
+    if !delivered {
+        return Json(json!({"delivered": false, "reason": "no browser connected"})).into_response();
+    }
+
+    let mut confirm_rx = state.0.display_confirm.subscribe();
+    let deadline = tokio::time::sleep(std::time::Duration::from_millis(
+        DISPLAY_CONFIRM_DEADLINE_MS,
+    ));
+    tokio::pin!(deadline);
+    loop {
+        {
+            let c = confirm_rx.borrow_and_update();
+            if c.generation == permit_generation {
+                if let Some((rseq, reason)) = &c.rejection {
+                    if *rseq == sequence {
+                        return Json(json!({
+                            "delivered": true, "rendered": false,
+                            "rejected": true, "reason": reason
+                        }))
+                        .into_response();
+                    }
+                }
+                if c.watermark.is_some_and(|w| w >= sequence) {
+                    return Json(json!({"delivered": true, "rendered": true})).into_response();
+                }
+            } else if c.generation > permit_generation {
+                return Json(json!({
+                    "delivered": true, "rendered": false,
+                    "reason": "the caller's screen moved to a new leg before this was confirmed"
+                }))
+                .into_response();
             }
         }
+        tokio::select! {
+            changed = confirm_rx.changed() => { if changed.is_err() { break; } }
+            _ = &mut deadline => { break; }
+        }
     }
-    let delivered = emit_json(&state, value);
-    Json(delivery_response(delivered)).into_response()
+    Json(json!({
+        "delivered": true, "rendered": false,
+        "reason": "no confirmation from the browser"
+    }))
+    .into_response()
 }
+
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ViewRequest {
     #[serde(default)]
     target: String,
@@ -1679,14 +2072,53 @@ async fn view(State(state): State<AppState>, Json(req): Json<ViewRequest>) -> Re
         )
             .into_response();
     }
+    let permit_generation = state.0.coordinator.generation();
     let target = req.target.trim().to_ascii_lowercase();
+
+    let gate = state.0.display_gate.lock().await;
+    if state.0.coordinator.generation() != permit_generation
+        || state.0.coordinator.accept_side_effect(&req.token).is_err()
+    {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({
+                "delivered": false,
+                "code": "invalid_leg",
+                "detail": "this leg is no longer on the call: stop retrying, nothing you send reaches the caller"
+            })),
+        )
+            .into_response();
+    }
+
     if target.is_empty() {
-        let mut screen = state.0.screen_state.lock().await.clone();
-        if let Some(screen) = screen.as_object_mut() {
-            screen.insert("connected".into(), state.0.delivery.connected().into());
-        }
+        let (has_visual, kind, title, object_ids) = gate.projection.summary();
+        let view = gate
+            .screen_state
+            .get("view")
+            .and_then(Value::as_str)
+            .unwrap_or("auto")
+            .to_string();
+        let connected = state.0.delivery.connected();
+        let confirm = state.0.display_confirm.borrow().clone();
+        // Nothing is on screen, so there is nothing outstanding to confirm:
+        // a fresh call or an emptied stage is trivially "confirmed" without
+        // ever having heard from the browser in this generation.
+        let confirmed = !has_visual
+            || (confirm.generation == permit_generation
+                && confirm.watermark.is_some_and(|w| w >= gate.watermark));
+        let screen = json!({
+            "view": view,
+            "has_visual": has_visual,
+            "visual_kind": kind,
+            "title": title.unwrap_or_default(),
+            "object_ids": object_ids,
+            "confirmed": confirmed,
+            "connected": connected,
+            "stale": !confirmed,
+        });
         return Json(json!({"delivered": true, "screen": screen})).into_response();
     }
+
     if !matches!(
         target.as_str(),
         "auto"
@@ -1714,6 +2146,8 @@ async fn view(State(state): State<AppState>, Json(req): Json<ViewRequest>) -> Re
         )
             .into_response();
     }
+
+    drop(gate);
     let value = json!({
         "type": "view",
         "target": target,
@@ -1857,21 +2291,26 @@ async fn ws(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> impl In
         .on_upgrade(move |socket| websocket(socket, state))
 }
 async fn websocket(socket: WebSocket, state: AppState) {
-    // Registration precedes snapshot reads. Every event published after this
-    // point is queued for this epoch, so the writer can release the barrier
-    // only after epoch, status, history, and the optional diagram are sent.
-    let connection = state.0.delivery.register();
+    let (connection, snapshot_actions, watermark) = state.register_connection().await;
     let epoch = connection.epoch;
     let (mut sink, mut incoming) = socket.split();
     let mut frames = connection.receiver;
     let writer_state = state.clone();
     let mut writer = Box::pin(tokio::spawn(async move {
-        send_snapshot_sink(&mut sink, &writer_state).await?;
+        send_snapshot_sink(&mut sink, &writer_state, &snapshot_actions, watermark).await?;
         while let Some(frame) = frames.recv().await {
             match frame {
                 DeliveryFrame::Event { sequence, event } => {
+                    if sequence <= watermark && is_display_event(&event) {
+                        tracing::trace!(
+                            sequence,
+                            epoch,
+                            "discarding replayed display event <= watermark"
+                        );
+                        continue;
+                    }
                     tracing::trace!(sequence, epoch, "delivering sequenced event");
-                    send_event_sink(&mut sink, event).await?
+                    send_event_sink(&mut sink, stamp_display_seq(event, sequence)).await?
                 }
                 DeliveryFrame::Message(message) => sink.send(message).await?,
             }
@@ -1911,7 +2350,7 @@ async fn websocket(socket: WebSocket, state: AppState) {
             },
         }
     }
-    state.0.delivery.retire(epoch);
+    state.retire_connection(epoch).await;
     // The writer owns the only sink. Retiring first prevents new events from
     // being accepted while its final send is being canceled.
     writer.abort();
@@ -1921,6 +2360,8 @@ async fn websocket(socket: WebSocket, state: AppState) {
 async fn send_snapshot_sink(
     sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
     state: &AppState,
+    snapshot_actions: &[Value],
+    watermark: u64,
 ) -> Result<(), axum::Error> {
     let initial = [
         Event::Json(json!({"type":"epoch", "generation":state.0.coordinator.generation()})),
@@ -1932,8 +2373,15 @@ async fn send_snapshot_sink(
     for event in initial {
         send_event_sink(sink, event).await?;
     }
-    if let Some(diagram) = state.0.last_display.lock().await.clone() {
-        send_event_sink(sink, Event::Json(diagram)).await?;
+    for action in snapshot_actions {
+        send_event_sink(
+            sink,
+            stamp_display_seq(
+                Event::Json(json!({"type":"display", "action":action})),
+                watermark,
+            ),
+        )
+        .await?;
     }
     Ok(())
 }
@@ -2269,19 +2717,91 @@ async fn handle_text_frame(
                 .chars()
                 .take(200)
                 .collect::<String>();
-            let visual_kind = command
-                .get("visual_kind")
-                .and_then(Value::as_str)
-                .filter(|kind| matches!(*kind, "" | "mermaid" | "plan" | "timeline" | "diff"))
-                .unwrap_or("");
-            *state.0.screen_state.lock().await = json!({
+            let visual_kind = match command.get("visual_kind") {
+                Some(Value::String(s)) => {
+                    if matches!(
+                        s.as_str(),
+                        "chart" | "metric" | "progress" | "diagram" | "document" | "code" | "note"
+                    ) {
+                        Value::String(s.clone())
+                    } else {
+                        Value::Null
+                    }
+                }
+                _ => Value::Null,
+            };
+            let object_ids = command
+                .get("object_ids")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let pinned = command
+                .get("pinned")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let has_visual = command
+                .get("has_visual")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let stale = command
+                .get("stale")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let report_gen = command
+                .get("generation")
+                .and_then(Value::as_u64)
+                .unwrap_or_else(|| state.0.coordinator.generation());
+
+            let current_gen = state.0.coordinator.generation();
+            let active_ep = state.0.delivery.active_epoch();
+            if active_ep != Some(epoch) || report_gen != current_gen {
+                return Ok(());
+            }
+            let mut gate = state.0.display_gate.lock().await;
+
+            let report = json!({
                 "view": view,
-                "has_visual": command.get("has_visual").and_then(Value::as_bool).unwrap_or(false),
+                "pinned": pinned,
+                "has_visual": has_visual,
                 "visual_kind": visual_kind,
+                "object_ids": object_ids,
                 "title": title,
-                "stale": command.get("stale").and_then(Value::as_bool).unwrap_or(false),
+                "stale": stale,
+                "generation": current_gen,
             });
-            Ok(())
+            gate.screen_state = report.clone();
+            gate.report_epoch = Some(epoch);
+            gate.report_generation = Some(current_gen);
+            *state.0.screen_state.lock().await = report;
+            drop(gate);
+
+            let applied_seq = command.get("applied_seq").and_then(Value::as_u64);
+            let rejected = command
+                .get("rejected")
+                .and_then(Value::as_object)
+                .and_then(|m| {
+                    let seq = m.get("seq").and_then(Value::as_u64)?;
+                    let reason = m
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .unwrap_or("the caller's screen could not render it")
+                        .to_string();
+                    Some((seq, reason))
+                });
+            state.0.display_confirm.send_modify(|c| {
+                if c.generation != current_gen {
+                    c.generation = current_gen;
+                    c.watermark = None;
+                }
+                if let Some(seq) = applied_seq {
+                    if c.watermark.is_none_or(|w| seq > w) {
+                        c.watermark = Some(seq);
+                    }
+                }
+                c.rejection = rejected.clone();
+            });
+
+            send_json(state, epoch, json!({"type":"screen_state_ack"})).await
         }
         Some("ping") => {
             send_json(

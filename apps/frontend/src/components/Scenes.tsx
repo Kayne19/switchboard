@@ -11,7 +11,7 @@ import type {
   ProgressData,
   SceneObject,
 } from '../controller/types';
-import { cast, objectsOfType, primaryObject } from '../app/sceneModel';
+import { buildCompositionModel, cast, objectsOfType, primaryObject } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { CodeViewport } from '../primitives/CodeViewport';
@@ -68,9 +68,20 @@ export function IdleScene({ state, onToggleListening }: Pick<SceneProps, 'state'
 }
 
 export function ConversationScene({ state, onToggleListening, transcriptOpen, setTranscriptOpen }: SceneProps) {
-  const object = primaryObject(state);
-  if (!object) return <IdleScene state={state} onToggleListening={onToggleListening} />;
-  const message = cast.message(object).data;
+  const comp = buildCompositionModel(state);
+  const object =
+    comp.runtimeConversation ??
+    (comp.primary?.type === 'message' ? comp.primary : null) ??
+    (state.objects['message'] as SceneObject<MessageData> | undefined) ??
+    null;
+  const fallbackMessage: MessageData = {
+    context: 'OPERATOR LINE',
+    tag: 'CURRENT RESPONSE / LIVE',
+    segments: [{ text: 'Line open. Speak when ready.' }],
+    channel: { name: 'VOICE', mode: 'PUSH-TO-TALK' },
+    transcript: [],
+  };
+  const message = object ? cast.message(object).data : fallbackMessage;
   // Status/activity speech is rendered as an annotation elsewhere; it must not
   // replace the conversation's latest committed response.
   const segments = message.segments;
@@ -88,7 +99,7 @@ export function ConversationScene({ state, onToggleListening, transcriptOpen, se
         />
       </div>
 
-      <ObjectMotion objectId={object.id} className="conversation-answer">
+      <ObjectMotion objectId={object?.id ?? "conversation"} className="conversation-answer">
         <TechFrame variant="panel" />
         <div className="conversation-answer__tag tech micro">{message.tag ?? 'CURRENT RESPONSE / 01'}</div>
         <div className="conversation-answer__text"><RichText segments={segments} /></div>
@@ -273,6 +284,99 @@ export function CodeScene({ state, onToggleListening, onFocus }: SceneProps) {
         </motion.aside>
       </div>
       <SceneFooter left="FRAME / INTERRUPTED RAILS" right="DISPLAY / SOURCE" />
+    </motion.section>
+  );
+}
+
+export function ComposedScene({ state, onToggleListening, onFocus }: SceneProps) {
+  const comp = buildCompositionModel(state);
+  const primary = comp.primary;
+  if (!primary) return <IdleScene state={state} onToggleListening={onToggleListening} />;
+
+  const noteObject = comp.allAgentObjects.find((o) => o.type === 'note') as SceneObject<NoteData> | undefined;
+  const note = noteFromSpeech(state, noteObject);
+  const metrics = comp.allAgentObjects.filter((o) => o.type === 'metric') as Array<SceneObject<MetricData>>;
+  const progressList = comp.allAgentObjects.filter((o) => o.type === 'progress') as Array<SceneObject<ProgressData>>;
+
+  const renderPrimaryPrimitive = () => {
+    switch (primary.type) {
+      case 'chart':
+        return <ChartPrimitive data={(primary as SceneObject<ChartData>).data} />;
+      case 'diagram':
+        return <DiagramPrimitive data={(primary as SceneObject<DiagramData>).data} />;
+      case 'document':
+        return <DocumentViewport data={(primary as SceneObject<DocumentData>).data} />;
+      case 'code':
+        return <CodeViewport data={(primary as SceneObject<CodeData>).data} />;
+      case 'metric':
+        return <MetricsPrimitive metrics={[primary as SceneObject<MetricData>]} />;
+      case 'progress':
+        return <ProgressPrimitive data={(primary as SceneObject<ProgressData>).data} />;
+      case 'note':
+        return <AnnotationCard data={(primary as SceneObject<NoteData>).data} />;
+      default:
+        return null;
+    }
+  };
+
+  const title = (primary.data as any)?.title ?? (primary.data as any)?.subject ?? (primary.data as any)?.label ?? 'COMPOSED WORKSPACE';
+  const subtitle = (primary.data as any)?.subtitle ?? 'STRUCTURED SCENE';
+
+  return (
+    <motion.section className="scene scene--content scene--composed" data-scene="composed" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+      <CornerMarks />
+      <div className="scene-heading">
+        <div className="scene-heading__title tech">{title}</div>
+        <div className="scene-heading__sub tech micro">{subtitle}</div>
+      </div>
+      <div className="content-grid">
+        <motion.div className="content-main composed-main" layout>
+          <ObjectMotion objectId={primary.id} className="composed-primary-object">
+            <TechFrame variant="panel" />
+            <FocusableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
+              {renderPrimaryPrimitive()}
+            </FocusableSurface>
+          </ObjectMotion>
+          {comp.compare.map((cmp) => (
+            <ObjectMotion key={cmp.id} objectId={cmp.id} className="composed-compare-object">
+              <TechFrame variant="panel" />
+              <FocusableSurface onActivate={() => onFocus(cmp.id)} ariaLabel={`Expand compare ${cmp.type}`}>
+                {cmp.type === 'chart' ? <ChartPrimitive data={(cmp as SceneObject<ChartData>).data} /> : null}
+                {cmp.type === 'diagram' ? <DiagramPrimitive data={(cmp as SceneObject<DiagramData>).data} /> : null}
+                {cmp.type === 'document' ? <DocumentViewport data={(cmp as SceneObject<DocumentData>).data} /> : null}
+                {cmp.type === 'code' ? <CodeViewport data={(cmp as SceneObject<CodeData>).data} /> : null}
+                {cmp.type === 'metric' ? <MetricsPrimitive metrics={[cmp as SceneObject<MetricData>]} /> : null}
+                {cmp.type === 'progress' ? <ProgressPrimitive data={(cmp as SceneObject<ProgressData>).data} /> : null}
+                {cmp.type === 'note' ? <AnnotationCard data={(cmp as SceneObject<NoteData>).data} /> : null}
+              </FocusableSurface>
+            </ObjectMotion>
+          ))}
+          {progressList.filter(p => p.id !== primary.id && !comp.compare.some(c => c.id === p.id)).map(p => (
+            <ObjectMotion key={p.id} objectId={p.id} className="composed-progress">
+              <FocusableSurface onActivate={() => onFocus(p.id)} ariaLabel="Expand progress">
+                <ProgressPrimitive data={p.data} />
+              </FocusableSurface>
+            </ObjectMotion>
+          ))}
+        </motion.div>
+        <motion.aside className="content-rail" layout>
+          <DamoclesPresence
+            listening={state.listening}
+            onToggleListening={onToggleListening}
+            context={(primary.data as any)?.context ?? 'COMPOSED'}
+            size="rail"
+          />
+          {metrics.length > 0 && primary.type !== 'metric' ? (
+            <MetricsPrimitive metrics={metrics} />
+          ) : null}
+          {note ? (
+            <ObjectMotion objectId={noteObject?.id ?? 'speech-note'} className="rail-note">
+              <AnnotationCard data={note} onFocus={noteObject ? () => onFocus(noteObject.id) : undefined} />
+            </ObjectMotion>
+          ) : null}
+        </motion.aside>
+      </div>
+      <SceneFooter left="DISPLAY / COMPOSED" right="SYSTEM / ACTIVE" />
     </motion.section>
   );
 }

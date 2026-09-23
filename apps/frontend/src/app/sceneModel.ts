@@ -1,4 +1,5 @@
 import type {
+  AgentObjectType,
   ChartData,
   CodeData,
   ControllerState,
@@ -10,7 +11,9 @@ import type {
   ProgressData,
   SceneObject,
   SceneObjectType,
+  ScreenStateReport,
 } from '../controller/types';
+import { RUNTIME_CONVERSATION_ID } from '../controller/types';
 
 export function orderedObjects(state: ControllerState): SceneObject[] {
   return state.order.map((id) => state.objects[id]).filter(Boolean);
@@ -20,22 +23,163 @@ export function objectsOfType<T>(state: ControllerState, type: SceneObjectType):
   return orderedObjects(state).filter((object) => object.type === type) as Array<SceneObject<T>>;
 }
 
-export function primaryObject(state: ControllerState): SceneObject | null {
-  const objects = orderedObjects(state);
-  return objects.find((object) => object.role === 'primary') ?? objects.find((object) => !['metric', 'progress', 'note'].includes(object.type)) ?? null;
+export interface CompositionModel {
+  primary: SceneObject | null;
+  compare: SceneObject[];
+  secondary: SceneObject[];
+  ambient: SceneObject[];
+  allAgentObjects: SceneObject[];
+  runtimeConversation: SceneObject<MessageData> | null;
+  runtimeObjects: SceneObject[];
+  isGenericComposed: boolean;
+  visualKind: AgentObjectType | null;
 }
 
-export type SceneKind = 'idle' | 'conversation' | 'training' | 'architecture' | 'document' | 'code';
+export function buildCompositionModel(state: ControllerState): CompositionModel {
+  const allAgentObjects = state.agentOrder
+    .map((id) => state.agentObjects[id])
+    .filter((obj): obj is SceneObject => Boolean(obj));
+
+  // Determine primary:
+  // "one deterministic primary (first explicit primary, else first non-ambient by order)"
+  let primary: SceneObject | null = null;
+  const explicitPrimary = allAgentObjects.find((obj) => obj.role === 'primary');
+  if (explicitPrimary) {
+    primary = explicitPrimary;
+  } else {
+    const firstNonAmbient = allAgentObjects.find((obj) => obj.role !== 'ambient');
+    if (firstNonAmbient) {
+      primary = firstNonAmbient;
+    } else if (allAgentObjects.length > 0) {
+      primary = allAgentObjects[0];
+    }
+  }
+
+  const compare: SceneObject[] = [];
+  const secondary: SceneObject[] = [];
+  const ambient: SceneObject[] = [];
+
+  for (const obj of allAgentObjects) {
+    if (obj.id === primary?.id) {
+      continue;
+    }
+    if (obj.role === 'compare') {
+      compare.push(obj);
+    } else if (obj.role === 'ambient') {
+      ambient.push(obj);
+    } else {
+      secondary.push(obj);
+    }
+  }
+
+  const isObjectOnlyWorkspace =
+    allAgentObjects.length > 0 &&
+    allAgentObjects.every((obj) => ['metric', 'progress', 'note'].includes(obj.type));
+
+  const isGenericComposed =
+    isObjectOnlyWorkspace ||
+    (primary !== null && ['metric', 'progress', 'note'].includes(primary.type));
+
+  const runtimeObjects = state.runtimeOrder
+    .map((id) => state.runtimeObjects[id])
+    .filter((obj): obj is SceneObject => Boolean(obj));
+
+  const runtimeConv =
+    (state.runtimeObjects[RUNTIME_CONVERSATION_ID] as SceneObject<MessageData> | undefined) ??
+    (state.runtimeObjects['conversation'] as SceneObject<MessageData> | undefined) ??
+    (state.objects['message'] as SceneObject<MessageData> | undefined) ??
+    null;
+
+  let visualKind: AgentObjectType | null = null;
+  if (state.focusId && state.agentObjects[state.focusId]) {
+    const focused = state.agentObjects[state.focusId];
+    if (focused.type !== 'message') {
+      visualKind = focused.type as AgentObjectType;
+    }
+  } else if (primary && primary.type !== 'message') {
+    visualKind = primary.type as AgentObjectType;
+  }
+
+  return {
+    primary,
+    compare,
+    secondary,
+    ambient,
+    allAgentObjects,
+    runtimeConversation: runtimeConv,
+    runtimeObjects,
+    isGenericComposed,
+    visualKind,
+  };
+}
+
+export function primaryObject(state: ControllerState): SceneObject | null {
+  return buildCompositionModel(state).primary;
+}
+
+export type SceneKind =
+  | 'idle'
+  | 'conversation'
+  | 'training'
+  | 'architecture'
+  | 'document'
+  | 'code'
+  | 'composed';
 
 export function sceneKind(state: ControllerState): SceneKind {
-  const primary = primaryObject(state);
-  if (!primary) return 'idle';
+  if (state.workspace.effectiveView === 'comms') {
+    return 'conversation';
+  }
+  const comp = buildCompositionModel(state);
+  if (comp.isGenericComposed) {
+    return 'composed';
+  }
+  const primary = comp.primary;
+  if (!primary) {
+    if (comp.runtimeConversation) return 'conversation';
+    const legacyMsg = state.order.map((id) => state.objects[id]).find((o) => o?.type === 'message');
+    if (legacyMsg) return 'conversation';
+    return 'idle';
+  }
   if (primary.type === 'message') return 'conversation';
   if (primary.type === 'chart') return 'training';
   if (primary.type === 'diagram') return 'architecture';
   if (primary.type === 'document') return 'document';
   if (primary.type === 'code') return 'code';
-  return 'idle';
+  return 'composed';
+}
+
+export function deriveScreenState(
+  state: ControllerState,
+  generation: number,
+): ScreenStateReport {
+  const comp = buildCompositionModel(state);
+  const focused = state.focusId ? state.agentObjects[state.focusId] : null;
+  const primary = comp.primary;
+
+  let title = '';
+  const candidate = focused ?? primary;
+  if (candidate?.data && typeof candidate.data === 'object') {
+    const data = candidate.data as Record<string, unknown>;
+    if (typeof data.title === 'string') {
+      title = data.title;
+    } else if (typeof data.subject === 'string') {
+      title = data.subject;
+    } else if (typeof data.label === 'string') {
+      title = data.label;
+    }
+  }
+
+  return {
+    view: state.workspace.effectiveView,
+    pinned: state.workspace.callerPinned,
+    has_visual: state.agentOrder.length > 0,
+    visual_kind: comp.visualKind,
+    object_ids: [...state.agentOrder],
+    title,
+    stale: state.workspace.stale,
+    generation,
+  };
 }
 
 export const cast = {

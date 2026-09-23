@@ -1,48 +1,53 @@
 import { describe, expect, it } from 'vitest';
+import fixtures from '../fixtures/display-actions.json';
 import { assertControllerAction, validateControllerAction } from '../../src/controller/validation';
 
 describe('display protocol validation', () => {
-  it('accepts the six semantic operations', () => {
-    const actions = [
-      { op: 'show', id: 'gpu', type: 'metric', data: { label: 'GPU', value: '94%' } },
-      { op: 'hide', id: 'gpu' },
-      { op: 'say', target: 'loss', at: { x: 32, series: 'VAL LOSS' }, text: 'Divergence begins here.' },
-      { op: 'focus', id: 'loss' },
-      { op: 'clear' },
-    ];
-
-    for (const action of actions) expect(validateControllerAction(action).ok).toBe(true);
+  it('accepts and normalizes all canonical valid fixtures', () => {
+    for (const testCase of fixtures.valid) {
+      const result = validateControllerAction(testCase.action);
+      expect(result.ok, `Expected valid fixture "${testCase.name}" to pass`).toBe(true);
+      if (result.ok) {
+        expect(result.action, `Normalized action for "${testCase.name}" should match`).toEqual(testCase.normalized);
+      }
+    }
   });
 
-  it('rejects layout instructions and unknown object types', () => {
-    expect(validateControllerAction({
-      op: 'show', id: 'gpu', type: 'metric', width: 400, data: { label: 'GPU', value: '94%' },
-    })).toEqual({ ok: false, error: 'model-controlled layout field is forbidden: width' });
-
-    expect(validateControllerAction({
-      op: 'show', id: 'thing', type: 'card', data: {},
-    }).ok).toBe(false);
+  it('rejects all canonical invalid fixtures', () => {
+    for (const testCase of fixtures.invalid) {
+      const result = validateControllerAction(testCase.action);
+      expect(result.ok, `Expected invalid fixture "${testCase.name}" to be rejected`).toBe(false);
+    }
   });
 
-  it('accepts all agent display object shapes', () => {
-    const actions = [
-      { op: 'show', id: 'd', type: 'diagram', data: { nodes: [], edges: [{ from: 'a', to: 'b', label: 'next' }] } },
-      { op: 'show', id: 'c', type: 'code', data: { source: { text: 'const x = 1' } } },
-      { op: 'show', id: 'm', type: 'metric', data: { label: 'L', value: '1' } },
-      { op: 'show', id: 'p', type: 'progress', data: { label: 'L', value: 0.5 } },
-      { op: 'show', id: 'n', type: 'note', data: { segments: [{ text: 'hello' }] } },
-      { op: 'show', id: 'e', type: 'document', data: { subject: 'S', paragraphs: [] } },
-    ];
-    for (const action of actions) expect(validateControllerAction(action).ok).toBe(true);
+  it('rejects non-finite mutations (NaN, Infinity, -Infinity)', () => {
+    for (const mutation of fixtures.nonFiniteMutations) {
+      const cloned = JSON.parse(JSON.stringify(mutation.baseAction));
+      let target: any = cloned;
+      for (let i = 0; i < mutation.path.length - 1; i++) {
+        target = target[mutation.path[i]];
+      }
+      const lastKey = mutation.path[mutation.path.length - 1];
+      if (mutation.value === 'Infinity') {
+        target[lastKey] = Number.POSITIVE_INFINITY;
+      } else if (mutation.value === '-Infinity') {
+        target[lastKey] = Number.NEGATIVE_INFINITY;
+      } else if (mutation.value === 'NaN') {
+        target[lastKey] = Number.NaN;
+      }
+
+      const result = validateControllerAction(cloned);
+      expect(result.ok, `Expected non-finite mutation "${mutation.name}" to be rejected`).toBe(false);
+    }
   });
 
-  it('rejects unknown operations and non-finite chart values, including nested layout fields', () => {
-    expect(validateControllerAction({ op: 'listen', on: true }).ok).toBe(false);
-    expect(validateControllerAction({ op: 'show', id: 'c', type: 'chart', data: { series: [{ values: [Infinity] }] } }).ok).toBe(false);
-    expect(validateControllerAction({ op: 'show', id: 'c', type: 'chart', data: { series: [{ values: [1], style: 'x' }] } }).ok).toBe(false);
-  });
+  it('assertControllerAction returns action on valid input and throws on invalid input', () => {
+    const valid = fixtures.valid[0].action;
+    expect(() => assertControllerAction(valid)).not.toThrow();
+    const action = assertControllerAction(valid);
+    expect(action.op).toBe('show');
 
-  it('throws a useful error at the external transport boundary', () => {
-    expect(() => assertControllerAction({ op: 'listen', on: 'yes' })).toThrow(/unknown operation/);
+    expect(() => assertControllerAction({ op: 'listen', on: true })).toThrow(/unknown operation/);
+    expect(() => assertControllerAction({ op: 'show', id: '__runtime/x', type: 'metric', data: { label: 'L', value: '1' } })).toThrow(/reserved identifier namespace/);
   });
 });

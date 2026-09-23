@@ -13,14 +13,9 @@ import {
 	HandsFreeController,
 	PLAYBACK_DRAIN_DEBOUNCE_MS,
 } from "./hands_free.js";
-import {
-	historyBack,
-	historyForward,
-	historyLive,
-	markStale,
-	renderVisual,
-} from "./stage.js";
-import "./diff.js";
+function markStale(): void {
+	document.body.classList.add("stage-stale");
+}
 import {
 	initMissionClock,
 	initSynchro,
@@ -1328,7 +1323,8 @@ function connect() {
 		previous.close();
 
 	const proto = location.protocol === "https:" ? "wss" : "ws";
-	const socket = new WebSocket(`${proto}://${location.host}/ws`);
+	const wsParam = new URLSearchParams(location.search).get("ws");
+	const socket = new WebSocket(wsParam || `${proto}://${location.host}/ws`);
 	snapshotReady = false;
 	ws = socket;
 	socket.binaryType = "arraybuffer";
@@ -1541,8 +1537,6 @@ function connect() {
 				// or the other.
 				transferEra = null;
 				setRoute(msg);
-			} else if (msg.type === "diagram") {
-				void renderVisual(msg).then(() => reportWorkspaceState());
 			} else if (msg.type === "view") {
 				setWorkspaceView(typeof msg.target === "string" ? msg.target : "", "agent");
 			} else if (msg.type === "error") {
@@ -1948,24 +1942,8 @@ let previousWorkspaceFocus: HTMLElement | null = null;
 const hasVisual = () => document.body.classList.contains("has-diagram");
 let lastScreenState = "";
 
-function reportWorkspaceState(force = false): void {
-	if (!ws || ws.readyState !== WebSocket.OPEN) return;
-	const payload = screenStateMessage(
-		document.body.classList.contains("theater")
-			? "theater"
-			: document.body.dataset.view || "auto",
-		hasVisual(),
-		document.body.dataset.visualKind || "",
-		document.getElementById("stageTitle")?.textContent || "",
-		document.body.classList.contains("stage-stale"),
-	);
-	if (!force && payload === lastScreenState) return;
-	lastScreenState = payload;
-	try {
-		ws.send(payload);
-	} catch {
-		/* The reconnect snapshot reports it again. */
-	}
+function reportWorkspaceState(_force = false): void {
+	// Obsolete in V17: screen state is derived and reported by V17 over the bridge.
 }
 
 function normalizeWorkspaceTarget(target: string): WorkspaceView | null {
@@ -2051,13 +2029,7 @@ new MutationObserver(applyWorkspaceView).observe(document.body, {
 	attributeFilter: ["class"],
 });
 
-stageZoom.addEventListener("click", (e: MouseEvent) => {
-	const target = e.target;
-	if (!(target instanceof HTMLElement)) return;
-	if (target.id === "historyBack") historyBack();
-	if (target.id === "historyForward") historyForward();
-	if (target.id === "historyLive") historyLive();
-});
+stageZoom.addEventListener("click", () => {});
 
 theaterExit.addEventListener("click", () => setWorkspaceView("auto", "user"));
 
@@ -2144,7 +2116,7 @@ if (window.parent !== window) {
 		const data = event.data as {
 			source?: string;
 			command?: string;
-			value?: string;
+			value?: unknown;
 		};
 		if (data?.source !== "switchboard-v17" || !data.command) return;
 		const select = (control: HTMLSelectElement) => {
@@ -2179,6 +2151,21 @@ if (window.parent !== window) {
 				break;
 			case "thinking":
 				select(thinkingSelect);
+				break;
+			case "screen_state":
+				if (
+					ws &&
+					ws.readyState === WebSocket.OPEN &&
+					data.value &&
+					typeof data.value === "object"
+				) {
+					ws.send(
+						JSON.stringify({
+							type: "screen_state",
+							...(data.value as Record<string, unknown>),
+						}),
+					);
+				}
 				break;
 			case "state":
 				publishBridgeState();

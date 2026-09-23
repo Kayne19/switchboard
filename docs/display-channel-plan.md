@@ -3,7 +3,7 @@
 Read first: `docs/visual-channel.md` (principles and refused patterns),
 `apps/frontend/PROTOCOL.md` (the six-operation semantic protocol),
 `apps/frontend/ARCHITECTURE.md` (data flow and the extension strategy), and
-`docs/diagram-tool.md` (the current, narrow contract being generalized).
+`diagram-tool.md` (the display channel contract).
 
 ## What this is
 
@@ -52,7 +52,7 @@ cross the boundary. (PROTOCOL.md: "It never says where or how many pixels.")
 ## The three channels to the caller (kept distinct)
 
 - `speak` (`POST /speak`): audio.
-- `display` (`POST /diagram`, the new general channel): on-screen content
+- `display` (`POST /display`, the general channel): on-screen content
   objects and the display operations.
 - `view` (`POST /view`): screen mode (`auto`/`visual`/`comms`/`system`/
   `theater`) with caller-pin precedence and `screen_state` truth.
@@ -92,12 +92,9 @@ One tool, `display`, whose parameters *are* a protocol action:
 - Runtime objects keep a reserved ID namespace (the conversation, the presence)
   so agent-chosen IDs cannot collide with them.
 
-## The wire (no contract change)
+## The wire
 
-Same endpoint, same variable, same socket, same 64 KB cap. **No new endpoint,
-no new `SWITCHBOARD_*` variable** (refused pattern; the environment file is a
-public contract with homelab). The payload on `POST /diagram` changes from a
-per-kind shape to a protocol action; the socket carries a `display` event.
+Dedicated endpoint `POST /display` with `SWITCHBOARD_DISPLAY_URL`, per-generation token authentication, and the browser's existing WebSocket. The payload on `POST /display` is `{ token, action }`; the socket carries a `display` event.
 
 Roles on the pipe:
 
@@ -141,7 +138,7 @@ the plan as built.)
 - `extensions/agent-switchboard.ts`: add the general `display` tool; delete the
   `diagram`/`plan`/`timeline`/`diff` tools in the same commit. `speak`,
   `view`, and the routing tools are unchanged.
-- `apps/backend/src/api.rs`: `POST /diagram` accepts an action payload; add
+- `apps/backend/src/api.rs`: `POST /display` accepts `{ token, action }`; add
   protocol validation (a small module, the Rust port of `validation.ts`);
   broadcast a `display` event; rename `last_diagram` to `last_display` and keep
   hold/replay; delete the per-kind intake branch in the same commit.
@@ -193,7 +190,7 @@ calls (chart, metric, progress, diagram, document, code, note), each rendered
 correctly in the composed scene.
 
 ### Phase 3 - docs
-Rewrite `docs/diagram-tool.md` into the channel contract and update
+Rewrite `diagram-tool.md` into the channel contract and update
 `docs/visual-channel.md` (the implemented capabilities now include the general
 channel; Mermaid becomes one content type, not the interface). The deploy is
 the homelab pinned-tag cutover from `docs/extraction-plan.md` — one atomic
@@ -202,8 +199,8 @@ switch of the container from this tree.
 ## Decisions made here (veto any)
 - One general `display` tool. Fallback if the model flails on the union
   schema: split into 1:1 tools per operation.
-- `POST /diagram` stays the pipe (no new endpoint, no new variable); the
-  payload becomes a protocol action.
+- `POST /display` is the dedicated display endpoint (with `SWITCHBOARD_DISPLAY_URL`); the
+  payload is authenticated and strictly validated.
 - `message` is runtime-owned; agent asides use `note`; `speak`/`view`/`listen`
   stay separate channels.
 - The agent owns object IDs (reserved namespace for runtime objects).
@@ -213,7 +210,7 @@ switch of the container from this tree.
   the old tools and per-kind branch land in a single commit.
 
 ## Non-goals
-- No new environment variables or endpoints (refused pattern).
+- Clean cutover to dedicated display endpoint and environment variable; no compatibility aliases.
 - No coordinates, CSS, or raw HTML/markup from the agent; the transcript is
   not forgeable.
 - No turn dispatch, epoch, page-rescue, or routing changes (read
