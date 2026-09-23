@@ -165,7 +165,7 @@ function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, 
   const liveMessage = liveChatMessage(state);
   return (
     <div className="content-rail__details">
-      {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
+      {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} variant="rail" /> : null}
       {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
       <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
       <RailProgress progressList={progressList} onFocus={onFocus} />

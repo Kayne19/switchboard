@@ -3,12 +3,21 @@ import type { MetricData, SceneObject } from '../controller/types';
 
 interface MetricsPrimitiveProps {
   metrics: Array<SceneObject<MetricData>>;
-  variant?: 'list' | 'primary';
+  variant?: 'list' | 'primary' | 'rail';
 }
 
 export function MetricsPrimitive({ metrics, variant = 'list' }: MetricsPrimitiveProps) {
+  const isRail = variant === 'rail';
   return (
     <motion.div className={`metrics metrics--${variant}`} layout data-testid="metrics">
+      {isRail ? (
+        <div className="metrics__header">
+          <span className="metrics__tag tech micro">TELEMETRY</span>
+          <span className="metrics__index tech muted">
+            {metrics.length === 1 ? (metrics[0]?.data.caption ?? 'LIVE') : `${metrics.length} CHANNELS`}
+          </span>
+        </div>
+      ) : null}
       <AnimatePresence mode="popLayout" initial={false}>
         {metrics.map((metric) => (
           <motion.div

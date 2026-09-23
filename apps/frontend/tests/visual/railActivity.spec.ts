@@ -150,3 +150,137 @@ test('rail progress uses spacing instead of a top border', async ({ page }) => {
   expect(await progress.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe('0px');
   expect(progressBox!.y - (noteBox!.y + noteBox!.height)).toBeGreaterThan(0);
 });
+
+test('rail metrics get telemetry framing in the content rail', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?scene=architecture&chrome=0');
+  await page.evaluate(() => {
+    const dispatch = window.SwitchboardController?.dispatch;
+    if (!dispatch) throw new Error('controller unavailable');
+    dispatch({ op: 'clear' });
+    dispatch({
+      op: 'show', id: 'map', type: 'diagram', role: 'primary',
+      data: {
+        mode: 'graph', title: 'SYSTEM MAP',
+        nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+        edges: [{ from: 'a', to: 'b' }],
+      },
+    });
+    dispatch({
+      op: 'show', id: 'latency', type: 'metric', role: 'secondary',
+      data: { label: 'LATENCY', value: '182 ms' },
+    });
+    dispatch({
+      op: 'show', id: 'error_rate', type: 'metric', role: 'secondary',
+      data: { label: 'ERROR RATE', value: '0.01%' },
+    });
+  });
+
+  const metrics = page.locator('.content-rail__details .metrics');
+  await expect(metrics).toBeVisible();
+  await expect(metrics).toHaveClass(/metrics--rail/);
+
+  const header = metrics.locator('.metrics__header');
+  await expect(header).toBeVisible();
+  await expect(header.locator('.metrics__tag')).toHaveText('TELEMETRY');
+  await expect(header.locator('.metrics__index')).toHaveText('2 CHANNELS');
+
+  const borderTop = await metrics.evaluate((el) => getComputedStyle(el).borderTopWidth);
+  expect(borderTop).toBe('1px');
+  const borderRadius = await metrics.evaluate((el) => getComputedStyle(el).borderRadius);
+  expect(borderRadius).toBe('0px');
+});
+
+for (const viewport of viewports) {
+  test(`tool activity mounting and unmounting does not shift metrics or chat at ${viewport.width}x${viewport.height}`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    const fixtureServer = new DisplayFixtureServer({ initialGeneration: testInfo.workerIndex + 60 });
+    const { wsUrl } = await fixtureServer.start();
+
+    try {
+      await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+      await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === 'hello')).toBe(true);
+
+      fixtureServer.broadcast({
+        type: 'display',
+        action: {
+          op: 'show', id: 'map', type: 'diagram', role: 'primary',
+          data: {
+            mode: 'graph', title: 'SYSTEM MAP',
+            nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+            edges: [{ from: 'a', to: 'b' }],
+          },
+        },
+      });
+      fixtureServer.broadcast({
+        type: 'display',
+        action: { op: 'show', id: 'latency', type: 'metric', role: 'secondary', data: { label: 'LATENCY', value: '182 ms' } },
+      });
+      fixtureServer.broadcast({
+        type: 'spoken',
+        entry: { role: 'agent', text: 'Monitoring active routes.', id: 'reply-1' },
+      });
+
+      await expect(page.locator('.content-rail__details .metrics')).toBeVisible();
+      await expect(page.locator('.content-rail__details .live-chat-card')).toBeVisible();
+      await page.waitForTimeout(300);
+
+      const metricsBoxBefore = await page.locator('.content-rail__details .metrics').boundingBox();
+      const chatBoxBefore = await page.locator('.content-rail__details .live-chat-card').boundingBox();
+      expect(metricsBoxBefore).not.toBeNull();
+      expect(chatBoxBefore).not.toBeNull();
+
+      // Mount activity
+      fixtureServer.broadcast({
+        type: 'activity',
+        state: 'start',
+        tool: 'route_check',
+        label: 'Checking',
+        detail: 'ping 10.0.0.1',
+      });
+
+      await expect(page.locator('.content-rail__details .tool-activity')).toBeVisible();
+      await page.waitForTimeout(300);
+
+      const metricsBoxDuring = await page.locator('.content-rail__details .metrics').boundingBox();
+      const chatBoxDuring = await page.locator('.content-rail__details .live-chat-card').boundingBox();
+
+      expect(metricsBoxDuring!.x).toBeCloseTo(metricsBoxBefore!.x, 1);
+      expect(metricsBoxDuring!.y).toBeCloseTo(metricsBoxBefore!.y, 1);
+      expect(metricsBoxDuring!.width).toBeCloseTo(metricsBoxBefore!.width, 1);
+      expect(metricsBoxDuring!.height).toBeCloseTo(metricsBoxBefore!.height, 1);
+
+      expect(chatBoxDuring!.x).toBeCloseTo(chatBoxBefore!.x, 1);
+      expect(chatBoxDuring!.y).toBeCloseTo(chatBoxBefore!.y, 1);
+      expect(chatBoxDuring!.width).toBeCloseTo(chatBoxBefore!.width, 1);
+      expect(chatBoxDuring!.height).toBeCloseTo(chatBoxBefore!.height, 1);
+
+      // Unmount activity (end and linger)
+      fixtureServer.broadcast({
+        type: 'activity',
+        state: 'end',
+        tool: 'route_check',
+        label: 'Done',
+        detail: 'ping 10.0.0.1',
+      });
+
+      await expect(page.locator('.content-rail__details .tool-activity')).toBeHidden({ timeout: 5000 });
+      await page.waitForTimeout(300);
+
+      const metricsBoxAfter = await page.locator('.content-rail__details .metrics').boundingBox();
+      const chatBoxAfter = await page.locator('.content-rail__details .live-chat-card').boundingBox();
+
+      expect(metricsBoxAfter!.x).toBeCloseTo(metricsBoxBefore!.x, 1);
+      expect(metricsBoxAfter!.y).toBeCloseTo(metricsBoxBefore!.y, 1);
+      expect(metricsBoxAfter!.width).toBeCloseTo(metricsBoxBefore!.width, 1);
+      expect(metricsBoxAfter!.height).toBeCloseTo(metricsBoxBefore!.height, 1);
+
+      expect(chatBoxAfter!.x).toBeCloseTo(chatBoxBefore!.x, 1);
+      expect(chatBoxAfter!.y).toBeCloseTo(chatBoxBefore!.y, 1);
+      expect(chatBoxAfter!.width).toBeCloseTo(chatBoxBefore!.width, 1);
+      expect(chatBoxAfter!.height).toBeCloseTo(chatBoxBefore!.height, 1);
+    } finally {
+      await fixtureServer.stop();
+    }
+  });
+}
