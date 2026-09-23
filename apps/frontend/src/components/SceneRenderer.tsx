@@ -44,6 +44,7 @@ export function SceneRenderer() {
               key="idle"
               state={state}
               onToggleListening={shared.onToggleListening}
+              setTranscriptOpen={setTranscriptOpen}
             />
           ) : null}
           {kind === "conversation" ? (

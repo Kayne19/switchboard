@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import type { MessageData } from '../controller/types';
 import { RichText } from '../primitives/RichText';
 
@@ -72,6 +72,18 @@ function TranscriptBody({ lines }: { lines: TranscriptLine[] }) {
 function TranscriptComposer({ onSend }: { onSend?: (text: string) => boolean }) {
   const [draft, setDraft] = useState('');
   const [notSent, setNotSent] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Opening the history is how a caller who will not speak reaches the line,
+  // so the field takes focus as the drawer mounts and they can type at once.
+  // It runs in the commit of the opening click, still inside that gesture,
+  // which is when a touch keyboard is allowed to come up. A field disabled
+  // for a line with no runtime cannot take focus and is left alone.
+  useLayoutEffect(() => {
+    if (onSend) {
+      inputRef.current?.focus({ preventScroll: true });
+    }
+  }, [onSend]);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -87,6 +99,7 @@ function TranscriptComposer({ onSend }: { onSend?: (text: string) => boolean }) 
   return (
     <form className="transcript__composer" onSubmit={submit}>
       <input
+        ref={inputRef}
         className="transcript__input"
         value={draft}
         onChange={(event) => {
