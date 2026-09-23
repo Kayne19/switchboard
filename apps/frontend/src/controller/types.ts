@@ -138,6 +138,7 @@ export interface SceneObject<T = unknown> {
   data: T;
   createdAt: number;
   updatedAt: number;
+  primaryClaimedAt?: number;
 }
 
 export interface SpeechState {

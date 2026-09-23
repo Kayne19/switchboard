@@ -434,12 +434,18 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
   const primary = comp.primary;
   if (!primary) return <IdleScene state={state} onToggleListening={onToggleListening} />;
 
+  const primaryMetrics = comp.primaryMetrics;
+  const isMetricPrimary = primary.type === 'metric' || primaryMetrics.length > 0;
+
   const noteObjects = comp.allAgentObjects.filter((object) => object.type === 'note') as Array<SceneObject<NoteData>>;
   const noteObject = noteForTarget(noteObjects, primary.id);
   const note = annotationForScene(state, noteObject, liveChatMessage(state));
   const metrics = comp.allAgentObjects.filter((o) => o.type === 'metric') as Array<SceneObject<MetricData>>;
   const progressList = comp.allAgentObjects.filter((o) => o.type === 'progress') as Array<SceneObject<ProgressData>>;
-  const railMetrics = primary.type === 'metric' ? metrics.filter((metric) => metric.id !== primary.id) : metrics;
+  const primaryMetricIds = new Set(primaryMetrics.map((m) => m.id));
+  const railMetrics = isMetricPrimary
+    ? metrics.filter((metric) => !primaryMetricIds.has(metric.id))
+    : metrics;
   const railNote = noteObject?.id === primary.id ? null : note;
   // Everything the rail does not carry shares one visible aux row below the
   // primary -- compare objects, secondary visuals, and progress -- so an
@@ -461,11 +467,22 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
         <div className="scene-heading__sub tech micro">{subtitle}</div>
       </div>
       <div className="content-grid">
-        <motion.div className={`content-main composed-main${primary.type === 'metric' ? ' composed-main--metric-primary' : ''}`} layout>
-          <ObjectMotion objectId={primary.id} className={`composed-primary-object composed-primary-object--${primary.type}`}>
+        <motion.div className={`content-main composed-main${isMetricPrimary ? ' composed-main--metric-primary' : ''}`} layout>
+          <ObjectMotion
+            objectId={primary.id}
+            className={`composed-primary-object composed-primary-object--${primary.type}${primaryMetrics.length > 1 ? ' composed-primary-object--cluster' : ''}`}
+          >
             <TechFrame variant="panel" />
             <FocusableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
-              {composedPrimitive(primary, 'primary')}
+              {isMetricPrimary ? (
+                <MetricsPrimitive
+                  metrics={primaryMetrics.length > 0 ? primaryMetrics : [primary as SceneObject<MetricData>]}
+                  variant="primary"
+                  onFocus={onFocus}
+                />
+              ) : (
+                composedPrimitive(primary, 'primary')
+              )}
             </FocusableSurface>
           </ObjectMotion>
           {auxObjects.length > 0 ? (

@@ -28,7 +28,7 @@ use tower_http::services::ServeDir;
 
 const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SceneObject {
     pub id: String,
     #[serde(rename = "type")]
@@ -36,6 +36,8 @@ pub struct SceneObject {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     pub data: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_claimed_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -73,24 +75,45 @@ impl DisplayProjection {
                 let role = action.get("role").and_then(Value::as_str).map(String::from);
                 let data = action.get("data").cloned().unwrap_or(Value::Null);
 
-                // One object holds the primary role. A show that claims it
-                // takes it from the previous holder, which stays on stage as
-                // secondary -- the same rule as the browser's reducer.
+                // Primary claimant semantics (#38):
+                // A metric claiming primary while metrics hold it joins them in a cluster.
+                // A non-metric claim demotes all primary metrics.
+                // A metric claim while a non-metric holds primary demotes the non-metric.
+                // Removing one metric leaves the rest primary.
+                // Cluster order is stable (claim order).
                 if role.as_deref() == Some("primary") {
+                    let is_metric = object_type == "metric";
                     for object in self.objects.values_mut() {
-                        if object.id != id && object.role.as_deref() == Some("primary") {
+                        if object.id != id
+                            && object.role.as_deref() == Some("primary")
+                            && (!is_metric || object.object_type != "metric")
+                        {
                             object.role = Some("secondary".to_string());
+                            object.primary_claimed_at = None;
                         }
                     }
                 }
 
                 if let Some(existing) = self.objects.get_mut(id) {
                     existing.object_type = object_type.to_string();
-                    if role.is_some() {
+                    let was_primary = existing.role.as_deref() == Some("primary");
+                    if let Some(ref new_role) = role {
+                        if new_role == "primary" {
+                            if !was_primary || existing.primary_claimed_at.is_none() {
+                                existing.primary_claimed_at = Some(sequence);
+                            }
+                        } else {
+                            existing.primary_claimed_at = None;
+                        }
                         existing.role = role;
                     }
                     existing.data = data;
                 } else {
+                    let primary_claimed_at = if role.as_deref() == Some("primary") {
+                        Some(sequence)
+                    } else {
+                        None
+                    };
                     self.objects.insert(
                         id.to_string(),
                         SceneObject {
@@ -98,6 +121,7 @@ impl DisplayProjection {
                             object_type: object_type.to_string(),
                             role,
                             data,
+                            primary_claimed_at,
                         },
                     );
                     self.order.push(id.to_string());
@@ -197,16 +221,28 @@ impl DisplayProjection {
     // object, else the first object overall. Keep the two in lockstep; see
     // docs/visual-channel.md.
     fn composition_primary(&self) -> Option<&SceneObject> {
+        let mut primaries: Vec<&SceneObject> = self
+            .objects
+            .values()
+            .filter(|object| object.role.as_deref() == Some("primary"))
+            .collect();
+        if !primaries.is_empty() {
+            // Sort by claim order (primary_claimed_at), with self.order as tie-breaker
+            primaries.sort_by_key(|o| {
+                (
+                    o.primary_claimed_at.unwrap_or(u64::MAX),
+                    self.order
+                        .iter()
+                        .position(|id| id == &o.id)
+                        .unwrap_or(usize::MAX),
+                )
+            });
+            return primaries.first().copied();
+        }
         self.order
             .iter()
             .filter_map(|id| self.objects.get(id))
-            .find(|object| object.role.as_deref() == Some("primary"))
-            .or_else(|| {
-                self.order
-                    .iter()
-                    .filter_map(|id| self.objects.get(id))
-                    .find(|object| object.role.as_deref() != Some("ambient"))
-            })
+            .find(|object| object.role.as_deref() != Some("ambient"))
             .or_else(|| self.order.iter().find_map(|id| self.objects.get(id)))
     }
 

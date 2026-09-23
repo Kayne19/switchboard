@@ -4,11 +4,19 @@ import type { MetricData, SceneObject } from '../controller/types';
 interface MetricsPrimitiveProps {
   metrics: Array<SceneObject<MetricData>>;
   variant?: 'list' | 'primary';
+  onFocus?: (id: string) => void;
 }
 
-export function MetricsPrimitive({ metrics, variant = 'list' }: MetricsPrimitiveProps) {
+export function MetricsPrimitive({ metrics, variant = 'list', onFocus }: MetricsPrimitiveProps) {
+  const isCluster = variant === 'primary' && metrics.length > 1;
+
   return (
-    <motion.div className={`metrics metrics--${variant}`} layout data-testid="metrics">
+    <motion.div
+      className={`metrics metrics--${variant}${isCluster ? ' metrics--cluster' : ''}`}
+      data-count={metrics.length}
+      layout
+      data-testid="metrics"
+    >
       <AnimatePresence mode="popLayout" initial={false}>
         {metrics.map((metric) => (
           <motion.div
@@ -19,6 +27,14 @@ export function MetricsPrimitive({ metrics, variant = 'list' }: MetricsPrimitive
             animate={{ opacity: 1, x: 0, filter: 'blur(0px)' }}
             exit={{ opacity: 0, x: 10, filter: 'blur(5px)' }}
             transition={{ duration: 0.28, ease: [0.22, 0.61, 0.36, 1] }}
+            onClick={
+              isCluster && onFocus
+                ? (e) => {
+                    e.stopPropagation();
+                    onFocus(metric.id);
+                  }
+                : undefined
+            }
           >
             <span className="metric-row__label tech micro">{metric.data.label}</span>
             <motion.span

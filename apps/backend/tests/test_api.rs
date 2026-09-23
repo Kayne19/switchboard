@@ -387,6 +387,80 @@ fn a_later_primary_claim_takes_the_role_and_demotes_the_earlier_one() {
     assert_eq!(projection.objects["b"].role.as_deref(), Some("secondary"));
 }
 
+#[test]
+fn primary_metric_cluster_semantics_and_stable_claim_order() {
+    // Primary metric cluster semantics (#38):
+    // Metrics claiming primary join each other in a cluster.
+    // A non-metric claim demotes all primary metrics.
+    // A metric claim while a non-metric holds primary demotes the non-metric.
+    // Removing one metric leaves the rest primary.
+    // Cluster order is stable by claim order.
+    let mut projection = DisplayProjection::default();
+    let show_metric = |id: &str, label: &str, role: Option<&str>| {
+        let mut action =
+            json!({"op":"show", "id":id, "type":"metric", "data":{"label":label, "value":"10"}});
+        if let Some(role) = role {
+            action["role"] = json!(role);
+        }
+        action
+    };
+    let show_other = |id: &str, obj_type: &str, role: Option<&str>| {
+        let mut action = json!({"op":"show", "id":id, "type":obj_type, "data":{"title":id}});
+        if let Some(role) = role {
+            action["role"] = json!(role);
+        }
+        action
+    };
+
+    // 1. Metric A claims primary
+    projection.apply(&show_metric("m1", "CPU", Some("primary")), 1);
+    assert_eq!(projection.objects["m1"].role.as_deref(), Some("primary"));
+
+    // 2. Metric B claims primary -> joins metric A
+    projection.apply(&show_metric("m2", "MEM", Some("primary")), 2);
+    assert_eq!(projection.objects["m1"].role.as_deref(), Some("primary"));
+    assert_eq!(projection.objects["m2"].role.as_deref(), Some("primary"));
+
+    let (_, kind, title, _) = projection.summary();
+    assert_eq!(kind.as_deref(), Some("metric"));
+    assert_eq!(title.as_deref(), Some("CPU"));
+
+    let replay = projection.snapshot_actions();
+    assert_eq!(replay[0]["role"], "primary");
+    assert_eq!(replay[1]["role"], "primary");
+
+    // 3. Updating Metric A data preserves its leading position in claim order
+    projection.apply(&show_metric("m1", "CPU", Some("primary")), 3);
+    assert_eq!(projection.summary().2.as_deref(), Some("CPU"));
+
+    // 4. Non-metric claims primary -> demotes all primary metrics
+    projection.apply(&show_other("diag", "diagram", Some("primary")), 4);
+    assert_eq!(projection.objects["diag"].role.as_deref(), Some("primary"));
+    assert_eq!(projection.objects["m1"].role.as_deref(), Some("secondary"));
+    assert_eq!(projection.objects["m2"].role.as_deref(), Some("secondary"));
+    assert_eq!(projection.summary().1.as_deref(), Some("diagram"));
+
+    // 5. Metric claim demotes non-metric primary
+    projection.apply(&show_metric("m1", "CPU", Some("primary")), 5);
+    assert_eq!(projection.objects["m1"].role.as_deref(), Some("primary"));
+    assert_eq!(
+        projection.objects["diag"].role.as_deref(),
+        Some("secondary")
+    );
+    assert_eq!(projection.summary().1.as_deref(), Some("metric"));
+
+    // 6. Metric B re-claims primary -> joins M1 at the end
+    projection.apply(&show_metric("m2", "MEM", Some("primary")), 6);
+    assert_eq!(projection.objects["m1"].role.as_deref(), Some("primary"));
+    assert_eq!(projection.objects["m2"].role.as_deref(), Some("primary"));
+
+    // 7. Removing one metric leaves the other primary
+    projection.apply(&json!({"op":"hide", "id":"m1"}), 7);
+    assert!(!projection.objects.contains_key("m1"));
+    assert_eq!(projection.objects["m2"].role.as_deref(), Some("primary"));
+    assert_eq!(projection.summary().2.as_deref(), Some("MEM"));
+}
+
 #[tokio::test]
 async fn delivery_registration_captures_live_events_for_snapshot_barrier() {
     let delivery = DeliveryState::new();
