@@ -48,10 +48,10 @@ function isRuntimeState(value: unknown): value is Partial<RuntimeState> {
   return Boolean(value && typeof value === "object");
 }
 
-// The native runtime is opt-in (`?native`) while it is proven against the
-// iframe bridge.
+// The native runtime is the default. `?legacy` falls back to the iframe
+// bridge for one release while the native path is proven in use.
 function nativeRuntimeRequested(): boolean {
-  return new URLSearchParams(window.location.search).has("native");
+  return !new URLSearchParams(window.location.search).has("legacy");
 }
 
 // `?ws=` points the page at another backend. The dev server has no backend of

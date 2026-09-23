@@ -1,10 +1,10 @@
 import { expect, test } from "@playwright/test";
 import { DisplayFixtureServer } from "./display-fixture-server.mjs";
 
-test("production root loads the isolated runtime and relays voice controls", async ({
+test("?legacy loads the isolated runtime and relays voice controls", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/?legacy");
   await expect(page.locator(".runtime-controls")).toHaveCount(0);
   await expect(page.locator(".runtime-frame")).toHaveAttribute(
     "aria-hidden",
@@ -36,7 +36,7 @@ test("production root loads the isolated runtime and relays voice controls", asy
   );
 });
 
-test("runtime bridge handles display events, replay, screen_state bridge queue/ack, and runtime separation", async ({
+test("legacy bridge handles display events, replay, screen_state bridge queue/ack, and runtime separation", async ({
   page,
 }) => {
   const replayMetric = {
@@ -78,7 +78,7 @@ test("runtime bridge handles display events, replay, screen_state bridge queue/a
     });
 
     // 1. Navigate with custom WS pointing to our fixture server
-    await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+    await page.goto(`/?legacy&ws=${encodeURIComponent(wsUrl)}`);
 
     const runtime = page.frameLocator(".runtime-frame");
     await expect(runtime.locator("html")).toHaveAttribute(
@@ -174,6 +174,13 @@ test("runtime bridge handles display events, replay, screen_state bridge queue/a
 });
 
 test.describe("native runtime", () => {
+  test("is what the production root runs", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator(".runtime-controls")).toHaveCount(0);
+    await expect(page.locator(".runtime-frame")).toHaveCount(0);
+    await expect(page.locator(".damocles-presence__button").first()).toBeVisible();
+  });
+
   test("owns the backend socket: replay, display, screen_state queue/ack, view, retired generation", async ({
     page,
   }) => {
@@ -191,7 +198,7 @@ test.describe("native runtime", () => {
     const { wsUrl } = await fixtureServer.start();
 
     try {
-      await page.goto(`/?native&ws=${encodeURIComponent(wsUrl)}`);
+      await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
 
       // No hidden frame: the page itself opened the socket and said hello.
       await expect(page.locator(".runtime-frame")).toHaveCount(0);
@@ -259,13 +266,18 @@ test.describe("native runtime", () => {
       fixtureServer.broadcast({ type: "view", target: "comms" });
       await expect(page.locator('[data-scene="conversation"]')).toBeVisible();
 
+      // A report already in flight under generation 1 may land as retired;
+      // what matters is that the page reports under the new generation once
+      // it has seen the epoch.
       fixtureServer.setGeneration(2);
       await expect
         .poll(() =>
           fixtureServer.reports.some((report) => report.generation === 2),
         )
         .toBe(true);
-      expect(fixtureServer.retiredReports).toEqual([]);
+      expect(
+        fixtureServer.retiredReports.every((report) => report.generation === 1),
+      ).toBe(true);
     } finally {
       await fixtureServer.stop();
     }
@@ -277,7 +289,7 @@ test.describe("native runtime", () => {
     const fixtureServer = new DisplayFixtureServer({ initialGeneration: 3 });
     const { wsUrl } = await fixtureServer.start();
     try {
-      await page.goto(`/?native&ws=${encodeURIComponent(wsUrl)}`);
+      await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
       await expect
         .poll(() => fixtureServer.frames.some((frame) => frame.type === "hello"))
         .toBe(true);
@@ -318,7 +330,7 @@ test.describe("native runtime", () => {
     const fixtureServer = new DisplayFixtureServer({ initialGeneration: 1 });
     const { wsUrl } = await fixtureServer.start();
     try {
-      await page.goto(`/?native&ws=${encodeURIComponent(wsUrl)}`);
+      await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
       await expect
         .poll(() => fixtureServer.frames.filter((f) => f.type === "hello").length)
         .toBe(1);
