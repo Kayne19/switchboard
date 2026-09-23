@@ -5,32 +5,14 @@ import { planReportDispatch, shouldClearRejectionOnSend } from "../app/reportDis
 import { useController } from "../controller/context";
 import type { MessageData, ScreenStateReport } from "../controller/types";
 import { RUNTIME_CONVERSATION_ID } from "../controller/types";
+import {
+  CallRuntime,
+  INITIAL_RUNTIME_STATE,
+  type RuntimeState,
+} from "../runtime/callRuntime";
 
 const LEGACY_SOURCE = "switchboard-legacy-runtime";
 const V17_SOURCE = "switchboard-v17";
-
-interface SelectOption {
-  value: string;
-  label: string;
-}
-
-interface RuntimeState {
-  connected: boolean;
-  recording: boolean;
-  status: string;
-  handsFree: boolean;
-  handsFreeStatus: string;
-  handsFreeLease: string;
-  route: string;
-  routes: SelectOption[];
-  model: string;
-  models: SelectOption[];
-  thinking: string;
-  thinkingLevels: SelectOption[];
-  onProject: boolean;
-  modelDisabled: boolean;
-  thinkingDisabled: boolean;
-}
 
 interface TranscriptLine {
   speaker: string;
@@ -39,24 +21,6 @@ interface TranscriptLine {
 }
 
 type ServerMessage = Record<string, unknown> & { type?: string; seq?: number };
-
-const initialRuntime: RuntimeState = {
-  connected: false,
-  recording: false,
-  status: "Connecting…",
-  handsFree: false,
-  handsFreeStatus: "Standby",
-  handsFreeLease: "",
-  route: "operator",
-  routes: [{ value: "operator", label: "Operator" }],
-  model: "",
-  models: [],
-  thinking: "",
-  thinkingLevels: [],
-  onProject: false,
-  modelDisabled: true,
-  thinkingDisabled: true,
-};
 
 function text(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -80,30 +44,101 @@ function normalizeHistory(raw: unknown): TranscriptLine[] {
   });
 }
 
-function isRuntimeState(value: unknown): value is RuntimeState {
+function isRuntimeState(value: unknown): value is Partial<RuntimeState> {
   return Boolean(value && typeof value === "object");
+}
+
+// The native runtime is opt-in (`?native`) while it is proven against the
+// iframe bridge.
+function nativeRuntimeRequested(): boolean {
+  return new URLSearchParams(window.location.search).has("native");
+}
+
+// `?ws=` points the page at another backend. The dev server has no backend of
+// its own, so without one the native runtime stays down there.
+function backendSocketUrl(): string | null {
+  const wsParam = new URLSearchParams(window.location.search).get("ws");
+  if (wsParam) return wsParam;
+  if (import.meta.env.DEV) return null;
+  const proto = window.location.protocol === "https:" ? "wss" : "ws";
+  return `${proto}://${window.location.host}/ws`;
+}
+
+// The iframe bridge's command vocabulary, served by the native runtime.
+function runNativeCommand(
+  runtime: CallRuntime | null,
+  name: string,
+  value: unknown,
+): void {
+  if (!runtime) return;
+  switch (name) {
+    case "talk":
+      runtime.talk();
+      break;
+    case "send":
+      runtime.send();
+      break;
+    case "cancel":
+      runtime.cancel();
+      break;
+    case "retry":
+      runtime.retry();
+      break;
+    case "hands-free":
+      runtime.toggleHandsFree();
+      break;
+    case "hangup":
+      void runtime.hangup();
+      break;
+    case "route":
+      if (typeof value === "string") runtime.selectRoute(value);
+      break;
+    case "model":
+      if (typeof value === "string") runtime.selectModel(value);
+      break;
+    case "thinking":
+      if (typeof value === "string") runtime.selectThinking(value);
+      break;
+    case "screen_state":
+      if (value && typeof value === "object")
+        runtime.sendScreenState(value as ScreenStateReport);
+      break;
+  }
 }
 
 export function RuntimeIntegration() {
   const { state, dispatch, registerVoiceRuntime } = useController();
+  const [native] = useState(nativeRuntimeRequested);
   const frameRef = useRef<HTMLIFrameElement>(null);
+  const nativeRuntimeRef = useRef<CallRuntime | null>(null);
   const transcriptRef = useRef<TranscriptLine[]>([]);
   const currentResponseRef = useRef("");
-  const iframeReadyRef = useRef(false);
+  const transportReadyRef = useRef(false);
   const generationRef = useRef(0);
   const pendingReportRef = useRef<ScreenStateReport | null>(null);
   const inFlightReportRef = useRef<ScreenStateReport | null>(null);
   const appliedSeqRef = useRef(0);
   const pendingRejectionRef = useRef<{ seq: number; reason: string } | null>(null);
+  const handleServerRef = useRef<(message: ServerMessage) => void>(() => {});
+  const handleStateRef = useRef<(runtimeState: Partial<RuntimeState>) => void>(
+    () => {},
+  );
   const [reportNonce, setReportNonce] = useState(0);
-  const [runtime, setRuntime] = useState<RuntimeState>(initialRuntime);
+  const [runtime, setRuntime] = useState<RuntimeState>(INITIAL_RUNTIME_STATE);
 
-  const command = useCallback((name: string, value?: unknown) => {
-    frameRef.current?.contentWindow?.postMessage(
-      { source: V17_SOURCE, command: name, value },
-      window.location.origin,
-    );
-  }, []);
+  const command = useCallback(
+    (name: string, value?: unknown) => {
+      if (native) {
+        runNativeCommand(nativeRuntimeRef.current, name, value);
+        return;
+      }
+      frameRef.current?.contentWindow?.postMessage(
+        { source: V17_SOURCE, command: name, value },
+        window.location.origin,
+      );
+    },
+    [native],
+  );
 
   const sendReport = useCallback(
     (report: ScreenStateReport) => {
@@ -156,6 +191,7 @@ export function RuntimeIntegration() {
     [dispatch, runtime.handsFree, runtime.route],
   );
 
+  // Both transports deliver into these two handlers.
   useEffect(() => {
     const appendTranscript = (line: TranscriptLine) => {
       const existing = line.id
@@ -170,14 +206,14 @@ export function RuntimeIntegration() {
       }
     };
 
-    const handleServer = (message: ServerMessage) => {
+    handleServerRef.current = (message: ServerMessage) => {
       switch (message.type) {
         case "epoch": {
           transcriptRef.current = [];
           currentResponseRef.current = "";
           generationRef.current =
             typeof message.generation === "number" ? message.generation : 0;
-          iframeReadyRef.current = true;
+          transportReadyRef.current = true;
           inFlightReportRef.current = null;
           pendingReportRef.current = null;
           dispatch({ op: "epoch_reset" });
@@ -280,6 +316,19 @@ export function RuntimeIntegration() {
       }
     };
 
+    handleStateRef.current = (runtimeState: Partial<RuntimeState>) => {
+      if (!runtimeState.connected) transportReadyRef.current = false;
+      setRuntime((current) => ({ ...current, ...runtimeState }));
+      dispatch({
+        op: "listen",
+        on: Boolean(runtimeState.recording || runtimeState.handsFree),
+      });
+    };
+  }, [dispatch, handleScreenStateAck, showConversation]);
+
+  // Legacy transport: the hidden iframe owns the socket and posts to us.
+  useEffect(() => {
+    if (native) return;
     const onMessage = (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return;
       const packet = event.data as {
@@ -290,19 +339,13 @@ export function RuntimeIntegration() {
       if (event.source !== frameRef.current?.contentWindow) return;
       if (packet?.source !== LEGACY_SOURCE) return;
       if (packet.kind === "state" && isRuntimeState(packet.payload)) {
-        const runtimeState = packet.payload;
-        if (!runtimeState.connected) iframeReadyRef.current = false;
-        setRuntime((current) => ({ ...current, ...runtimeState }));
-        dispatch({
-          op: "listen",
-          on: Boolean(runtimeState.recording || runtimeState.handsFree),
-        });
+        handleStateRef.current(packet.payload);
       } else if (
         packet.kind === "server" &&
         packet.payload &&
         typeof packet.payload === "object"
       ) {
-        handleServer(packet.payload as ServerMessage);
+        handleServerRef.current(packet.payload as ServerMessage);
       } else if (packet.kind === "ready") {
         command("bridge_ready");
         command("state");
@@ -312,9 +355,30 @@ export function RuntimeIntegration() {
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [command, dispatch, handleScreenStateAck, sendReport, showConversation]);
+  }, [native, command, handleScreenStateAck]);
 
-  // Derive screen state and queue/send across the bridge.
+  // Native transport: this page owns the socket.
+  useEffect(() => {
+    if (!native) return;
+    const socketUrl = backendSocketUrl();
+    if (!socketUrl) return;
+    const callRuntime = new CallRuntime({
+      socketUrl,
+      onState: (runtimeState) => handleStateRef.current(runtimeState),
+      onServer: (message) => handleServerRef.current(message),
+      document,
+      window,
+    });
+    nativeRuntimeRef.current = callRuntime;
+    callRuntime.start();
+    return () => {
+      callRuntime.dispose();
+      if (nativeRuntimeRef.current === callRuntime)
+        nativeRuntimeRef.current = null;
+    };
+  }, [native]);
+
+  // Derive screen state and queue/send it over the transport.
   //
   // The rejection carried on `pendingRejectionRef` is merged into the
   // report by `planReportDispatch` but never cleared here -- only
@@ -330,7 +394,7 @@ export function RuntimeIntegration() {
 
     const action = planReportDispatch(baseReport, {
       inFlightReport: inFlightReportRef.current,
-      transportReady: iframeReadyRef.current,
+      transportReady: transportReadyRef.current,
       pendingRejection: pendingRejectionRef.current,
     });
 
@@ -355,6 +419,8 @@ export function RuntimeIntegration() {
     registerVoiceRuntime({ toggleTurn });
     return () => registerVoiceRuntime(null);
   }, [command, registerVoiceRuntime, runtime.connected, runtime.recording]);
+
+  if (native) return null;
 
   const wsParam =
     typeof window !== "undefined"

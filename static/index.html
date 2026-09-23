@@ -5,7 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#000000" />
     <title>Switchboard</title>
-    <script type="module" crossorigin src="/v17-assets/index-BUU24X3_.js"></script>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "openwakeword-wasm-browser": "/openwakeword/wake-word-engine.js",
+          "onnxruntime-web": "/openwakeword/ort/ort.wasm.bundle.min.mjs"
+        }
+      }
+    </script>
+    <script type="module" crossorigin src="/v17-assets/index-BPKR22cA.js"></script>
     <link rel="stylesheet" crossorigin href="/v17-assets/index-BNBS3jTA.css">
   </head>
   <body>
