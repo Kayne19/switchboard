@@ -57,6 +57,29 @@ function noteFromSpeech(state: ControllerState, fallback?: SceneObject<NoteData>
   return fallback?.data ?? null;
 }
 
+interface ExplanationProps {
+  note: NoteData | null;
+  noteObject?: SceneObject<NoteData>;
+  onFocus: (id: string | null) => void;
+}
+
+// The explanation beside content, shared by every rail composition. It stays
+// mounted while its words change, so an update patches the text in place;
+// it resolves in and out only when an explanation appears or goes away. Its
+// layout animates position only: animating its size on a text change scales
+// the text while it reflows, which reads as a twitch.
+function RailNote({ note, noteObject, onFocus }: ExplanationProps) {
+  return (
+    <AnimatePresence initial={false}>
+      {note ? (
+        <ObjectMotion key="rail-note" objectId={noteObject?.id ?? 'speech-note'} className="rail-note" layout="position">
+          <AnnotationCard data={note} onFocus={noteObject ? () => onFocus(noteObject.id) : undefined} />
+        </ObjectMotion>
+      ) : null}
+    </AnimatePresence>
+  );
+}
+
 export function IdleScene({ state, onToggleListening }: Pick<SceneProps, 'state' | 'onToggleListening'>) {
   return (
     <motion.section className="scene scene--idle" data-scene="idle" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -170,11 +193,13 @@ export function TrainingScene({ state, onToggleListening, onFocus }: SceneProps)
               ))}
             </AnimatePresence>
           </div>
-          {note ? (
-            <motion.div className="training-note" layout initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-              <AnnotationCard data={note} onFocus={noteObject ? () => onFocus(noteObject.id) : undefined} />
-            </motion.div>
-          ) : null}
+          <AnimatePresence initial={false}>
+            {note ? (
+              <motion.div key="training-note" className="training-note" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
+                <AnnotationCard data={note} onFocus={noteObject ? () => onFocus(noteObject.id) : undefined} />
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
           {progress ? (
             <ObjectMotion objectId={progress.id} className="training-progress">
               <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
@@ -221,7 +246,7 @@ export function ArchitectureScene({ state, onToggleListening, onFocus }: ScenePr
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={diagram.data.context ?? 'SYSTEM MAP'} size="rail" />
-          {note ? <ObjectMotion objectId={noteObject?.id ?? 'speech-note'} className="rail-note"><AnnotationCard data={note} onFocus={noteObject ? () => onFocus(noteObject.id) : undefined} /></ObjectMotion> : null}
+          <RailNote note={note} noteObject={noteObject} onFocus={onFocus} />
         </motion.aside>
       </div>
       <SceneFooter left="DISPLAY / SYSTEM MAP" right="TRACE / ACTIVE ROUTE" />
@@ -250,7 +275,7 @@ export function DocumentScene({ state, onToggleListening, onFocus }: SceneProps)
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={document.data.context ?? 'DOCUMENT'} size="rail" />
-          {note ? <ObjectMotion objectId={noteObject?.id ?? 'speech-note'} className="rail-note"><AnnotationCard data={note} onFocus={noteObject ? () => onFocus(noteObject.id) : undefined} /></ObjectMotion> : null}
+          <RailNote note={note} noteObject={noteObject} onFocus={onFocus} />
         </motion.aside>
       </div>
       <SceneFooter left="CONTENT / ORIGINAL EMAIL" right="CHROME / SWITCHBOARD" />
@@ -279,7 +304,7 @@ export function CodeScene({ state, onToggleListening, onFocus }: SceneProps) {
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={code.data.context ?? 'SOURCE'} size="rail" />
-          {note ? <ObjectMotion objectId={noteObject?.id ?? 'speech-note'} className="rail-note"><AnnotationCard data={note} onFocus={noteObject ? () => onFocus(noteObject.id) : undefined} /></ObjectMotion> : null}
+          <RailNote note={note} noteObject={noteObject} onFocus={onFocus} />
         </motion.aside>
       </div>
       <SceneFooter left="FRAME / INTERRUPTED RAILS" right="DISPLAY / SOURCE" />
@@ -367,11 +392,7 @@ export function ComposedScene({ state, onToggleListening, onFocus }: SceneProps)
           {metrics.length > 0 && primary.type !== 'metric' ? (
             <MetricsPrimitive metrics={metrics} />
           ) : null}
-          {note ? (
-            <ObjectMotion objectId={noteObject?.id ?? 'speech-note'} className="rail-note">
-              <AnnotationCard data={note} onFocus={noteObject ? () => onFocus(noteObject.id) : undefined} />
-            </ObjectMotion>
-          ) : null}
+          <RailNote note={note} noteObject={noteObject} onFocus={onFocus} />
         </motion.aside>
       </div>
       <SceneFooter left="DISPLAY / COMPOSED" right="SYSTEM / ACTIVE" />

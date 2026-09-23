@@ -516,6 +516,8 @@ button {
 
 .annotation-card {
   position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   width: 100%;
   height: 100%;
   min-height: 0;
@@ -527,20 +529,59 @@ button {
   text-align: left;
   overflow: hidden;
 }
-.annotation-card--button {
-  cursor: zoom-in;
+.annotation-card__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: clamp(8px, 1cqh, 13px);
 }
 .annotation-card__tag {
-  margin-bottom: clamp(8px, 1cqh, 13px);
   color: rgba(232, 230, 223, 0.35);
 }
+.annotation-card__body {
+  height: 100%;
+  min-height: 0;
+}
+/* Long explanations scroll inside the card; short ones never show a bar. */
 .annotation-card__text {
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
   font-family: "Helvetica Neue", Arial, sans-serif;
   font-size: clamp(13px, 1.06cqw, 18px);
   line-height: 1.48;
 }
 .annotation-card__text strong {
   font-weight: 600;
+}
+
+/* Markdown read from spoken and explanatory text */
+.rich-text__paragraph,
+.rich-text__list {
+  margin: 0 0 0.55em;
+}
+.rich-text__paragraph:last-child,
+.rich-text__list:last-child {
+  margin-bottom: 0;
+}
+.rich-text__list {
+  padding-left: 1.25em;
+}
+.rich-text__list li {
+  margin: 0.12em 0;
+}
+.rich-text__list li::marker {
+  color: rgba(var(--orange-rgb), 0.72);
+}
+.rich-text__code {
+  padding: 0.05em 0.3em;
+  background: rgba(232, 230, 223, 0.08);
+  color: var(--paper);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.86em;
 }
 
 /* Training */
@@ -620,11 +661,15 @@ button {
   z-index: 5;
   left: clamp(22px, 3cqw, 52px);
   top: clamp(24px, 4cqh, 46px);
+  display: flex;
+  flex-direction: column;
   width: min(42%, 520px);
   max-height: 34%;
   background: #000;
 }
 .training-note .annotation-card {
+  height: auto;
+  min-height: 0;
   padding: clamp(10px, 1cqw, 16px) clamp(12px, 1.2cqw, 18px)
     clamp(10px, 1cqw, 16px);
   border: 1px solid rgba(var(--orange-rgb), 0.33);
@@ -962,6 +1007,7 @@ button {
 .focus-layer__content--note .annotation-card {
   height: auto;
   min-height: 220px;
+  max-height: 76vh;
   padding: 3cqh 0;
   overflow: visible;
 }
