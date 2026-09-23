@@ -127,24 +127,26 @@ generation has reached the projection's own watermark. `stale` is exactly
 `!confirmed` — see the note below on why that is not the same as
 `!connected`.
 
-**Primary-visual precedence.** `DisplayProjection::summary()` (backend)
-picks the object a `visual_kind` / `title` answer is about as: the focused
-object, if one is set and still on stage, otherwise the *most recently*
-`show`n object (the last entry in `order`). The browser's `sceneModel.ts`
-resolves the analogous value for its own `screen_state` report
-(`buildCompositionModel` / `deriveScreenState`) as: the focused object
-(unchanged), otherwise its composition "primary" — an object with
-`role: "primary"` if any exists (ties broken toward whichever was shown
-*first*), else the *first* non-ambient object shown, else the first object
-overall. The two rules agree whenever there is at most one non-ambient
-object on stage, or the agent relies on `focus`, or a single object carries
-`role: "primary"` — the common case, and the one the confirm/reject contract
-above is exercised against. They can disagree once several non-ambient
-objects with no explicit `role: "primary"` are on stage and nothing is
-focused: the backend's `/view` intent then points at the newest one, the
-browser's own report at the oldest. `sceneModel.ts` predates this phase and
-was not changed by it; noted here so the discrepancy is visible rather than
-assumed away.
+**Primary-visual precedence.** `DisplayProjection::summary()` (backend) and
+the browser's `buildCompositionModel` in `sceneModel.ts` use one unified
+rule to pick the object a `visual_kind` / `title` answer is about:
+
+1. the focused object, if `focus` names one and it is still on stage;
+2. otherwise the composition **primary**, computed over the objects
+   currently on stage in the order they were `show`n:
+   1. the first object with `role: "primary"`;
+   2. else the first object that is not `role: "ambient"` (an unset role
+      counts as non-ambient);
+   3. else the first object shown, if any is on stage at all.
+
+Focus always overrides the composition primary, for both `visual_kind` and
+`title` — an agent that calls `focus` on an ambient or secondary object
+still gets that object reported back. Absent a focus, `role: "primary"`
+wins regardless of show order, and a later `show` never displaces an
+earlier non-ambient object just by being more recent. The backend's `/view`
+intent and the browser's own `screen_state` report are computed by the same
+rule, so they agree on every composed scene, not just the common single-object
+or single-`role:"primary"` case.
 
 **`stale` is decoupled from `connected` — deliberately.** A visual can be
 fully confirmed by a browser that has since disconnected: `confirmed: true`

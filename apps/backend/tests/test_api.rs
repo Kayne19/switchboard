@@ -243,6 +243,116 @@ async fn view_reports_requested_diagram_as_unconfirmed_until_the_browser_acks() 
 }
 
 #[tokio::test]
+async fn view_reports_first_non_ambient_object_when_nothing_is_focused_or_primary() {
+    // Mirrors sceneModel.ts's buildCompositionModel: with no focus and no
+    // explicit role:"primary", the composition primary is the FIRST
+    // non-ambient object shown, not the most recently shown one. Before this
+    // fix, DisplayProjection::summary() picked order.last() here, which
+    // would report "document" (the second object) instead of "diagram"
+    // (the first).
+    let state = state();
+    let (code, _) = request_json(
+        &state,
+        Method::POST,
+        "/display",
+        Some(json!({
+            "token": "operator",
+            "action": {
+                "op": "show",
+                "id": "first",
+                "type": "diagram",
+                "data": {
+                    "title": "diagram-title",
+                    "mode": "graph",
+                    "nodes": [{"id": "n1", "label": "N1"}],
+                    "edges": []
+                }
+            }
+        })),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+
+    let (code, _) = request_json(
+        &state,
+        Method::POST,
+        "/display",
+        Some(json!({
+            "token": "operator",
+            "action": {
+                "op": "show",
+                "id": "second",
+                "type": "document",
+                "data": {"subject": "document-title", "paragraphs": ["p1"]}
+            }
+        })),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+
+    let (code, response) =
+        request_json(&state, Method::POST, "/view", Some(json!({"target":""}))).await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(response["screen"]["visual_kind"], "diagram");
+    assert_eq!(response["screen"]["title"], "diagram-title");
+}
+
+#[tokio::test]
+async fn view_reports_the_object_with_role_primary_even_when_shown_first() {
+    // role:"primary" outranks a later, non-ambient object even though
+    // nothing is focused -- matching sceneModel.ts's explicit-primary-wins
+    // rule. This is the case that discriminates the fix from the old
+    // order.last() logic: the primary object is shown FIRST here, so a
+    // last-wins rule would (wrongly) report the second, non-primary object.
+    let state = state();
+    let (code, _) = request_json(
+        &state,
+        Method::POST,
+        "/display",
+        Some(json!({
+            "token": "operator",
+            "action": {
+                "op": "show",
+                "id": "first",
+                "type": "document",
+                "role": "primary",
+                "data": {"subject": "document-title", "paragraphs": ["p1"]}
+            }
+        })),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+
+    let (code, _) = request_json(
+        &state,
+        Method::POST,
+        "/display",
+        Some(json!({
+            "token": "operator",
+            "action": {
+                "op": "show",
+                "id": "second",
+                "type": "diagram",
+                "data": {
+                    "title": "diagram-title",
+                    "mode": "graph",
+                    "nodes": [{"id": "n1", "label": "N1"}],
+                    "edges": []
+                }
+            }
+        })),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+
+    let (code, response) =
+        request_json(&state, Method::POST, "/view", Some(json!({"target":""}))).await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(response["screen"]["visual_kind"], "document");
+    assert_eq!(response["screen"]["title"], "document-title");
+}
+
+#[tokio::test]
 async fn delivery_registration_captures_live_events_for_snapshot_barrier() {
     let delivery = DeliveryState::new();
     let mut connection = delivery.register();

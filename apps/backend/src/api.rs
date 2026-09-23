@@ -176,14 +176,30 @@ impl DisplayProjection {
         actions
     }
 
+    // Mirrors the browser's `buildCompositionModel` in
+    // apps/frontend/src/app/sceneModel.ts exactly: the reporting object is
+    // the focused object if one is set and still on stage, else the
+    // composition primary -- the first object (in `order`) with
+    // role:"primary", else the first non-ambient object, else the first
+    // object overall. Keep the two in lockstep; see docs/visual-channel.md.
+    fn composition_primary(&self) -> Option<&SceneObject> {
+        self.order
+            .iter()
+            .filter_map(|id| self.objects.get(id))
+            .find(|object| object.role.as_deref() == Some("primary"))
+            .or_else(|| {
+                self.order
+                    .iter()
+                    .filter_map(|id| self.objects.get(id))
+                    .find(|object| object.role.as_deref() != Some("ambient"))
+            })
+            .or_else(|| self.order.iter().find_map(|id| self.objects.get(id)))
+    }
+
     pub fn summary(&self) -> (bool, Option<String>, Option<String>, Vec<String>) {
         let has_visual = !self.order.is_empty();
-        let primary_id = self
-            .focus_id
-            .clone()
-            .filter(|id| self.objects.contains_key(id))
-            .or_else(|| self.order.last().cloned());
-        let primary = primary_id.as_ref().and_then(|id| self.objects.get(id));
+        let focused = self.focus_id.as_ref().and_then(|id| self.objects.get(id));
+        let primary = focused.or_else(|| self.composition_primary());
         let kind = primary.map(|o| o.object_type.clone());
         let title = primary.and_then(|o| {
             o.data
