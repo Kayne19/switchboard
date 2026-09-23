@@ -1,10 +1,16 @@
 import { motion, useReducedMotion } from 'motion/react';
 import { useId, useMemo } from 'react';
-import type { ChartData, Semantic } from '../controller/types';
+import type { ChartData, ChartSeries, Semantic } from '../controller/types';
 
 const semanticColor: Record<Semantic,string> = {
   red:'var(--red)',orange:'var(--orange)',green:'var(--green)',cyan:'var(--cyan)',amber:'var(--amber)',paper:'var(--paper)',muted:'var(--muted)'
 };
+
+const fallbackSeriesSemantics: Semantic[] = ['green', 'orange', 'cyan', 'amber', 'paper', 'muted'];
+
+export function chartSeriesColor(series: ChartSeries, index: number): string {
+  return semanticColor[series.semantic ?? fallbackSeriesSemantics[index % fallbackSeriesSemantics.length]];
+}
 
 function niceTicks(min:number,max:number,count=4){return Array.from({length:count},(_,i)=>max-((max-min)*i)/(count-1));}
 
@@ -32,12 +38,12 @@ export function ChartPrimitive({ data, focused = false }: { data: ChartData; foc
         {[0,.25,.5,.75,1].map(ratio=>{const x=pad.left+ratio*(width-pad.left-pad.right);return <g key={ratio}><line x1={x} y1={pad.top} x2={x} y2={height-pad.bottom}/><text x={x} y={height-20} textAnchor="middle">{Math.round(ratio*xMax)}</text></g>;})}
       </g>
       <g clipPath={`url(#${clipId})`}>
-        {seriesPaths.map((series,index)=><motion.path key={series.name} d={series.path} fill="none" stroke={semanticColor[series.semantic ?? (index===0?'green':'orange')]} strokeWidth={focused?3:2.3} vectorEffect="non-scaling-stroke" initial={reduced?undefined:{pathLength:0,opacity:0}} animate={{pathLength:1,opacity:1}} transition={{duration:.62,delay:index*.08,ease:[.22,.61,.36,1]}}/>)}
+        {seriesPaths.map((series,index)=><motion.path className="chart-series" key={series.name} d={series.path} fill="none" stroke={chartSeriesColor(series, index)} strokeWidth={focused?3:2.3} vectorEffect="non-scaling-stroke" initial={reduced?undefined:{pathLength:0,opacity:0}} animate={{pathLength:1,opacity:1}} transition={{duration:.62,delay:index*.08,ease:[.22,.61,.36,1]}}/>)}
         {data.marker && markerValue != null ? <motion.g initial={{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}><line x1={xAtEpoch(data.marker.x)} y1={pad.top} x2={xAtEpoch(data.marker.x)} y2={height-pad.bottom} stroke="rgba(var(--orange-rgb),.34)" strokeDasharray="6 8"/><circle cx={xAtEpoch(data.marker.x)} cy={yAt(markerValue)} r={focused?7:5} fill="#000" stroke="var(--orange)" strokeWidth="2"/></motion.g> : null}
       </g>
       <text className="chart-axis-label" x={width/2} y={height-2} textAnchor="middle">{data.xLabel ?? 'X'}</text>
       <text className="chart-axis-label" transform={`translate(17 ${height/2}) rotate(-90)`} textAnchor="middle">{data.yLabel ?? 'Y'}</text>
-      <g className="chart-legend" transform={`translate(${pad.left+8} ${pad.top+12})`}>{data.series.map((series,index)=><g transform={`translate(${index*178} 0)`} key={series.name}><line x1="0" y1="0" x2="24" y2="0" stroke={semanticColor[series.semantic ?? 'paper']} strokeWidth="2"/><text x="34" y="4">{series.name}</text></g>)}</g>
+      <g className="chart-legend" transform={`translate(${pad.left+8} ${pad.top+12})`}>{data.series.map((series,index)=><g transform={`translate(${index*178} 0)`} key={series.name}><line className="chart-legend__key" x1="0" y1="0" x2="24" y2="0" stroke={chartSeriesColor(series, index)} strokeWidth="2"/><text x="34" y="4">{series.name}</text></g>)}</g>
     </svg>
   </div>;
 }
