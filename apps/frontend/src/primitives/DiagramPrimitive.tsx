@@ -15,30 +15,101 @@ const colors: Record<Semantic, string> = {
 
 type PositionedNode = DiagramNode & { x: number; y: number; layer: number; indexInLayer: number };
 
-function createLayers(nodes: DiagramNode[], edges: DiagramEdge[]): DiagramNode[][] {
-  const incoming = new Map(nodes.map((node) => [node.id, 0]));
+export function createLayers(nodes: DiagramNode[], edges: DiagramEdge[]): DiagramNode[][] {
+  if (nodes.length === 0) return [];
+
   const outgoing = new Map(nodes.map((node) => [node.id, [] as string[]]));
   for (const edge of edges) {
-    incoming.set(edge.to, (incoming.get(edge.to) ?? 0) + 1);
-    outgoing.get(edge.from)?.push(edge.to);
-  }
-  const roots = nodes.filter((node) => (incoming.get(node.id) ?? 0) === 0).map((node) => node.id);
-  const depth = new Map<string, number>();
-  const queue = roots.map((id) => ({ id, depth: 0 }));
-  while (queue.length) {
-    const item = queue.shift();
-    if (!item) break;
-    if ((depth.get(item.id) ?? -1) >= item.depth) continue;
-    depth.set(item.id, item.depth);
-    for (const child of outgoing.get(item.id) ?? []) {
-      queue.push({ id: child, depth: item.depth + 1 });
+    if (outgoing.has(edge.from) && outgoing.has(edge.to)) {
+      outgoing.get(edge.from)?.push(edge.to);
     }
   }
+
+  // Collapse every feedback loop into one component before assigning depth.
+  // The resulting component graph is a DAG, so longest-path layering is both
+  // bounded and deterministic even for pure cycles and self-loops.
+  const visitIndex = new Map<string, number>();
+  const lowLink = new Map<string, number>();
+  const stack: string[] = [];
+  const onStack = new Set<string>();
+  const components: string[][] = [];
+  let nextVisitIndex = 0;
+
+  const findComponent = (id: string) => {
+    visitIndex.set(id, nextVisitIndex);
+    lowLink.set(id, nextVisitIndex);
+    nextVisitIndex += 1;
+    stack.push(id);
+    onStack.add(id);
+
+    for (const child of outgoing.get(id) ?? []) {
+      if (!visitIndex.has(child)) {
+        findComponent(child);
+        lowLink.set(id, Math.min(lowLink.get(id) ?? 0, lowLink.get(child) ?? 0));
+      } else if (onStack.has(child)) {
+        lowLink.set(id, Math.min(lowLink.get(id) ?? 0, visitIndex.get(child) ?? 0));
+      }
+    }
+
+    if (lowLink.get(id) !== visitIndex.get(id)) return;
+
+    const component: string[] = [];
+    while (stack.length > 0) {
+      const member = stack.pop();
+      if (!member) break;
+      onStack.delete(member);
+      component.push(member);
+      if (member === id) break;
+    }
+    components.push(component);
+  };
+
   for (const node of nodes) {
-    if (!depth.has(node.id)) depth.set(node.id, 0);
+    if (!visitIndex.has(node.id)) findComponent(node.id);
   }
-  const maxDepth = Math.max(0, ...depth.values());
-  return Array.from({ length: maxDepth + 1 }, (_, layer) => nodes.filter((node) => depth.get(node.id) === layer));
+
+  const componentByNode = new Map<string, number>();
+  components.forEach((component, componentIndex) => {
+    for (const id of component) componentByNode.set(id, componentIndex);
+  });
+
+  const componentOutgoing = components.map(() => new Set<number>());
+  const componentIncoming = components.map(() => 0);
+  for (const [from, children] of outgoing) {
+    const fromComponent = componentByNode.get(from);
+    if (fromComponent === undefined) continue;
+    for (const child of children) {
+      const toComponent = componentByNode.get(child);
+      if (
+        toComponent === undefined ||
+        toComponent === fromComponent ||
+        componentOutgoing[fromComponent].has(toComponent)
+      ) {
+        continue;
+      }
+      componentOutgoing[fromComponent].add(toComponent);
+      componentIncoming[toComponent] += 1;
+    }
+  }
+
+  const componentDepth = components.map(() => 0);
+  const queue = componentIncoming.flatMap((count, index) => (count === 0 ? [index] : []));
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const component = queue[cursor];
+    for (const child of componentOutgoing[component]) {
+      componentDepth[child] = Math.max(componentDepth[child], componentDepth[component] + 1);
+      componentIncoming[child] -= 1;
+      if (componentIncoming[child] === 0) queue.push(child);
+    }
+  }
+
+  const maxDepth = Math.max(...componentDepth);
+  const layers = Array.from({ length: maxDepth + 1 }, () => [] as DiagramNode[]);
+  for (const node of nodes) {
+    const component = componentByNode.get(node.id);
+    layers[component === undefined ? 0 : componentDepth[component]].push(node);
+  }
+  return layers;
 }
 
 function edgePath(from: PositionedNode, to: PositionedNode, portrait: boolean, nodeWidth: number, nodeHeight: number) {

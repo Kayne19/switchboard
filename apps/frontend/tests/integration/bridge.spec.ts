@@ -55,6 +55,28 @@ test("runtime bridge handles display events, replay, screen_state bridge queue/a
   const { wsUrl } = await fixtureServer.start();
 
   try {
+    // Reproduce a cold-mount race by delaying the parent's message listener.
+    // The iframe must keep announcing itself and must not open its WebSocket
+    // (or receive the replay snapshot) until that listener answers.
+    await page.addInitScript(() => {
+      if (window.parent !== window) return;
+      const addEventListener = window.addEventListener.bind(window);
+      window.addEventListener = ((
+        type: string,
+        listener: EventListenerOrEventListenerObject,
+        options?: boolean | AddEventListenerOptions,
+      ) => {
+        if (type === "message") {
+          window.setTimeout(
+            () => addEventListener(type, listener, options),
+            400,
+          );
+          return;
+        }
+        addEventListener(type, listener, options);
+      }) as typeof window.addEventListener;
+    });
+
     // 1. Navigate with custom WS pointing to our fixture server
     await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
 

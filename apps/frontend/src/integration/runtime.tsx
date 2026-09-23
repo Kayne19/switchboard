@@ -177,6 +177,7 @@ export function RuntimeIntegration() {
           currentResponseRef.current = "";
           generationRef.current =
             typeof message.generation === "number" ? message.generation : 0;
+          iframeReadyRef.current = true;
           inFlightReportRef.current = null;
           pendingReportRef.current = null;
           dispatch({ op: "epoch_reset" });
@@ -286,9 +287,11 @@ export function RuntimeIntegration() {
         kind?: string;
         payload?: unknown;
       };
+      if (event.source !== frameRef.current?.contentWindow) return;
       if (packet?.source !== LEGACY_SOURCE) return;
       if (packet.kind === "state" && isRuntimeState(packet.payload)) {
         const runtimeState = packet.payload;
+        if (!runtimeState.connected) iframeReadyRef.current = false;
         setRuntime((current) => ({ ...current, ...runtimeState }));
         dispatch({
           op: "listen",
@@ -301,13 +304,8 @@ export function RuntimeIntegration() {
       ) {
         handleServer(packet.payload as ServerMessage);
       } else if (packet.kind === "ready") {
-        iframeReadyRef.current = true;
+        command("bridge_ready");
         command("state");
-        if (pendingReportRef.current && !inFlightReportRef.current) {
-          const report = pendingReportRef.current;
-          pendingReportRef.current = null;
-          sendReport(report);
-        }
       } else if (packet.kind === "screen_state_ack") {
         handleScreenStateAck();
       }

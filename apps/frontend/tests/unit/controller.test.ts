@@ -134,6 +134,18 @@ describe('controller reducer & ownership', () => {
     expect(state.focusId).toBeNull();
   });
 
+  it('preserves state identity when listening is already at the requested value', () => {
+    const initial = createInitialState();
+    const unchanged = controllerReducer(initial, { op: 'listen', on: false });
+    expect(unchanged).toBe(initial);
+    expect(unchanged.revision).toBe(0);
+
+    const listening = controllerReducer(initial, { op: 'listen', on: true });
+    const stillListening = controllerReducer(listening, { op: 'listen', on: true });
+    expect(stillListening).toBe(listening);
+    expect(stillListening.revision).toBe(1);
+  });
+
   it('supports all seven structured types in compositions', () => {
     const state = reduceActions(createInitialState(), [
       chartAction,

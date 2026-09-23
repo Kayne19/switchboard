@@ -49,6 +49,8 @@ const handsFreeStatusEl = getElement("handsFreeStatus");
 const handsFreeLeaseEl = getElement("handsFreeLease");
 const presenceEl = getElement("presenceState");
 const RUNTIME_BRIDGE_SOURCE = "switchboard-legacy-runtime";
+let bridgeParentReady = window.parent === window;
+let bridgeAnnouncementTimer = null;
 function publishBridgeMessage(kind, payload) {
     if (window.parent === window)
         return;
@@ -92,6 +94,10 @@ function publishBridgeState() {
 function publishServerMessage(message) {
     publishBridgeMessage("server", message);
     document.dispatchEvent(new CustomEvent("switchboard:server-message", { detail: message }));
+}
+function stopBridgeAnnouncements() {
+    clearIntervalSafe(bridgeAnnouncementTimer);
+    bridgeAnnouncementTimer = null;
 }
 let ws = null;
 let mediaRecorder = null;
@@ -1936,6 +1942,8 @@ if (window.parent !== window) {
     window.addEventListener("message", (event) => {
         if (event.origin !== window.location.origin)
             return;
+        if (event.source !== window.parent)
+            return;
         const data = event.data;
         if (data?.source !== "switchboard-v17" || !data.command)
             return;
@@ -1946,6 +1954,14 @@ if (window.parent !== window) {
             control.dispatchEvent(new Event("change", { bubbles: true }));
         };
         switch (data.command) {
+            case "bridge_ready":
+                if (!bridgeParentReady) {
+                    bridgeParentReady = true;
+                    stopBridgeAnnouncements();
+                    publishBridgeState();
+                    connect();
+                }
+                break;
             case "talk":
                 btn.click();
                 break;
@@ -1991,8 +2007,9 @@ if (window.parent !== window) {
     });
     window.addEventListener("load", () => {
         publishBridgeMessage("ready", null);
-        publishBridgeState();
+        bridgeAnnouncementTimer = setInterval(() => publishBridgeMessage("ready", null), 250);
     });
+    window.addEventListener("pagehide", stopBridgeAnnouncements);
 }
 try {
     initMissionClock("missionClock");
@@ -2001,4 +2018,5 @@ try {
 catch {
     // Tactical canvas and mission clock enhancements degrade gracefully
 }
-connect();
+if (window.parent === window)
+    connect();

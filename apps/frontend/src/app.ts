@@ -95,6 +95,8 @@ const handsFreeLeaseEl = getElement<HTMLElement>("handsFreeLease");
 const presenceEl = getElement<HTMLElement>("presenceState");
 
 const RUNTIME_BRIDGE_SOURCE = "switchboard-legacy-runtime";
+let bridgeParentReady = window.parent === window;
+let bridgeAnnouncementTimer: ReturnType<typeof setInterval> | null = null;
 
 function publishBridgeMessage(kind: string, payload: unknown): void {
 	if (window.parent === window) return;
@@ -149,6 +151,11 @@ function publishServerMessage(message: BrowserMessage): void {
 	document.dispatchEvent(
 		new CustomEvent("switchboard:server-message", { detail: message }),
 	);
+}
+
+function stopBridgeAnnouncements(): void {
+	clearIntervalSafe(bridgeAnnouncementTimer);
+	bridgeAnnouncementTimer = null;
 }
 
 let ws: WebSocket | null = null;
@@ -2113,6 +2120,7 @@ if (window.parent !== window) {
 	}
 	window.addEventListener("message", (event: MessageEvent) => {
 		if (event.origin !== window.location.origin) return;
+		if (event.source !== window.parent) return;
 		const data = event.data as {
 			source?: string;
 			command?: string;
@@ -2125,6 +2133,14 @@ if (window.parent !== window) {
 			control.dispatchEvent(new Event("change", { bubbles: true }));
 		};
 		switch (data.command) {
+			case "bridge_ready":
+				if (!bridgeParentReady) {
+					bridgeParentReady = true;
+					stopBridgeAnnouncements();
+					publishBridgeState();
+					connect();
+				}
+				break;
 			case "talk":
 				btn.click();
 				break;
@@ -2174,8 +2190,12 @@ if (window.parent !== window) {
 	});
 	window.addEventListener("load", () => {
 		publishBridgeMessage("ready", null);
-		publishBridgeState();
+		bridgeAnnouncementTimer = setInterval(
+			() => publishBridgeMessage("ready", null),
+			250,
+		);
 	});
+	window.addEventListener("pagehide", stopBridgeAnnouncements);
 }
 try {
 	initMissionClock("missionClock");
@@ -2185,4 +2205,4 @@ try {
 } catch {
 	// Tactical canvas and mission clock enhancements degrade gracefully
 }
-connect();
+if (window.parent === window) connect();

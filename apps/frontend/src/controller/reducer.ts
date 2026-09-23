@@ -272,6 +272,7 @@ export function controllerReducer(state: ControllerState, action: ControllerActi
       return { ...state, focusId: targetId, revision };
     }
     case 'listen':
+      if (state.listening === action.on) return state;
       return { ...state, listening: action.on, revision };
     case 'clear': {
       // Agent clear removes agent objects, agent speech, and focusId; runtime state is preserved

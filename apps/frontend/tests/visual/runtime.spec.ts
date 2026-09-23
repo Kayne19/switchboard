@@ -5,13 +5,14 @@ async function publish(
   kind: string,
   payload: unknown,
 ) {
-  await page.evaluate(
+  const frameHandle = await page.locator(".runtime-frame").elementHandle();
+  const frame = await frameHandle?.contentFrame();
+  if (!frame) throw new Error("voice runtime iframe is not available");
+  await frame.evaluate(
     ({ kind, payload }) => {
-      window.dispatchEvent(
-        new MessageEvent("message", {
-          origin: window.location.origin,
-          data: { source: "switchboard-legacy-runtime", kind, payload },
-        }),
+      window.parent.postMessage(
+        { source: "switchboard-legacy-runtime", kind, payload },
+        window.parent.location.origin,
       );
     },
     { kind, payload },
