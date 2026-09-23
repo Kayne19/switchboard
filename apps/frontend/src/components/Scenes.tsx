@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react';
-import type { CSSProperties } from 'react';
+import { useState, type CSSProperties } from 'react';
 import type {
   ChartData,
   CodeData,
@@ -348,6 +348,9 @@ export function ArchitectureScene({ state, onToggleListening, onFocus, onOpenHis
   const note = annotationForScene(state, noteObject, liveChatMessage(state));
   const metrics = objectsOfType<MetricData>(state, 'metric');
   const progressList = objectsOfType<ProgressData>(state, 'progress');
+  const [calloutPlaced, setCalloutPlaced] = useState(false);
+
+  const railNote = calloutPlaced ? null : note;
 
   return (
     <motion.section className="scene scene--content scene--architecture" data-scene="architecture" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -359,12 +362,12 @@ export function ArchitectureScene({ state, onToggleListening, onFocus, onOpenHis
         <ObjectMotion objectId={diagram.id} className="content-main diagram-object">
           <TechFrame variant="rails" />
           <FocusableSurface onActivate={() => onFocus(diagram.id)} ariaLabel="Expand diagram">
-            <DiagramPrimitive data={diagram.data} />
+            <DiagramPrimitive data={diagram.data} note={note} onCalloutChange={setCalloutPlaced} />
           </FocusableSurface>
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={diagram.data.context ?? 'SYSTEM MAP'} size="rail" activity={state.activity} />
-          <RailDetails state={state} metrics={metrics} note={note} noteObject={noteObject} progressList={progressList} onFocus={onFocus} onOpenHistory={onOpenHistory} />
+          <RailDetails state={state} metrics={metrics} note={railNote} noteObject={calloutPlaced ? undefined : noteObject} progressList={progressList} onFocus={onFocus} onOpenHistory={onOpenHistory} />
         </motion.aside>
       </div>
       <SceneFooter left="DISPLAY / SYSTEM MAP" right={sceneCaption(diagram, 'TRACE / ACTIVE ROUTE')} />

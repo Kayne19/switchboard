@@ -102,3 +102,33 @@ for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
     });
   });
 }
+
+
+describe('diagram callout placement', () => {
+  it('places a callout near the anchored node without covering other nodes in landscape', () => {
+    const layout = layoutDiagram(graphs.chain, 'landscape', 'review');
+    expect(layout.callout).not.toBeNull();
+    expect(layout.callout?.targetNodeId).toBe('review');
+    expect(layout.callout?.leader).toHaveLength(2);
+    for (const node of layout.nodes) {
+      if (node.node.id === 'review') continue;
+      const overlapsOther = !(
+        layout.callout!.box.x + layout.callout!.box.width <= node.box.x ||
+        node.box.x + node.box.width <= layout.callout!.box.x ||
+        layout.callout!.box.y + layout.callout!.box.height <= node.box.y ||
+        node.box.y + node.box.height <= layout.callout!.box.y
+      );
+      expect(overlapsOther).toBe(false);
+    }
+  });
+
+  it('returns null callout in portrait to trigger fallback to the rail', () => {
+    const layout = layoutDiagram(graphs.chain, 'portrait', 'review');
+    expect(layout.callout).toBeNull();
+  });
+
+  it('returns null callout when the node id is unknown', () => {
+    const layout = layoutDiagram(graphs.chain, 'landscape', 'unknown-node');
+    expect(layout.callout).toBeNull();
+  });
+});

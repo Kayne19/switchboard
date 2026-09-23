@@ -29,6 +29,7 @@ export function AnnotationCard({ data, onFocus, onOpenHistory }: AnnotationCardP
             {data.anchor.node ? ` / NODE ${data.anchor.node}` : ''}
             {data.anchor.x !== undefined ? ` / X ${data.anchor.x}` : ''}
             {data.anchor.series ? ` / ${data.anchor.series}` : ''}
+            {data.anchor.node ? <span className="annotation-card__node-badge tech micro">NOTE</span> : null}
           </span>
         ) : null}
         {onOpenHistory ? (

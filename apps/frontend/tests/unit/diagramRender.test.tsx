@@ -87,3 +87,53 @@ describe('diagram rendering', () => {
     expect(glow?.getAttribute('filterUnits')).toBe('userSpaceOnUse');
   });
 });
+
+
+describe('anchored diagram note', () => {
+  it('highlights the node and renders a callout with leader line', () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() =>
+      root.render(
+        <DiagramPrimitive
+          data={data}
+          note={{
+            tag: 'OBSERVATION',
+            anchor: { target: 'test-diagram', node: 'route' },
+            segments: [{ text: 'Route description.' }],
+          }}
+        />,
+      ),
+    );
+
+    const callout = host.querySelector('.diagram-callout');
+    expect(callout).not.toBeNull();
+    const leader = host.querySelector('.diagram-callout__leader');
+    expect(leader).not.toBeNull();
+    const anchoredNode = host.querySelector('.diagram-node__body--anchored');
+    expect(anchoredNode).not.toBeNull();
+    expect(anchoredNode?.querySelector('.diagram-node-label')?.textContent).toBe('ROUTE');
+  });
+
+  it('preserves default rendering when the anchored node is unknown', () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() =>
+      root.render(
+        <DiagramPrimitive
+          data={data}
+          note={{
+            tag: 'OBSERVATION',
+            anchor: { target: 'test-diagram', node: 'nonexistent' },
+            segments: [{ text: 'Route description.' }],
+          }}
+        />,
+      ),
+    );
+
+    expect(host.querySelector('.diagram-callout')).toBeNull();
+    expect(host.querySelector('.diagram-node__body--anchored')).toBeNull();
+  });
+});

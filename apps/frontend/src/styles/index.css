@@ -558,6 +558,9 @@ button {
   min-width: 0;
   min-height: 0;
 }
+.content-grid:has(.diagram-callout) .content-rail .rail-note {
+  display: none;
+}
 .content-main {
   position: relative;
   min-width: 0;
@@ -628,6 +631,19 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.annotation-card__node-badge {
+  display: inline-block;
+  padding: 0 4px;
+  margin-left: 6px;
+  background: rgba(var(--orange-rgb), 0.25);
+  border: 1px solid var(--orange);
+  color: var(--orange);
+  font-weight: 700;
+  font-size: 8.5px;
+  line-height: 1.3;
+  vertical-align: middle;
+  border-radius: 2px;
 }
 .annotation-card__history {
   flex: none;
@@ -1214,6 +1230,25 @@ button {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 7px;
   letter-spacing: 0.08em;
+}
+.diagram-node__body--anchored .diagram-node__frame {
+  stroke: var(--orange);
+  stroke-width: 2.2px;
+  stroke-opacity: 1;
+}
+.diagram-callout {
+  animation: diagram-node-resolve 0.28s cubic-bezier(0.22, 0.61, 0.36, 1) backwards;
+}
+.diagram-callout__text {
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  line-height: 1.36;
+}
+.diagram-callout__tag {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  font-weight: 600;
 }
 
 /* Document */
