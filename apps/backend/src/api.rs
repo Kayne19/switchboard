@@ -73,6 +73,17 @@ impl DisplayProjection {
                 let role = action.get("role").and_then(Value::as_str).map(String::from);
                 let data = action.get("data").cloned().unwrap_or(Value::Null);
 
+                // One object holds the primary role. A show that claims it
+                // takes it from the previous holder, which stays on stage as
+                // secondary -- the same rule as the browser's reducer.
+                if role.as_deref() == Some("primary") {
+                    for object in self.objects.values_mut() {
+                        if object.id != id && object.role.as_deref() == Some("primary") {
+                            object.role = Some("secondary".to_string());
+                        }
+                    }
+                }
+
                 if let Some(existing) = self.objects.get_mut(id) {
                     existing.object_type = object_type.to_string();
                     if role.is_some() {
@@ -179,9 +190,10 @@ impl DisplayProjection {
     // Mirrors the browser's `buildCompositionModel` in
     // apps/frontend/src/app/sceneModel.ts exactly: the reporting object is
     // the focused object if one is set and still on stage, else the
-    // composition primary -- the first object (in `order`) with
-    // role:"primary", else the first non-ambient object, else the first
-    // object overall. Keep the two in lockstep; see docs/visual-channel.md.
+    // composition primary -- the object with role:"primary" (`apply` leaves
+    // at most one: the latest to claim it), else the first non-ambient
+    // object, else the first object overall. Keep the two in lockstep; see
+    // docs/visual-channel.md.
     fn composition_primary(&self) -> Option<&SceneObject> {
         self.order
             .iter()

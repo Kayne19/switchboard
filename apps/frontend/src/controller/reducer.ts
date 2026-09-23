@@ -73,6 +73,23 @@ export function createInitialState(): ControllerState {
   };
 }
 
+// One agent object holds the primary viewport at a time. A show that claims
+// it takes it from whichever object held it before; that object stays on
+// stage as secondary. The backend's DisplayProjection applies the same rule,
+// so /view and this page agree on which object is primary.
+function withPrimaryClaimedBy(
+  objects: Record<string, SceneObject>,
+  claimantId: string,
+): Record<string, SceneObject> {
+  const result = { ...objects };
+  for (const [id, object] of Object.entries(objects)) {
+    if (id !== claimantId && object.role === 'primary') {
+      result[id] = { ...object, role: 'secondary' };
+    }
+  }
+  return result;
+}
+
 function syncCombinedState(
   state: ControllerState,
   agentObjects: Record<string, SceneObject>,
@@ -160,7 +177,8 @@ export function controllerReducer(state: ControllerState, action: ControllerActi
           createdAt: existing?.createdAt ?? now,
           updatedAt: now,
         };
-        const agentObjects = { ...state.agentObjects, [action.id]: object };
+        const shown = { ...state.agentObjects, [action.id]: object };
+        const agentObjects = action.role === 'primary' ? withPrimaryClaimedBy(shown, action.id) : shown;
         const agentOrder = existing ? state.agentOrder : [...state.agentOrder, action.id];
         return syncCombinedState(
           state,

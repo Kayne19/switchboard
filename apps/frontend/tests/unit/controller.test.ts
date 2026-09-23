@@ -168,22 +168,71 @@ describe('controller reducer & ownership', () => {
 
     const comp = buildCompositionModel(state);
     expect(comp.allAgentObjects.length).toBe(7);
-    // chartAction was first primary
-    expect(comp.primary?.id).toBe('training-loss');
+    // diagramAction claimed primary after chartAction did, so it holds it.
+    expect(comp.primary?.id).toBe('sys-arch');
+    expect(comp.secondary.some((o) => o.id === 'training-loss')).toBe(true);
     expect(comp.compare.some((o) => o.id === 'memo')).toBe(true);
     expect(comp.ambient.some((o) => o.id === 'gpu')).toBe(true);
   });
 
-  it('resolves primary by explicit role, tie-breaking by order', () => {
-    // Both chart and diagram have role: 'primary'. chart is first by order.
+  it('gives the primary role to the latest show that claims it', () => {
     const state = reduceActions(createInitialState(), [chartAction, diagramAction]);
-    const comp = buildCompositionModel(state);
-    expect(comp.primary?.id).toBe('training-loss');
+    expect(buildCompositionModel(state).primary?.id).toBe('sys-arch');
+    expect(sceneKind(state)).toBe('architecture');
+    // The displaced object stays on stage, demoted rather than removed.
+    expect(state.agentObjects['training-loss'].role).toBe('secondary');
+    expect(state.agentOrder).toEqual(['training-loss', 'sys-arch']);
 
-    // If diagram is added first, diagram is primary
     const reversed = reduceActions(createInitialState(), [diagramAction, chartAction]);
-    const compReversed = buildCompositionModel(reversed);
-    expect(compReversed.primary?.id).toBe('sys-arch');
+    expect(buildCompositionModel(reversed).primary?.id).toBe('training-loss');
+    expect(sceneKind(reversed)).toBe('training');
+    expect(reversed.agentObjects['sys-arch'].role).toBe('secondary');
+  });
+
+  it('lets an object already on stage take the primary role back', () => {
+    const state = reduceActions(createInitialState(), [
+      diagramAction,
+      { ...codeAction, role: 'primary' },
+      diagramAction,
+    ]);
+    expect(buildCompositionModel(state).primary?.id).toBe('sys-arch');
+    expect(state.agentObjects.patch.role).toBe('secondary');
+  });
+
+  it('keeps the primary where it is when an update carries no role', () => {
+    const { role: _role, ...diagramUpdate } = diagramAction as Extract<ControllerAction, { op: 'show' }>;
+    const state = reduceActions(createInitialState(), [
+      diagramAction,
+      { ...codeAction, role: 'primary' },
+      diagramUpdate,
+    ]);
+    expect(buildCompositionModel(state).primary?.id).toBe('patch');
+    expect(state.agentObjects['sys-arch'].role).toBe('secondary');
+  });
+
+  it('returns the viewport to the earlier object when the current primary is hidden', () => {
+    const state = reduceActions(createInitialState(), [
+      diagramAction,
+      { ...codeAction, role: 'primary' },
+      { op: 'hide', id: 'patch' },
+    ]);
+    expect(buildCompositionModel(state).primary?.id).toBe('sys-arch');
+    expect(sceneKind(state)).toBe('architecture');
+  });
+
+  it('does not let a runtime object take the agent primary', () => {
+    const state = reduceActions(createInitialState(), [
+      diagramAction,
+      {
+        op: 'runtime_show',
+        id: RUNTIME_CONVERSATION_ID,
+        type: 'message',
+        role: 'primary',
+        data: { segments: [{ text: 'hello' }] },
+      },
+    ]);
+    expect(state.agentObjects['sys-arch'].role).toBe('primary');
+    expect(buildCompositionModel(state).primary?.id).toBe('sys-arch');
   });
 
   it('resolves primary to first non-ambient object when no explicit primary exists', () => {

@@ -352,6 +352,41 @@ async fn view_reports_the_object_with_role_primary_even_when_shown_first() {
     assert_eq!(response["screen"]["title"], "document-title");
 }
 
+#[test]
+fn a_later_primary_claim_takes_the_role_and_demotes_the_earlier_one() {
+    // Mirrors the reducer in apps/frontend/src/controller/reducer.ts: only
+    // the latest object shown with role:"primary" keeps it, and the one it
+    // displaced stays on stage as secondary -- including in the snapshot a
+    // reconnecting browser replays.
+    let mut projection = DisplayProjection::default();
+    let show = |id: &str, object_type: &str, role: Option<&str>| {
+        let mut action = json!({"op":"show", "id":id, "type":object_type, "data":{"title":id}});
+        if let Some(role) = role {
+            action["role"] = json!(role);
+        }
+        action
+    };
+
+    projection.apply(&show("a", "diagram", Some("primary")), 1);
+    projection.apply(&show("b", "code", Some("primary")), 2);
+    let (_, kind, title, order) = projection.summary();
+    assert_eq!(kind.as_deref(), Some("code"));
+    assert_eq!(title.as_deref(), Some("b"));
+    assert_eq!(order, vec!["a", "b"]);
+    let replay = projection.snapshot_actions();
+    assert_eq!(replay[0]["role"], "secondary");
+    assert_eq!(replay[1]["role"], "primary");
+
+    // An update that names no role leaves the primary where it is.
+    projection.apply(&show("a", "diagram", None), 3);
+    assert_eq!(projection.summary().1.as_deref(), Some("code"));
+
+    // Re-claiming the role takes it back.
+    projection.apply(&show("a", "diagram", Some("primary")), 4);
+    assert_eq!(projection.summary().1.as_deref(), Some("diagram"));
+    assert_eq!(projection.objects["b"].role.as_deref(), Some("secondary"));
+}
+
 #[tokio::test]
 async fn delivery_registration_captures_live_events_for_snapshot_barrier() {
     let delivery = DeliveryState::new();
