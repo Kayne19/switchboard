@@ -112,11 +112,9 @@ export function RuntimeIntegration() {
             : `PROJECT / ${runtime.route.toUpperCase()}`,
         tag: "CURRENT RESPONSE / LIVE",
         caption: currentCaptionRef.current || `VOICE / ${String(Math.max(1, responseCount)).padStart(2, "0")}`,
-        segments: [
-          {
-            text: currentResponseRef.current || "Line open. Speak when ready.",
-          },
-        ],
+        // No response yet means no segments: the conversation scene shows
+        // its own open-line prompt, and a content rail shows no live card.
+        segments: currentResponseRef.current ? [{ text: currentResponseRef.current }] : [],
         channel: {
           name: "VOICE",
           mode: runtime.handsFree ? "HANDS-FREE" : "PUSH-TO-TALK",

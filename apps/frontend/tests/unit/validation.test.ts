@@ -1,6 +1,37 @@
 import { describe, expect, it } from 'vitest';
 import fixtures from '../fixtures/display-actions.json';
-import { assertControllerAction, validateControllerAction } from '../../src/controller/validation';
+import {
+  assertControllerAction,
+  normalizeProgressValue,
+  validateControllerAction,
+} from '../../src/controller/validation';
+
+describe('progress value normalization', () => {
+  it('reads values above 1 as percentages and scales them to ratios', () => {
+    expect(normalizeProgressValue(65)).toBe(0.65);
+    expect(normalizeProgressValue(67)).toBe(0.67);
+    expect(normalizeProgressValue(100)).toBe(1);
+  });
+
+  it('keeps 0-1 ratio values and clamps out-of-range values to the nearest end', () => {
+    expect(normalizeProgressValue(0)).toBe(0);
+    expect(normalizeProgressValue(1)).toBe(1);
+    expect(normalizeProgressValue(150)).toBe(1);
+    expect(normalizeProgressValue(-3)).toBe(0);
+    expect(normalizeProgressValue(0.5125)).toBe(0.5125);
+  });
+
+  it('normalizes the value on validated show actions', () => {
+    const result = validateControllerAction({
+      op: 'show', id: 'deploy', type: 'progress',
+      data: { label: 'DEPLOY', value: 65, text: '65% COMPLETE' },
+    });
+    expect(result).toMatchObject({ ok: true });
+    if (result.ok && result.action.op === 'show') {
+      expect((result.action.data as { value: number }).value).toBe(0.65);
+    }
+  });
+});
 
 describe('display protocol validation', () => {
   it('accepts and normalizes all canonical valid fixtures', () => {
