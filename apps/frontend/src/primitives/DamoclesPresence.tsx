@@ -1,15 +1,11 @@
 import { AnimatePresence, motion } from 'motion/react';
 import type { ActivityState } from '../controller/types';
 import { useFloatingMotion } from '../hooks/useFloatingMotion';
-import { useLingeringValue } from '../hooks/useLingeringValue';
+import { ACTIVITY_LINGER_MS, useLingeringValue } from '../hooks/useLingeringValue';
 import { DamoclesGlyph } from './DamoclesGlyph';
 import { VoiceIndicator } from './VoiceIndicator';
 
 export type PresenceSize = 'idle' | 'conversation' | 'rail' | 'compact';
-
-// How long the caption keeps naming a tool after it finishes, so a run of
-// short calls reads as one steady status.
-const ACTIVITY_LINGER_MS = 1200;
 
 export function DamoclesPresence({
   listening,

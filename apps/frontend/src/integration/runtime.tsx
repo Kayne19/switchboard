@@ -67,7 +67,6 @@ export function RuntimeIntegration() {
   const pendingReportRef = useRef<ScreenStateReport | null>(null);
   const inFlightReportRef = useRef<ScreenStateReport | null>(null);
   const appliedSeqRef = useRef(0);
-  const lastRouteRef = useRef<string | null>(null);
   const pendingRejectionRef = useRef<{ seq: number; reason: string } | null>(null);
   const handleServerRef = useRef<(message: ServerMessage) => void>(() => {});
   const activityToolRef = useRef<string | null>(null);
@@ -113,11 +112,9 @@ export function RuntimeIntegration() {
             : `PROJECT / ${runtime.route.toUpperCase()}`,
         tag: "CURRENT RESPONSE / LIVE",
         caption: currentCaptionRef.current || `VOICE / ${String(Math.max(1, responseCount)).padStart(2, "0")}`,
-        segments: [
-          {
-            text: currentResponseRef.current || "Line open. Speak when ready.",
-          },
-        ],
+        // No response yet means no segments: the conversation scene shows
+        // its own open-line prompt, and a content rail shows no live card.
+        segments: currentResponseRef.current ? [{ text: currentResponseRef.current }] : [],
         channel: {
           name: "VOICE",
           mode: runtime.handsFree ? "HANDS-FREE" : "PUSH-TO-TALK",
@@ -273,12 +270,6 @@ export function RuntimeIntegration() {
 
     handleStateRef.current = (runtimeState: RuntimeState) => {
       if (!runtimeState.connected) transportReadyRef.current = false;
-      // A handoff to another route ends the previous agent's turn: any tool
-      // activity that was still showing belongs to the line we left.
-      if (lastRouteRef.current !== null && lastRouteRef.current !== runtimeState.route) {
-        dispatch({ op: "runtime_activity", activity: null });
-      }
-      lastRouteRef.current = runtimeState.route;
       setRuntime(runtimeState);
       dispatch({
         op: "listen",

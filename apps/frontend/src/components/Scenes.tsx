@@ -12,6 +12,7 @@ import type {
   ProgressData,
   SceneObject,
 } from '../controller/types';
+import { RUNTIME_CONVERSATION_ID } from '../controller/types';
 import { buildCompositionModel, cast, objectsOfType, primaryObject } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
@@ -61,12 +62,12 @@ function annotationForScene(
 ): NoteData | null {
   // Notes are durable display objects. A later chat response may supply a
   // transient explanation only when no note is present; it must never mutate
-  // or visually replace an explicit note. When the scene shows the live
-  // chat card, that card is the explanation surface, so the annotation slot
-  // carries the explicit note alone.
+  // or visually replace an explicit note. A spoken reply already reads in the
+  // live chat card when the scene shows one, so the slot then carries only
+  // speech the card does not: an agent `say`, or an error on the line.
   if (noteObject) return noteObject.data;
-  if (liveMessage) return null;
   if (!state.speech) return null;
+  if (liveMessage && state.speech.target === RUNTIME_CONVERSATION_ID) return null;
   return { tag: 'DAMOCLES / EXPLANATION', segments: [{ text: state.speech.text }] };
 }
 
@@ -79,12 +80,14 @@ function noteForTarget(
     ?? notes[0];
 }
 
-// The runtime conversation is the current assistant turn. When a content
-// scene shows it, the live chat card is that surface; the annotation slot
-// is left for durable notes.
+// The current assistant turn, for the live chat card. Only the runtime
+// conversation counts: an agent may name any object `message`, and that is
+// not a chat turn. Before the first response there is nothing to show.
 function liveChatMessage(state: ControllerState): MessageData | null {
-  const object = buildCompositionModel(state).runtimeConversation;
-  return object ? cast.message(object).data : null;
+  const object = state.runtimeObjects[RUNTIME_CONVERSATION_ID];
+  if (object?.type !== 'message') return null;
+  const message = cast.message(object).data;
+  return message.segments.length > 0 ? message : null;
 }
 
 function sceneCaption(object: SceneObject, fallback: string): string {
@@ -143,6 +146,57 @@ function RailProgress({ progressList, onFocus }: { progressList: Array<SceneObje
   );
 }
 
+interface RailDetailsProps {
+  state: ControllerState;
+  metrics: Array<SceneObject<MetricData>>;
+  note: NoteData | null;
+  noteObject?: SceneObject<NoteData>;
+  progressList: Array<SceneObject<ProgressData>>;
+  onFocus: (id: string | null) => void;
+  onOpenHistory?: () => void;
+}
+
+// The details column beside every content visual: the live response, the
+// metrics, the note, any progress the main column has no slot for, and the
+// tool activity. It is a permanent slot; an empty one renders nothing, and
+// the activity panel can linger after its end without the wrapper
+// unmounting it first.
+function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, onOpenHistory }: RailDetailsProps) {
+  const liveMessage = liveChatMessage(state);
+  return (
+    <div className="content-rail__details">
+      {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
+      {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
+      <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
+      <RailProgress progressList={progressList} onFocus={onFocus} />
+      <ToolActivity activity={state.activity} />
+    </div>
+  );
+}
+
+// One object drawn inside a composed workspace, as the primary or in the aux
+// row beneath it. Only a metric changes with the slot.
+function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux') {
+  switch (object.type) {
+    case 'chart':
+      return <ChartPrimitive data={(object as SceneObject<ChartData>).data} />;
+    case 'diagram':
+      return <DiagramPrimitive data={(object as SceneObject<DiagramData>).data} />;
+    case 'document':
+      return <DocumentViewport data={(object as SceneObject<DocumentData>).data} />;
+    case 'code':
+      return <CodeViewport data={(object as SceneObject<CodeData>).data} />;
+    case 'metric':
+      return <MetricsPrimitive metrics={[object as SceneObject<MetricData>]} variant={slot === 'primary' ? 'primary' : undefined} />;
+    case 'progress':
+      return <ProgressPrimitive data={(object as SceneObject<ProgressData>).data} />;
+    case 'note':
+      return <AnnotationCard data={(object as SceneObject<NoteData>).data} />;
+    default:
+      return null;
+  }
+}
+
 export function IdleScene({ state, onToggleListening }: Pick<SceneProps, 'state' | 'onToggleListening'>) {
   return (
     <motion.section className="scene scene--idle" data-scene="idle" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -172,8 +226,9 @@ export function ConversationScene({ state, onToggleListening, setTranscriptOpen 
   };
   const message = object ? cast.message(object).data : fallbackMessage;
   // Status/activity speech is rendered as an annotation elsewhere; it must not
-  // replace the conversation's latest committed response.
-  const segments = message.segments;
+  // replace the conversation's latest committed response. Before the first
+  // response the line carries no text, and this scene alone says it is open.
+  const segments = message.segments.length > 0 ? message.segments : fallbackMessage.segments;
 
   return (
     <motion.section className="scene scene--conversation" data-scene="conversation" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -213,8 +268,7 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
   const primary = charts.find((chart) => chart.role === 'primary') ?? charts[0];
   if (!primary) return <IdleScene state={state} onToggleListening={onToggleListening} />;
   const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), primary.id);
-  const liveMessage = liveChatMessage(state);
-  const note = annotationForScene(state, noteObject, liveMessage);
+  const note = annotationForScene(state, noteObject, liveChatMessage(state));
 
   return (
     <motion.section className="scene scene--content scene--training" data-scene="training" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -270,15 +324,8 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
             size="rail"
             activity={state.activity}
           />
-          {/* The details column is a permanent slot; an empty one renders
-              nothing, and the activity panel can linger after its end
-              without the wrapper unmounting it first. */}
-          <div className="content-rail__details">
-            {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
-            {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
-            <RailProgress progressList={railProgress} onFocus={onFocus} />
-            <ToolActivity activity={state.activity} />
-          </div>
+          {/* The note sits on the chart here, so the rail carries none. */}
+          <RailDetails state={state} metrics={metrics} note={null} progressList={railProgress} onFocus={onFocus} onOpenHistory={onOpenHistory} />
         </motion.aside>
       </div>
       <SceneFooter left="DISPLAY / COMPOSED" right={sceneCaption(primary, 'PRIMARY / LOSS TRACE')} />
@@ -291,8 +338,7 @@ export function ArchitectureScene({ state, onToggleListening, onFocus, onOpenHis
   if (!primaryObjectValue) return <IdleScene state={state} onToggleListening={onToggleListening} />;
   const diagram = cast.diagram(primaryObjectValue);
   const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), diagram.id);
-  const liveMessage = liveChatMessage(state);
-  const note = annotationForScene(state, noteObject, liveMessage);
+  const note = annotationForScene(state, noteObject, liveChatMessage(state));
   const metrics = objectsOfType<MetricData>(state, 'metric');
   const progressList = objectsOfType<ProgressData>(state, 'progress');
 
@@ -311,13 +357,7 @@ export function ArchitectureScene({ state, onToggleListening, onFocus, onOpenHis
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={diagram.data.context ?? 'SYSTEM MAP'} size="rail" activity={state.activity} />
-          <div className="content-rail__details">
-            {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
-            {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
-            <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
-            <RailProgress progressList={progressList} onFocus={onFocus} />
-            <ToolActivity activity={state.activity} />
-          </div>
+          <RailDetails state={state} metrics={metrics} note={note} noteObject={noteObject} progressList={progressList} onFocus={onFocus} onOpenHistory={onOpenHistory} />
         </motion.aside>
       </div>
       <SceneFooter left="DISPLAY / SYSTEM MAP" right={sceneCaption(diagram, 'TRACE / ACTIVE ROUTE')} />
@@ -330,8 +370,7 @@ export function DocumentScene({ state, onToggleListening, onFocus, onOpenHistory
   if (!primaryObjectValue) return <IdleScene state={state} onToggleListening={onToggleListening} />;
   const document = cast.document(primaryObjectValue);
   const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), document.id);
-  const liveMessage = liveChatMessage(state);
-  const note = annotationForScene(state, noteObject, liveMessage);
+  const note = annotationForScene(state, noteObject, liveChatMessage(state));
   const metrics = objectsOfType<MetricData>(state, 'metric');
   const progressList = objectsOfType<ProgressData>(state, 'progress');
 
@@ -349,13 +388,7 @@ export function DocumentScene({ state, onToggleListening, onFocus, onOpenHistory
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={document.data.context ?? 'DOCUMENT'} size="rail" activity={state.activity} />
-          <div className="content-rail__details">
-            {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
-            {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
-            <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
-            <RailProgress progressList={progressList} onFocus={onFocus} />
-            <ToolActivity activity={state.activity} />
-          </div>
+          <RailDetails state={state} metrics={metrics} note={note} noteObject={noteObject} progressList={progressList} onFocus={onFocus} onOpenHistory={onOpenHistory} />
         </motion.aside>
       </div>
       <SceneFooter left="CONTENT / ORIGINAL EMAIL" right={sceneCaption(document, 'CHROME / SWITCHBOARD')} />
@@ -368,8 +401,7 @@ export function CodeScene({ state, onToggleListening, onFocus, onOpenHistory }: 
   if (!primaryObjectValue) return <IdleScene state={state} onToggleListening={onToggleListening} />;
   const code = cast.code(primaryObjectValue);
   const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), code.id);
-  const liveMessage = liveChatMessage(state);
-  const note = annotationForScene(state, noteObject, liveMessage);
+  const note = annotationForScene(state, noteObject, liveChatMessage(state));
   const metrics = objectsOfType<MetricData>(state, 'metric');
   const progressList = objectsOfType<ProgressData>(state, 'progress');
 
@@ -387,19 +419,15 @@ export function CodeScene({ state, onToggleListening, onFocus, onOpenHistory }: 
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={code.data.context ?? 'SOURCE'} size="rail" activity={state.activity} />
-          <div className="content-rail__details">
-            {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
-            {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
-            <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
-            <RailProgress progressList={progressList} onFocus={onFocus} />
-            <ToolActivity activity={state.activity} />
-          </div>
+          <RailDetails state={state} metrics={metrics} note={note} noteObject={noteObject} progressList={progressList} onFocus={onFocus} onOpenHistory={onOpenHistory} />
         </motion.aside>
       </div>
       <SceneFooter left="FRAME / INTERRUPTED RAILS" right={sceneCaption(code, 'DISPLAY / SOURCE')} />
     </motion.section>
   );
 }
+
+const AUX_VISUAL_TYPES = new Set(['chart', 'diagram', 'document', 'code']);
 
 export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory }: SceneProps) {
   const comp = buildCompositionModel(state);
@@ -408,60 +436,20 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
 
   const noteObjects = comp.allAgentObjects.filter((object) => object.type === 'note') as Array<SceneObject<NoteData>>;
   const noteObject = noteForTarget(noteObjects, primary.id);
-  const liveMessage = liveChatMessage(state);
-  const note = annotationForScene(state, noteObject, liveMessage);
+  const note = annotationForScene(state, noteObject, liveChatMessage(state));
   const metrics = comp.allAgentObjects.filter((o) => o.type === 'metric') as Array<SceneObject<MetricData>>;
   const progressList = comp.allAgentObjects.filter((o) => o.type === 'progress') as Array<SceneObject<ProgressData>>;
   const railMetrics = primary.type === 'metric' ? metrics.filter((metric) => metric.id !== primary.id) : metrics;
   const railNote = noteObject?.id === primary.id ? null : note;
-  // Compare objects and secondary progress share one visible aux row below
-  // the primary, so a secondary object is never accepted and then lost.
+  // Everything the rail does not carry shares one visible aux row below the
+  // primary -- compare objects, secondary visuals, and progress -- so an
+  // accepted object is never lost to the layout. Metrics and the note stay
+  // in the rail.
   const auxObjects: SceneObject[] = [
     ...comp.compare,
+    ...comp.secondary.filter((o) => AUX_VISUAL_TYPES.has(o.type)),
     ...progressList.filter((p) => p.id !== primary.id && !comp.compare.some((c) => c.id === p.id)),
   ];
-
-  const renderPrimaryPrimitive = () => {
-    switch (primary.type) {
-      case 'chart':
-        return <ChartPrimitive data={(primary as SceneObject<ChartData>).data} />;
-      case 'diagram':
-        return <DiagramPrimitive data={(primary as SceneObject<DiagramData>).data} />;
-      case 'document':
-        return <DocumentViewport data={(primary as SceneObject<DocumentData>).data} />;
-      case 'code':
-        return <CodeViewport data={(primary as SceneObject<CodeData>).data} />;
-      case 'metric':
-        return <MetricsPrimitive metrics={[primary as SceneObject<MetricData>]} variant="primary" />;
-      case 'progress':
-        return <ProgressPrimitive data={(primary as SceneObject<ProgressData>).data} />;
-      case 'note':
-        return <AnnotationCard data={(primary as SceneObject<NoteData>).data} />;
-      default:
-        return null;
-    }
-  };
-
-  const renderAuxPrimitive = (object: SceneObject) => {
-    switch (object.type) {
-      case 'chart':
-        return <ChartPrimitive data={(object as SceneObject<ChartData>).data} />;
-      case 'diagram':
-        return <DiagramPrimitive data={(object as SceneObject<DiagramData>).data} />;
-      case 'document':
-        return <DocumentViewport data={(object as SceneObject<DocumentData>).data} />;
-      case 'code':
-        return <CodeViewport data={(object as SceneObject<CodeData>).data} />;
-      case 'metric':
-        return <MetricsPrimitive metrics={[object as SceneObject<MetricData>]} />;
-      case 'progress':
-        return <ProgressPrimitive data={(object as SceneObject<ProgressData>).data} />;
-      case 'note':
-        return <AnnotationCard data={(object as SceneObject<NoteData>).data} />;
-      default:
-        return null;
-    }
-  };
 
   const title = (primary.data as any)?.title ?? (primary.data as any)?.subject ?? (primary.data as any)?.label ?? 'COMPOSED WORKSPACE';
   const subtitle = (primary.data as any)?.subtitle ?? 'STRUCTURED SCENE';
@@ -477,7 +465,7 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
           <ObjectMotion objectId={primary.id} className={`composed-primary-object composed-primary-object--${primary.type}`}>
             <TechFrame variant="panel" />
             <FocusableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
-              {renderPrimaryPrimitive()}
+              {composedPrimitive(primary, 'primary')}
             </FocusableSurface>
           </ObjectMotion>
           {auxObjects.length > 0 ? (
@@ -490,7 +478,7 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
                 >
                   <TechFrame variant="panel" />
                   <FocusableSurface onActivate={() => onFocus(object.id)} ariaLabel={`Expand ${object.type}`}>
-                    {renderAuxPrimitive(object)}
+                    {composedPrimitive(object, 'aux')}
                   </FocusableSurface>
                 </ObjectMotion>
               ))}
@@ -505,12 +493,15 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
             size="rail"
             activity={state.activity}
           />
-          <div className="content-rail__details">
-            {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
-            {railMetrics.length > 0 ? <MetricsPrimitive metrics={railMetrics} /> : null}
-            <RailNote note={railNote} noteObject={noteObject?.id === primary.id ? undefined : noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
-            <ToolActivity activity={state.activity} />
-          </div>
+          <RailDetails
+            state={state}
+            metrics={railMetrics}
+            note={railNote}
+            noteObject={noteObject?.id === primary.id ? undefined : noteObject}
+            progressList={[]}
+            onFocus={onFocus}
+            onOpenHistory={onOpenHistory}
+          />
         </motion.aside>
       </div>
       <SceneFooter left="DISPLAY / COMPOSED" right={sceneCaption(primary, 'SYSTEM / ACTIVE')} />

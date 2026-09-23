@@ -691,9 +691,236 @@ test('tool activity clears when the route changes', async ({ page }) => {
     const panel = page.locator('[data-testid="tool-activity"]');
     await expect(panel).toBeVisible();
 
+    // A handoff is always an epoch frame followed by the new route's status;
+    // the epoch reset is what ends the previous line's activity.
+    fixtureServer.broadcast({ type: 'epoch', generation: 13 });
     fixtureServer.broadcast({ type: 'status', route: 'damocles', routes: [{ value: 'damocles', label: 'Damocles' }] });
     await expect.poll(async () => (await panel.count()) === 0).toBe(true);
   } finally {
     await fixtureServer.stop();
   }
+});
+
+
+async function openLine(page: Page, fixtureServer: DisplayFixtureServer, viewport = { width: 1440, height: 900 }) {
+  const { wsUrl } = await fixtureServer.start();
+  await page.setViewportSize(viewport);
+  await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+  await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === 'hello')).toBe(true);
+}
+
+const MAP_ACTION = {
+  op: 'show', id: 'map', type: 'diagram', role: 'primary',
+  data: {
+    mode: 'graph', title: 'SYSTEM MAP',
+    nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+    edges: [{ from: 'a', to: 'b' }],
+  },
+};
+
+
+test('an agent say and a line error still show beside the live chat card', async ({ page }) => {
+  const fixtureServer = new DisplayFixtureServer({ initialGeneration: 7 });
+  try {
+    await openLine(page, fixtureServer);
+    fixtureServer.broadcast({ type: 'display', action: MAP_ACTION });
+    fixtureServer.broadcast({ type: 'spoken', entry: { role: 'agent', text: 'The map is up.', id: 'reply-1' } });
+    const live = page.locator('.live-chat-card');
+    await expect(live).toContainText('The map is up.');
+    // The spoken reply reads in the live card only, never twice.
+    await expect(page.locator('.rail-note')).toHaveCount(0);
+
+    fixtureServer.broadcast({ type: 'error', message: 'LINE ERROR / TRANSFER FAILED' });
+    await expect(page.locator('.rail-note')).toContainText('LINE ERROR / TRANSFER FAILED');
+
+    fixtureServer.broadcast({ type: 'display', action: { op: 'say', text: 'AGENT SAY EXPLANATION' } });
+    await expect(page.locator('.rail-note')).toContainText('AGENT SAY EXPLANATION');
+    await expect(live).toContainText('The map is up.');
+  } finally {
+    await fixtureServer.stop();
+  }
+});
+
+
+test('an agent object named message is not taken for the live chat turn', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openController(page);
+  await page.evaluate(() => {
+    const dispatch = window.SwitchboardController?.dispatch;
+    if (!dispatch) throw new Error('controller unavailable');
+    dispatch({ op: 'clear' });
+    dispatch({ op: 'show', id: 'message', type: 'metric', role: 'primary', data: { label: 'QUEUE', value: '12' } });
+  });
+
+  await expect(page.locator('[data-scene="composed"]')).toBeVisible();
+  await expect(page.locator('.live-chat-card')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+
+test('no live chat card stands in before the first response', async ({ page }) => {
+  const fixtureServer = new DisplayFixtureServer({ initialGeneration: 7 });
+  try {
+    await openLine(page, fixtureServer);
+    fixtureServer.broadcast({ type: 'display', action: MAP_ACTION });
+    fixtureServer.broadcast({ type: 'transcript', text: 'Show me the map.' });
+    await expect(page.locator('[data-scene="architecture"]')).toBeVisible();
+    await expect(page.locator('.live-chat-card')).toHaveCount(0);
+
+    // The conversation scene keeps its own open-line prompt.
+    fixtureServer.broadcast({ type: 'view', target: 'comms' });
+    await expect(page.locator('.conversation-answer__text')).toHaveText('Line open. Speak when ready.');
+  } finally {
+    await fixtureServer.stop();
+  }
+});
+
+
+test('rail progress keeps a visible bar with its default text', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openController(page);
+  await page.evaluate(() => {
+    const dispatch = window.SwitchboardController?.dispatch;
+    if (!dispatch) throw new Error('controller unavailable');
+    dispatch({ op: 'clear' });
+    dispatch({
+      op: 'show', id: 'quality-map', type: 'diagram', role: 'primary',
+      data: { mode: 'graph', title: 'QUALITY PATH', nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }], edges: [{ from: 'a', to: 'b' }] },
+    });
+    dispatch({ op: 'show', id: 'demo', type: 'progress', role: 'secondary', data: { label: 'Progress demo', value: 57 } });
+  });
+
+  const progress = page.locator('.rail-progress .progress-primitive');
+  await expect(progress).toBeVisible();
+  const geometry = await progress.evaluate((element) => {
+    const rail = element.closest('.content-rail')!.getBoundingClientRect();
+    const track = element.querySelector('.progress-primitive__track')!.getBoundingClientRect();
+    const text = element.querySelector('.progress-primitive__text')!.getBoundingClientRect();
+    return {
+      trackWidth: track.width,
+      withinRail: track.right <= rail.right + 1 && text.right <= rail.right + 1,
+      overflows: element.scrollWidth > element.clientWidth + 1,
+    };
+  });
+  expect(geometry.trackWidth).toBeGreaterThan(80);
+  expect(geometry.withinRail).toBe(true);
+  expect(geometry.overflows).toBe(false);
+  await expect(progress.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '57');
+});
+
+
+test('a crowded phone rail scrolls instead of collapsing the response and the note', async ({ page }) => {
+  const fixtureServer = new DisplayFixtureServer({ initialGeneration: 7 });
+  try {
+    await openLine(page, fixtureServer, { width: 390, height: 844 });
+    fixtureServer.broadcast({ type: 'display', action: MAP_ACTION });
+    fixtureServer.broadcast({ type: 'display', action: { op: 'show', id: 'm1', type: 'metric', role: 'secondary', data: { label: 'THROUGHPUT', value: '98.4%' } } });
+    fixtureServer.broadcast({ type: 'display', action: { op: 'show', id: 'm2', type: 'metric', role: 'secondary', data: { label: 'LATENCY', value: '182 ms' } } });
+    fixtureServer.broadcast({ type: 'display', action: { op: 'show', id: 'p1', type: 'progress', role: 'secondary', data: { label: 'DEPLOY', value: 40 } } });
+    fixtureServer.broadcast({ type: 'display', action: { op: 'show', id: 'n1', type: 'note', role: 'secondary', data: { segments: [{ text: 'The durable note.' }] } } });
+    fixtureServer.broadcast({ type: 'spoken', entry: { role: 'agent', text: 'The current response.', id: 'reply-1' } });
+    fixtureServer.broadcast({ type: 'activity', state: 'start', tool: 'shell', label: 'Working', detail: 'ls' });
+    await expect(page.locator('[data-testid="tool-activity"]')).toBeAttached();
+
+    const geometry = await page.evaluate(() => {
+      const rect = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+      return {
+        liveHeight: rect('.live-chat-card__text').height,
+        noteHeight: rect('.rail-note').height,
+        detailsBottom: rect('.content-rail__details').bottom,
+        footerTop: rect('.scene-footer').top,
+      };
+    });
+    expect(geometry.liveHeight).toBeGreaterThan(24);
+    expect(geometry.noteHeight).toBeGreaterThan(24);
+    expect(geometry.detailsBottom).toBeLessThanOrEqual(geometry.footerTop + 1);
+  } finally {
+    await fixtureServer.stop();
+  }
+});
+
+
+for (const viewport of [{ width: 390, height: 844 }, { width: 820, height: 1180 }, { width: 900, height: 800 }, { width: 1440, height: 900 }]) {
+  test(`the conversation activity panel leaves the transcript toggle clickable at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    const fixtureServer = new DisplayFixtureServer({ initialGeneration: 7 });
+    try {
+      await openLine(page, fixtureServer, viewport);
+      fixtureServer.broadcast({ type: 'spoken', entry: { role: 'agent', text: 'Working on it.', id: 'reply-1' } });
+      fixtureServer.broadcast({ type: 'activity', state: 'start', tool: 'a_rather_long_tool_name_for_the_panel', label: 'Working', detail: 'a detail long enough to fill the panel width' });
+      await expect(page.locator('[data-scene="conversation"]')).toBeVisible();
+      await expect(page.locator('[data-testid="tool-activity"]')).toBeVisible();
+
+      const covered = await page.evaluate(() => {
+        const toggle = document.querySelector<HTMLElement>('.transcript-toggle')!;
+        const box = toggle.getBoundingClientRect();
+        const y = box.top + box.height / 2;
+        return [0.1, 0.5, 0.9].some((fraction) => {
+          const hit = document.elementFromPoint(box.left + box.width * fraction, y);
+          return !hit || !toggle.contains(hit);
+        });
+      });
+      expect(covered).toBe(false);
+      const answer = await page.evaluate(() => {
+        const panel = document.querySelector('[data-testid="tool-activity"]')!.getBoundingClientRect();
+        const box = document.querySelector('.conversation-answer')!.getBoundingClientRect();
+        return panel.top >= box.bottom - 1 && panel.right <= window.innerWidth;
+      });
+      expect(answer).toBe(true);
+    } finally {
+      await fixtureServer.stop();
+    }
+  });
+}
+
+
+test('a short metric value stays at the right edge and leaves the label its room', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openController(page);
+  await page.evaluate(() => {
+    const dispatch = window.SwitchboardController?.dispatch;
+    if (!dispatch) throw new Error('controller unavailable');
+    dispatch({ op: 'clear' });
+    dispatch({
+      op: 'show', id: 'map', type: 'diagram', role: 'primary',
+      data: { mode: 'graph', title: 'MAP', nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }], edges: [{ from: 'a', to: 'b' }] },
+    });
+    dispatch({ op: 'show', id: 'rps', type: 'metric', role: 'secondary', data: { label: 'THROUGHPUT / RPS', value: 'OK' } });
+  });
+
+  const row = page.locator('.metric-row').first();
+  await expect(row).toBeVisible();
+  const geometry = await row.evaluate((element) => {
+    const rowBox = element.getBoundingClientRect();
+    const value = element.querySelector('.metric-row__value')!;
+    const range = document.createRange();
+    range.selectNodeContents(value);
+    const label = element.querySelector<HTMLElement>('.metric-row__label')!;
+    return {
+      valueGap: rowBox.right - range.getBoundingClientRect().right,
+      labelTruncated: label.scrollWidth > label.clientWidth + 1,
+    };
+  });
+  expect(geometry.valueGap).toBeLessThan(4);
+  expect(geometry.labelTruncated).toBe(false);
+});
+
+
+test('a secondary chart is drawn in the composed aux row', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openController(page);
+  await page.evaluate(() => {
+    const dispatch = window.SwitchboardController?.dispatch;
+    if (!dispatch) throw new Error('controller unavailable');
+    dispatch({ op: 'clear' });
+    dispatch({ op: 'show', id: 'tp', type: 'metric', role: 'primary', data: { label: 'THROUGHPUT', value: '98.4%' } });
+    dispatch({
+      op: 'show', id: 'sc', type: 'chart', role: 'secondary',
+      data: { title: 'TREND', series: [{ name: 'TP', values: [0.4, 0.6, 0.9] }] },
+    });
+  });
+
+  await expect(page.locator('[data-scene="composed"]')).toBeVisible();
+  await expect(page.locator('.composed-aux [data-testid="chart"]')).toBeVisible();
 });

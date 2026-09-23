@@ -844,9 +844,11 @@ button {
 .metric-row {
   position: relative;
   display: grid;
-  /* The value is capped so an unbroken model string can never squeeze the
-     label to zero and spill across it; what does not fit truncates. */
-  grid-template-columns: minmax(0, 1fr) minmax(0, 55%);
+  /* The value column hugs its value, capped so an unbroken model string can
+     never squeeze the label to zero and spill across it; what does not fit
+     truncates. A plain 55% track would always take its cap and pull short
+     values off the right edge. */
+  grid-template-columns: minmax(0, 1fr) fit-content(55%);
   align-items: center;
   min-height: 0;
   padding: clamp(8px, 1.25cqh, 14px) 0;
@@ -966,20 +968,57 @@ button {
   display: flex;
   flex-direction: column;
   gap: clamp(12px, 2cqh, 22px);
+  /* The response and the note are the column's only shrinkable surfaces.
+     Each keeps a readable floor, and a rail too short for everything
+     scrolls instead of collapsing them or running onto the footer. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
 }
 .content-rail__details > .metrics {
   flex: none;
 }
 .content-rail__details > .rail-note {
   flex: 1 1 auto;
+  min-height: clamp(64px, 10cqh, 110px);
 }
 .content-rail__details > .rail-progress {
   flex: none;
   min-width: 0;
 }
-.rail-progress .progress-primitive {
+.rail-progress .progress-primitive,
+.composed-aux-object--progress .progress-primitive {
+  /* A rail or an aux cell is too narrow for the wide label | bar | text row:
+     the fixed label column and the gaps leave the bar no width at all. Here
+     the label takes its own line and the bar shares the next with the text. */
+  grid-template-columns: minmax(0, 1fr) fit-content(50%);
+  gap: 8px 12px;
   min-height: 0;
   padding-top: clamp(8px, 1cqh, 12px);
+}
+.rail-progress .progress-primitive__label,
+.composed-aux-object--progress .progress-primitive__label {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.rail-progress .progress-primitive__label > *,
+.composed-aux-object--progress .progress-primitive__label > *,
+.rail-progress .progress-primitive__text,
+.composed-aux-object--progress .progress-primitive__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-progress .progress-primitive__label strong,
+.composed-aux-object--progress .progress-primitive__label strong {
+  font-size: clamp(14px, 1.3cqw, 22px);
+}
+.rail-progress .progress-primitive__text,
+.composed-aux-object--progress .progress-primitive__text {
+  grid-column: 2;
+  justify-self: end;
 }
 /* The live chat output: the current assistant turn in a contained
    scrollable card. It grows with the rail and scrolls inside; the note
@@ -995,6 +1034,7 @@ button {
 }
 .content-rail__details > .live-chat-card {
   flex: 1 1 auto;
+  min-height: clamp(84px, 13cqh, 140px);
 }
 .live-chat-card__header {
   display: flex;
@@ -1083,13 +1123,16 @@ button {
   color: var(--paper);
 }
 /* In the conversation layout the panel sits in the channel row, clear of
-   the answer box and its lower-right caption. */
+   the answer box and its lower-right caption. Its left edge stops short of
+   the centred transcript toggle, so it never sits over that control. */
 .tool-activity--conversation {
   position: absolute;
   z-index: 3;
+  left: calc(50% + 140px);
   right: 6.2cqw;
   bottom: 6.4cqh;
-  width: min(34cqw, 360px);
+  max-width: 360px;
+  margin-left: auto;
   border-top: 0;
   padding-top: 0;
 }
@@ -1608,6 +1651,15 @@ button {
   }
   .transcript-toggle {
     bottom: 6.2cqh;
+  }
+  /* Too narrow to share the toggle's row: the panel takes the band between
+     the answer box and the channel row instead. */
+  .tool-activity--conversation {
+    left: 6cqw;
+    right: 6cqw;
+    bottom: 12cqh;
+    max-width: 420px;
+    margin-inline: auto;
   }
   .transcript {
     --transcript-size: clamp(14px, 2.5cqw, 19px);

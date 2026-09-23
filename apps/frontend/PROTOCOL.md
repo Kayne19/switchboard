@@ -29,15 +29,6 @@ Remove one object.
 { "op": "hide", "id": "gpu" }
 ```
 
-## Value normalization
-
-`progress.value` is normalized before it reaches the renderer: values in
-0–1 are read as ratios, values in 1–100 as percentages, and values outside
-0–100 are clamped to the nearest end. Both `1` and `100` land on a full
-bar. The fill, the `aria-valuenow`, and the reported state all use the
-normalized ratio, so a model that sends `65` for "65 percent" renders a
-65% fill.
-
 ### `say`
 
 Display a current explanation, optionally attached to an object or a semantic point.
@@ -75,6 +66,17 @@ Remove content and return to the Damocles presence.
 { "op": "clear" }
 ```
 
+
+## Value normalization
+
+`progress.value` is normalized before it reaches the renderer: values in
+0–1 are read as ratios, values in 1–100 as percentages, and values outside
+0–100 are clamped to the nearest end. Both `1` and `100` land on a full
+bar, so a value of exactly `1` always means complete, never one percent.
+The fill, the `aria-valuenow` (as a rounded percentage), and the reported
+state all derive from the normalized ratio, so a model that sends `65` for
+"65 percent" renders a 65% fill. The display tool asks models for
+percentages.
 
 ## Runtime boundary
 

@@ -526,7 +526,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 		description:
 			"Show semantic content on the caller's screen. Use one action per call with op show, hide, say, focus, or clear. You can show chart, metric, progress, diagram, document, code, or note objects; compose a scene with roles (primary, compare, secondary, ambient). Reuse a stable id to update an object in place so the renderer can animate continuity. Use caption for the scene's small supporting label. A note can carry anchor:{target,x?,series?,node?} to attach it to a visual object. Use short, meaningful labels and let the renderer decide layout: never send markup, CSS, pixel geometry, or styling. The live transcript is system-owned, so message is not available; use note for persistent on-screen annotations and speak for words." +
 			"\n\nShapes: chart: {series:[{name,values:[n]}]} | metric: {label,value} | " +
-			"progress: {label,value} | diagram: {mode:\"graph\",nodes:[{id,label}],edges:[{from,to}]} | " +
+			"progress: {label,value (percent, 0-100)} | diagram: {mode:\"graph\",nodes:[{id,label}],edges:[{from,to}]} | " +
 			"document: {subject,paragraphs:[str]} | code: {source:{text}} | note: {segments:[{text}]}. " +
 			"Set type to the object you want; each type takes only its own shape.",
 		parameters: DisplayActionType,

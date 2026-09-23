@@ -1,10 +1,6 @@
 import { AnimatePresence, motion } from 'motion/react';
 import type { ActivityState } from '../controller/types';
-import { useLingeringValue } from '../hooks/useLingeringValue';
-
-// How long the panel keeps the last tool after it finishes, so a run of
-// short calls reads as one steady status before the panel goes idle.
-const ACTIVITY_LINGER_MS = 1600;
+import { ACTIVITY_LINGER_MS, useLingeringValue } from '../hooks/useLingeringValue';
 
 /**
  * The last tool the project agent used: a compact status panel, separate
