@@ -29,7 +29,9 @@ and the two trees can drift. Cut the drift short — do the tag switch early.
 The contract between the halves is the environment file. The role writes it,
 this app reads it. Every `SWITCHBOARD_*` variable the code reads is public
 interface: changing or adding one is a change on both sides, and the PR that
-does it should say so.
+does it should say so. That includes `SWITCHBOARD_GIT_SHA`, which crosses at
+build time instead: the homelab builder sets it so `build.rs` can stamp a
+binary built from `git archive` with its commit (see `README.md`).
 
 ## `extensions/`
 
