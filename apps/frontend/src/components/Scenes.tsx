@@ -27,6 +27,7 @@ import { RichText } from '../primitives/RichText';
 import { SceneFooter } from '../primitives/SceneFooter';
 import { FocusableSurface } from '../primitives/FocusableSurface';
 import { TechFrame } from '../primitives/TechFrame';
+import { ToolActivity } from '../primitives/ToolActivity';
 
 interface SceneProps {
   state: ControllerState;
@@ -184,6 +185,7 @@ export function ConversationScene({ state, onToggleListening, setTranscriptOpen 
       <button className="transcript-toggle tech micro" type="button" onClick={() => setTranscriptOpen(true)}>
         TRANSCRIPT HIDDEN
       </button>
+      <ToolActivity activity={state.activity} placement="conversation" />
     </motion.section>
   );
 }
@@ -252,12 +254,14 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
             size="rail"
             activity={state.activity}
           />
-          {liveMessage || metrics.length > 0 ? (
-            <div className="content-rail__details">
-              {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
-              {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
-            </div>
-          ) : null}
+          {/* The details column is a permanent slot; an empty one renders
+              nothing, and the activity panel can linger after its end
+              without the wrapper unmounting it first. */}
+          <div className="content-rail__details">
+            {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
+            {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
+            <ToolActivity activity={state.activity} />
+          </div>
         </motion.aside>
       </div>
       <SceneFooter left="DISPLAY / COMPOSED" right={sceneCaption(primary, 'PRIMARY / LOSS TRACE')} />
@@ -301,6 +305,7 @@ export function ArchitectureScene({ state, onToggleListening, onFocus, onOpenHis
                 </FocusableSurface>
               </ObjectMotion>
             ))}
+            <ToolActivity activity={state.activity} />
           </div>
         </motion.aside>
       </div>
@@ -344,6 +349,7 @@ export function DocumentScene({ state, onToggleListening, onFocus, onOpenHistory
                 </FocusableSurface>
               </ObjectMotion>
             ))}
+            <ToolActivity activity={state.activity} />
           </div>
         </motion.aside>
       </div>
@@ -387,6 +393,7 @@ export function CodeScene({ state, onToggleListening, onFocus, onOpenHistory }: 
                 </FocusableSurface>
               </ObjectMotion>
             ))}
+            <ToolActivity activity={state.activity} />
           </div>
         </motion.aside>
       </div>
@@ -499,13 +506,12 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
             size="rail"
             activity={state.activity}
           />
-          {liveMessage || railMetrics.length > 0 || railNote ? (
-            <div className="content-rail__details">
-              {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
-              {railMetrics.length > 0 ? <MetricsPrimitive metrics={railMetrics} /> : null}
-              <RailNote note={railNote} noteObject={noteObject?.id === primary.id ? undefined : noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
-            </div>
-          ) : null}
+          <div className="content-rail__details">
+            {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
+            {railMetrics.length > 0 ? <MetricsPrimitive metrics={railMetrics} /> : null}
+            <RailNote note={railNote} noteObject={noteObject?.id === primary.id ? undefined : noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
+            <ToolActivity activity={state.activity} />
+          </div>
         </motion.aside>
       </div>
       <SceneFooter left="DISPLAY / COMPOSED" right={sceneCaption(primary, 'SYSTEM / ACTIVE')} />

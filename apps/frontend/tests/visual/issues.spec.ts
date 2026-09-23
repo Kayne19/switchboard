@@ -504,3 +504,138 @@ test('long chat output scrolls inside the live card', async ({ page }) => {
     await fixtureServer.stop();
   }
 });
+
+
+test('tool activity panel appears, flips to done, and clears when idle', async ({ page }) => {
+  const fixtureServer = new DisplayFixtureServer({ initialGeneration: 10 });
+  const { wsUrl } = await fixtureServer.start();
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+    await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === 'hello')).toBe(true);
+    fixtureServer.broadcast({
+      type: 'display',
+      action: {
+        op: 'show', id: 'map', type: 'diagram', role: 'primary',
+        data: {
+          mode: 'graph', title: 'SYSTEM MAP',
+          nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+          edges: [{ from: 'a', to: 'b' }],
+        },
+      },
+    });
+
+    await expect(page.locator('[data-testid="tool-activity"]')).toHaveCount(0);
+
+    fixtureServer.broadcast({ type: 'activity', state: 'start', tool: 'shell', label: 'Running tests', detail: 'cargo test --locked' });
+    const panel = page.locator('[data-testid="tool-activity"]');
+    await expect(panel).toBeVisible();
+    await expect(panel).toContainText('CURRENT ACTIVITY');
+    await expect(panel).toContainText('\u25cf RUNNING');
+    await expect(panel).toContainText('shell');
+
+    fixtureServer.broadcast({ type: 'activity', state: 'end', tool: 'shell' });
+    await expect(panel).toContainText('LAST TOOL USED');
+    await expect(panel).toContainText('\u25a0 DONE');
+
+    await page.waitForTimeout(2200);
+    await expect(page.locator('[data-testid="tool-activity"]')).toHaveCount(0);
+  } finally {
+    await fixtureServer.stop();
+  }
+});
+
+
+test('tool activity panel truncates long names and stays clear of the response', async ({ page }) => {
+  const fixtureServer = new DisplayFixtureServer({ initialGeneration: 11 });
+  const { wsUrl } = await fixtureServer.start();
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+    await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === 'hello')).toBe(true);
+    fixtureServer.broadcast({
+      type: 'display',
+      action: {
+        op: 'show', id: 'map', type: 'diagram', role: 'primary',
+        data: {
+          mode: 'graph', title: 'SYSTEM MAP',
+          nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+          edges: [{ from: 'a', to: 'b' }],
+        },
+      },
+    });
+    const longTool = `exec-repo-worker-${'x'.repeat(64)}`;
+    fixtureServer.broadcast({
+      type: 'activity', state: 'start', tool: longTool,
+      label: 'Long detail', detail: `${'detail '.repeat(24)}trailing`,
+    });
+
+    const panel = page.locator('[data-testid="tool-activity"]');
+    await expect(panel).toBeVisible();
+    const railGeometry = await panel.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      const stage = document.querySelector<HTMLElement>('.stage')!.getBoundingClientRect();
+      const tool = element.querySelector<HTMLElement>('.tool-activity__tool')!;
+      const detail = element.querySelector<HTMLElement>('.tool-activity__detail');
+      return {
+        insideStage:
+          box.left >= stage.left - 1 && box.top >= stage.top - 1 &&
+          box.right <= stage.right + 1 && box.bottom <= stage.bottom + 1,
+        toolTruncated: tool.scrollWidth > tool.clientWidth,
+        detailTruncated: detail ? detail.scrollWidth > detail.clientWidth : true,
+      };
+    });
+    expect(railGeometry.insideStage).toBe(true);
+    expect(railGeometry.toolTruncated).toBe(true);
+    expect(railGeometry.detailTruncated).toBe(true);
+
+    fixtureServer.broadcast({ type: 'view', target: 'comms' });
+    const conversationPanel = page.locator('.tool-activity--conversation');
+    await expect(page.locator('[data-scene="conversation"]')).toBeVisible();
+    await expect(conversationPanel).toBeVisible();
+    const overlap = await conversationPanel.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      const answer = document.querySelector<HTMLElement>('.conversation-answer')!.getBoundingClientRect();
+      return !(
+        box.left >= answer.right || answer.left >= box.right ||
+        box.top >= answer.bottom || answer.top >= box.bottom
+      );
+    });
+    expect(overlap, 'panel must not cover the current response').toBe(false);
+  } finally {
+    await fixtureServer.stop();
+  }
+});
+
+
+test('tool activity clears when the route changes', async ({ page }) => {
+  const fixtureServer = new DisplayFixtureServer({ initialGeneration: 12 });
+  const { wsUrl } = await fixtureServer.start();
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+    await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === 'hello')).toBe(true);
+    fixtureServer.broadcast({
+      type: 'display',
+      action: {
+        op: 'show', id: 'map', type: 'diagram', role: 'primary',
+        data: {
+          mode: 'graph', title: 'SYSTEM MAP',
+          nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+          edges: [{ from: 'a', to: 'b' }],
+        },
+      },
+    });
+    fixtureServer.broadcast({ type: 'activity', state: 'start', tool: 'shell', label: 'Working', detail: 'on it' });
+    const panel = page.locator('[data-testid="tool-activity"]');
+    await expect(panel).toBeVisible();
+
+    fixtureServer.broadcast({ type: 'status', route: 'damocles', routes: [{ value: 'damocles', label: 'Damocles' }] });
+    await expect.poll(async () => (await panel.count()) === 0).toBe(true);
+  } finally {
+    await fixtureServer.stop();
+  }
+});

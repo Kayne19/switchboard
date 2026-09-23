@@ -1040,6 +1040,59 @@ button {
   line-height: 1.48;
   padding-right: clamp(6px, 1cqw, 14px);
 }
+/* The last tool the project agent used: a compact status panel that
+   updates in place as tool activity starts and ends. Long tool names and
+   details truncate; the panel never grows into neighbouring surfaces. */
+.tool-activity {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding-top: clamp(8px, 1.1cqh, 12px);
+  border-top: 1px solid rgba(232, 230, 223, 0.14);
+}
+.content-rail__details > .tool-activity {
+  flex: none;
+}
+.tool-activity__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.tool-activity__tag {
+  flex: none;
+  color: rgba(232, 230, 223, 0.35);
+}
+.tool-activity__status {
+  flex: none;
+}
+.tool-activity__status--running {
+  color: var(--orange);
+}
+.tool-activity__status--done {
+  color: rgba(232, 230, 223, 0.4);
+}
+.tool-activity__tool,
+.tool-activity__detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-activity__tool {
+  color: var(--paper);
+}
+/* In the conversation layout the panel sits in the channel row, clear of
+   the answer box and its lower-right caption. */
+.tool-activity--conversation {
+  position: absolute;
+  z-index: 3;
+  right: 6.2cqw;
+  bottom: 6.4cqh;
+  width: min(34cqw, 360px);
+  border-top: 0;
+  padding-top: 0;
+}
 
 /* Diagram */
 .diagram-object {
