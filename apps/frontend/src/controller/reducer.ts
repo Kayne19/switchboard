@@ -331,11 +331,27 @@ export function controllerReducer(state: ControllerState, action: ControllerActi
       return { ...reset, activity: null };
     }
     case 'epoch_reset': {
-      // Epoch reset clears both agent and runtime state
-      return {
-        ...createInitialState(),
+      // A new epoch is a new leg. What the old leg's agent put on screen,
+      // said, focused, or asked to see goes with it. The conversation is
+      // the call's, not the leg's: it stays mounted so a handoff never
+      // flashes the idle page, and the caller's own pin stays too.
+      const workspace: WorkspaceState = state.workspace.callerPinned
+        ? { ...state.workspace, stale: false }
+        : createInitialWorkspaceState();
+      const reset = syncCombinedState(
+        state,
+        {},
+        [],
+        null,
+        state.runtimeObjects,
+        state.runtimeOrder,
+        state.runtimeSpeech,
+        workspace,
+        null,
+        state.listening,
         revision,
-      };
+      );
+      return { ...reset, activity: null };
     }
     case 'set_view': {
       if (state.workspace.callerPinned) {

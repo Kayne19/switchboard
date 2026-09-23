@@ -36,6 +36,12 @@ A diagram, plan, timeline, or diff earns screen space only when it exists. The
 stage materializes when that content arrives and remains available in visual
 history afterward.
 
+A handoff between legs is not a new conversation. When the operator patches the
+caller through, or a project agent hands them back, the conversation stays on
+screen and its route label changes; the screen never passes through the idle
+page. What the old leg drew leaves with it, and the new leg's first response or
+visual appears in place.
+
 ### Voice first, not voice only
 
 Anything a caller can reasonably request aloud should also be reachable by

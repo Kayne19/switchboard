@@ -142,14 +142,16 @@ impl DisplayProjection {
                     at,
                 });
             }
-            "clear" => {
-                self.objects.clear();
-                self.order.clear();
-                self.focus_id = None;
-                self.speech = None;
-            }
+            "clear" => self.clear(),
             _ => {}
         }
+    }
+
+    pub fn clear(&mut self) {
+        self.objects.clear();
+        self.order.clear();
+        self.focus_id = None;
+        self.speech = None;
     }
 
     pub fn snapshot_actions(&self) -> Vec<Value> {
@@ -225,12 +227,23 @@ impl DisplayProjection {
     }
 }
 
+/// The leg a scene belongs to. A transfer changes the generation; a return
+/// to the operator keeps it and changes the route, so neither alone names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SceneLeg {
+    pub route: String,
+    pub generation: u64,
+}
+
 pub struct DisplayGateState {
     pub projection: DisplayProjection,
     pub screen_state: Value,
     pub active_epoch: Option<u64>,
     pub report_epoch: Option<u64>,
     pub report_generation: Option<u64>,
+    /// The leg the projection was last reset for; `None` until one is
+    /// announced.
+    pub scene_leg: Option<SceneLeg>,
     pub watermark: u64,
 }
 
@@ -267,6 +280,107 @@ fn stamp_display_seq(event: Event, sequence: u64) -> Event {
     }
 }
 
+/// Tells the browser the call has moved to a new leg.
+///
+/// A transfer is announced from two places: candidate promotion, when the
+/// incoming agent first shows life or acts, and the route callback, when the
+/// PBX finishes the transfer after the intro turn. Both hold one of these.
+/// They are built before `AppInner` exists, which is why this holds clones
+/// rather than the state.
+#[derive(Clone)]
+struct LegAnnouncer {
+    coordinator: Coordinator,
+    live_leg: LiveLegState,
+    events: broadcast::Sender<Event>,
+    delivery: DeliveryState,
+    display_gate: Arc<Mutex<DisplayGateState>>,
+    display_confirm: watch::Sender<ConfirmState>,
+    last_display: Arc<Mutex<Option<Value>>>,
+}
+
+impl LegAnnouncer {
+    fn publish(&self, event: Event) {
+        let _ = self.events.send(event.clone());
+        self.delivery.publish(event);
+    }
+
+    /// Adopts the candidate leg and announces it. False when there was no
+    /// candidate to adopt.
+    async fn promote_candidate(&self) -> bool {
+        // Held from adoption until the epoch is out, so a display from the
+        // new leg cannot be applied ahead of its own scene reset.
+        let mut gate = self.display_gate.lock().await;
+        let Ok(identity) = self.coordinator.adopt_candidate() else {
+            return false;
+        };
+        let status = self.coordinator.status_json();
+        let route = status["route"]
+            .as_str()
+            .unwrap_or(crate::pbx::OPERATOR)
+            .to_owned();
+        self.live_leg.set_session(
+            &route,
+            if route == crate::pbx::OPERATOR {
+                ""
+            } else {
+                &identity.token
+            },
+        );
+        self.begin_scene(
+            &mut gate,
+            SceneLeg {
+                route,
+                generation: identity.generation,
+            },
+        )
+        .await;
+        self.publish(Event::Json(status));
+        true
+    }
+
+    /// The route callback: the PBX has settled on a leg.
+    async fn announce_route(&self, status: Value) {
+        let route = status["route"]
+            .as_str()
+            .unwrap_or(crate::pbx::OPERATOR)
+            .to_owned();
+        let mut gate = self.display_gate.lock().await;
+        let generation = self.coordinator.generation();
+        self.begin_scene(&mut gate, SceneLeg { route, generation })
+            .await;
+        self.coordinator.publish_status(status.clone());
+        self.publish(Event::Json(status));
+    }
+
+    /// Clears the scene for `leg` and sends the epoch that tells the browser
+    /// to do the same, once per leg. Whichever announcement arrives second
+    /// finds the scene already belongs to that leg and leaves it alone: by
+    /// then it may hold the new agent's first drawing, and the browser may be
+    /// playing its first words.
+    async fn begin_scene(&self, gate: &mut DisplayGateState, leg: SceneLeg) {
+        if gate.scene_leg.as_ref() == Some(&leg) {
+            tracing::debug!(route = %leg.route, generation = leg.generation, "leg already announced; restating its status only");
+            return;
+        }
+        tracing::info!(route = %leg.route, generation = leg.generation, "the caller's screen moves to a new leg");
+        gate.projection.clear();
+        gate.screen_state["stale"] = json!(true);
+        gate.report_epoch = None;
+        gate.report_generation = None;
+        *self.last_display.lock().await = None;
+        self.display_confirm.send_modify(|confirm| {
+            confirm.generation = leg.generation;
+            confirm.watermark = None;
+            confirm.rejection = None;
+        });
+        self.publish(Event::Json(json!({
+            "type": "epoch",
+            "generation": leg.generation,
+        })));
+        gate.scene_leg = Some(leg);
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState(pub Arc<AppInner>);
 pub struct AppInner {
@@ -293,6 +407,7 @@ pub struct AppInner {
     pub active_session: Arc<Mutex<Option<PiSession>>>,
     activity_clock: ActivityClock,
     live_leg: LiveLegState,
+    leg_announcer: LegAnnouncer,
     operation_transition: Mutex<()>,
     active_operations: Mutex<HashMap<TaskId, AbortHandle>>,
     pub queued_turns: AtomicU64,
@@ -633,18 +748,44 @@ impl AppState {
         let speech_deadline = speaker.speech_deadline;
         let mut coordinator = Coordinator::new(switchboard.status());
         let live_leg = switchboard.live_leg_state();
+        let display_gate = Arc::new(Mutex::new(DisplayGateState {
+            projection: DisplayProjection::default(),
+            screen_state: json!({
+                "view": "auto",
+                "pinned": false,
+                "has_visual": false,
+                "visual_kind": Value::Null,
+                "object_ids": [],
+                "title": "",
+                "stale": false,
+                "generation": 0,
+            }),
+            active_epoch: None,
+            report_epoch: None,
+            report_generation: None,
+            scene_leg: None,
+            watermark: 0,
+        }));
+        let (display_confirm_tx, _) = watch::channel(ConfirmState::default());
+        let leg_announcer = LegAnnouncer {
+            coordinator: coordinator.clone(),
+            live_leg: live_leg.clone(),
+            events: events.clone(),
+            delivery: delivery.clone(),
+            display_gate: display_gate.clone(),
+            display_confirm: display_confirm_tx.clone(),
+            last_display: last_display.clone(),
+        };
         let activity_events = events.clone();
         let activity_delivery = delivery.clone();
-        let activity_coordinator = coordinator.clone();
-        let activity_live_leg = live_leg.clone();
+        let activity_announcer = leg_announcer.clone();
         let activity_callback: ActivityCallback = Arc::new(move |activity: Activity| {
             let events = activity_events.clone();
             let delivery = activity_delivery.clone();
-            let coordinator = activity_coordinator.clone();
-            let live_leg = activity_live_leg.clone();
+            let announcer = activity_announcer.clone();
             Box::pin(async move {
-                if coordinator.is_candidate() {
-                    let _ = promote_candidate(&coordinator, &live_leg, &events, &delivery);
+                if announcer.coordinator.is_candidate() {
+                    let _ = announcer.promote_candidate().await;
                 }
                 if activity.state == "life" {
                     return;
@@ -682,66 +823,10 @@ impl AppState {
                 candidate_delivery.publish(event);
             },
         ));
-        let display_gate = Arc::new(Mutex::new(DisplayGateState {
-            projection: DisplayProjection::default(),
-            screen_state: json!({
-                "view": "auto",
-                "pinned": false,
-                "has_visual": false,
-                "visual_kind": Value::Null,
-                "object_ids": [],
-                "title": "",
-                "stale": false,
-                "generation": 0,
-            }),
-            active_epoch: None,
-            report_epoch: None,
-            report_generation: None,
-            watermark: 0,
-        }));
-        let (display_confirm_tx, _) = watch::channel(ConfirmState::default());
-        let route_events = events.clone();
-        let route_delivery = delivery.clone();
-        let route_display = last_display.clone();
-        let route_coordinator = coordinator.clone();
-        let route_gate = display_gate.clone();
-        let route_confirm = display_confirm_tx.clone();
+        let route_announcer = leg_announcer.clone();
         let route_callback: RouteCallback = Arc::new(move |status| {
-            let events = route_events.clone();
-            let delivery = route_delivery.clone();
-            let diagram = route_display.clone();
-            let coordinator = route_coordinator.clone();
-            let gate = route_gate.clone();
-            let route_confirm = route_confirm.clone();
-            Box::pin(async move {
-                {
-                    let mut g = gate.lock().await;
-                    g.projection.objects.clear();
-                    g.projection.order.clear();
-                    g.projection.focus_id = None;
-                    g.projection.speech = None;
-                    g.screen_state["stale"] = json!(true);
-                    g.report_epoch = None;
-                    g.report_generation = None;
-                }
-                let generation = coordinator.generation();
-                route_confirm.send_modify(|c| {
-                    c.generation = generation;
-                    c.watermark = None;
-                    c.rejection = None;
-                });
-                let epoch = Event::Json(json!({
-                    "type": "epoch",
-                    "generation": generation,
-                }));
-                let _ = events.send(epoch.clone());
-                delivery.publish(epoch);
-                coordinator.publish_status(status.clone());
-                *diagram.lock().await = None;
-                let event = Event::Json(status);
-                let _ = events.send(event.clone());
-                delivery.publish(event);
-            })
+            let announcer = route_announcer.clone();
+            Box::pin(async move { announcer.announce_route(status).await })
         });
         let active_session = switchboard.session_control();
         let activity_clock = switchboard.activity_clock();
@@ -782,6 +867,7 @@ impl AppState {
             active_session,
             activity_clock,
             live_leg,
+            leg_announcer,
             operation_transition: Mutex::new(()),
             active_operations: Mutex::new(HashMap::new()),
             queued_turns: AtomicU64::new(0),
@@ -904,50 +990,14 @@ fn publish_status(state: &AppState, status: Value) {
     emit_json(state, status);
 }
 
-fn promote_candidate(
-    coordinator: &Coordinator,
-    live_leg: &LiveLegState,
-    events: &broadcast::Sender<Event>,
-    delivery: &DeliveryState,
-) -> bool {
-    let Ok(identity) = coordinator.adopt_candidate() else {
-        return false;
-    };
-    let status = coordinator.status_json();
-    let route = status["route"].as_str().unwrap_or("operator");
-    live_leg.set_session(
-        route,
-        if route == crate::pbx::OPERATOR {
-            ""
-        } else {
-            &identity.token
-        },
-    );
-    let epoch = Event::Json(json!({
-        "type": "epoch",
-        "generation": identity.generation,
-    }));
-    let _ = events.send(epoch.clone());
-    delivery.publish(epoch);
-    let status_event = Event::Json(status);
-    let _ = events.send(status_event.clone());
-    delivery.publish(status_event);
-    true
-}
-
-fn promote_candidate_for_token(state: &AppState, token: &str) {
+async fn promote_candidate_for_token(state: &AppState, token: &str) {
     if state
         .0
         .coordinator
         .candidate_identity()
         .is_some_and(|candidate| candidate.token == token)
     {
-        let _ = promote_candidate(
-            &state.0.coordinator,
-            &state.0.live_leg,
-            &state.0.events,
-            &state.0.delivery,
-        );
+        let _ = state.0.leg_announcer.promote_candidate().await;
     }
 }
 
@@ -1836,7 +1886,7 @@ async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Respons
         )
             .into_response();
     }
-    promote_candidate_for_token(&state, &req.token);
+    promote_candidate_for_token(&state, &req.token).await;
     if let Err(error) = state.0.coordinator.accept_side_effect(&req.token) {
         let (code, detail) = match error {
             crate::lifecycle::LifecycleError::CandidateSideEffect => (
@@ -1972,7 +2022,7 @@ async fn display(State(state): State<AppState>, body: axum::body::Bytes) -> Resp
         }
     };
 
-    promote_candidate_for_token(&state, token);
+    promote_candidate_for_token(&state, token).await;
     if let Err(error) = state.0.coordinator.accept_side_effect(token) {
         let detail = match error {
             crate::lifecycle::LifecycleError::CandidateSideEffect => {
@@ -2070,7 +2120,7 @@ struct ViewRequest {
 }
 
 async fn view(State(state): State<AppState>, Json(req): Json<ViewRequest>) -> Response {
-    promote_candidate_for_token(&state, &req.token);
+    promote_candidate_for_token(&state, &req.token).await;
     if let Err(error) = state.0.coordinator.accept_side_effect(&req.token) {
         let detail = match error {
             crate::lifecycle::LifecycleError::CandidateSideEffect => {

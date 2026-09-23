@@ -111,6 +111,100 @@ test.describe("call runtime", () => {
     }
   });
 
+  // Issue #22: the caller used to see conversation -> idle -> conversation
+  // across a transfer, and a first drawing from the new leg was wiped when
+  // the transfer settled.
+  test("an operator-to-project handoff never mounts the idle scene and keeps the first drawing", async ({
+    page,
+  }) => {
+    const projectStatus = {
+      type: "status",
+      route: "switchboard",
+      label: "switchboard",
+      projects: ["switchboard"],
+      thinking: "medium",
+      levels: ["low", "medium", "high"],
+    };
+    const fixtureServer = new DisplayFixtureServer({ initialGeneration: 1 });
+    const { wsUrl } = await fixtureServer.start();
+
+    try {
+      await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+      await expect
+        .poll(() => fixtureServer.reports.length, { timeout: 10_000 })
+        .toBeGreaterThan(0);
+
+      fixtureServer.broadcast({ type: "transcript", id: "c1", text: "Put me through to switchboard." });
+      fixtureServer.broadcast({
+        type: "spoken",
+        entry: { id: "a1", role: "agent", text: "Putting you through to switchboard." },
+      });
+      await expect(page.locator('main.stage[data-scene-kind="conversation"]')).toBeVisible();
+
+      // Every scene the stage mounts from here on, however briefly.
+      await page.evaluate(() => {
+        const seen: string[] = [];
+        (window as unknown as { scenesSeen: string[] }).scenesSeen = seen;
+        const record = () => {
+          const kind = document.querySelector("main.stage")?.getAttribute("data-scene-kind") ?? "";
+          if (kind && seen[seen.length - 1] !== kind) seen.push(kind);
+        };
+        record();
+        new MutationObserver(record).observe(document.body, {
+          subtree: true,
+          childList: true,
+          attributes: true,
+          attributeFilter: ["data-scene-kind"],
+        });
+      });
+
+      // The incoming leg shows life: it is adopted and the epoch moves.
+      fixtureServer.broadcast({ type: "candidate", route: "switchboard", generation: 1 });
+      fixtureServer.broadcast({ type: "candidate_cleared", generation: 2 });
+      fixtureServer.setGeneration(2);
+      fixtureServer.broadcast(projectStatus);
+
+      // Its first act is a drawing; then the PBX settles and the reply lands.
+      fixtureServer.broadcast({
+        type: "display",
+        seq: 5,
+        action: {
+          op: "show",
+          id: "call-path",
+          type: "diagram",
+          role: "primary",
+          data: {
+            mode: "graph",
+            title: "Call path",
+            nodes: [
+              { id: "operator", label: "OPERATOR" },
+              { id: "agent", label: "AGENT", state: "active" },
+            ],
+            edges: [{ from: "operator", to: "agent", label: "patch" }],
+          },
+        },
+      });
+      fixtureServer.broadcast(projectStatus);
+      fixtureServer.broadcast({ type: "reply", text: "That is the call path." });
+
+      await expect(page.locator('main.stage[data-scene-kind="architecture"]')).toBeVisible();
+      await expect(page.locator('[data-testid="diagram"]')).toContainText("AGENT");
+      await expect
+        .poll(() => {
+          const latest = fixtureServer.reports[fixtureServer.reports.length - 1];
+          return latest?.generation === 2 && latest?.applied_seq === 5 && latest?.title === "Call path";
+        })
+        .toBe(true);
+
+      const scenesSeen = await page.evaluate(
+        () => (window as unknown as { scenesSeen: string[] }).scenesSeen,
+      );
+      expect(scenesSeen).toEqual(["conversation", "architecture"]);
+    } finally {
+      await fixtureServer.stop();
+    }
+  });
+
   test("the presence records a push-to-talk clip and sends it on the socket", async ({
     page,
   }) => {
