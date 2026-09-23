@@ -84,13 +84,16 @@ Motion is an implementation detail. It must not appear in the model-facing proto
 
 ## Transport boundary
 
-The expected production boundary is a bidirectional WebSocket:
+The production boundary is a bidirectional WebSocket:
 
 ```text
-Damocles backend <-> WebSocket adapter <-> controller.dispatch(action)
+Damocles backend <-> src/runtime/callRuntime.ts <-> src/integration/runtime.tsx <-> controller.dispatch(action)
 ```
 
-The transport adapter validates incoming actions, dispatches them, and reports user interaction events back to the backend. It must not contain layout logic.
+`callRuntime.ts` owns the socket and the call's audio and reports decoded
+backend messages and runtime state; it owns no DOM. `runtime.tsx` validates
+incoming display actions, dispatches them, and reports the rendered scene back
+to the backend. Neither contains layout logic.
 
 ## Extension strategy
 

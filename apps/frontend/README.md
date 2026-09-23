@@ -4,18 +4,23 @@ This package is the approved React and TypeScript replacement frontend for Switc
 
 ## Repository integration
 
-V17.2 is the primary frontend at `/`. The previous client is preserved at
-`/legacy/` and runs in an inaccessible, same-origin runtime frame behind V17.2
-so its proven WebSocket, recording, wake-word, audio playback, reconnect,
-outbox, and project/model controls remain authoritative during the cutover.
-`src/integration/runtime.tsx` converts runtime events into the six-operation
-display protocol and relays V17.2 controls back to that runtime. The frame is
-hidden from the accessibility tree; the React controls are the only exposed
-interaction surface.
+V17.2 is the frontend at `/`, and it runs the call itself. `src/runtime/`
+owns the browser's side of a call: `callRuntime.ts` holds the backend
+WebSocket (hello, heartbeat, reconnect, epochs and transfers, the clip
+outbox), `pushToTalk.ts` records the caller, `audioPlayback.ts` plays replies,
+and hands-free listening reuses `src/hands_free.ts` and the local wake-word
+detector. The runtime owns no DOM; it reports state and backend messages to
+`src/integration/runtime.tsx`, which turns them into the six-operation display
+protocol and sends the rendered scene back as screen-state reports. The
+Damocles presence is the only call control the design exposes.
 
-Production integration coverage lives in `tests/integration/bridge.spec.ts`.
-The semantic event mapping and live Mermaid path are covered by
-`tests/visual/runtime.spec.ts`.
+The wake-word engine and ONNX Runtime are not bundled: they load from the
+committed `/openwakeword/` files through the import map in `index.html`, and
+Vite treats the package as external.
+
+Production integration coverage lives in `tests/integration/callRuntime.spec.ts`
+(a fixture WebSocket plus Chromium's fake microphone). The semantic event
+mapping and live Mermaid path are covered by `tests/visual/runtime.spec.ts`.
 
 ## Start
 

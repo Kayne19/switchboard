@@ -8,7 +8,7 @@ export interface PendingRejection {
 export interface ReportDispatchSnapshot {
   /** The report currently awaiting a `screen_state_ack`, or null if none is in flight. */
   inFlightReport: ScreenStateReport | null;
-  /** Whether the transport (iframe bridge) is ready to accept a send at all. */
+  /** Whether the backend socket has delivered this generation's snapshot. */
   transportReady: boolean;
   /**
    * The rejection recorded from a `display` action the runtime declined to

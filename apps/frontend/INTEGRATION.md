@@ -2,11 +2,12 @@
 
 ## Current repository status
 
-The cutover described below is implemented in this repository. V17.2 is built
-to `static/` and served at `/`; the previous client remains available at
-`/legacy/` and supplies the isolated voice/runtime bridge. The production
-bridge and semantic adapter are covered by `tests/integration/bridge.spec.ts`
-and `tests/visual/runtime.spec.ts` respectively.
+The cutover described below is complete. V17.2 is built to `static/` and
+served at `/`, and it owns the backend connection and voice runtime itself
+(`src/runtime/`); the previous client and its hidden runtime frame have been
+removed. The production path is covered by
+`tests/integration/callRuntime.spec.ts` and the semantic adapter by
+`tests/visual/runtime.spec.ts`.
 
 ## Goal
 

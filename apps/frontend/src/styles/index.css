@@ -1048,18 +1048,6 @@ button {
   overflow-wrap: anywhere;
 }
 
-/* The isolated legacy frame owns the proven audio transport and stays hidden;
-   the on-screen Damocles presence is the only call affordance. */
-.runtime-frame {
-  position: fixed;
-  left: -2px;
-  bottom: -2px;
-  width: 1px;
-  height: 1px;
-  border: 0;
-  opacity: 0;
-  pointer-events: none;
-}
 .diagram-primitive--mermaid {
   display: grid;
   place-items: center;

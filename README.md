@@ -246,9 +246,9 @@ test it manually and then fails with "command not found" for the switchboard.
 | `legacy/backend/models.py` | legacy spoken model name resolution |
 | `legacy/backend/audio.py` | legacy whisper in, ElevenLabs out, and reply-length shaping |
 | `static/index.html` | V17.2 React shell served at the root route |
-| `static/legacy/index.html` | isolated previous presentation/runtime and rollback route |
-| `apps/frontend/src/` | V17.2 React presentation plus the existing TypeScript voice runtime and transport adapter |
-| `static/*.js`, `static/v17-assets/` | committed deterministic legacy-runtime and V17.2 browser build output |
+| `apps/frontend/src/` | V17.2 React presentation and its call runtime |
+| `apps/frontend/src/runtime/` | the browser's side of a call: backend WebSocket, push-to-talk, playback, hands-free wiring |
+| `static/v17-assets/`, `static/vad-worklet.js` | committed deterministic browser build output |
 | `static/openwakeword/` | same-origin Hey Jarvis ONNX, wrapper, and ONNX Runtime WASM assets |
 | `apps/frontend/src/hands_free.ts` | hands-free controller, real wake adapter, and separate VAD endpointing |
 | `docs/hands-free.md` | hands-free lifecycle, asset provenance, and license obligations |

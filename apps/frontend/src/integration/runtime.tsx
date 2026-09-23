@@ -1,3 +1,8 @@
+// Connects the page's call runtime (`runtime/callRuntime.ts`) to the scene
+// controller: backend messages become scene actions, runtime state drives the
+// listening presence, and the rendered scene goes back to the backend as
+// screen-state reports.
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { deriveScreenState } from "../app/sceneModel";
 import { interpretDisplayMessage } from "../app/displayMessage";
@@ -10,9 +15,6 @@ import {
   INITIAL_RUNTIME_STATE,
   type RuntimeState,
 } from "../runtime/callRuntime";
-
-const LEGACY_SOURCE = "switchboard-legacy-runtime";
-const V17_SOURCE = "switchboard-v17";
 
 interface TranscriptLine {
   speaker: string;
@@ -44,18 +46,8 @@ function normalizeHistory(raw: unknown): TranscriptLine[] {
   });
 }
 
-function isRuntimeState(value: unknown): value is Partial<RuntimeState> {
-  return Boolean(value && typeof value === "object");
-}
-
-// The native runtime is the default. `?legacy` falls back to the iframe
-// bridge for one release while the native path is proven in use.
-function nativeRuntimeRequested(): boolean {
-  return !new URLSearchParams(window.location.search).has("legacy");
-}
-
 // `?ws=` points the page at another backend. The dev server has no backend of
-// its own, so without one the native runtime stays down there.
+// its own, so without one the call runtime stays down there.
 function backendSocketUrl(): string | null {
   const wsParam = new URLSearchParams(window.location.search).get("ws");
   if (wsParam) return wsParam;
@@ -64,53 +56,9 @@ function backendSocketUrl(): string | null {
   return `${proto}://${window.location.host}/ws`;
 }
 
-// The iframe bridge's command vocabulary, served by the native runtime.
-function runNativeCommand(
-  runtime: CallRuntime | null,
-  name: string,
-  value: unknown,
-): void {
-  if (!runtime) return;
-  switch (name) {
-    case "talk":
-      runtime.talk();
-      break;
-    case "send":
-      runtime.send();
-      break;
-    case "cancel":
-      runtime.cancel();
-      break;
-    case "retry":
-      runtime.retry();
-      break;
-    case "hands-free":
-      runtime.toggleHandsFree();
-      break;
-    case "hangup":
-      void runtime.hangup();
-      break;
-    case "route":
-      if (typeof value === "string") runtime.selectRoute(value);
-      break;
-    case "model":
-      if (typeof value === "string") runtime.selectModel(value);
-      break;
-    case "thinking":
-      if (typeof value === "string") runtime.selectThinking(value);
-      break;
-    case "screen_state":
-      if (value && typeof value === "object")
-        runtime.sendScreenState(value as ScreenStateReport);
-      break;
-  }
-}
-
 export function RuntimeIntegration() {
   const { state, dispatch, registerVoiceRuntime } = useController();
-  const [native] = useState(nativeRuntimeRequested);
-  const frameRef = useRef<HTMLIFrameElement>(null);
-  const nativeRuntimeRef = useRef<CallRuntime | null>(null);
+  const [callRuntime, setCallRuntime] = useState<CallRuntime | null>(null);
   const transcriptRef = useRef<TranscriptLine[]>([]);
   const currentResponseRef = useRef("");
   const transportReadyRef = useRef(false);
@@ -120,35 +68,24 @@ export function RuntimeIntegration() {
   const appliedSeqRef = useRef(0);
   const pendingRejectionRef = useRef<{ seq: number; reason: string } | null>(null);
   const handleServerRef = useRef<(message: ServerMessage) => void>(() => {});
-  const handleStateRef = useRef<(runtimeState: Partial<RuntimeState>) => void>(
-    () => {},
-  );
+  const handleStateRef = useRef<(runtimeState: RuntimeState) => void>(() => {});
   const [reportNonce, setReportNonce] = useState(0);
   const [runtime, setRuntime] = useState<RuntimeState>(INITIAL_RUNTIME_STATE);
 
-  const command = useCallback(
-    (name: string, value?: unknown) => {
-      if (native) {
-        runNativeCommand(nativeRuntimeRef.current, name, value);
-        return;
-      }
-      frameRef.current?.contentWindow?.postMessage(
-        { source: V17_SOURCE, command: name, value },
-        window.location.origin,
-      );
-    },
-    [native],
-  );
-
+  // A report the socket could not carry waits as the pending one, and the
+  // rejection it carries stays pending with it.
   const sendReport = useCallback(
     (report: ScreenStateReport) => {
+      if (!callRuntime?.sendScreenState(report)) {
+        pendingReportRef.current = report;
+        return;
+      }
       inFlightReportRef.current = report;
       if (shouldClearRejectionOnSend(report, pendingRejectionRef.current)) {
         pendingRejectionRef.current = null;
       }
-      command("screen_state", report);
     },
-    [command],
+    [callRuntime],
   );
 
   const handleScreenStateAck = useCallback(() => {
@@ -191,7 +128,8 @@ export function RuntimeIntegration() {
     [dispatch, runtime.handsFree, runtime.route],
   );
 
-  // Both transports deliver into these two handlers.
+  // The runtime is created once; these handlers are replaced as the scene
+  // callbacks they close over change.
   useEffect(() => {
     const appendTranscript = (line: TranscriptLine) => {
       const existing = line.id
@@ -316,9 +254,9 @@ export function RuntimeIntegration() {
       }
     };
 
-    handleStateRef.current = (runtimeState: Partial<RuntimeState>) => {
+    handleStateRef.current = (runtimeState: RuntimeState) => {
       if (!runtimeState.connected) transportReadyRef.current = false;
-      setRuntime((current) => ({ ...current, ...runtimeState }));
+      setRuntime(runtimeState);
       dispatch({
         op: "listen",
         on: Boolean(runtimeState.recording || runtimeState.handsFree),
@@ -326,59 +264,25 @@ export function RuntimeIntegration() {
     };
   }, [dispatch, handleScreenStateAck, showConversation]);
 
-  // Legacy transport: the hidden iframe owns the socket and posts to us.
   useEffect(() => {
-    if (native) return;
-    const onMessage = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return;
-      const packet = event.data as {
-        source?: string;
-        kind?: string;
-        payload?: unknown;
-      };
-      if (event.source !== frameRef.current?.contentWindow) return;
-      if (packet?.source !== LEGACY_SOURCE) return;
-      if (packet.kind === "state" && isRuntimeState(packet.payload)) {
-        handleStateRef.current(packet.payload);
-      } else if (
-        packet.kind === "server" &&
-        packet.payload &&
-        typeof packet.payload === "object"
-      ) {
-        handleServerRef.current(packet.payload as ServerMessage);
-      } else if (packet.kind === "ready") {
-        command("bridge_ready");
-        command("state");
-      } else if (packet.kind === "screen_state_ack") {
-        handleScreenStateAck();
-      }
-    };
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [native, command, handleScreenStateAck]);
-
-  // Native transport: this page owns the socket.
-  useEffect(() => {
-    if (!native) return;
     const socketUrl = backendSocketUrl();
     if (!socketUrl) return;
-    const callRuntime = new CallRuntime({
+    const runtimeForPage = new CallRuntime({
       socketUrl,
       onState: (runtimeState) => handleStateRef.current(runtimeState),
       onServer: (message) => handleServerRef.current(message),
       document,
       window,
     });
-    nativeRuntimeRef.current = callRuntime;
-    callRuntime.start();
+    runtimeForPage.start();
+    setCallRuntime(runtimeForPage);
     return () => {
-      callRuntime.dispose();
-      if (nativeRuntimeRef.current === callRuntime)
-        nativeRuntimeRef.current = null;
+      runtimeForPage.dispose();
+      setCallRuntime(null);
     };
-  }, [native]);
+  }, []);
 
-  // Derive screen state and queue/send it over the transport.
+  // Derive screen state and queue/send it over the socket.
   //
   // The rejection carried on `pendingRejectionRef` is merged into the
   // report by `planReportDispatch` but never cleared here -- only
@@ -408,37 +312,21 @@ export function RuntimeIntegration() {
     sendReport(action.report);
   }, [state, sendReport, reportNonce]);
 
+  // The Damocles presence is the call's one control: it starts a turn, sends
+  // the one being recorded, or forces a reconnect when the line is down.
   useEffect(() => {
+    if (!callRuntime) return;
     const toggleTurn = () => {
       if (!runtime.connected) {
-        command("retry");
+        callRuntime.retry();
         return;
       }
-      command(runtime.recording ? "send" : "talk");
+      if (runtime.recording) callRuntime.send();
+      else callRuntime.talk();
     };
     registerVoiceRuntime({ toggleTurn });
     return () => registerVoiceRuntime(null);
-  }, [command, registerVoiceRuntime, runtime.connected, runtime.recording]);
+  }, [callRuntime, registerVoiceRuntime, runtime.connected, runtime.recording]);
 
-  if (native) return null;
-
-  const wsParam =
-    typeof window !== "undefined"
-      ? new URLSearchParams(window.location.search).get("ws")
-      : null;
-  const iframeSrc = import.meta.env.DEV
-    ? "about:blank"
-    : `/legacy/index.html?runtime=1${wsParam ? `&ws=${encodeURIComponent(wsParam)}` : ""}`;
-
-  return (
-    <iframe
-      ref={frameRef}
-      className="runtime-frame"
-      src={iframeSrc}
-      title="Switchboard voice runtime"
-      allow="microphone; autoplay"
-      aria-hidden="true"
-      tabIndex={-1}
-    />
-  );
+  return null;
 }
