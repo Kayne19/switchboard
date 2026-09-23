@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { deriveScreenState } from "../app/sceneModel";
+import { interpretDisplayMessage } from "../app/displayMessage";
 import { useController } from "../controller/context";
 import type { MessageData, ScreenStateReport } from "../controller/types";
 import { RUNTIME_CONVERSATION_ID } from "../controller/types";
-import { validateControllerAction } from "../controller/validation";
 
 const LEGACY_SOURCE = "switchboard-legacy-runtime";
 const V17_SOURCE = "switchboard-v17";
@@ -37,7 +37,7 @@ interface TranscriptLine {
   id?: string;
 }
 
-type ServerMessage = Record<string, unknown> & { type?: string };
+type ServerMessage = Record<string, unknown> & { type?: string; seq?: number };
 
 const initialRuntime: RuntimeState = {
   connected: false,
@@ -92,6 +92,9 @@ export function RuntimeIntegration() {
   const generationRef = useRef(0);
   const pendingReportRef = useRef<ScreenStateReport | null>(null);
   const inFlightReportRef = useRef<ScreenStateReport | null>(null);
+  const appliedSeqRef = useRef(0);
+  const pendingRejectionRef = useRef<{ seq: number; reason: string } | null>(null);
+  const [reportNonce, setReportNonce] = useState(0);
   const [runtime, setRuntime] = useState<RuntimeState>(initialRuntime);
 
   const command = useCallback((name: string, value?: unknown) => {
@@ -238,9 +241,17 @@ export function RuntimeIntegration() {
           break;
         }
         case "display": {
-          const result = validateControllerAction(message.action);
+          const { result, seq } = interpretDisplayMessage(message);
           if (result.ok) {
             dispatch(result.action);
+            if (seq !== undefined) {
+              appliedSeqRef.current = Math.max(appliedSeqRef.current, seq);
+            }
+          } else {
+            if (seq !== undefined) {
+              pendingRejectionRef.current = { seq, reason: result.error };
+            }
+            setReportNonce((n) => n + 1);
           }
           break;
         }
@@ -304,6 +315,11 @@ export function RuntimeIntegration() {
   // Derive screen state and queue/send across the bridge
   useEffect(() => {
     const report = deriveScreenState(state, generationRef.current);
+    report.applied_seq = appliedSeqRef.current;
+    if (pendingRejectionRef.current) {
+      report.rejected = pendingRejectionRef.current;
+      pendingRejectionRef.current = null;
+    }
     const serialized = JSON.stringify(report);
     const inFlightSerialized = inFlightReportRef.current
       ? JSON.stringify(inFlightReportRef.current)
@@ -324,7 +340,7 @@ export function RuntimeIntegration() {
     }
 
     sendReport(report);
-  }, [state, sendReport]);
+  }, [state, sendReport, reportNonce]);
 
   useEffect(() => {
     const toggleTurn = () => {

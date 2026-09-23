@@ -161,6 +161,8 @@ export interface ScreenStateReport {
   title: string;
   stale: boolean;
   generation: number;
+  applied_seq?: number;
+  rejected?: { seq: number; reason: string };
 }
 
 export interface ControllerState {

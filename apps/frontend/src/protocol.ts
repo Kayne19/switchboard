@@ -40,6 +40,8 @@ export function screenStateMessage(
 	generation?: number,
 	pinned?: boolean,
 	objectIds?: string[],
+	appliedSeq?: number,
+	rejected?: { seq: number; reason: string },
 ): string {
 	return JSON.stringify({
 		type: "screen_state",
@@ -51,6 +53,8 @@ export function screenStateMessage(
 		...(generation !== undefined ? { generation } : {}),
 		...(pinned !== undefined ? { pinned } : {}),
 		...(objectIds !== undefined ? { object_ids: objectIds } : {}),
+		...(appliedSeq !== undefined ? { applied_seq: appliedSeq } : {}),
+		...(rejected !== undefined ? { rejected } : {}),
 	});
 }
 

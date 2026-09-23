@@ -29,7 +29,7 @@ export function helloMessage() {
         },
     });
 }
-export function screenStateMessage(view, hasVisual, visualKind, title, stale, generation, pinned, objectIds) {
+export function screenStateMessage(view, hasVisual, visualKind, title, stale, generation, pinned, objectIds, appliedSeq, rejected) {
     return JSON.stringify({
         type: "screen_state",
         view,
@@ -40,6 +40,8 @@ export function screenStateMessage(view, hasVisual, visualKind, title, stale, ge
         ...(generation !== undefined ? { generation } : {}),
         ...(pinned !== undefined ? { pinned } : {}),
         ...(objectIds !== undefined ? { object_ids: objectIds } : {}),
+        ...(appliedSeq !== undefined ? { applied_seq: appliedSeq } : {}),
+        ...(rejected !== undefined ? { rejected } : {}),
     });
 }
 export function sttStartHeader(clip) {
