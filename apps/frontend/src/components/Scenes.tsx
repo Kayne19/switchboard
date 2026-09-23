@@ -34,14 +34,17 @@ interface SceneProps {
   setTranscriptOpen: (open: boolean) => void;
 }
 
-function CornerMarks() {
+// The conversation's corner accents, from #conversation .corner-a / .corner-b
+// in reference/lineage/approved-v16-controller.html. They belong to this
+// composition only; the content scenes are framed by their objects instead.
+function ConversationCorners() {
   return (
     <>
-      <svg className="corner-mark corner-mark--top" viewBox="0 0 420 120" preserveAspectRatio="none" aria-hidden="true">
-        <path d="M 0 118 V 18 H 248 L 286 0 H 420" />
+      <svg className="corner-mark corner-mark--top" viewBox="0 0 320 140" preserveAspectRatio="none" aria-hidden="true">
+        <path d="M0 36 H52 V0 M52 16 H220 L250 46 H320" />
       </svg>
-      <svg className="corner-mark corner-mark--bottom" viewBox="0 0 360 100" preserveAspectRatio="none" aria-hidden="true">
-        <path d="M 360 0 V 78 H 118 L 82 100 H 0" />
+      <svg className="corner-mark corner-mark--bottom" viewBox="0 0 260 110" preserveAspectRatio="none" aria-hidden="true">
+        <path d="M260 64 H202 V110 M202 91 H50 L18 59 H0" />
       </svg>
     </>
   );
@@ -88,7 +91,7 @@ export function ConversationScene({ state, onToggleListening, transcriptOpen, se
 
   return (
     <motion.section className="scene scene--conversation" data-scene="conversation" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <CornerMarks />
+      <ConversationCorners />
       <div className="conversation-presence-band">
         <DamoclesPresence
           listening={state.listening}
@@ -100,7 +103,7 @@ export function ConversationScene({ state, onToggleListening, transcriptOpen, se
       </div>
 
       <ObjectMotion objectId={object?.id ?? "conversation"} className="conversation-answer">
-        <TechFrame variant="panel" />
+        <TechFrame variant="answer" />
         <div className="conversation-answer__tag tech micro">{message.tag ?? 'CURRENT RESPONSE / 01'}</div>
         <div className="conversation-answer__text"><RichText segments={segments} /></div>
         <div className="conversation-answer__index tech micro">VOICE / 01</div>
@@ -147,7 +150,6 @@ export function TrainingScene({ state, onToggleListening, onFocus }: SceneProps)
 
   return (
     <motion.section className="scene scene--content scene--training" data-scene="training" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <CornerMarks />
       <div className="scene-heading">
         <div className="scene-heading__title tech">{primary.data.title ?? 'TRAINING / RUN'}</div>
         <div className="scene-heading__sub tech micro">{primary.data.subtitle ?? 'LOSS TRACE / LIVE'}</div>
@@ -206,14 +208,13 @@ export function ArchitectureScene({ state, onToggleListening, onFocus }: ScenePr
 
   return (
     <motion.section className="scene scene--content scene--architecture" data-scene="architecture" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <CornerMarks />
       <div className="scene-heading">
         <div className="scene-heading__title tech">{diagram.data.title ?? 'SYSTEM / DIAGRAM'}</div>
         <div className="scene-heading__sub tech micro">{diagram.data.subtitle ?? 'GRAPH / COMPOSED'}</div>
       </div>
       <div className="content-grid">
         <ObjectMotion objectId={diagram.id} className="content-main diagram-object">
-          <TechFrame variant="open" />
+          <TechFrame variant="rails" />
           <FocusableSurface onActivate={() => onFocus(diagram.id)} ariaLabel="Expand diagram">
             <DiagramPrimitive data={diagram.data} />
           </FocusableSurface>
@@ -237,7 +238,6 @@ export function DocumentScene({ state, onToggleListening, onFocus }: SceneProps)
 
   return (
     <motion.section className="scene scene--content scene--document" data-scene="document" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <CornerMarks />
       <div className="scene-heading">
         <div className="scene-heading__title tech">DOCUMENT / {document.data.kind?.toUpperCase() ?? 'CONTENT'}</div>
         <div className="scene-heading__sub tech micro">CONTENT / ORIGINAL</div>
@@ -267,7 +267,6 @@ export function CodeScene({ state, onToggleListening, onFocus }: SceneProps) {
 
   return (
     <motion.section className="scene scene--content scene--code" data-scene="code" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <CornerMarks />
       <div className="scene-heading">
         <div className="scene-heading__title tech">{code.data.title ?? 'SOURCE / LIVE'}</div>
         <div className="scene-heading__sub tech micro">{code.data.file ?? 'SOURCE'}</div>
@@ -324,7 +323,6 @@ export function ComposedScene({ state, onToggleListening, onFocus }: SceneProps)
 
   return (
     <motion.section className="scene scene--content scene--composed" data-scene="composed" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <CornerMarks />
       <div className="scene-heading">
         <div className="scene-heading__title tech">{title}</div>
         <div className="scene-heading__sub tech micro">{subtitle}</div>

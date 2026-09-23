@@ -130,27 +130,29 @@ button {
   outline-offset: 4px;
 }
 
+/* Conversation corner accents: placement from #conversation .corner-a/b in
+   the approved v16 composition. */
 .corner-mark {
   position: absolute;
   z-index: 1;
   pointer-events: none;
   fill: none;
-  stroke: rgba(var(--orange-rgb), 0.42);
+  stroke: rgba(var(--orange-rgb), 0.48);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
 .corner-mark--top {
-  top: 4.8cqh;
-  left: 4.2cqw;
-  width: min(29cqw, 460px);
-  height: 9cqh;
+  top: 6.1cqh;
+  left: 5.3cqw;
+  width: 25cqw;
+  height: 12cqh;
 }
 .corner-mark--bottom {
-  right: 4.2cqw;
-  bottom: 4.5cqh;
-  width: min(23cqw, 390px);
-  height: 8cqh;
-  stroke: rgba(127, 214, 61, 0.28);
+  right: 4.4cqw;
+  bottom: 6.4cqh;
+  width: 18cqw;
+  height: 10cqh;
+  stroke: rgba(127, 214, 61, 0.3);
 }
 
 .tech-frame {
@@ -161,6 +163,17 @@ button {
   height: 100%;
   pointer-events: none;
   overflow: visible;
+}
+.tech-frame__path {
+  fill: none;
+  vector-effect: non-scaling-stroke;
+  animation: tech-frame-resolve 0.36s cubic-bezier(0.22, 0.61, 0.36, 1)
+    backwards;
+}
+@keyframes tech-frame-resolve {
+  from {
+    opacity: 0;
+  }
 }
 
 /* Shared Damocles presence */
@@ -299,7 +312,6 @@ button {
   width: min(62cqw, 1000px);
   height: min(31cqh, 330px);
   min-height: 180px;
-  background: rgba(2, 2, 2, 0.9);
   z-index: 2;
 }
 .conversation-answer__tag {
@@ -815,15 +827,17 @@ button {
   position: absolute;
   z-index: 1;
   inset: clamp(8px, 1.1cqh, 16px) clamp(8px, 1cqw, 16px);
+  /* The inside of the approved code frame (TechFrame "code"), so source
+     never crosses the rails as it scrolls. */
   clip-path: polygon(
     0 0,
-    85% 0,
-    91% 9.2%,
-    100% 9.2%,
+    86.4% 0,
+    90.2% 5.7%,
+    100% 5.7%,
     100% 100%,
-    15.5% 100%,
-    10.2% 90%,
-    0 90%
+    17.2% 100%,
+    14.2% 95.4%,
+    0 95.4%
   );
   background: #000;
   overflow: hidden;
@@ -1118,16 +1132,16 @@ button {
     font-size: clamp(7px, 1.08cqw, 9px);
   }
   .corner-mark--top {
-    top: 3.4cqh;
+    top: 3.8cqh;
     left: 4cqw;
-    width: 42cqw;
-    height: 7cqh;
+    width: 34cqw;
+    height: 9cqh;
   }
   .corner-mark--bottom {
     right: 4cqw;
-    bottom: 3.5cqh;
-    width: 34cqw;
-    height: 6cqh;
+    bottom: 4cqh;
+    width: 27cqw;
+    height: 7cqh;
   }
 
   .damocles-presence--idle {
@@ -1373,6 +1387,7 @@ button {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .tech-frame__path,
   .diagram-edge,
   .diagram-node__body {
     animation: none !important;
