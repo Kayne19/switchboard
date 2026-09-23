@@ -55,6 +55,8 @@ extension staging path, not through a deploy.
   `python3 -m unittest discover -s legacy/tests`, and `npm test` followed by
   `git diff --exit-code -- static` — the compiled browser output is committed,
   so rebuild it in the same change.
+- A `static/` merge conflict is resolved by rebuilding from the merged source
+  (`npm ci && npm run build`), never by picking a side (see #37).
 - Compatibility tests live in `legacy/tests/`; browser tests stay in `apps/frontend/tests/`.
   They are the reason this repo exists — keep them passing on every commit.
 - No network, no ElevenLabs, no whisper model downloads in tests. Stub them.
