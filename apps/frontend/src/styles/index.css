@@ -180,6 +180,10 @@ button {
 .damocles-presence {
   --presence-width: min(12cqw, 16cqh, 196px);
   --signal-height: clamp(34px, 5.2cqh, 50px);
+  /* The sword's own axis: the line through its pommel and grip, x = 451 of
+     the glyph's 944 units (DamoclesGlyph.tsx). The diagonal hilt pulls the
+     glyph's box to the right of it, so centring on the box looks off. */
+  --glyph-axis: calc(451 / 944 * 100%);
   position: relative;
   width: var(--presence-width);
   min-width: 0;
@@ -221,7 +225,7 @@ button {
 .damocles-presence__float {
   width: 100%;
   aspect-ratio: 944 / 1133;
-  transform-origin: 50% 18%;
+  transform-origin: var(--glyph-axis) 18%;
   will-change: transform;
 }
 .damocles-presence__float svg {
@@ -230,25 +234,34 @@ button {
   height: 100%;
   overflow: visible;
 }
+/* The signal is centred on the sword's axis. It is a flex row because a
+   flex item wider than its line overflows evenly on both sides; an auto
+   grid column instead grows to the right and drags its content off-axis. */
 .damocles-presence__signal {
   position: relative;
   width: max(100%, 128px);
   height: var(--signal-height);
-  left: 50%;
+  left: var(--glyph-axis);
   transform: translateX(-50%);
-  display: grid;
-  place-items: center;
+  display: flex;
+  justify-content: center;
+  align-items: center;
   color: var(--paper);
   overflow: visible;
 }
 .damocles-presence__caption {
-  width: 100%;
+  flex: none;
+  width: max-content;
   text-align: center;
   color: rgba(232, 230, 223, 0.54);
   white-space: nowrap;
 }
+/* Sized to its content, never narrower than the bars need: a label wider
+   than a fixed indicator pushed the whole block to one side. */
 .voice-indicator {
-  width: 138px;
+  flex: none;
+  width: max-content;
+  min-width: 138px;
   height: 42px;
   display: grid;
   grid-template-rows: 24px 16px;
@@ -256,7 +269,7 @@ button {
   transform-origin: 50% 50%;
 }
 .voice-indicator--compact {
-  width: 118px;
+  min-width: 118px;
   height: 36px;
   grid-template-rows: 20px 14px;
 }
