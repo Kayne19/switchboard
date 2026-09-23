@@ -399,6 +399,64 @@ test('secondary progress occupies the visible aux row in a composed workspace', 
 });
 
 
+test('compare progress renders once in the composed aux row', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openController(page);
+  await page.evaluate(() => {
+    const dispatch = window.SwitchboardController?.dispatch;
+    if (!dispatch) throw new Error('controller unavailable');
+    dispatch({ op: 'clear' });
+    dispatch({
+      op: 'show', id: 'throughput', type: 'metric', role: 'primary',
+      data: { label: 'THROUGHPUT', value: '98.4%', semantic: 'green' },
+    });
+    dispatch({
+      op: 'show', id: 'coverage', type: 'progress', role: 'compare',
+      data: { label: 'COVERAGE', value: 67, text: '67%' },
+    });
+  });
+
+  // A compare-role progress object is both a compare object and a progress
+  // object; the aux row still gives it exactly one slot.
+  const progress = page.locator('.composed-aux .progress-primitive');
+  await expect(progress).toHaveCount(1);
+  await expect(progress).toBeVisible();
+});
+
+
+test('every progress object is visible in the training scene', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openController(page);
+  await page.evaluate(() => {
+    const dispatch = window.SwitchboardController?.dispatch;
+    if (!dispatch) throw new Error('controller unavailable');
+    dispatch({ op: 'clear' });
+    dispatch({
+      op: 'show', id: 'loss', type: 'chart', role: 'primary',
+      data: {
+        title: 'Validation loss', xMax: 40, yMin: 0, yMax: 1,
+        series: [{ name: 'VAL LOSS', values: [0.8, 0.5, 0.3, 0.45] }],
+      },
+    });
+    dispatch({
+      op: 'show', id: 'epoch', type: 'progress', role: 'secondary',
+      data: { label: 'EPOCH', value: 40, text: '40%' },
+    });
+    dispatch({
+      op: 'show', id: 'eval', type: 'progress', role: 'secondary',
+      data: { label: 'EVAL', value: 80, text: '80%' },
+    });
+  });
+
+  const scene = page.locator('[data-scene="training"]');
+  await expect(scene).toBeVisible();
+  await expect(scene.locator('.progress-primitive')).toHaveCount(2);
+  for (const label of ['EPOCH', 'EVAL']) {
+    await expect(scene.locator('.progress-primitive', { hasText: label })).toBeVisible();
+  }
+});
+
+
 test('note and live chat output coexist; neither mutates the other', async ({ page }) => {
   const fixtureServer = new DisplayFixtureServer({ initialGeneration: 7 });
   const { wsUrl } = await fixtureServer.start();

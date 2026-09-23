@@ -127,6 +127,22 @@ function RailNote({ note, noteObject, onFocus, onOpenHistory }: ExplanationProps
   );
 }
 
+// Progress objects the main column has no slot for, each in a bounded block
+// in the rail, so an accepted progress object is never lost to the layout.
+function RailProgress({ progressList, onFocus }: { progressList: Array<SceneObject<ProgressData>>; onFocus: (id: string | null) => void }) {
+  return (
+    <>
+      {progressList.map((progress) => (
+        <ObjectMotion key={progress.id} objectId={progress.id} className="rail-progress">
+          <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
+            <ProgressPrimitive data={progress.data} />
+          </FocusableSurface>
+        </ObjectMotion>
+      ))}
+    </>
+  );
+}
+
 export function IdleScene({ state, onToggleListening }: Pick<SceneProps, 'state' | 'onToggleListening'>) {
   return (
     <motion.section className="scene scene--idle" data-scene="idle" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -193,7 +209,7 @@ export function ConversationScene({ state, onToggleListening, setTranscriptOpen 
 export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory }: SceneProps) {
   const charts = objectsOfType<ChartData>(state, 'chart');
   const metrics = objectsOfType<MetricData>(state, 'metric');
-  const progress = objectsOfType<ProgressData>(state, 'progress')[0];
+  const [progress, ...railProgress] = objectsOfType<ProgressData>(state, 'progress');
   const primary = charts.find((chart) => chart.role === 'primary') ?? charts[0];
   if (!primary) return <IdleScene state={state} onToggleListening={onToggleListening} />;
   const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), primary.id);
@@ -260,6 +276,7 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
           <div className="content-rail__details">
             {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
             {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
+            <RailProgress progressList={railProgress} onFocus={onFocus} />
             <ToolActivity activity={state.activity} />
           </div>
         </motion.aside>
@@ -298,13 +315,7 @@ export function ArchitectureScene({ state, onToggleListening, onFocus, onOpenHis
             {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
             {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
             <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
-            {progressList.map((progress) => (
-              <ObjectMotion key={progress.id} objectId={progress.id} className="rail-progress">
-                <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
-                  <ProgressPrimitive data={progress.data} />
-                </FocusableSurface>
-              </ObjectMotion>
-            ))}
+            <RailProgress progressList={progressList} onFocus={onFocus} />
             <ToolActivity activity={state.activity} />
           </div>
         </motion.aside>
@@ -342,13 +353,7 @@ export function DocumentScene({ state, onToggleListening, onFocus, onOpenHistory
             {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
             {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
             <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
-            {progressList.map((progress) => (
-              <ObjectMotion key={progress.id} objectId={progress.id} className="rail-progress">
-                <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
-                  <ProgressPrimitive data={progress.data} />
-                </FocusableSurface>
-              </ObjectMotion>
-            ))}
+            <RailProgress progressList={progressList} onFocus={onFocus} />
             <ToolActivity activity={state.activity} />
           </div>
         </motion.aside>
@@ -386,13 +391,7 @@ export function CodeScene({ state, onToggleListening, onFocus, onOpenHistory }: 
             {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
             {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
             <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
-            {progressList.map((progress) => (
-              <ObjectMotion key={progress.id} objectId={progress.id} className="rail-progress">
-                <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
-                  <ProgressPrimitive data={progress.data} />
-                </FocusableSurface>
-              </ObjectMotion>
-            ))}
+            <RailProgress progressList={progressList} onFocus={onFocus} />
             <ToolActivity activity={state.activity} />
           </div>
         </motion.aside>
@@ -419,7 +418,7 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
   // the primary, so a secondary object is never accepted and then lost.
   const auxObjects: SceneObject[] = [
     ...comp.compare,
-    ...progressList.filter((p) => p.id !== primary.id),
+    ...progressList.filter((p) => p.id !== primary.id && !comp.compare.some((c) => c.id === p.id)),
   ];
 
   const renderPrimaryPrimitive = () => {

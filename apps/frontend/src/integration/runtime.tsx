@@ -276,7 +276,6 @@ export function RuntimeIntegration() {
       // A handoff to another route ends the previous agent's turn: any tool
       // activity that was still showing belongs to the line we left.
       if (lastRouteRef.current !== null && lastRouteRef.current !== runtimeState.route) {
-        lastRouteRef.current = runtimeState.route;
         dispatch({ op: "runtime_activity", activity: null });
       }
       lastRouteRef.current = runtimeState.route;
