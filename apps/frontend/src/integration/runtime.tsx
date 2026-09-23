@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { deriveScreenState } from "../app/sceneModel";
 import { interpretDisplayMessage } from "../app/displayMessage";
+import { planReportDispatch, shouldClearRejectionOnSend } from "../app/reportDispatch";
 import { useController } from "../controller/context";
 import type { MessageData, ScreenStateReport } from "../controller/types";
 import { RUNTIME_CONVERSATION_ID } from "../controller/types";
@@ -107,6 +108,9 @@ export function RuntimeIntegration() {
   const sendReport = useCallback(
     (report: ScreenStateReport) => {
       inFlightReportRef.current = report;
+      if (shouldClearRejectionOnSend(report, pendingRejectionRef.current)) {
+        pendingRejectionRef.current = null;
+      }
       command("screen_state", report);
     },
     [command],
@@ -312,34 +316,34 @@ export function RuntimeIntegration() {
     return () => window.removeEventListener("message", onMessage);
   }, [command, dispatch, handleScreenStateAck, sendReport, showConversation]);
 
-  // Derive screen state and queue/send across the bridge
+  // Derive screen state and queue/send across the bridge.
+  //
+  // The rejection carried on `pendingRejectionRef` is merged into the
+  // report by `planReportDispatch` but never cleared here -- only
+  // `sendReport` clears it, and only when the report actually being sent
+  // is the one that carries it (see `shouldClearRejectionOnSend`). That is
+  // what lets the rejection survive any number of intervening effect runs
+  // (unrelated state changes) while an earlier report is still in flight,
+  // instead of being silently dropped by a later, rejection-less rebuild
+  // that would otherwise overwrite the queue.
   useEffect(() => {
-    const report = deriveScreenState(state, generationRef.current);
-    report.applied_seq = appliedSeqRef.current;
-    if (pendingRejectionRef.current) {
-      report.rejected = pendingRejectionRef.current;
-      pendingRejectionRef.current = null;
-    }
-    const serialized = JSON.stringify(report);
-    const inFlightSerialized = inFlightReportRef.current
-      ? JSON.stringify(inFlightReportRef.current)
-      : null;
+    const baseReport = deriveScreenState(state, generationRef.current);
+    baseReport.applied_seq = appliedSeqRef.current;
 
-    if (serialized === inFlightSerialized) {
+    const action = planReportDispatch(baseReport, {
+      inFlightReport: inFlightReportRef.current,
+      transportReady: iframeReadyRef.current,
+      pendingRejection: pendingRejectionRef.current,
+    });
+
+    if (action.kind === "skip") {
       return;
     }
-
-    if (!iframeReadyRef.current) {
-      pendingReportRef.current = report;
+    if (action.kind === "queue") {
+      pendingReportRef.current = action.report;
       return;
     }
-
-    if (inFlightReportRef.current) {
-      pendingReportRef.current = report;
-      return;
-    }
-
-    sendReport(report);
+    sendReport(action.report);
   }, [state, sendReport, reportNonce]);
 
   useEffect(() => {
