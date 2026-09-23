@@ -116,3 +116,37 @@ test('the shared content rail keeps one semantic surface order', async ({ page }
     await fixtureServer.stop();
   }
 });
+
+test('rail progress uses spacing instead of a top border', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?scene=architecture&chrome=0');
+  await page.evaluate(() => {
+    const dispatch = window.SwitchboardController?.dispatch;
+    if (!dispatch) throw new Error('controller unavailable');
+    dispatch({ op: 'clear' });
+    dispatch({
+      op: 'show', id: 'map', type: 'diagram', role: 'primary',
+      data: {
+        mode: 'graph', title: 'SYSTEM MAP',
+        nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+        edges: [{ from: 'a', to: 'b' }],
+      },
+    });
+    dispatch({
+      op: 'show', id: 'note', type: 'note', role: 'secondary',
+      data: { segments: [{ text: 'The active path is healthy.' }] },
+    });
+    dispatch({
+      op: 'show', id: 'deploy', type: 'progress', role: 'secondary',
+      data: { label: 'DEPLOY', value: 40 },
+    });
+  });
+
+  const noteBox = await page.locator('.rail-note').boundingBox();
+  const progress = page.locator('.rail-progress .progress-primitive');
+  const progressBox = await progress.boundingBox();
+  expect(noteBox).not.toBeNull();
+  expect(progressBox).not.toBeNull();
+  expect(await progress.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe('0px');
+  expect(progressBox!.y - (noteBox!.y + noteBox!.height)).toBeGreaterThan(0);
+});
