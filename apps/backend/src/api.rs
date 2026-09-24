@@ -1600,7 +1600,7 @@ async fn process_turns(state: AppState) {
 async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
     let status = current_status(&state);
     Json(
-        json!({"status":"ok", "whisper_model":"sidecar", "stt_configured":state.0.stt.command.is_some(), "stt_stream_configured":state.0.stt_stream.configured(), "stt_adapter":"sidecar", "elevenlabs_configured":state.0.speaker.configured(), "route":status["route"], "model":status["model"], "thinking":status["thinking"], "model_swaps":status["model_swaps"], "projects":status["projects"]}),
+        json!({"status":"ok", "git":crate::GIT_SHA, "whisper_model":"sidecar", "stt_configured":state.0.stt.command.is_some(), "stt_stream_configured":state.0.stt_stream.configured(), "stt_adapter":"sidecar", "elevenlabs_configured":state.0.speaker.configured(), "route":status["route"], "model":status["model"], "thinking":status["thinking"], "model_swaps":status["model_swaps"], "projects":status["projects"]}),
     )
 }
 async fn status(State(state): State<AppState>) -> impl IntoResponse {
