@@ -932,12 +932,33 @@ button {
   width: min(100%, 720px);
   justify-self: start;
 }
+.composed-primary-object--cluster {
+  width: 100%;
+}
 .composed-primary-object--metric > .focusable-content {
   height: auto;
   padding: clamp(12px, 1.4cqw, 22px);
 }
 .metrics--primary {
   width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: clamp(12px, 1.6cqw, 24px);
+}
+/* Primary metric cluster grids (#38). The reducer caps the cluster at six
+   (MAX_PRIMARY_METRICS), so these cover every count it can reach. */
+.metrics--primary[data-count="2"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.metrics--primary[data-count="3"] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.metrics--primary[data-count="4"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.metrics--primary[data-count="5"],
+.metrics--primary[data-count="6"] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 .metrics--primary .metric-row {
   isolation: isolate;
@@ -949,6 +970,22 @@ button {
   background: rgba(var(--orange-rgb), 0.55);
   clip-path: polygon(0 0, calc(100% - 34px) 0, 100% 34px, 100% 100%, 28px 100%, 0 calc(100% - 28px));
 }
+.metrics--primary[data-count="2"] .metric-row {
+  min-height: clamp(130px, 20cqh, 200px);
+  padding: clamp(20px, 2.4cqw, 40px);
+}
+.metrics--primary.metrics--cluster:not([data-count="2"]) .metric-row {
+  min-height: clamp(100px, 14cqh, 160px);
+  padding: clamp(16px, 1.8cqw, 32px);
+  clip-path: polygon(0 0, calc(100% - 24px) 0, 100% 24px, 100% 100%, 20px 100%, 0 calc(100% - 20px));
+}
+.metrics--primary.metrics--cluster .metric-row[role="button"] {
+  cursor: zoom-in;
+}
+.metrics--primary.metrics--cluster .metric-row[role="button"]:focus-visible {
+  outline: 1px solid var(--orange);
+  outline-offset: 4px;
+}
 .metrics--primary .metric-row::before {
   content: "";
   position: absolute;
@@ -956,6 +993,9 @@ button {
   inset: 1px;
   background: #000;
   clip-path: polygon(0 0, calc(100% - 33px) 0, 100% 33px, 100% 100%, 27px 100%, 0 calc(100% - 27px));
+}
+.metrics--primary.metrics--cluster:not([data-count="2"]) .metric-row::before {
+  clip-path: polygon(0 0, calc(100% - 23px) 0, 100% 23px, 100% 100%, 19px 100%, 0 calc(100% - 19px));
 }
 .metrics--primary .metric-row::after {
   content: "PRIMARY / METRIC";
@@ -979,6 +1019,12 @@ button {
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.metrics--primary[data-count="2"] .metric-row__value {
+  font-size: clamp(34px, 4.4cqw, 72px);
+}
+.metrics--primary.metrics--cluster:not([data-count="2"]) .metric-row__value {
+  font-size: clamp(26px, 3.2cqw, 52px);
 }
 .content-rail__details {
   min-width: 0;
@@ -1793,6 +1839,29 @@ button {
   }
   .metric-row__value {
     font-size: clamp(14px, 2.7cqw, 20px);
+  }
+
+  /* Primary metric cluster portrait recomposition (#38) */
+  .metrics--primary[data-count="2"],
+  .metrics--primary[data-count="3"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .metrics--primary[data-count="4"],
+  .metrics--primary[data-count="5"],
+  .metrics--primary[data-count="6"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .metrics--primary.metrics--cluster .metric-row {
+    min-height: clamp(76px, 10cqh, 120px);
+    padding: clamp(12px, 2.4cqw, 20px);
+    gap: clamp(6px, 1cqh, 12px);
+  }
+  .metrics--primary.metrics--cluster .metric-row__value {
+    font-size: clamp(20px, 4.4cqw, 32px);
+  }
+  .metrics--primary.metrics--cluster .metric-row::after {
+    right: clamp(14px, 2.4cqw, 24px);
+    top: clamp(10px, 1.4cqh, 16px);
   }
 
   .diagram-object .focusable-content {
