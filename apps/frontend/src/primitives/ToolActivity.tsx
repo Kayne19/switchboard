@@ -7,11 +7,24 @@ import { ACTIVITY_LINGER_MS, ACTIVITY_MINIMUM_MS, useLingeringValue } from '../h
  * from both the live chat output and the durable notes. It updates when a
  * tool starts and finishes, truncates long names and details, and clears
  * itself when there is no recent activity.
+ *
+ * In the rail it sits in its own slot at the foot of the column. With
+ * `reserveSpace` the slot keeps the panel's full height whether a tool is
+ * shown or not, so the surfaces that stretch into the rest of the column
+ * never resize when it comes or goes, and the panel never covers them.
  */
-export function ToolActivity({ activity, placement = 'rail' }: { activity: ActivityState | null; placement?: 'rail' | 'conversation' }) {
+export function ToolActivity({
+  activity,
+  placement = 'rail',
+  reserveSpace = false,
+}: {
+  activity: ActivityState | null;
+  placement?: 'rail' | 'conversation';
+  reserveSpace?: boolean;
+}) {
   const shown = useLingeringValue(activity, ACTIVITY_LINGER_MS, ACTIVITY_MINIMUM_MS);
   const running = shown === activity;
-  return (
+  const panel = (
     <AnimatePresence initial={false}>
       {shown ? (
         <motion.div
@@ -30,7 +43,7 @@ export function ToolActivity({ activity, placement = 'rail' }: { activity: Activ
             <span
               className={`tool-activity__status tech micro tool-activity__status--${running ? 'running' : 'done'}`}
             >
-              {running ? '\u25cf RUNNING' : '\u25a0 DONE'}
+              {running ? '● RUNNING' : '■ DONE'}
             </span>
           </div>
           <div className="tool-activity__tool tech" title={shown.tool}>
@@ -44,5 +57,22 @@ export function ToolActivity({ activity, placement = 'rail' }: { activity: Activ
         </motion.div>
       ) : null}
     </AnimatePresence>
+  );
+  if (placement !== 'rail') return panel;
+  return (
+    <div className="tool-activity-slot">
+      {reserveSpace ? (
+        // The panel's own three lines, unseen, so the reserved height is
+        // exactly the panel's at every geometry.
+        <div className="tool-activity-slot__sizer" aria-hidden="true">
+          <div className="tool-activity__header">
+            <span className="tool-activity__tag tech micro">{' '}</span>
+          </div>
+          <div className="tool-activity__tool tech">{' '}</div>
+          <div className="tool-activity__detail tech micro">{' '}</div>
+        </div>
+      ) : null}
+      {panel}
+    </div>
   );
 }

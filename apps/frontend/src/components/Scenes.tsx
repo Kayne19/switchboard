@@ -163,13 +163,18 @@ interface RailDetailsProps {
 // unmounting it first.
 function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, onOpenHistory }: RailDetailsProps) {
   const liveMessage = liveChatMessage(state);
+  // The response and the note stretch into the column's free space, so while
+  // either is shown the activity slot stays reserved and a tool starting or
+  // clearing never resizes them. Metrics and progress keep their own size at
+  // the top and are not moved by a panel below them.
+  const reserveActivity = liveMessage !== null || note !== null;
   return (
     <div className="content-rail__details">
       {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} variant="rail" /> : null}
       {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
       <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
       <RailProgress progressList={progressList} onFocus={onFocus} />
-      <ToolActivity activity={state.activity} />
+      <ToolActivity activity={state.activity} reserveSpace={reserveActivity} />
     </div>
   );
 }

@@ -107,7 +107,7 @@ test('the shared content rail keeps one semantic surface order', async ({ page }
         if (child.classList.contains('live-chat-card')) return 'chat';
         if (child.classList.contains('rail-note')) return 'note';
         if (child.classList.contains('rail-progress')) return 'progress';
-        if (child.classList.contains('tool-activity')) return 'activity';
+        if (child.classList.contains('tool-activity-slot')) return 'activity';
         return child.className;
       })
     ));
@@ -244,6 +244,9 @@ for (const viewport of viewports) {
 
       const metricsBoxDuring = await page.locator('.content-rail__details .metrics').boundingBox();
       const chatBoxDuring = await page.locator('.content-rail__details .live-chat-card').boundingBox();
+      const activityBox = await page.locator('.content-rail__details .tool-activity').boundingBox();
+      expect(overlap(activityBox!, metricsBoxDuring!), 'activity covers the metrics').toBe(false);
+      expect(overlap(activityBox!, chatBoxDuring!), 'activity covers the live response').toBe(false);
 
       expect(metricsBoxDuring!.x).toBeCloseTo(metricsBoxBefore!.x, 1);
       expect(metricsBoxDuring!.y).toBeCloseTo(metricsBoxBefore!.y, 1);
@@ -279,6 +282,72 @@ for (const viewport of viewports) {
       expect(chatBoxAfter!.y).toBeCloseTo(chatBoxBefore!.y, 1);
       expect(chatBoxAfter!.width).toBeCloseTo(chatBoxBefore!.width, 1);
       expect(chatBoxAfter!.height).toBeCloseTo(chatBoxBefore!.height, 1);
+    } finally {
+      await fixtureServer.stop();
+    }
+  });
+}
+
+
+// A rail with more than fits: the column scrolls, and the activity panel must
+// still take its own place in it rather than land on top of what it holds.
+for (const viewport of viewports) {
+  test(`tool activity never covers a crowded rail at ${viewport.width}x${viewport.height}`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    const fixtureServer = new DisplayFixtureServer({ initialGeneration: testInfo.workerIndex + 80 });
+    const { wsUrl } = await fixtureServer.start();
+
+    try {
+      await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+      await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === 'hello')).toBe(true);
+      fixtureServer.broadcast({
+        type: 'display',
+        action: {
+          op: 'show', id: 'map', type: 'diagram', role: 'primary',
+          data: {
+            mode: 'graph', title: 'SYSTEM MAP',
+            nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+            edges: [{ from: 'a', to: 'b' }],
+          },
+        },
+      });
+      for (const [id, label, value] of [['m1', 'VAL LOSS', '0.18'], ['m2', 'TRAIN LOSS', '0.10'], ['m3', 'GPU', '91%']]) {
+        fixtureServer.broadcast({ type: 'display', action: { op: 'show', id, type: 'metric', role: 'secondary', data: { label, value } } });
+      }
+      fixtureServer.broadcast({
+        type: 'display',
+        action: { op: 'show', id: 'note', type: 'note', role: 'secondary', data: { segments: [{ text: 'The active path is healthy.' }] } },
+      });
+      fixtureServer.broadcast({ type: 'spoken', entry: { role: 'agent', text: 'Monitoring active routes.', id: 'reply-1' } });
+      await expect(page.locator('.content-rail__details .rail-note')).toBeVisible();
+      await expect(page.locator('.content-rail__details .live-chat-card')).toBeVisible();
+
+      const surfaces = ['.metrics', '.live-chat-card', '.rail-note'];
+      const boxes = async () => Promise.all(surfaces.map(async (selector) => (await page.locator(`.content-rail__details ${selector}`).boundingBox())!));
+      // The metrics animate their layout as rows arrive; compare settled boxes.
+      const settledBoxes = async () => {
+        let last = JSON.stringify(await boxes());
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+          await page.waitForTimeout(150);
+          const next = JSON.stringify(await boxes());
+          if (next === last) break;
+          last = next;
+        }
+        return JSON.parse(last) as Box[];
+      };
+      const before = await settledBoxes();
+
+      fixtureServer.broadcast({ type: 'activity', state: 'start', tool: 'route_check', label: 'Checking', detail: 'ping 10.0.0.1' });
+      await expect(page.locator('.content-rail__details .tool-activity')).toBeAttached();
+      await page.waitForTimeout(300);
+
+      const during = await settledBoxes();
+      const activityBox = (await page.locator('.content-rail__details .tool-activity').boundingBox())!;
+      surfaces.forEach((selector, index) => {
+        expect(overlap(activityBox, during[index]), `activity covers ${selector}`).toBe(false);
+        expect(during[index].y, `${selector} moved when activity appeared`).toBeCloseTo(before[index].y, 1);
+        expect(during[index].height, `${selector} resized when activity appeared`).toBeCloseTo(before[index].height, 1);
+      });
     } finally {
       await fixtureServer.stop();
     }
