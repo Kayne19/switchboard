@@ -28,7 +28,11 @@ use tower_http::services::ServeDir;
 
 const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+/// The most metrics the primary cluster holds; `MAX_PRIMARY_METRICS` in
+/// apps/frontend/src/controller/reducer.ts. Keep the two equal.
+pub const MAX_PRIMARY_METRICS: usize = 6;
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SceneObject {
     pub id: String,
     #[serde(rename = "type")]
@@ -36,6 +40,8 @@ pub struct SceneObject {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     pub data: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_claimed_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -73,24 +79,45 @@ impl DisplayProjection {
                 let role = action.get("role").and_then(Value::as_str).map(String::from);
                 let data = action.get("data").cloned().unwrap_or(Value::Null);
 
-                // One object holds the primary role. A show that claims it
-                // takes it from the previous holder, which stays on stage as
-                // secondary -- the same rule as the browser's reducer.
-                if role.as_deref() == Some("primary") {
-                    for object in self.objects.values_mut() {
-                        if object.id != id && object.role.as_deref() == Some("primary") {
-                            object.role = Some("secondary".to_string());
-                        }
-                    }
+                // Primary claimant semantics (#38), the same rule as the
+                // browser's reducer (`withPrimaryClaimedBy`):
+                // A metric claiming primary while metrics hold it joins them in a cluster.
+                // A non-metric claim demotes all primary metrics.
+                // A metric claim while a non-metric holds primary demotes the non-metric.
+                // A metric claim that would grow the cluster past
+                // MAX_PRIMARY_METRICS demotes its earliest claimant.
+                // A primary that changes type claims the role again under its new type.
+                // Removing one metric leaves the rest primary.
+                // Cluster order is stable (claim order).
+                let changes_primary_type = role.is_none()
+                    && self.objects.get(id).is_some_and(|existing| {
+                        existing.role.as_deref() == Some("primary")
+                            && existing.object_type != object_type
+                    });
+                if role.as_deref() == Some("primary") || changes_primary_type {
+                    self.demote_for_primary_claim(id, object_type == "metric");
                 }
 
                 if let Some(existing) = self.objects.get_mut(id) {
                     existing.object_type = object_type.to_string();
-                    if role.is_some() {
+                    let was_primary = existing.role.as_deref() == Some("primary");
+                    if let Some(ref new_role) = role {
+                        if new_role == "primary" {
+                            if !was_primary || existing.primary_claimed_at.is_none() {
+                                existing.primary_claimed_at = Some(sequence);
+                            }
+                        } else {
+                            existing.primary_claimed_at = None;
+                        }
                         existing.role = role;
                     }
                     existing.data = data;
                 } else {
+                    let primary_claimed_at = if role.as_deref() == Some("primary") {
+                        Some(sequence)
+                    } else {
+                        None
+                    };
                     self.objects.insert(
                         id.to_string(),
                         SceneObject {
@@ -98,6 +125,7 @@ impl DisplayProjection {
                             object_type: object_type.to_string(),
                             role,
                             data,
+                            primary_claimed_at,
                         },
                     );
                     self.order.push(id.to_string());
@@ -147,6 +175,55 @@ impl DisplayProjection {
         }
     }
 
+    /// Demotes every primary the claim displaces to secondary: all of them
+    /// for a non-metric claimant; for a metric, only non-metrics, plus the
+    /// earliest cluster members when the cluster would exceed
+    /// `MAX_PRIMARY_METRICS`.
+    fn demote_for_primary_claim(&mut self, claimant: &str, is_metric: bool) {
+        let mut displaced = Vec::new();
+        let mut cluster = Vec::new();
+        for object in self.objects.values() {
+            if object.id == claimant || object.role.as_deref() != Some("primary") {
+                continue;
+            }
+            if is_metric && object.object_type == "metric" {
+                cluster.push(object);
+            } else {
+                displaced.push(object.id.clone());
+            }
+        }
+        cluster.sort_by_key(|object| self.claim_order_key(object));
+        let overflow = cluster.len().saturating_sub(MAX_PRIMARY_METRICS - 1);
+        displaced.extend(cluster[..overflow].iter().map(|object| object.id.clone()));
+        for id in displaced {
+            if let Some(object) = self.objects.get_mut(&id) {
+                object.role = Some("secondary".to_string());
+                object.primary_claimed_at = None;
+            }
+        }
+    }
+
+    fn claim_order_key(&self, object: &SceneObject) -> (u64, usize) {
+        (
+            object.primary_claimed_at.unwrap_or(u64::MAX),
+            self.order
+                .iter()
+                .position(|id| id == &object.id)
+                .unwrap_or(usize::MAX),
+        )
+    }
+
+    /// The primary objects, earliest claim first.
+    fn primaries_in_claim_order(&self) -> Vec<&SceneObject> {
+        let mut primaries: Vec<&SceneObject> = self
+            .objects
+            .values()
+            .filter(|object| object.role.as_deref() == Some("primary"))
+            .collect();
+        primaries.sort_by_key(|object| self.claim_order_key(object));
+        primaries
+    }
+
     pub fn clear(&mut self) {
         self.objects.clear();
         self.order.clear();
@@ -156,18 +233,42 @@ impl DisplayProjection {
 
     pub fn snapshot_actions(&self) -> Vec<Value> {
         let mut actions = Vec::new();
-        for id in &self.order {
-            if let Some(obj) = self.objects.get(id) {
-                let mut map = serde_json::Map::new();
-                map.insert("op".into(), "show".into());
-                map.insert("id".into(), obj.id.clone().into());
-                map.insert("type".into(), obj.object_type.clone().into());
-                if let Some(r) = &obj.role {
-                    map.insert("role".into(), r.clone().into());
-                }
-                map.insert("data".into(), obj.data.clone());
-                actions.push(Value::Object(map));
+        let show = |obj: &SceneObject, role: Option<&str>| {
+            let mut map = serde_json::Map::new();
+            map.insert("op".into(), "show".into());
+            map.insert("id".into(), obj.id.clone().into());
+            map.insert("type".into(), obj.object_type.clone().into());
+            if let Some(r) = role {
+                map.insert("role".into(), r.into());
             }
+            map.insert("data".into(), obj.data.clone());
+            Value::Object(map)
+        };
+
+        // A reconnecting browser rebuilds its stage from these shows, so they
+        // must reproduce two orders: the show order (its `agentOrder`, which
+        // lays out the rail and picks the fallback primary) and the claim
+        // order of the primaries (the metric cluster's order). Every object
+        // is replayed in show order. A primary carries its role there only
+        // while the primaries met so far are also in claim order; the rest
+        // are replayed without a role and then claim it, in claim order.
+        let claim_order = self.primaries_in_claim_order();
+        let mut claimed_inline = 0;
+        for id in &self.order {
+            let Some(obj) = self.objects.get(id) else {
+                continue;
+            };
+            if obj.role.as_deref() != Some("primary") {
+                actions.push(show(obj, obj.role.as_deref()));
+            } else if claim_order.get(claimed_inline).map(|next| &next.id) == Some(id) {
+                claimed_inline += 1;
+                actions.push(show(obj, Some("primary")));
+            } else {
+                actions.push(show(obj, None));
+            }
+        }
+        for obj in &claim_order[claimed_inline..] {
+            actions.push(show(obj, Some("primary")));
         }
         if let Some(focus_id) = &self.focus_id {
             actions.push(json!({"op": "focus", "id": focus_id}));
@@ -192,21 +293,18 @@ impl DisplayProjection {
     // Mirrors the browser's `buildCompositionModel` in
     // apps/frontend/src/app/sceneModel.ts exactly: the reporting object is
     // the focused object if one is set and still on stage, else the
-    // composition primary -- the object with role:"primary" (`apply` leaves
-    // at most one: the latest to claim it), else the first non-ambient
-    // object, else the first object overall. Keep the two in lockstep; see
-    // docs/visual-channel.md.
+    // composition primary -- the earliest claimant among the objects with
+    // role:"primary" (`apply` leaves either one non-metric or a cluster of
+    // metrics holding it), else the first non-ambient object, else the first
+    // object overall. Keep the two in lockstep; see docs/visual-channel.md.
     fn composition_primary(&self) -> Option<&SceneObject> {
+        if let Some(first) = self.primaries_in_claim_order().first() {
+            return Some(first);
+        }
         self.order
             .iter()
             .filter_map(|id| self.objects.get(id))
-            .find(|object| object.role.as_deref() == Some("primary"))
-            .or_else(|| {
-                self.order
-                    .iter()
-                    .filter_map(|id| self.objects.get(id))
-                    .find(|object| object.role.as_deref() != Some("ambient"))
-            })
+            .find(|object| object.role.as_deref() != Some("ambient"))
             .or_else(|| self.order.iter().find_map(|id| self.objects.get(id)))
     }
 
