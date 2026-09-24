@@ -44,7 +44,7 @@ const progressAction: ControllerAction = {
   id: 'train-progress',
   type: 'progress',
   role: 'secondary',
-  data: { label: 'Epoch', value: 0.75, text: '30/40' } as ProgressData,
+  data: { label: 'Epoch', value: 75, text: '30/40' } as ProgressData,
 };
 
 const diagramAction: ControllerAction = {

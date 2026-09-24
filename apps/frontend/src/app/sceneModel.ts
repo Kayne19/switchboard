@@ -35,6 +35,10 @@ export interface CompositionModel {
   visualKind: AgentObjectType | null;
 }
 
+function messageObject(object: SceneObject | undefined): SceneObject<MessageData> | null {
+  return object?.type === 'message' ? (object as SceneObject<MessageData>) : null;
+}
+
 export function buildCompositionModel(state: ControllerState): CompositionModel {
   const allAgentObjects = state.agentOrder
     .map((id) => state.agentObjects[id])
@@ -84,11 +88,12 @@ export function buildCompositionModel(state: ControllerState): CompositionModel 
     .map((id) => state.runtimeObjects[id])
     .filter((obj): obj is SceneObject => Boolean(obj));
 
+  // `state.objects` merges agent objects, and an agent may give any object
+  // the id `message`: the fallback is a conversation only when it holds one.
   const runtimeConv =
-    (state.runtimeObjects[RUNTIME_CONVERSATION_ID] as SceneObject<MessageData> | undefined) ??
-    (state.runtimeObjects['conversation'] as SceneObject<MessageData> | undefined) ??
-    (state.objects['message'] as SceneObject<MessageData> | undefined) ??
-    null;
+    messageObject(state.runtimeObjects[RUNTIME_CONVERSATION_ID]) ??
+    messageObject(state.runtimeObjects['conversation']) ??
+    messageObject(state.objects['message']);
 
   let visualKind: AgentObjectType | null = null;
   if (state.focusId && state.agentObjects[state.focusId]) {
