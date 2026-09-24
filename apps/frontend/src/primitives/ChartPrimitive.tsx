@@ -48,16 +48,26 @@ export function ChartPrimitive({
   const pointerSeries = hasAnnotation
     ? (annotation.series ? data.series.find((series) => series.name === annotation.series) ?? data.series[0] : data.series[0])
     : undefined;
-  const pointerIndex = hasAnnotation && pointerSeries
-    ? Math.round((annotation.x! / xMax) * Math.max(0, pointerSeries.values.length - 1))
-    : 0;
-  const pointerValue = pointerSeries?.values[Math.min((pointerSeries?.values.length ?? 1) - 1, Math.max(0, pointerIndex))];
-  const pointerX = hasAnnotation ? xAtEpoch(annotation.x!) : 0;
-  const pointerY = pointerValue != null ? yAt(pointerValue) : undefined;
+  // The pointer lands on the drawn line: x is held inside the chart's domain
+  // (an out-of-range x points at the nearest end rather than off the plot),
+  // and the value is interpolated between the samples either side of it, the
+  // same straight segment the series path draws there.
+  const pointerEpoch = hasAnnotation ? Math.min(xMax, Math.max(0, annotation.x!)) : 0;
+  let pointerValue: number | undefined;
+  if (pointerSeries && pointerSeries.values.length > 0 && xMax > 0) {
+    const last = pointerSeries.values.length - 1;
+    const position = (pointerEpoch / xMax) * last;
+    const lower = Math.floor(position);
+    const upper = Math.min(last, lower + 1);
+    pointerValue = pointerSeries.values[lower] + (pointerSeries.values[upper] - pointerSeries.values[lower]) * (position - lower);
+  }
+  const pointerX = xAtEpoch(pointerEpoch);
+  const pointerY = pointerValue != null ? Math.min(height - pad.bottom, Math.max(pad.top, yAt(pointerValue))) : undefined;
   // The annotation's leader starts at the note card's measured edge (viewBox
   // units, supplied by the scene) so the stem always leaves the card and
-  // reaches the point. Until the card is measured, it starts at the plot
-  // top, never at the frame's outer border.
+  // reaches the point; it is drawn outside the plot clip, so a card that
+  // sits above the plot still meets its leader. Until the card is measured,
+  // it starts at the plot top, never at the frame's outer border.
   const stemStartX = annotation?.cardEdge?.x ?? pointerX;
   const stemStartY = annotation?.cardEdge?.y ?? pad.top;
   // The pointer takes over the marker's point only when it lands on that
@@ -84,30 +94,30 @@ export function ChartPrimitive({
             {annotationOnMarker ? null : <circle className="chart-marker__point" cx={xAtEpoch(data.marker.x)} cy={yAt(markerValue)} r={focused?7:5} fill="#000" stroke="var(--orange)" strokeWidth="2"/>}
           </motion.g>
         ) : null}
-        {hasAnnotation && pointerY != null ? (
-          <motion.g className="chart-pointer" initial={reduced ? undefined : { opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}>
-            <line
-              className="chart-pointer__stem"
-              x1={stemStartX}
-              y1={stemStartY}
-              x2={pointerX}
-              y2={pointerY}
-              stroke="rgba(var(--orange-rgb), 0.75)"
-              strokeWidth="1.5"
-              vectorEffect="non-scaling-stroke"
-            />
-            <circle
-              className="chart-pointer__marker"
-              cx={pointerX}
-              cy={pointerY}
-              r={focused ? 7 : 5}
-              fill="#000"
-              stroke="var(--orange)"
-              strokeWidth="2"
-            />
-          </motion.g>
-        ) : null}
       </g>
+      {hasAnnotation && pointerY != null ? (
+        <motion.g className="chart-pointer" initial={reduced ? undefined : { opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}>
+          <line
+            className="chart-pointer__stem"
+            x1={stemStartX}
+            y1={stemStartY}
+            x2={pointerX}
+            y2={pointerY}
+            stroke="rgba(var(--orange-rgb), 0.75)"
+            strokeWidth="1.5"
+            vectorEffect="non-scaling-stroke"
+          />
+          <circle
+            className="chart-pointer__marker"
+            cx={pointerX}
+            cy={pointerY}
+            r={focused ? 7 : 5}
+            fill="#000"
+            stroke="var(--orange)"
+            strokeWidth="2"
+          />
+        </motion.g>
+      ) : null}
       <text className="chart-axis-label" x={width/2} y={height-2} textAnchor="middle">{data.xLabel ?? 'X'}</text>
       <text className="chart-axis-label" transform={`translate(17 ${height/2}) rotate(-90)`} textAnchor="middle">{data.yLabel ?? 'Y'}</text>
       <g className="chart-legend" transform={`translate(${pad.left+8} ${pad.top+12})`}>{data.series.map((series,index)=><g transform={`translate(${index*178} 0)`} key={series.name}><line className="chart-legend__key" x1="0" y1="0" x2="24" y2="0" stroke={chartSeriesColor(series, index)} strokeWidth="2"/><text x="34" y="4">{series.name}</text></g>)}</g>

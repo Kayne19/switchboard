@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
+import { useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import type {
   ChartData,
   CodeData,
@@ -99,6 +99,9 @@ function chartAnnotationStyle(note: NoteData | null, chart: SceneObject<ChartDat
   if (note?.anchor?.target !== chart.id || note.anchor.x === undefined) return undefined;
   const maxCount = Math.max(2, ...chart.data.series.map((series) => series.values.length));
   const xMax = chart.data.xMax ?? maxCount - 1;
+  // A chart with no positive x domain has no point to reach: the note is
+  // placed as an unanchored one rather than at a NaN position.
+  if (!(xMax > 0)) return undefined;
   const xSvg = 74 + (note.anchor.x / xMax) * (CHART_VIEW_WIDTH - 74 - 28);
   const ratio = Math.min(0.79, Math.max(0.21, xSvg / CHART_VIEW_WIDTH));
   return { '--annotation-anchor-x': `${ratio * 100}%` } as CSSProperties;
@@ -109,17 +112,20 @@ function chartAnnotationStyle(note: NoteData | null, chart: SceneObject<ChartDat
 // the card's on-screen position relative to the chart's rendered svg — the
 // same letterboxed geometry the renderer applies — and reports the card's
 // bottom-centre in viewBox units, so the leader leaves the card wherever the
-// CSS finally placed it.
+// CSS finally placed it. The observers report size changes only, so
+// `layoutKey` names what moves the card without resizing it — a new anchor
+// position or a different chart — and a change to it measures again.
 function useChartAnnotationCardEdge(
   cardRef: RefObject<HTMLDivElement | null>,
   resolveSvg: () => SVGSVGElement | null,
   present: boolean,
+  layoutKey: string,
 ): { x: number; y: number } | undefined {
   const [edge, setEdge] = useState<{ x: number; y: number } | undefined>(undefined);
   const resolveRef = useRef(resolveSvg);
   resolveRef.current = resolveSvg;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!present) {
       setEdge(undefined);
       return;
@@ -152,7 +158,7 @@ function useChartAnnotationCardEdge(
     const svg = resolveRef.current();
     if (svg) observer.observe(svg);
     return () => observer.disconnect();
-  }, [cardRef, present]);
+  }, [cardRef, present, layoutKey]);
 
   return edge;
 }
@@ -321,17 +327,23 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
   const metrics = objectsOfType<MetricData>(state, 'metric');
   const [progress, ...railProgress] = objectsOfType<ProgressData>(state, 'progress');
   const primary = charts.find((chart) => chart.role === 'primary') ?? charts[0];
-  if (!primary) return <IdleScene state={state} onToggleListening={onToggleListening} />;
-  const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), primary.id);
-  const note = annotationForScene(state, noteObject, liveChatMessage(state));
-  const anchoredNote = note?.anchor?.target === primary.id;
+  const noteObject = primary ? noteForTarget(objectsOfType<NoteData>(state, 'note'), primary.id) : undefined;
+  const note = primary ? annotationForScene(state, noteObject, liveChatMessage(state)) : null;
+  // Only a note that names a point on the primary chart is placed over that
+  // point with a leader. A note anchored to the chart without an x is
+  // attached to it without one, and keeps the unanchored placement.
+  const noteStyle = primary ? chartAnnotationStyle(note, primary) : undefined;
   const noteRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLDivElement>(null);
   const cardEdge = useChartAnnotationCardEdge(
     noteRef,
-    () => mainRef.current?.querySelector<SVGSVGElement>(`.chart-object[data-chart-id="${primary.id}"] svg`) ?? null,
-    Boolean(anchoredNote),
+    // The chart's own svg, not the first one in the panel: the panel's
+    // TechFrame is an svg too, drawn over the whole panel with its own box.
+    () => mainRef.current?.querySelector<SVGSVGElement>(`.chart-object[data-chart-id="${primary?.id}"] .chart-primitive > svg`) ?? null,
+    noteStyle !== undefined,
+    `${primary?.id}|${JSON.stringify(noteStyle ?? null)}`,
   );
+  if (!primary) return <IdleScene state={state} onToggleListening={onToggleListening} />;
 
   return (
     <motion.section className="scene scene--content scene--training" data-scene="training" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -367,8 +379,8 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
               <motion.div
                 key="training-note"
                 ref={noteRef}
-                className={`training-note${note.anchor?.target === primary.id ? ' training-note--anchored' : ''}`}
-                style={chartAnnotationStyle(note, primary)}
+                className={`training-note${noteStyle ? ' training-note--anchored' : ''}`}
+                style={noteStyle}
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
@@ -405,6 +417,7 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
 }
 
 export function ArchitectureScene({ state, onToggleListening, onFocus, onOpenHistory }: SceneProps) {
+  const [calloutPlaced, setCalloutPlaced] = useState(false);
   const primaryObjectValue = primaryObject(state);
   if (!primaryObjectValue) return <IdleScene state={state} onToggleListening={onToggleListening} />;
   const diagram = cast.diagram(primaryObjectValue);
@@ -412,7 +425,6 @@ export function ArchitectureScene({ state, onToggleListening, onFocus, onOpenHis
   const note = annotationForScene(state, noteObject, liveChatMessage(state));
   const metrics = objectsOfType<MetricData>(state, 'metric');
   const progressList = objectsOfType<ProgressData>(state, 'progress');
-  const [calloutPlaced, setCalloutPlaced] = useState(false);
 
   const railNote = calloutPlaced ? null : note;
 
