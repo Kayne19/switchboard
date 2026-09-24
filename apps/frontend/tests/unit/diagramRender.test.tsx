@@ -183,6 +183,30 @@ describe('anchored note fit and ownership', () => {
     expect(callout?.textContent).toContain('directory');
   });
 
+  it('keeps a note in the rail when its tag is too wide for the callout box', () => {
+    renderAnchored({
+      tag: 'CURRENT EXPLANATION / ROUTING / PROJECT SESSION / HEADLESS PI',
+      anchor: { target: 'test-diagram', node: 'route' },
+      segments: [{ text: 'Context moves here.' }],
+    });
+
+    // The tag is one unwrapped line: drawn in the 240-unit box it would run
+    // across the diagram, so the note falls back to the rail instead.
+    expect(host.querySelector('.diagram-callout')).toBeNull();
+    expect(host.querySelector('.diagram-node__marker')).not.toBeNull();
+  });
+
+  it('keeps a note in the rail when one word is wider than a callout line', () => {
+    renderAnchored({
+      tag: 'OBSERVATION',
+      anchor: { target: 'test-diagram', node: 'route' },
+      segments: [{ text: 'Config lives at /etc/switchboard/projects/registry.d/override.json now.' }],
+    });
+
+    expect(host.querySelector('.diagram-callout')).toBeNull();
+    expect(host.querySelector('.diagram-node__marker')).not.toBeNull();
+  });
+
   it('does not capture a note whose target is another object', () => {
     renderAnchored({
       tag: 'OBSERVATION',

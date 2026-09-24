@@ -16,7 +16,12 @@ const colors: Record<Semantic, string> = {
 const pathThrough = (points: Point[]) =>
   points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
 
-function wrapText(text: string, maxCharsPerLine = 32): string[] {
+// The callout box is 240 units wide with 14 units of inset each side: about
+// 32 characters of its 11-unit body face, or 34 of its 9-unit tracked tag.
+const CALLOUT_LINE_CHARS = 32;
+const CALLOUT_TAG_CHARS = 34;
+
+function wrapText(text: string, maxCharsPerLine = CALLOUT_LINE_CHARS): string[] {
   const words = text.split(/\s+/);
   const lines: string[] = [];
   let current = '';
@@ -68,14 +73,19 @@ export function DiagramPrimitive({
     [data, portrait, hasAnchoredNode, anchoredNodeId],
   );
   const { nodeWidth, nodeHeight } = layout;
-  // The callout box fits three wrapped lines. A longer note is not
-  // truncated: it is treated as not fitting, so the note stays in the rail
-  // with the matching badge and nothing is silently lost.
+  // The callout box fits three wrapped lines and a one-line tag. A longer
+  // note — or a word or tag too wide for the box — is not truncated or
+  // spilled over the diagram: it is treated as not fitting, so the note
+  // stays in the rail with the matching badge and nothing is silently lost.
   const calloutLines =
     hasAnchoredNode && note
-      ? wrapText(note.segments.map((segment) => segment.text).join(''), 32)
+      ? wrapText(note.segments.map((segment) => segment.text).join(''), CALLOUT_LINE_CHARS)
       : [];
-  const calloutFits = calloutLines.length > 0 && calloutLines.length <= 3;
+  const calloutFits =
+    calloutLines.length > 0 &&
+    calloutLines.length <= 3 &&
+    calloutLines.every((line) => line.length <= CALLOUT_LINE_CHARS) &&
+    (note?.tag?.length ?? 0) <= CALLOUT_TAG_CHARS;
   const calloutPlaced = Boolean(!portrait && layout.callout && calloutFits);
 
   useEffect(() => {
@@ -101,6 +111,9 @@ export function DiagramPrimitive({
         aria-label={data.title ?? 'System diagram'}
       >
         <defs>
+          {/* The region is the whole drawing, not each edge's bounding box: a
+              straight edge has a zero-height box, and a filter region derived
+              from it would erase the edge entirely. */}
           <filter id="active-edge-glow" filterUnits="userSpaceOnUse" x="0" y="0" width="100%" height="100%">
             <feGaussianBlur stdDeviation="2.2" result="blur" />
             <feMerge>
@@ -222,6 +235,8 @@ export function DiagramPrimitive({
             </g>
           </g>
         ) : null}
+        {/* Labels paint last, each on a backing of its own, so no node or
+            crossing edge can cover the words on an edge. */}
         <g className="diagram-edge-labels">
           {edges.map((edge) =>
             edge.label ? (

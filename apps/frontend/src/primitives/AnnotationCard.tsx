@@ -29,9 +29,12 @@ export function AnnotationCard({ data, onFocus, onOpenHistory }: AnnotationCardP
             {data.anchor.node ? ` / NODE ${data.anchor.node}` : ''}
             {data.anchor.x !== undefined ? ` / X ${data.anchor.x}` : ''}
             {data.anchor.series ? ` / ${data.anchor.series}` : ''}
-            {data.anchor.node ? <span className="annotation-card__node-badge tech micro">NOTE</span> : null}
           </span>
         ) : null}
+        {/* The badge that matches the node's own marker sits beside the
+            anchor text, not inside it: the anchor text ellipsizes in a
+            narrow rail and would clip the badge with it. */}
+        {data.anchor?.node ? <span className="annotation-card__node-badge tech micro">NOTE</span> : null}
         {onOpenHistory ? (
           <button type="button" className="annotation-card__history tech micro" onClick={onOpenHistory} aria-label="Open conversation history">
             HISTORY
