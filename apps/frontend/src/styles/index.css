@@ -1138,14 +1138,14 @@ button {
 .content-rail__details > .metrics {
   flex: none;
 }
-/* The rail's metrics are bracketed rather than titled: the orange rule
-   stands in for the first row's divider and a hairline closes the block, and
-   extra space sets the block apart from the response below it. Their labels
-   and values carry the meaning, so no header line is spent on them. */
+/* The rail's metrics are headed by a rule rather than a title: the orange
+   rule stands in for the first row's divider, the rows are divided from one
+   another only, and extra space sets the block apart from the response below
+   it. Their labels and values carry the meaning, so no header line is spent
+   on them. */
 .metrics--rail {
   min-width: 0;
   border-top: 1px solid rgba(var(--orange-rgb), 0.48);
-  border-bottom: 1px solid rgba(232, 230, 223, 0.13);
   margin-bottom: clamp(4px, 1cqh, 12px);
 }
 .metrics--rail > .metric-row:first-child {
