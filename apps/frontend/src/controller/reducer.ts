@@ -3,6 +3,8 @@ import type {
   ControllerState,
   SceneObject,
   SpeechState,
+  ToolCount,
+  ToolRunState,
   WorkspaceState,
 } from './types';
 import { RUNTIME_ID_PREFIX } from './types';
@@ -55,6 +57,21 @@ export function createInitialWorkspaceState(): WorkspaceState {
   };
 }
 
+// How soon after a burst's last call ended a new call still joins it: the
+// next of a run of calls the agent makes back to back arrives within a few
+// milliseconds, the first call of its next step seconds later.
+export const TOOL_BURST_WINDOW_MS = 300;
+
+export function createInitialToolRun(): ToolRunState {
+  return { running: {}, burst: [], endedAt: null };
+}
+
+function countCall(burst: ToolCount[], tool: string): ToolCount[] {
+  return burst.some((entry) => entry.tool === tool)
+    ? burst.map((entry) => (entry.tool === tool ? { tool, count: entry.count + 1 } : entry))
+    : [...burst, { tool, count: 1 }];
+}
+
 export function createInitialState(): ControllerState {
   return {
     agentObjects: {},
@@ -68,6 +85,7 @@ export function createInitialState(): ControllerState {
     speech: null,
     workspace: createInitialWorkspaceState(),
     activity: null,
+    toolRun: createInitialToolRun(),
     listening: false,
     focusId: null,
     revision: 0,
@@ -152,6 +170,7 @@ function syncCombinedState(
     speech,
     workspace: updatedWorkspace,
     activity: state.activity,
+    toolRun: state.toolRun,
     focusId,
     listening,
     revision,
@@ -346,9 +365,38 @@ export function controllerReducer(state: ControllerState, action: ControllerActi
       );
     }
     case 'runtime_activity': {
+      const run = state.toolRun;
+      if (action.activity === null) {
+        if (state.activity === null && Object.keys(run.running).length === 0) return state;
+        // Everything settled: whatever was still counted as running is not.
+        const endedAt = Object.keys(run.running).length > 0 ? (action.at ?? null) : run.endedAt;
+        return { ...state, activity: null, toolRun: { running: {}, burst: run.burst, endedAt }, revision };
+      }
+      const tool = action.activity.tool;
+      const joins =
+        Object.keys(run.running).length > 0 ||
+        (run.endedAt !== null && action.at !== undefined && action.at - run.endedAt <= TOOL_BURST_WINDOW_MS);
+      const burst = joins ? countCall(run.burst, tool) : [{ tool, count: 1 }];
+      const running = { ...(joins ? run.running : {}), [tool]: (joins ? run.running[tool] ?? 0 : 0) + 1 };
       // The revision only grows, so it names each call apart from the last.
-      const activity = action.activity === null ? null : { ...action.activity, call: revision };
-      return { ...state, activity, revision };
+      const activity = { ...action.activity, call: revision, burst };
+      return { ...state, activity, toolRun: { running, burst, endedAt: null }, revision };
+    }
+    case 'runtime_activity_end': {
+      const run = state.toolRun;
+      const count = run.running[action.tool] ?? 0;
+      // An end for no call of that tool we know of retires nothing.
+      if (count === 0) return state;
+      const running = { ...run.running };
+      if (count === 1) delete running[action.tool];
+      else running[action.tool] = count - 1;
+      const settled = Object.keys(running).length === 0;
+      return {
+        ...state,
+        activity: settled ? null : state.activity,
+        toolRun: { running, burst: run.burst, endedAt: settled ? (action.at ?? null) : null },
+        revision,
+      };
     }
     case 'runtime_reset': {
       // Runtime reset removes runtime state, activity included; agent state is preserved
@@ -365,7 +413,7 @@ export function controllerReducer(state: ControllerState, action: ControllerActi
         state.listening,
         revision,
       );
-      return { ...reset, activity: null };
+      return { ...reset, activity: null, toolRun: createInitialToolRun() };
     }
     case 'epoch_reset': {
       // A new epoch is a new leg. What the old leg's agent put on screen,
@@ -388,7 +436,7 @@ export function controllerReducer(state: ControllerState, action: ControllerActi
         state.listening,
         revision,
       );
-      return { ...reset, activity: null };
+      return { ...reset, activity: null, toolRun: createInitialToolRun() };
     }
     case 'set_view': {
       if (state.workspace.callerPinned) {

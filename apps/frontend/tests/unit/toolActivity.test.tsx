@@ -5,7 +5,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActivityState } from '../../src/controller/types';
-import { ToolActivity } from '../../src/primitives/ToolActivity';
+import { activitySummary, ToolActivity } from '../../src/primitives/ToolActivity';
 
 let host: HTMLDivElement;
 let root: Root;
@@ -74,5 +74,44 @@ describe('tool activity calls', () => {
     expect(callLine()?.children).toHaveLength(2);
     show(read(2));
     expect(slot.querySelector('.tool-activity-slot__sizer')).toBe(sizer);
+  });
+});
+
+// #50: calls made together arrive faster than a frame, so the panel counts
+// them rather than naming only the last.
+describe('tool call bursts', () => {
+  const burst = (tool: string, detail: string, counts: Array<[string, number]>): ActivityState => ({
+    label: 'switchboard',
+    tool,
+    detail,
+    call: 9,
+    burst: counts.map(([name, count]) => ({ tool: name, count })),
+  });
+
+  it('names a lone call by its tool and detail', () => {
+    expect(activitySummary(read(1))).toEqual({ title: 'read', detail: 'apps/backend/src/api.rs', count: 1 });
+  });
+
+  it('counts a burst of one tool by what it worked on, keeping the latest detail', () => {
+    show(burst('read', 'src/file-19.ts', [['read', 20]]));
+    expect(host.querySelector('.tool-activity__call .tool-activity__tool')?.textContent).toBe('read / 20 files');
+    expect(host.querySelector('.tool-activity__call .tool-activity__detail')?.textContent).toBe('src/file-19.ts');
+    expect(panel()?.getAttribute('data-count')).toBe('20');
+    expect(activitySummary(burst('grep', 'TODO', [['grep', 4]])).title).toBe('grep / 4 searches');
+    expect(activitySummary(burst('route_check', '', [['route_check', 3]])).title).toBe('route_check / 3 calls');
+  });
+
+  it('counts every call of a mixed burst and lists its tools, the busiest first', () => {
+    show(burst('grep', 'TODO', [['grep', 2], ['read', 20]]));
+    expect(host.querySelector('.tool-activity__call .tool-activity__tool')?.textContent).toBe('22 tool calls');
+    expect(host.querySelector('.tool-activity__call .tool-activity__detail')?.textContent).toBe('read 20 / grep 2');
+  });
+
+  it('says the finished burst was tools, not one tool', () => {
+    show(burst('read', 'src/file-19.ts', [['read', 20]]));
+    show(null);
+    act(() => vi.advanceTimersByTime(200));
+    expect(panel()?.textContent).toContain('LAST TOOLS USED');
+    expect(host.querySelector('.tool-activity__call .tool-activity__tool')?.textContent).toBe('read / 20 files');
   });
 });

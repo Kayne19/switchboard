@@ -767,12 +767,74 @@ test('every call of one tool registers on the activity panel (#27)', async ({ pa
       seen.push(call!);
       fixtureServer.broadcast({ type: 'activity', state: 'end', tool: 'read' });
       await expect(panel).toContainText('LAST TOOL USED');
+      // Steps apart, as an agent's separate steps are: calls back to back
+      // within the burst window are counted as one burst instead (#50).
+      await page.waitForTimeout(400);
     }
     // Four calls of the same tool with the same detail are four calls on the
     // panel, each with a line of its own.
     expect(new Set(seen).size).toBe(4);
     await expect(panel.locator('.tool-activity__call')).toHaveCount(1);
     await expect(panel.locator('.tool-activity__tool')).toHaveText('read');
+  } finally {
+    await fixtureServer.stop();
+  }
+});
+
+
+// #50: a burst of parallel calls arrives faster than a frame; the panel
+// counts it instead of naming only the last call.
+test('a burst of tool calls reads as its count on the activity panel', async ({ page }) => {
+  const fixtureServer = new DisplayFixtureServer({ initialGeneration: 92 });
+  const { wsUrl } = await fixtureServer.start();
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+    await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === 'hello')).toBe(true);
+    fixtureServer.broadcast({
+      type: 'display',
+      action: {
+        op: 'show', id: 'map', type: 'diagram', role: 'primary',
+        data: {
+          mode: 'graph', title: 'SYSTEM MAP',
+          nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+          edges: [{ from: 'a', to: 'b' }],
+        },
+      },
+    });
+
+    const panel = page.locator('.content-rail__details [data-testid="tool-activity"]');
+    const tool = panel.locator('.tool-activity__call .tool-activity__tool');
+    const detail = panel.locator('.tool-activity__call .tool-activity__detail');
+    for (let n = 0; n < 20; n += 1) {
+      fixtureServer.broadcast({ type: 'activity', state: 'start', tool: 'read', label: 'Reading', detail: `src/file-${n}.ts` });
+    }
+    await expect(tool).toHaveText('read / 20 files');
+    await expect(detail).toHaveText('src/file-19.ts');
+    await expect(panel).toContainText('\u25cf RUNNING');
+    await expect(page.locator('.damocles-presence__caption')).toContainText('WORKING / read / 20 files');
+
+    // Nineteen done, one still running: the panel stays up.
+    for (let n = 0; n < 19; n += 1) fixtureServer.broadcast({ type: 'activity', state: 'end', tool: 'read' });
+    fixtureServer.broadcast({ type: 'activity', state: 'start', tool: 'grep', label: 'Searching', detail: 'TODO' });
+    fixtureServer.broadcast({ type: 'activity', state: 'start', tool: 'grep', label: 'Searching', detail: 'FIXME' });
+    await expect(tool).toHaveText('22 tool calls');
+    await expect(detail).toHaveText('read 20 / grep 2');
+    await expect(panel).toContainText('\u25cf RUNNING');
+
+    fixtureServer.broadcast({ type: 'activity', state: 'end', tool: 'read' });
+    fixtureServer.broadcast({ type: 'activity', state: 'end', tool: 'grep' });
+    fixtureServer.broadcast({ type: 'activity', state: 'end', tool: 'grep' });
+    await expect(panel).toContainText('LAST TOOLS USED');
+    await expect(panel).toContainText('\u25a0 DONE');
+    await expect(tool).toHaveText('22 tool calls');
+
+    // The agent's next step, seconds later, is a call of its own.
+    await page.waitForTimeout(400);
+    fixtureServer.broadcast({ type: 'activity', state: 'start', tool: 'read', label: 'Reading', detail: 'README.md' });
+    await expect(tool).toHaveText('read');
+    await expect(detail).toHaveText('README.md');
   } finally {
     await fixtureServer.stop();
   }
