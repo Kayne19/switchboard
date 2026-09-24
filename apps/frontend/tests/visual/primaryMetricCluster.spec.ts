@@ -168,4 +168,43 @@ test.describe('Primary metric cluster layout and behavior (#38)', () => {
     await expect(focusLayer.locator('.metric-row__label')).toHaveText('MEM');
     await expect(focusLayer.locator('.metric-row__value')).toHaveText('60%');
   });
+
+  for (const geometry of [
+    { name: 'portrait-phone', width: 390, height: 844 },
+    { name: 'landscape-phone', width: 844, height: 390 },
+    { name: 'small-landscape', width: 1024, height: 600 },
+  ]) {
+    test(`a claim past the cluster cap never spills the cluster out of the main column (${geometry.name})`, async ({ page }) => {
+      await page.setViewportSize({ width: geometry.width, height: geometry.height });
+      await page.goto('/?scene=architecture&chrome=0');
+      await page.waitForSelector('[data-scene]');
+
+      await page.evaluate(() => {
+        const dispatch = window.SwitchboardController?.dispatch;
+        if (!dispatch) throw new Error('controller unavailable');
+        dispatch({ op: 'clear' });
+        for (let n = 0; n < 7; n += 1) {
+          dispatch({
+            op: 'show', id: `m${n}`, type: 'metric', role: 'primary',
+            data: { label: `METRIC ${n}`, value: `${n * 7}%` },
+          });
+        }
+      });
+
+      const mainRows = page.locator('.composed-primary-object--cluster .metric-row');
+      await expect(mainRows).toHaveCount(6);
+      // The earliest claim gave way and moved to the rail.
+      const railMetrics = page.locator('.content-rail__details .metrics .metric-row');
+      await expect(railMetrics).toHaveCount(1);
+      await expect(railMetrics.locator('.metric-row__label')).toHaveText('METRIC 0');
+
+      // Rows outside the main column are clipped: count them once layout settles.
+      await expect.poll(() => page.evaluate(() => {
+        const main = document.querySelector('.content-main')!.getBoundingClientRect();
+        return [...document.querySelectorAll('.composed-primary-object--cluster .metric-row')]
+          .map((row) => row.getBoundingClientRect())
+          .filter((row) => row.bottom > main.bottom + 0.5 || row.right > main.right + 0.5).length;
+      })).toBe(0);
+    });
+  }
 });

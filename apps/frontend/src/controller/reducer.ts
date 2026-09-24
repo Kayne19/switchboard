@@ -74,12 +74,21 @@ export function createInitialState(): ControllerState {
   };
 }
 
+// The most metrics the primary cluster holds. The cluster grid has a designed
+// layout for up to this many at every stage geometry; one more would spill
+// out of the main column and be clipped.
+export const MAX_PRIMARY_METRICS = 6;
+
 // Primary claimant semantics (#38):
 // A metric claiming primary while metrics hold it joins them in a cluster.
 // A non-metric claim demotes all primary metrics.
 // A metric claim while a non-metric holds primary demotes the non-metric.
+// A metric claim that would grow the cluster past MAX_PRIMARY_METRICS demotes
+// its earliest claimant, so the latest claim always reaches the viewport.
 // Removing one metric leaves the rest primary.
 // Cluster order is stable (claim order).
+// The backend's DisplayProjection applies the same rule, so /view and this
+// page agree on which objects are primary.
 function withPrimaryClaimedBy(
   objects: Record<string, SceneObject>,
   claimantId: string,
@@ -88,12 +97,19 @@ function withPrimaryClaimedBy(
   if (!claimant) return objects;
   const isMetricClaim = claimant.type === 'metric';
   const result = { ...objects };
+  const clusterMates: SceneObject[] = [];
   for (const [id, object] of Object.entries(objects)) {
     if (id !== claimantId && object.role === 'primary') {
       if (!isMetricClaim || object.type !== 'metric') {
         result[id] = { ...object, role: 'secondary', primaryClaimedAt: undefined };
+      } else {
+        clusterMates.push(object);
       }
     }
+  }
+  clusterMates.sort((a, b) => (a.primaryClaimedAt ?? 0) - (b.primaryClaimedAt ?? 0));
+  for (const evicted of clusterMates.slice(0, Math.max(0, clusterMates.length - (MAX_PRIMARY_METRICS - 1)))) {
+    result[evicted.id] = { ...evicted, role: 'secondary', primaryClaimedAt: undefined };
   }
   return result;
 }
@@ -178,9 +194,13 @@ export function controllerReducer(state: ControllerState, action: ControllerActi
         );
       } else {
         const existing = state.agentObjects[action.id];
-        const isClaimingPrimary = action.role === 'primary';
         const wasPrimary = existing?.role === 'primary';
         const role = action.role ?? existing?.role;
+        // A primary that changes type claims the role again under its new
+        // type, so a metric that becomes a chart cannot share the viewport
+        // with the metric cluster it left.
+        const isClaimingPrimary = action.role === 'primary'
+          || (role === 'primary' && existing !== undefined && existing.type !== action.type);
         const primaryClaimedAt = role === 'primary'
           ? (wasPrimary ? existing?.primaryClaimedAt ?? revision : revision)
           : undefined;

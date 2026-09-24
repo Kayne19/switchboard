@@ -926,7 +926,8 @@ button {
   grid-template-columns: minmax(0, 1fr);
   gap: clamp(12px, 1.6cqw, 24px);
 }
-/* Primary metric cluster grids (#38) */
+/* Primary metric cluster grids (#38). The reducer caps the cluster at six
+   (MAX_PRIMARY_METRICS), so these cover every count it can reach. */
 .metrics--primary[data-count="2"] {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -939,9 +940,6 @@ button {
 .metrics--primary[data-count="5"],
 .metrics--primary[data-count="6"] {
   grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-.metrics--primary.metrics--cluster:not([data-count="1"]):not([data-count="2"]):not([data-count="3"]):not([data-count="4"]):not([data-count="5"]):not([data-count="6"]) {
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, clamp(200px, 22cqw, 360px)), 1fr));
 }
 .metrics--primary .metric-row {
   isolation: isolate;

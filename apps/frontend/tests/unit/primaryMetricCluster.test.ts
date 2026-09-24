@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildCompositionModel, deriveScreenState, primaryObject, sceneKind } from '../../src/app/sceneModel';
-import { controllerReducer, createInitialState } from '../../src/controller/reducer';
+import { MAX_PRIMARY_METRICS, controllerReducer, createInitialState } from '../../src/controller/reducer';
 import type { ControllerAction, ControllerState, MetricData } from '../../src/controller/types';
 
 function reduceActions(state: ControllerState, actions: ControllerAction[]): ControllerState {
@@ -163,6 +163,85 @@ describe('Primary Metric Cluster semantics (#38)', () => {
     const comp = buildCompositionModel(state);
     // metric-a claimed primary first, then metric-b, then metric-d
     expect(comp.primaryMetrics.map((m) => m.id)).toEqual(['metric-a', 'metric-b', 'metric-d']);
+  });
+
+  it('caps the cluster: one claim past the cap demotes the earliest claimant to the rail', () => {
+    const claim = (id: string, value = '1'): ControllerAction => ({
+      op: 'show', id, type: 'metric', role: 'primary', data: { label: id.toUpperCase(), value },
+    });
+    const full = reduceActions(
+      createInitialState(),
+      Array.from({ length: MAX_PRIMARY_METRICS }, (_, n) => claim(`m${n}`)),
+    );
+    expect(buildCompositionModel(full).primaryMetrics).toHaveLength(MAX_PRIMARY_METRICS);
+
+    // Updating a member of a full cluster evicts nobody.
+    const updated = controllerReducer(full, claim('m3', '2'));
+    expect(buildCompositionModel(updated).primaryMetrics.map((m) => m.id)).toEqual(
+      buildCompositionModel(full).primaryMetrics.map((m) => m.id),
+    );
+
+    const overflowed = controllerReducer(updated, claim('extra'));
+    const comp = buildCompositionModel(overflowed);
+    expect(comp.primaryMetrics.map((m) => m.id)).toEqual(['m1', 'm2', 'm3', 'm4', 'm5', 'extra']);
+    expect(overflowed.agentObjects.m0.role).toBe('secondary');
+    expect(comp.secondary.map((o) => o.id)).toEqual(['m0']);
+    expect(deriveScreenState(overflowed, 1).title).toBe('M1');
+  });
+
+  it('lets a primary that changes type claim the role again under its new type', () => {
+    const state = reduceActions(createInitialState(), [
+      metricA,
+      metricB,
+      // metric-a becomes a chart without naming a role.
+      { op: 'show', id: 'metric-a', type: 'chart', data: { title: 'CPU TRACE', series: [{ label: 'cpu', points: [{ x: 1, y: 0.5 }] }] } },
+    ]);
+
+    expect(state.agentObjects['metric-a'].role).toBe('primary');
+    expect(state.agentObjects['metric-b'].role).toBe('secondary');
+    const comp = buildCompositionModel(state);
+    expect(comp.primary?.id).toBe('metric-a');
+    expect(comp.primaryMetrics).toEqual([]);
+    expect(deriveScreenState(state, 1).visual_kind).toBe('chart');
+  });
+
+  it('replaying the backend snapshot rebuilds show order and cluster order', () => {
+    // Each case is a live action sequence and the snapshot the backend's
+    // DisplayProjection replays for it; apps/backend/tests/test_api.rs
+    // asserts the same snapshots.
+    const metric = (id: string, role?: 'primary' | 'secondary'): ControllerAction => ({
+      op: 'show', id, type: 'metric', ...(role ? { role } : {}), data: { label: id, value: '1' },
+    });
+    const diagram = (role: 'primary' | 'secondary'): ControllerAction => ({
+      op: 'show', id: 'diag', type: 'diagram', role, data: { title: 'DIAG', mode: 'graph', nodes: [], edges: [] },
+    });
+    const cases: Array<{ live: ControllerAction[]; snapshot: ControllerAction[] }> = [
+      {
+        live: [metric('m-sec', 'secondary'), metric('m-prim', 'primary'), metric('m-sec', 'primary')],
+        snapshot: [metric('m-sec'), metric('m-prim', 'primary'), metric('m-sec', 'primary')],
+      },
+      {
+        live: [
+          metric('m1', 'primary'), metric('m2', 'primary'), diagram('primary'),
+          metric('m2', 'primary'), metric('m1', 'primary'),
+        ],
+        snapshot: [metric('m1'), metric('m2', 'primary'), diagram('secondary'), metric('m1', 'primary')],
+      },
+    ];
+
+    for (const { live, snapshot } of cases) {
+      const liveState = reduceActions(createInitialState(), live);
+      const replayed = reduceActions(
+        controllerReducer(liveState, { op: 'epoch_reset' }),
+        snapshot,
+      );
+      expect(replayed.agentOrder).toEqual(liveState.agentOrder);
+      const roles = (state: ControllerState) => state.agentOrder.map((id) => state.agentObjects[id].role);
+      expect(roles(replayed)).toEqual(roles(liveState));
+      expect(buildCompositionModel(replayed).primaryMetrics.map((m) => m.id)).toEqual(
+        buildCompositionModel(liveState).primaryMetrics.map((m) => m.id),
+      );
+    }
   });
 
   it('truthfully derives screen state with visual_kind metric and leading primary metric label', () => {
