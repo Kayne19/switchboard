@@ -169,6 +169,12 @@ export interface ActivityState {
   label: string;
   tool: string;
   detail: string;
+  /**
+   * Which call this is, stamped by the reducer: every tool start gets a new
+   * one, so a second call of the same tool reads as a second call rather
+   * than as the first one still running.
+   */
+  call?: number;
 }
 
 export interface WorkspaceState {

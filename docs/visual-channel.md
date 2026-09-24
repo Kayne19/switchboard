@@ -156,7 +156,7 @@ rule to pick the object a `visual_kind` / `title` answer is about:
    3. else the first object shown, if any is on stage at all.
 
 `role: "primary"` is held either by one non-metric object or by a cluster
-of up to six metrics (`MAX_PRIMARY_METRICS`), which the page lays out
+of up to nine metrics (`MAX_PRIMARY_METRICS`), which the page lays out
 together in the main column in claim order. A `show` that carries
 `role: "primary"` demotes every object it displaces to `role: "secondary"`,
 where it stays on stage: a non-metric claim displaces every primary; a metric

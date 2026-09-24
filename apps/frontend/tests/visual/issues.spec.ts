@@ -607,6 +607,48 @@ test('tool activity panel appears, flips to done, and clears when idle', async (
 });
 
 
+test('every call of one tool registers on the activity panel (#27)', async ({ page }) => {
+  const fixtureServer = new DisplayFixtureServer({ initialGeneration: 91 });
+  const { wsUrl } = await fixtureServer.start();
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+    await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === 'hello')).toBe(true);
+    fixtureServer.broadcast({
+      type: 'display',
+      action: {
+        op: 'show', id: 'map', type: 'diagram', role: 'primary',
+        data: {
+          mode: 'graph', title: 'SYSTEM MAP',
+          nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+          edges: [{ from: 'a', to: 'b' }],
+        },
+      },
+    });
+
+    const panel = page.locator('.content-rail__details [data-testid="tool-activity"]');
+    const seen: string[] = [];
+    for (let n = 0; n < 4; n += 1) {
+      fixtureServer.broadcast({ type: 'activity', state: 'start', tool: 'read', label: 'Reading', detail: 'apps/backend/src/api.rs' });
+      await expect(panel).toContainText('CURRENT ACTIVITY');
+      const call = await panel.getAttribute('data-call');
+      expect(call).not.toBeNull();
+      seen.push(call!);
+      fixtureServer.broadcast({ type: 'activity', state: 'end', tool: 'read' });
+      await expect(panel).toContainText('LAST TOOL USED');
+    }
+    // Four calls of the same tool with the same detail are four calls on the
+    // panel, each with a line of its own.
+    expect(new Set(seen).size).toBe(4);
+    await expect(panel.locator('.tool-activity__call')).toHaveCount(1);
+    await expect(panel.locator('.tool-activity__tool')).toHaveText('read');
+  } finally {
+    await fixtureServer.stop();
+  }
+});
+
+
 test('tool activity panel truncates long names and stays clear of the response', async ({ page }) => {
   const fixtureServer = new DisplayFixtureServer({ initialGeneration: 11 });
   const { wsUrl } = await fixtureServer.start();

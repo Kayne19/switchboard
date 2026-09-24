@@ -30,7 +30,7 @@ const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
 /// The most metrics the primary cluster holds; `MAX_PRIMARY_METRICS` in
 /// apps/frontend/src/controller/reducer.ts. Keep the two equal.
-pub const MAX_PRIMARY_METRICS: usize = 6;
+pub const MAX_PRIMARY_METRICS: usize = 9;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SceneObject {

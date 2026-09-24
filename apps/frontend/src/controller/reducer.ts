@@ -74,10 +74,10 @@ export function createInitialState(): ControllerState {
   };
 }
 
-// The most metrics the primary cluster holds. The cluster grid has a designed
-// layout for up to this many at every stage geometry; one more would spill
-// out of the main column and be clipped.
-export const MAX_PRIMARY_METRICS = 6;
+// The most metrics the primary cluster holds: three rows of three. The
+// cluster grid has a designed layout for up to this many at every stage
+// geometry; one more would spill out of the main column and be clipped.
+export const MAX_PRIMARY_METRICS = 9;
 
 // Primary claimant semantics (#38):
 // A metric claiming primary while metrics hold it joins them in a cluster.
@@ -346,7 +346,9 @@ export function controllerReducer(state: ControllerState, action: ControllerActi
       );
     }
     case 'runtime_activity': {
-      return { ...state, activity: action.activity, revision };
+      // The revision only grows, so it names each call apart from the last.
+      const activity = action.activity === null ? null : { ...action.activity, call: revision };
+      return { ...state, activity, revision };
     }
     case 'runtime_reset': {
       // Runtime reset removes runtime state, activity included; agent state is preserved

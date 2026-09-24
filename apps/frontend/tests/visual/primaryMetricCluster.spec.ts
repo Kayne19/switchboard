@@ -173,6 +173,47 @@ test.describe('Primary metric cluster layout and behavior (#38)', () => {
     { name: 'portrait-phone', width: 390, height: 844 },
     { name: 'landscape-phone', width: 844, height: 390 },
     { name: 'small-landscape', width: 1024, height: 600 },
+    { name: 'landscape', width: 1440, height: 900 },
+    { name: 'ultrawide', width: 2560, height: 1080 },
+    { name: 'portrait-tablet', width: 820, height: 1180 },
+  ]) {
+    test(`eight primary metrics all show in the cluster, none truncated (${geometry.name})`, async ({ page }) => {
+      // Live feedback on #38: eight metrics sent as primary showed only six.
+      await page.setViewportSize({ width: geometry.width, height: geometry.height });
+      await page.goto('/?scene=architecture&chrome=0');
+      await page.waitForSelector('[data-scene]');
+
+      await page.evaluate(() => {
+        const dispatch = window.SwitchboardController?.dispatch;
+        if (!dispatch) throw new Error('controller unavailable');
+        dispatch({ op: 'clear' });
+        for (let n = 0; n < 8; n += 1) {
+          dispatch({
+            op: 'show', id: `m${n}`, type: 'metric', role: 'primary',
+            data: { label: `METRIC ${n}`, value: `01:42:1${n}` },
+          });
+        }
+      });
+
+      await expect(page.locator('.composed-primary-object--cluster .metric-row')).toHaveCount(8);
+      await expect(page.locator('.content-rail__details .metrics')).toHaveCount(0);
+      await expect.poll(() => page.evaluate(() => {
+        const main = document.querySelector('.content-main')!.getBoundingClientRect();
+        const rows = [...document.querySelectorAll('.composed-primary-object--cluster .metric-row')];
+        return {
+          spilled: rows.map((row) => row.getBoundingClientRect())
+            .filter((row) => row.top < main.top - 0.5 || row.bottom > main.bottom + 0.5 || row.right > main.right + 0.5).length,
+          truncated: rows.map((row) => row.querySelector<HTMLElement>('.metric-row__value')!)
+            .filter((value) => value.scrollWidth > value.clientWidth + 1).length,
+        };
+      })).toEqual({ spilled: 0, truncated: 0 });
+    });
+  }
+
+  for (const geometry of [
+    { name: 'portrait-phone', width: 390, height: 844 },
+    { name: 'landscape-phone', width: 844, height: 390 },
+    { name: 'small-landscape', width: 1024, height: 600 },
   ]) {
     test(`a claim past the cluster cap never spills the cluster out of the main column (${geometry.name})`, async ({ page }) => {
       await page.setViewportSize({ width: geometry.width, height: geometry.height });
@@ -183,7 +224,8 @@ test.describe('Primary metric cluster layout and behavior (#38)', () => {
         const dispatch = window.SwitchboardController?.dispatch;
         if (!dispatch) throw new Error('controller unavailable');
         dispatch({ op: 'clear' });
-        for (let n = 0; n < 7; n += 1) {
+        // One past the cap of nine.
+        for (let n = 0; n < 10; n += 1) {
           dispatch({
             op: 'show', id: `m${n}`, type: 'metric', role: 'primary',
             data: { label: `METRIC ${n}`, value: `${n * 7}%` },
@@ -192,7 +234,7 @@ test.describe('Primary metric cluster layout and behavior (#38)', () => {
       });
 
       const mainRows = page.locator('.composed-primary-object--cluster .metric-row');
-      await expect(mainRows).toHaveCount(6);
+      await expect(mainRows).toHaveCount(9);
       // The earliest claim gave way and moved to the rail.
       const railMetrics = page.locator('.content-rail__details .metrics .metric-row');
       await expect(railMetrics).toHaveCount(1);

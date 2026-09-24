@@ -226,15 +226,29 @@ describe('controller reducer & ownership', () => {
       { op: 'runtime_say', target: RUNTIME_CONVERSATION_ID, text: 'The route is on screen.' },
       { op: 'runtime_activity', activity },
     ]);
-    expect(state.activity).toEqual(activity);
+    expect(state.activity).toMatchObject(activity);
     // Activity is status, not explanation: what Damocles said stays current.
     expect(state.speech?.text).toBe('The route is on screen.');
 
     const carried = reduceActions(state, [diagramAction, { op: 'focus', id: 'sys-arch' }]);
-    expect(carried.activity).toEqual(activity);
+    expect(carried.activity).toBe(state.activity);
     expect(controllerReducer(carried, { op: 'runtime_activity', activity: null }).activity).toBeNull();
     expect(controllerReducer(carried, { op: 'runtime_reset' }).activity).toBeNull();
     expect(controllerReducer(carried, { op: 'epoch_reset' }).activity).toBeNull();
+  });
+
+  it('names every tool call apart, even a repeat of the same tool (#27)', () => {
+    const read = { label: 'switchboard', tool: 'read', detail: 'apps/backend/src/api.rs' };
+    const first = controllerReducer(createInitialState(), { op: 'runtime_activity', activity: read });
+    const ended = controllerReducer(first, { op: 'runtime_activity', activity: null });
+    const second = controllerReducer(ended, { op: 'runtime_activity', activity: read });
+    // Back to back, with no end between them, is still a new call.
+    const third = controllerReducer(second, { op: 'runtime_activity', activity: read });
+
+    const calls = [first, second, third].map((state) => state.activity?.call);
+    expect(calls.every((call) => typeof call === 'number')).toBe(true);
+    expect(new Set(calls).size).toBe(3);
+    expect(calls[0]! < calls[1]! && calls[1]! < calls[2]!).toBe(true);
   });
 
   it('does not let a runtime object take the agent primary', () => {
