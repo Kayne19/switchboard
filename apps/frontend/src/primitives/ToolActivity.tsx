@@ -2,6 +2,51 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import type { ActivityState } from '../controller/types';
 import { ACTIVITY_LINGER_MS, ACTIVITY_MINIMUM_MS, useLingeringValue } from '../hooks/useLingeringValue';
 
+// What a call of each of the agent's own tools works on, to count a burst of
+// them by: twenty reads are twenty files. Any other tool counts calls.
+const TOOL_NOUNS: Record<string, string> = {
+  read: 'files',
+  write: 'files',
+  edit: 'edits',
+  bash: 'commands',
+  grep: 'searches',
+  find: 'searches',
+  ls: 'listings',
+};
+
+export interface ActivitySummary {
+  /** The tool line: the tool, or what the burst came to. */
+  title: string;
+  /** The detail line: the latest call's detail, or a mixed burst's tools. */
+  detail: string;
+  /** How many calls the burst has made. */
+  count: number;
+}
+
+/**
+ * How the panel and the presence caption name the activity (#50). A lone
+ * call names its tool and its detail. A burst of one tool counts what it
+ * worked on -- `read / 20 files` -- and keeps the latest call's detail; a
+ * burst of several tools counts every call and lists the tools, the busiest
+ * first.
+ */
+export function activitySummary(activity: ActivityState): ActivitySummary {
+  const tool = activity.tool || 'TOOL';
+  const burst = activity.burst?.length ? activity.burst : [{ tool: activity.tool, count: 1 }];
+  const count = burst.reduce((sum, entry) => sum + entry.count, 0);
+  if (count <= 1) return { title: tool, detail: activity.detail, count };
+  if (burst.length === 1) {
+    return { title: `${tool} / ${count} ${TOOL_NOUNS[activity.tool.toLowerCase()] ?? 'calls'}`, detail: activity.detail, count };
+  }
+  // A stable sort: tools with as many calls stay in the order they came.
+  const busiest = [...burst].sort((a, b) => b.count - a.count);
+  return {
+    title: `${count} tool calls`,
+    detail: busiest.map((entry) => `${entry.tool || 'TOOL'} ${entry.count}`).join(' / '),
+    count,
+  };
+}
+
 /**
  * The last tool the project agent used: a compact status panel, separate
  * from both the live chat output and the durable notes. It updates when a
@@ -11,6 +56,8 @@ import { ACTIVITY_LINGER_MS, ACTIVITY_MINIMUM_MS, useLingeringValue } from '../h
  * The panel stays up through a run of calls, but every call registers on
  * it: a sweep runs along its top rule and the tool's name comes in afresh,
  * so ten calls of one tool read as ten calls rather than one still running.
+ * Calls made together -- a burst of parallel reads -- arrive faster than a
+ * frame, so the panel counts them instead (see `activitySummary`).
  *
  * In the rail it sits in its own slot at the foot of the column. With
  * `reserveSpace` the slot keeps the panel's full height whether a tool is
@@ -29,9 +76,10 @@ export function ToolActivity({
   const reduced = useReducedMotion();
   const shown = useLingeringValue(activity, ACTIVITY_LINGER_MS, ACTIVITY_MINIMUM_MS);
   const running = shown === activity;
+  const summary = shown ? activitySummary(shown) : null;
   const panel = (
     <AnimatePresence initial={false}>
-      {shown ? (
+      {shown && summary ? (
         <motion.div
           key="tool-activity"
           className={`tool-activity tool-activity--${placement}`}
@@ -41,6 +89,7 @@ export function ToolActivity({
           transition={{ duration: 0.18 }}
           data-testid="tool-activity"
           data-call={shown.call}
+          data-count={summary.count}
         >
           <motion.span
             key={`sweep-${shown.call ?? 0}`}
@@ -52,7 +101,7 @@ export function ToolActivity({
           />
           <div className="tool-activity__header">
             <span className="tool-activity__tag tech micro">
-              {running ? 'CURRENT ACTIVITY' : 'LAST TOOL USED'}
+              {running ? 'CURRENT ACTIVITY' : summary.count > 1 ? 'LAST TOOLS USED' : 'LAST TOOL USED'}
             </span>
             <span
               className={`tool-activity__status tech micro tool-activity__status--${running ? 'running' : 'done'}`}
@@ -67,12 +116,12 @@ export function ToolActivity({
             animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
             transition={{ duration: 0.18, ease: [0.22, 0.61, 0.36, 1] }}
           >
-            <div className="tool-activity__tool tech" title={shown.tool}>
-              {shown.tool || 'TOOL'}
+            <div className="tool-activity__tool tech" title={summary.title}>
+              {summary.title}
             </div>
-            {shown.detail ? (
-              <div className="tool-activity__detail tech micro muted" title={shown.detail}>
-                {shown.detail}
+            {summary.detail ? (
+              <div className="tool-activity__detail tech micro muted" title={summary.detail}>
+                {summary.detail}
               </div>
             ) : null}
           </motion.div>

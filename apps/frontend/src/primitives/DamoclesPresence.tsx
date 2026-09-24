@@ -3,6 +3,7 @@ import type { ActivityState } from '../controller/types';
 import { useFloatingMotion } from '../hooks/useFloatingMotion';
 import { ACTIVITY_LINGER_MS, ACTIVITY_MINIMUM_MS, useLingeringValue } from '../hooks/useLingeringValue';
 import { DamoclesGlyph } from './DamoclesGlyph';
+import { activitySummary } from './ToolActivity';
 import { VoiceIndicator } from './VoiceIndicator';
 
 export type PresenceSize = 'idle' | 'conversation' | 'rail' | 'compact';
@@ -40,7 +41,7 @@ export function DamoclesPresence({
             <VoiceIndicator key="voice" compact={size === 'compact' || size === 'rail'} />
           ) : showCaption ? (
             <motion.div key="caption" className="damocles-presence__caption tech micro" title={shownActivity?.detail || undefined} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.16 }}>
-              {shownActivity ? `WORKING / ${shownActivity.tool || 'TOOL'}` : 'VOICE / ACTIVE'}<br/><span className="muted">CONTEXT / {context}</span>
+              {shownActivity ? `WORKING / ${activitySummary(shownActivity).title}` : 'VOICE / ACTIVE'}<br/><span className="muted">CONTEXT / {context}</span>
             </motion.div>
           ) : null}
         </AnimatePresence>

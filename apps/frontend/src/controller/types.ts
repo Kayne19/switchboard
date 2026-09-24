@@ -175,6 +175,32 @@ export interface ActivityState {
    * than as the first one still running.
    */
   call?: number;
+  /**
+   * The burst this call belongs to, counted by tool in the order each tool
+   * first came, stamped by the reducer (#50). A call that starts while
+   * another is still running, or just after the last one ended, joins the
+   * burst before it, so twenty parallel reads read as twenty. A lone call's
+   * burst is itself.
+   */
+  burst?: ToolCount[];
+}
+
+export interface ToolCount {
+  tool: string;
+  count: number;
+}
+
+/**
+ * The tool calls under way, by tool, and the burst they make: what the
+ * reducer measures the next start against. The backend's events carry no
+ * call id, so calls are told apart by tool: an end retires one call of its
+ * tool.
+ */
+export interface ToolRunState {
+  running: Record<string, number>;
+  burst: ToolCount[];
+  /** When the burst's last call ended, on the runtime's clock; null while any runs. */
+  endedAt: number | null;
 }
 
 export interface WorkspaceState {
@@ -212,6 +238,7 @@ export interface ControllerState {
 
   workspace: WorkspaceState;
   activity: ActivityState | null;
+  toolRun: ToolRunState;
   listening: boolean;
   focusId: string | null;
   revision: number;
@@ -234,7 +261,13 @@ export type RuntimeAction =
   | { op: 'runtime_show'; id: string; type: SceneObjectType; role?: SceneObjectRole; data: unknown }
   | { op: 'runtime_hide'; id: string }
   | { op: 'runtime_say'; text: string; target?: string | null; at?: SpeechState['at'] }
-  | { op: 'runtime_activity'; activity: ActivityState | null }
+  /**
+   * A tool call started (`activity`), or everything the agent was running
+   * has settled (`null`). `at` is the runtime's clock, in milliseconds.
+   */
+  | { op: 'runtime_activity'; activity: ActivityState | null; at?: number }
+  /** One call of `tool` ended. */
+  | { op: 'runtime_activity_end'; tool: string; at?: number }
   | { op: 'runtime_reset' }
   | { op: 'epoch_reset' }
   | { op: 'set_view'; view: string | null }

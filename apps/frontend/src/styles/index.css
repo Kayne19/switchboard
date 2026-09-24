@@ -752,6 +752,16 @@ button {
 .rich-text__list li::marker {
   color: rgba(var(--orange-rgb), 0.72);
 }
+/* The surfaces that read agent text scroll down, never sideways. A long
+   path, hash or table row wraps inside the column instead of widening it:
+   `anywhere` also lowers the text's min-content width, so the grid track
+   that holds it never grows past its card, which `break-word` would not. */
+.live-chat-card__text,
+.annotation-card__text,
+.conversation-answer__text {
+  overflow-x: hidden;
+  overflow-wrap: anywhere;
+}
 .rich-text__code {
   padding: 0.05em 0.3em;
   background: rgba(232, 230, 223, 0.08);
@@ -776,8 +786,7 @@ button {
 .training-charts--compare {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
-/* A chart panel is a column: the note that annotates the chart, when there
-   is one, takes a band at the top, and the chart fills the rest. */
+/* A chart panel: the chart fills it, and the notes on it lie over it. */
 .chart-object {
   position: relative;
   display: flex;
@@ -793,9 +802,6 @@ button {
   height: auto;
   padding: clamp(16px, 2cqw, 32px) clamp(12px, 1.4cqw, 24px)
     clamp(10px, 1.2cqw, 20px);
-}
-.chart-object--noted > .focusable-content {
-  padding-top: clamp(6px, 1cqh, 14px);
 }
 .chart-primitive {
   width: 100%;
@@ -841,45 +847,72 @@ button {
   top: 3%;
   color: var(--cyan);
 }
-/* The chart's note sits in its own band above the plot, inside the panel's
-   frame: it never covers the grid, the traces or the frame's corner lines.
-   Its top clears the frame's stepped top edge, and its sides keep the chart's
-   own inset from the frame. */
-.training-note {
-  --note-width: min(46%, 520px);
-  --note-inset: clamp(12px, 1.4cqw, 24px);
-  position: relative;
+/* The notes on a chart lie over its panel, inside the frame: the layer's
+   insets clear the frame's stepped top edge and its corner lines, and the
+   layer places each card within them, clear of the other cards, of the
+   points they name, and of the traces where it has the room (see
+   notePlacement.ts). Only the cards take the pointer, so the chart under the
+   rest of the layer still expands on a click. */
+.chart-notes {
+  --note-width: min(42%, 500px);
+  /* The card's border and its leader are one colour, so the leader reads
+     as the card's own edge running out to the point. */
+  --chart-note-edge: rgba(var(--orange-rgb), 0.5);
+  position: absolute;
   z-index: 2;
-  flex: none;
-  align-self: flex-start;
+  inset: clamp(30px, 4.2cqh, 48px) clamp(12px, 1.4cqw, 24px);
+  pointer-events: none;
+}
+.training-charts--compare .chart-notes {
+  --note-width: min(80%, 440px);
+}
+.chart-notes__leaders {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+/* One pixel, as the card's border is, fading on its way to the point but
+   still there when it meets it, so it never reads as stopping short. */
+.chart-note-leader__line {
+  stroke-width: 1;
+  stroke-linejoin: miter;
+  stroke-linecap: butt;
+}
+.chart-note-leader__stop {
+  stop-color: var(--chart-note-edge);
+}
+.chart-note-leader__stop--card {
+  stop-opacity: 1;
+}
+.chart-note-leader__stop--mid {
+  stop-opacity: 0.5;
+}
+.chart-note-leader__stop--point {
+  stop-opacity: 0.2;
+}
+.chart-note {
+  position: absolute;
+  left: 0;
+  top: 0;
   display: flex;
   flex-direction: column;
   width: var(--note-width);
-  max-height: 38%;
-  margin: clamp(30px, 4.2cqh, 48px) var(--note-inset) 0;
+  max-height: 36%;
   background: #000;
+  pointer-events: auto;
 }
-.training-charts--compare .training-note {
-  --note-width: min(86%, 520px);
-}
-.training-note .annotation-card {
+.chart-note .annotation-card {
   height: auto;
   min-height: 0;
   padding: clamp(10px, 1cqw, 16px) clamp(12px, 1.2cqw, 18px)
     clamp(10px, 1cqw, 16px);
-  border: 1px solid rgba(var(--orange-rgb), 0.33);
+  border: 1px solid var(--chart-note-edge);
+  /* The layer's leader router cuts the same share (CARD_CUT) from the top
+     edge it may leave by. */
   clip-path: polygon(0 0, 92% 0, 100% 23%, 100% 100%, 0 100%);
-}
-/* An anchored note centres over its point as far as the band allows; the
-   leader the chart draws then drops from the card's bottom edge to the
-   point. */
-.training-note--anchored {
-  left: clamp(
-    calc(var(--note-width) / 2),
-    calc(var(--annotation-anchor-x) - var(--note-inset)),
-    calc(100% - var(--note-width) / 2 - 2 * var(--note-inset))
-  );
-  transform: translateX(-50%);
 }
 .training-progress {
   min-height: 64px;
@@ -1128,14 +1161,14 @@ button {
 .content-rail__details > .metrics {
   flex: none;
 }
-/* The rail's metrics are bracketed rather than titled: the orange rule
-   stands in for the first row's divider and a hairline closes the block, and
-   extra space sets the block apart from the response below it. Their labels
-   and values carry the meaning, so no header line is spent on them. */
+/* The rail's metrics are headed by a rule rather than a title: the orange
+   rule stands in for the first row's divider, the rows are divided from one
+   another only, and extra space sets the block apart from the response below
+   it. Their labels and values carry the meaning, so no header line is spent
+   on them. */
 .metrics--rail {
   min-width: 0;
   border-top: 1px solid rgba(var(--orange-rgb), 0.48);
-  border-bottom: 1px solid rgba(232, 230, 223, 0.13);
   margin-bottom: clamp(4px, 1cqh, 12px);
 }
 .metrics--rail > .metric-row:first-child {
@@ -1189,6 +1222,8 @@ button {
   min-width: 0;
   min-height: 0;
   display: grid;
+  /* The column is the card's own width, as in the annotation card. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   gap: clamp(8px, 1cqh, 12px);
   padding-top: clamp(10px, 1.2cqh, 14px);
@@ -1960,16 +1995,17 @@ button {
   .chart-object > .focusable-content {
     padding: 14px 8px 8px;
   }
-  .training-note {
+  .chart-notes {
     --note-width: min(78%, 460px);
-    --note-inset: 3.5cqw;
-    max-height: 40%;
-    margin-top: clamp(26px, 3.6cqh, 40px);
+    inset: clamp(26px, 3.6cqh, 40px) 3.5cqw clamp(16px, 2.4cqh, 28px);
   }
-  .training-note .annotation-card {
+  .chart-note {
+    max-height: 40%;
+  }
+  .chart-note .annotation-card {
     padding: 9px 11px;
   }
-  .training-note .annotation-card__text {
+  .chart-note .annotation-card__text {
     font-size: clamp(10px, 1.8cqw, 14px);
     line-height: 1.35;
   }
@@ -2114,11 +2150,10 @@ button {
     padding-top: 18px;
     padding-bottom: 48px;
   }
-  /* A very wide stage draws the chart height-limited, so the note's band is
-     paid for in plot height: a wider card keeps it to fewer lines. */
-  .training-note {
-    --note-width: min(44%, 720px);
-    margin-top: clamp(24px, 3.4cqh, 40px);
+  /* A very wide stage draws the chart height-limited, with room beside
+     it: a wider card keeps a note to fewer lines. */
+  .chart-notes {
+    --note-width: min(40%, 680px);
   }
 }
 

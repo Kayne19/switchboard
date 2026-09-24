@@ -69,8 +69,6 @@ export function RuntimeIntegration() {
   const appliedSeqRef = useRef(0);
   const pendingRejectionRef = useRef<{ seq: number; reason: string } | null>(null);
   const handleServerRef = useRef<(message: ServerMessage) => void>(() => {});
-  const activityToolRef = useRef<string | null>(null);
-  activityToolRef.current = state.activity?.tool ?? null;
   const handleStateRef = useRef<(runtimeState: RuntimeState) => void>(() => {});
   const [reportNonce, setReportNonce] = useState(0);
   const [runtime, setRuntime] = useState<RuntimeState>(INITIAL_RUNTIME_STATE);
@@ -210,6 +208,9 @@ export function RuntimeIntegration() {
           break;
         }
         case "reply": {
+          // The turn is over, so nothing it started is still running, even
+          // should an end have gone missing.
+          dispatch({ op: "runtime_activity", activity: null, at: Date.now() });
           const body = text(message.text) || "(No spoken response.)";
           appendTranscript({ speaker: "DAMOCLES", text: body });
           currentResponseRef.current = body;
@@ -222,6 +223,8 @@ export function RuntimeIntegration() {
           break;
         }
         case "thinking":
+          // A new turn: nothing an earlier one started is still running.
+          dispatch({ op: "runtime_activity", activity: null });
           dispatch({ op: "listen", on: false });
           break;
         case "activity": {
@@ -229,14 +232,18 @@ export function RuntimeIntegration() {
           // speech, so every call flashed its tool text over what Damocles
           // had said and then left the bare leg label behind; it now goes to
           // the activity surface and never touches speech.
+          // The reducer counts the calls under way, so a burst of them --
+          // twenty parallel reads -- reads as twenty, and an end retires
+          // one call of its tool rather than the panel.
           const tool = text(message.tool);
           if (message.state === "start") {
             dispatch({
               op: "runtime_activity",
               activity: { label: text(message.label), tool, detail: text(message.detail) },
+              at: Date.now(),
             });
-          } else if (message.state === "end" && activityToolRef.current === tool) {
-            dispatch({ op: "runtime_activity", activity: null });
+          } else if (message.state === "end") {
+            dispatch({ op: "runtime_activity_end", tool, at: Date.now() });
           }
           break;
         }

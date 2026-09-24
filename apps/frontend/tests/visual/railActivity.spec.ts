@@ -160,7 +160,7 @@ test('rail progress uses spacing instead of a top border', async ({ page }) => {
   expect(progressBox!.y - (noteBox!.y + noteBox!.height)).toBeGreaterThan(0);
 });
 
-test('rail metrics are framed by rules in the content rail, with no header line', async ({ page }) => {
+test('rail metrics are headed by a rule in the content rail, with no header line and no rule under the last metric', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/?scene=architecture&chrome=0');
   await page.evaluate(() => {
@@ -189,22 +189,28 @@ test('rail metrics are framed by rules in the content rail, with no header line'
   await expect(metrics).toBeVisible();
   await expect(metrics).toHaveClass(/metrics--rail/);
 
-  // Bracketed by rules, not titled: no header line is spent on them (#32).
+  // Headed by a rule, not titled: no header line is spent on them (#32).
   await expect(metrics.locator('.metrics__header')).toHaveCount(0);
   await expect(metrics).not.toContainText('TELEMETRY');
 
   const frame = await metrics.evaluate((el) => {
     const style = getComputedStyle(el);
-    const first = el.querySelector('.metric-row')!;
+    const rows = el.querySelectorAll('.metric-row');
+    const first = rows[0]!;
+    const last = rows[rows.length - 1]!;
     return {
       top: style.borderTopWidth,
       bottom: style.borderBottomWidth,
+      lastRowBottom: getComputedStyle(last).borderBottomWidth,
       firstRowTop: getComputedStyle(first).borderTopWidth,
       firstRowOffset: first.getBoundingClientRect().top - el.getBoundingClientRect().top,
     };
   });
   expect(frame.top).toBe('1px');
-  expect(frame.bottom).toBe('1px');
+  // The rows are divided from one another; the last one draws no rule
+  // beneath it.
+  expect(frame.bottom).toBe('0px');
+  expect(frame.lastRowBottom).toBe('0px');
   // The orange rule is the first row's divider, so the rows start right under it.
   expect(frame.firstRowTop).toBe('0px');
   expect(frame.firstRowOffset).toBeLessThanOrEqual(1);

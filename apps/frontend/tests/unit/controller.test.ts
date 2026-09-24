@@ -3,6 +3,7 @@ import {
   controllerReducer,
   createInitialState,
   reduceActions,
+  TOOL_BURST_WINDOW_MS,
 } from '../../src/controller/reducer';
 import { buildCompositionModel, deriveScreenState, sceneKind } from '../../src/app/sceneModel';
 import type {
@@ -249,6 +250,78 @@ describe('controller reducer & ownership', () => {
     expect(calls.every((call) => typeof call === 'number')).toBe(true);
     expect(new Set(calls).size).toBe(3);
     expect(calls[0]! < calls[1]! && calls[1]! < calls[2]!).toBe(true);
+  });
+
+  describe('tool call bursts (#50)', () => {
+    const call = (tool: string, detail = '') => ({ label: 'switchboard', tool, detail });
+    const start = (tool: string, at: number, detail = ''): ControllerAction => ({ op: 'runtime_activity', activity: call(tool, detail), at });
+    const end = (tool: string, at: number): ControllerAction => ({ op: 'runtime_activity_end', tool, at });
+
+    it('counts calls started together as one burst', () => {
+      const reads = Array.from({ length: 20 }, (_, index) => start('read', 1000 + index, `src/file-${index}.ts`));
+      const state = reduceActions(createInitialState(), reads);
+      expect(state.activity?.tool).toBe('read');
+      expect(state.activity?.detail).toBe('src/file-19.ts');
+      expect(state.activity?.burst).toEqual([{ tool: 'read', count: 20 }]);
+    });
+
+    it('counts a mixed burst by tool, in the order each tool first came', () => {
+      const state = reduceActions(createInitialState(), [start('grep', 0), start('read', 1), start('read', 2), start('grep', 3), start('read', 4)]);
+      expect(state.activity?.burst).toEqual([{ tool: 'grep', count: 2 }, { tool: 'read', count: 3 }]);
+      expect(state.activity?.tool).toBe('read');
+    });
+
+    it('keeps the panel up until the last call of the burst ends', () => {
+      let state = reduceActions(createInitialState(), [start('read', 0), start('read', 1), start('grep', 2)]);
+      state = reduceActions(state, [end('read', 10), end('grep', 11)]);
+      expect(state.activity).not.toBeNull();
+      state = controllerReducer(state, end('read', 12));
+      expect(state.activity).toBeNull();
+    });
+
+    it('retires nothing for an end of a tool with no call running', () => {
+      const state = reduceActions(createInitialState(), [start('read', 0)]);
+      expect(controllerReducer(state, end('grep', 5))).toBe(state);
+    });
+
+    it('lets a call made just after the burst ended join it, and one made later start afresh', () => {
+      const ran = reduceActions(createInitialState(), [start('read', 0), end('read', 5)]);
+      expect(ran.activity).toBeNull();
+
+      const soon = controllerReducer(ran, start('read', 5 + TOOL_BURST_WINDOW_MS - 1));
+      expect(soon.activity?.burst).toEqual([{ tool: 'read', count: 2 }]);
+
+      const later = controllerReducer(ran, start('read', 5 + TOOL_BURST_WINDOW_MS + 1));
+      expect(later.activity?.burst).toEqual([{ tool: 'read', count: 1 }]);
+      // Each is still a call of its own (#27).
+      expect(later.activity?.call).not.toBe(ran.activity?.call);
+    });
+
+    it('starts afresh after everything settled, and after a reset', () => {
+      const ran = reduceActions(createInitialState(), [start('read', 0), start('read', 1)]);
+      const settled = controllerReducer(ran, { op: 'runtime_activity', activity: null });
+      expect(settled.activity).toBeNull();
+      expect(settled.toolRun.running).toEqual({});
+      expect(controllerReducer(settled, start('read', 2)).activity?.burst).toEqual([{ tool: 'read', count: 1 }]);
+
+      for (const reset of [{ op: 'runtime_reset' }, { op: 'epoch_reset' }] as ControllerAction[]) {
+        const after = controllerReducer(ran, reset);
+        expect(after.toolRun).toEqual({ running: {}, burst: [], endedAt: null });
+        expect(controllerReducer(after, start('read', 2)).activity?.burst).toEqual([{ tool: 'read', count: 1 }]);
+      }
+    });
+
+    it('carries the run through a scene change', () => {
+      const ran = reduceActions(createInitialState(), [start('read', 0)]);
+      const carried = reduceActions(ran, [diagramAction]);
+      expect(carried.toolRun).toBe(ran.toolRun);
+      expect(controllerReducer(carried, end('read', 1)).activity).toBeNull();
+    });
+
+    it('does not churn when there is nothing to settle', () => {
+      const idle = createInitialState();
+      expect(controllerReducer(idle, { op: 'runtime_activity', activity: null })).toBe(idle);
+    });
   });
 
   it('does not let a runtime object take the agent primary', () => {
