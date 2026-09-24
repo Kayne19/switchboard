@@ -874,7 +874,8 @@ button {
   overflow: visible;
   pointer-events: none;
 }
-/* One pixel, as the card's border is, fading hard on its way to the point. */
+/* One pixel, as the card's border is, fading on its way to the point but
+   still there when it meets it, so it never reads as stopping short. */
 .chart-note-leader__line {
   stroke-width: 1;
   stroke-linejoin: miter;
@@ -887,10 +888,10 @@ button {
   stop-opacity: 1;
 }
 .chart-note-leader__stop--mid {
-  stop-opacity: 0.38;
+  stop-opacity: 0.5;
 }
 .chart-note-leader__stop--point {
-  stop-opacity: 0.06;
+  stop-opacity: 0.2;
 }
 .chart-note {
   position: absolute;
