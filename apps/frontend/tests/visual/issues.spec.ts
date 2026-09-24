@@ -565,6 +565,63 @@ test('long chat output scrolls inside the live card', async ({ page }) => {
   }
 });
 
+// #48: a table row, a path or a hash with no break in it wraps inside the
+// live card; the card never scrolls sideways or grows past the rail.
+test('wide chat output wraps inside the live card instead of scrolling sideways', async ({ page }) => {
+  const fixtureServer = new DisplayFixtureServer({ initialGeneration: 9 });
+  const { wsUrl } = await fixtureServer.start();
+  const reply = [
+    '| file | status | owner | notes |',
+    '|------|--------|-------|-------|',
+    '| apps/backend/src/pbx.rs | modified | switchboard | turn epoch is stamped before dispatch |',
+    '',
+    `Commit ${'0123456789abcdef'.repeat(8)} touched /home/lab/projects/switchboard/apps/frontend/src/components/Scenes.tsx.`,
+    '',
+    `\`${'very_long_identifier_'.repeat(10)}\``,
+  ].join('\n');
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+    await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === 'hello')).toBe(true);
+    fixtureServer.broadcast({
+      type: 'display',
+      action: {
+        op: 'show', id: 'map', type: 'diagram', role: 'primary',
+        data: {
+          mode: 'graph', title: 'SYSTEM MAP',
+          nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+          edges: [{ from: 'a', to: 'b' }],
+        },
+      },
+    });
+    fixtureServer.broadcast({ type: 'spoken', entry: { role: 'agent', text: reply, id: 'reply-wide' } });
+
+    const card = page.locator('.live-chat-card');
+    await expect(card).toBeVisible();
+    await expect(card).toContainText('0123456789abcdef');
+    const geometry = await card.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      const rail = document.querySelector<HTMLElement>('.content-rail__details')!.getBoundingClientRect();
+      const text = element.querySelector<HTMLElement>('.live-chat-card__text')!;
+      const textBox = text.getBoundingClientRect();
+      return {
+        insideRail: box.left >= rail.left - 1 && box.right <= rail.right + 1,
+        textInsideCard: textBox.left >= box.left - 1 && textBox.right <= box.right + 1,
+        overflowX: getComputedStyle(text).overflowX,
+        scrollWidth: text.scrollWidth,
+        clientWidth: text.clientWidth,
+      };
+    });
+    expect(geometry.insideRail).toBe(true);
+    expect(geometry.textInsideCard).toBe(true);
+    expect(geometry.overflowX).toBe('hidden');
+    expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+  } finally {
+    await fixtureServer.stop();
+  }
+});
+
 
 test('tool activity panel appears, flips to done, and clears when idle', async ({ page }) => {
   const fixtureServer = new DisplayFixtureServer({ initialGeneration: 10 });

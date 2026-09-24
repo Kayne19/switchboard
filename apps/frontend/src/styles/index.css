@@ -752,6 +752,16 @@ button {
 .rich-text__list li::marker {
   color: rgba(var(--orange-rgb), 0.72);
 }
+/* The surfaces that read agent text scroll down, never sideways. A long
+   path, hash or table row wraps inside the column instead of widening it:
+   `anywhere` also lowers the text's min-content width, so the grid track
+   that holds it never grows past its card, which `break-word` would not. */
+.live-chat-card__text,
+.annotation-card__text,
+.conversation-answer__text {
+  overflow-x: hidden;
+  overflow-wrap: anywhere;
+}
 .rich-text__code {
   padding: 0.05em 0.3em;
   background: rgba(232, 230, 223, 0.08);
@@ -1189,6 +1199,8 @@ button {
   min-width: 0;
   min-height: 0;
   display: grid;
+  /* The column is the card's own width, as in the annotation card. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   gap: clamp(8px, 1cqh, 12px);
   padding-top: clamp(10px, 1.2cqh, 14px);
