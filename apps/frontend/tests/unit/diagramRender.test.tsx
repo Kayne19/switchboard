@@ -39,7 +39,7 @@ function render() {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  act(() => root.render(<DiagramPrimitive data={data} />));
+  act(() => root.render(<DiagramPrimitive data={data} id="test-diagram" />));
 }
 
 describe('diagram rendering', () => {
@@ -85,5 +85,161 @@ describe('diagram rendering', () => {
     // A bounding-box filter region has zero height on a horizontal edge.
     const glow = host.querySelector('#active-edge-glow');
     expect(glow?.getAttribute('filterUnits')).toBe('userSpaceOnUse');
+  });
+});
+
+
+describe('anchored diagram note', () => {
+  it('highlights the node and renders a callout with leader line', () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() =>
+      root.render(
+        <DiagramPrimitive
+          data={data}
+          id="test-diagram"
+          note={{
+            tag: 'OBSERVATION',
+            anchor: { target: 'test-diagram', node: 'route' },
+            segments: [{ text: 'Route description.' }],
+          }}
+        />,
+      ),
+    );
+
+    const callout = host.querySelector('.diagram-callout');
+    expect(callout).not.toBeNull();
+    const leader = host.querySelector('.diagram-callout__leader');
+    expect(leader).not.toBeNull();
+    const anchoredNode = host.querySelector('.diagram-node__body--anchored');
+    expect(anchoredNode).not.toBeNull();
+    expect(anchoredNode?.querySelector('.diagram-node-label')?.textContent).toBe('ROUTE');
+  });
+
+  it('preserves default rendering when the anchored node is unknown', () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() =>
+      root.render(
+        <DiagramPrimitive
+          data={data}
+          id="test-diagram"
+          note={{
+            tag: 'OBSERVATION',
+            anchor: { target: 'test-diagram', node: 'nonexistent' },
+            segments: [{ text: 'Route description.' }],
+          }}
+        />,
+      ),
+    );
+
+    expect(host.querySelector('.diagram-callout')).toBeNull();
+    expect(host.querySelector('.diagram-node__body--anchored')).toBeNull();
+  });
+});
+
+
+describe('anchored note fit and ownership', () => {
+  function renderAnchored(note: { tag?: string; anchor?: { target: string; node?: string; x?: number; series?: string }; segments: Array<{ text: string }> }) {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root.render(<DiagramPrimitive data={data} id="test-diagram" note={note} />));
+  }
+
+  it('falls back to the rail badge without truncating when the note does not fit the callout', () => {
+    renderAnchored({
+      tag: 'OBSERVATION',
+      anchor: { target: 'test-diagram', node: 'route' },
+      segments: [
+        {
+          text: 'The voice does not change. Context moves. Damocles routes the session into the project directory, then the project orchestrator delegates work without exposing those internal handoffs to you.',
+        },
+      ],
+    });
+
+    // Six wrapped lines will not fit the three-line callout box, so the
+    // note is not truncated: it stays in the rail and the node carries the
+    // matching badge instead.
+    expect(host.querySelector('.diagram-callout')).toBeNull();
+    expect(host.querySelector('.diagram-node__body--anchored')).not.toBeNull();
+    expect(host.querySelector('.diagram-node__marker')).not.toBeNull();
+  });
+
+  it('renders the full text in the callout when it fits', () => {
+    renderAnchored({
+      tag: 'OBSERVATION',
+      anchor: { target: 'test-diagram', node: 'route' },
+      segments: [{ text: 'Context moves. Damocles routes the session into the project directory.' }],
+    });
+
+    const callout = host.querySelector('.diagram-callout');
+    expect(callout).not.toBeNull();
+    // A wrapped line is one tspan; assert on a phrase that stays within a
+    // single wrapped line so line boundaries cannot break the match.
+    expect(callout?.textContent).toContain('Damocles routes');
+    expect(callout?.textContent).toContain('directory');
+  });
+
+  it('keeps a note in the rail when its tag is too wide for the callout box', () => {
+    renderAnchored({
+      tag: 'CURRENT EXPLANATION / ROUTING / PROJECT SESSION / HEADLESS PI',
+      anchor: { target: 'test-diagram', node: 'route' },
+      segments: [{ text: 'Context moves here.' }],
+    });
+
+    // The tag is one unwrapped line: drawn in the 240-unit box it would run
+    // across the diagram, so the note falls back to the rail instead.
+    expect(host.querySelector('.diagram-callout')).toBeNull();
+    expect(host.querySelector('.diagram-node__marker')).not.toBeNull();
+  });
+
+  it('keeps a note in the rail when one word is wider than a callout line', () => {
+    renderAnchored({
+      tag: 'OBSERVATION',
+      anchor: { target: 'test-diagram', node: 'route' },
+      segments: [{ text: 'Config lives at /etc/switchboard/projects/registry.d/override.json now.' }],
+    });
+
+    expect(host.querySelector('.diagram-callout')).toBeNull();
+    expect(host.querySelector('.diagram-node__marker')).not.toBeNull();
+  });
+
+  it('hands a placed callout back to the rail when the diagram unmounts', () => {
+    const placed: boolean[] = [];
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() =>
+      root.render(
+        <DiagramPrimitive
+          data={data}
+          id="test-diagram"
+          note={{ tag: 'OBSERVATION', anchor: { target: 'test-diagram', node: 'route' }, segments: [{ text: 'Context moves here.' }] }}
+          onCalloutChange={(value) => placed.push(value)}
+        />,
+      ),
+    );
+    expect(host.querySelector('.diagram-callout')).not.toBeNull();
+    expect(placed.at(-1)).toBe(true);
+
+    // A surface boundary replacing a diagram that threw unmounts it the same
+    // way; the scene must not keep hiding the note from the rail.
+    act(() => root.render(<div />));
+    expect(placed.at(-1)).toBe(false);
+  });
+
+  it('does not capture a note whose target is another object', () => {
+    renderAnchored({
+      tag: 'OBSERVATION',
+      anchor: { target: 'other-object', node: 'route' },
+      segments: [{ text: 'Route description.' }],
+    });
+
+    expect(host.querySelector('.diagram-callout')).toBeNull();
+    expect(host.querySelector('.diagram-node__body--anchored')).toBeNull();
+    expect(host.querySelector('.diagram-node__marker')).toBeNull();
   });
 });

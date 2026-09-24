@@ -49,7 +49,7 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
     { op: 'show', id: 'learning-rate', type: 'metric', data: { label: 'LEARNING RATE', value: '1.2e-4' } },
     { op: 'show', id: 'gpu', type: 'metric', data: { label: 'GPU', value: '91%' } },
     { op: 'show', id: 'eta', type: 'metric', data: { label: 'ETA', value: '01:42:18' } },
-    { op: 'show', id: 'progress', type: 'progress', data: { label: 'EPOCH 41 / 80', detail: 'ACTIVE / OPTIMIZER STEP 18442', value: 0.5125, text: '51.25% COMPLETE' } },
+    { op: 'show', id: 'progress', type: 'progress', data: { label: 'EPOCH 41 / 80', detail: 'ACTIVE / OPTIMIZER STEP 18442', value: 51.25, text: '51.25% COMPLETE' } },
     { op: 'show', id: 'training-note', type: 'note', data: { tag: 'OBSERVATION / EPOCH 32+', anchor: { target: 'loss', x: 32, series: 'VAL LOSS' }, segments: [
       { text: 'Validation loss turns upward here while training loss continues down. I would inspect the ' },
       { text: 'learning-rate transition', accent: true, bold: true },
@@ -74,7 +74,7 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
         { from: 'implementer', to: 'pool', semantic: 'cyan' },
       ],
     } },
-    { op: 'show', id: 'architecture-note', type: 'note', data: { tag: 'CURRENT EXPLANATION / 01', segments: [
+    { op: 'show', id: 'architecture-note', type: 'note', data: { tag: 'CURRENT EXPLANATION / 01', anchor: { target: 'system-map', node: 'session' }, segments: [
       { text: 'The voice does not change. ' },
       { text: 'Context moves.', accent: true, bold: true },
       { text: ' Damocles routes the session into the project directory, then the project orchestrator delegates work without exposing those internal handoffs to you.' },

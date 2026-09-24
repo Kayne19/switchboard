@@ -25,6 +25,7 @@ export function objectsOfType<T>(state: ControllerState, type: SceneObjectType):
 
 export interface CompositionModel {
   primary: SceneObject | null;
+  primaryMetrics: Array<SceneObject<MetricData>>;
   compare: SceneObject[];
   secondary: SceneObject[];
   ambient: SceneObject[];
@@ -35,32 +36,57 @@ export interface CompositionModel {
   visualKind: AgentObjectType | null;
 }
 
+function messageObject(object: SceneObject | undefined): SceneObject<MessageData> | null {
+  return object?.type === 'message' ? (object as SceneObject<MessageData>) : null;
+}
+
 export function buildCompositionModel(state: ControllerState): CompositionModel {
   const allAgentObjects = state.agentOrder
     .map((id) => state.agentObjects[id])
     .filter((obj): obj is SceneObject => Boolean(obj));
 
-  // Determine primary: the object holding role "primary" (the reducer lets
-  // only the latest claimant keep it), else the first non-ambient by order.
+  // Primary metrics cluster (#38):
+  // When metrics claim role "primary", they join a cluster instead of demoting
+  // each other. Cluster order is stable by claim order (primaryClaimedAt).
+  const primaryMetrics = allAgentObjects
+    .filter((obj): obj is SceneObject<MetricData> => obj.role === 'primary' && obj.type === 'metric')
+    .sort((a, b) => (a.primaryClaimedAt ?? 0) - (b.primaryClaimedAt ?? 0));
+
+  // Determine primary:
+  // If a primary metric cluster exists, the leading primary metric in claim
+  // order is primary. Otherwise, the explicit primary object holding role
+  // "primary", else the first non-ambient by order, else the first object.
   let primary: SceneObject | null = null;
-  const explicitPrimary = allAgentObjects.find((obj) => obj.role === 'primary');
-  if (explicitPrimary) {
-    primary = explicitPrimary;
+  if (primaryMetrics.length > 0) {
+    primary = primaryMetrics[0];
   } else {
-    const firstNonAmbient = allAgentObjects.find((obj) => obj.role !== 'ambient');
-    if (firstNonAmbient) {
-      primary = firstNonAmbient;
-    } else if (allAgentObjects.length > 0) {
-      primary = allAgentObjects[0];
+    const explicitPrimary = allAgentObjects.find((obj) => obj.role === 'primary');
+    if (explicitPrimary) {
+      primary = explicitPrimary;
+    } else {
+      const firstNonAmbient = allAgentObjects.find((obj) => obj.role !== 'ambient');
+      if (firstNonAmbient) {
+        primary = firstNonAmbient;
+      } else if (allAgentObjects.length > 0) {
+        primary = allAgentObjects[0];
+      }
     }
   }
+
+  const activePrimaryMetrics =
+    primaryMetrics.length > 0
+      ? primaryMetrics
+      : primary && primary.type === 'metric'
+        ? [primary as SceneObject<MetricData>]
+        : [];
+  const primaryMetricIds = new Set(activePrimaryMetrics.map((m) => m.id));
 
   const compare: SceneObject[] = [];
   const secondary: SceneObject[] = [];
   const ambient: SceneObject[] = [];
 
   for (const obj of allAgentObjects) {
-    if (obj.id === primary?.id) {
+    if (obj.id === primary?.id || primaryMetricIds.has(obj.id)) {
       continue;
     }
     if (obj.role === 'compare') {
@@ -84,11 +110,12 @@ export function buildCompositionModel(state: ControllerState): CompositionModel 
     .map((id) => state.runtimeObjects[id])
     .filter((obj): obj is SceneObject => Boolean(obj));
 
+  // `state.objects` merges agent objects, and an agent may give any object
+  // the id `message`: the fallback is a conversation only when it holds one.
   const runtimeConv =
-    (state.runtimeObjects[RUNTIME_CONVERSATION_ID] as SceneObject<MessageData> | undefined) ??
-    (state.runtimeObjects['conversation'] as SceneObject<MessageData> | undefined) ??
-    (state.objects['message'] as SceneObject<MessageData> | undefined) ??
-    null;
+    messageObject(state.runtimeObjects[RUNTIME_CONVERSATION_ID]) ??
+    messageObject(state.runtimeObjects['conversation']) ??
+    messageObject(state.objects['message']);
 
   let visualKind: AgentObjectType | null = null;
   if (state.focusId && state.agentObjects[state.focusId]) {
@@ -102,6 +129,7 @@ export function buildCompositionModel(state: ControllerState): CompositionModel 
 
   return {
     primary,
+    primaryMetrics: activePrimaryMetrics,
     compare,
     secondary,
     ambient,

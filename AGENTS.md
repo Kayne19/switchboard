@@ -29,7 +29,9 @@ and the two trees can drift. Cut the drift short — do the tag switch early.
 The contract between the halves is the environment file. The role writes it,
 this app reads it. Every `SWITCHBOARD_*` variable the code reads is public
 interface: changing or adding one is a change on both sides, and the PR that
-does it should say so.
+does it should say so. That includes `SWITCHBOARD_GIT_SHA`, which crosses at
+build time instead: the homelab builder sets it so `build.rs` can stamp a
+binary built from `git archive` with its commit (see `README.md`).
 
 ## `extensions/`
 
@@ -53,6 +55,13 @@ extension staging path, not through a deploy.
   `python3 -m unittest discover -s legacy/tests`, and `npm test` followed by
   `git diff --exit-code -- static` — the compiled browser output is committed,
   so rebuild it in the same change.
+- A `static/` merge conflict is resolved by rebuilding from the merged source
+  (`npm ci && npm run build`), never by picking a side (see #37).
+- `master` requires a passing CI `test` check on an up-to-date head. A head
+  pushed by the Copilot agent gets no CI jobs until a maintainer approves its
+  workflow runs on the pull request. An unapproved run has zero jobs and can
+  end as a failure that GitHub blames on the workflow file; it is not (see
+  #35). Approve it, or push the head yourself.
 - Compatibility tests live in `legacy/tests/`; browser tests stay in `apps/frontend/tests/`.
   They are the reason this repo exists — keep them passing on every commit.
 - No network, no ElevenLabs, no whisper model downloads in tests. Stub them.

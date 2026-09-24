@@ -51,6 +51,13 @@ export interface LaidOutEdge {
   label: EdgeLabel | null;
 }
 
+export interface DiagramCallout {
+  targetNodeId: string;
+  box: Box;
+  leader: Point[];
+  placement: 'above' | 'below' | 'left' | 'right';
+}
+
 export interface DiagramLayout {
   width: number;
   height: number;
@@ -58,6 +65,7 @@ export interface DiagramLayout {
   nodeHeight: number;
   nodes: LaidOutNode[];
   edges: LaidOutEdge[];
+  callout?: DiagramCallout | null;
 }
 
 // The approved geometry, in main/cross terms.
@@ -191,7 +199,7 @@ function labelBacking(text: string) {
   };
 }
 
-export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation): DiagramLayout {
+export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation, anchorNodeId?: string): DiagramLayout {
   const geometry = GEOMETRY[orientation];
   const landscape = orientation === 'landscape';
   const layers = createLayers(data.nodes, data.edges);
@@ -329,12 +337,132 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
     label: labelFor(item),
   }));
 
+  const width = landscape ? mainSize : crossSize;
+  const height = landscape ? crossSize : mainSize;
+  const callout = anchorNodeId ? placeCallout(nodes, edges, anchorNodeId, width, height, orientation) : null;
+
   return {
-    width: landscape ? mainSize : crossSize,
-    height: landscape ? crossSize : mainSize,
+    width,
+    height,
     nodeWidth: landscape ? geometry.nodeMain : geometry.nodeCross,
     nodeHeight: landscape ? geometry.nodeCross : geometry.nodeMain,
     nodes,
     edges,
+    callout,
   };
+}
+
+function boxesOverlap(a: Box, b: Box, clearance = 10): boolean {
+  return !(
+    a.x + a.width + clearance <= b.x ||
+    b.x + b.width + clearance <= a.x ||
+    a.y + a.height + clearance <= b.y ||
+    b.y + b.height + clearance <= a.y
+  );
+}
+
+export function placeCallout(
+  nodes: LaidOutNode[],
+  edges: LaidOutEdge[],
+  targetNodeId: string,
+  diagramWidth: number,
+  diagramHeight: number,
+  orientation: DiagramOrientation,
+): DiagramCallout | null {
+  if (orientation === 'portrait') return null;
+
+  const target = nodes.find((n) => n.node.id === targetNodeId);
+  if (!target) return null;
+
+  const calloutWidth = 240;
+  const calloutHeight = 80;
+  const gap = 20;
+
+  const candidates: Array<{
+    placement: 'above' | 'below' | 'left' | 'right';
+    box: Box;
+    leader: Point[];
+  }> = [
+    {
+      placement: 'above',
+      box: {
+        x: Math.max(10, Math.min(diagramWidth - calloutWidth - 10, target.box.x + (target.box.width - calloutWidth) / 2)),
+        y: target.box.y - gap - calloutHeight,
+        width: calloutWidth,
+        height: calloutHeight,
+      },
+      leader: [
+        { x: target.box.x + target.box.width / 2, y: target.box.y - gap },
+        { x: target.box.x + target.box.width / 2, y: target.box.y },
+      ],
+    },
+    {
+      placement: 'below',
+      box: {
+        x: Math.max(10, Math.min(diagramWidth - calloutWidth - 10, target.box.x + (target.box.width - calloutWidth) / 2)),
+        y: target.box.y + target.box.height + gap,
+        width: calloutWidth,
+        height: calloutHeight,
+      },
+      leader: [
+        { x: target.box.x + target.box.width / 2, y: target.box.y + target.box.height + gap },
+        { x: target.box.x + target.box.width / 2, y: target.box.y + target.box.height },
+      ],
+    },
+    {
+      placement: 'right',
+      box: {
+        x: target.box.x + target.box.width + gap,
+        y: Math.max(10, Math.min(diagramHeight - calloutHeight - 10, target.box.y + (target.box.height - calloutHeight) / 2)),
+        width: calloutWidth,
+        height: calloutHeight,
+      },
+      leader: [
+        { x: target.box.x + target.box.width + gap, y: target.box.y + target.box.height / 2 },
+        { x: target.box.x + target.box.width, y: target.box.y + target.box.height / 2 },
+      ],
+    },
+    {
+      placement: 'left',
+      box: {
+        x: target.box.x - gap - calloutWidth,
+        y: Math.max(10, Math.min(diagramHeight - calloutHeight - 10, target.box.y + (target.box.height - calloutHeight) / 2)),
+        width: calloutWidth,
+        height: calloutHeight,
+      },
+      leader: [
+        { x: target.box.x - gap, y: target.box.y + target.box.height / 2 },
+        { x: target.box.x, y: target.box.y + target.box.height / 2 },
+      ],
+    },
+  ];
+
+  for (const cand of candidates) {
+    if (
+      cand.box.x < 10 ||
+      cand.box.x + cand.box.width > diagramWidth - 10 ||
+      cand.box.y < 10 ||
+      cand.box.y + cand.box.height > diagramHeight - 10
+    ) {
+      continue;
+    }
+    const overlapsOtherNode = nodes.some(
+      (n) => n.node.id !== targetNodeId && boxesOverlap(cand.box, n.box, 12),
+    );
+    if (overlapsOtherNode) continue;
+
+    const overlapsLabel = edges.some(
+      (e) => e.label && boxesOverlap(cand.box, e.label.box, 8),
+    );
+    if (overlapsLabel) continue;
+
+    return {
+      targetNodeId,
+      box: cand.box,
+      leader: cand.leader,
+      placement: cand.placement,
+    };
+  }
+
+  return null;
 }
