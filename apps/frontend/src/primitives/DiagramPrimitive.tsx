@@ -88,8 +88,12 @@ export function DiagramPrimitive({
     (note?.tag?.length ?? 0) <= CALLOUT_TAG_CHARS;
   const calloutPlaced = Boolean(!portrait && layout.callout && calloutFits);
 
+  // The scene drops the note from the rail while the callout carries it. A
+  // diagram that goes away (a new scene, or a render error that leaves its
+  // surface unavailable) takes the callout with it, so it hands the note back.
   useEffect(() => {
     onCalloutChange?.(calloutPlaced);
+    return () => onCalloutChange?.(false);
   }, [calloutPlaced, onCalloutChange]);
 
   const activeNodes = new Set(data.nodes.filter((node) => node.state === 'active').map((node) => node.id));

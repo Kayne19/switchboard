@@ -207,6 +207,30 @@ describe('anchored note fit and ownership', () => {
     expect(host.querySelector('.diagram-node__marker')).not.toBeNull();
   });
 
+  it('hands a placed callout back to the rail when the diagram unmounts', () => {
+    const placed: boolean[] = [];
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() =>
+      root.render(
+        <DiagramPrimitive
+          data={data}
+          id="test-diagram"
+          note={{ tag: 'OBSERVATION', anchor: { target: 'test-diagram', node: 'route' }, segments: [{ text: 'Context moves here.' }] }}
+          onCalloutChange={(value) => placed.push(value)}
+        />,
+      ),
+    );
+    expect(host.querySelector('.diagram-callout')).not.toBeNull();
+    expect(placed.at(-1)).toBe(true);
+
+    // A surface boundary replacing a diagram that threw unmounts it the same
+    // way; the scene must not keep hiding the note from the rail.
+    act(() => root.render(<div />));
+    expect(placed.at(-1)).toBe(false);
+  });
+
   it('does not capture a note whose target is another object', () => {
     renderAnchored({
       tag: 'OBSERVATION',
