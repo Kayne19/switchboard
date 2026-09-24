@@ -1164,14 +1164,17 @@ button {
   color: var(--paper);
 }
 /* In the conversation layout the panel sits above the fixed lower controls,
-   clear of the answer box, the centred transcript toggle, and the approved
-   lower-right corner mark. */
+   clear of the centred transcript toggle. It is centred on 20.2cqh, midway
+   between the top of the approved lower-right corner mark (6.4 + 10cqh) and
+   the lower edge of a 31cqh answer box (18 + (43 - 31) / 2 = 24cqh), so a
+   short stage leaves it the same clearance from both. */
 .tool-activity--conversation {
   position: absolute;
   z-index: 3;
   left: calc(50% + 140px);
   right: 6.2cqw;
-  bottom: 18cqh;
+  bottom: 20.2cqh;
+  translate: 0 50%;
   max-width: 360px;
   margin-left: auto;
   border-top: 0;
@@ -1699,6 +1702,7 @@ button {
     left: 6cqw;
     right: 6cqw;
     bottom: 12cqh;
+    translate: none;
     max-width: 420px;
     margin-inline: auto;
   }

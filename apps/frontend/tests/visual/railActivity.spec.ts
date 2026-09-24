@@ -16,6 +16,13 @@ const viewports = [
   { width: 2560, height: 1080 },
 ] as const;
 
+// Common laptop browser viewports, where the band between the answer box and
+// the lower corner mark is at its narrowest.
+const shortLandscapes = [
+  { width: 1366, height: 657 },
+  { width: 1536, height: 730 },
+] as const;
+
 function overlap(first: Box, second: Box) {
   return !(
     first.x + first.width <= second.x
@@ -40,10 +47,12 @@ async function openConversation(page: Page, testInfo: TestInfo) {
   });
   await expect(page.locator('[data-scene="conversation"]')).toBeVisible();
   await expect(page.locator('.tool-activity--conversation')).toBeVisible();
+  // Measure where the panel settles, not its 6px rise in.
+  await page.waitForTimeout(300);
   return fixtureServer;
 }
 
-for (const viewport of viewports) {
+for (const viewport of [...viewports, ...shortLandscapes]) {
   test(`conversation activity clears the fixed lower controls at ${viewport.width}x${viewport.height}`, async ({ page }, testInfo) => {
     await page.setViewportSize(viewport);
     const fixtureServer = await openConversation(page, testInfo);
