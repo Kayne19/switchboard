@@ -1915,6 +1915,12 @@ button {
     min-height: 0;
     padding: 7px 0;
   }
+  /* The rail's telemetry header costs a line, so on a short portrait stage
+     its rows give some padding back: a phone rail still holds five metrics
+     without clipping the last. A tall stage keeps the full 7px. */
+  .metrics--rail .metric-row {
+    padding: clamp(4px, 0.6cqh, 7px) 0;
+  }
   .metric-row__value {
     font-size: clamp(14px, 2.7cqw, 20px);
   }
