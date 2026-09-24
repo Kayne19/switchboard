@@ -110,6 +110,25 @@ button {
   color: var(--muted);
 }
 
+.surface-unavailable,
+.stage-unavailable {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  color: rgba(232, 230, 223, 0.3);
+}
+.stage-unavailable {
+  position: absolute;
+  left: 50%;
+  bottom: 7cqh;
+  width: auto;
+  height: auto;
+  transform: translateX(-50%);
+}
+
 .focusable-content {
   display: block;
   width: 100%;

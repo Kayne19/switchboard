@@ -94,6 +94,18 @@ fn diagram_show() -> Value {
 }
 
 #[tokio::test]
+async fn healthz_reports_the_commit_the_binary_was_stamped_with() {
+    // A deploy is checked with one request, so the stamp build.rs chose has to
+    // reach /healthz verbatim, beside the fields existing consumers read.
+    let (code, health) = request_json(&state(), Method::GET, "/healthz", None).await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(health["git"], env!("SWITCHBOARD_GIT_SHA"));
+    assert_eq!(health["git"], crate::GIT_SHA);
+    assert!(!crate::GIT_SHA.is_empty());
+    assert_eq!(health["status"], "ok");
+}
+
+#[tokio::test]
 async fn http_contract_exposes_status_health_and_page_controls() {
     let state = state();
     let (code, status) = request_json(&state, Method::GET, "/status", None).await;

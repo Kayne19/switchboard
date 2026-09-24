@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import type {
   ChartData,
   CodeData,
@@ -29,6 +29,7 @@ import { SceneFooter } from '../primitives/SceneFooter';
 import { FocusableSurface } from '../primitives/FocusableSurface';
 import { TechFrame } from '../primitives/TechFrame';
 import { ToolActivity } from '../primitives/ToolActivity';
+import { SurfaceBoundary } from './SurfaceBoundary';
 
 interface SceneProps {
   state: ControllerState;
@@ -95,6 +96,14 @@ function sceneCaption(object: SceneObject, fallback: string): string {
   return typeof caption === 'string' && caption.trim() ? caption : fallback;
 }
 
+function ObjectSurface({ object, children }: { object: SceneObject; children: ReactNode }) {
+  return (
+    <SurfaceBoundary surfaceId={object.id} resetKey={object}>
+      {children}
+    </SurfaceBoundary>
+  );
+}
+
 function chartAnnotationStyle(note: NoteData | null, chart: SceneObject<ChartData>): CSSProperties | undefined {
   if (note?.anchor?.target !== chart.id || note.anchor.x === undefined) return undefined;
   const xMax = chart.data.xMax ?? Math.max(1, ...chart.data.series.map((series) => series.values.length - 1));
@@ -119,11 +128,13 @@ function RailNote({ note, noteObject, onFocus, onOpenHistory }: ExplanationProps
     <AnimatePresence initial={false}>
       {note ? (
         <ObjectMotion key="rail-note" objectId={noteObject?.id ?? 'speech-note'} className="rail-note" layout="position">
-          <AnnotationCard
-            data={note}
-            onFocus={noteObject ? () => onFocus(noteObject.id) : undefined}
-            onOpenHistory={noteObject ? undefined : onOpenHistory}
-          />
+          <SurfaceBoundary surfaceId={noteObject?.id ?? 'speech-note'} resetKey={noteObject ?? note}>
+            <AnnotationCard
+              data={note}
+              onFocus={noteObject ? () => onFocus(noteObject.id) : undefined}
+              onOpenHistory={noteObject ? undefined : onOpenHistory}
+            />
+          </SurfaceBoundary>
         </ObjectMotion>
       ) : null}
     </AnimatePresence>
@@ -137,9 +148,11 @@ function RailProgress({ progressList, onFocus }: { progressList: Array<SceneObje
     <>
       {progressList.map((progress) => (
         <ObjectMotion key={progress.id} objectId={progress.id} className="rail-progress">
-          <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
-            <ProgressPrimitive data={progress.data} />
-          </FocusableSurface>
+          <ObjectSurface object={progress}>
+            <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
+              <ProgressPrimitive data={progress.data} />
+            </FocusableSurface>
+          </ObjectSurface>
         </ObjectMotion>
       ))}
     </>
@@ -214,9 +227,7 @@ export function ConversationScene({ state, onToggleListening, setTranscriptOpen 
   const comp = buildCompositionModel(state);
   const object =
     comp.runtimeConversation ??
-    (comp.primary?.type === 'message' ? comp.primary : null) ??
-    (state.objects['message'] as SceneObject<MessageData> | undefined) ??
-    null;
+    (comp.primary?.type === 'message' ? comp.primary : null);
   const fallbackMessage: MessageData = {
     context: 'OPERATOR LINE',
     tag: 'CURRENT RESPONSE / LIVE',
@@ -245,9 +256,11 @@ export function ConversationScene({ state, onToggleListening, setTranscriptOpen 
 
       <ObjectMotion objectId={object?.id ?? "conversation"} className="conversation-answer">
         <TechFrame variant="answer" />
-        <div className="conversation-answer__tag tech micro">{message.tag ?? 'CURRENT RESPONSE / 01'}</div>
-        <div className="conversation-answer__text"><div className="conversation-answer__text-inner"><RichText segments={segments} /></div></div>
-        <div className="conversation-answer__index tech micro">{message.caption ?? `${message.channel?.name ?? 'VOICE'} / LIVE`}</div>
+        <SurfaceBoundary surfaceId={object?.id ?? 'conversation'} resetKey={object ?? message}>
+          <div className="conversation-answer__tag tech micro">{message.tag ?? 'CURRENT RESPONSE / 01'}</div>
+          <div className="conversation-answer__text"><div className="conversation-answer__text-inner"><RichText segments={segments} /></div></div>
+          <div className="conversation-answer__index tech micro">{message.caption ?? `${message.channel?.name ?? 'VOICE'} / LIVE`}</div>
+        </SurfaceBoundary>
       </ObjectMotion>
 
       <div className="conversation-channel tech micro">
@@ -284,9 +297,11 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
               {charts.map((chart) => (
                 <ObjectMotion key={chart.id} objectId={chart.id} className="chart-object">
                   <TechFrame variant="panel" />
-                  <FocusableSurface onActivate={() => onFocus(chart.id)} ariaLabel={`Expand ${chart.data.title ?? 'chart'}`}>
-                    <ChartPrimitive data={chart.data} />
-                  </FocusableSurface>
+                  <ObjectSurface object={chart}>
+                    <FocusableSurface onActivate={() => onFocus(chart.id)} ariaLabel={`Expand ${chart.data.title ?? 'chart'}`}>
+                      <ChartPrimitive data={chart.data} />
+                    </FocusableSurface>
+                  </ObjectSurface>
                   {chart.role === 'compare' ? <div className="compare-label tech micro">COMPARE / {chart.data.compareLabel ?? 'RUN'}</div> : null}
                 </ObjectMotion>
               ))}
@@ -303,15 +318,19 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.2 }}
               >
-                <AnnotationCard data={note} onFocus={noteObject ? () => onFocus(noteObject.id) : undefined} onOpenHistory={noteObject ? undefined : onOpenHistory} />
+                <SurfaceBoundary surfaceId={noteObject?.id ?? 'speech-note'} resetKey={noteObject ?? note}>
+                  <AnnotationCard data={note} onFocus={noteObject ? () => onFocus(noteObject.id) : undefined} onOpenHistory={noteObject ? undefined : onOpenHistory} />
+                </SurfaceBoundary>
               </motion.div>
             ) : null}
           </AnimatePresence>
           {progress ? (
             <ObjectMotion objectId={progress.id} className="training-progress">
-              <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
-                <ProgressPrimitive data={progress.data} />
-              </FocusableSurface>
+              <ObjectSurface object={progress}>
+                <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
+                  <ProgressPrimitive data={progress.data} />
+                </FocusableSurface>
+              </ObjectSurface>
             </ObjectMotion>
           ) : null}
         </motion.div>
@@ -351,9 +370,11 @@ export function ArchitectureScene({ state, onToggleListening, onFocus, onOpenHis
       <div className="content-grid">
         <ObjectMotion objectId={diagram.id} className="content-main diagram-object">
           <TechFrame variant="rails" />
-          <FocusableSurface onActivate={() => onFocus(diagram.id)} ariaLabel="Expand diagram">
-            <DiagramPrimitive data={diagram.data} />
-          </FocusableSurface>
+          <ObjectSurface object={diagram}>
+            <FocusableSurface onActivate={() => onFocus(diagram.id)} ariaLabel="Expand diagram">
+              <DiagramPrimitive data={diagram.data} />
+            </FocusableSurface>
+          </ObjectSurface>
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={diagram.data.context ?? 'SYSTEM MAP'} size="rail" activity={state.activity} />
@@ -382,9 +403,11 @@ export function DocumentScene({ state, onToggleListening, onFocus, onOpenHistory
       </div>
       <div className="content-grid">
         <ObjectMotion objectId={document.id} className="content-main document-object">
-          <FocusableSurface onActivate={() => onFocus(document.id)} ariaLabel="Expand document">
-            <DocumentViewport data={document.data} />
-          </FocusableSurface>
+          <ObjectSurface object={document}>
+            <FocusableSurface onActivate={() => onFocus(document.id)} ariaLabel="Expand document">
+              <DocumentViewport data={document.data} />
+            </FocusableSurface>
+          </ObjectSurface>
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={document.data.context ?? 'DOCUMENT'} size="rail" activity={state.activity} />
@@ -413,9 +436,11 @@ export function CodeScene({ state, onToggleListening, onFocus, onOpenHistory }: 
       </div>
       <div className="content-grid">
         <ObjectMotion objectId={code.id} className="content-main code-object">
-          <FocusableSurface onActivate={() => onFocus(code.id)} ariaLabel="Expand code">
-            <CodeViewport data={code.data} />
-          </FocusableSurface>
+          <ObjectSurface object={code}>
+            <FocusableSurface onActivate={() => onFocus(code.id)} ariaLabel="Expand code">
+              <CodeViewport data={code.data} />
+            </FocusableSurface>
+          </ObjectSurface>
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
           <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={code.data.context ?? 'SOURCE'} size="rail" activity={state.activity} />
@@ -475,25 +500,29 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
           >
             <TechFrame variant="panel" />
             {primaryMetrics.length > 1 ? (
-              <div className="focusable-content">
-                <MetricsPrimitive
-                  metrics={primaryMetrics}
-                  variant="primary"
-                  onFocus={onFocus}
-                />
-              </div>
-            ) : (
-              <FocusableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
-                {isMetricPrimary ? (
+              <SurfaceBoundary surfaceId="primary-metric-cluster" resetKey={state.agentObjects}>
+                <div className="focusable-content">
                   <MetricsPrimitive
-                    metrics={primaryMetrics.length > 0 ? primaryMetrics : [primary as SceneObject<MetricData>]}
+                    metrics={primaryMetrics}
                     variant="primary"
                     onFocus={onFocus}
                   />
-                ) : (
-                  composedPrimitive(primary, 'primary')
-                )}
-              </FocusableSurface>
+                </div>
+              </SurfaceBoundary>
+            ) : (
+              <ObjectSurface object={primary}>
+                <FocusableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
+                  {isMetricPrimary ? (
+                    <MetricsPrimitive
+                      metrics={primaryMetrics.length > 0 ? primaryMetrics : [primary as SceneObject<MetricData>]}
+                      variant="primary"
+                      onFocus={onFocus}
+                    />
+                  ) : (
+                    composedPrimitive(primary, 'primary')
+                  )}
+                </FocusableSurface>
+              </ObjectSurface>
             )}
           </ObjectMotion>
           {auxObjects.length > 0 ? (
@@ -505,9 +534,11 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
                   className={`composed-aux-object composed-aux-object--${object.type}`}
                 >
                   <TechFrame variant="panel" />
-                  <FocusableSurface onActivate={() => onFocus(object.id)} ariaLabel={`Expand ${object.type}`}>
-                    {composedPrimitive(object, 'aux')}
-                  </FocusableSurface>
+                  <ObjectSurface object={object}>
+                    <FocusableSurface onActivate={() => onFocus(object.id)} ariaLabel={`Expand ${object.type}`}>
+                      {composedPrimitive(object, 'aux')}
+                    </FocusableSurface>
+                  </ObjectSurface>
                 </ObjectMotion>
               ))}
             </div>
