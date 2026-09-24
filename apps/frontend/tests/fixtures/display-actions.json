@@ -158,7 +158,7 @@
         "data": {
           "label": "Compiling",
           "detail": "Building assets",
-          "value": 0.75,
+          "value": 75,
           "text": "75%"
         }
       },
@@ -170,7 +170,7 @@
         "data": {
           "label": "Compiling",
           "detail": "Building assets",
-          "value": 0.75,
+          "value": 75,
           "text": "75%"
         }
       }
@@ -1120,7 +1120,7 @@
         "type": "progress",
         "data": {
           "label": "Upload",
-          "value": 0.5
+          "value": 50
         }
       },
       "path": [

@@ -145,6 +145,11 @@ SWITCHBOARD_LOG
 SWITCHBOARD_LOG_FORMAT
 ```
 
+`SWITCHBOARD_GIT_SHA` is read at build time, not from the env file: the homelab
+builder passes the pinned commit to `cargo build`, and `build.rs` stamps it into
+the startup log and `/healthz` (falling back to `git describe`, then `unknown`).
+It is interface on the same terms as the runtime names above.
+
 `SWITCHBOARD_SPEECH_DEADLINE_MS` is a positive bounded millisecond deadline
 (default `25000`) shared by `/speak`, normal reply synthesis, the TTS transport,
 and the project extension's abort timeout. `SWITCHBOARD_LOG` overrides

@@ -299,6 +299,16 @@ cargo test --offline
 cargo clippy --offline --all-targets -- -D warnings
 ```
 
+`build.rs` stamps the binary with the commit it was built from, logged at
+startup as `git=` and reported by `/healthz` as `git`. It takes
+`SWITCHBOARD_GIT_SHA` from the build environment when set (trimmed; blank means
+unset; anything that is not a commit or tag name fails the build), else
+`git describe --always --dirty --abbrev=12`, else `unknown`. The homelab
+builder compiles a `git archive` of the pin, which has no `.git`, so it passes
+the pinned commit in that variable. It is a build-time input, not part of the
+env file, but under `AGENTS.md` it is interface all the same: renaming it or
+changing what it accepts needs a homelab PR.
+
 The legacy Python service in `legacy/backend/` remains the compatibility
 baseline until homelab cuts over to the pinned Rust binary. Do not remove its audio path before the STT sidecar
 or a benchmarked Rust Whisper adapter is validated on the deployment host.
@@ -315,7 +325,7 @@ behavior.
 ```bash
 systemctl status switchboard
 journalctl -u switchboard -f          # every transcript, route change and signal
-curl -s localhost:8765/healthz | jq   # model, TTS config, current route
+curl -s localhost:8765/healthz | jq   # commit, model, TTS config, current route
 ```
 
 The browser page is `https://switchboard.home.arpa` (via caddy). It has to be

@@ -150,19 +150,27 @@ rule to pick the object a `visual_kind` / `title` answer is about:
 1. the focused object, if `focus` names one and it is still on stage;
 2. otherwise the composition **primary**, computed over the objects
    currently on stage in the order they were `show`n:
-   1. the object with `role: "primary"`;
+   1. the earliest claimant holding `role: "primary"`;
    2. else the first object that is not `role: "ambient"` (an unset role
       counts as non-ambient);
    3. else the first object shown, if any is on stage at all.
 
-At most one object holds `role: "primary"`. A `show` that carries
-`role: "primary"` takes the role from whichever object held it, and that
-object stays on stage with `role: "secondary"` — so the latest explicit claim
-wins, and hiding it hands the viewport back by rule 2. A `show` that names no
-role keeps the object's current role, so updating an object never moves the
-primary. The browser's reducer (`controller/reducer.ts`) and
-`DisplayProjection::apply` both apply this demotion, which is also what a
-reconnecting browser's snapshot replays.
+`role: "primary"` is held either by one non-metric object or by a cluster
+of up to six metrics (`MAX_PRIMARY_METRICS`), which the page lays out
+together in the main column in claim order. A `show` that carries
+`role: "primary"` demotes every object it displaces to `role: "secondary"`,
+where it stays on stage: a non-metric claim displaces every primary; a metric
+claim displaces a non-metric primary and joins any metrics holding the role,
+displacing the earliest of them only when the cluster is already full. So the
+latest explicit claim always reaches the primary viewport, and hiding the
+last primary hands the viewport back by rule 2. The composition primary of
+rule 2.1 is the earliest claimant still holding the role, which for a cluster
+is its first metric. A `show` that names no role keeps the object's current
+role, so updating an object never moves the primary; one that changes a
+primary's type claims the role again under the new type. The browser's reducer
+(`controller/reducer.ts`) and `DisplayProjection::apply` both apply these
+rules, and a reconnecting browser's snapshot replays every object in show
+order and the primaries' claims in claim order, so it rebuilds both.
 
 Focus always overrides the composition primary, for both `visual_kind` and
 `title` — an agent that calls `focus` on an ambient or secondary object

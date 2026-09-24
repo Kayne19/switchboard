@@ -17,13 +17,14 @@ import { DiagramPrimitive } from '../primitives/DiagramPrimitive';
 import { DocumentViewport } from '../primitives/DocumentViewport';
 import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
 import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
+import { SurfaceBoundary } from './SurfaceBoundary';
 
 function FocusedObject({ object }: { object: SceneObject }) {
   switch (object.type) {
     case 'chart':
       return <ChartPrimitive data={object.data as ChartData} focused />;
     case 'diagram':
-      return <DiagramPrimitive data={object.data as DiagramData} focused />;
+      return <DiagramPrimitive data={object.data as DiagramData} id={object.id} focused />;
     case 'document':
       return <DocumentViewport data={object.data as DocumentData} focused />;
     case 'code':
@@ -65,7 +66,9 @@ export function FocusLayer({ object, onClose }: { object: SceneObject | null; on
               <span>FOCUS / {object.type.toUpperCase()}</span>
               <button type="button" onClick={onClose}>RETURN / ESC</button>
             </div>
-            <FocusedObject object={object} />
+            <SurfaceBoundary surfaceId={object.id} resetKey={object}>
+              <FocusedObject object={object} />
+            </SurfaceBoundary>
           </motion.div>
         </motion.div>
       ) : null}

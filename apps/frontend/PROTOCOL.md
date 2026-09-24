@@ -69,14 +69,11 @@ Remove content and return to the Damocles presence.
 
 ## Value normalization
 
-`progress.value` is normalized before it reaches the renderer: values in
-0–1 are read as ratios, values in 1–100 as percentages, and values outside
-0–100 are clamped to the nearest end. Both `1` and `100` land on a full
-bar, so a value of exactly `1` always means complete, never one percent.
-The fill, the `aria-valuenow` (as a rounded percentage), and the reported
-state all derive from the normalized ratio, so a model that sends `65` for
-"65 percent" renders a 65% fill. The display tool asks models for
-percentages.
+`progress.value` is a percentage in 0–100. Out-of-range values clamp to [0, 100],
+and values are rounded to two decimal places. A value of `1` means 1%, not
+complete. The fill and `aria-valuenow` derive directly from this percentage.
+The display tool asks models for `value (percent, 0-100)`. Non-finite numbers
+are rejected.
 
 ## Runtime boundary
 
