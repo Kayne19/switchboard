@@ -154,10 +154,10 @@ test('explicit anchored note survives later chat messages', async ({ page }) => 
       },
     });
 
-    const note = page.locator('.training-note .annotation-card');
+    const note = page.locator('.chart-note .annotation-card');
     await expect(note).toHaveAttribute('data-anchor-target', 'loss');
     await expect(note).toContainText('This annotation stays attached to the validation spike.');
-    await expect(page.locator('.training-note')).toHaveClass(/training-note--anchored/);
+    await expect(page.locator('.chart-note')).toHaveClass(/chart-note--anchored/);
     const noteOverflow = await note.locator('.annotation-card__text').evaluate((element) => ({
       clientWidth: element.clientWidth,
       scrollWidth: element.scrollWidth,
@@ -172,6 +172,79 @@ test('explicit anchored note survives later chat messages', async ({ page }) => 
     await fixtureServer.stop();
   }
 });
+
+// #49 and #26: every note on a chart is shown over the plot, clear of the
+// others, and the chart keeps its size for them; a note that names a point
+// runs its leader out of its card's border.
+for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }, { width: 2560, height: 1080 }]) {
+  test(`every note on a chart shows over it without covering another at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.goto('/?scene=training&chrome=0');
+    await expect(page.locator('.chart-note')).toHaveCount(1);
+    const chartBox = async () => page.locator('.chart-object[data-chart-id="loss"] .chart-primitive > svg').evaluate((svg) => {
+      const box = svg.getBoundingClientRect();
+      return { width: box.width, height: box.height };
+    });
+    const before = await chartBox();
+
+    await page.evaluate(() => {
+      const dispatch = window.SwitchboardController?.dispatch;
+      if (!dispatch) throw new Error('controller unavailable');
+      dispatch({
+        op: 'show', id: 'general-note', type: 'note',
+        data: { tag: 'NOTE / GENERAL', segments: [{ text: 'A second note that names no point. It must still be on screen.' }] },
+      });
+      dispatch({
+        op: 'show', id: 'early-note', type: 'note',
+        data: {
+          tag: 'EARLY / EPOCH 6', anchor: { target: 'loss', x: 6, series: 'TRAIN LOSS' },
+          segments: [{ text: 'Both losses fall together through the warmup.' }],
+        },
+      });
+    });
+    await expect(page.locator('.chart-note')).toHaveCount(3);
+    await page.waitForTimeout(400);
+    expect(await chartBox()).toEqual(before);
+
+    const geometry = await page.evaluate(() => {
+      const panel = document.querySelector<HTMLElement>('.chart-object[data-chart-id="loss"]')!.getBoundingClientRect();
+      const layer = document.querySelector<HTMLElement>('.chart-notes')!.getBoundingClientRect();
+      const cards = [...document.querySelectorAll<HTMLElement>('.chart-note')].map((element) => {
+        const box = element.getBoundingClientRect();
+        return { id: element.dataset.note!, left: box.left, top: box.top, right: box.right, bottom: box.bottom };
+      });
+      const leaders = [...document.querySelectorAll<SVGGElement>('.chart-note-leader')].map((group) => ({
+        id: group.dataset.note!,
+        points: group.querySelector('polyline')!.getAttribute('points')!.split(' ').map((pair) => {
+          const [x, y] = pair.split(',').map(Number);
+          return { x: layer.left + x, y: layer.top + y };
+        }),
+      }));
+      return { panel: { left: panel.left, top: panel.top, right: panel.right, bottom: panel.bottom }, cards, leaders };
+    });
+
+    for (const [index, card] of geometry.cards.entries()) {
+      expect(card.left).toBeGreaterThanOrEqual(geometry.panel.left - 1);
+      expect(card.right).toBeLessThanOrEqual(geometry.panel.right + 1);
+      expect(card.top).toBeGreaterThanOrEqual(geometry.panel.top - 1);
+      expect(card.bottom).toBeLessThanOrEqual(geometry.panel.bottom + 1);
+      for (const other of geometry.cards.slice(index + 1)) {
+        const apart = card.right <= other.left + 0.5 || other.right <= card.left + 0.5 || card.bottom <= other.top + 0.5 || other.bottom <= card.top + 0.5;
+        expect(apart, `${card.id} and ${other.id} must not overlap`).toBe(true);
+      }
+    }
+    expect(geometry.leaders.map((leader) => leader.id).sort()).toEqual(['early-note', 'training-note']);
+    for (const leader of geometry.leaders) {
+      const card = geometry.cards.find((candidate) => candidate.id === leader.id)!;
+      const start = leader.points[0];
+      // It begins on the card's bottom or top border.
+      const onEdge = Math.abs(start.y - (card.bottom - 0.5)) <= 1 || Math.abs(start.y - (card.top + 0.5)) <= 1;
+      expect(onEdge, `${leader.id} leader starts on its card's border`).toBe(true);
+      expect(start.x).toBeGreaterThanOrEqual(card.left);
+      expect(start.x).toBeLessThanOrEqual(card.right);
+    }
+  });
+}
 
 test('long current response scrolls above configurable lower-right caption', async ({ page }) => {
   const fixtureServer = new DisplayFixtureServer({ initialGeneration: 6 });
@@ -489,7 +562,7 @@ test('note and live chat output coexist; neither mutates the other', async ({ pa
       },
     });
 
-    const note = page.locator('.training-note .annotation-card');
+    const note = page.locator('.chart-note .annotation-card');
     await expect(note).toContainText('This annotation stays attached to the validation spike.');
 
     fixtureServer.broadcast({ type: 'spoken', entry: { role: 'agent', text: 'The spike is contained.', id: 'reply-1' } });
@@ -499,7 +572,7 @@ test('note and live chat output coexist; neither mutates the other', async ({ pa
     await expect(note).toContainText('This annotation stays attached to the validation spike.');
 
     const overlap = await page.evaluate(() => {
-      const noteBox = document.querySelector<HTMLElement>('.training-note')!.getBoundingClientRect();
+      const noteBox = document.querySelector<HTMLElement>('.chart-note')!.getBoundingClientRect();
       const liveBox = document.querySelector<HTMLElement>('.live-chat-card')!.getBoundingClientRect();
       return !(
         noteBox.right <= liveBox.left || liveBox.right <= noteBox.left ||
@@ -513,7 +586,7 @@ test('note and live chat output coexist; neither mutates the other', async ({ pa
     await expect(note).toContainText('This annotation stays attached to the validation spike.');
 
     fixtureServer.broadcast({ type: 'display', action: { op: 'hide', id: 'spike-note' } });
-    await expect(page.locator('.training-note')).toHaveCount(0);
+    await expect(page.locator('.chart-note')).toHaveCount(0);
     await expect(live).toContainText('A newer response replaces the live card only.');
   } finally {
     await fixtureServer.stop();
