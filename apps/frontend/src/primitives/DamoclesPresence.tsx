@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'motion/react';
 import type { ActivityState } from '../controller/types';
 import { useFloatingMotion } from '../hooks/useFloatingMotion';
-import { ACTIVITY_LINGER_MS, useLingeringValue } from '../hooks/useLingeringValue';
+import { ACTIVITY_LINGER_MS, ACTIVITY_MINIMUM_MS, useLingeringValue } from '../hooks/useLingeringValue';
 import { DamoclesGlyph } from './DamoclesGlyph';
 import { VoiceIndicator } from './VoiceIndicator';
 
@@ -27,7 +27,7 @@ export function DamoclesPresence({
   /** The tool the agent is running; the caption names it in place of the voice line. */
   activity?: ActivityState | null;
 }) {
-  const shownActivity = useLingeringValue(activity, ACTIVITY_LINGER_MS);
+  const shownActivity = useLingeringValue(activity, ACTIVITY_LINGER_MS, ACTIVITY_MINIMUM_MS);
   const { y, rotate } = useFloatingMotion({ listening, amplitude: size === 'idle' ? 8.5 : size === 'conversation' ? 5.5 : 4 });
   const content = (
     <>

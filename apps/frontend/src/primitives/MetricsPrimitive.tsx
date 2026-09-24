@@ -4,11 +4,15 @@ import type { MetricData, SceneObject } from '../controller/types';
 
 interface MetricsPrimitiveProps {
   metrics: Array<SceneObject<MetricData>>;
-  variant?: 'list' | 'primary';
+  variant?: 'list' | 'primary' | 'rail';
   onFocus?: (id: string) => void;
 }
 
 export function MetricsPrimitive({ metrics, variant = 'list', onFocus }: MetricsPrimitiveProps) {
+  if (variant === 'rail' && metrics.length === 0) {
+    return null;
+  }
+  const isRail = variant === 'rail';
   const isCluster = variant === 'primary' && metrics.length > 1;
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>, id: string) => {
@@ -25,6 +29,14 @@ export function MetricsPrimitive({ metrics, variant = 'list', onFocus }: Metrics
       layout
       data-testid="metrics"
     >
+      {isRail ? (
+        <div className="metrics__header">
+          <span className="metrics__tag tech micro">TELEMETRY</span>
+          <span className="metrics__index tech muted">
+            {metrics.length === 1 ? (metrics[0]?.data.caption ?? 'LIVE') : `${metrics.length} CHANNELS`}
+          </span>
+        </div>
+      ) : null}
       <AnimatePresence mode="popLayout" initial={false}>
         {metrics.map((metric) => (
           <motion.div
