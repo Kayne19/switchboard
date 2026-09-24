@@ -837,7 +837,6 @@ button {
   gap: clamp(18px, 2.5cqw, 44px);
   width: 100%;
   min-height: 64px;
-  border-top: 1px solid rgba(232, 230, 223, 0.14);
   padding-top: clamp(10px, 1.2cqh, 16px);
 }
 .progress-primitive__label {
@@ -1058,6 +1057,32 @@ button {
 .content-rail__details > .metrics {
   flex: none;
 }
+/* The rail's metrics keep the rows' own geometry-driven spacing; the
+   framing adds only the rule and the header line above them. */
+.metrics--rail {
+  min-width: 0;
+  padding-top: clamp(10px, 1.2cqh, 14px);
+  border-top: 1px solid rgba(var(--orange-rgb), 0.48);
+}
+.metrics__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: clamp(6px, 1cqh, 10px);
+}
+.metrics__tag {
+  flex: none;
+  color: rgba(232, 230, 223, 0.35);
+}
+.metrics__index {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(232, 230, 223, 0.35);
+}
 .content-rail__details > .rail-note {
   flex: 1 1 auto;
   min-height: clamp(64px, 10cqh, 110px);
@@ -1162,15 +1187,31 @@ button {
 /* The last tool the project agent used: a compact status panel that
    updates in place as tool activity starts and ends. Long tool names and
    details truncate; the panel never grows into neighbouring surfaces. */
-.tool-activity {
+.tool-activity,
+.tool-activity-slot__sizer {
   min-width: 0;
   display: grid;
   gap: 4px;
   padding-top: clamp(8px, 1.1cqh, 12px);
   border-top: 1px solid rgba(232, 230, 223, 0.14);
 }
-.content-rail__details > .tool-activity {
+/* The rail panel's slot sits in the column's flow at its foot, so the panel
+   never covers another surface. A reserved slot holds an unseen copy of the
+   panel, and the panel stacks over it in the same cell. */
+.content-rail__details > .tool-activity-slot {
   flex: none;
+  margin-top: auto;
+  min-width: 0;
+  display: grid;
+}
+.tool-activity-slot:empty {
+  display: none;
+}
+.tool-activity-slot > * {
+  grid-area: 1 / 1;
+}
+.tool-activity-slot__sizer {
+  visibility: hidden;
 }
 .tool-activity__header {
   display: flex;
@@ -1201,15 +1242,18 @@ button {
 .tool-activity__tool {
   color: var(--paper);
 }
-/* In the conversation layout the panel sits in the channel row, clear of
-   the answer box and its lower-right caption. Its left edge stops short of
-   the centred transcript toggle, so it never sits over that control. */
+/* In the conversation layout the panel sits above the fixed lower controls,
+   clear of the centred transcript toggle. It is centred on 20.2cqh, midway
+   between the top of the approved lower-right corner mark (6.4 + 10cqh) and
+   the lower edge of a 31cqh answer box (18 + (43 - 31) / 2 = 24cqh), so a
+   short stage leaves it the same clearance from both. */
 .tool-activity--conversation {
   position: absolute;
   z-index: 3;
   left: calc(50% + 140px);
   right: 6.2cqw;
-  bottom: 6.4cqh;
+  bottom: 20.2cqh;
+  translate: 0 50%;
   max-width: 360px;
   margin-left: auto;
   border-top: 0;
@@ -1756,6 +1800,7 @@ button {
     left: 6cqw;
     right: 6cqw;
     bottom: 12cqh;
+    translate: none;
     max-width: 420px;
     margin-inline: auto;
   }
@@ -1869,6 +1914,12 @@ button {
   .metric-row {
     min-height: 0;
     padding: 7px 0;
+  }
+  /* The rail's telemetry header costs a line, so on a short portrait stage
+     its rows give some padding back: a phone rail still holds five metrics
+     without clipping the last. A tall stage keeps the full 7px. */
+  .metrics--rail .metric-row {
+    padding: clamp(4px, 0.6cqh, 7px) 0;
   }
   .metric-row__value {
     font-size: clamp(14px, 2.7cqw, 20px);

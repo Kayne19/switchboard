@@ -230,20 +230,25 @@ interface RailDetailsProps {
   onOpenHistory?: () => void;
 }
 
-// The details column beside every content visual: the live response, the
-// metrics, the note, any progress the main column has no slot for, and the
-// tool activity. It is a permanent slot; an empty one renders nothing, and
+// The details column beside every content visual: the metrics, live response,
+// note, any progress the main column has no slot for, and tool activity. It is
+// a permanent slot; an empty one renders nothing, and
 // the activity panel can linger after its end without the wrapper
 // unmounting it first.
 function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, onOpenHistory }: RailDetailsProps) {
   const liveMessage = liveChatMessage(state);
+  // The response and the note stretch into the column's free space, so while
+  // either is shown the activity slot stays reserved and a tool starting or
+  // clearing never resizes them. Metrics and progress keep their own size at
+  // the top and are not moved by a panel below them.
+  const reserveActivity = liveMessage !== null || note !== null;
   return (
     <div className="content-rail__details">
+      {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} variant="rail" /> : null}
       {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
-      {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} /> : null}
       <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
       <RailProgress progressList={progressList} onFocus={onFocus} />
-      <ToolActivity activity={state.activity} />
+      <ToolActivity activity={state.activity} reserveSpace={reserveActivity} />
     </div>
   );
 }
