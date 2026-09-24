@@ -575,6 +575,24 @@ fn snapshot_replay_keeps_show_order_when_claim_order_differs() {
 }
 
 #[test]
+fn the_primary_metric_cap_matches_the_browser_reducer() {
+    // The browser applies the same cluster rule with its own constant; if
+    // the two caps differ, /view and the page disagree on which metrics hold
+    // the primary viewport.
+    let reducer = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/apps/frontend/src/controller/reducer.ts"
+    ))
+    .expect("read the browser reducer");
+    let declared = reducer.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("export const MAX_PRIMARY_METRICS = ")
+            .and_then(|rest| rest.trim_end_matches(';').parse::<usize>().ok())
+    });
+    assert_eq!(declared, Some(MAX_PRIMARY_METRICS));
+}
+
+#[test]
 fn primary_metric_cluster_is_capped_and_the_earliest_claim_gives_way() {
     let mut projection = DisplayProjection::default();
     let show_metric = |id: &str| json!({"op":"show", "id":id, "type":"metric", "role":"primary", "data":{"label":id, "value":"1"}});

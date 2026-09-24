@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useIsPresent } from 'motion/react';
-import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import type {
   ChartData,
   CodeData,
@@ -15,7 +15,7 @@ import type {
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
 import { buildCompositionModel, cast, objectsOfType, primaryObject } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
-import { CHART_VIEW_HEIGHT, CHART_VIEW_WIDTH, ChartPrimitive } from '../primitives/ChartPrimitive';
+import { CHART_VIEW_HEIGHT, CHART_VIEW_WIDTH, ChartPrimitive, type ChartNoteCard } from '../primitives/ChartPrimitive';
 import { CodeViewport } from '../primitives/CodeViewport';
 import { DamoclesPresence } from '../primitives/DamoclesPresence';
 import { DiagramPrimitive } from '../primitives/DiagramPrimitive';
@@ -105,72 +105,101 @@ function ObjectSurface({ object, children }: { object: SceneObject; children: Re
   );
 }
 
-function chartAnnotationStyle(note: NoteData | null, chart: SceneObject<ChartData>): CSSProperties | undefined {
+// Where on the chart's viewBox x axis a note that names a point wants its
+// card, or undefined when it names none: a note anchored without an x, or a
+// chart with no positive x domain (which has no point to reach, so the note
+// is placed as an unanchored one rather than at a NaN position).
+function chartNoteAnchorX(note: NoteData | null, chart: SceneObject<ChartData>): number | undefined {
   if (note?.anchor?.target !== chart.id || note.anchor.x === undefined) return undefined;
   const maxCount = Math.max(2, ...chart.data.series.map((series) => series.values.length));
   const xMax = chart.data.xMax ?? maxCount - 1;
-  // A chart with no positive x domain has no point to reach: the note is
-  // placed as an unanchored one rather than at a NaN position.
   if (!(xMax > 0)) return undefined;
-  const xSvg = 74 + (note.anchor.x / xMax) * (CHART_VIEW_WIDTH - 74 - 28);
-  const ratio = Math.min(0.79, Math.max(0.21, xSvg / CHART_VIEW_WIDTH));
-  return { '--annotation-anchor-x': `${ratio * 100}%` } as CSSProperties;
+  return 74 + (Math.min(xMax, Math.max(0, note.anchor.x)) / xMax) * (CHART_VIEW_WIDTH - 74 - 28);
 }
 
-// The anchored note card is an HTML element the CSS clamps against the chart,
-// while the pointer is drawn in the chart's SVG viewBox. This hook measures
-// the card's on-screen position relative to the chart's rendered svg — the
-// same letterboxed geometry the renderer applies — and reports the card's
-// bottom-centre in viewBox units, so the leader leaves the card wherever the
-// CSS finally placed it. The observers report size changes only, so
-// `layoutKey` names what moves the card without resizing it — a new anchor
-// position or a different chart — and a change to it measures again.
-function useChartAnnotationCardEdge(
+interface ChartNoteGeometry {
+  /** The card's edges in the chart's viewBox units, for the leader. */
+  card?: ChartNoteCard;
+  /** The point's x in the card's containing panel, in CSS pixels. */
+  anchorPx?: number;
+}
+
+// The note card is an HTML element laid out in its band above the plot,
+// while the leader is drawn in the chart's SVG viewBox. This hook measures
+// both against the chart's rendered svg -- the same letterboxed geometry the
+// renderer applies. It reports where the point falls across the card's
+// panel, so the card centres over the point even when the chart is drawn
+// narrower than the panel; and the card's left, right and bottom edges in
+// viewBox units with the units one screen pixel spans, so the leader leaves
+// the card wherever the CSS finally placed it and keeps its screen-space
+// taper at any size. The observers report size changes only, so a new
+// anchor, its new position across the panel, or a different chart
+// (`layoutKey`) measures again.
+function useChartNoteGeometry(
   cardRef: RefObject<HTMLDivElement | null>,
   resolveSvg: () => SVGSVGElement | null,
-  present: boolean,
+  anchorX: number | undefined,
   layoutKey: string,
-): { x: number; y: number } | undefined {
-  const [edge, setEdge] = useState<{ x: number; y: number } | undefined>(undefined);
+): ChartNoteGeometry {
+  const [card, setCard] = useState<ChartNoteCard | undefined>(undefined);
+  const [anchorPx, setAnchorPx] = useState<number | undefined>(undefined);
   const resolveRef = useRef(resolveSvg);
   resolveRef.current = resolveSvg;
+  const present = anchorX !== undefined;
 
   useLayoutEffect(() => {
-    if (!present) {
-      setEdge(undefined);
+    if (anchorX === undefined) {
+      setCard(undefined);
+      setAnchorPx(undefined);
       return;
     }
     const update = () => {
-      const card = cardRef.current;
+      const element = cardRef.current;
       const svg = resolveRef.current();
-      if (!card || !svg) {
-        setEdge(undefined);
+      const panel = element?.parentElement;
+      if (!element || !svg || !panel) {
+        setCard(undefined);
         return;
       }
-      const cardRect = card.getBoundingClientRect();
+      const cardRect = element.getBoundingClientRect();
       const svgRect = svg.getBoundingClientRect();
       if (svgRect.width === 0 || svgRect.height === 0) {
-        setEdge(undefined);
+        setCard(undefined);
         return;
       }
       const scale = Math.min(svgRect.width / CHART_VIEW_WIDTH, svgRect.height / CHART_VIEW_HEIGHT);
       const offsetX = (svgRect.width - CHART_VIEW_WIDTH * scale) / 2;
       const offsetY = (svgRect.height - CHART_VIEW_HEIGHT * scale) / 2;
-      setEdge({
-        x: (cardRect.left + cardRect.width / 2 - svgRect.left - offsetX) / scale,
-        y: (cardRect.bottom - svgRect.top - offsetY) / scale,
-      });
+      const nextAnchor = svgRect.left + offsetX + anchorX * scale - panel.getBoundingClientRect().left;
+      setAnchorPx((previous) => (previous !== undefined && Math.abs(previous - nextAnchor) < 0.5 ? previous : nextAnchor));
+      const next: ChartNoteCard = {
+        left: (cardRect.left - svgRect.left - offsetX) / scale,
+        right: (cardRect.right - svgRect.left - offsetX) / scale,
+        bottom: (cardRect.bottom - svgRect.top - offsetY) / scale,
+        unitsPerPx: 1 / scale,
+      };
+      setCard((previous) =>
+        previous &&
+        Math.abs(previous.left - next.left) < 0.01 &&
+        Math.abs(previous.right - next.right) < 0.01 &&
+        Math.abs(previous.bottom - next.bottom) < 0.01 &&
+        Math.abs(previous.unitsPerPx - next.unitsPerPx) < 1e-6
+          ? previous
+          : next,
+      );
     };
     update();
     const observer = new ResizeObserver(update);
-    const card = cardRef.current;
-    if (card) observer.observe(card);
+    const element = cardRef.current;
+    if (element) observer.observe(element);
     const svg = resolveRef.current();
     if (svg) observer.observe(svg);
     return () => observer.disconnect();
-  }, [cardRef, present, layoutKey]);
+    // A new anchor, or a new panel position for it, moves the card without
+    // resizing it.
+  }, [cardRef, present, anchorX, anchorPx, layoutKey]);
 
-  return edge;
+  return { card: present ? card : undefined, anchorPx: present ? anchorPx : undefined };
 }
 
 interface ExplanationProps {
@@ -353,20 +382,35 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
   const primary = charts.find((chart) => chart.role === 'primary') ?? charts[0];
   const noteObject = primary ? noteForTarget(objectsOfType<NoteData>(state, 'note'), primary.id) : undefined;
   const note = primary ? annotationForScene(state, noteObject, liveChatMessage(state)) : null;
-  // Only a note that names a point on the primary chart is placed over that
-  // point with a leader. A note anchored to the chart without an x is
-  // attached to it without one, and keeps the unanchored placement.
-  const noteStyle = primary ? chartAnnotationStyle(note, primary) : undefined;
-  const noteRef = useRef<HTMLDivElement>(null);
+  // The note sits in its own band at the top of the panel of the chart it
+  // names -- a compare chart's included -- and otherwise in the primary's, so
+  // it never covers the plot or the panel's frame. Only a note that names a
+  // point is placed above that point with a leader down to it; a note
+  // anchored to the chart without an x is attached to it without one.
+  const noteChart = charts.find((chart) => chart.id === note?.anchor?.target) ?? primary;
+  const anchorX = noteChart ? chartNoteAnchorX(note, noteChart) : undefined;
+  const noteRef = useRef<HTMLDivElement | null>(null);
+  // A card fading out of one chart's panel detaches after the one that
+  // replaced it in another has attached, so only an attach moves the ref.
+  const attachNote = useCallback((element: HTMLDivElement | null) => {
+    if (element) noteRef.current = element;
+  }, []);
   const mainRef = useRef<HTMLDivElement>(null);
-  const cardEdge = useChartAnnotationCardEdge(
+  const { card: noteCard, anchorPx } = useChartNoteGeometry(
     noteRef,
     // The chart's own svg, not the first one in the panel: the panel's
     // TechFrame is an svg too, drawn over the whole panel with its own box.
-    () => mainRef.current?.querySelector<SVGSVGElement>(`.chart-object[data-chart-id="${primary?.id}"] .chart-primitive > svg`) ?? null,
-    noteStyle !== undefined,
-    `${primary?.id}|${JSON.stringify(noteStyle ?? null)}`,
+    () => mainRef.current?.querySelector<SVGSVGElement>(`.chart-object[data-chart-id="${noteChart?.id}"] .chart-primitive > svg`) ?? null,
+    anchorX,
+    noteChart?.id ?? '',
   );
+  // Until the chart is measured, the card centres where the point would be if
+  // the chart filled its panel's width; the stylesheet keeps it inside the
+  // panel's frame either way.
+  const noteStyle: CSSProperties | undefined =
+    anchorX === undefined
+      ? undefined
+      : ({ '--annotation-anchor-x': anchorPx !== undefined ? `${anchorPx}px` : `${(anchorX / CHART_VIEW_WIDTH) * 100}%` } as CSSProperties);
   if (!primary) return <IdleScene state={state} onToggleListening={onToggleListening} />;
 
   return (
@@ -380,44 +424,47 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
         <motion.div ref={mainRef} className="content-main training-main" layout>
           <div className={`training-charts${charts.length > 1 ? ' training-charts--compare' : ''}`}>
             <AnimatePresence mode="popLayout" initial={false}>
-              {charts.map((chart) => (
-                <ObjectMotion key={chart.id} objectId={chart.id} className="chart-object" data-chart-id={chart.id}>
-                  <TechFrame variant="panel" />
-                  <ObjectSurface object={chart}>
-                    <FocusableSurface onActivate={() => onFocus(chart.id)} ariaLabel={`Expand ${chart.data.title ?? 'chart'}`}>
-                      <ChartPrimitive
-                        data={chart.data}
-                        annotation={
-                          note?.anchor?.target === chart.id && note.anchor.x !== undefined
-                            ? { ...note.anchor, cardEdge: chart.id === primary.id ? cardEdge : undefined }
-                            : undefined
-                        }
-                      />
-                    </FocusableSurface>
-                  </ObjectSurface>
-                  {chart.role === 'compare' ? <div className="compare-label tech micro">COMPARE / {chart.data.compareLabel ?? 'RUN'}</div> : null}
-                </ObjectMotion>
-              ))}
+              {charts.map((chart) => {
+                const carriesNote = note !== null && chart.id === noteChart?.id;
+                return (
+                  <ObjectMotion key={chart.id} objectId={chart.id} className={`chart-object${carriesNote ? ' chart-object--noted' : ''}`} data-chart-id={chart.id}>
+                    <TechFrame variant="panel" />
+                    <AnimatePresence initial={false}>
+                      {carriesNote ? (
+                        <motion.div
+                          key="training-note"
+                          ref={attachNote}
+                          className={`training-note${noteStyle ? ' training-note--anchored' : ''}`}
+                          style={noteStyle}
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={{ opacity: 0 }}
+                          transition={{ duration: 0.2 }}
+                        >
+                          <SurfaceBoundary surfaceId={noteObject?.id ?? 'speech-note'} resetKey={noteObject ?? note}>
+                            <AnnotationCard data={note} onFocus={noteObject ? () => onFocus(noteObject.id) : undefined} onOpenHistory={noteObject ? undefined : onOpenHistory} />
+                          </SurfaceBoundary>
+                        </motion.div>
+                      ) : null}
+                    </AnimatePresence>
+                    <ObjectSurface object={chart}>
+                      <FocusableSurface onActivate={() => onFocus(chart.id)} ariaLabel={`Expand ${chart.data.title ?? 'chart'}`}>
+                        <ChartPrimitive
+                          data={chart.data}
+                          annotation={
+                            carriesNote && note?.anchor?.target === chart.id && note.anchor.x !== undefined
+                              ? { x: note.anchor.x, series: note.anchor.series, card: noteCard }
+                              : undefined
+                          }
+                        />
+                      </FocusableSurface>
+                    </ObjectSurface>
+                    {chart.role === 'compare' ? <div className="compare-label tech micro">COMPARE / {chart.data.compareLabel ?? 'RUN'}</div> : null}
+                  </ObjectMotion>
+                );
+              })}
             </AnimatePresence>
           </div>
-          <AnimatePresence initial={false}>
-            {note ? (
-              <motion.div
-                key="training-note"
-                ref={noteRef}
-                className={`training-note${noteStyle ? ' training-note--anchored' : ''}`}
-                style={noteStyle}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.2 }}
-              >
-                <SurfaceBoundary surfaceId={noteObject?.id ?? 'speech-note'} resetKey={noteObject ?? note}>
-                  <AnnotationCard data={note} onFocus={noteObject ? () => onFocus(noteObject.id) : undefined} onOpenHistory={noteObject ? undefined : onOpenHistory} />
-                </SurfaceBoundary>
-              </motion.div>
-            ) : null}
-          </AnimatePresence>
           {progress ? (
             <ObjectMotion objectId={progress.id} className="training-progress">
               <ObjectSurface object={progress}>

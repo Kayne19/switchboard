@@ -160,7 +160,7 @@ test('rail progress uses spacing instead of a top border', async ({ page }) => {
   expect(progressBox!.y - (noteBox!.y + noteBox!.height)).toBeGreaterThan(0);
 });
 
-test('rail metrics get telemetry framing in the content rail', async ({ page }) => {
+test('rail metrics are framed by rules in the content rail, with no header line', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/?scene=architecture&chrome=0');
   await page.evaluate(() => {
@@ -189,13 +189,25 @@ test('rail metrics get telemetry framing in the content rail', async ({ page }) 
   await expect(metrics).toBeVisible();
   await expect(metrics).toHaveClass(/metrics--rail/);
 
-  const header = metrics.locator('.metrics__header');
-  await expect(header).toBeVisible();
-  await expect(header.locator('.metrics__tag')).toHaveText('TELEMETRY');
-  await expect(header.locator('.metrics__index')).toHaveText('2 CHANNELS');
+  // Bracketed by rules, not titled: no header line is spent on them (#32).
+  await expect(metrics.locator('.metrics__header')).toHaveCount(0);
+  await expect(metrics).not.toContainText('TELEMETRY');
 
-  const borderTop = await metrics.evaluate((el) => getComputedStyle(el).borderTopWidth);
-  expect(borderTop).toBe('1px');
+  const frame = await metrics.evaluate((el) => {
+    const style = getComputedStyle(el);
+    const first = el.querySelector('.metric-row')!;
+    return {
+      top: style.borderTopWidth,
+      bottom: style.borderBottomWidth,
+      firstRowTop: getComputedStyle(first).borderTopWidth,
+      firstRowOffset: first.getBoundingClientRect().top - el.getBoundingClientRect().top,
+    };
+  });
+  expect(frame.top).toBe('1px');
+  expect(frame.bottom).toBe('1px');
+  // The orange rule is the first row's divider, so the rows start right under it.
+  expect(frame.firstRowTop).toBe('0px');
+  expect(frame.firstRowOffset).toBeLessThanOrEqual(1);
   const borderRadius = await metrics.evaluate((el) => getComputedStyle(el).borderRadius);
   expect(borderRadius).toBe('0px');
 });

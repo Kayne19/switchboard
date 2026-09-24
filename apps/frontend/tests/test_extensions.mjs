@@ -149,6 +149,21 @@ async function agentExtensionBehavior() {
 			"display description must include a per-type shape hint (e.g. 'diagram:')",
 		);
 
+		// The model is told that primary metrics cluster, and how many the
+		// cluster holds -- the same cap the page and the backend apply (#38).
+		const cap = Number(
+			/export const MAX_PRIMARY_METRICS = (\d+);/.exec(
+				readFileSync(new URL("../src/controller/reducer.ts", import.meta.url), "utf8"),
+			)?.[1],
+		);
+		const capWords = { 6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten", 12: "twelve" };
+		assert.ok(capWords[cap], `no word for a primary metric cap of ${cap}`);
+		assert.match(
+			displayTool.description,
+			new RegExp(`role primary share the main stage as one cluster, up to ${capWords[cap]}\\b`),
+			"display description must say primary metrics cluster, and state the cluster's cap",
+		);
+
 		const showBranches = schema.anyOf.filter((b) => b.properties?.op?.const === "show");
 		const expectedShowTypes = ["chart", "metric", "progress", "diagram", "document", "code", "note"];
 		assert.equal(showBranches.length, expectedShowTypes.length, "there must be one show branch per displayable type");

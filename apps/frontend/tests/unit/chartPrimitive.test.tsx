@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { ChartData } from '../../src/controller/types';
-import { ChartPrimitive, chartSeriesColor } from '../../src/primitives/ChartPrimitive';
+import { ChartPrimitive, chartSeriesColor, chartXTicks, type ChartNoteCard } from '../../src/primitives/ChartPrimitive';
 
 const data: ChartData = {
   series: [
@@ -62,49 +62,115 @@ describe('chart series colors', () => {
 });
 
 
-describe('chart pointer', () => {
-  it('draws a pointer reaching the real series point when anchor has x', () => {
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-    act(() =>
-      root.render(
-        <ChartPrimitive
-          data={data}
-          annotation={{ x: 1, series: 'GAMMA' }}
-        />,
-      ),
-    );
+// The leader is a tapered wedge: its first and last points are one side of
+// it, the middle two the other, so the midpoints of its ends are where it
+// leaves the card and where it meets the line.
+function leaderGeometry(root: ParentNode) {
+  const polygon = root.querySelector<SVGPolygonElement>('.chart-pointer__leader');
+  if (!polygon) return null;
+  const points = polygon.getAttribute('points')!.split(' ').map((pair) => pair.split(',').map(Number));
+  const [a, b, c, d] = points;
+  return {
+    start: { x: (a[0] + d[0]) / 2, y: (a[1] + d[1]) / 2 },
+    end: { x: (b[0] + c[0]) / 2, y: (b[1] + c[1]) / 2 },
+    startWidth: Math.hypot(a[0] - d[0], a[1] - d[1]),
+    endWidth: Math.hypot(b[0] - c[0], b[1] - c[1]),
+  };
+}
 
-    const pointer = host.querySelector('.chart-pointer');
-    expect(pointer).not.toBeNull();
-    const stem = host.querySelector<SVGLineElement>('.chart-pointer__stem');
-    const marker = host.querySelector<SVGCircleElement>('.chart-pointer__marker');
-    expect(stem).not.toBeNull();
-    expect(marker).not.toBeNull();
-    expect(stem?.getAttribute('y2')).toBe(marker?.getAttribute('cy'));
-    expect(stem?.getAttribute('x1')).toBe(marker?.getAttribute('cx'));
-    expect(stem?.getAttribute('x2')).toBe(marker?.getAttribute('cx'));
+type Annotation = { x?: number; series?: string; card?: ChartNoteCard };
+
+function renderWith(chart: ChartData, annotation?: Annotation) {
+  host = document.createElement('div');
+  document.body.append(host);
+  root = createRoot(host);
+  act(() => root.render(<ChartPrimitive data={chart} annotation={annotation} />));
+}
+
+const plotWidth = 1000 - 74 - 28;
+const plotHeight = 500 - 34 - 54;
+
+describe('chart traces (#46)', () => {
+  it('never draws a series with a path-length dash pattern', () => {
+    // The strokes are non-scaling, so a dash pattern measured in user space
+    // is laid in screen space and stops the line short of its last point
+    // whenever the chart is drawn larger than its viewBox.
+    render();
+    const paths = [...host.querySelectorAll<SVGPathElement>('.chart-series')];
+    expect(paths.length).toBeGreaterThan(0);
+    for (const path of paths) {
+      expect(path.getAttribute('vector-effect')).toBe('non-scaling-stroke');
+      expect(path.getAttribute('pathLength')).toBeNull();
+      expect(path.getAttribute('stroke-dasharray')).toBeNull();
+      expect(path.style.strokeDasharray).toBe('');
+    }
   });
 
-  it('draws no pointer when anchor does not have x', () => {
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-    act(() =>
-      root.render(
-        <ChartPrimitive
-          data={data}
-          annotation={{ series: 'GAMMA' }}
-        />,
-      ),
-    );
-
-    const pointer = host.querySelector('.chart-pointer');
-    expect(pointer).toBeNull();
+  it('runs each series from the first x to the last', () => {
+    renderWith({ series: [{ name: 'Output', values: [42, 58, 75, 68, 92, 115] }] });
+    const d = host.querySelector('.chart-series')!.getAttribute('d')!;
+    const xs = [...d.matchAll(/[ML] ([\d.]+) /g)].map((match) => Number(match[1]));
+    expect(xs).toHaveLength(6);
+    expect(xs[0]).toBeCloseTo(74);
+    expect(xs[5]).toBeCloseTo(1000 - 28);
   });
 });
 
+describe('chart x axis', () => {
+  it('ticks at round values of the domain', () => {
+    expect(chartXTicks(5)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(chartXTicks(40)).toEqual([0, 10, 20, 30, 40]);
+    expect(chartXTicks(3)).toEqual([0, 1, 2, 3]);
+    expect(chartXTicks(63)).toEqual([0, 20, 40, 60]);
+    expect(chartXTicks(1)).toEqual([0, 0.2, 0.4, 0.6, 0.8, 1]);
+    expect(chartXTicks(0)).toEqual([0]);
+  });
+
+  it('labels each gridline with the x it sits at', () => {
+    renderWith({ series: [{ name: 'Output', values: [42, 58, 75, 68, 92, 115] }] });
+    const labels = [...host.querySelectorAll<SVGTextElement>('.chart-grid text[text-anchor="middle"]')];
+    expect(labels.map((label) => label.textContent)).toEqual(['0', '1', '2', '3', '4', '5']);
+    for (const label of labels) {
+      expect(Number(label.getAttribute('x'))).toBeCloseTo(74 + (Number(label.textContent) / 5) * plotWidth);
+    }
+  });
+
+  it('closes the grid at the right edge when no round value lands there', () => {
+    renderWith({ series: [{ name: 'RUN', values: [1, 2, 3] }], xMax: 63 });
+    const verticals = [...host.querySelectorAll<SVGLineElement>('.chart-grid line')].filter(
+      (line) => line.getAttribute('x1') === line.getAttribute('x2'),
+    );
+    expect(verticals.map((line) => Number(line.getAttribute('x1')))).toContain(1000 - 28);
+    const labels = [...host.querySelectorAll<SVGTextElement>('.chart-grid text[text-anchor="middle"]')].map((label) => label.textContent);
+    expect(labels).toEqual(['0', '20', '40', '60']);
+  });
+});
+
+describe('chart pointer', () => {
+  it('draws a leader reaching the real series point when anchor has x', () => {
+    renderWith(data, { x: 1, series: 'GAMMA' });
+
+    expect(host.querySelector('.chart-pointer')).not.toBeNull();
+    const leader = leaderGeometry(host)!;
+    // GAMMA runs 3 -> 4 across x 0 -> 1 on a 1..6 scale.
+    expect(leader.end.x).toBeCloseTo(1000 - 28, 1);
+    expect(leader.end.y).toBeCloseTo(34 + (1 - (4 - 1) / (6 - 1)) * plotHeight, 1);
+    // Unmeasured, it drops straight from the plot top.
+    expect(leader.start.x).toBeCloseTo(leader.end.x, 1);
+    expect(leader.start.y).toBeCloseTo(34, 1);
+  });
+
+  it('marks the point with the leader alone, not a dot of its own', () => {
+    renderWith(data, { x: 1, series: 'GAMMA' });
+    expect(host.querySelector('.chart-pointer circle')).toBeNull();
+    expect(host.querySelector('.chart-pointer__leader')?.getAttribute('fill')).toMatch(/^url\(#.+-leader\)$/);
+  });
+
+  it('draws no pointer when anchor does not have x', () => {
+    renderWith(data, { series: 'GAMMA' });
+    expect(host.querySelector('.chart-pointer')).toBeNull();
+  });
+});
 
 describe('marker and annotation interaction', () => {
   const markerData: ChartData = {
@@ -115,69 +181,74 @@ describe('marker and annotation interaction', () => {
     xMax: 3,
     marker: { x: 3, series: 'LOSS' },
   };
-
-  function renderWith(data: ChartData, annotation?: { x?: number; series?: string; cardEdge?: { x: number; y: number } }) {
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-    act(() => root.render(<ChartPrimitive data={data} annotation={annotation} />));
-  }
+  const card = (left: number, right: number, bottom: number, unitsPerPx = 1): ChartNoteCard => ({ left, right, bottom, unitsPerPx });
 
   it('keeps the marker point when the annotation points elsewhere', () => {
     renderWith(markerData, { x: 1, series: 'VALID' });
-    expect(host.querySelector('.chart-pointer__marker')).not.toBeNull();
+    expect(host.querySelector('.chart-pointer__leader')).not.toBeNull();
     expect(host.querySelector('.chart-marker__point')).not.toBeNull();
   });
 
-  it('hides the marker point only when the annotation lands on that exact point', () => {
+  it('keeps the marker point when the annotation lands on it, and ends the leader there', () => {
     renderWith(markerData, { x: 3, series: 'LOSS' });
-    expect(host.querySelector('.chart-marker__point')).toBeNull();
-    expect(host.querySelector('.chart-pointer__marker')).not.toBeNull();
+    const marker = host.querySelector<SVGCircleElement>('.chart-marker__point');
+    expect(marker).not.toBeNull();
+    const leader = leaderGeometry(host)!;
+    expect(leader.end.x).toBeCloseTo(Number(marker!.getAttribute('cx')), 1);
+    expect(leader.end.y).toBeCloseTo(Number(marker!.getAttribute('cy')), 1);
   });
 
-  it('leaves the measured card edge and reaches the point when the card edge is supplied', () => {
-    renderWith(markerData, { x: 1, series: 'VALID', cardEdge: { x: 400, y: 90 } });
-    const stem = host.querySelector<SVGLineElement>('.chart-pointer__stem');
-    const marker = host.querySelector<SVGCircleElement>('.chart-pointer__marker');
-    expect(stem?.getAttribute('x1')).toBe('400');
-    expect(stem?.getAttribute('y1')).toBe('90');
-    expect(stem?.getAttribute('x2')).toBe(marker?.getAttribute('cx'));
-    expect(stem?.getAttribute('y2')).toBe(marker?.getAttribute('cy'));
+  it('leaves the card straight above the point when the card spans it', () => {
+    renderWith(markerData, { x: 1, series: 'VALID', card: card(200, 600, 90) });
+    const leader = leaderGeometry(host)!;
+    expect(leader.start.x).toBeCloseTo(74 + plotWidth / 3, 1);
+    expect(leader.start.y).toBeCloseTo(90, 1);
+    expect(leader.end.x).toBeCloseTo(74 + plotWidth / 3, 1);
+  });
+
+  it('leaves the card from inside its nearest corner when the point is beyond it', () => {
+    renderWith(markerData, { x: 3, series: 'VALID', card: card(200, 600, 90, 2) });
+    const leader = leaderGeometry(host)!;
+    // 14 px in from the right edge, at 2 units per px.
+    expect(leader.start.x).toBeCloseTo(600 - 28, 1);
+    expect(leader.start.y).toBeCloseTo(90, 1);
+    expect(leader.end.x).toBeCloseTo(1000 - 28, 1);
+  });
+
+  it('tapers from the card to the point at the same screen width at any drawn size', () => {
+    renderWith(markerData, { x: 1, series: 'VALID', card: card(200, 600, 90, 1) });
+    const small = leaderGeometry(host)!;
+    act(() => root.unmount());
+    host.remove();
+    renderWith(markerData, { x: 1, series: 'VALID', card: card(200, 600, 90, 2) });
+    const large = leaderGeometry(host)!;
+    expect(small.startWidth).toBeGreaterThan(small.endWidth);
+    expect(large.startWidth).toBeCloseTo(small.startWidth * 2, 1);
+    expect(large.endWidth).toBeCloseTo(small.endWidth * 2, 1);
   });
 
   it('lands the pointer on the drawn segment when x falls between samples', () => {
     // Samples at x = 0, 2, 4, 6; x = 1 is halfway along the first segment,
     // which the path draws straight from 0 to 6.
     renderWith({ series: [{ name: 'SAW', values: [0, 6, 0, 6] }], xMax: 6, yMin: 0, yMax: 6 }, { x: 1, series: 'SAW' });
-    const marker = host.querySelector<SVGCircleElement>('.chart-pointer__marker');
-    const plotWidth = 1000 - 74 - 28;
-    const plotHeight = 500 - 34 - 54;
-    expect(Number(marker?.getAttribute('cx'))).toBeCloseTo(74 + plotWidth / 6);
-    expect(Number(marker?.getAttribute('cy'))).toBeCloseTo(34 + plotHeight / 2);
+    const leader = leaderGeometry(host)!;
+    expect(leader.end.x).toBeCloseTo(74 + plotWidth / 6, 1);
+    expect(leader.end.y).toBeCloseTo(34 + plotHeight / 2, 1);
   });
 
   it('holds an out-of-range x at the end of the plot instead of drawing off it', () => {
     renderWith(markerData, { x: 9, series: 'VALID' });
-    const marker = host.querySelector<SVGCircleElement>('.chart-pointer__marker');
+    const leader = leaderGeometry(host)!;
     const valid = markerData.series[1].values;
-    const plotHeight = 500 - 34 - 54;
-    expect(Number(marker?.getAttribute('cx'))).toBeCloseTo(1000 - 28);
+    expect(leader.end.x).toBeCloseTo(1000 - 28, 1);
     // The y is the last sample's, the same point the path ends on.
-    expect(Number(marker?.getAttribute('cy'))).toBeCloseTo(34 + (1 - (valid[valid.length - 1] - 1) / (4 - 1)) * plotHeight);
+    expect(leader.end.y).toBeCloseTo(34 + (1 - (valid[valid.length - 1] - 1) / (4 - 1)) * plotHeight, 1);
   });
 
   it('draws the leader outside the plot clip so it reaches a card above the plot', () => {
-    renderWith(markerData, { x: 1, series: 'VALID', cardEdge: { x: 400, y: 12 } });
-    const stem = host.querySelector<SVGLineElement>('.chart-pointer__stem');
-    expect(stem?.getAttribute('y1')).toBe('12');
-    expect(stem?.closest('[clip-path]')).toBeNull();
-  });
-
-  it('starts the leader at the plot top, not the frame border, until the card is measured', () => {
-    renderWith(markerData, { x: 1, series: 'VALID' });
-    const stem = host.querySelector<SVGLineElement>('.chart-pointer__stem');
-    const marker = host.querySelector<SVGCircleElement>('.chart-pointer__marker');
-    expect(stem?.getAttribute('y1')).toBe('34');
-    expect(stem?.getAttribute('x1')).toBe(marker?.getAttribute('cx'));
+    renderWith(markerData, { x: 1, series: 'VALID', card: card(200, 600, -40) });
+    const leader = leaderGeometry(host)!;
+    expect(leader.start.y).toBeCloseTo(-40, 1);
+    expect(host.querySelector('.chart-pointer__leader')?.closest('[clip-path]')).toBeNull();
   });
 });

@@ -183,7 +183,11 @@ describe('Primary Metric Cluster semantics (#38)', () => {
 
     const overflowed = controllerReducer(updated, claim('extra'));
     const comp = buildCompositionModel(overflowed);
-    expect(comp.primaryMetrics.map((m) => m.id)).toEqual(['m1', 'm2', 'm3', 'm4', 'm5', 'extra']);
+    expect(MAX_PRIMARY_METRICS).toBe(9);
+    expect(comp.primaryMetrics.map((m) => m.id)).toEqual([
+      ...Array.from({ length: MAX_PRIMARY_METRICS - 1 }, (_, n) => `m${n + 1}`),
+      'extra',
+    ]);
     expect(overflowed.agentObjects.m0.role).toBe('secondary');
     expect(comp.secondary.map((o) => o.id)).toEqual(['m0']);
     expect(deriveScreenState(overflowed, 1).title).toBe('M1');

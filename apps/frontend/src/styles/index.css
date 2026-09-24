@@ -776,17 +776,26 @@ button {
 .training-charts--compare {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
+/* A chart panel is a column: the note that annotates the chart, when there
+   is one, takes a band at the top, and the chart fills the rest. */
 .chart-object {
   position: relative;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
   background: #000;
 }
-.chart-object .focusable-content {
+.chart-object > .focusable-content {
   position: relative;
   z-index: 1;
+  flex: 1 1 0;
+  height: auto;
   padding: clamp(16px, 2cqw, 32px) clamp(12px, 1.4cqw, 24px)
     clamp(10px, 1.2cqw, 20px);
+}
+.chart-object--noted > .focusable-content {
+  padding-top: clamp(6px, 1cqh, 14px);
 }
 .chart-primitive {
   width: 100%;
@@ -832,16 +841,26 @@ button {
   top: 3%;
   color: var(--cyan);
 }
+/* The chart's note sits in its own band above the plot, inside the panel's
+   frame: it never covers the grid, the traces or the frame's corner lines.
+   Its top clears the frame's stepped top edge, and its sides keep the chart's
+   own inset from the frame. */
 .training-note {
-  position: absolute;
-  z-index: 5;
-  left: clamp(22px, 3cqw, 52px);
-  top: clamp(24px, 4cqh, 46px);
+  --note-width: min(46%, 520px);
+  --note-inset: clamp(12px, 1.4cqw, 24px);
+  position: relative;
+  z-index: 2;
+  flex: none;
+  align-self: flex-start;
   display: flex;
   flex-direction: column;
-  width: min(42%, 520px);
-  max-height: 34%;
+  width: var(--note-width);
+  max-height: 38%;
+  margin: clamp(30px, 4.2cqh, 48px) var(--note-inset) 0;
   background: #000;
+}
+.training-charts--compare .training-note {
+  --note-width: min(86%, 520px);
 }
 .training-note .annotation-card {
   height: auto;
@@ -851,13 +870,16 @@ button {
   border: 1px solid rgba(var(--orange-rgb), 0.33);
   clip-path: polygon(0 0, 92% 0, 100% 23%, 100% 100%, 0 100%);
 }
+/* An anchored note centres over its point as far as the band allows; the
+   leader the chart draws then drops from the card's bottom edge to the
+   point. */
 .training-note--anchored {
-  left: clamp(21%, var(--annotation-anchor-x), 79%);
+  left: clamp(
+    calc(var(--note-width) / 2),
+    calc(var(--annotation-anchor-x) - var(--note-inset)),
+    calc(100% - var(--note-width) / 2 - 2 * var(--note-inset))
+  );
   transform: translateX(-50%);
-}
-.training-note--anchored::after {
-  content: "";
-  display: none;
 }
 .training-progress {
   min-height: 64px;
@@ -990,7 +1012,7 @@ button {
   grid-template-columns: minmax(0, 1fr);
   gap: clamp(12px, 1.6cqw, 24px);
 }
-/* Primary metric cluster grids (#38). The reducer caps the cluster at six
+/* Primary metric cluster grids (#38). The reducer caps the cluster at nine
    (MAX_PRIMARY_METRICS), so these cover every count it can reach. */
 .metrics--primary[data-count="2"] {
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1002,7 +1024,10 @@ button {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .metrics--primary[data-count="5"],
-.metrics--primary[data-count="6"] {
+.metrics--primary[data-count="6"],
+.metrics--primary[data-count="7"],
+.metrics--primary[data-count="8"],
+.metrics--primary[data-count="9"] {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 .metrics--primary .metric-row {
@@ -1023,6 +1048,20 @@ button {
   min-height: clamp(100px, 14cqh, 160px);
   padding: clamp(16px, 1.8cqw, 32px);
   clip-path: polygon(0 0, calc(100% - 24px) 0, 100% 24px, 100% 100%, 20px 100%, 0 calc(100% - 20px));
+}
+/* Seven to nine take a third row of three at the same card size wherever the
+   stage has the height for it; a short stage lets the cards give back only
+   what a third row needs. */
+.metrics--primary.metrics--cluster:is([data-count="7"], [data-count="8"], [data-count="9"]) .metric-row {
+  min-height: clamp(64px, 14cqh, 160px);
+  padding: clamp(10px, 1.8cqh, 32px) clamp(14px, 1.8cqw, 32px);
+  gap: clamp(6px, 1.2cqh, 18px);
+}
+/* Seven to nine cards read as one primary block through the panel around
+   them; the same corner tag nine times over says nothing more, and in a
+   compact card it would run into the metric's own label. */
+.metrics--primary.metrics--cluster:is([data-count="7"], [data-count="8"], [data-count="9"]) .metric-row::after {
+  content: none;
 }
 .metrics--primary.metrics--cluster .metric-row[role="button"] {
   cursor: zoom-in;
@@ -1089,31 +1128,18 @@ button {
 .content-rail__details > .metrics {
   flex: none;
 }
-/* The rail's metrics keep the rows' own geometry-driven spacing; the
-   framing adds only the rule and the header line above them. */
+/* The rail's metrics are bracketed rather than titled: the orange rule
+   stands in for the first row's divider and a hairline closes the block, and
+   extra space sets the block apart from the response below it. Their labels
+   and values carry the meaning, so no header line is spent on them. */
 .metrics--rail {
   min-width: 0;
-  padding-top: clamp(10px, 1.2cqh, 14px);
   border-top: 1px solid rgba(var(--orange-rgb), 0.48);
+  border-bottom: 1px solid rgba(232, 230, 223, 0.13);
+  margin-bottom: clamp(4px, 1cqh, 12px);
 }
-.metrics__header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  padding-bottom: clamp(6px, 1cqh, 10px);
-}
-.metrics__tag {
-  flex: none;
-  color: rgba(232, 230, 223, 0.35);
-}
-.metrics__index {
-  min-width: 0;
-  margin-left: auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: rgba(232, 230, 223, 0.35);
+.metrics--rail > .metric-row:first-child {
+  border-top: 0;
 }
 .content-rail__details > .rail-note {
   flex: 1 1 auto;
@@ -1226,6 +1252,26 @@ button {
   gap: 4px;
   padding-top: clamp(8px, 1.1cqh, 12px);
   border-top: 1px solid rgba(232, 230, 223, 0.14);
+}
+.tool-activity {
+  position: relative;
+}
+.tool-activity__call {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+/* Runs along the top rule once per call, then fades. */
+.tool-activity__sweep {
+  position: absolute;
+  top: -1px;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  background: var(--orange);
+  transform-origin: left center;
+  opacity: 0;
+  pointer-events: none;
 }
 /* The rail panel's slot sits in the column's flow at its foot, so the panel
    never covers another surface. A reserved slot holds an unseen copy of the
@@ -1911,17 +1957,14 @@ button {
   .training-charts--compare .chart-object {
     min-height: 38cqh;
   }
-  .chart-object .focusable-content {
+  .chart-object > .focusable-content {
     padding: 14px 8px 8px;
   }
   .training-note {
-    top: 3.5cqh;
-    left: 3.5cqw;
-    width: min(56%, 460px);
-    max-height: 27%;
-  }
-  .training-note--anchored {
-    left: clamp(28%, var(--annotation-anchor-x), 72%);
+    --note-width: min(78%, 460px);
+    --note-inset: 3.5cqw;
+    max-height: 40%;
+    margin-top: clamp(26px, 3.6cqh, 40px);
   }
   .training-note .annotation-card {
     padding: 9px 11px;
@@ -1947,12 +1990,6 @@ button {
     min-height: 0;
     padding: 7px 0;
   }
-  /* The rail's telemetry header costs a line, so on a short portrait stage
-     its rows give some padding back: a phone rail still holds five metrics
-     without clipping the last. A tall stage keeps the full 7px. */
-  .metrics--rail .metric-row {
-    padding: clamp(4px, 0.6cqh, 7px) 0;
-  }
   .metric-row__value {
     font-size: clamp(14px, 2.7cqw, 20px);
   }
@@ -1964,13 +2001,22 @@ button {
   }
   .metrics--primary[data-count="4"],
   .metrics--primary[data-count="5"],
-  .metrics--primary[data-count="6"] {
+  .metrics--primary[data-count="6"],
+  .metrics--primary[data-count="7"],
+  .metrics--primary[data-count="8"],
+  .metrics--primary[data-count="9"] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .metrics--primary.metrics--cluster .metric-row {
     min-height: clamp(76px, 10cqh, 120px);
     padding: clamp(12px, 2.4cqw, 20px);
     gap: clamp(6px, 1cqh, 12px);
+  }
+  /* Two columns keep a portrait value readable; seven to nine then run to
+     five rows, so each gives back some height. */
+  .metrics--primary.metrics--cluster:is([data-count="7"], [data-count="8"], [data-count="9"]) .metric-row {
+    min-height: clamp(62px, 8cqh, 110px);
+    padding: clamp(10px, 1.4cqh, 18px) clamp(12px, 2.4cqw, 20px);
   }
   .metrics--primary.metrics--cluster .metric-row__value {
     font-size: clamp(20px, 4.4cqw, 32px);
@@ -2067,6 +2113,12 @@ button {
   .code-viewport__scroll {
     padding-top: 18px;
     padding-bottom: 48px;
+  }
+  /* A very wide stage draws the chart height-limited, so the note's band is
+     paid for in plot height: a wider card keeps it to fewer lines. */
+  .training-note {
+    --note-width: min(44%, 720px);
+    margin-top: clamp(24px, 3.4cqh, 40px);
   }
 }
 

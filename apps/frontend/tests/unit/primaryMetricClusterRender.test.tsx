@@ -163,4 +163,28 @@ describe('primary metric cluster rendering', () => {
     expect(railMetricRows).toHaveLength(1);
     expect(railMetricRows?.[0].querySelector('.metric-row__label')?.textContent).toBe('RAIL METRIC');
   });
+
+  it('renders eight primary metrics together in the main cluster, none in the rail (#38)', () => {
+    // Live feedback: eight metrics sent as primary showed only six.
+    const actions: ControllerAction[] = Array.from({ length: 8 }, (_, n) => ({
+      op: 'show', id: `m${n}`, type: 'metric', role: 'primary', data: { label: `METRIC ${n}`, value: `${n}` },
+    }));
+    const state = reduceActions(createInitialState(), actions);
+
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => {
+      root.render(
+        <ComposedScene state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} />,
+      );
+    });
+
+    const cluster = host.querySelector('.composed-primary-object--cluster .metrics--primary');
+    expect(cluster?.getAttribute('data-count')).toBe('8');
+    expect([...cluster!.querySelectorAll('.metric-row__label')].map((label) => label.textContent)).toEqual(
+      Array.from({ length: 8 }, (_, n) => `METRIC ${n}`),
+    );
+    expect(host.querySelectorAll('.content-rail__details .metric-row')).toHaveLength(0);
+  });
 });

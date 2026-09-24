@@ -37,28 +37,28 @@ describe('MetricsPrimitive', () => {
     updatedAt: 100,
   };
 
-  it('renders list variant without rail telemetry header', () => {
+  it('renders list variant rows', () => {
     const host = renderMetrics([metric1, metric2], 'list');
     expect(host.querySelector('.metrics--list')).not.toBeNull();
-    expect(host.querySelector('.metrics__header')).toBeNull();
     const rows = host.querySelectorAll('.metric-row');
     expect(rows).toHaveLength(2);
     expect(rows[0].textContent).toContain('GPU');
     expect(rows[0].textContent).toContain('94%');
   });
 
-  it('renders rail variant with telemetry header and channel count', () => {
+  it('renders rail variant as its rows alone, with no header line (#32)', () => {
     const host = renderMetrics([metric1, metric2], 'rail');
-    expect(host.querySelector('.metrics--rail')).not.toBeNull();
-    const header = host.querySelector('.metrics__header');
-    expect(header).not.toBeNull();
-    expect(header!.querySelector('.metrics__tag')?.textContent).toBe('TELEMETRY');
-    expect(header!.querySelector('.metrics__index')?.textContent).toBe('2 CHANNELS');
-    const rows = host.querySelectorAll('.metric-row');
+    const metrics = host.querySelector('.metrics--rail');
+    expect(metrics).not.toBeNull();
+    expect(host.querySelector('.metrics__header')).toBeNull();
+    expect(host.textContent).not.toContain('TELEMETRY');
+    expect(host.textContent).not.toContain('CHANNELS');
+    const rows = metrics!.querySelectorAll(':scope > .metric-row');
     expect(rows).toHaveLength(2);
+    expect(metrics!.firstElementChild).toBe(rows[0]);
   });
 
-  it('renders rail variant with single metric caption or default index', () => {
+  it('renders a single rail metric without a caption line', () => {
     const single: SceneObject<MetricData> = {
       id: 'latency',
       type: 'metric',
@@ -68,10 +68,8 @@ describe('MetricsPrimitive', () => {
       updatedAt: 100,
     };
     const host = renderMetrics([single], 'rail');
-    const header = host.querySelector('.metrics__header');
-    expect(header).not.toBeNull();
-    expect(header!.querySelector('.metrics__tag')?.textContent).toBe('TELEMETRY');
-    expect(header!.querySelector('.metrics__index')?.textContent).toBe('EDGE / P95');
+    expect(host.querySelector('.metrics__header')).toBeNull();
+    expect(host.textContent).toBe('LATENCY182 ms');
   });
 
   it('returns null when variant is rail and metrics list is empty', () => {
