@@ -56,8 +56,9 @@ test("tool activity never flashes over the explanation", async ({ page }) => {
     expect(new Set(states)).toEqual(new Set([explanation]));
 
     // The calls showed on the activity surface instead, and it settles back.
+    // Back to back, they are one burst, counted rather than named (#50).
     const caption = page.locator(".damocles-presence__caption");
-    await expect(caption).toContainText("WORKING / edit", { ignoreCase: true });
+    await expect(caption).toContainText("WORKING / 3 tool calls", { ignoreCase: true });
     await expect(caption).toContainText("VOICE / ACTIVE", { ignoreCase: true, timeout: 3_000 });
   } finally {
     await fixtureServer.stop();
