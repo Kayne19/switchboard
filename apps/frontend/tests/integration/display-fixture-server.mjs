@@ -106,6 +106,13 @@ export class DisplayFixtureServer {
               ws.send(JSON.stringify({ type: 'pong', nonce: msg.nonce, time: msg.time }));
             } else if (msg.type === 'clip') {
               ws.send(JSON.stringify({ type: 'accepted', id: msg.id, streaming: false }));
+            } else if (msg.type === 'typed_turn') {
+              // As route_final_transcript in apps/backend/src/api.rs: a typed
+              // turn under the current epoch is taken and echoed back as the
+              // caller's transcript line with the same id; a stale one is not.
+              if (msg.generation === this.generation) {
+                ws.send(JSON.stringify({ type: 'transcript', id: msg.id, text: msg.text }));
+              }
             } else if (msg.type === 'screen_state') {
               if (msg.generation === this.generation) {
                 this.reports.push(msg);

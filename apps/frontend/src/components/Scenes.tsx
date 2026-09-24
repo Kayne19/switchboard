@@ -1,4 +1,4 @@
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, motion, useIsPresent } from 'motion/react';
 import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import type {
   ChartData,
@@ -29,6 +29,7 @@ import { SceneFooter } from '../primitives/SceneFooter';
 import { FocusableSurface } from '../primitives/FocusableSurface';
 import { TechFrame } from '../primitives/TechFrame';
 import { ToolActivity } from '../primitives/ToolActivity';
+import { TranscriptToggle } from '../primitives/TranscriptToggle';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
 interface SceneProps {
@@ -276,7 +277,13 @@ function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux') {
   }
 }
 
-export function IdleScene({ state, onToggleListening }: Pick<SceneProps, 'state' | 'onToggleListening'>) {
+type IdleSceneProps = Pick<SceneProps, 'state' | 'onToggleListening'> & Partial<Pick<SceneProps, 'setTranscriptOpen'>>;
+
+// With an opener, the idle stage keeps the transcript toggle in its
+// conversation-page place, hidden until the pointer reaches the bottom band,
+// so the typed line is reachable before anyone has spoken.
+export function IdleScene({ state, onToggleListening, setTranscriptOpen }: IdleSceneProps) {
+  const isPresent = useIsPresent();
   return (
     <motion.section className="scene scene--idle" data-scene="idle" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
       <DamoclesPresence
@@ -285,6 +292,7 @@ export function IdleScene({ state, onToggleListening }: Pick<SceneProps, 'state'
         size="idle"
         showCaption={false}
       />
+      {setTranscriptOpen && isPresent ? <TranscriptToggle reveal="hover" onOpen={() => setTranscriptOpen(true)} /> : null}
     </motion.section>
   );
 }
@@ -332,9 +340,7 @@ export function ConversationScene({ state, onToggleListening, setTranscriptOpen 
       <div className="conversation-channel tech micro">
         CHANNEL / {message.channel?.name ?? 'VOICE'}<br />MODE / {message.channel?.mode ?? 'HANDS-FREE'}
       </div>
-      <button className="transcript-toggle tech micro" type="button" onClick={() => setTranscriptOpen(true)}>
-        TRANSCRIPT HIDDEN
-      </button>
+      <TranscriptToggle onOpen={() => setTranscriptOpen(true)} />
       <ToolActivity activity={state.activity} placement="conversation" />
     </motion.section>
   );

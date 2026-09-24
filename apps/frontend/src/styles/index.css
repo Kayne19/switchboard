@@ -432,6 +432,38 @@ button {
   color: var(--orange);
   letter-spacing: 0.21em;
 }
+/* On the idle stage the same toggle sits in the same place, inside a band
+   along the bottom edge, and stays out of sight until the pointer enters the
+   band. Hidden, it keeps its box and its tab stop, so keyboard focus shows it
+   as well. The band stops well short of the Damocles presence and sits
+   beneath it, so the glyph keeps every click. */
+.transcript-reveal {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: max(14cqh, 88px);
+  z-index: 2;
+}
+.transcript-reveal .transcript-toggle {
+  opacity: 0;
+  transition:
+    opacity 0.24s ease,
+    color 0.16s ease,
+    letter-spacing 0.16s ease;
+}
+.transcript-reveal:hover .transcript-toggle,
+.transcript-reveal .transcript-toggle:focus-visible {
+  opacity: 1;
+}
+/* Where the primary pointer cannot hover, a hidden toggle could never be
+   found, so it rests in view. This asks what the input can do, not how big
+   the screen is. */
+@media (hover: none) {
+  .transcript-reveal .transcript-toggle {
+    opacity: 1;
+  }
+}
 /* One typography for everything said in the history, typed turns included:
    the caller's lines and the input they type into share a face and size. */
 .transcript {
