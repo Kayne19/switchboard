@@ -1,7 +1,7 @@
 import { motion, useReducedMotion } from 'motion/react';
 import { useId, useMemo } from 'react';
 import type { ChartData, ChartSeries, Semantic } from '../controller/types';
-import { CHART_LEGEND_STEP, CHART_PAD, CHART_VIEW_HEIGHT, CHART_VIEW_WIDTH, chartScales, chartTraces } from './chartGeometry';
+import { CHART_LEGEND_STEP, CHART_PAD, CHART_VIEW_HEIGHT, CHART_VIEW_WIDTH, chartScales, chartSeriesPoint, chartTraces } from './chartGeometry';
 
 const semanticColor: Record<Semantic,string> = {
   red:'var(--red)',orange:'var(--orange)',green:'var(--green)',cyan:'var(--cyan)',amber:'var(--amber)',paper:'var(--paper)',muted:'var(--muted)'
@@ -55,9 +55,11 @@ export function ChartPrimitive({
   // The plot's right edge keeps its gridline even when no round value lands
   // on it, so the grid stays closed; it is labelled only when one does.
   const xGrid=xMax>0 && xTicks[xTicks.length-1]<xMax ? [...xTicks,xMax] : xTicks;
-  const markerSeries=data.marker ? data.series.find(series=>series.name===data.marker?.series) ?? data.series[0] : undefined;
-  const markerIndex=data.marker && markerSeries ? Math.round((data.marker.x/xMax)*Math.max(0,markerSeries.values.length-1)) : 0;
-  const markerValue=markerSeries?.values[Math.min((markerSeries?.values.length ?? 1)-1,markerIndex)];
+  // A marker is a ring on the point it names, on the drawn line itself: the
+  // same interpolated point a note's leader reaches. It draws no guide of its
+  // own -- a full-height dashed rule read as a stray line through the plot,
+  // and ran on past the point beneath any leader that met it there.
+  const markerPoint=data.marker ? chartSeriesPoint(data,data.marker.x,data.marker.series,scales) : undefined;
 
   return <div className={`chart-primitive${focused?' chart-primitive--focused':''}`} data-testid="chart">
     <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label={data.title ?? 'Chart'}>
@@ -78,10 +80,9 @@ export function ChartPrimitive({
       </g>
       <g clipPath={`url(#${clipId})`}>
         {seriesPaths.map((series,index)=><g key={series.name} clipPath={`url(#${clipId}-trace-${index})`}><motion.path className="chart-series" d={series.path} fill="none" stroke={chartSeriesColor(series, index)} strokeWidth={focused?3:2.3} vectorEffect="non-scaling-stroke" initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{duration:.3,delay:index*.08}}/></g>)}
-        {data.marker && markerValue != null ? (
-          <motion.g initial={{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}>
-            <line x1={xAtEpoch(data.marker.x)} y1={pad.top} x2={xAtEpoch(data.marker.x)} y2={height-pad.bottom} stroke="rgba(var(--orange-rgb),.34)" strokeDasharray="6 8"/>
-            <circle className="chart-marker__point" cx={xAtEpoch(data.marker.x)} cy={yAt(markerValue)} r={focused?7:5} fill="#000" stroke="var(--orange)" strokeWidth="2"/>
+        {markerPoint ? (
+          <motion.g className="chart-marker" initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}>
+            <circle className="chart-marker__point" cx={markerPoint.x} cy={markerPoint.y} r={focused?7:5} fill="#000" stroke="var(--orange)" strokeWidth="2"/>
           </motion.g>
         ) : null}
       </g>

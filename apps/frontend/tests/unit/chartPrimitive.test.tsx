@@ -180,6 +180,28 @@ describe('chart series point', () => {
     expect(point.y).toBeCloseTo(Number(marker.getAttribute('cy')), 1);
   });
 
+  it('marks a point with a ring alone, with no guide line through the plot', () => {
+    renderWith({
+      series: [{ name: 'LOSS', values: [4, 3, 2, 1] }],
+      xMax: 3,
+      marker: { x: 2, series: 'LOSS' },
+    });
+    const marker = host.querySelector('.chart-marker')!;
+    expect(marker.querySelectorAll('.chart-marker__point')).toHaveLength(1);
+    expect(marker.querySelector('line')).toBeNull();
+    expect(host.querySelector('svg [stroke-dasharray]')).toBeNull();
+  });
+
+  it('puts the marker ring on the drawn segment when its x falls between samples', () => {
+    // Samples at x = 0, 2, 4, 6; x = 1 is halfway up the first segment, 0 -> 6.
+    const chart: ChartData = { series: [{ name: 'SAW', values: [0, 6, 0, 6] }], xMax: 6, yMin: 0, yMax: 6, marker: { x: 1 } };
+    renderWith(chart);
+    const marker = host.querySelector<SVGCircleElement>('.chart-marker__point')!;
+    const plotHeight = 500 - 34 - 54;
+    expect(Number(marker.getAttribute('cy'))).toBeCloseTo(34 + plotHeight / 2, 1);
+    expect(Number(marker.getAttribute('cx'))).toBeCloseTo(chartSeriesPoint(chart, 1)!.x, 1);
+  });
+
   it('leaves the leader to the note layer: the chart draws no pointer of its own', () => {
     render();
     expect(host.querySelector('.chart-pointer')).toBeNull();
