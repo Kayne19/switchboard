@@ -7,18 +7,46 @@ import {
 } from '../../src/controller/validation';
 
 describe('progress value normalization', () => {
-  it('reads values above 1 as percentages and scales them to ratios', () => {
-    expect(normalizeProgressValue(65)).toBe(0.65);
-    expect(normalizeProgressValue(67)).toBe(0.67);
-    expect(normalizeProgressValue(100)).toBe(1);
-  });
-
-  it('keeps 0-1 ratio values and clamps out-of-range values to the nearest end', () => {
+  it('normalizes progress values as percentages clamped to 0-100', () => {
     expect(normalizeProgressValue(0)).toBe(0);
     expect(normalizeProgressValue(1)).toBe(1);
-    expect(normalizeProgressValue(150)).toBe(1);
-    expect(normalizeProgressValue(-3)).toBe(0);
-    expect(normalizeProgressValue(0.5125)).toBe(0.5125);
+    expect(normalizeProgressValue(1.02)).toBe(1.02);
+    expect(normalizeProgressValue(65)).toBe(65);
+    expect(normalizeProgressValue(100)).toBe(100);
+    expect(normalizeProgressValue(-5)).toBe(0);
+    expect(normalizeProgressValue(150)).toBe(100);
+  });
+
+  // The backend's normalize_progress_value rounds the same way; its test
+  // pins the same cases.
+  it('rounds to two decimal places', () => {
+    expect(normalizeProgressValue(33.333)).toBe(33.33);
+    expect(normalizeProgressValue(66.666)).toBe(66.67);
+  });
+
+  it('rejects non-finite progress values in show actions', () => {
+    for (const val of [NaN, Infinity, -Infinity]) {
+      const result = validateControllerAction({
+        op: 'show',
+        id: 'deploy',
+        type: 'progress',
+        data: { label: 'DEPLOY', value: val },
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toMatch(/non-finite number/);
+      }
+    }
+    const nonNumber = validateControllerAction({
+      op: 'show',
+      id: 'deploy',
+      type: 'progress',
+      data: { label: 'DEPLOY', value: 'not-a-number' as unknown as number },
+    });
+    expect(nonNumber.ok).toBe(false);
+    if (!nonNumber.ok) {
+      expect(nonNumber.error).toBe('progress.value must be a finite number');
+    }
   });
 
   it('normalizes the value on validated show actions', () => {
@@ -28,7 +56,7 @@ describe('progress value normalization', () => {
     });
     expect(result).toMatchObject({ ok: true });
     if (result.ok && result.action.op === 'show') {
-      expect((result.action.data as { value: number }).value).toBe(0.65);
+      expect((result.action.data as { value: number }).value).toBe(65);
     }
   });
 });

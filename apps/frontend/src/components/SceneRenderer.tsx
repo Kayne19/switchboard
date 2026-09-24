@@ -1,7 +1,10 @@
 import { AnimatePresence, LayoutGroup } from "motion/react";
 import { buildCompositionModel, sceneKind } from "../app/sceneModel";
+import type { ControllerState } from "../controller/types";
 import { useController } from "../controller/context";
+import { DamoclesPresence } from "../primitives/DamoclesPresence";
 import { FocusLayer } from "./FocusLayer";
+import { SurfaceBoundary } from "./SurfaceBoundary";
 import { TranscriptDrawer } from "./TranscriptDrawer";
 import {
   ArchitectureScene,
@@ -13,9 +16,23 @@ import {
   TrainingScene,
 } from "./Scenes";
 
-export function SceneRenderer() {
-  const { state, dispatch, transcriptOpen, setTranscriptOpen, voiceRuntime } =
-    useController();
+interface SceneContentProps {
+  state: ControllerState;
+  dispatch: ReturnType<typeof useController>["dispatch"];
+  transcriptOpen: boolean;
+  setTranscriptOpen: (open: boolean) => void;
+  voiceRuntime: ReturnType<typeof useController>["voiceRuntime"];
+  onToggleListening: () => void;
+}
+
+function SceneContent({
+  state,
+  dispatch,
+  transcriptOpen,
+  setTranscriptOpen,
+  voiceRuntime,
+  onToggleListening,
+}: SceneContentProps) {
   const kind = sceneKind(state);
   const focusedObject = state.focusId
     ? (state.objects[state.focusId] ?? null)
@@ -25,10 +42,7 @@ export function SceneRenderer() {
   // call turn; in demo mode it only toggles the visual listening state.
   const shared = {
     state,
-    onToggleListening: () =>
-      voiceRuntime
-        ? voiceRuntime.toggleTurn()
-        : dispatch({ op: "listen", on: !state.listening }),
+    onToggleListening,
     onFocus: (id: string | null) => dispatch({ op: "focus", id }),
     // An explanation offers the history only when there is one to open.
     onOpenHistory: conversation ? () => setTranscriptOpen(true) : undefined,
@@ -75,5 +89,55 @@ export function SceneRenderer() {
         />
       </main>
     </LayoutGroup>
+  );
+}
+
+function UnavailableStage({
+  state,
+  onToggleListening,
+}: Pick<SceneContentProps, "state" | "onToggleListening">) {
+  return (
+    <main className="stage" data-scene-kind="unavailable">
+      <section className="scene scene--idle">
+        <DamoclesPresence
+          listening={state.listening}
+          onToggleListening={onToggleListening}
+          size="idle"
+          showCaption={false}
+        />
+        <div className="stage-unavailable tech micro">DISPLAY / UNAVAILABLE</div>
+      </section>
+    </main>
+  );
+}
+
+export function SceneRenderer() {
+  const { state, dispatch, transcriptOpen, setTranscriptOpen, voiceRuntime } =
+    useController();
+  const onToggleListening = () =>
+    voiceRuntime
+      ? voiceRuntime.toggleTurn()
+      : dispatch({ op: "listen", on: !state.listening });
+
+  return (
+    <SurfaceBoundary
+      surfaceId="display"
+      resetKey={state.objects}
+      fallback={
+        <UnavailableStage
+          state={state}
+          onToggleListening={onToggleListening}
+        />
+      }
+    >
+      <SceneContent
+        state={state}
+        dispatch={dispatch}
+        transcriptOpen={transcriptOpen}
+        setTranscriptOpen={setTranscriptOpen}
+        voiceRuntime={voiceRuntime}
+        onToggleListening={onToggleListening}
+      />
+    </SurfaceBoundary>
   );
 }
