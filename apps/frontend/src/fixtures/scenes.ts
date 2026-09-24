@@ -74,7 +74,7 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
         { from: 'implementer', to: 'pool', semantic: 'cyan' },
       ],
     } },
-    { op: 'show', id: 'architecture-note', type: 'note', data: { tag: 'CURRENT EXPLANATION / 01', segments: [
+    { op: 'show', id: 'architecture-note', type: 'note', data: { tag: 'CURRENT EXPLANATION / 01', anchor: { target: 'system-map', node: 'session' }, segments: [
       { text: 'The voice does not change. ' },
       { text: 'Context moves.', accent: true, bold: true },
       { text: ' Damocles routes the session into the project directory, then the project orchestrator delegates work without exposing those internal handoffs to you.' },

@@ -24,7 +24,7 @@ function FocusedObject({ object }: { object: SceneObject }) {
     case 'chart':
       return <ChartPrimitive data={object.data as ChartData} focused />;
     case 'diagram':
-      return <DiagramPrimitive data={object.data as DiagramData} focused />;
+      return <DiagramPrimitive data={object.data as DiagramData} id={object.id} focused />;
     case 'document':
       return <DocumentViewport data={object.data as DocumentData} focused />;
     case 'code':
