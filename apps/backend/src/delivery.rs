@@ -35,7 +35,7 @@ pub(crate) enum Event {
     },
 }
 
-const DELIVERY_QUEUE: usize = 256;
+pub(crate) const DELIVERY_QUEUE: usize = 256;
 
 #[derive(Clone)]
 pub(crate) struct DeliveryState {
