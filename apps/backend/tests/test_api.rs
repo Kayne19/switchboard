@@ -4,7 +4,6 @@ use crate::registry::Registry;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use http_body_util::BodyExt;
-use std::collections::HashMap;
 use tokio::sync::oneshot;
 use tokio::time::{timeout, Duration};
 use tower::ServiceExt;
@@ -29,11 +28,7 @@ fn state_with_stream(stt: Option<String>, stream: Option<String>) -> AppState {
     AppState::new(
         board,
         TranscriptLog::new(10),
-        Speaker::from_values(
-            100,
-            std::time::Duration::from_millis(25_000),
-            &HashMap::from([("ELEVENLABS_API_KEY".into(), "test-key".into())]),
-        ),
+        Speaker::offline(100, std::time::Duration::from_millis(25_000)),
         SttAdapter::from_command(stt),
         SttStreamAdapter::from_command(stream),
     )
