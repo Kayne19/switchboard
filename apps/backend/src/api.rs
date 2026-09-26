@@ -1277,16 +1277,15 @@ async fn process_stream_results(state: AppState) {
     while let Some(result) = results.recv().await {
         match result {
             StreamResult::Partial(partial) => {
-                let valid = {
-                    let clips = state.0.stream_clips.lock().await;
-                    matches!(clips.get(&partial.clip_id), Some(StreamClipState::Open { generation, next_sequence, .. }) if *generation == partial.generation && partial.sequence <= *next_sequence)
-                };
-                if valid && partial.generation == state.0.coordinator.generation() {
-                    emit_json(
-                        &state,
-                        json!({"type":"partial", "id":partial.clip_id, "generation":partial.generation, "sequence":partial.sequence, "text":partial.text}),
-                    );
-                }
+                // Only the final result is shown and acted on. The page has no
+                // place for a caller line that is still being recognized.
+                tracing::debug!(
+                    clip = %partial.clip_id,
+                    generation = partial.generation,
+                    sequence = partial.sequence,
+                    chars = partial.text.chars().count(),
+                    "streaming STT partial"
+                );
             }
             StreamResult::Final(final_result) => {
                 let claim = {

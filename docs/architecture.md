@@ -319,7 +319,6 @@ A normal voice turn should remain traceable as:
 capture
   -> WebSocket admission
   -> STT adapter / streaming worker
-  -> partial transcript (display only)
   -> final transcript claim
   -> current-generation turn dispatch
   -> Pi session and tool loop
@@ -329,8 +328,10 @@ capture
   -> browser playback
 ```
 
-Partial results must not be persisted, routed, steered, or spoken as if they
-were final. A final result may be claimed only once. A failed or abandoned
+A streaming worker's partial results are logged and go no further: they are
+not shown, persisted, routed, steered, or spoken. The page has no place for a
+caller line that is still being recognized, so the service does not send
+them. A final result may be claimed only once. A failed or abandoned
 stream must either complete through the complete-clip contract or report a bounded,
 visible failure; it must not silently create a duplicate turn.
 

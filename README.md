@@ -300,7 +300,8 @@ transcript to stdout. Deployments may additionally set
 `SWITCHBOARD_STT_STREAM_COMMAND` to a long-lived worker. It receives
 length-prefixed frames (kind byte, big-endian `u32` payload length, payload),
 starts with a JSONL `{"type":"ready"}` line, and emits bounded JSONL
-`partial`/`final` records. A chunk payload starts with an id length byte, the
+`partial`/`final` records; partials are logged, and only a final result
+becomes a turn. A chunk payload starts with an id length byte, the
 UTF-8 clip id, big-endian generation and sequence numbers, then the WebM bytes,
 so concurrent clips remain attributable. Streaming is selected only for
 WebM/Opus clients after the WebSocket hello handshake; unavailable or
