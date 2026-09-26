@@ -17,7 +17,7 @@ use std::sync::{
     Arc,
 };
 use std::time::Instant;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, timeout, Duration, Instant as TokioInstant};
@@ -26,6 +26,9 @@ pub const ELEVENLABS_TTS_URL: &str = "https://api.elevenlabs.io/v1/text-to-speec
 const STT_TIMEOUT: Duration = Duration::from_secs(120);
 const STT_STDOUT_LIMIT: usize = 1024 * 1024;
 const STT_STDERR_LIMIT: usize = 64 * 1024;
+/// How much of a failed process's stderr reaches the journal: the end of it,
+/// where a traceback or a decoder names what went wrong.
+const STDERR_LOG_CHARS: usize = 1000;
 const TTS_RESPONSE_LIMIT: usize = 32 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -105,7 +108,13 @@ impl TtsTransport for HttpTtsTransport {
             .map_err(|error| AudioError::Tts(format!("could not reach ElevenLabs: {error}")))?;
             let status = response.status();
             let length = response.content_length();
-            if length.is_some_and(|length| length > TTS_RESPONSE_LIMIT as u64) {
+            if let Some(length) = length.filter(|length| *length > TTS_RESPONSE_LIMIT as u64) {
+                tracing::warn!(
+                    %status,
+                    content_length = length,
+                    limit = TTS_RESPONSE_LIMIT,
+                    "refusing an ElevenLabs response larger than the audio size limit"
+                );
                 return Err(AudioError::Tts(
                     "ElevenLabs response exceeded the audio size limit".into(),
                 ));
@@ -187,6 +196,11 @@ impl Stream for TtsChunkStream {
         match self.inner.as_mut().poll_next(cx) {
             std::task::Poll::Ready(Some(Ok(chunk))) => {
                 if self.bytes.saturating_add(chunk.len()) > TTS_RESPONSE_LIMIT {
+                    tracing::warn!(
+                        bytes = self.bytes.saturating_add(chunk.len()),
+                        limit = TTS_RESPONSE_LIMIT,
+                        "the ElevenLabs stream outgrew the audio size limit; stopping it"
+                    );
                     self.finished = true;
                     return std::task::Poll::Ready(Some(Err(AudioError::Tts(
                         "ElevenLabs response exceeded the audio size limit".into(),
@@ -227,6 +241,8 @@ impl SttAdapter {
             .command
             .as_deref()
             .ok_or(AudioError::MissingSttCommand)?;
+        let started = Instant::now();
+        tracing::debug!(bytes = webm.len(), "running the STT sidecar");
         let mut command_process = Command::new("sh");
         command_process
             .args(["-c", command])
@@ -292,17 +308,36 @@ impl SttAdapter {
                 process_guard.disarm();
                 abort_drain(stdout_task);
                 abort_drain(stderr_task);
+                tracing::warn!(
+                    bytes = webm.len(),
+                    timeout = ?self.timeout,
+                    "the STT sidecar did not finish in time and was killed"
+                );
                 return Err(AudioError::Process("STT sidecar timed out".into()));
             }
         };
+        let elapsed = started.elapsed();
         let stdout = join_bounded(stdout_task).await;
         let stderr = join_bounded(stderr_task).await;
         if stdout.truncated {
+            tracing::warn!(
+                bytes = webm.len(),
+                limit = STT_STDOUT_LIMIT,
+                ?elapsed,
+                "the STT sidecar wrote more than the transcript limit; discarding it"
+            );
             return Err(AudioError::Process(
                 "STT sidecar produced too much transcript output".into(),
             ));
         }
         if !status.success() {
+            tracing::warn!(
+                %status,
+                bytes = webm.len(),
+                ?elapsed,
+                stderr = %stderr_excerpt(&stderr.bytes),
+                "the STT sidecar exited unsuccessfully"
+            );
             let detail = String::from_utf8_lossy(&stderr.bytes)
                 .trim()
                 .chars()
@@ -317,8 +352,43 @@ impl SttAdapter {
                 }
             )));
         }
+        tracing::debug!(
+            bytes = webm.len(),
+            transcript_bytes = stdout.bytes.len(),
+            ?elapsed,
+            "the STT sidecar finished"
+        );
         Ok(String::from_utf8_lossy(&stdout.bytes).trim().to_owned())
     }
+}
+
+/// The end of a process's stderr, trimmed and bounded for a log line.
+fn stderr_excerpt(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let text = text.trim();
+    let skip = text.chars().count().saturating_sub(STDERR_LOG_CHARS);
+    text.chars().skip(skip).collect()
+}
+
+/// Keeps the last `limit` bytes a long-lived process writes, so the reason it
+/// stopped is still there when it does.
+async fn drain_tail<R>(mut reader: R, limit: usize) -> Vec<u8>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut tail = std::collections::VecDeque::with_capacity(limit.min(8192));
+    let mut chunk = [0_u8; 8192];
+    loop {
+        match reader.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(read) => {
+                tail.extend(&chunk[..read]);
+                let excess = tail.len().saturating_sub(limit);
+                tail.drain(..excess);
+            }
+        }
+    }
+    tail.into()
 }
 
 fn abort_drain(task: Option<tokio::task::JoinHandle<crate::pi_client::BoundedOutput>>) {
@@ -343,6 +413,10 @@ const STREAM_CHUNK_HEADER: usize = 1 + 128 + 8 + 8;
 const STREAM_CHUNK_LIMIT: usize = STREAM_FRAME_LIMIT - STREAM_CHUNK_HEADER;
 const STREAM_OUTPUT_LIMIT: usize = 64 * 1024;
 const STREAM_START_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a stopped stream worker's stderr gets to finish draining. The
+/// worker is dead by then; only a helper it left holding the pipe keeps it
+/// open, and that must not hold up the restart.
+const STREAM_STDERR_GRACE: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StreamClip {
@@ -434,6 +508,7 @@ impl SttStreamAdapter {
                     if requests.is_closed() {
                         return;
                     }
+                    tracing::info!(?backoff, "restarting the STT stream worker");
                     sleep(backoff).await;
                     backoff = (backoff * 2).min(Duration::from_secs(5));
                 } else {
@@ -573,6 +648,8 @@ async fn start_stream_process(
     results: &mpsc::Sender<StreamResult>,
     queued_bytes: &Arc<std::sync::atomic::AtomicUsize>,
 ) -> bool {
+    let started = Instant::now();
+    tracing::debug!("starting the STT stream worker");
     let mut process = Command::new("sh");
     process
         .args(["-c", command])
@@ -600,25 +677,33 @@ async fn start_stream_process(
         Some(stdout) => stdout,
         None => return false,
     };
-    if let Some(stderr) = child.stderr.take() {
-        tokio::spawn(async move {
-            let mut stderr = stderr;
-            let _ = crate::pi_client::drain_bounded(&mut stderr, STT_STDERR_LIMIT).await;
-        });
-    }
+    // A worker that dies says why on stderr. Keep the end of it for the
+    // journal rather than draining it into nothing.
+    let stderr_task = child
+        .stderr
+        .take()
+        .map(|stderr| tokio::spawn(drain_tail(stderr, STT_STDERR_LIMIT)));
     let mut lines = BufReader::new(stdout).lines();
-    let ready = timeout(STREAM_START_TIMEOUT, lines.next_line())
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .flatten();
-    let ready_ok = ready
-        .as_deref()
-        .and_then(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .is_some_and(|value| value.get("type").and_then(|value| value.as_str()) == Some("ready"));
-    if !ready_ok {
+    let not_ready = match timeout(STREAM_START_TIMEOUT, lines.next_line()).await {
+        Err(_) => Some("no ready record within the start timeout"),
+        Ok(Err(_)) => Some("its output could not be read"),
+        Ok(Ok(None)) => Some("it exited before reporting ready"),
+        Ok(Ok(Some(line))) => serde_json::from_str::<serde_json::Value>(&line)
+            .ok()
+            .is_none_or(|value| value.get("type").and_then(|value| value.as_str()) != Some("ready"))
+            .then_some("its first line was not a ready record"),
+    };
+    if let Some(reason) = not_ready {
         crate::pi_client::terminate_process(&mut child).await;
         guard.disarm();
+        let (status, stderr) = stream_worker_exit(&mut child, stderr_task).await;
+        tracing::warn!(
+            reason,
+            %status,
+            startup = ?started.elapsed(),
+            %stderr,
+            "the STT stream worker did not become ready"
+        );
         let _ = results
             .send(StreamResult::WorkerError(
                 "STT stream worker did not become ready".into(),
@@ -626,6 +711,11 @@ async fn start_stream_process(
             .await;
         return false;
     }
+    tracing::info!(
+        pid = child.id(),
+        startup = ?started.elapsed(),
+        "the STT stream worker is ready"
+    );
     let failure = loop {
         tokio::select! {
             request = requests.recv() => {
@@ -665,10 +755,47 @@ async fn start_stream_process(
     };
     crate::pi_client::terminate_process(&mut child).await;
     guard.disarm();
+    let (status, stderr) = stream_worker_exit(&mut child, stderr_task).await;
+    match &failure {
+        Some(reason) => tracing::warn!(
+            %reason,
+            %status,
+            uptime = ?started.elapsed(),
+            %stderr,
+            "the STT stream worker stopped"
+        ),
+        None => tracing::debug!(
+            %status,
+            uptime = ?started.elapsed(),
+            "the STT stream worker stopped: the service is shutting down"
+        ),
+    }
     if let Some(error) = failure {
         let _ = results.send(StreamResult::WorkerError(error)).await;
     }
     false
+}
+
+/// How a stopped stream worker ended, and the end of what it wrote to stderr.
+async fn stream_worker_exit(
+    child: &mut tokio::process::Child,
+    stderr: Option<tokio::task::JoinHandle<Vec<u8>>>,
+) -> (String, String) {
+    let status = match child.try_wait() {
+        Ok(Some(status)) => status.to_string(),
+        _ => "unknown".into(),
+    };
+    let stderr = match stderr {
+        None => String::new(),
+        Some(mut task) => match timeout(STREAM_STDERR_GRACE, &mut task).await {
+            Ok(Ok(bytes)) => stderr_excerpt(&bytes),
+            _ => {
+                task.abort();
+                String::new()
+            }
+        },
+    };
+    (status, stderr)
 }
 
 #[derive(Clone)]
@@ -787,8 +914,40 @@ impl Speaker {
             body,
             deadline,
         };
-        let (status, _, stream) = self.transport.send_stream(request).await?;
+        // The request is logged by what identifies it, never by its key or
+        // the words being spoken: the journal is not where either belongs.
+        let chars = text.chars().count();
+        let started = Instant::now();
+        tracing::debug!(
+            voice = %self.voice_id,
+            model = %self.model_id,
+            chars,
+            "requesting speech from ElevenLabs"
+        );
+        let (status, length, stream) = match self.transport.send_stream(request).await {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::warn!(
+                    voice = %self.voice_id,
+                    model = %self.model_id,
+                    chars,
+                    elapsed = ?started.elapsed(),
+                    %error,
+                    "the ElevenLabs request failed"
+                );
+                return Err(error);
+            }
+        };
+        let elapsed = started.elapsed();
         if status != StatusCode::OK {
+            tracing::warn!(
+                voice = %self.voice_id,
+                model = %self.model_id,
+                chars,
+                %status,
+                ?elapsed,
+                "ElevenLabs refused the request"
+            );
             let mut body = Vec::new();
             let mut stream = stream;
             while let Some(chunk) = stream.next().await {
@@ -806,6 +965,15 @@ impl Speaker {
                     .collect::<String>()
             )));
         }
+        tracing::info!(
+            voice = %self.voice_id,
+            model = %self.model_id,
+            chars,
+            %status,
+            ?elapsed,
+            content_length = ?length,
+            "ElevenLabs answered; streaming speech"
+        );
         Ok(TtsChunkStream {
             inner: stream,
             deadline,
