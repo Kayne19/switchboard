@@ -890,6 +890,40 @@ async fn streaming_clip_rejects_duplicate_chunks_and_repeats_end_cancel_safely()
 }
 
 #[tokio::test]
+async fn a_body_the_handler_cannot_read_gets_axums_own_answer() {
+    // Controls and callbacks take axum's rejection so they can log it; the
+    // page or agent that sent the body must still get the answer axum gives.
+    async fn send(path: &str, content_type: Option<&str>, body: Vec<u8>) -> (StatusCode, String) {
+        let mut request = Request::builder().method(Method::POST).uri(path);
+        if let Some(content_type) = content_type {
+            request = request.header("content-type", content_type);
+        }
+        let response = state()
+            .router(None)
+            .oneshot(request.body(Body::from(body)).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+    let json = Some("application/json");
+
+    let (code, body) = send("/view", json, br#"{"target":"","colour":"red"}"#.to_vec()).await;
+    assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body.contains("colour"), "{body}");
+
+    let (code, _) = send("/connect", json, b"{not json".to_vec()).await;
+    assert_eq!(code, StatusCode::BAD_REQUEST);
+
+    let (code, _) = send("/speak", None, br#"{"text":"hello"}"#.to_vec()).await;
+    assert_eq!(code, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+    let (code, _) = send("/display", json, vec![b' '; 65 * 1024]).await;
+    assert_eq!(code, StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
 async fn speak_rejects_blank_text_without_logging_it() {
     let state = state();
     let (code, body) =
@@ -1263,6 +1297,7 @@ async fn clip_accepted_before_a_page_rescue_is_dropped_after_transcription() {
             audio: vec![0],
             _mime: "audio/webm".into(),
             generation: state.0.coordinator.generation(),
+            connection: tracing::Span::none(),
         })
         .await
         .unwrap();
