@@ -42,10 +42,10 @@ pub enum ArtifactState {
         source_digest: String,
         transport_generation: u64,
     },
+    /// Staged at `path`; `digest` is the SHA-256 of what was sent.
     Ready {
         path: String,
         digest: String,
-        degraded_reason: Option<String>,
     },
     Sentinel {
         reason: String,
@@ -251,8 +251,13 @@ impl Prewarm {
 
         let locks_dir = config.state_dir.join("ssh").join("locks");
         let control_dir = config.state_dir.join("ssh").join("control");
-        let _ = ensure_private_dir(&locks_dir);
-        let _ = ensure_private_dir(&control_dir);
+        for dir in [&locks_dir, &control_dir] {
+            if let Err(error) = ensure_private_dir(dir) {
+                // Every SSH master for every remote host needs these; say so
+                // here rather than as a lock error per host later.
+                tracing::error!(dir = %dir.display(), %error, "could not create the SSH state directory");
+            }
+        }
 
         let mut transports = HashMap::new();
         let mut transport_watchers = HashMap::new();
@@ -1086,8 +1091,6 @@ impl Prewarm {
             .and_then(|n| n.to_str())
             .unwrap_or("agent.ts");
 
-        let mut prior_artifact: Option<(String, String)> = None;
-
         loop {
             if *shutdown_rx.borrow() {
                 break;
@@ -1098,15 +1101,7 @@ impl Prewarm {
                 res = self.await_transport_ready(host) => match res {
                     Ok(gen) => gen,
                     Err(reason) => {
-                        if let Some((path, digest)) = &prior_artifact {
-                            tx.send_replace(ArtifactState::Ready {
-                                path: path.clone(),
-                                digest: digest.clone(),
-                                degraded_reason: Some(reason),
-                            });
-                        } else {
-                            tx.send_replace(ArtifactState::Sentinel { reason });
-                        }
+                        tx.send_replace(ArtifactState::Sentinel { reason });
                         tokio::select! {
                             _ = shutdown_rx.changed() => break,
                             _ = tokio::time::sleep(Duration::from_secs(5)) => {}
@@ -1124,15 +1119,7 @@ impl Prewarm {
             let client_opts = match self.client_for(host, generation) {
                 Ok(opts) => opts,
                 Err(e) => {
-                    if let Some((path, digest)) = &prior_artifact {
-                        tx.send_replace(ArtifactState::Ready {
-                            path: path.clone(),
-                            digest: digest.clone(),
-                            degraded_reason: Some(e),
-                        });
-                    } else {
-                        tx.send_replace(ArtifactState::Sentinel { reason: e });
-                    }
+                    tx.send_replace(ArtifactState::Sentinel { reason: e });
                     tokio::select! {
                         _ = shutdown_rx.changed() => break,
                         _ = tokio::time::sleep(Duration::from_secs(2)) => {}
@@ -1168,14 +1155,11 @@ impl Prewarm {
                  TMP=\"$CDIR/.$FN.$NONCE.tmp\" && \
                  TARGET=\"$CDIR/$FN\" && \
                  MANIFEST=\"$CDIR/$FN.digest\" && \
-                 LKG=\"$CDIR/$FN.lkg\" && \
-                 LKG_MAN=\"$CDIR/$FN.digest.lkg\" && \
                  cat > \"$TMP\" && \
                  REM_DIGEST=$(sha256sum \"$TMP\" 2>/dev/null | awk '{{print $1}}') && \
                  if [ -z \"$REM_DIGEST\" ]; then REM_DIGEST=$(shasum -a 256 \"$TMP\" 2>/dev/null | awk '{{print $1}}'); fi && \
                  if [ \"$REM_DIGEST\" != \"{source_digest}\" ]; then rm -f \"$TMP\"; exit 2; fi && \
                  chmod 0600 \"$TMP\" && \
-                 if [ -f \"$TARGET\" ]; then cp -f \"$TARGET\" \"$LKG\" 2>/dev/null || true; cp -f \"$MANIFEST\" \"$LKG_MAN\" 2>/dev/null || true; fi && \
                  printf '%s' \"$REM_DIGEST\" > \"$TMP.digest\" && \
                  chmod 0600 \"$TMP.digest\" && \
                  mv -f \"$TMP\" \"$TARGET\" && \
@@ -1201,15 +1185,7 @@ impl Prewarm {
                 Ok(child) => child,
                 Err(e) => {
                     let err = format!("staging spawn failed: {e}");
-                    if let Some((path, digest)) = &prior_artifact {
-                        tx.send_replace(ArtifactState::Ready {
-                            path: path.clone(),
-                            digest: digest.clone(),
-                            degraded_reason: Some(err),
-                        });
-                    } else {
-                        tx.send_replace(ArtifactState::Sentinel { reason: err });
-                    }
+                    tx.send_replace(ArtifactState::Sentinel { reason: err });
                     break;
                 }
             };
@@ -1261,58 +1237,32 @@ impl Prewarm {
                     } else {
                         target_path
                     };
-                    prior_artifact = Some((target_path.clone(), source_digest.clone()));
                     tx.send_replace(ArtifactState::Ready {
                         path: target_path,
                         digest: source_digest.clone(),
-                        degraded_reason: None,
                     });
                 }
                 Ok(Ok(status)) => {
                     crate::pi_client::terminate_process(&mut child).await;
                     guard.disarm();
                     let err = format!("staging remote script failed (exit {status}): {stderr}");
-                    if let Some((path, digest)) = &prior_artifact {
-                        tx.send_replace(ArtifactState::Ready {
-                            path: path.clone(),
-                            digest: digest.clone(),
-                            degraded_reason: Some(err),
-                        });
-                    } else {
-                        tx.send_replace(ArtifactState::Sentinel { reason: err });
-                    }
+                    tx.send_replace(ArtifactState::Sentinel { reason: err });
                 }
                 Ok(Err(e)) => {
                     crate::pi_client::terminate_process(&mut child).await;
                     guard.disarm();
                     let err = format!("staging wait error: {e}");
-                    if let Some((path, digest)) = &prior_artifact {
-                        tx.send_replace(ArtifactState::Ready {
-                            path: path.clone(),
-                            digest: digest.clone(),
-                            degraded_reason: Some(err),
-                        });
-                    } else {
-                        tx.send_replace(ArtifactState::Sentinel { reason: err });
-                    }
+                    tx.send_replace(ArtifactState::Sentinel { reason: err });
                 }
                 Err(_) => {
                     crate::pi_client::terminate_process(&mut child).await;
                     guard.disarm();
                     let err = "staging timed out".to_string();
-                    if let Some((path, digest)) = &prior_artifact {
-                        tx.send_replace(ArtifactState::Ready {
-                            path: path.clone(),
-                            digest: digest.clone(),
-                            degraded_reason: Some(err),
-                        });
-                    } else {
-                        tx.send_replace(ArtifactState::Sentinel { reason: err });
-                    }
+                    tx.send_replace(ArtifactState::Sentinel { reason: err });
                 }
             }
 
-            let _ = &prior_artifact;
+            // Staged once per startup; a new extension ships with a redeploy.
             break;
         }
     }

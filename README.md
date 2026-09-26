@@ -34,11 +34,12 @@ Everything a project leg needs from its host is set up once, at startup, by
   process already holds is adopted rather than duplicated; only the process
   that created a master tears it down. A master that dies is reconnected under
   a new generation.
-- **Model catalogs.** `pi --list-models` once per host and runtime, kept in
-  memory and refreshed.
-- **The agent extension.** Staged to every host that needs it, checked by
-  SHA-256, replaced atomically, with the last good copy kept if a refresh
-  fails.
+- **Model catalogs.** `pi --list-models` per host and runtime, at startup and
+  then every five minutes; a failed refresh keeps the last good listing.
+- **The agent extension.** Staged once to every host that needs it: written
+  to a temporary file, checked against its SHA-256, then moved into place. A
+  host that cannot take it launches its legs without it; a changed extension
+  reaches hosts with the next restart.
 - **Prepare commands.** Each project's `prepare` runs once. Its output, exit
   status, or timeout becomes a timestamped report the incoming agent is shown;
   a failure is reported, not retried, and does not block the project.
