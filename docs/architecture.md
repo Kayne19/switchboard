@@ -363,6 +363,10 @@ Every important boundary should have a useful trace or event:
 - TTS request, provider first byte, and audio completion
 - cancellation, rescue, timeout, and fallback
 
+In the journal, a line names the browser connection, request, or turn it
+belongs to through a span (`ws`, `http`, `turn`, `stt`); `README.md` lists
+them under "Operating it".
+
 Failure ownership should be obvious:
 
 - browser capture failure: browser reports it and releases the mic

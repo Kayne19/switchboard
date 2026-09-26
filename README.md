@@ -345,9 +345,25 @@ those on the deployment host after a pin bump.
 
 ```bash
 systemctl status switchboard
-journalctl -u switchboard -f          # every transcript, route change and signal
-curl -s localhost:8765/healthz | jq   # commit, model, TTS config, current route
+journalctl -u switchboard -f          # transcriptions, turns, route changes, controls, callbacks, speech
+curl -s localhost:8765/healthz | jq   # commit, which of STT, streaming STT and TTS are configured, route, model
 ```
+
+A log line carries the context it happened in as a span.
+`ws{connection=3 joined_generation=5}` marks what one browser tab sent and the
+work it started, so two tabs can be told apart. `http{endpoint="/speak"}` marks
+a page control or agent callback from arrival to outcome, which is either done
+or the refusal and its reason; `/display` adds the action's `op`, `kind` and
+`id`. `turn{clip=...}` follows a turn through the PBX, the agent and the
+synthesis of its reply, and `stt{clip=...}` the speech-to-text sidecar run.
+
+A sidecar that exits unsuccessfully is logged with the end of its stderr. The
+streaming worker logs becoming ready, stopping and restarting, with its exit
+status and stderr. An ElevenLabs request is logged by voice, model and
+character count, with its HTTP status and latency. The API key and the words
+spoken are never logged, and neither is display content, only its size and
+kind. `SWITCHBOARD_LOG=switchboard=debug,warn` adds each sidecar run and TTS
+request as it starts.
 
 The browser page is `https://switchboard.home.arpa` (via caddy). It has to be
 https: browsers only grant microphone access on a secure context, so hitting
