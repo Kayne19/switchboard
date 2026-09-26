@@ -1586,6 +1586,12 @@ async fn process_turns(state: AppState) {
         .expect("turn worker started once");
     while let Some((id, transcript, generation)) = receiver.recv().await {
         state.0.queued_turns.fetch_sub(1, Ordering::AcqRel);
+        // A leg started from the page (a connection or a redial) is held under
+        // the PBX lock until it is adopted or rolled back. Wait for that
+        // outcome: the stamp check below means nothing until it is known which
+        // leg the turn would run on, and a prompt must not begin while a leg is
+        // starting.
+        drop(state.0.switchboard.lock().await);
         let turn_state = state.clone();
         let started = std::time::Instant::now();
         // Register the abort handle before awaiting the task. Page-level rescue

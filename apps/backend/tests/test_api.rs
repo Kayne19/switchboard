@@ -1624,6 +1624,156 @@ async fn a_clip_keeps_the_first_stamp_the_server_saw_for_its_id() {
     ));
 }
 
+// A leg started from the page -- a connection or a redial -- differs from an
+// agent's transfer in one way that matters here: no turn is running, so the
+// turn worker is free while the leg starts. The page control holds the PBX
+// lock from its rescue until the leg is adopted or rolled back, and the turn
+// worker has to wait for that outcome before it checks a queued clip's stamp.
+// It used to check at once, pass, and begin the turn's prompt, which took the
+// call out of the starting phase: the leg was then never adopted, and the
+// caller's words ran on it once the lock came free.
+
+/// Starts a leg the way a page control does and keeps the PBX lock, then
+/// queues a transcribed clip stamped with the epoch the browser was told
+/// about, and waits until the turn worker has taken it.
+async fn queue_a_clip_while_a_page_control_starts_a_leg(
+    state: &AppState,
+    id: &str,
+) -> (JoinHandle<()>, JoinHandle<()>) {
+    let (locked_tx, locked_rx) = oneshot::channel();
+    let control_state = state.clone();
+    let control = tokio::spawn(async move {
+        hold_turn_lock(&control_state, Some(locked_tx)).await;
+    });
+    locked_rx.await.unwrap();
+    cancel_active_operations(state).await;
+    begin_alpha_candidate(state, "alpha-leg");
+
+    state.0.queued_turns.store(1, Ordering::Release);
+    state
+        .0
+        .turns
+        .send((
+            id.into(),
+            "and check the logs".into(),
+            state.0.coordinator.generation(),
+        ))
+        .await
+        .unwrap();
+    let turn_worker = tokio::spawn(process_turns(state.clone()));
+    timeout(Duration::from_secs(10), async {
+        while state.0.queued_turns.load(Ordering::Acquire) != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the turn worker takes the clip");
+    (control, turn_worker)
+}
+
+#[tokio::test]
+async fn speech_queued_while_a_page_control_starts_a_leg_is_dropped_with_notice_on_adoption() {
+    let state = state();
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (control, turn_worker) =
+        queue_a_clip_while_a_page_control_starts_a_leg(&state, "while-connecting").await;
+
+    assert!(
+        state.0.coordinator.is_candidate(),
+        "a turn must not begin while a leg is starting"
+    );
+    assert!(!state.0.turn_in_flight.load(Ordering::Acquire));
+    assert_eq!(
+        types_of(&queued_frames(&mut connection)),
+        ["epoch", "candidate"]
+    );
+
+    // The incoming agent shows life, its leg is adopted, and the control ends.
+    assert!(state.0.leg_announcer.promote_candidate().await);
+    control.abort();
+
+    let frames = frames_until(&mut connection, "error").await;
+    assert_eq!(
+        types_of(&frames),
+        ["candidate_cleared", "epoch", "status", "error"]
+    );
+    assert_dropped_with_notice(&frames[3], "while-connecting");
+    assert!(!state.0.turn_in_flight.load(Ordering::Acquire));
+    assert!(state.0.active_operations.lock().await.is_empty());
+    turn_worker.abort();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn speech_queued_while_a_page_control_starts_a_leg_stays_with_the_leg_after_a_rollback() {
+    // The generation does not move when a startup is rolled back, so the clip
+    // is still addressed to the leg the caller never left, and goes there.
+    let root = std::env::temp_dir().join(format!(
+        "switchboard-rollback-operator-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let operator = root.join("fake-pi");
+    crate::pi_client::write_executable_script(
+        &operator,
+        r##"while IFS= read -r line; do
+printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Operator heard you."}}'
+printf '%s\n' '{"type":"agent_settled"}'
+done
+"##,
+    );
+    let config =
+        crate::Config::for_tests(&[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    // No speech key: the reply is not synthesized, so nothing leaves the box.
+    let state = AppState::new(
+        Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
+        TranscriptLog::new(10),
+        Speaker::from_values(
+            100,
+            std::time::Duration::from_millis(25_000),
+            &HashMap::new(),
+        ),
+        SttAdapter::from_command(None),
+        SttStreamAdapter::from_command(None),
+    );
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (control, turn_worker) =
+        queue_a_clip_while_a_page_control_starts_a_leg(&state, "while-connecting").await;
+    assert!(state.0.coordinator.is_candidate());
+
+    assert!(state.0.coordinator.rollback_startup("startup failed"));
+    control.abort();
+
+    let frames = frames_until(&mut connection, "reply").await;
+    assert_eq!(
+        types_of(&frames),
+        [
+            "epoch",
+            "candidate",
+            "candidate_cleared",
+            "thinking",
+            "reply"
+        ]
+    );
+    assert_eq!(frames[3]["route"], OPERATOR);
+    assert_eq!(frames[4]["text"], "Operator heard you.");
+    assert_eq!(frames[4]["route"], OPERATOR);
+
+    turn_worker.abort();
+    state.0.switchboard.lock().await.shutdown().await;
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[tokio::test]
 async fn shutdown_notifies_upgraded_connections_before_reaping_the_pbx() {
     let state = state();

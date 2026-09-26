@@ -342,6 +342,12 @@ impl Coordinator {
             if state.operation.is_some() {
                 return Err(LifecycleError::OperationActive);
             }
+            // Beginning a turn now would move the call out of `Starting` with
+            // the candidate still staged, and a candidate the PBX no longer
+            // sees starting is never adopted.
+            if state.phase == Phase::Starting {
+                return Err(LifecycleError::CandidateActive);
+            }
             let operation = OperationIdentity {
                 id,
                 leg: leg.clone(),
