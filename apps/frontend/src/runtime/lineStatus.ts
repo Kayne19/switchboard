@@ -2,6 +2,8 @@
 // model and thinking level that leg runs, and which of those the caller may
 // change. Pure, so the picker rules can be tested without a socket.
 
+import type { StatusMessage } from "../protocol";
+
 export interface SelectOption {
   value: string;
   label: string;
@@ -47,7 +49,7 @@ export const OPERATOR_LINE: LineState = {
   modelsDiagnostic: "",
 };
 
-export function lineStateFromStatus(message: BrowserMessage): LineState {
+export function lineStateFromStatus(message: StatusMessage): LineState {
   const onProject = Boolean(message.route && message.route !== "operator");
 
   // Every leg runs at a level somebody chose, so there is always a level to

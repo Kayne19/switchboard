@@ -14,6 +14,7 @@ const compiled = ts.transpileModule(source, {
 assert.deepEqual(compiled.diagnostics ?? [], []);
 const encoded = Buffer.from(compiled.outputText).toString("base64");
 const {
+	SERVER_MESSAGE_TYPES,
 	clipHeader,
 	decodeServerMessage,
 	helloMessage,
@@ -26,13 +27,54 @@ const {
 	postJson,
 } = await import(`data:text/javascript;base64,${encoded}`);
 
-assert.deepEqual(decodeServerMessage('{"type":"status","route":"operator"}'), {
-	type: "status",
-	route: "operator",
-});
-assert.equal(decodeServerMessage("not json"), null);
-assert.equal(decodeServerMessage("null"), null);
-assert.equal(decodeServerMessage("42"), null);
+// The shared examples of every server-to-browser message, which the Rust
+// serializer is held to as well (apps/backend/tests/test_protocol.rs). Each
+// one decodes to exactly itself, as the variant its type names, and every
+// type the page knows has at least one.
+const fixture = JSON.parse(
+	readFileSync("apps/frontend/tests/fixtures/server-messages.json", "utf8"),
+);
+const exemplified = new Set();
+for (const { name, message } of fixture.messages) {
+	const decoded = decodeServerMessage(JSON.stringify(message));
+	assert.deepEqual(decoded, message, `example ${name} decodes to itself`);
+	exemplified.add(decoded.type);
+}
+assert.deepEqual(
+	SERVER_MESSAGE_TYPES.filter((type) => !exemplified.has(type)),
+	[],
+	"every server message type has an example in server-messages.json",
+);
+
+// A frame is admitted only as a whole message of the protocol.
+for (const [frame, why] of [
+	["not json", "not JSON"],
+	["null", "not an object"],
+	["42", "not an object"],
+	['[{"type":"epoch","generation":1}]', "an array"],
+	['{"generation":1}', "no type"],
+	[
+		'{"type":"partial","id":"c1","generation":1,"sequence":0,"text":"hel"}',
+		"a type the service does not send",
+	],
+	['{"type":"status","route":"operator"}', "a status missing its fields"],
+	['{"type":"epoch","generation":"4"}', "a field of the wrong kind"],
+	['{"type":"error","id":7,"message":"x"}', "an optional field of the wrong kind"],
+	['{"type":"error","code":"other","message":"x"}', "an unknown error code"],
+	[
+		'{"type":"spoken","entry":{"role":"agent","text":"hi"}}',
+		"a transcript entry missing its route and time",
+	],
+	['{"type":"history","entries":[{"role":"agent"}]}', "a malformed entry in a list"],
+	['{"type":"display","seq":3}', "a display without its action"],
+]) {
+	assert.equal(decodeServerMessage(frame), null, why);
+}
+assert.deepEqual(
+	decodeServerMessage('{"type":"epoch","generation":4,"stale":true}'),
+	{ type: "epoch", generation: 4 },
+	"a field no message declares is dropped",
+);
 
 const previousFetch = globalThis.fetch;
 const requests = [];

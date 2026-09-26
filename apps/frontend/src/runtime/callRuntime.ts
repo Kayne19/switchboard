@@ -26,6 +26,7 @@ import {
   sttEndHeader,
   sttStartHeader,
   typedTurnMessage,
+  type ServerMessage,
 } from "../protocol";
 import type { ScreenStateReport } from "../controller/types";
 import { AudioPlayback } from "./audioPlayback";
@@ -100,7 +101,7 @@ interface EventSource {
 export interface CallRuntimeOptions {
   socketUrl: string;
   onState: (state: RuntimeState) => void;
-  onServer: (message: BrowserMessage) => void;
+  onServer: (message: ServerMessage) => void;
   createSocket?: (url: string) => WebSocket;
   postJson?: typeof postJson;
   player?: HTMLAudioElement;
@@ -754,7 +755,13 @@ export class CallRuntime {
       if (!current()) return;
       if (typeof event.data === "string") {
         const message = decodeServerMessage(event.data);
-        if (!message) return;
+        if (!message) {
+          console.warn(
+            "Switchboard: ignored a server message that is not in the protocol:",
+            event.data.slice(0, 200),
+          );
+          return;
+        }
         this.handleText(message, socket, generation);
         this.options.onServer(message);
       } else if (event.data instanceof ArrayBuffer) {
@@ -775,14 +782,14 @@ export class CallRuntime {
   }
 
   private handleText(
-    message: BrowserMessage,
+    message: ServerMessage,
     socket: WebSocket,
     generation: number,
   ): void {
     switch (message.type) {
       case "hello_ack":
-        this.streamingSelected = message.stt_streaming === true;
-        this.playback.setStreamingEnabled(message.mse_mp3 === true);
+        this.streamingSelected = message.stt_streaming;
+        this.playback.setStreamingEnabled(message.mse_mp3);
         this.flushOutbox();
         break;
       case "epoch":
@@ -835,13 +842,9 @@ export class CallRuntime {
         this.playback.receiveAudioDone(message);
         break;
       case "final_response_audio_closed":
-        if (
-          typeof message.response_id === "string" &&
-          typeof message.generation === "number" &&
-          message.generation === this.turnEpoch
-        ) {
+        if (message.generation === this.turnEpoch) {
           this.clearResponseBarrier();
-          if (message.success === false) {
+          if (!message.success) {
             this.update({
               handsFreeStatus:
                 "Hands-free follow-up is waiting for a successful response.",
@@ -888,7 +891,7 @@ export class CallRuntime {
         // A transcript in history is the durable completion acknowledgement.
         // Drop its retained audio even if the live transcript frame was lost.
         const completed = new Set(
-          (message.entries || []).map((entry) => entry.id).filter(Boolean),
+          message.entries.map((entry) => entry.id).filter(Boolean),
         );
         this.outbox.retain((clip) => !completed.has(clip.id));
         break;
@@ -907,7 +910,7 @@ export class CallRuntime {
         );
         break;
       case "queued": {
-        const waiting = message.waiting ?? 0;
+        const waiting = message.waiting;
         if (message.steered) {
           this.setStatus("Added that to the turn already in progress.", false);
         } else if (waiting > 1) {

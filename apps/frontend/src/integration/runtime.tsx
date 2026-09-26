@@ -10,6 +10,7 @@ import { planReportDispatch, shouldClearRejectionOnSend } from "../app/reportDis
 import { useController } from "../controller/context";
 import type { MessageData, ScreenStateReport } from "../controller/types";
 import { RUNTIME_CONVERSATION_ID } from "../controller/types";
+import type { ServerMessage, TranscriptEntry } from "../protocol";
 import {
   CallRuntime,
   INITIAL_RUNTIME_STATE,
@@ -22,28 +23,18 @@ interface TranscriptLine {
   id?: string;
 }
 
-type ServerMessage = Record<string, unknown> & { type?: string; seq?: number };
-
-function text(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function normalizeHistory(raw: unknown): TranscriptLine[] {
-  if (!Array.isArray(raw)) return [];
-  return raw.flatMap((entry) => {
-    if (!entry || typeof entry !== "object") return [];
-    const item = entry as Record<string, unknown>;
-    const body = text(item.text);
-    return body
+function normalizeHistory(entries: TranscriptEntry[]): TranscriptLine[] {
+  return entries.flatMap((entry) =>
+    entry.text
       ? [
           {
-            speaker: item.role === "caller" ? "CALLER" : "DAMOCLES",
-            text: body,
-            id: text(item.id) || undefined,
+            speaker: entry.role === "caller" ? "CALLER" : "DAMOCLES",
+            text: entry.text,
+            id: entry.id || undefined,
           },
         ]
-      : [];
-  });
+      : [],
+  );
 }
 
 // `?ws=` points the page at another backend. The dev server has no backend of
@@ -61,7 +52,6 @@ export function RuntimeIntegration() {
   const [callRuntime, setCallRuntime] = useState<CallRuntime | null>(null);
   const transcriptRef = useRef<TranscriptLine[]>([]);
   const currentResponseRef = useRef("");
-  const currentCaptionRef = useRef("");
   const transportReadyRef = useRef(false);
   const generationRef = useRef(0);
   const pendingReportRef = useRef<ScreenStateReport | null>(null);
@@ -99,9 +89,8 @@ export function RuntimeIntegration() {
   }, [sendReport]);
 
   const showConversation = useCallback(
-    (response?: string, caption?: string) => {
+    (response?: string) => {
       if (response !== undefined) currentResponseRef.current = response;
-      if (caption) currentCaptionRef.current = caption;
       const responseCount = transcriptRef.current.filter((entry) => entry.speaker === "DAMOCLES").length;
       const message: MessageData = {
         context:
@@ -109,7 +98,7 @@ export function RuntimeIntegration() {
             ? "OPERATOR LINE"
             : `PROJECT / ${runtime.route.toUpperCase()}`,
         tag: "CURRENT RESPONSE / LIVE",
-        caption: currentCaptionRef.current || `VOICE / ${String(Math.max(1, responseCount)).padStart(2, "0")}`,
+        caption: `VOICE / ${String(Math.max(1, responseCount)).padStart(2, "0")}`,
         // No response yet means no segments: the conversation scene shows
         // its own open-line prompt, and a content rail shows no live card.
         segments: currentResponseRef.current ? [{ text: currentResponseRef.current }] : [],
@@ -153,8 +142,7 @@ export function RuntimeIntegration() {
           // handoff keeps them on screen; `epoch_reset` drops only what the
           // old leg put there. A reconnect is followed by `history`, which
           // replaces the transcript with the server's.
-          generationRef.current =
-            typeof message.generation === "number" ? message.generation : 0;
+          generationRef.current = message.generation;
           transportReadyRef.current = true;
           inFlightReportRef.current = null;
           pendingReportRef.current = null;
@@ -171,35 +159,31 @@ export function RuntimeIntegration() {
             showConversation();
           } else {
             // The server has no call to show, so neither does the page.
-            currentCaptionRef.current = "";
             dispatch({ op: "runtime_hide", id: RUNTIME_CONVERSATION_ID });
           }
           break;
         }
         case "transcript": {
-          const body = text(message.text);
+          const body = message.text;
           if (!body) break;
           appendTranscript({
             speaker: "CALLER",
             text: body,
-            id: text(message.id) || undefined,
+            id: message.id || undefined,
           });
           showConversation();
           break;
         }
         case "spoken": {
-          const entry = message.entry;
-          if (!entry || typeof entry !== "object") break;
-          const item = entry as Record<string, unknown>;
-          const body = text(item.text);
+          const body = message.entry.text;
           if (!body) break;
           appendTranscript({
             speaker: "DAMOCLES",
             text: body,
-            id: text(item.id) || undefined,
+            id: message.entry.id || undefined,
           });
           currentResponseRef.current = body;
-          showConversation(body, text(item.caption) || text(message.caption));
+          showConversation(body);
           dispatch({
             op: "runtime_say",
             target: RUNTIME_CONVERSATION_ID,
@@ -211,10 +195,10 @@ export function RuntimeIntegration() {
           // The turn is over, so nothing it started is still running, even
           // should an end have gone missing.
           dispatch({ op: "runtime_activity", activity: null, at: Date.now() });
-          const body = text(message.text) || "(No spoken response.)";
+          const body = message.text || "(No spoken response.)";
           appendTranscript({ speaker: "DAMOCLES", text: body });
           currentResponseRef.current = body;
-          showConversation(body, text(message.caption));
+          showConversation(body);
           dispatch({
             op: "runtime_say",
             target: RUNTIME_CONVERSATION_ID,
@@ -235,11 +219,11 @@ export function RuntimeIntegration() {
           // The reducer counts the calls under way, so a burst of them --
           // twenty parallel reads -- reads as twenty, and an end retires
           // one call of its tool rather than the panel.
-          const tool = text(message.tool);
+          const tool = message.tool;
           if (message.state === "start") {
             dispatch({
               op: "runtime_activity",
-              activity: { label: text(message.label), tool, detail: text(message.detail) },
+              activity: { label: message.label, tool, detail: message.detail },
               at: Date.now(),
             });
           } else if (message.state === "end") {
@@ -263,7 +247,7 @@ export function RuntimeIntegration() {
           break;
         }
         case "view": {
-          const target = text(message.target);
+          const target = message.target;
           if (target === "comms") {
             showConversation();
           }
@@ -275,7 +259,7 @@ export function RuntimeIntegration() {
           break;
         }
         case "error": {
-          const body = text(message.message) || "The line reported an error.";
+          const body = message.message || "The line reported an error.";
           dispatch({ op: "runtime_say", text: body });
           break;
         }

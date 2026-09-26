@@ -13,6 +13,7 @@ import { SceneRenderer } from '../../src/components/SceneRenderer';
 import { sceneKind } from '../../src/app/sceneModel';
 import { ControllerProvider, useController } from '../../src/controller/context';
 import { RUNTIME_CONVERSATION_ID } from '../../src/controller/types';
+import { helloAck } from '../fixtures/serverMessages';
 
 type Controller = ReturnType<typeof useController>;
 
@@ -260,7 +261,7 @@ describe('typing in the drawer opened from idle', () => {
 describe('the voice-free path from idle', () => {
   let socket: FakeSocket;
 
-  async function receive(message: Record<string, unknown>) {
+  async function receive(message: object) {
     await act(async () => {
       socket.onmessage?.({ data: JSON.stringify(message) } as MessageEvent);
     });
@@ -278,7 +279,7 @@ describe('the voice-free path from idle', () => {
       socket.readyState = 1;
       socket.onopen?.({} as Event);
     });
-    await receive({ type: 'hello_ack', version: 1, stt_streaming: false, mse_mp3: false });
+    await receive(helloAck());
     await receive({ type: 'epoch', generation: 4 });
     await receive({ type: 'history', entries: [] });
   });

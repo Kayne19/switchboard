@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { DisplayFixtureServer } from "./display-fixture-server.mjs";
+import { statusMessage, transcriptEntry } from "../fixtures/serverMessages";
 
 test.describe("call runtime", () => {
   test("the production root mounts no runtime frame or call chrome", async ({ page }) => {
@@ -91,7 +92,7 @@ test.describe("call runtime", () => {
         )
         .toBe(true);
 
-      fixtureServer.broadcast({ type: "view", target: "comms" });
+      fixtureServer.broadcast({ type: "view", target: "comms", reason: "" });
       await expect(page.locator('[data-scene="conversation"]')).toBeVisible();
 
       // A report already in flight under generation 1 may land as retired;
@@ -117,14 +118,13 @@ test.describe("call runtime", () => {
   test("an operator-to-project handoff never mounts the idle scene and keeps the first drawing", async ({
     page,
   }) => {
-    const projectStatus = {
-      type: "status",
+    const projectStatus = statusMessage({
       route: "switchboard",
       label: "switchboard",
       projects: ["switchboard"],
       thinking: "medium",
       levels: ["low", "medium", "high"],
-    };
+    });
     const fixtureServer = new DisplayFixtureServer({ initialGeneration: 1 });
     const { wsUrl } = await fixtureServer.start();
 
@@ -137,7 +137,7 @@ test.describe("call runtime", () => {
       fixtureServer.broadcast({ type: "transcript", id: "c1", text: "Put me through to switchboard." });
       fixtureServer.broadcast({
         type: "spoken",
-        entry: { id: "a1", role: "agent", text: "Putting you through to switchboard." },
+        entry: transcriptEntry({ id: "a1", role: "agent", text: "Putting you through to switchboard." }),
       });
       await expect(page.locator('main.stage[data-scene-kind="conversation"]')).toBeVisible();
 
@@ -185,7 +185,7 @@ test.describe("call runtime", () => {
         },
       });
       fixtureServer.broadcast(projectStatus);
-      fixtureServer.broadcast({ type: "reply", text: "That is the call path." });
+      fixtureServer.broadcast({ type: "reply", text: "That is the call path.", route: "switchboard" });
 
       await expect(page.locator('main.stage[data-scene-kind="architecture"]')).toBeVisible();
       await expect(page.locator('[data-testid="diagram"]')).toContainText("AGENT");
