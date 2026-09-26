@@ -133,6 +133,23 @@ fn stale_generation_and_concurrent_prompt_are_rejected() {
 }
 
 #[test]
+fn no_prompt_begins_while_a_page_started_leg_is_starting() {
+    // A page control starts a leg with no turn running. A prompt begun then
+    // would take the call out of `Starting` with the candidate still staged,
+    // and the leg would never be adopted.
+    let coordinator = coordinator();
+    coordinator.begin_rescue("page connect");
+    coordinator.begin_candidate(alpha_candidate()).unwrap();
+    assert_eq!(
+        coordinator.begin_prompt(&coordinator.current_identity()),
+        Err(LifecycleError::CandidateActive)
+    );
+    assert!(coordinator.is_candidate());
+    let adopted = coordinator.adopt_candidate().unwrap();
+    assert_eq!(coordinator.current_identity(), adopted);
+}
+
+#[test]
 fn startup_thinking_is_private_until_candidate_adoption() {
     let coordinator = coordinator();
     let candidate = CandidateLeg::new(

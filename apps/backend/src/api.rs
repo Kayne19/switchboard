@@ -1571,7 +1571,7 @@ fn emit_stale_clip(state: &AppState, id: &str) {
             "type":"error",
             "id":id,
             "code":"stale_epoch",
-            "message":"that recording belongs to the previous leg"
+            "message":"The line changed before that got through. Please repeat it."
         }),
     );
 }
@@ -1586,6 +1586,12 @@ async fn process_turns(state: AppState) {
         .expect("turn worker started once");
     while let Some((id, transcript, generation)) = receiver.recv().await {
         state.0.queued_turns.fetch_sub(1, Ordering::AcqRel);
+        // A leg started from the page (a connection or a redial) is held under
+        // the PBX lock until it is adopted or rolled back. Wait for that
+        // outcome: the stamp check below means nothing until it is known which
+        // leg the turn would run on, and a prompt must not begin while a leg is
+        // starting.
+        drop(state.0.switchboard.lock().await);
         let turn_state = state.clone();
         let started = std::time::Instant::now();
         // Register the abort handle before awaiting the task. Page-level rescue
@@ -1623,6 +1629,7 @@ async fn process_turns(state: AppState) {
         .await
         else {
             tracing::info!(clip = %id, stamped = generation, "dropping turn because rescue occurred before registration");
+            emit_stale_clip(&state, &id);
             if let Some(operation) = &operation {
                 state.0.coordinator.finish_operation(operation);
             }

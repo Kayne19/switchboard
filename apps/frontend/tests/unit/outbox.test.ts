@@ -29,6 +29,17 @@ describe("restampStaleClips", () => {
     expect(preClip.epoch, "pre-transfer speech keeps the server's discard").toBe(3);
     expect(currentClip.epoch).toBe(4);
   });
+
+  it("leaves a clip that already went out on the stamp it went out with", () => {
+    // The server keeps the first stamp it sees for a clip id, so a clip that
+    // was handed to a socket cannot be moved: a retransmission under a new
+    // stamp would be taken as the clip it already has and never answered.
+    const onTheWire = clip("a", { epoch: 3, transferEra: "alpha", sent: true, transmitted: true });
+    const afterReconnect = clip("b", { epoch: 3, transferEra: "alpha", sent: false, transmitted: true });
+    expect(restampStaleClips([onTheWire, afterReconnect], 4)).toBe(0);
+    expect(onTheWire.epoch).toBe(3);
+    expect(afterReconnect.epoch).toBe(3);
+  });
 });
 
 describe("ClipOutbox", () => {
