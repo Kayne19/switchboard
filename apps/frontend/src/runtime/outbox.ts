@@ -1,10 +1,12 @@
 // Completed voice clips the backend has not yet finished with.
 //
-// A clip stays here, oldest first, until its transcript (or a history entry
-// carrying its id) arrives. `sent` means only "attempted on this socket";
-// reconnect clears it and the clip is retransmitted under the same id, which
-// the backend deduplicates. That is what keeps a backend restart from
-// destroying the only copy of something the caller said.
+// A clip stays here, oldest first, until its transcript, an error naming it,
+// or a history entry carrying its id arrives. `sent` means only "attempted on
+// this socket"; reconnect clears it and the clip is retransmitted under the
+// same id. The backend answers a clip it already settled with the verdict it
+// sent, which a tab that was disconnected at the time never heard. That is
+// what keeps a backend restart from destroying the only copy of something
+// the caller said, and a dropped socket from leaving a clip unanswered.
 
 export const MAX_OUTBOX_CLIPS = 16;
 export const MAX_OUTBOX_BYTES = 128 * 1024 * 1024;
@@ -16,8 +18,8 @@ export interface Clip {
   created: number;
   epoch: number;
   // The candidate route the browser was watching when recording started.
-  // On the epoch that ends a transfer, such a clip is re-stamped to the new
-  // generation and resubmitted instead of being discarded.
+  // On the epoch of that candidate's adoption, such a clip is re-stamped to
+  // it and resubmitted instead of being discarded.
   transferEra?: string;
   sent: boolean;
   // Set once the whole clip has gone out on some socket. Unlike `sent`, a
@@ -76,27 +78,51 @@ export class ClipOutbox {
   }
 }
 
+/// A candidate leg that became the leg on the line: its route, and the
+/// epoch it was adopted at.
+export interface Adoption {
+  route: string;
+  generation: number;
+}
+
 // A clip recorded while the browser knew a transfer was in flight is
-// addressed to the leg being started, not to the leg that was live. Re-stamp
-// those to the new generation so the flush that follows delivers them. Any
-// other stale clip is left to be discarded: that is the server's safety
-// invariant for speech begun before the transfer was known.
+// addressed to the leg being started, not to the leg that was live. When that
+// leg is adopted, re-stamp those clips to its epoch so the flush that follows
+// delivers them. Any other stale clip is left to be discarded: that is the
+// server's safety invariant for speech begun before the transfer was known.
+//
+// Only the adoption of the very candidate the clip was recorded for counts:
+// the same route, one epoch on from the stamp the clip was recorded under. A
+// hangup while connecting moves the epoch the same way an adoption does, and
+// words addressed to the incoming leg must not run on the operator (#70).
 //
 // A clip that already went out is not re-stamped. The server holds it under
 // the stamp it went out with and drops it with a `stale_epoch` error that
 // names it, which is how the caller hears about it; sent again under a new
-// stamp it would be taken as the clip the server already has, and never
-// answered.
+// stamp it would be taken as the clip the server already has.
 export function restampStaleClips(
   clips: readonly Clip[],
-  generation: number,
+  adoption: Adoption,
 ): number {
   let resubmitted = 0;
   for (const clip of clips) {
-    if (clip.epoch !== generation && clip.transferEra && !clip.transmitted) {
-      clip.epoch = generation;
+    if (
+      clip.transferEra === adoption.route &&
+      clip.epoch + 1 === adoption.generation &&
+      !clip.transmitted
+    ) {
+      clip.epoch = adoption.generation;
       resubmitted += 1;
     }
   }
   return resubmitted;
+}
+
+// The candidate on `route` ended without being adopted: the clips recorded
+// for it were never addressed to a leg the caller reached, and stay on the
+// stamp they were recorded under.
+export function forgetTransfer(clips: readonly Clip[], route: string): void {
+  for (const clip of clips) {
+    if (clip.transferEra === route) clip.transferEra = undefined;
+  }
 }

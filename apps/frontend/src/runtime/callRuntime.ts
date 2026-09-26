@@ -38,7 +38,13 @@ import {
   type LineState,
   type SelectOption,
 } from "./lineStatus";
-import { ClipOutbox, restampStaleClips, type Clip } from "./outbox";
+import {
+  ClipOutbox,
+  forgetTransfer,
+  restampStaleClips,
+  type Adoption,
+  type Clip,
+} from "./outbox";
 import { PushToTalk, type PushToTalkOptions } from "./pushToTalk";
 
 export const IDLE_TEXT = "Connected. Tap Talk and speak.";
@@ -148,6 +154,9 @@ export class CallRuntime {
   // The destination route the browser has been told is connecting, or null.
   // Clips recorded while this is set are addressed to the incoming leg.
   private transferEra: string | null = null;
+  // The candidate the server last said was adopted, until the epoch it was
+  // adopted at arrives. Only that epoch carries the transfer's clips along.
+  private adoption: Adoption | null = null;
 
   private lineRequestsPending = 0;
   private lineRequestChain: Promise<void> | null = null;
@@ -799,27 +808,36 @@ export class CallRuntime {
         // reconnect retry, otherwise a pre-rescue clip can cross the barrier.
         if (typeof message.generation === "number") {
           const epoch = message.generation;
-          const resubmitted = restampStaleClips(this.outbox.all, epoch);
-          // Clips from a retired epoch are dropped here. The server tells the
-          // caller about the ones it received; these it never saw, so the
-          // caller is told here.
+          // A hangup while connecting moves the epoch too; only the epoch
+          // the candidate was adopted at carries its clips along.
+          const adoption =
+            this.adoption?.generation === epoch ? this.adoption : null;
+          this.adoption = null;
+          const resubmitted = adoption
+            ? restampStaleClips(this.outbox.all, adoption)
+            : 0;
+          // Clips from a retired epoch that never went out are dropped here,
+          // and the caller is told here, because the server never saw them.
+          // A clip that did go out stays until the server answers for it:
+          // after a reconnect it is sent again under the stamp it went out
+          // with, and the server replies with the verdict the tab missed.
           const neverSent = this.outbox.all.filter(
             (clip) => clip.epoch !== epoch && !clip.transmitted,
           ).length;
           this.handsFree?.epochChanged();
           this.clearResponseBarrier();
-          this.outbox.retain((clip) => clip.epoch === epoch);
+          this.outbox.retain(
+            (clip) => clip.epoch === epoch || clip.transmitted === true,
+          );
           this.turnEpoch = epoch;
           this.snapshotReady = true;
-          if (this.transferEra) {
-            this.transferEra = null;
-            if (resubmitted > 0) {
-              this.setStatus(
-                `The line changed while you were talking; ` +
-                  `sending ${resubmitted} clip(s) along...`,
-                false,
-              );
-            }
+          this.transferEra = null;
+          if (resubmitted > 0) {
+            this.setStatus(
+              `The line changed while you were talking; ` +
+                `sending ${resubmitted} clip(s) along...`,
+              false,
+            );
           }
           this.flushOutbox();
           if (neverSent > 0) {
@@ -841,9 +859,20 @@ export class CallRuntime {
         }
         break;
       case "candidate_cleared":
-        // The transfer was rolled back or interrupted. The epoch did not
-        // move, so queued clips keep their stamp and stay on this leg.
+        // The epoch that follows an adoption is the new leg's, and speech
+        // recorded for it is carried along. A rollback leaves the epoch
+        // where it was, and a rescue (a hangup while connecting) moves it
+        // exactly as an adoption would, so neither may carry anything.
         this.transferEra = null;
+        if (message.reason === "adopted") {
+          this.adoption = {
+            route: message.route,
+            generation: message.generation,
+          };
+        } else {
+          this.adoption = null;
+          forgetTransfer(this.outbox.all, message.route);
+        }
         if (this.state.status.startsWith("Connecting to ")) {
           this.setStatus(IDLE_TEXT, false);
         }

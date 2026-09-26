@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ClipOutbox,
   MAX_OUTBOX_CLIPS,
+  forgetTransfer,
   restampStaleClips,
   type Clip,
 } from "../../src/runtime/outbox";
@@ -23,7 +24,10 @@ describe("restampStaleClips", () => {
     const transferClip = clip("a", { epoch: 3, transferEra: "alpha" });
     const preClip = clip("b", { epoch: 3 });
     const currentClip = clip("c", { epoch: 4 });
-    const resubmitted = restampStaleClips([transferClip, preClip, currentClip], 4);
+    const resubmitted = restampStaleClips([transferClip, preClip, currentClip], {
+      route: "alpha",
+      generation: 4,
+    });
     expect(resubmitted, "only the transfer-era clip is re-stamped").toBe(1);
     expect(transferClip.epoch, "transfer-era clip follows the new leg").toBe(4);
     expect(preClip.epoch, "pre-transfer speech keeps the server's discard").toBe(3);
@@ -36,9 +40,34 @@ describe("restampStaleClips", () => {
     // stamp would be taken as the clip it already has and never answered.
     const onTheWire = clip("a", { epoch: 3, transferEra: "alpha", sent: true, transmitted: true });
     const afterReconnect = clip("b", { epoch: 3, transferEra: "alpha", sent: false, transmitted: true });
-    expect(restampStaleClips([onTheWire, afterReconnect], 4)).toBe(0);
+    expect(
+      restampStaleClips([onTheWire, afterReconnect], { route: "alpha", generation: 4 }),
+    ).toBe(0);
     expect(onTheWire.epoch).toBe(3);
     expect(afterReconnect.epoch).toBe(3);
+  });
+
+  // Issue #70: speech addressed to a connecting leg goes only to that leg,
+  // adopted at the epoch right after the one the clip was recorded under.
+  it("moves a clip only onto the adoption of the candidate it was recorded for", () => {
+    const forAlpha = () => clip("a", { epoch: 3, transferEra: "alpha" });
+    const otherRoute = forAlpha();
+    expect(restampStaleClips([otherRoute], { route: "beta", generation: 4 })).toBe(0);
+    expect(otherRoute.epoch).toBe(3);
+    // Adopted later than the candidate it was recorded for: a rescue came
+    // between, and this is a leg the words were never addressed to.
+    const laterLeg = forAlpha();
+    expect(restampStaleClips([laterLeg], { route: "alpha", generation: 5 })).toBe(0);
+    expect(laterLeg.epoch).toBe(3);
+  });
+
+  it("forgets the transfer a clip was recorded for once it ends unadopted", () => {
+    const forAlpha = clip("a", { epoch: 3, transferEra: "alpha" });
+    const forBeta = clip("b", { epoch: 3, transferEra: "beta" });
+    forgetTransfer([forAlpha, forBeta], "alpha");
+    expect(forAlpha.transferEra).toBeUndefined();
+    expect(forBeta.transferEra).toBe("beta");
+    expect(restampStaleClips([forAlpha], { route: "alpha", generation: 4 })).toBe(0);
   });
 });
 

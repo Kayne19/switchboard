@@ -38,7 +38,9 @@
       "name": "candidate_cleared",
       "message": {
         "type": "candidate_cleared",
-        "generation": 5
+        "route": "alpha",
+        "generation": 5,
+        "reason": "adopted"
       }
     },
     {

@@ -1248,9 +1248,9 @@ async fn assert_back_on_the_operator(
             .lock()
             .unwrap()
             .iter()
-            .map(|notice| notice.active)
+            .map(|notice| notice.ended)
             .collect::<Vec<_>>(),
-        [true, false],
+        [None, Some(crate::protocol::CandidateEnd::RolledBack)],
         "the browser is told the candidate began and that it ended"
     );
 
