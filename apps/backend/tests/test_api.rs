@@ -134,10 +134,7 @@ async fn http_contract_exposes_status_health_and_page_controls() {
     .await;
     assert_eq!(code, StatusCode::OK);
     assert_eq!(thinking, json!({"thinking":"", "error":null}));
-    assert_eq!(
-        state.0.switchboard.lock().await.status()["thinking_default"],
-        "high"
-    );
+    assert_eq!(state.0.coordinator.status().thinking_default, "high");
 
     let (code, model) = request_json(
         &state,
@@ -702,10 +699,7 @@ async fn final_response_barrier_is_emitted_once_after_a_settled_turn() {
         delivery_generation: None,
     };
 
-    assert!(
-        deliver_turn_if_current(&state, &reply, current_status(&state), generation, "clip-1",)
-            .await
-    );
+    assert!(deliver_turn_if_current(&state, &reply, generation, "clip-1",).await);
     let mut barriers = Vec::new();
     while let Ok(Event::Json(value)) = events.try_recv() {
         if value["type"] == "final_response_audio_closed" {
@@ -739,16 +733,7 @@ async fn stale_final_response_does_not_emit_a_barrier() {
         delivery_generation: None,
     };
 
-    assert!(
-        !deliver_turn_if_current(
-            &state,
-            &reply,
-            current_status(&state),
-            generation,
-            "stale-clip",
-        )
-        .await
-    );
+    assert!(!deliver_turn_if_current(&state, &reply, generation, "stale-clip").await);
     assert!(matches!(
         events.try_recv(),
         Err(broadcast::error::TryRecvError::Empty)
@@ -1086,9 +1071,7 @@ async fn superseded_reply_is_not_logged_or_broadcast() {
         delivery_generation: None,
     };
 
-    assert!(
-        !deliver_page_reply_if_current(&state, &reply, current_status(&state), generation).await
-    );
+    assert!(!deliver_page_reply_if_current(&state, &reply, generation).await);
     assert!(state.0.transcript_log.lock().await.entries().is_empty());
     assert!(matches!(
         events.try_recv(),
@@ -1650,11 +1633,9 @@ async fn display_projection_generation_race() {
     assert_eq!(code, StatusCode::CONFLICT);
     assert_eq!(resp["code"], "invalid_leg");
 
-    // Un-quiesce route back to operator so new calls can proceed with rotated token
-    state
-        .0
-        .coordinator
-        .publish_status(json!({"type": "status", "route": "operator"}));
+    // Settle back onto the operator so new calls can proceed with the rotated
+    // token.
+    state.0.coordinator.settle();
     let current_token = state.0.coordinator.current_identity().token;
 
     let fresh_display = json!({
@@ -1950,8 +1931,7 @@ fn types_of(frames: &[Value]) -> Vec<&str> {
 
 /// The PBX finishing a transfer to the leg the coordinator already holds.
 async fn settle_transfer(state: &AppState) {
-    let status = state.0.coordinator.status_json();
-    state.0.leg_announcer.announce_route(status).await;
+    state.0.leg_announcer.announce_route().await;
 }
 
 #[tokio::test]
@@ -2060,9 +2040,12 @@ async fn returning_to_the_operator_still_clears_the_project_scene() {
     settle_transfer(&state).await;
     queued_frames(&mut connection);
 
-    // Handing back keeps the generation and changes the route. The switchboard
-    // here never left the operator, so its announcement is exactly that shape.
-    state.0.switchboard.lock().await.announce_route().await;
+    // Handing back keeps the generation and changes the route. Hanging up the
+    // project leg is the shortest way there.
+    assert_eq!(
+        state.0.switchboard.lock().await.force_hangup().await,
+        Some("alpha".to_owned())
+    );
 
     let returned = queued_frames(&mut connection);
     assert_eq!(types_of(&returned), ["epoch", "status"]);
@@ -2294,7 +2277,7 @@ async fn a_page_control_whose_leg_is_rescued_mid_operation_is_refused_as_superse
     let rescuer = state.clone();
     let controlled = run_page_control(&state, "model change", RunningWork::Keep, async move {
         rescuer.0.coordinator.begin_rescue("page rescue");
-        (operator_reply(), current_status(&rescuer))
+        operator_reply()
     })
     .await;
 

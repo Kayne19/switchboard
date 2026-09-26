@@ -4,12 +4,11 @@ use std::sync::Arc;
 use std::thread;
 
 fn coordinator() -> Coordinator {
-    Coordinator::new(json!({
-        "type": "status",
-        "route": "operator",
-        "models": [],
-        "models_available": true
-    }))
+    Coordinator::new(StatusConfig::default(), "medium")
+}
+
+fn phase(coordinator: &Coordinator) -> Phase {
+    coordinator.linearize(|state| state.phase)
 }
 
 fn coordinator_with_notices() -> (Coordinator, Arc<std::sync::Mutex<Vec<CandidateNotice>>>) {
@@ -147,20 +146,20 @@ fn startup_thinking_is_private_until_candidate_adoption() {
     assert!(coordinator
         .accept_thinking_callback("candidate", "not-a-level")
         .is_err());
-    assert_eq!(coordinator.status_json()["thinking"], "");
+    assert_eq!(coordinator.status().thinking, "");
     assert_eq!(
         coordinator.accept_thinking_callback("candidate", "high"),
         Ok(false)
     );
-    assert_eq!(coordinator.status_json()["route"], "operator");
+    assert_eq!(coordinator.status().route, "operator");
     let identity = coordinator.adopt_candidate().unwrap();
     assert_eq!(identity.generation, 1);
-    assert_eq!(coordinator.status_json()["route"], "alpha");
-    assert_eq!(coordinator.status_json()["thinking"], "high");
+    assert_eq!(coordinator.status().route, "alpha");
+    assert_eq!(coordinator.status().thinking, "high");
 }
 
 #[test]
-fn rescue_reopens_only_after_a_new_status_projection() {
+fn rescue_reopens_only_once_the_call_settles() {
     let coordinator = coordinator();
     let old = coordinator.current_identity();
     coordinator.begin_rescue("page rescue");
@@ -168,7 +167,7 @@ fn rescue_reopens_only_after_a_new_status_projection() {
         coordinator.begin_prompt(&coordinator.current_identity()),
         Err(LifecycleError::WrongPhase)
     );
-    coordinator.publish_status(json!({"type":"status", "route":"operator"}));
+    coordinator.settle();
     let operation = coordinator
         .begin_prompt(&coordinator.current_identity())
         .unwrap();
@@ -185,7 +184,7 @@ fn invalid_startup_thinking_is_rejected() {
         Err(LifecycleError::WrongPhase)
     );
     coordinator.adopt_candidate().unwrap();
-    assert_eq!(coordinator.status_json()["thinking"], "medium");
+    assert_eq!(coordinator.status().thinking, "medium");
 }
 
 #[test]
@@ -210,7 +209,7 @@ fn candidate_failure_rolls_back_private_state_and_side_effects_are_rejected() {
         Ok(false)
     );
     assert!(coordinator.rollback_startup("intro failed"));
-    assert_eq!(coordinator.status_json()["route"], "operator");
+    assert_eq!(coordinator.status().route, "operator");
     assert!(coordinator.candidate_identity().is_none());
     assert!(!coordinator.is_candidate());
 }
@@ -255,7 +254,7 @@ fn callbacks_require_the_current_leg_token_and_stale_work_is_rejected() {
 }
 
 #[test]
-fn catalog_publication_matches_adoption_generation() {
+fn the_launch_catalog_is_shown_once_its_leg_is_adopted() {
     let catalog = ModelCatalog {
         entries: vec![CatalogEntry {
             provider: "anthropic".into(),
@@ -280,20 +279,7 @@ fn catalog_publication_matches_adoption_generation() {
         )
         .unwrap();
     coordinator.adopt_candidate().unwrap();
-    assert_eq!(coordinator.status_json()["models"][0]["model"], "opus");
-}
-
-#[test]
-fn populated_status_keeps_picker_catalog_when_lifecycle_cache_is_empty() {
-    let coordinator = coordinator();
-    coordinator.publish_status(json!({
-        "type": "status",
-        "route": "alpha",
-        "models": [{"provider": "openai", "model": "gpt-5.6", "thinks": true}],
-        "models_available": true
-    }));
-    assert_eq!(coordinator.status_json()["models"][0]["model"], "gpt-5.6");
-    assert_eq!(coordinator.status_json()["models_available"], true);
+    assert_eq!(coordinator.status().models[0].model, "opus");
 }
 
 #[test]
@@ -311,7 +297,7 @@ fn status_read_does_not_wait_for_lifecycle_linearization() {
         });
     });
     entered.wait();
-    assert_eq!(coordinator.status_json()["route"], "operator");
+    assert_eq!(coordinator.status().route, "operator");
     release.wait();
     worker.join().unwrap();
 }
@@ -351,4 +337,225 @@ fn idle_time_is_measured_from_the_last_turn_boundary() {
 
     std::thread::sleep(idle * 2);
     assert!(coordinator.return_if_idle(idle).is_some());
+}
+
+fn alpha_catalog() -> ModelCatalog {
+    ModelCatalog {
+        entries: vec![CatalogEntry {
+            provider: "anthropic".into(),
+            model: "opus".into(),
+            thinks: true,
+        }],
+        available: true,
+        diagnostic: None,
+    }
+}
+
+/// Puts the call on alpha the way a transfer does: a candidate, adopted, its
+/// intro finished.
+fn on_alpha(coordinator: &Coordinator) {
+    coordinator
+        .begin_candidate(alpha_candidate().with_catalog(alpha_catalog()))
+        .unwrap();
+    coordinator.adopt_candidate().unwrap();
+    assert!(coordinator.finish_intro());
+}
+
+/// Asserts nothing of the project leg is left on the call.
+fn assert_on_the_operator(coordinator: &Coordinator) {
+    assert_eq!(coordinator.route(), "operator");
+    assert_eq!(coordinator.project(), None);
+    assert_eq!(coordinator.model(), "");
+    assert_eq!(coordinator.persistent_session_id(), "");
+    let status = coordinator.status();
+    assert_eq!(
+        (status.route.as_str(), status.label.as_str()),
+        ("operator", "Operator")
+    );
+    assert!(status.models.is_empty());
+    assert!(status.models_available);
+    assert!(!status.thinking_confirmed);
+}
+
+#[test]
+fn return_to_operator_clears_the_leg_from_every_phase() {
+    // At rest on a project: the agent handed back, or the page connected.
+    let call = coordinator();
+    on_alpha(&call);
+    let generation = call.generation();
+    assert_eq!(phase(&call), Phase::Active);
+    call.return_to_operator();
+    assert_eq!(phase(&call), Phase::Operator);
+    assert_on_the_operator(&call);
+    // The generation is the leg's, not the route's: a return keeps it.
+    assert_eq!(call.generation(), generation);
+
+    // Quiescing: a page rescue, then the hangup that follows it.
+    let call = coordinator();
+    on_alpha(&call);
+    call.begin_rescue("page rescue");
+    assert_eq!(phase(&call), Phase::Quiescing);
+    call.return_to_operator();
+    assert_eq!(phase(&call), Phase::Operator);
+    assert_on_the_operator(&call);
+
+    // Mid-turn: the operator is being told why the caller came back, and the
+    // turn settles the phase when it ends.
+    let call = coordinator();
+    on_alpha(&call);
+    let operation = call.begin_prompt(&call.current_identity()).unwrap();
+    call.return_to_operator();
+    assert_eq!(phase(&call), Phase::TurnRunning);
+    assert_on_the_operator(&call);
+    assert!(call.finish_operation(&operation));
+    assert_eq!(phase(&call), Phase::Operator);
+
+    // Already on the operator: nothing to clear.
+    let call = coordinator();
+    call.return_to_operator();
+    assert_eq!(phase(&call), Phase::Operator);
+    assert_on_the_operator(&call);
+
+    // A staged candidate is not on the line yet, and stays staged.
+    let call = coordinator();
+    call.begin_candidate(alpha_candidate()).unwrap();
+    call.return_to_operator();
+    assert_eq!(phase(&call), Phase::Starting);
+    assert!(call.candidate_identity().is_some());
+
+    // Shutting down stays shutting down.
+    let call = coordinator();
+    on_alpha(&call);
+    call.begin_shutdown();
+    call.return_to_operator();
+    assert_eq!(phase(&call), Phase::Shutdown);
+    assert_on_the_operator(&call);
+}
+
+#[test]
+fn settle_brings_a_rescued_call_to_rest_even_when_the_control_is_refused() {
+    // A redial rescues the live leg, then the PBX refuses it: the leg is still
+    // named, and the call must not stay quiescing, refusing every callback
+    // and steer, until something else happens to publish a status.
+    let call = coordinator();
+    on_alpha(&call);
+    call.begin_rescue("model change");
+    let current = call.current_identity();
+    assert_eq!(call.begin_prompt(&current), Err(LifecycleError::WrongPhase));
+    let status = call.settle();
+    assert_eq!(status.route, "alpha");
+    assert_eq!(status, call.status());
+    assert_eq!(phase(&call), Phase::Active);
+    assert!(call.begin_prompt(&current).is_ok());
+
+    // On the operator it comes to rest on the operator.
+    let call = coordinator();
+    call.begin_rescue("hangup with nothing on the line");
+    assert_eq!(call.settle().route, "operator");
+    assert_eq!(phase(&call), Phase::Operator);
+
+    // A call that is not quiescing is left as it is.
+    let call = coordinator();
+    let operation = call.begin_prompt(&call.current_identity()).unwrap();
+    call.settle();
+    assert_eq!(phase(&call), Phase::TurnRunning);
+    assert!(call.finish_operation(&operation));
+}
+
+#[test]
+fn the_status_is_built_from_the_coordinators_own_state() {
+    let coordinator = Coordinator::new(
+        StatusConfig {
+            operator_model: "provider/operator-model:low".into(),
+            model_swaps: true,
+            projects: vec!["alpha".into(), "beta".into()],
+        },
+        "medium",
+    );
+    let levels: Vec<String> = THINKING_LEVELS
+        .iter()
+        .map(|level| (*level).into())
+        .collect();
+    let operator = Status {
+        route: "operator".into(),
+        label: "Operator".into(),
+        model: "provider/operator-model:low".into(),
+        model_name: "provider/operator-model".into(),
+        thinking: "low".into(),
+        thinking_requested: "low".into(),
+        thinking_confirmed: false,
+        thinking_default: "medium".into(),
+        levels: levels.clone(),
+        models: Vec::new(),
+        models_available: true,
+        models_diagnostic: None,
+        model_swaps: true,
+        projects: vec!["alpha".into(), "beta".into()],
+    };
+    assert_eq!(coordinator.status(), operator);
+
+    // A starting leg is private: the page still shows the operator.
+    coordinator
+        .begin_candidate(
+            CandidateLeg::new(
+                "alpha",
+                "alpha",
+                "session",
+                "alpha-leg",
+                "anthropic/opus:high",
+                "high",
+            )
+            .with_catalog(alpha_catalog()),
+        )
+        .unwrap();
+    assert_eq!(coordinator.status(), operator);
+
+    // On the project: its model, the level it was asked for, and the catalog
+    // it launched with.
+    coordinator.adopt_candidate().unwrap();
+    coordinator.finish_intro();
+    let project = Status {
+        route: "alpha".into(),
+        label: "alpha".into(),
+        model: "anthropic/opus:high".into(),
+        model_name: "anthropic/opus".into(),
+        thinking: "high".into(),
+        thinking_requested: "high".into(),
+        thinking_confirmed: false,
+        thinking_default: "medium".into(),
+        levels,
+        models: vec![ModelEntry {
+            provider: "anthropic".into(),
+            model: "opus".into(),
+            thinks: true,
+        }],
+        models_available: true,
+        models_diagnostic: None,
+        model_swaps: true,
+        projects: vec!["alpha".into(), "beta".into()],
+    };
+    assert_eq!(coordinator.status(), project);
+
+    // The leg reports the level it actually runs at.
+    assert_eq!(
+        coordinator.accept_thinking_callback("alpha-leg", "medium"),
+        Ok(true)
+    );
+    let confirmed = Status {
+        thinking: "medium".into(),
+        thinking_confirmed: true,
+        ..project
+    };
+    assert_eq!(coordinator.status(), confirmed);
+
+    // Rescued: the leg stays named until the caller is put back.
+    coordinator.begin_rescue("page rescue");
+    assert_eq!(coordinator.status(), confirmed);
+
+    coordinator.return_to_operator();
+    assert_eq!(coordinator.status(), operator);
+
+    coordinator.set_thinking_default("xhigh");
+    assert_eq!(coordinator.status().thinking_default, "xhigh");
+    assert_eq!(coordinator.thinking_default(), "xhigh");
 }

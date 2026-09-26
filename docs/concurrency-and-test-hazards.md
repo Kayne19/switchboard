@@ -95,6 +95,16 @@ the project's scene. Promotion holds the display gate from adoption until the
 `epoch` is published, so a display from the new leg cannot be applied, and then
 wiped, ahead of its own reset.
 
+Neither announcement carries its own idea of the leg. Both read it from the
+coordinator, the one owner of the route: adoption moves the route, so from
+promotion on, everything that reads it (the transcript, the PBX's replies, a
+hangup) names the incoming leg, even while the PBX is still waiting for the
+intro turn to end. The route callback is only told that the PBX has settled,
+and restates the coordinator's status. A hangup that lands mid-intro, after
+adoption, therefore drops the incoming leg by name and returns the caller to
+the operator; before adoption the route is still the old one, and the rescue
+has already abandoned the candidate.
+
 On the browser side an `epoch` drops what the old leg put on screen (its
 objects, speech, focus, activity, and any view it asked for) and keeps the
 conversation, which belongs to the call. The route label on it changes when the

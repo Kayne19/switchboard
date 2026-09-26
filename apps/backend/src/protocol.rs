@@ -8,7 +8,7 @@
 //! variant without an example fails on both sides.
 use crate::history::TranscriptEntry;
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[cfg_attr(test, derive(serde::Deserialize))]
@@ -34,11 +34,9 @@ pub enum ServerMessage {
     /// The candidate leg was adopted, rolled back, or rescued away.
     CandidateCleared { generation: u64 },
     /// The line's status: who is on it, their model and thinking level, and
-    /// which of those the caller may change. Carried as the PBX and the
-    /// coordinator build it (see [`ServerMessage::status`]); its fields are
-    /// typed in the browser and pinned by the fixture, and are typed here
-    /// once the status projection itself is (#60).
-    Status(Map<String, Value>),
+    /// which of those the caller may change. The coordinator builds it from
+    /// its own state (`Coordinator::status`).
+    Status(Status),
     /// A clip was taken: whole, or opened as a stream (`streaming`).
     Accepted {
         id: String,
@@ -119,6 +117,45 @@ pub enum ServerMessage {
     ScreenStateAck,
 }
 
+/// The fields of a `status` message.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(test, derive(serde::Deserialize))]
+pub struct Status {
+    /// `operator`, or the id of the project on the line.
+    pub route: String,
+    /// Display name for whoever is on the line.
+    pub label: String,
+    /// The model spec the leg was started with, thinking suffix included.
+    pub model: String,
+    /// `provider/model`, without the thinking suffix.
+    pub model_name: String,
+    /// The level the leg reported, else the one it was asked for.
+    pub thinking: String,
+    pub thinking_requested: String,
+    /// Whether the leg has reported its level.
+    pub thinking_confirmed: bool,
+    /// The level the next project call is asked for when the caller names
+    /// none.
+    pub thinking_default: String,
+    pub levels: Vec<String>,
+    /// The models the picker offers: the catalog the leg launched with.
+    pub models: Vec<ModelEntry>,
+    pub models_available: bool,
+    /// Why the catalog is unavailable, when it is.
+    pub models_diagnostic: Option<String>,
+    pub model_swaps: bool,
+    pub projects: Vec<String>,
+}
+
+/// One model the picker offers.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(serde::Deserialize))]
+pub struct ModelEntry {
+    pub provider: String,
+    pub model: String,
+    pub thinks: bool,
+}
+
 /// Why an `error` needs handling beyond showing its message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(serde::Deserialize))]
@@ -130,18 +167,6 @@ pub enum ErrorCode {
 }
 
 impl ServerMessage {
-    /// The status message for a status projection, from
-    /// `Coordinator::status_json` or `Switchboard::status`. The projection
-    /// names its own `type`, which the tag replaces.
-    pub fn status(projection: Value) -> Self {
-        let mut fields = match projection {
-            Value::Object(fields) => fields,
-            _ => Map::new(),
-        };
-        fields.remove("type");
-        Self::Status(fields)
-    }
-
     /// An `error` that answers no particular clip or turn.
     pub fn error(message: impl Into<String>) -> Self {
         Self::Error {

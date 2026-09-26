@@ -1,6 +1,12 @@
 //! Call routing and Pi session lifecycle.
-use crate::lifecycle::{CandidateLeg, Coordinator};
-use crate::models::{normalize_thinking, pin_thinking, ModelCatalog, THINKING_LEVELS};
+//!
+//! The switchboard owns the processes: the operator's and the project leg's
+//! `PiSession`s, the session control rescues close, and launching. Which leg
+//! is on the line -- route, project, model, session -- belongs to the
+//! coordinator (`lifecycle.rs`); the switchboard reads it there and changes it
+//! only through the coordinator's transitions.
+use crate::lifecycle::{CandidateLeg, Coordinator, StatusConfig};
+use crate::models::{normalize_thinking, parse_spec, pin_thinking, ModelCatalog};
 use crate::pi_client::{
     local_argv, ActivityCallback, PiSession, PiSessionError, Signal, Turn, RETURN_SENTINEL,
     RETURN_TOOL, SET_MODEL_TOOL, TRANSFER_TOOL,
@@ -13,80 +19,15 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock as StdRwLock};
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::Duration;
 
 pub const OPERATOR: &str = "operator";
-pub type RouteCallback =
-    Arc<dyn Fn(serde_json::Value) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+/// Told the switchboard has settled on a leg; it reads which one from the
+/// coordinator.
+pub type RouteCallback = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
-#[derive(Clone, Debug)]
-pub struct LiveLegState(Arc<StdRwLock<LiveLegSnapshot>>);
-#[derive(Debug)]
-struct LiveLegSnapshot {
-    route: String,
-    session_token: String,
-    effective_thinking: String,
-}
-impl LiveLegState {
-    fn new() -> Self {
-        Self(Arc::new(StdRwLock::new(LiveLegSnapshot {
-            route: OPERATOR.to_owned(),
-            session_token: String::new(),
-            effective_thinking: String::new(),
-        })))
-    }
-
-    pub fn route(&self) -> String {
-        self.0
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .route
-            .clone()
-    }
-
-    pub(crate) fn set_session(&self, route: &str, token: &str) {
-        let mut state = self
-            .0
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.route = route.to_owned();
-        state.session_token = token.to_owned();
-        state.effective_thinking.clear();
-    }
-
-    fn set_route(&self, route: &str) {
-        self.set_session(route, "");
-    }
-
-    fn effective_thinking(&self) -> String {
-        self.0
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .effective_thinking
-            .clone()
-    }
-
-    pub fn report_thinking(&self, token: &str, thinking: &str) -> bool {
-        if !THINKING_LEVELS.contains(&thinking) {
-            return false;
-        }
-        let mut state = self
-            .0
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if state.route == OPERATOR
-            || state.session_token.is_empty()
-            || state.session_token != token
-            || state.effective_thinking == thinking
-        {
-            return false;
-        }
-        state.effective_thinking = thinking.to_owned();
-        true
-    }
-}
 const AGENT_BRIEF_HEADER: &str =
     "You are on a voice call in the {project} project, in its own directory.\n\n";
 const SPEAK_BRIEF: &str = "Use the configured speak tool for spoken updates; written output is kept for the caller's screen and is not read aloud.";
@@ -198,7 +139,6 @@ pub struct Switchboard {
     operator_system_prompt: String,
     operator_extension: Option<String>,
     agent_model: Option<String>,
-    agent_thinking: String,
     model_swaps: bool,
     speak_url: String,
     state_url: String,
@@ -209,23 +149,26 @@ pub struct Switchboard {
     activity_callback: Option<ActivityCallback>,
     route_callback: Option<RouteCallback>,
     active_session: Arc<Mutex<Option<PiSession>>>,
-    route: String,
-    project: Option<Project>,
     operator: Option<PiSession>,
     agent: Option<PiSession>,
-    model_spec: String,
-    session_id: String,
-    /// The model catalog the current project leg launched with.
-    leg_catalog: Option<ModelCatalog>,
-    live_leg: LiveLegState,
     operator_note: Option<String>,
-    coordinator: Option<Coordinator>,
+    /// The one owner of the leg on the line, and of the status the page is
+    /// shown.
+    coordinator: Coordinator,
     /// The only owner of launch setup: transports, catalogs, staged
     /// extensions, and prepare reports are all settled here at startup.
     prewarm: Arc<Prewarm>,
 }
 impl Switchboard {
     pub fn new(config: &crate::Config, registry: Registry, prewarm: Arc<Prewarm>) -> Self {
+        let coordinator = Coordinator::new(
+            StatusConfig {
+                operator_model: config.operator_model.clone().unwrap_or_default(),
+                model_swaps: config.model_swaps,
+                projects: registry.ids(),
+            },
+            config.agent_thinking.clone(),
+        );
         Self {
             registry,
             pi_binary: config.pi_binary.clone(),
@@ -233,7 +176,6 @@ impl Switchboard {
             operator_system_prompt: config.operator_prompt.to_string_lossy().into_owned(),
             operator_extension: config.operator_extension.clone(),
             agent_model: config.agent_model.clone(),
-            agent_thinking: config.agent_thinking.clone(),
             model_swaps: config.model_swaps,
             speak_url: config.speak_url.clone(),
             state_url: config.state_url.clone(),
@@ -244,21 +186,16 @@ impl Switchboard {
             activity_callback: None,
             route_callback: None,
             active_session: Arc::new(Mutex::new(None)),
-            route: OPERATOR.into(),
-            project: None,
             operator: None,
             agent: None,
-            model_spec: String::new(),
-            session_id: String::new(),
-            leg_catalog: None,
-            live_leg: LiveLegState::new(),
             operator_note: None,
-            coordinator: None,
+            coordinator,
             prewarm,
         }
     }
-    pub fn set_coordinator(&mut self, coordinator: Coordinator) {
-        self.coordinator = Some(coordinator);
+    /// The coordinator this switchboard reports to; the application shares it.
+    pub fn coordinator(&self) -> Coordinator {
+        self.coordinator.clone()
     }
     pub fn set_activity_callback(&mut self, callback: Option<ActivityCallback>) {
         self.activity_callback = callback;
@@ -271,10 +208,9 @@ impl Switchboard {
     pub async fn announce_route(&self) {
         if let Some(callback) = &self.route_callback {
             let callback = Arc::clone(callback);
-            let status = self.status();
-            if let Err(panic) = AssertUnwindSafe(callback(status)).catch_unwind().await {
+            if let Err(panic) = AssertUnwindSafe(callback()).catch_unwind().await {
                 tracing::error!(
-                    route = %self.route,
+                    route = %self.coordinator.route(),
                     panic = %crate::pi_client::panic_message(&panic),
                     "route callback panicked; the page may show a stale leg"
                 );
@@ -283,23 +219,7 @@ impl Switchboard {
     }
 
     fn rollback_startup(&self, reason: impl Into<String>) {
-        let Some(coordinator) = &self.coordinator else {
-            return;
-        };
-        if !coordinator.rollback_startup(reason) {
-            return;
-        }
-        let status = coordinator.status_json();
-        let route = status["route"].as_str().unwrap_or(OPERATOR);
-        let identity = coordinator.current_identity();
-        self.live_leg.set_session(
-            route,
-            if route == OPERATOR {
-                ""
-            } else {
-                &identity.token
-            },
-        );
+        self.coordinator.rollback_startup(reason);
     }
 
     pub fn session_control(&self) -> Arc<Mutex<Option<PiSession>>> {
@@ -310,68 +230,14 @@ impl Switchboard {
         *self.active_session.lock().await = session;
     }
 
-    pub fn route(&self) -> &str {
-        &self.route
-    }
-    pub fn live_leg_state(&self) -> LiveLegState {
-        self.live_leg.clone()
-    }
-    pub fn status(&self) -> serde_json::Value {
-        let spec = if self.route == OPERATOR {
-            self.operator_model.clone().unwrap_or_default()
-        } else {
-            self.model_spec.clone()
-        };
-        let (provider, model, requested) = crate::models::parse_spec(&spec);
-        let model_name = if provider.is_empty() {
-            model.clone()
-        } else {
-            format!("{provider}/{model}")
-        };
-        let effective = self.live_leg.effective_thinking();
-        let (models, models_available, models_diagnostic) = if self.route == OPERATOR {
-            (Vec::new(), true, None)
-        } else if self.project.is_some() {
-            self.leg_catalog
-                .as_ref()
-                .map(|catalog| {
-                    (
-                        catalog
-                            .entries
-                            .iter()
-                            .map(|entry| {
-                                serde_json::json!({
-                                    "provider": entry.provider,
-                                    "model": entry.model,
-                                    "thinks": entry.thinks,
-                                })
-                            })
-                            .collect::<Vec<_>>(),
-                        catalog.available,
-                        catalog.diagnostic.clone(),
-                    )
-                })
-                .unwrap_or_else(|| {
-                    (
-                        Vec::new(),
-                        false,
-                        Some("model catalog has not been loaded".into()),
-                    )
-                })
-        } else {
-            (Vec::new(), false, Some("no project is connected".into()))
-        };
-        serde_json::json!({"type":"status", "route":self.route, "label":self.route_label(), "model":spec, "model_name":model_name, "thinking":if effective.is_empty() { requested.clone() } else { effective.clone() }, "thinking_requested":requested, "thinking_confirmed":!effective.is_empty(), "thinking_default":self.agent_thinking, "levels":THINKING_LEVELS, "models":models, "models_available":models_available, "models_diagnostic":models_diagnostic, "model_swaps":self.model_swaps, "projects":self.registry.ids()})
-    }
     pub fn route_label(&self) -> String {
-        if self.route == OPERATOR {
-            "Operator".into()
-        } else {
-            self.project
-                .as_ref()
-                .map(|p| p.id.clone())
-                .unwrap_or_else(|| self.route.clone())
-        }
+        self.coordinator.route_label()
+    }
+    /// The registry entry for the project on the line.
+    fn current_project(&self) -> Option<Project> {
+        self.coordinator
+            .project()
+            .and_then(|id| self.registry.get(&id).cloned())
     }
     pub async fn shutdown(&mut self) {
         if let Some(session) = self.agent.take() {
@@ -394,7 +260,7 @@ impl Switchboard {
     }
 
     pub async fn handle_ctx(&mut self, context: &TransferContext) -> Reply {
-        if self.route == OPERATOR {
+        if self.coordinator.route() == OPERATOR {
             self.handle_operator_ctx(context).await
         } else {
             self.handle_agent_ctx(context).await
@@ -466,7 +332,7 @@ impl Switchboard {
         let turn = match session.prompt(&message).await {
             Ok(turn) => turn,
             Err(error) => {
-                tracing::warn!(route = %self.route, %error, "the operator leg failed mid-prompt");
+                tracing::warn!(%error, "the operator leg failed mid-prompt");
                 return self.recover_operator(error.to_string()).await;
             }
         };
@@ -500,7 +366,7 @@ impl Switchboard {
 
     async fn handle_agent_ctx(&mut self, context: &TransferContext) -> Reply {
         let Some(session) = self.agent.clone() else {
-            tracing::warn!(route = %self.route, "the project leg is gone; returning to the operator");
+            tracing::warn!(route = %self.coordinator.route(), "the project leg is gone; returning to the operator");
             return self
                 .return_operator_ctx(context, "project session is gone")
                 .await;
@@ -510,7 +376,7 @@ impl Switchboard {
             Err(error) => {
                 let detail = error.to_string();
                 let name = self.route_label();
-                tracing::warn!(route = %self.route, %error, "the project leg failed mid-prompt; returning to the operator");
+                tracing::warn!(route = %name, %error, "the project leg failed mid-prompt; returning to the operator");
                 self.drop_agent().await;
                 self.operator_note = Some(format!("The call to {name} ended: {detail}"));
                 return self.reply(
@@ -535,7 +401,7 @@ impl Switchboard {
                 detail
             };
             let name = self.route_label();
-            tracing::warn!(route = %self.route, %detail, "the project leg failed its turn; returning to the operator");
+            tracing::warn!(route = %name, %detail, "the project leg failed its turn; returning to the operator");
             self.drop_agent().await;
             self.operator_note = Some(format!("The call to {name} ended: {detail}"));
             return self.reply(
@@ -615,7 +481,7 @@ impl Switchboard {
             crate::registry::ResolveResult::Exact(project) => project.clone(),
             crate::registry::ResolveResult::Ambiguous(candidates) => {
                 let candidates_text = candidates.join(", ");
-                let from = (self.route != OPERATOR).then(|| self.route_label());
+                let from = (self.coordinator.route() != OPERATOR).then(|| self.route_label());
                 if from.is_some() {
                     self.drop_agent().await;
                 }
@@ -638,7 +504,7 @@ impl Switchboard {
                 } else {
                     known.join(", ")
                 };
-                let from = (self.route != OPERATOR).then(|| self.route_label());
+                let from = (self.coordinator.route() != OPERATOR).then(|| self.route_label());
                 if from.is_some() {
                     self.drop_agent().await;
                 }
@@ -655,7 +521,7 @@ impl Switchboard {
         };
 
         tracing::info!(
-            from = %self.route,
+            from = %self.coordinator.route(),
             to = %project.id,
             host = project.canonical_host().unwrap_or("<local>"),
             cwd = %project.cwd,
@@ -697,23 +563,21 @@ impl Switchboard {
         let session_id = uuid_like();
         let leg_token = uuid_like();
 
-        if let Some(coordinator) = &self.coordinator {
-            let candidate = CandidateLeg::new(
-                project.id.clone(),
-                project.id.clone(),
-                session_id.clone(),
-                leg_token.clone(),
-                model.clone(),
-                self.agent_thinking.clone(),
-            )
-            .with_catalog(plan.catalog.clone());
-            if let Err(error) = coordinator.begin_candidate(candidate) {
-                tracing::warn!(project = %project.id, %error, "candidate startup was refused");
-                return self.reply_transfer_error(
-                    format!("I couldn't get {} on the line: {error}", project.id),
-                    Some(error.to_string()),
-                );
-            }
+        let candidate = CandidateLeg::new(
+            project.id.clone(),
+            project.id.clone(),
+            session_id.clone(),
+            leg_token.clone(),
+            model.clone(),
+            thinking_in_spec(&model),
+        )
+        .with_catalog(plan.catalog.clone());
+        if let Err(error) = self.coordinator.begin_candidate(candidate) {
+            tracing::warn!(project = %project.id, %error, "candidate startup was refused");
+            return self.reply_transfer_error(
+                format!("I couldn't get {} on the line: {error}", project.id),
+                Some(error.to_string()),
+            );
         }
 
         let session = match self
@@ -777,30 +641,26 @@ impl Switchboard {
             );
         }
 
-        if let Some(coordinator) = &self.coordinator {
-            if coordinator.is_candidate() {
-                if let Err(error) = coordinator.adopt_candidate() {
-                    session.close().await;
-                    self.set_active_session(previous_agent.clone()).await;
-                    self.rollback_startup(format!("adoption failed: {error}"));
-                    return self.reply_transfer_error(
-                        format!("{} did not come up.", project.id),
-                        Some(error.to_string()),
-                    );
-                }
+        // The leg may be adopted already: a candidate is promoted on its first
+        // sign of life, which usually arrives during the intro turn. Either
+        // way the coordinator names it from here on; the switchboard only
+        // swaps the process handles.
+        if self.coordinator.is_candidate() {
+            if let Err(error) = self.coordinator.adopt_candidate() {
+                session.close().await;
+                self.set_active_session(previous_agent.clone()).await;
+                self.rollback_startup(format!("adoption failed: {error}"));
+                return self.reply_transfer_error(
+                    format!("{} did not come up.", project.id),
+                    Some(error.to_string()),
+                );
             }
-            coordinator.finish_intro();
         }
+        self.coordinator.finish_intro();
 
         if let Some(previous) = self.agent.take() {
             previous.close().await;
         }
-        self.project = Some(project.clone());
-        self.route = project.id.clone();
-        self.live_leg.set_session(&self.route, &leg_token);
-        self.model_spec = model.clone();
-        self.session_id = session_id.clone();
-        self.leg_catalog = Some(plan.catalog);
         self.agent = Some(session);
         self.set_active_session(self.agent.clone()).await;
         self.announce_route().await;
@@ -960,7 +820,7 @@ impl Switchboard {
         if !self.model_swaps {
             return Ok(pin_thinking(
                 self.default_model(project),
-                &self.agent_thinking,
+                &self.coordinator.thinking_default(),
             ));
         }
         let requested = if requested_model.trim().is_empty() {
@@ -970,7 +830,7 @@ impl Switchboard {
         };
         catalog
             .resolve(requested, requested_thinking)
-            .map(|choice| pin_thinking(&choice.spec(), &self.agent_thinking))
+            .map(|choice| pin_thinking(&choice.spec(), &self.coordinator.thinking_default()))
             .map_err(|error| error.to_string())
     }
 
@@ -981,7 +841,7 @@ impl Switchboard {
         intent: &str,
         keep_context: bool,
     ) -> Reply {
-        let Some(project) = self.project.clone() else {
+        let Some(project) = self.current_project() else {
             return self.reply(["There is no project on the line."], None);
         };
         if !self.model_swaps {
@@ -999,17 +859,18 @@ impl Switchboard {
                 Some("remote_shutdown_unverified".to_owned()),
             );
         }
-        let requested_model = if model.is_empty() && !self.model_spec.is_empty() {
-            self.model_spec.clone()
+        let live_spec = self.coordinator.model();
+        let requested_model = if model.is_empty() && !live_spec.is_empty() {
+            live_spec.clone()
         } else {
             model.to_owned()
         };
-        let (_, _, current_thinking) = crate::models::parse_spec(&self.model_spec);
+        let (_, _, current_thinking) = parse_spec(&live_spec);
         let level = if thinking.is_empty() {
             if !current_thinking.is_empty() {
                 current_thinking
             } else {
-                self.agent_thinking.clone()
+                self.coordinator.thinking_default()
             }
         } else {
             match normalize_thinking(thinking) {
@@ -1045,39 +906,37 @@ impl Switchboard {
             }
         };
         let spec = choice.spec();
-        if keep_context && spec == self.model_spec {
+        if keep_context && spec == live_spec {
             return self.reply([format!("Already on {}.", choice.spoken())], None);
         }
         let session_id = if keep_context {
-            self.session_id.clone()
+            self.coordinator.persistent_session_id()
         } else {
             uuid_like()
         };
         tracing::info!(
             project = %project.id,
-            from = %self.model_spec,
+            from = %live_spec,
             to = %spec,
             context = if keep_context { "kept" } else { "cleared" },
             "swapping the model on the live leg"
         );
         let leg_token = uuid_like();
-        if let Some(coordinator) = &self.coordinator {
-            let candidate = CandidateLeg::new(
-                project.id.clone(),
-                project.id.clone(),
-                session_id.clone(),
-                leg_token.clone(),
-                spec.clone(),
-                level.clone(),
-            )
-            .with_catalog(plan.catalog.clone());
-            if let Err(error) = coordinator.begin_candidate(candidate) {
-                tracing::warn!(project = %project.id, %error, "candidate startup for redial was refused");
-                return self.reply(
-                    [format!("I couldn't restart {}: {error}", project.id)],
-                    Some(error.to_string()),
-                );
-            }
+        let candidate = CandidateLeg::new(
+            project.id.clone(),
+            project.id.clone(),
+            session_id.clone(),
+            leg_token.clone(),
+            spec.clone(),
+            thinking_in_spec(&spec),
+        )
+        .with_catalog(plan.catalog.clone());
+        if let Err(error) = self.coordinator.begin_candidate(candidate) {
+            tracing::warn!(project = %project.id, %error, "candidate startup for redial was refused");
+            return self.reply(
+                [format!("I couldn't restart {}: {error}", project.id)],
+                Some(error.to_string()),
+            );
         }
 
         let session = match self
@@ -1159,29 +1018,21 @@ impl Switchboard {
             );
         }
 
-        if let Some(coordinator) = &self.coordinator {
-            if coordinator.is_candidate() {
-                if let Err(error) = coordinator.adopt_candidate() {
-                    session.close().await;
-                    self.rollback_startup(format!("adoption failed: {error}"));
-                    self.drop_agent().await;
-                    return self.reply(
-                        [format!("{} did not come up.", project.id)],
-                        Some(error.to_string()),
-                    );
-                }
+        if self.coordinator.is_candidate() {
+            if let Err(error) = self.coordinator.adopt_candidate() {
+                session.close().await;
+                self.rollback_startup(format!("adoption failed: {error}"));
+                self.drop_agent().await;
+                return self.reply(
+                    [format!("{} did not come up.", project.id)],
+                    Some(error.to_string()),
+                );
             }
-            coordinator.finish_intro();
         }
+        self.coordinator.finish_intro();
         if let Some(previous) = self.agent.take() {
             previous.close().await;
         }
-        self.project = Some(project.clone());
-        self.route = project.id.clone();
-        self.live_leg.set_session(&self.route, &leg_token);
-        self.session_id = session_id.clone();
-        self.model_spec = spec.clone();
-        self.leg_catalog = Some(plan.catalog);
         self.agent = Some(session);
         self.set_active_session(self.agent.clone()).await;
         self.announce_route().await;
@@ -1214,18 +1065,13 @@ impl Switchboard {
         )
     }
     async fn drop_agent(&mut self) {
-        let was = self.route.clone();
+        let was_on_a_project = self.coordinator.route() != OPERATOR;
         if let Some(s) = self.agent.take() {
             s.close().await;
         }
         self.set_active_session(self.operator.clone()).await;
-        self.project = None;
-        self.route = OPERATOR.into();
-        self.live_leg.set_route(OPERATOR);
-        self.model_spec.clear();
-        self.session_id.clear();
-        self.leg_catalog = None;
-        if was != OPERATOR {
+        self.coordinator.return_to_operator();
+        if was_on_a_project {
             self.announce_route().await;
         }
     }
@@ -1234,9 +1080,10 @@ impl Switchboard {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
+        let status = self.coordinator.status();
         Reply::new(
-            &self.route,
-            &self.route_label(),
+            &status.route,
+            &status.label,
             texts
                 .into_iter()
                 .map(|text| Utterance {
@@ -1251,24 +1098,24 @@ impl Switchboard {
         let spoke = turn.agent_spoke();
         let failed = turn.failed;
         let error = turn.error;
+        let status = self.coordinator.status();
         let mut reply = Reply::new(
-            &self.route,
-            &self.route_label(),
+            &status.route,
+            &status.label,
             vec![Utterance {
                 text: turn.text,
                 synthesize: !spoke,
             }],
             failed.then_some(error),
         );
-        if let Some(coordinator) = &self.coordinator {
-            reply.delivery_generation = Some(coordinator.generation());
-        }
+        reply.delivery_generation = Some(self.coordinator.generation());
         reply
     }
     fn reply_transfer_error(&self, message: String, error: Option<String>) -> Reply {
+        let status = self.coordinator.status();
         Reply::new(
-            &self.route,
-            &self.route_label(),
+            &status.route,
+            &status.label,
             vec![Utterance {
                 text: message,
                 synthesize: true,
@@ -1308,7 +1155,8 @@ impl Switchboard {
         self.transfer_ctx(&context, project, "", "").await
     }
     pub async fn force_hangup(&mut self) -> Option<String> {
-        if self.route == OPERATOR {
+        let route = self.coordinator.route();
+        if route == OPERATOR {
             if let Some(session) = self.operator.take() {
                 tracing::info!("caller hung up a wedged operator turn from the page");
                 session.close().await;
@@ -1317,14 +1165,14 @@ impl Switchboard {
             }
             return None;
         }
-        let left = self.route.clone();
+        let left = route;
         tracing::info!(%left, "caller hung up the project leg from the page");
         self.drop_agent().await;
         self.operator_note = Some(format!("The caller dropped the line to {left}."));
         Some(left)
     }
     pub async fn set_model(&mut self, model: &str) -> Reply {
-        if self.route == OPERATOR {
+        if self.coordinator.route() == OPERATOR {
             return self.reply(
                 ["Model changes are only available on a project leg."],
                 Some("Model changes are only available on a project leg.".into()),
@@ -1336,8 +1184,8 @@ impl Switchboard {
     pub async fn set_thinking(&mut self, level: &str) -> Reply {
         match normalize_thinking(level) {
             Ok(value) if !value.is_empty() => {
-                self.agent_thinking = value.clone();
-                if self.route == OPERATOR {
+                self.coordinator.set_thinking_default(&value);
+                if self.coordinator.route() == OPERATOR {
                     return self.reply(
                         [format!(
                             "Thinking is set to {value} for the next project call."
@@ -1351,6 +1199,11 @@ impl Switchboard {
             Err(e) => self.reply([e.to_string()], Some(e.to_string())),
         }
     }
+}
+
+/// The thinking level a model spec asks for: its suffix, empty for none.
+fn thinking_in_spec(spec: &str) -> String {
+    parse_spec(spec).2
 }
 
 fn arg_bool(signal: &Signal, name: &str, default: bool) -> bool {

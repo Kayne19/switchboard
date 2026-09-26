@@ -117,10 +117,16 @@ fn optional_fields_are_left_out_rather_than_sent_empty() {
     );
 }
 
-/// The browser types every status field, so the example it is held to must
-/// be what the PBX and the coordinator actually publish.
+/// The status message `status` the coordinator publishes.
+fn published(coordinator: &crate::lifecycle::Coordinator) -> Value {
+    ServerMessage::Status(coordinator.status()).to_value()
+}
+
+/// The browser types every status field, so the examples it is held to must
+/// be what the coordinator actually publishes: on the operator, as a
+/// switchboard built from the deployment's settings starts, and on a project.
 #[test]
-fn the_status_example_is_the_status_the_service_publishes() {
+fn the_status_examples_are_the_statuses_the_coordinator_publishes() {
     let config = crate::Config::for_tests(&[
         ("SWITCHBOARD_OPERATOR_MODEL", "provider/operator-model:low"),
         ("SWITCHBOARD_AGENT_THINKING", "medium"),
@@ -134,43 +140,69 @@ fn the_status_example_is_the_status_the_service_publishes() {
         crate::models::ModelCatalog::unavailable("no catalog in this test"),
     );
     let board = crate::pbx::Switchboard::new(&config, registry, std::sync::Arc::new(prewarm));
-    let coordinator = crate::lifecycle::Coordinator::new(board.status());
+    assert_eq!(published(&board.coordinator()), example("status_operator"));
 
-    assert_eq!(
-        ServerMessage::status(board.status()).to_value(),
-        example("status_operator")
-    );
-    // The coordinator lays its own route, model, and thinking over the PBX's
-    // status; its values can differ, its fields cannot.
-    assert_eq!(
-        json_kinds(&ServerMessage::status(coordinator.status_json()).to_value()),
-        json_kinds(&example("status_operator"))
-    );
-}
-
-/// Each field of an object with the kind of JSON value it holds.
-fn json_kinds(value: &Value) -> Vec<(String, &'static str)> {
-    let kind = |value: &Value| match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
+    let on_a_project = || {
+        crate::lifecycle::Coordinator::new(
+            crate::lifecycle::StatusConfig {
+                operator_model: "provider/operator-model:low".into(),
+                model_swaps: true,
+                projects: vec!["alpha".into(), "beta".into()],
+            },
+            "medium",
+        )
     };
-    value
-        .as_object()
-        .expect("an object")
-        .iter()
-        .map(|(field, value)| (field.clone(), kind(value)))
-        .collect()
-}
 
-#[test]
-fn a_status_projection_is_sent_under_its_own_type_once() {
-    let message = ServerMessage::status(json!({"type":"status", "route":"operator"}));
+    // A leg on its launch catalog that has reported its thinking level.
+    let coordinator = on_a_project();
+    let catalog = crate::models::ModelCatalog {
+        entries: [("model-a", true), ("model-b", false)]
+            .into_iter()
+            .map(|(model, thinks)| crate::models::CatalogEntry {
+                provider: "provider".into(),
+                model: model.into(),
+                thinks,
+            })
+            .collect(),
+        available: true,
+        diagnostic: None,
+    };
+    coordinator
+        .begin_candidate(
+            crate::lifecycle::CandidateLeg::new(
+                "alpha",
+                "alpha",
+                "session",
+                "alpha-leg",
+                "provider/model-a:high",
+                "high",
+            )
+            .with_catalog(catalog),
+        )
+        .unwrap();
+    coordinator.adopt_candidate().unwrap();
+    coordinator.finish_intro();
     assert_eq!(
-        serde_json::to_string(&message).unwrap(),
-        r#"{"type":"status","route":"operator"}"#
+        coordinator.accept_thinking_callback("alpha-leg", "high"),
+        Ok(true)
+    );
+    assert_eq!(published(&coordinator), example("status_project"));
+
+    // A leg adopted without a catalog, before it reports its level.
+    let coordinator = on_a_project();
+    coordinator
+        .begin_candidate(crate::lifecycle::CandidateLeg::new(
+            "beta",
+            "beta",
+            "session",
+            "beta-leg",
+            "provider/model-a",
+            "medium",
+        ))
+        .unwrap();
+    coordinator.adopt_candidate().unwrap();
+    assert_eq!(
+        published(&coordinator),
+        example("status_project_without_a_catalog")
     );
 }

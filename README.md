@@ -267,8 +267,8 @@ test it manually and then fails with "command not found" for the switchboard.
 | --- | --- |
 | `apps/backend/src/main.rs` | composition root, and `Config`: the one reader of the environment |
 | `apps/backend/src/api.rs` | HTTP and WebSocket endpoints, turn and speech workers, delivery to the browser |
-| `apps/backend/src/lifecycle.rs` | the coordinator: call identity, phases, candidate legs, idle clock, status |
-| `apps/backend/src/pbx.rs` | routing: transfers, returns, redials, rescue |
+| `apps/backend/src/lifecycle.rs` | the coordinator: call identity, the current route and leg, phases, candidate legs, idle clock, status |
+| `apps/backend/src/pbx.rs` | routing: transfers, returns, redials, rescue, and the agent processes |
 | `apps/backend/src/prewarm.rs` | startup setup per host and project, and launch plans |
 | `apps/backend/src/pi_client.rs` | the pi RPC protocol — one turn in, text and signals out — and SSH commands |
 | `apps/backend/src/models.rs` | model catalogs and spoken model/thinking resolution |

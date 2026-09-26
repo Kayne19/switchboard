@@ -1,11 +1,16 @@
-//! Synchronous ownership for call identity, operations, and status publication.
+//! Synchronous ownership for call identity, the current route, operations, and
+//! the status the page is shown.
 //!
 //! The coordinator deliberately contains no async code. Callers take a short
 //! linearization point here, then perform PBX, process, or callback work after
 //! releasing it.
+//!
+//! It is the one owner of the leg on the line: its route, project, model,
+//! session, thinking, and catalog. The PBX owns the processes and changes the
+//! leg only through the named transitions here; everything else reads it.
 
-use crate::models::ModelCatalog;
-use serde_json::{json, Value};
+use crate::models::{parse_spec, ModelCatalog, THINKING_LEVELS};
+use crate::protocol::{ModelEntry, Status};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -99,11 +104,15 @@ pub struct CandidateNotice {
 
 pub type CandidateCallback = Arc<dyn Fn(&CandidateNotice) + Send + Sync>;
 
-#[derive(Clone, Debug)]
-pub struct CatalogPublication {
-    pub project: String,
-    pub generation: u64,
-    pub catalog: Arc<ModelCatalog>,
+/// What the status needs besides the call's state: the deployment's settings,
+/// which no transition changes.
+#[derive(Clone, Debug, Default)]
+pub struct StatusConfig {
+    /// The operator's model spec, as the operator is launched with it.
+    pub operator_model: String,
+    pub model_swaps: bool,
+    /// Every project the caller can be put through to.
+    pub projects: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -136,6 +145,7 @@ impl fmt::Display for LifecycleError {
 }
 impl std::error::Error for LifecycleError {}
 
+/// The leg a startup replaces, restored if the startup fails.
 #[derive(Clone)]
 struct StartupRollback {
     route: String,
@@ -145,30 +155,36 @@ struct StartupRollback {
     model: String,
     thinking_requested: String,
     thinking_effective: String,
-    catalog: Option<CatalogPublication>,
-    status_value: Value,
+    catalog: Option<Arc<ModelCatalog>>,
 }
 
 pub struct CallLifecycle {
     route: String,
+    /// The project on the line; `None` on the operator.
     project: Option<String>,
     persistent_session_id: String,
     leg: LegIdentity,
     phase: Phase,
+    /// The project leg's model spec; empty on the operator, whose model is a
+    /// deployment setting (`StatusConfig::operator_model`).
     model: String,
     thinking_requested: String,
+    /// The level the leg reported through `/leg-state`; empty until it does.
     thinking_effective: String,
+    /// The level the next project call is asked for when the caller names
+    /// none. `/thinking` changes it.
+    thinking_default: String,
     last_activity: Instant,
     operation: Option<OperationIdentity>,
     terminal_reason: Option<String>,
     candidate: Option<CandidateLeg>,
     startup_rollback: Option<StartupRollback>,
-    catalog: Option<CatalogPublication>,
-    status_value: Value,
+    /// The catalog the project leg launched with.
+    catalog: Option<Arc<ModelCatalog>>,
 }
 
 impl CallLifecycle {
-    pub fn operator(status: Value) -> Self {
+    fn operator(thinking_default: String) -> Self {
         Self {
             route: OPERATOR.into(),
             project: None,
@@ -178,94 +194,126 @@ impl CallLifecycle {
             model: String::new(),
             thinking_requested: String::new(),
             thinking_effective: String::new(),
+            thinking_default,
             last_activity: Instant::now(),
             operation: None,
             terminal_reason: None,
             candidate: None,
             startup_rollback: None,
             catalog: None,
-            status_value: status,
         }
     }
 
-    /// The status the page is shown: the PBX's last status with this
-    /// lifecycle's route, model, thinking, and adopted catalog laid over it.
-    fn status_projection(&self) -> Value {
-        let mut value = self.status_value.clone();
-        if !value.is_object() {
-            value = json!({"type":"status"});
-        }
-        value["type"] = json!("status");
-        value["route"] = json!(self.route);
-        if !self.model.is_empty() {
-            value["model"] = json!(self.model);
-        }
-        let thinking = if self.thinking_effective.is_empty() {
-            &self.thinking_requested
+    fn on_operator(&self) -> bool {
+        self.route == OPERATOR
+    }
+
+    /// The phase a call at rest on its route is in.
+    fn resting_phase(&self) -> Phase {
+        if self.on_operator() {
+            Phase::Operator
         } else {
-            &self.thinking_effective
-        };
-        value["thinking"] = json!(thinking);
-        value["thinking_requested"] = json!(self.thinking_requested);
-        value["thinking_confirmed"] = json!(!self.thinking_effective.is_empty());
-        if let Some(catalog) = &self.catalog {
-            if self.project.as_deref() == Some(catalog.project.as_str())
-                && catalog.generation == self.leg.generation
-            {
-                value["models"] = Value::Array(
-                    catalog
-                        .catalog
-                        .entries
-                        .iter()
-                        .map(|entry| {
-                            json!({
-                                "provider": entry.provider,
-                                "model": entry.model,
-                                "thinks": entry.thinks,
-                            })
-                        })
-                        .collect(),
-                );
-                value["models_available"] = json!(catalog.catalog.available);
-                value["models_diagnostic"] = catalog
-                    .catalog
-                    .diagnostic
-                    .clone()
-                    .map_or(Value::Null, Value::String);
-            }
-        } else if self.project.is_some() && value.get("models").is_none() {
-            // Older/page-redial paths publish a complete status projection
-            // before attaching a CandidateLeg catalog. Preserve that
-            // provider-qualified snapshot instead of disabling the picker just
-            // because the lifecycle cache is empty.
-            value["models"] = json!([]);
-            value["models_available"] = json!(false);
-            value["models_diagnostic"] = json!("model catalog has not been loaded");
-        } else if self.catalog.is_some() {
-            // A rescue advances the generation before old resources are closed.
-            // Never expose a catalog from that retired leg as current status.
-            value["models"] = json!([]);
-            value["models_available"] = json!(false);
-            value["models_diagnostic"] = json!("model catalog is stale");
+            Phase::Active
         }
-        value
+    }
+
+    fn route_label(&self) -> String {
+        if self.on_operator() {
+            "Operator".into()
+        } else {
+            self.project.clone().unwrap_or_else(|| self.route.clone())
+        }
+    }
+
+    /// The status the page is shown, built from this lifecycle alone. On the
+    /// operator the model and its thinking are the operator's deployment
+    /// setting; on a project they are the leg's.
+    fn status(&self, config: &StatusConfig) -> Status {
+        let on_operator = self.on_operator();
+        let model = if on_operator {
+            config.operator_model.clone()
+        } else {
+            self.model.clone()
+        };
+        let (provider, model_id, spec_thinking) = parse_spec(&model);
+        let model_name = if provider.is_empty() {
+            model_id
+        } else {
+            format!("{provider}/{model_id}")
+        };
+        let thinking_requested = if on_operator {
+            spec_thinking
+        } else {
+            self.thinking_requested.clone()
+        };
+        let thinking = if self.thinking_effective.is_empty() {
+            thinking_requested.clone()
+        } else {
+            self.thinking_effective.clone()
+        };
+        let (models, models_available, models_diagnostic) = if on_operator {
+            (Vec::new(), true, None)
+        } else if let Some(catalog) = &self.catalog {
+            (
+                catalog
+                    .entries
+                    .iter()
+                    .map(|entry| ModelEntry {
+                        provider: entry.provider.clone(),
+                        model: entry.model.clone(),
+                        thinks: entry.thinks,
+                    })
+                    .collect(),
+                catalog.available,
+                catalog.diagnostic.clone(),
+            )
+        } else {
+            (
+                Vec::new(),
+                false,
+                Some("model catalog has not been loaded".into()),
+            )
+        };
+        Status {
+            route: self.route.clone(),
+            label: self.route_label(),
+            model,
+            model_name,
+            thinking,
+            thinking_requested,
+            thinking_confirmed: !self.thinking_effective.is_empty(),
+            thinking_default: self.thinking_default.clone(),
+            levels: THINKING_LEVELS
+                .iter()
+                .map(|level| (*level).to_owned())
+                .collect(),
+            models,
+            models_available,
+            models_diagnostic,
+            model_swaps: config.model_swaps,
+            projects: config.projects.clone(),
+        }
     }
 }
 
 #[derive(Clone)]
 pub struct Coordinator {
     state: Arc<Mutex<CallLifecycle>>,
-    projection: Arc<RwLock<Arc<Value>>>,
+    config: Arc<StatusConfig>,
+    projection: Arc<RwLock<Arc<Status>>>,
     next_operation: Arc<AtomicU64>,
     on_candidate: Arc<Mutex<Option<CandidateCallback>>>,
 }
 
 impl Coordinator {
-    pub fn new(status: Value) -> Self {
-        let lifecycle = CallLifecycle::operator(status);
-        let projection = Arc::new(RwLock::new(Arc::new(lifecycle.status_projection())));
+    /// A call on the operator. `thinking_default` is the level the first
+    /// project call is asked for.
+    pub fn new(config: StatusConfig, thinking_default: impl Into<String>) -> Self {
+        let lifecycle = CallLifecycle::operator(thinking_default.into());
+        let projection = Arc::new(RwLock::new(Arc::new(lifecycle.status(&config))));
         Self {
             state: Arc::new(Mutex::new(lifecycle)),
+            config: Arc::new(config),
             projection,
             next_operation: Arc::new(AtomicU64::new(1)),
             on_candidate: Arc::new(Mutex::new(None)),
@@ -302,20 +350,59 @@ impl Coordinator {
     }
 
     fn refresh_locked(&self, state: &CallLifecycle) {
-        let projection = Arc::new(state.status_projection());
+        let projection = Arc::new(state.status(&self.config));
         *self
             .projection
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = projection;
     }
 
-    pub fn status_json(&self) -> Value {
-        Value::clone(
+    /// The status the page is shown. Read without waiting for a transition in
+    /// progress: it is the projection the last one left.
+    pub fn status(&self) -> Status {
+        Status::clone(
             &self
                 .projection
                 .read()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()),
         )
+    }
+
+    /// `operator`, or the id of the project on the line.
+    pub fn route(&self) -> String {
+        self.linearize(|state| state.route.clone())
+    }
+
+    /// The route and the generation of the leg on it, read together.
+    pub fn route_and_generation(&self) -> (String, u64) {
+        self.linearize(|state| (state.route.clone(), state.leg.generation))
+    }
+
+    /// The name the page shows for whoever is on the line.
+    pub fn route_label(&self) -> String {
+        self.linearize(|state| state.route_label())
+    }
+
+    /// The project on the line, `None` on the operator.
+    pub fn project(&self) -> Option<String> {
+        self.linearize(|state| state.project.clone())
+    }
+
+    /// The model spec the project leg was started with; empty on the operator.
+    pub fn model(&self) -> String {
+        self.linearize(|state| state.model.clone())
+    }
+
+    /// The pi session the project leg writes; a redial that keeps context
+    /// reopens it.
+    pub fn persistent_session_id(&self) -> String {
+        self.linearize(|state| state.persistent_session_id.clone())
+    }
+
+    /// The level the next project call is asked for when the caller names
+    /// none.
+    pub fn thinking_default(&self) -> String {
+        self.linearize(|state| state.thinking_default.clone())
     }
 
     pub fn current_identity(&self) -> LegIdentity {
@@ -378,11 +465,7 @@ impl Coordinator {
             state.operation = None;
             state.last_activity = Instant::now();
             if state.phase == Phase::TurnRunning {
-                state.phase = if state.route == OPERATOR {
-                    Phase::Operator
-                } else {
-                    Phase::Active
-                };
+                state.phase = state.resting_phase();
             }
             self.refresh_locked(state);
             true
@@ -431,19 +514,45 @@ impl Coordinator {
         self.linearize(|state| state.last_activity = Instant::now());
     }
 
-    pub fn publish_status(&self, status: Value) {
+    /// Ends the quiet a rescue left: a `Quiescing` call comes to rest on the
+    /// route it is on, and callbacks and steers are admitted again. Every
+    /// page control settles on its way out, and so does every delivered turn,
+    /// including one that was refused. Returns the status to publish.
+    pub fn settle(&self) -> Status {
         self.linearize(|state| {
-            if let Some(route) = status.get("route").and_then(Value::as_str) {
-                state.route = route.to_owned();
-                if state.phase == Phase::Quiescing {
-                    state.phase = if route == OPERATOR {
-                        Phase::Operator
-                    } else {
-                        Phase::Active
-                    };
-                }
+            if state.phase == Phase::Quiescing {
+                state.phase = state.resting_phase();
             }
-            state.status_value = status;
+            self.refresh_locked(state);
+            state.status(&self.config)
+        })
+    }
+
+    /// The caller is back on the operator: the project, its model, session,
+    /// thinking, and catalog are gone with its leg. A call at rest or
+    /// quiescing is now at rest on the operator; a turn still running (the
+    /// operator is being told why the caller came back) settles when it ends.
+    pub fn return_to_operator(&self) {
+        self.linearize(|state| {
+            state.route = OPERATOR.into();
+            state.project = None;
+            state.persistent_session_id.clear();
+            state.model.clear();
+            state.thinking_requested.clear();
+            state.thinking_effective.clear();
+            state.catalog = None;
+            if matches!(state.phase, Phase::Quiescing | Phase::Active) {
+                state.phase = Phase::Operator;
+            }
+            self.refresh_locked(state);
+        });
+    }
+
+    /// `/thinking`: the level the next project call is asked for when the
+    /// caller names none.
+    pub fn set_thinking_default(&self, level: &str) {
+        self.linearize(|state| {
+            state.thinking_default = level.to_owned();
             self.refresh_locked(state);
         });
     }
@@ -469,7 +578,6 @@ impl Coordinator {
                 thinking_requested: state.thinking_requested.clone(),
                 thinking_effective: state.thinking_effective.clone(),
                 catalog: state.catalog.clone(),
-                status_value: state.status_value.clone(),
             });
             state.phase = Phase::Starting;
             let route = candidate.route.clone();
@@ -495,7 +603,7 @@ impl Coordinator {
             if matches!(state.phase, Phase::Quiescing | Phase::Shutdown) {
                 return Err(LifecycleError::StaleLeg);
             }
-            if state.route == OPERATOR {
+            if state.on_operator() {
                 if token.is_empty() || token == state.leg.token {
                     return Ok(());
                 }
@@ -514,7 +622,7 @@ impl Coordinator {
         thinking: &str,
     ) -> Result<bool, LifecycleError> {
         self.linearize(|state| {
-            if !crate::models::THINKING_LEVELS.contains(&thinking) {
+            if !THINKING_LEVELS.contains(&thinking) {
                 return Err(LifecycleError::WrongPhase);
             }
             if let Some(candidate) = state.candidate.as_mut() {
@@ -548,28 +656,26 @@ impl Coordinator {
             let identity = candidate.identity.clone();
             let route = candidate.route.clone();
             state.route = candidate.route;
-            state.project = Some(candidate.project.clone());
+            state.project = Some(candidate.project);
             state.persistent_session_id = candidate.persistent_session_id;
             state.leg = identity.clone();
             state.phase = Phase::TurnRunning;
             state.model = candidate.model;
-            state.thinking_requested = candidate.thinking.clone();
+            state.thinking_requested = candidate.thinking;
+            // Confirmed only by the leg's own report: what it was asked for
+            // is not what it runs at when its model clamps the level.
             state.thinking_effective =
-                if crate::models::THINKING_LEVELS.contains(&candidate.startup_thinking.as_str()) {
+                if THINKING_LEVELS.contains(&candidate.startup_thinking.as_str()) {
                     candidate.startup_thinking
                 } else {
-                    candidate.thinking
+                    String::new()
                 };
             state.operation = Some(OperationIdentity {
                 id: self.next_operation.fetch_add(1, Ordering::Relaxed),
                 leg: identity.clone(),
             });
             state.terminal_reason = None;
-            state.catalog = candidate.catalog.map(|catalog| CatalogPublication {
-                project: candidate.project,
-                generation: identity.generation,
-                catalog,
-            });
+            state.catalog = candidate.catalog;
             self.notify_candidate(&CandidateNotice {
                 route,
                 generation: identity.generation,
@@ -599,11 +705,7 @@ impl Coordinator {
             if state.candidate.take().is_some() {
                 state.startup_rollback = None;
                 state.terminal_reason = Some(reason.into());
-                state.phase = if state.route == OPERATOR {
-                    Phase::Operator
-                } else {
-                    Phase::Active
-                };
+                state.phase = state.resting_phase();
                 self.notify_candidate(&CandidateNotice {
                     route: state.route.clone(),
                     generation: state.leg.generation,
@@ -620,18 +722,13 @@ impl Coordinator {
             state.project = previous.project;
             state.persistent_session_id = previous.persistent_session_id;
             state.leg = LegIdentity::new(previous.leg.token, generation);
-            state.phase = if state.route == OPERATOR {
-                Phase::Operator
-            } else {
-                Phase::Active
-            };
+            state.phase = state.resting_phase();
             state.model = previous.model;
             state.thinking_requested = previous.thinking_requested;
             state.thinking_effective = previous.thinking_effective;
             state.operation = None;
             state.terminal_reason = Some(reason.into());
             state.catalog = previous.catalog;
-            state.status_value = previous.status_value;
             self.notify_candidate(&CandidateNotice {
                 route: state.route.clone(),
                 generation: state.leg.generation,
@@ -644,7 +741,7 @@ impl Coordinator {
 
     pub fn return_if_idle(&self, timeout: std::time::Duration) -> Option<LegIdentity> {
         self.linearize(|state| {
-            if state.route == OPERATOR
+            if state.on_operator()
                 || state.operation.is_some()
                 || state.candidate.is_some()
                 || state.last_activity.elapsed() < timeout
