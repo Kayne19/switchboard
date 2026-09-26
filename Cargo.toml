@@ -28,4 +28,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 [dev-dependencies]
 http-body-util = "0.1"
+# Already in the tree through axum's `ws` feature; the tests use it as the
+# browser's end of a real WebSocket.
+tokio-tungstenite = "0.29"
 tower = { version = "0.5", features = ["util"] }
