@@ -140,7 +140,7 @@ Measured before the fix: three failing runs in ten, and one in ten with the
 newest test skipped, so it long predated that test. More concurrent process
 spawning makes it fire more often.
 
-`write_executable_script` in `src/pi_client.rs` is the fix. It writes the script,
+`write_executable_script` in `apps/backend/src/pi_client.rs` is the fix. It writes the script,
 chmods it, then execs it once with a `--switchboard-exec-probe` argument that the
 script answers by exiting immediately, and returns only when that probe succeeds.
 A successful probe proves no process holds a write descriptor; the file is never
@@ -187,36 +187,33 @@ which guarantees the broken pipe rather than leaving it to chance.
 The general rule: when a downstream write fails because an upstream process
 already failed, report the upstream failure. The write error is a symptom.
 
-### Clippy passing locally does not mean it passes in CI
+Extension staging follows the same rule. It lives in prewarm now
+(`run_artifact_job` in `apps/backend/src/prewarm.rs`): the write of the
+extension to the remote's stdin is not what decides, the exit status and stderr
+are. That matters beyond log quality. A remote that stops reading early but
+*succeeds* used to be reported as a staging failure and fell back to the
+sentinel. `staging_survives_a_remote_that_stops_reading_before_the_extension_ends`
+in `apps/backend/tests/test_prewarm.rs` covers exactly that, by sending a
+megabyte to a remote that reads sixteen bytes and exits zero.
 
-CI installs whatever `stable` currently is, so it can be several releases ahead
-of the toolchain on a development box. Clippy gains lints in that gap, and
-`-D warnings` turns each new one into a build failure on code nobody touched.
-The first CI run here failed exactly that way — `unnecessary_sort_by` in
-`remote_argv`, flagged by clippy 1.97 and unknown to the 1.92 that had just
-passed locally.
+### Why the toolchain is pinned
 
-Check `cargo clippy --version` against the CI log before concluding a local run
-proves anything. Pinning the toolchain in `rust-toolchain.toml` would make the
-two agree and turn upgrades into a deliberate change; that has not been done.
+CI used to install whatever `stable` currently was, which could be several
+releases ahead of the toolchain on a development box. Clippy gains lints in
+that gap, and `-D warnings` turns each new one into a build failure on code
+nobody touched. The first CI run here failed exactly that way:
+`unnecessary_sort_by`, flagged by clippy 1.97 and unknown to the 1.92 that had
+just passed locally.
 
-`upload_extension` in `src/pbx.rs` had the same pattern and now behaves the same
-way. It used to propagate the stdin write error while the remote command's stderr
-was discarded, so the warning logged a broken pipe instead of the actual remote
-error — a permission denial, a missing directory. The exit status and stderr are
-now what decide.
-
-That one has a second consequence worth knowing, because it is not only about
-log quality: a remote that stops reading early but *succeeds* was being reported
-as a staging failure and fell back to the sentinel. The regression test covers
-exactly that, by sending a megabyte to a remote that reads sixteen bytes and
-exits zero.
+`rust-toolchain.toml` now pins the version for both, so a local run and CI reach
+the same verdict, and an upgrade is a deliberate, reviewable change to that file
+rather than a surprise on an unrelated pull request.
 
 ## Prewarm SSH transport, flock, and deterministic control paths
 
 Prewarm relies on cross-process `flock` locking and OpenSSH control sockets under `SWITCHBOARD_STATE_DIR`:
 
-- Lock files (`<state_dir>/ssh/locks/<sha256>.lock`) and socket files (`<state_dir>/ssh/control/<sha256>.sock`) are deterministic per canonical host (`canonical_host()`).
+- Lock files (`<state_dir>/ssh/locks/<host hash>.lock`) and socket files (`<state_dir>/ssh/control/<host hash>.sock`) are deterministic per canonical host (`canonical_host()`). The host hash is the first 16 hex digits of the host's SHA-256: a full digest overflowed the 108-byte `sun_path` once ssh appended its suffix (see `host_hash`).
 - Stale control socket removal occurs ONLY AFTER acquiring the kernel `flock` on the lock file.
 - Only the process that created the master connection initiates master exit (`-O exit`) or child termination on shutdown; an adopting process releases its `flock` lock without signaling or deleting a sibling's live control socket.
 - Prepare exit status (zero, nonzero, or timeout) is a terminal report snapshot; nonzero or timed-out prepare outputs remain launchable and are never retried.

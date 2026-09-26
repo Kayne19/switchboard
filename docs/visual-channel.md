@@ -1,6 +1,6 @@
 # Visual Channel Capabilities & Deferred Proposals
 
-`diagram-tool.md` is the wire contract for the **general `display` channel**; this document records the implemented capabilities, the composition model, deferred proposals, and refused patterns.
+`docs/display-tool.md` is the wire contract for the **general `display` channel**; this document records the implemented capabilities, the composition model, deferred proposals, and refused patterns.
 
 ## Core Principle
 
@@ -21,7 +21,7 @@ this composition behavior.
 The agent has **one** `display` tool (not a per-kind menu). A call is a protocol
 action — `op` + `id` + `type` + `role` + `data` — and the agent decides freely
 what to show and how to compose it. The page owns pixels, theme, and layout; the
-agent sends semantics. See `diagram-tool.md` for the full action protocol.
+agent sends semantics. See `docs/display-tool.md` for the full action protocol.
 
 ### Content types (the agent's palette)
 
@@ -221,7 +221,7 @@ documented above:
    (`series`, `label`/`value`), regardless of the `type` actually sent. The
    validator now discriminates on `type` before checking shape, so a bad
    `diagram` payload is scored against the diagram schema and names which
-   diagram field is wrong — not a chart's. See `diagram-tool.md`'s per-type
+   diagram field is wrong — not a chart's. See `docs/display-tool.md`'s per-type
    `data` table and the `display` tool's per-type "Shapes" hint in
    `extensions/agent-switchboard.ts`.
 2. **Silent failure: "On screen" when nothing rendered.** `/display` used to

@@ -52,7 +52,9 @@ Expand an existing object. Use `null` or omit `id` to leave focus.
 
 ### `listen`
 
-Set the listening state without replacing the current scene.
+Set the listening state without replacing the current scene. `listen` belongs
+to the browser's own voice runtime and page controls: the agent's `display`
+channel carries the other five and rejects it (`docs/display-tool.md`).
 
 ```json
 { "op": "listen", "on": true }

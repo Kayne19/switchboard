@@ -44,22 +44,27 @@ browser mic / page controls
           v
   api.rs: application coordination
           |
+          +--> lifecycle.rs: the coordinator -- call identity, phases, freshness
+          |
           +--> pbx.rs: leg and route lifecycle
           |       |
           |       +--> operator Pi process
-          |       +--> project Pi process over SSH
+          |       +--> project Pi process, launched from a prewarm plan
+          |
+          +--> prewarm.rs: startup setup per host and project
+          |       (SSH masters, model catalogs, staged extensions, prepare)
           |
           +--> audio.rs: STT/TTS ports and adapters
           |       |
           |       +--> STT command or long-lived STT worker
           |       +--> ElevenLabs or local TTS transport
           |
-          +--> history / registry / models / coordinator
+          +--> history / registry / models / visual_protocol
 
+apps/backend/ ------- the Rust service (src/) and its tests (tests/)
 apps/frontend/ ------ browser: call runtime (socket, capture, playback) and rendering
 static/ ------------- committed browser build output
 extensions/ --------- Pi-side tool and callback adapters
-legacy/ ------------- compatibility baseline, not the active Rust service
 homelab ------------- deployment, secrets, registry, persona, systemd
 ```
 
@@ -75,7 +80,7 @@ The dependency direction is intentional:
 
 ### 1. Switchboard owns the call lifecycle
 
-`src/pbx.rs` and the coordinator own:
+`apps/backend/src/pbx.rs` and the coordinator (`lifecycle.rs`) own:
 
 - operator and project legs
 - transfer and return
@@ -90,7 +95,7 @@ caller.
 
 ### 2. Pi owns agent reasoning, not the call
 
-`src/pi_client.rs` owns the process/RPC transport and session continuity. The
+`apps/backend/src/pi_client.rs` owns the process/RPC transport and session continuity. The
 Pi process owns prompts, model responses, tool calls, and project work. It does
 not own:
 
@@ -106,7 +111,7 @@ special case hidden in browser code or PBX mutation.
 
 ### 3. `api.rs` coordinates application behavior
 
-`src/api.rs` is the application boundary for HTTP, WebSocket, turn dispatch,
+`apps/backend/src/api.rs` is the application boundary for HTTP, WebSocket, turn dispatch,
 audio delivery, generation checks, and worker coordination. It may coordinate
 these concerns, but it must not become the owner of provider-specific speech
 protocols or Pi routing policy.
@@ -117,7 +122,7 @@ or cancellation side effect inside an unrelated helper.
 
 ### 4. Audio is an adapter boundary
 
-`src/audio.rs` owns speech transport and worker mechanics:
+`apps/backend/src/audio.rs` owns speech transport and worker mechanics:
 
 - `SttAdapter` for complete-clip compatibility
 - `SttStreamAdapter` for long-lived streaming STT
@@ -141,8 +146,8 @@ configuration, not the browser protocol, turn epochs, or PBX lifecycle.
 - WebSocket framing from the browser side
 - audio playback and MSE fallback
 
-The React app around it (`src/integration/runtime.tsx`, `src/controller/`,
-`src/components/`) owns:
+The React app around it (`apps/frontend/src/integration/runtime.tsx`,
+`src/controller/`, `src/components/`) owns:
 
 - display and diagram rendering
 - status and route presentation
@@ -171,7 +176,7 @@ Every protocol addition must define:
 - ordering and replay behavior
 - cancellation behavior
 - stale-generation behavior
-- legacy fallback
+- fallback for an older peer
 - focused protocol tests
 
 ### 7. Generations and epochs own freshness
@@ -188,23 +193,28 @@ merely ignoring a late result is not sufficient.
 ### 8. Signals are separate from actions
 
 Pi extensions such as `transfer_to_project`, `return_to_operator`, `speak`,
-and `diagram` emit signals through the established callback/session contract.
+and `display` emit signals through the established callback/session contract.
 The service decides what action those signals cause.
 
 This separation keeps tools small, makes failures recoverable, and prevents an
 agent from acquiring hidden authority over the switchboard.
 
-### 9. Compatibility is an adapter, not a second architecture
+### 9. One implementation per lifecycle
 
-`legacy/` is the compatibility baseline and test suite. It is not the design
-center of the Rust service. New behavior should preserve the legacy contract
-through an adapter or explicit fallback rather than duplicating the full
-lifecycle in a second implementation.
+A fallback is an adapter or an explicit refusal, never a second copy of the
+lifecycle kept for "when the real one is absent". pbx.rs once carried a full
+transfer-time setup path for a switchboard without prewarm. Production always
+had prewarm, nothing ran that path on purpose, and two holes led back into it
+anyway: an extension prewarm could not stage was uploaded live, and a redial
+that could not reach prewarm opened its own SSH connection. A second
+implementation is untested in the configuration that matters and silently
+reachable in the one that does not.
 
-The complete-clip `SWITCHBOARD_STT_COMMAND` contract remains valid while the
-optional long-lived `SWITCHBOARD_STT_STREAM_COMMAND` contract is deployed and
-benchmarked. Both sides of an environment contract must be changed together:
-application here, deployment in homelab.
+The same holds across a contract. The complete-clip `SWITCHBOARD_STT_COMMAND`
+contract and the optional long-lived `SWITCHBOARD_STT_STREAM_COMMAND` are two
+explicit transports behind one adapter, with a stated fallback between them.
+Both sides of an environment contract change together: application here,
+deployment in homelab.
 
 ### 10. Deployment stays outside this repository
 
@@ -221,25 +231,36 @@ This repository owns application behavior and extension source. A deployment
 change requires a separate homelab change (e.g. pinning binary release tags/checksums).
 Never place secrets or deployment workarounds here to make a local feature appear complete.
 
-### 11. Prewarm and zero transfer-time setup
+### 11. Prewarm owns launch setup
 
-`src/prewarm.rs` owns startup prewarming for SSH transports, model catalogs, extension staging digests, and project prepare commands:
+`apps/backend/src/prewarm.rs` does all of the setup a project leg needs, once,
+at startup: the SSH master connection per host, the model catalog per host and
+runtime, the staged extension per host, and each project's prepare command.
 
-- **No resident project Pi at startup**: Project Pi processes launch on call transfer; they are not resident at startup.
-- **Asynchronous prewarm**: Startup prewarming runs asynchronously before worker spawning, establishing master SSH connections, fetching in-memory model catalog snapshots per `CatalogKey`, verifying extension digests (SHA-256, mode `0600`, atomic tmp files, LKG fallback), and executing project prepare commands (nonzero exit status or timeout produce terminal, timestamped report snapshots that are launchable and never retried).
-- **Zero transfer-time setup**: Transfer paths consume prewarmed transport generations, catalog snapshots, extension staging decisions, and prepare reports. Live request-time SSH setup, extension uploads, prepare command execution, and catalog listings are bypassed during transfer.
+- **No resident project Pi at startup.** Project processes launch on transfer.
+- **Launch plans, not setup.** A transfer or redial asks prewarm for a
+  `LaunchPlan` (prepare report, catalog, extension or none, SSH options) and
+  starts the process from it. Nothing else reaches the host at transfer time:
+  no SSH setup, no upload, no prepare, no model listing.
+- **Refusal, not fallback.** A host prewarm cannot vouch for is a refused
+  transfer or redial, and a live leg keeps running. An extension that could
+  not be staged means the leg launches without one and its brief tells it to
+  use the return sentinel.
+- **Settled once.** Prepare results (success, nonzero, or timeout) are
+  timestamped reports that are launchable and never retried.
 
-### 12. Persistent SSH ownership and qualified model fallback
+### 12. Persistent SSH ownership and model fallback
 
-- **SSH Master Ownership**: Master SSH connections (`ControlMaster=yes`, `ControlPersist=no`) use deterministic lock (`<state_dir>/ssh/locks/<sha256>.lock`) and socket (`<state_dir>/ssh/control/<sha256>.sock`) paths under `SWITCHBOARD_STATE_DIR` protected by kernel `flock`. Master ownership is strictly preserved: only the process that created the master connection terminates master (`-O exit`) or child processes on shutdown; adopting processes release locks without signaling sibling control sockets. Injected client options set `ControlMaster=no` with explicit `ControlPath`.
-- **In-Memory Catalog & Fallback**: Model catalogs are cached in memory per `CatalogKey` (`host`, `runtime`, list models argv). When catalog resolution is unavailable or unpopulated, provider-qualified model specs pass through cleanly, while bare model names fail closed with clear diagnostic errors.
+- **SSH master ownership.** Master connections (`ControlMaster=yes`, `ControlPersist=no`) use deterministic lock (`<state_dir>/ssh/locks/<host hash>.lock`) and socket (`<state_dir>/ssh/control/<host hash>.sock`) paths under `SWITCHBOARD_STATE_DIR`, protected by kernel `flock`. Only the process that created a master terminates it (`-O exit`) or its children on shutdown; an adopting process releases its lock without signaling a sibling's control socket. Client commands set `ControlMaster=no` with an explicit `ControlPath`.
+- **Model fallback is model policy.** Prewarm reports a catalog that could not be listed as unavailable, with its reason; it does not decide what that admits. `ModelCatalog::resolve` in `models.rs` does: a provider-qualified spec passes through, a bare name is refused.
 
 ## Ports and adapters
 
 ### Inbound adapters
 
 - browser WebSocket audio/control frames
-- browser HTTP controls such as connect, hangup, speak, and diagram
+- browser HTTP controls: connect, hangup, thinking, and model
+- agent callbacks: speak, leg-state, display, and view
 - Pi RPC events and tool signals
 - process/stdin/stdout lifecycle events
 - startup configuration and environment values
@@ -273,16 +294,19 @@ removes the real coupling; do not create interfaces for ceremony.
 
 | Area | Owns | Must not own |
 |---|---|---|
-| `src/main.rs` | composition root and configuration wiring | turn policy |
-| `src/api.rs` | HTTP/WebSocket coordination, workers, delivery, generation checks | provider wire formats, PBX policy |
-| `src/pbx.rs` | leg lifecycle, transfer, return, rescue, redial | browser rendering or TTS encoding |
-| `src/pi_client.rs` | Pi process/RPC transport and session continuity | route authority or deployment registry |
-| `src/audio.rs` | STT/TTS transports, workers, bounds, deadlines | project selection or persistence policy |
-| `src/registry.rs` | project/model catalog resolution | agent reasoning |
-| `src/history.rs` | transcript/history storage shape | deciding when a turn routes |
-| `web/` | capture, protocol client, playback, UI | server authority or durable state |
+| `apps/backend/src/main.rs` | composition root; `Config`, the only reader of the environment | turn policy |
+| `api.rs` | HTTP/WebSocket coordination, workers, delivery, generation checks | provider wire formats, PBX policy |
+| `lifecycle.rs` | call identity, phases, candidate legs, operations, the idle clock, the status projection | async work or I/O |
+| `pbx.rs` | leg lifecycle: transfer, return, rescue, redial | host setup, browser rendering, TTS encoding |
+| `prewarm.rs` | startup setup and launch plans: SSH masters, catalogs, staged extensions, prepare | routing decisions, model policy |
+| `pi_client.rs` | Pi process/RPC transport, SSH command construction, process-tree cleanup | route authority or deployment registry |
+| `audio.rs` | STT/TTS transports, workers, bounds, deadlines | project selection or persistence policy |
+| `models.rs` | catalog parsing and spoken model/thinking resolution | where catalogs come from |
+| `registry.rs` | the project registry and spoken-name resolution | agent reasoning |
+| `history.rs` | transcript storage shape | deciding when a turn routes |
+| `visual_protocol.rs` | display action validation and normalization | layout |
+| `apps/frontend/` | capture, protocol client, playback, UI | server authority or durable state |
 | `extensions/` | Pi-side tool/callback signals | direct route mutation |
-| `legacy/` | compatibility behavior and tests | new Rust architecture |
 | homelab | deployment and secrets | application implementation |
 
 ## Turn lifecycle
@@ -297,7 +321,7 @@ capture
   -> final transcript claim
   -> current-generation turn dispatch
   -> Pi session and tool loop
-  -> speak/diagram signal or completed-reply fallback
+  -> speak/display signal or completed-reply fallback
   -> TTS transport
   -> ordered audio events
   -> browser playback
@@ -305,7 +329,7 @@ capture
 
 Partial results must not be persisted, routed, steered, or spoken as if they
 were final. A final result may be claimed only once. A failed or abandoned
-stream must either complete through the legacy contract or report a bounded,
+stream must either complete through the complete-clip contract or report a bounded,
 visible failure; it must not silently create a duplicate turn.
 
 ## Streaming rules
@@ -366,8 +390,16 @@ another callback or flag.
 
 Switchboard is not currently a perfect hexagonal implementation:
 
-- `src/api.rs` is a thick application coordinator and knows several concrete
-  audio/delivery structures.
+- `apps/backend/src/api.rs` is a thick application coordinator. Besides HTTP
+  and WebSocket handling it holds the display projection and the audio queue,
+  and knows several concrete audio/delivery structures.
+- The current route is held in three places: `Switchboard.route`,
+  `LiveLegState` (read by callbacks without the PBX lock), and the
+  coordinator's lifecycle, which takes it from the status JSON the PBX
+  publishes. Each transition keeps them in step by hand.
+- The display precedence rule is implemented twice, in `DisplayProjection`
+  (`api.rs`, for `/view`) and in the browser's `sceneModel.ts`. Tests pin both
+  to the same rule.
 - `apps/frontend/src/runtime/callRuntime.ts` still coordinates several
   concerns (socket lifecycle, outbox, line requests, hands-free wiring); the
   recorder and playback are separate modules, the rest is one class.

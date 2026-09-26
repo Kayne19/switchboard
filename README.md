@@ -11,7 +11,7 @@ edit anything here on the box — it is overwritten on every deploy.
 ## The call path
 
 ```text
-browser mic --webm/opus--> /ws --faster-whisper--> transcript
+browser mic --webm/opus--> /ws --speech-to-text sidecar--> transcript
     --> Switchboard.handle()  ── the active leg is either the operator or a project
     --> reply text --ElevenLabs--> mp3 --> /ws --> playback
 ```
@@ -25,14 +25,29 @@ Two kinds of leg, both a `pi --mode rpc` process driven over stdin/stdout:
 
 ## Startup prewarm
 
-At startup, before workers begin listening, `Prewarm` runs asynchronous prewarming for all configured hosts and projects:
+Everything a project leg needs from its host is set up once, at startup, by
+`apps/backend/src/prewarm.rs`, before the listener opens:
 
-- **SSH Transports**: Manages persistent master SSH connections (`ControlMaster=yes`, `ControlPersist=no`) per canonical host with deterministic lock files (`<state_dir>/ssh/locks/<sha256>.lock`) and socket files (`<state_dir>/ssh/control/<sha256>.sock`) under `SWITCHBOARD_STATE_DIR`. Supports cross-process flock locking, adoption of live masters, health monitoring probes, dead-master reconnects with generation increments, and bounded shutdown. Master ownership is strictly preserved: only the process that created the master connection initiates master exit (`-O exit`) or child termination on shutdown, while adopting processes release their lock without signaling sibling control sockets. Injected client options set `ControlMaster=no` with explicit `ControlPath`.
-- **Model Catalogs**: Fetches model catalogs per unique `CatalogKey` (`host`, `runtime`, list models argv) during startup and maintains in-memory snapshots.
-- **Extension Staging**: Verifies extension files using SHA-256 digest checks, atomic temporary file replacement, mode `0600`, and last-known-good (LKG) fallback with async refresh and restart validation. Does not upload files during transfer.
-- **Project Prepare**: Runs per-project prepare commands at startup with bounded stdout/stderr snapshots. Non-zero exit status or timeout become terminal, launchable reports carrying timestamped snapshots and are never retried.
+- **SSH masters.** One persistent master connection per host
+  (`ControlMaster=yes`, `ControlPersist=no`), with a lock file and control
+  socket under `SWITCHBOARD_STATE_DIR/ssh/`. A master another switchboard
+  process already holds is adopted rather than duplicated; only the process
+  that created a master tears it down. A master that dies is reconnected under
+  a new generation.
+- **Model catalogs.** `pi --list-models` once per host and runtime, kept in
+  memory and refreshed.
+- **The agent extension.** Staged to every host that needs it, checked by
+  SHA-256, replaced atomically, with the last good copy kept if a refresh
+  fails.
+- **Prepare commands.** Each project's `prepare` runs once. Its output, exit
+  status, or timeout becomes a timestamped report the incoming agent is shown;
+  a failure is reported, not retried, and does not block the project.
 
-Project Pi processes are **not** resident at startup; they launch on call transfer. Transfer awaits prewarm readiness and consumes prewarmed transport generations, catalog snapshots, extension decisions, and prepare reports, completely bypassing transfer-time setup (no live SSH setup, extension uploads, prepare command executions, or model catalog listing during transfer).
+Project processes are **not** resident at startup; they launch on transfer. A
+transfer or redial asks prewarm for a launch plan and starts the process from
+it, doing no setup of its own: no SSH handshake, no upload, no prepare, no
+model listing. A host prewarm cannot vouch for is a refused transfer, and on a
+redial the live leg keeps running.
 
 ## Who does the talking
 
@@ -86,25 +101,25 @@ the agent know what the caller can actually see instead of guessing.
 Display actions are strictly validated before acceptance; structured graphs,
 tables, and text are sanitized by the browser renderer. The product and layout
 contract is in `docs/frontend-command-station-architecture.md`; payload details
-are in `diagram-tool.md` and `docs/visual-channel.md`.
+are in `docs/display-tool.md` and `docs/visual-channel.md`.
 
 ## Who decides where the caller goes
 
 The switchboard does — not the agents. An agent calling `transfer_to_project` or
 `return_to_operator` only raises a *signal*: the tool itself does nothing but
-acknowledge, and `pbx.py` picks the call out of pi's `tool_execution_start`
+acknowledge, and `pbx.rs` picks the call out of pi's `tool_execution_start`
 event stream and swings the line over. That means a confused or wedged agent
 cannot strand the caller, and every failure path (bad ssh key, wrong `cwd`,
 missing agent binary, a leg that dies mid-call) ends with the caller back on the
 operator being told what happened, rather than talking into a dead pipe.
 
 For runtimes that cannot load a pi extension, the agent's system prompt tells it
-to emit `[[SWITCHBOARD:RETURN]]` instead; `piclient.py` treats that line as the
+to emit `[[SWITCHBOARD:RETURN]]` instead; `pi_client.rs` treats that line as the
 same signal and strips it before anything is spoken.
 
 Project agents get `transfer_to_project` too, so "send me to the other project"
 is one hop instead of a round trip through the operator. They cannot read the
-registry from a project host, so the extensions they may hand the caller to are
+registry from a project host, so the projects they may hand the caller to are
 named in their system prompt; anything else, they send the caller back and let
 the operator resolve it.
 
@@ -122,7 +137,7 @@ level, and the operator can name one on the way in (`transfer_to_project` takes
 `model` and `thinking`). Both go through the same signal mechanism as a
 transfer, for a blunter reason than usual: an agent cannot restart itself onto
 another model, because the process it would have to replace is the one making
-the call. `set_model` acknowledges, `pbx.py` tears the leg down and brings it
+the call. `set_model` acknowledges, `pbx.rs` tears the leg down and brings it
 back up.
 
 The conversation survives that restart. Every project leg is started with
@@ -131,15 +146,15 @@ was writing and picks the call up mid-sentence. Preserving is the default;
 `keep_context: false` mints a new id instead, and the agent is told the history
 was cleared on purpose so it does not try to recall it.
 
-What the caller says goes through whisper and then through a model's guess, so
-`legacy/backend/models.py` refuses rather than guesses. A name is resolved against
-`pi --list-models` **on the host the leg runs on** — providers are configured
-per box, so asking damocles would answer for the wrong machine — and a phrase
-matching two entries comes back as an error naming both. That is the case worth
-spending code on: one model id served by two providers, picked wrong, leaves the
-caller on the thing they were trying to get away from with no way to say so. The
-resolved spec is always provider-qualified even when the caller was not that
-specific.
+What the caller says goes through speech-to-text and then through a model's
+guess, so `models.rs` refuses rather than guesses. A name is resolved against
+the catalog prewarm listed with `pi --list-models` **on the host the leg runs
+on** — providers are configured per box, so asking damocles would answer for the
+wrong machine — and a phrase matching two entries comes back as an error naming
+both. That is the case worth spending code on: one model id served by two
+providers, picked wrong, leaves the caller on the thing they were trying to get
+away from with no way to say so. The resolved spec is always provider-qualified
+even when the caller was not that specific.
 
 If the catalog cannot be read at all, a provider-qualified spec is passed
 through (it is unambiguous by construction) and a bare name is refused. A
@@ -207,9 +222,11 @@ recreated on the next utterance; the route still remains `operator`.
 the role) drops a project leg the caller has gone silent on and puts them back
 on the operator. A call that is never ended otherwise holds an agent process and
 an ssh connection open on someone else's box for as long as this service runs.
-Nothing is synthesized when it fires — by definition nobody is listening — the
-note only appears in the transcript, and the operator is told why the line is
-free when they come back.
+Silence is measured from the last sign of life on the line: a clip arriving, a
+turn starting or ending, a steer, or a spoken reply, so a long-running turn
+never counts against the caller. Nothing is synthesized when it fires — by
+definition nobody is listening — the note only appears in the transcript, and
+the operator is told why the line is free when they come back.
 
 ## Adding a project
 
@@ -226,9 +243,10 @@ does not manage:
 2. the agent runtime the entry names (`pi`) installed and authenticated there
 3. the `cwd` to actually exist
 
-The switchboard copies its own tools (`speak`, `return_to_operator`) into
-`~/.cache/switchboard/` on the host the first time it connects, so that part
-needs no setup.
+The switchboard stages its own tools (`speak`, `display`, `return_to_operator`,
+and the rest of `extensions/agent-switchboard.ts`) into
+`~/.cache/switchboard/extensions/` on the host at startup, so that part needs
+no setup.
 
 If the agent binary is installed per-user (`~/.local/bin/pi` is the common
 case), give `runtime` the **absolute path**. A non-interactive ssh session does
@@ -237,67 +255,66 @@ test it manually and then fails with "command not found" for the switchboard.
 
 ## Files
 
-| file | what it is |
+| path | what it is |
 | --- | --- |
-| `legacy/backend/main.py` | compatibility FastAPI app; not the active service |
-| `legacy/backend/pbx.py` | legacy routing state, transfers, session lifecycle |
-| `legacy/backend/piclient.py` | legacy pi RPC protocol — one turn in, text and signals out |
-| `legacy/backend/registry.py` | legacy project directory and spoken-name resolution |
-| `legacy/backend/models.py` | legacy spoken model name resolution |
-| `legacy/backend/audio.py` | legacy whisper in, ElevenLabs out, and reply-length shaping |
-| `static/index.html` | V17.2 React shell served at the root route |
+| `apps/backend/src/main.rs` | composition root, and `Config`: the one reader of the environment |
+| `apps/backend/src/api.rs` | HTTP and WebSocket endpoints, turn and speech workers, delivery to the browser |
+| `apps/backend/src/lifecycle.rs` | the coordinator: call identity, phases, candidate legs, idle clock, status |
+| `apps/backend/src/pbx.rs` | routing: transfers, returns, redials, rescue |
+| `apps/backend/src/prewarm.rs` | startup setup per host and project, and launch plans |
+| `apps/backend/src/pi_client.rs` | the pi RPC protocol — one turn in, text and signals out — and SSH commands |
+| `apps/backend/src/models.rs` | model catalogs and spoken model/thinking resolution |
+| `apps/backend/src/registry.rs` | the project registry and spoken-name resolution |
+| `apps/backend/src/audio.rs` | speech-to-text sidecar, ElevenLabs, and reply-length shaping |
+| `apps/backend/src/visual_protocol.rs` | validation of display actions |
+| `apps/backend/src/history.rs` | the transcript kept for page reloads |
+| `apps/backend/tests/` | Rust tests, one file per source module |
 | `apps/frontend/src/` | V17.2 React presentation and its call runtime |
 | `apps/frontend/src/runtime/` | the browser's side of a call: backend WebSocket, push-to-talk, playback, hands-free wiring |
-| `static/v17-assets/`, `static/vad-worklet.js` | committed deterministic browser build output |
-| `static/openwakeword/` | same-origin Hey Jarvis ONNX, wrapper, and ONNX Runtime WASM assets |
 | `apps/frontend/src/hands_free.ts` | hands-free controller, real wake adapter, and separate VAD endpointing |
+| `apps/frontend/tests/` | browser, display, and pi-extension tests |
+| `static/index.html`, `static/v17-assets/`, `static/vad-worklet.js` | committed deterministic browser build output |
+| `static/openwakeword/` | same-origin Hey Jarvis ONNX, wrapper, and ONNX Runtime WASM assets |
+| `extensions/*.ts` | the pi extensions: `operator-switchboard.ts` for the operator, `agent-switchboard.ts` for project legs |
+| `docs/environment.md` | every environment variable the service reads, and what it passes to agents |
+| `docs/architecture.md` | ownership boundaries and the rules for where new behavior goes |
+| `docs/display-tool.md` | the `display` tool: payload, operations, layout, and composition |
 | `docs/hands-free.md` | hands-free lifecycle, asset provenance, and license obligations |
-| `apps/backend/src/` | Rust service: API, routing, pi sessions, registry, models, history, audio |
-| `extensions/*.ts` | plain TypeScript pi extensions; homelab templates remain authoritative until cutover |
-| `docs: diagram-tool.md` | the `display` tool: payload, operations, layout, and composition |
-| `legacy/tests/` | Python compatibility tests (`python3 -m unittest discover -s legacy/tests`) |
-| `apps/frontend/tests/` | Node browser, display, and pi-extension tests |
 
-## Agent persona deployment contract
+## The environment contract
 
-The plain project-agent extension reads `SWITCHBOARD_PERSONA` at runtime and the
-switchboard passes it through to each agent's environment. The homelab env file
-and its deployment template must provide this variable before deploying; the
-persona is no longer rendered into the extension source. Keep the authoritative
-Jinja deployment copies in homelab until that migration is complete. Project
-processes also receive `SWITCHBOARD_SESSION_TOKEN`: a fresh per-process callback
-correlation token distinct from the persistent `SWITCHBOARD_SESSION` identity.
-It is not authentication, and deployment changes remain a separate homelab PR.
+`docs/environment.md` lists every variable the service reads and everything it
+passes to project legs; it is the interface with the homelab deployment.
 
-The Rust service keeps STT behind the transitional `SWITCHBOARD_STT_COMMAND`
-sidecar contract: complete WebM bytes go to stdin and transcript text comes from
-stdout. Deployments may additionally set `SWITCHBOARD_STT_STREAM_COMMAND` to a
-long-lived worker. It receives length-prefixed frames (kind byte, big-endian
-`u32` payload length, payload), starts with a JSONL `{"type":"ready"}` line,
-and emits bounded JSONL `partial`/`final` records. A chunk payload starts with
-an id length byte, the UTF-8 clip id, big-endian generation and sequence
-numbers, then the WebM bytes, so concurrent clips remain attributable. Streaming is selected only
-for WebM/Opus clients after the WebSocket hello handshake; unavailable or
+Two contracts there need more than a line. Speech-to-text is a sidecar:
+`SWITCHBOARD_STT_COMMAND` receives complete WebM bytes on stdin and writes the
+transcript to stdout. Deployments may additionally set
+`SWITCHBOARD_STT_STREAM_COMMAND` to a long-lived worker. It receives
+length-prefixed frames (kind byte, big-endian `u32` payload length, payload),
+starts with a JSONL `{"type":"ready"}` line, and emits bounded JSONL
+`partial`/`final` records. A chunk payload starts with an id length byte, the
+UTF-8 clip id, big-endian generation and sequence numbers, then the WebM bytes,
+so concurrent clips remain attributable. Streaming is selected only for
+WebM/Opus clients after the WebSocket hello handshake; unavailable or
 backpressured workers explicitly fall back to the complete-clip contract.
-Speech synthesis uses the shared `SWITCHBOARD_SPEECH_DEADLINE_MS` environment
-contract (positive, bounded milliseconds; default `25000`) for `/speak`, normal
-replies, and the project extension's abort timeout. Deployment overrides require
-the corresponding homelab contract update. Adding the optional stream command
-also requires a separate homelab environment-template change; no deployment
-files live in this repository.
-The Rust Whisper path is intentionally not declared production-equivalent until
-it is benchmarked against the deployed faster-whisper model.
 
-## Building the migrated slices
+`SWITCHBOARD_SPEECH_DEADLINE_MS` bounds one synthesized utterance, for `/speak`
+and for replies alike, and the project extension aborts at the same deadline;
+the service passes the value to every leg so the two cannot disagree.
+
+## Building and testing
 
 ```bash
 npm ci
-npm test
-python3 -m unittest discover -s legacy/tests
+npm test                     # builds static/, then browser, display, and extension tests
+git diff --exit-code -- static
 cargo fmt --all -- --check
-cargo test --offline
-cargo clippy --offline --all-targets -- -D warnings
+cargo test --locked
+cargo clippy --locked --all-targets -- -D warnings
 ```
+
+These are the CI gates (`.github/workflows/ci.yml`). `static/` is committed
+build output, so a change that alters it commits the rebuild too.
 
 `build.rs` stamps the binary with the commit it was built from, logged at
 startup as `git=` and reported by `/healthz` as `git`. It takes
@@ -309,16 +326,12 @@ the pinned commit in that variable. It is a build-time input, not part of the
 env file, but under `AGENTS.md` it is interface all the same: renaming it or
 changing what it accepts needs a homelab PR.
 
-The legacy Python service in `legacy/backend/` remains the compatibility
-baseline until homelab cuts over to the pinned Rust binary. Do not remove its audio path before the STT sidecar
-or a benchmarked Rust Whisper adapter is validated on the deployment host.
-PBX mutation remains serialized, while live status, agent callbacks, steering,
-and forced page rescue bypass that lock through bounded shared controls. The
+PBX mutation is serialized, while live status, agent callbacks, steering, and
+forced page rescue bypass that lock through bounded shared controls. The
 forced-rescue path is covered under a deliberately wedged turn in the Rust
-tests. Fake pi, SSH, TTS, and STT paths are also exercised without network
-access. Repeat those boundaries on the deployment host as part of the live
-cutover check; unit tests cannot establish microphone, model, or remote-host
-behavior.
+tests. Fake pi, SSH, TTS, and STT paths are exercised without network access.
+Unit tests cannot establish microphone, model, or remote-host behavior; check
+those on the deployment host after a pin bump.
 
 ## Operating it
 
@@ -332,4 +345,6 @@ The browser page is `https://switchboard.home.arpa` (via caddy). It has to be
 https: browsers only grant microphone access on a secure context, so hitting
 `http://192.168.1.217:8765` directly will load the page and then fail to record.
 
-Restarting drops whatever call is in progress and reloads the whisper model.
+Restarting drops whatever call is in progress and repeats the startup prewarm.
+Speech-to-text runs in its own service (`switchboard-stt`) and is not restarted
+with it.

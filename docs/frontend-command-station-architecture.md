@@ -164,7 +164,7 @@ when no explicit note owns it. Notes can identify a semantic target in another
 artifact, and only an explicit note update, hide, or clear changes them. Small
 scene captions are content metadata rather than hard-coded instrumentation.
 
-See `diagram-tool.md` for payload limits and `docs/visual-channel.md` for
+See `docs/display-tool.md` for payload limits and `docs/visual-channel.md` for
 implemented visual forms.
 
 ## Current implementation map
@@ -194,7 +194,7 @@ A frontend change should survive these questions:
 - Can the agent inspect the resulting screen state?
 - Is every displayed signal backed by real state?
 - Is the primary action obvious from across a room and usable on a tablet?
-- Does the interface remain useful when animation, audio, or Mermaid rendering
+- Does the interface remain useful when animation, audio, or diagram rendering
   is unavailable?
 
 If not, the screen is becoming a dashboard again.
