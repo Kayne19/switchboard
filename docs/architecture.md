@@ -60,6 +60,10 @@ browser mic / page controls
           |       +--> STT command or long-lived STT worker
           |       +--> ElevenLabs or local TTS transport
           |
+          +--> display.rs: the stage projection and its confirmation gate
+          |
+          +--> delivery.rs: ordered per-connection delivery and the audio queue
+          |
           +--> history / registry / models / visual_protocol
           |
           +--> protocol.rs: every message the service sends the browser
@@ -315,12 +319,14 @@ removes the real coupling; do not create interfaces for ceremony.
 | Area | Owns | Must not own |
 |---|---|---|
 | `apps/backend/src/main.rs` | composition root; `Config`, the only reader of the environment | turn policy |
-| `api.rs` | HTTP/WebSocket coordination, workers, delivery, generation checks | provider wire formats, PBX policy |
+| `api.rs` | HTTP/WebSocket coordination, turn dispatch, workers, generation checks | provider wire formats, PBX policy, the display projection, the audio queue |
 | `lifecycle.rs` | call identity, the current route and the leg on it, phases, candidate legs, operations, the idle clock, the status | async work or I/O |
 | `pbx.rs` | leg lifecycle: transfer, return, rescue, redial; the operator and project processes | host setup, browser rendering, TTS encoding, a copy of the route |
 | `prewarm.rs` | startup setup and launch plans: SSH masters, catalogs, staged extensions, prepare | routing decisions, model policy |
 | `pi_client.rs` | Pi process/RPC transport, SSH command construction, process-tree cleanup | route authority or deployment registry |
 | `audio.rs` | STT/TTS transports, workers, bounds, deadlines | project selection or persistence policy |
+| `display.rs` | the stage projection (`DisplayProjection`), the display gate state, and the display-precedence rule for `/view` and the snapshot | generation checks, HTTP/WebSocket handling |
+| `delivery.rs` | the event envelope, per-connection framing (`DeliveryState`), and the ordered audio queue | route authority, generation checks |
 | `models.rs` | catalog parsing and spoken model/thinking resolution | where catalogs come from |
 | `registry.rs` | the project registry and spoken-name resolution | agent reasoning |
 | `history.rs` | transcript storage shape | deciding when a turn routes |
@@ -412,12 +418,19 @@ another callback or flag.
 
 Switchboard is not currently a perfect hexagonal implementation:
 
-- `apps/backend/src/api.rs` is a thick application coordinator. Besides HTTP
-  and WebSocket handling it holds the display projection and the audio queue,
-  and knows several concrete audio/delivery structures.
+- `apps/backend/src/api.rs` is still a thick application coordinator: HTTP and
+  WebSocket handling, turn dispatch, and the workers that drive `display.rs`
+  and `delivery.rs` through their own public methods. It no longer holds the
+  display projection or the audio queue directly -- those moved to
+  `display.rs` and `delivery.rs` (#60).
 - The display precedence rule is implemented twice, in `DisplayProjection`
-  (`api.rs`, for `/view`) and in the browser's `sceneModel.ts`. Tests pin both
-  to the same rule.
+  (`display.rs`, for `/view` and the snapshot) and in the browser's
+  `sceneModel.ts`, on purpose: the server answers `/view` without asking the
+  browser, and the browser renders without a round trip. This is now a
+  checked duplication rather than an unchecked one: both are held to
+  `apps/frontend/tests/fixtures/display-precedence.json`, read by a Rust test
+  in `display.rs`'s tests and a vitest test, so the two rules cannot drift
+  apart unnoticed.
 - Browser-to-server commands have builders in `protocol.ts` but no type on
   the Rust side: `handle_text_frame` reads each one field by field.
 - `apps/frontend/src/runtime/callRuntime.ts` still coordinates several

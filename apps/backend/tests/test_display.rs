@@ -300,3 +300,53 @@ async fn display_frames_carry_the_delivery_sequence() {
     };
     assert!(value.get("seq").is_none());
 }
+
+#[test]
+fn matches_the_shared_display_precedence_fixture() {
+    // The precedence rule -- which object is primary, its kind and title, and
+    // which ids are visible -- is implemented here and, on purpose, again in
+    // the browser's sceneModel.ts (see docs/architecture.md's known
+    // non-purity). apps/frontend/tests/unit/displayPrecedence.test.ts checks
+    // the browser side against the same cases; a mismatch here means the two
+    // have disagreed on what the stage shows.
+    let fixtures_str =
+        std::fs::read_to_string("apps/frontend/tests/fixtures/display-precedence.json")
+            .expect("canonical display-precedence.json fixture must load");
+    let fixtures: Value = serde_json::from_str(&fixtures_str).unwrap();
+
+    for case in fixtures["cases"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let mut projection = DisplayProjection::default();
+        for (sequence, action) in case["actions"].as_array().unwrap().iter().enumerate() {
+            projection.apply(action, sequence as u64 + 1);
+        }
+        let (has_visual, kind, title, visible_ids) = projection.summary();
+        let expected = &case["expected"];
+
+        assert_eq!(
+            has_visual,
+            expected["has_visual"].as_bool().unwrap(),
+            "has_visual mismatch for case '{name}'"
+        );
+        assert_eq!(
+            kind.as_deref(),
+            expected["kind"].as_str(),
+            "kind mismatch for case '{name}'"
+        );
+        assert_eq!(
+            title.as_deref(),
+            expected["title"].as_str(),
+            "title mismatch for case '{name}'"
+        );
+        let expected_ids: Vec<String> = expected["visible_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|id| id.as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(
+            visible_ids, expected_ids,
+            "visible_ids mismatch for case '{name}'"
+        );
+    }
+}
