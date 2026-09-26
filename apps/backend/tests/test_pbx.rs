@@ -1253,3 +1253,91 @@ async fn an_intro_that_is_never_answered_is_dropped_at_the_turn_deadline() {
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[tokio::test]
+async fn hanging_up_an_operator_with_nothing_running_does_nothing() {
+    let mut board = board_with(vec![], true);
+    assert_eq!(board.force_hangup().await, None);
+    assert_eq!(board.route(), OPERATOR);
+    assert_eq!(board.operator_note, None);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn hanging_up_the_operator_discards_its_process_and_the_next_turn_starts_another() {
+    // The operator stays the route; a wedged operator process is simply
+    // replaced on the next utterance.
+    let root = scratch_dir("hangup-operator");
+    let (operator, _) = logging_operator(&root);
+    let mut board = board_on(
+        vec![],
+        &[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())],
+        two_model_catalog(),
+    );
+    board.handle("hello").await;
+    let first = board.operator.clone().expect("the operator started");
+
+    assert_eq!(board.force_hangup().await.as_deref(), Some(OPERATOR));
+
+    assert!(!first.alive().await);
+    assert!(board.operator.is_none());
+    assert!(board.active_session.lock().await.is_none());
+    assert_eq!(board.route(), OPERATOR);
+    assert_eq!(board.operator_note, None);
+    let reply = board.handle("are you there?").await;
+    assert_eq!(reply.text, "Operator here.");
+    let second = board.operator.as_ref().expect("a fresh operator");
+    assert!(!second.same_session(&first));
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn hanging_up_a_project_leg_returns_the_caller_to_the_operator_and_tells_it_why() {
+    let root = scratch_dir("hangup-project");
+    let (operator, operator_log) = logging_operator(&root);
+    let (runtime, _) = recording_runtime(&root);
+    let mut board = board_on(
+        vec![project_on(None, &root, &runtime)],
+        &[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())],
+        two_model_catalog(),
+    );
+    let routes = Arc::new(StdMutex::new(Vec::new()));
+    let announced = Arc::clone(&routes);
+    board.set_route_callback(Some(Arc::new(move |status| {
+        let announced = Arc::clone(&announced);
+        Box::pin(async move {
+            announced.lock().unwrap().push(status["route"].clone());
+        })
+    })));
+    board.handle("hello").await;
+    let reply = board
+        .transfer_ctx(&transcript("put me through to alpha"), "alpha", "", "")
+        .await;
+    assert_eq!(reply.route, "alpha", "{reply:?}");
+    let agent = board.agent.clone().expect("the project leg is live");
+
+    assert_eq!(board.force_hangup().await.as_deref(), Some("alpha"));
+
+    assert!(!agent.alive().await, "the project leg was left running");
+    assert_eq!(board.route(), OPERATOR);
+    assert_eq!(board.live_leg.route(), OPERATOR);
+    assert!(board.agent.is_none() && board.project.is_none());
+    let operator_session = board.operator.as_ref().expect("the operator keeps running");
+    assert!(board
+        .active_session
+        .lock()
+        .await
+        .as_ref()
+        .is_some_and(|active| active.same_session(operator_session)));
+    assert_eq!(*routes.lock().unwrap(), ["alpha", OPERATOR]);
+
+    board.handle("I'm back").await;
+    assert_eq!(
+        operator_prompts(&operator_log).last().unwrap(),
+        "[switchboard] The caller dropped the line to alpha.\n\nI'm back"
+    );
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
