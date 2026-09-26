@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { ChartData } from '../../src/controller/types';
 import { ChartPrimitive, chartSeriesColor, chartXTicks } from '../../src/primitives/ChartPrimitive';
-import { chartSeriesPoint } from '../../src/primitives/chartGeometry';
+import { CHART_LEGEND_ROW_HEIGHT, CHART_LEGEND_STEP, chartLegendLayout, chartPad, chartSeriesPoint } from '../../src/primitives/chartGeometry';
 
 const data: ChartData = {
   series: [
@@ -206,5 +206,95 @@ describe('chart series point', () => {
     render();
     expect(host.querySelector('.chart-pointer')).toBeNull();
     expect(host.querySelector('polygon')).toBeNull();
+  });
+});
+
+// Legend items advance by their own content instead of a fixed step, so a
+// long series name no longer runs into the next key (#54).
+describe('chart legend layout (#54)', () => {
+  function legendItems(): { transform: string; text: string; title: string | null }[] {
+    return [...host.querySelectorAll<SVGGElement>('.chart-legend > g')].map((g) => ({
+      transform: g.getAttribute('transform')!,
+      text: g.querySelector('text')!.textContent ?? '',
+      title: g.querySelector('title')?.textContent ?? null,
+    }));
+  }
+
+  it('keeps the short-label legend at its original fixed step and one-row plot padding', () => {
+    // `data` (ALPHA, BETA, GAMMA, DELTA, EXPLICIT) is exactly the case the
+    // visual goldens cover: every name is short enough that the dynamic
+    // layout never needs more than the old fixed step.
+    renderWith(data);
+    const items = legendItems();
+    expect(items).toHaveLength(data.series.length);
+    items.forEach((item, index) => {
+      expect(item.transform).toBe(`translate(${index * CHART_LEGEND_STEP} 0)`);
+    });
+    const clipRect = host.querySelector('svg > defs > clipPath > rect')!;
+    expect(Number(clipRect.getAttribute('y'))).toBe(34);
+    expect(Number(clipRect.getAttribute('height'))).toBe(plotHeight);
+  });
+
+  it('advances a long label by its own width, clearing the next key instead of overlapping it', () => {
+    const longName = 'A VERY LONG SERIES NAME THAT USED TO OVERLAP THE NEXT KEY';
+    renderWith({ series: [{ name: longName, values: [1, 2] }, { name: 'SHORT', values: [1, 2] }] });
+    const items = legendItems();
+    expect(items).toHaveLength(2);
+    expect(items[0].text).toBe(longName);
+    // Both still fit on the first row...
+    expect(items[0].transform).toBe('translate(0 0)');
+    expect(items[1].transform).not.toMatch(/translate\(0 /);
+    // ...but the second key starts well past the fixed step, because the
+    // first label's real content needed the room.
+    const secondX = Number(items[1].transform.match(/translate\(([\d.]+) /)![1]);
+    expect(secondX).toBeGreaterThan(CHART_LEGEND_STEP);
+    // The layout the primitive rendered from is the geometry to check the
+    // room against: the second item never starts before the first item's
+    // text plus its clearance gap ends.
+    const layout = chartLegendLayout({ series: [{ name: longName, values: [] }, { name: 'SHORT', values: [] }] });
+    expect(layout.items[0].row).toBe(layout.items[1].row);
+    expect(secondX).toBeCloseTo(layout.items[1].x, 5);
+  });
+
+  it('wraps onto a further row once a row of realistic labels runs out of plot width', () => {
+    const series = Array.from({ length: 5 }, (_, index) => ({
+      name: `SERIES-${index}`.padEnd(20, 'X'),
+      values: [1, 2],
+    }));
+    renderWith({ series });
+    const items = legendItems();
+    expect(items).toHaveLength(5);
+    const rows = items.map((item) => Number(item.transform.match(/translate\([\d.]+ ([\d.]+)\)/)![1]));
+    // The first four fit the first row; the fifth wraps.
+    expect(rows.slice(0, 4)).toEqual([0, 0, 0, 0]);
+    expect(rows[4]).toBe(CHART_LEGEND_ROW_HEIGHT);
+    // No item on a shared row overlaps the next: each one's real content
+    // (its key, gap, and label) ends before the next one's key begins.
+    for (let index = 0; index + 1 < items.length; index += 1) {
+      if (rows[index] !== rows[index + 1]) continue;
+      const x = Number(items[index].transform.match(/translate\(([\d.]+) /)![1]);
+      const nextX = Number(items[index + 1].transform.match(/translate\(([\d.]+) /)![1]);
+      expect(nextX).toBeGreaterThan(x);
+    }
+    // The plot grew room for the wrapped row instead of sitting under it.
+    const pad = chartPad({ series });
+    expect(pad.top).toBe(34 + CHART_LEGEND_ROW_HEIGHT);
+    const clipRect = host.querySelector('svg > defs > clipPath > rect')!;
+    expect(Number(clipRect.getAttribute('y'))).toBe(pad.top);
+  });
+
+  it('truncates a label with an ellipsis when it cannot fit even a row to itself, and keeps the full name available', () => {
+    const longName = 'X'.repeat(400);
+    renderWith({ series: [{ name: longName, values: [1, 2] }] });
+    const items = legendItems();
+    expect(items).toHaveLength(1);
+    expect(items[0].text.length).toBeLessThan(longName.length);
+    expect(items[0].text.endsWith('…')).toBe(true);
+    // The full name is still available, e.g. on hover, via the title.
+    expect(items[0].title).toBe(longName);
+    // The truncated label actually fits the plot it was drawn in.
+    const layout = chartLegendLayout({ series: [{ name: longName, values: [] }] });
+    const plotWidth = 1000 - 74 - 28;
+    expect(layout.items[0].x + 34 + layout.items[0].text.length * 7.5).toBeLessThanOrEqual(plotWidth + 0.01);
   });
 });

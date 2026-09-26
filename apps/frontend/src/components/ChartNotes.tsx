@@ -3,11 +3,11 @@ import { useId, useLayoutEffect, useRef, useState } from 'react';
 import type { ChartData, NoteData, SceneObject } from '../controller/types';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import {
-  CHART_PLOT,
   CHART_VIEW_HEIGHT,
   CHART_VIEW_WIDTH,
   chartAxisBoxes,
   chartLegendBox,
+  chartPlot,
   chartScales,
   chartSeriesPoint,
   chartTraces,
@@ -139,9 +139,10 @@ export function ChartNotes({
         return { left: a.x, top: a.y, right: b.x, bottom: b.y };
       };
       if (toLayer) {
-        field.plot = rectToLayer(CHART_PLOT);
+        const plot = chartPlot(data);
+        field.plot = rectToLayer(plot);
         field.traces = chartTraces(data, chartScales(data)).map((trace) => trace.map(toLayer!));
-        field.labels = [chartLegendBox(data), ...chartAxisBoxes()].map(rectToLayer);
+        field.labels = [chartLegendBox(data), ...chartAxisBoxes(plot)].map(rectToLayer);
       }
 
       const toPlace: NoteToPlace[] = [];
