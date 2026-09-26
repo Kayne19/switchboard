@@ -989,18 +989,14 @@ impl Switchboard {
         }
         // The remote adapter can reap only the local ssh process. With no
         // verified remote shutdown protocol, reusing a persistent session ID
-        // could attach to work that is still running on the far host.
+        // could attach to work that is still running on the far host. That is
+        // a refusal like any other here: the live leg keeps running.
         if project.is_remote() && keep_context {
-            let name = project.id.clone();
+            let name = &project.id;
             tracing::warn!(project = %name, "refusing same-session remote redial; remote shutdown is unverified");
-            self.drop_agent().await;
-            let detail = "remote_shutdown_unverified".to_owned();
-            self.operator_note = Some(format!(
-                "The call to {name} was closed; I could not verify the remote session stopped."
-            ));
             return self.reply(
-                [format!("I couldn't safely restart {name}: the remote session could not be verified as stopped. You're back with the operator.")],
-                Some(detail),
+                [format!("I can't restart {name} on that and keep this conversation: I can't confirm the old session on its host has stopped. Ask for a fresh start to switch anyway.")],
+                Some("remote_shutdown_unverified".to_owned()),
             );
         }
         let requested_model = if model.is_empty() && !self.model_spec.is_empty() {

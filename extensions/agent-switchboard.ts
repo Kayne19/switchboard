@@ -762,7 +762,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 		name: "set_model",
 		label: "Change model",
 		description:
-			"Re-dial this same project on a different model or thinking level, because the caller asked. Your session is restarted on it \u2014 you keep this conversation unless you ask for it to be cleared \u2014 so say nothing alongside this call; you will be prompted again once you are back. If the model name is ambiguous the switchboard refuses and reads the caller the candidates, so pass what they said rather than guessing a provider.",
+			"Re-dial this same project on a different model or thinking level, because the caller asked. Your session is restarted on it \u2014 you keep this conversation unless you ask for it to be cleared \u2014 so say nothing alongside this call; you will be prompted again once you are back. On a project running on another host the switchboard will not keep the conversation across a restart; there, only a clean slate (keep_context false) switches, and the caller is told so. If the model name is ambiguous the switchboard refuses and reads the caller the candidates, so pass what they said rather than guessing a provider.",
 		parameters: Type.Object({
 			model: Type.Optional(
 				Type.String({

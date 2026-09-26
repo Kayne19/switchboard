@@ -147,6 +147,13 @@ was writing and picks the call up mid-sentence. Preserving is the default;
 `keep_context: false` mints a new id instead, and the agent is told the history
 was cleared on purpose so it does not try to recall it.
 
+On a project that runs on another host, keeping the conversation is refused
+for now. The switchboard can stop its own `ssh`, but it cannot confirm the pi on
+the far side has exited, and two processes writing one session file is worse
+than no swap. The live leg keeps running and the caller is told to ask for a
+fresh start, which switches without the history. The thinking picker keeps
+context, so on such a project it is refused the same way.
+
 What the caller says goes through speech-to-text and then through a model's
 guess, so `models.rs` refuses rather than guesses. A name is resolved against
 the catalog prewarm listed with `pi --list-models` **on the host the leg runs

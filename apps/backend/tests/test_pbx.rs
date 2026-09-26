@@ -940,3 +940,41 @@ async fn an_unavailable_catalog_admits_a_qualified_model_and_refuses_a_bare_one(
         let _ = std::fs::remove_dir_all(root);
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_remote_redial_that_keeps_context_is_refused_without_dropping_the_leg() {
+    let root = scratch_dir("remote-same-session");
+    let (ssh, ssh_log) = recording_ssh(&root);
+    let (runtime, _) = recording_runtime(&root);
+    let config = crate::Config::for_tests(&[
+        ("SWITCHBOARD_SSH_PROGRAM", &ssh.to_string_lossy()),
+        (
+            "SWITCHBOARD_STATE_DIR",
+            &root.join("state").to_string_lossy(),
+        ),
+    ]);
+    let mut project = project_on(Some("fake-host"), &root, &runtime);
+    project.stage_extension = false;
+    let registry = Registry::new(vec![project.clone()]);
+    let prewarm = crate::prewarm::Prewarm::settled(&config, &registry, two_model_catalog());
+    let mut board = Switchboard::new(&config, registry, Arc::new(prewarm));
+    let reply = board
+        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+        .await;
+    assert_eq!(reply.route, "alpha", "{reply:?}");
+    let live_session = board.session_id.clone();
+
+    // The thinking picker and set_model both keep context by default.
+    let reply = board.set_thinking("high").await;
+
+    assert_eq!(reply.error.as_deref(), Some("remote_shutdown_unverified"));
+    assert!(reply.text.contains("fresh start"), "{}", reply.text);
+    assert_eq!(reply.route, "alpha");
+    assert_eq!(board.route(), "alpha");
+    assert_eq!(board.session_id, live_session);
+    assert!(board.agent.is_some(), "the live leg must keep running");
+    assert_eq!(read_lines(&ssh_log).len(), 1);
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
