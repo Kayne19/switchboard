@@ -1,7 +1,19 @@
 import { motion, useReducedMotion } from 'motion/react';
 import { useId, useMemo } from 'react';
 import type { ChartData, ChartSeries, Semantic } from '../controller/types';
-import { CHART_LEGEND_STEP, CHART_PAD, CHART_VIEW_HEIGHT, CHART_VIEW_WIDTH, chartScales, chartSeriesPoint, chartTraces } from './chartGeometry';
+import {
+  CHART_LEGEND_KEY_WIDTH,
+  CHART_LEGEND_ROW_HEIGHT,
+  CHART_LEGEND_TEXT_X,
+  CHART_PAD,
+  CHART_VIEW_HEIGHT,
+  CHART_VIEW_WIDTH,
+  chartLegendLayout,
+  chartPad,
+  chartScales,
+  chartSeriesPoint,
+  chartTraces,
+} from './chartGeometry';
 
 const semanticColor: Record<Semantic,string> = {
   red:'var(--red)',orange:'var(--orange)',green:'var(--green)',cyan:'var(--cyan)',amber:'var(--amber)',paper:'var(--paper)',muted:'var(--muted)'
@@ -43,10 +55,16 @@ export function ChartPrimitive({
 }) {
   const reduced = useReducedMotion();
   const clipId = useId().replace(/:/g,'');
-  const width=CHART_VIEW_WIDTH,height=CHART_VIEW_HEIGHT,pad=CHART_PAD;
+  const width=CHART_VIEW_WIDTH,height=CHART_VIEW_HEIGHT;
+  // The legend can wrap onto further rows than a one-row chart needs, so the
+  // plot's own top padding grows to clear it; `CHART_PAD` (below, for the
+  // legend's own anchor) never does -- its rows grow downward from there
+  // instead, and the padding grows to keep the last of them off the plot.
+  const pad=chartPad(data);
   const plotWidth=width-pad.left-pad.right;
   const scales=chartScales(data);
   const {yMin,yMax,xMax,xAtEpoch,yAt}=scales;
+  const legend=useMemo(()=>chartLegendLayout(data,plotWidth),[data,plotWidth]);
   const seriesPaths=useMemo(()=>{
     const traces=chartTraces(data);
     return data.series.map((series,index)=>({...series,path:traces[index].map((point,pointIndex)=>`${pointIndex===0?'M':'L'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(' ')}));
@@ -88,7 +106,10 @@ export function ChartPrimitive({
       </g>
       <text className="chart-axis-label" x={width/2} y={height-2} textAnchor="middle">{data.xLabel ?? 'X'}</text>
       <text className="chart-axis-label" transform={`translate(17 ${height/2}) rotate(-90)`} textAnchor="middle">{data.yLabel ?? 'Y'}</text>
-      <g className="chart-legend" transform={`translate(${pad.left+8} ${pad.top+12})`}>{data.series.map((series,index)=><g transform={`translate(${index*CHART_LEGEND_STEP} 0)`} key={series.name}><line className="chart-legend__key" x1="0" y1="0" x2="24" y2="0" stroke={chartSeriesColor(series, index)} strokeWidth="2"/><text x="34" y="4">{series.name}</text></g>)}</g>
+      {/* Rows grow downward from the one-row anchor (`CHART_PAD`, not the
+          possibly-grown `pad`): `chartPad` already grew the plot's own top
+          padding to keep the last row clear of it. */}
+      <g className="chart-legend" transform={`translate(${CHART_PAD.left+8} ${CHART_PAD.top+12})`}>{legend.items.map((item,index)=><g transform={`translate(${item.x} ${item.row*CHART_LEGEND_ROW_HEIGHT})`} key={item.name}><line className="chart-legend__key" x1="0" y1="0" x2={CHART_LEGEND_KEY_WIDTH} y2="0" stroke={chartSeriesColor(data.series[index], index)} strokeWidth="2"/><text x={CHART_LEGEND_TEXT_X} y="4">{item.text}</text>{item.truncated?<title>{item.name}</title>:null}</g>)}</g>
     </svg>
   </div>;
 }
