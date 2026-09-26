@@ -5,5 +5,16 @@ __pycache__/
 .venv/
 node_modules/
 target/
+
+# Agent-runtime scratch: handoffs, transcripts, and workflow state. Local to
+# whoever ran the agent; never part of the application.
 .pi-subagents/
 .pi-workflow/
+.pi/
+.claude/worktrees/
+
+# Playwright output.
+test-results/
+
+# Personal routing symlink into the owner's wiki (see AGENTS.md).
+/BRAIN.md
