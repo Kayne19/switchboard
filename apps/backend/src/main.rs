@@ -1,13 +1,13 @@
-pub mod api;
-pub mod audio;
-pub mod history;
-pub mod lifecycle;
-pub mod models;
-pub mod pbx;
-pub mod pi_client;
-pub mod prewarm;
-pub mod registry;
-pub mod visual_protocol;
+mod api;
+mod audio;
+mod history;
+mod lifecycle;
+mod models;
+mod pbx;
+mod pi_client;
+mod prewarm;
+mod registry;
+mod visual_protocol;
 
 use std::collections::HashMap;
 use std::env;

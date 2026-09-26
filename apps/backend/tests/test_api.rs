@@ -671,7 +671,7 @@ fn audio_queue_emits_reserved_sequences_in_order_and_drops_on_clear() {
     ));
     assert!(matches!(
         queue.append(first, 3, vec![1]).as_slice(),
-        [Event::AudioChunk { sequence: 0, .. }]
+        [Event::AudioChunk { audio }] if audio == &[1]
     ));
     let events = queue.finish(first, 3);
     assert!(matches!(
@@ -679,9 +679,9 @@ fn audio_queue_emits_reserved_sequences_in_order_and_drops_on_clear() {
         [
             Event::AudioDone { sequence: 0, .. },
             Event::AudioStart { sequence: 1, .. },
-            Event::AudioChunk { sequence: 1, .. },
+            Event::AudioChunk { audio },
             Event::AudioDone { sequence: 1, .. }
-        ]
+        ] if audio == &[2]
     ));
     let stale = queue.reserve(3);
     queue.clear();
@@ -795,7 +795,7 @@ fn audio_queue_cancellation_releases_following_audio() {
     ));
     assert!(matches!(
         queue.append(second, 1, vec![7]).as_slice(),
-        [Event::AudioChunk { sequence: 1, .. }]
+        [Event::AudioChunk { audio }] if audio == &[7]
     ));
     let events = queue.finish(second, 1);
     assert!(matches!(

@@ -539,9 +539,10 @@ pub enum Event {
         mime: String,
         format: String,
     },
+    /// Belongs to the utterance of the last `AudioStart`; the browser gets
+    /// it as a bare binary frame.
     AudioChunk {
         audio: Vec<u8>,
-        sequence: u64,
     },
     AudioDone {
         generation: u64,
@@ -704,7 +705,7 @@ impl AudioQueue {
             return Vec::new();
         };
         if slot.generation == generation && !audio.is_empty() {
-            slot.events.push(Event::AudioChunk { audio, sequence });
+            slot.events.push(Event::AudioChunk { audio });
         }
         self.drain_ready()
     }
@@ -3140,7 +3141,7 @@ async fn send_event_sink(
         Event::AudioStart { generation, sequence, mime, format } => {
             socket.send(Message::Text(json!({"type":"audio_start", "generation":generation, "sequence":sequence, "mime":mime, "format":format}).to_string().into())).await
         }
-        Event::AudioChunk { audio, .. } => socket.send(Message::Binary(audio.into())).await,
+        Event::AudioChunk { audio } => socket.send(Message::Binary(audio.into())).await,
         Event::AudioDone { generation, sequence } => {
             socket.send(Message::Text(json!({"type":"audio_done", "generation":generation, "sequence":sequence, "done":true}).to_string().into())).await
         }
