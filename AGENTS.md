@@ -7,7 +7,7 @@ The voice front door for the lab: a caller reaches an operator agent, the
 operator patches them through to a project's coding agent running in that
 project's own directory, and that agent hands them back when they are done.
 `README.md` explains the call path and the design; read it before changing
-anything in `legacy/backend/`.
+anything in `apps/backend/`.
 
 This tree was extracted from the homelab repo, where it lived inside
 `ansible/roles/damocles/files/switchboard/`. It is now the place the code is
@@ -46,15 +46,13 @@ extension staging path, not through a deploy.
 ## Working here
 
 - The service is Rust (`apps/backend/src/`), the browser client is TypeScript (`apps/frontend/src/`,
-  compiled to the committed `static/`). The Python tree in `legacy/` is the
-  compatibility baseline, not the running service.
+  compiled to the committed `static/`).
 - The Rust toolchain is pinned in `rust-toolchain.toml` so a local run and CI
   agree. Bump it deliberately; do not work around it.
 - Every gate CI runs: `cargo fmt --all -- --check`, `cargo test --locked`,
-  `cargo clippy --locked --all-targets -- -D warnings`,
-  `python3 -m unittest discover -s legacy/tests`, and `npm test` followed by
-  `git diff --exit-code -- static` — the compiled browser output is committed,
-  so rebuild it in the same change.
+  `cargo clippy --locked --all-targets -- -D warnings`, and `npm test` followed
+  by `git diff --exit-code -- static` — the compiled browser output is
+  committed, so rebuild it in the same change.
 - A `static/` merge conflict is resolved by rebuilding from the merged source
   (`npm ci && npm run build`), never by picking a side (see #37).
 - `master` requires a passing CI `test` check on an up-to-date head. A head
@@ -62,14 +60,15 @@ extension staging path, not through a deploy.
   workflow runs on the pull request. An unapproved run has zero jobs and can
   end as a failure that GitHub blames on the workflow file; it is not (see
   #35). Approve it, or push the head yourself.
-- Compatibility tests live in `legacy/tests/`; browser tests stay in `apps/frontend/tests/`.
-  They are the reason this repo exists — keep them passing on every commit.
+- Rust tests live in `apps/backend/tests/`, each compiled as the `#[cfg(test)]`
+  module of the source file it covers; browser, display, and extension tests
+  live in `apps/frontend/tests/`. Keep them passing on every commit.
 - No network, no ElevenLabs, no whisper model downloads in tests. Stub them.
 - Read `docs/concurrency-and-test-hazards.md` before touching turn dispatch, page
   rescue, or any test that writes a fake executable. It records why the turn
   epoch is stamped where it is, why fake executables must go through
   `write_executable_script`, and why a broken pipe is never the error worth
   reporting.
-- Keep the legacy module layout: one concern per file in `legacy/backend/`, no
-  new package layers until something concrete needs one.
+- Keep the backend module layout: one concern per file in `apps/backend/src/`,
+  no new module layers until something concrete needs one.
 - Secrets never land in this tree. The app reads them from the environment.
