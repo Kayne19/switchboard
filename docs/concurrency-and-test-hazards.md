@@ -40,7 +40,8 @@ Two properties are load-bearing and easy to break by accident:
   check discards it.
 
 The turn worker re-checks the epoch again before dispatching. That is deliberate
-redundancy, not duplication.
+redundancy, not duplication. It first waits for the PBX lock, for the reason
+given under "A clip on the wire when the leg is adopted" below.
 
 **The stamp now comes from the browser.** Arrival is still later than capture:
 a clip recorded before a transfer but uploaded after it would be stamped on
@@ -61,18 +62,72 @@ change is discarded, and the caller has to repeat it. Browser-initiated bumps
 (`/hangup`, `/connect`, `/thinking` off the operator leg) are one message
 delivery away, so the tab is already awake and waiting on that exchange.
 
-An agent-initiated `transfer_to_project` bumps the epoch at *adoption*, not at
-startup: the generation stays put while the new leg is starting, and the new
+A new leg bumps the epoch at *adoption*, not at startup, whether an agent's
+`transfer_to_project` started it or a page control did (`/connect`, or a redial
+for `/model` or `/thinking`, which also bump it once at the start with their
+rescue): the generation stays put while the new leg is starting, and the new
 epoch is announced (with the status) the moment the leg is live.
 That leaves a window — ssh, process start, intro turn — in which the browser
 still holds the old epoch. The server closes it by emitting a
 `{"type":"candidate"}` event when a candidate leg begins and
 `{"type":"candidate_cleared"}` when adoption, rollback, or rescue ends it. The
 browser marks clips recorded while a candidate is in flight as addressed to the
-incoming leg and re-stamps them to the new epoch when the `epoch` event
-arrives, so the caller's words reach the new leg as a fresh turn. Any clip
-without that mark keeps the discard: a wrong number can only lose speech,
-never misroute it.
+incoming leg and re-stamps the ones it has not sent yet to the new epoch when
+the `epoch` event arrives, so the caller's words reach the new leg as a fresh
+turn. Any clip without that mark keeps the discard: a wrong number can only
+lose speech, never misroute it.
+
+### A clip on the wire when the leg is adopted
+
+A marked clip that already went out carries the old epoch, and the server keeps
+the first stamp it sees for a clip id: a retransmission under the same id is
+taken as the clip it already holds. So such a clip is dropped, never delivered
+to the new leg, and never steered into the starting one: a steer needs a turn
+to attach to, and the coordinator gives none out while a leg is `Starting`.
+Wherever the adoption lands, the caller hears about it through the
+ID-bearing `stale_epoch` error, which the browser shows:
+
+| the clip, when the leg is adopted | where it is dropped |
+| --- | --- |
+| transcribed and queued behind the transfer | turn dispatch |
+| transcribed, not yet steered or queued | the check under the session guard |
+| inside the speech-to-text sidecar | the check before it is logged |
+| not yet arrived | the check before it is logged |
+
+In the first two rows the words were already logged and echoed as the caller's,
+so they stay in the conversation; only acting on them is refused.
+The tests in `apps/backend/tests/test_api.rs` that follow
+`clip_accepted_before_a_page_rescue_is_dropped_after_transcription` drive each
+row, with a gated sidecar or a held session guard deciding the order. A startup
+that is rolled back does not move the generation, so a clip queued during it
+goes to the leg the caller never left.
+
+Delivering the clip to the new leg was the alternative, and it was rejected.
+The epoch does not move when a candidate starts, so a clip recorded just before
+the candidate event and one recorded just after carry the same stamp. The
+server could deliver only on the browser's word that a clip belongs to the
+incoming leg, and a wrong word would put speech on a leg it was not addressed
+to. Dropping can only lose speech.
+
+The browser therefore leaves a clip that went out whole on the stamp it went
+out with (`transmitted` in `apps/frontend/src/runtime/outbox.ts`, which a
+reconnect does not clear), drops it with the other clips from the retired epoch,
+and leaves the telling to the server. Re-stamping it used to announce that it
+was being carried along; and after a reconnect it went out again under the new
+epoch and the server, seeing an id it already held, accepted it and never
+answered. A clip the browser drops that never went out gets a notice from the
+browser, because the server never saw it.
+
+A leg started from the page differs in one way: no turn is running, so the
+turn worker is free while the leg starts. It used to take a queued clip at
+once, pass the stamp check, and begin the turn's prompt, which moved the call
+out of `Starting` with the candidate still staged. The leg was then never
+adopted, the generation never moved, and the caller's words ran on the new leg
+when the page control released the PBX lock. The turn worker now waits for that
+lock before the check, so it sees the outcome, and the coordinator refuses to
+begin a prompt while a leg is `Starting`. A turn dropped because a rescue landed
+between its check and its registration now gets a `stale_epoch` too; it used to
+be dropped without one.
 
 ### One scene reset per leg
 
@@ -113,7 +168,8 @@ retires a lagging socket rather than blocking the call.
 Audio reservations are generation-stamped and sequenced across mid-turn speech
 and settled replies. Cancellation releases a slot so a stale TTS result cannot
 wedge later speech. The browser drops queued/playing audio and outbox clips on a
-new epoch. A stale clip receives an ID-bearing `stale_epoch` error and is removed
+new epoch, and tells the caller when any of those clips never went out. A stale
+clip that did go out receives an ID-bearing `stale_epoch` error and is removed
 from the outbox rather than retried forever.
 
 The route/model/thinking pickers serialize their HTTP operations. A failed picker

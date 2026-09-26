@@ -364,6 +364,83 @@ describe("CallRuntime voice clips", () => {
     runtime.dispose();
   });
 
+  // Issue #58: a clip recorded while a transfer was connecting, and already
+  // sent when the new leg is adopted, went out under the old epoch. The server
+  // drops it and says so with a `stale_epoch` error naming it; the browser
+  // must neither pretend to carry it along nor send it again under the new
+  // epoch, which the server would take as the clip it already has.
+  it("leaves a clip already on the wire to the server, which tells the caller it was dropped", async () => {
+    const { runtime, latestState } = makeRuntime();
+    const socket = await connectAt(runtime, 3);
+    socket.receive({ type: "candidate", route: "alpha", generation: 3 });
+    runtime.talk();
+    await settle();
+    runtime.send();
+    await settle();
+    const clipFrames = () => socket.sentJson().filter((frame) => frame.type === "clip");
+    expect(clipFrames().map((frame) => frame.generation)).toEqual([3]);
+    const id = clipFrames()[0].id;
+    socket.receive({ type: "accepted", id });
+
+    // The incoming leg is adopted.
+    socket.receive({ type: "candidate_cleared", generation: 4 });
+    socket.receive({ type: "epoch", generation: 4 });
+    await settle();
+    expect(clipFrames().length, "the clip is not sent again").toBe(1);
+
+    const notice = "The line changed before that got through. Please repeat it.";
+    socket.receive({ type: "error", id, code: "stale_epoch", message: notice });
+    await settle();
+    expect(latestState()).toMatchObject({ status: "Error: " + notice, statusError: true });
+    runtime.dispose();
+  });
+
+  it("does not resend a clip already on the wire under the new epoch after a reconnect", async () => {
+    const { runtime } = makeRuntime();
+    const socket = await connectAt(runtime, 3);
+    socket.receive({ type: "candidate", route: "alpha", generation: 3 });
+    runtime.talk();
+    await settle();
+    runtime.send();
+    await settle();
+    expect(socket.sentJson().filter((frame) => frame.type === "clip").length).toBe(1);
+    socket.receive({ type: "candidate_cleared", generation: 4 });
+    socket.receive({ type: "epoch", generation: 4 });
+
+    // The line drops before the server's verdict on the clip arrives.
+    socket.drop();
+    runtime.retry();
+    const next = FakeSocket.latest();
+    next.open();
+    next.receive({ type: "hello_ack", version: 1 });
+    next.receive({ type: "epoch", generation: 4 });
+    await settle();
+    expect(next.sentJson().filter((frame) => frame.type === "clip")).toEqual([]);
+    runtime.dispose();
+  });
+
+  it("tells the caller when a new epoch drops speech that never went out", async () => {
+    const { runtime, latestState } = makeRuntime();
+    const socket = await connectAt(runtime, 3);
+    runtime.talk();
+    await settle();
+    // The line drops mid-sentence, so the clip is kept but not sent, and the
+    // leg changes before the page is back.
+    socket.drop();
+    runtime.retry();
+    const next = FakeSocket.latest();
+    next.open();
+    next.receive({ type: "hello_ack", version: 1 });
+    next.receive({ type: "epoch", generation: 4 });
+    await settle();
+    expect(next.sentJson().filter((frame) => frame.type === "clip")).toEqual([]);
+    expect(latestState()).toMatchObject({
+      status: "The line changed before 1 clip(s) went out. Please repeat that.",
+      statusError: true,
+    });
+    runtime.dispose();
+  });
+
   it("drops speech from a retired leg when no transfer was announced", async () => {
     const { runtime } = makeRuntime();
     const socket = await connectAt(runtime, 3);
