@@ -98,6 +98,44 @@ async fn healthz_reports_the_commit_the_binary_was_stamped_with() {
 }
 
 #[tokio::test]
+async fn healthz_reports_only_what_the_service_knows() {
+    // "whisper_model" and "stt_adapter" were constants kept from the Python
+    // response ("sidecar", on every deploy); they described nothing. Every
+    // field left is state this process holds.
+    let (code, health) = request_json(&state(), Method::GET, "/healthz", None).await;
+    assert_eq!(code, StatusCode::OK);
+    let fields = health
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        fields,
+        std::collections::BTreeSet::from([
+            "status",
+            "git",
+            "stt_configured",
+            "stt_stream_configured",
+            "elevenlabs_configured",
+            "route",
+            "model",
+            "thinking",
+            "model_swaps",
+            "projects",
+        ])
+    );
+    assert_eq!(health["stt_configured"], false);
+    assert_eq!(health["stt_stream_configured"], false);
+    assert_eq!(health["elevenlabs_configured"], true);
+
+    let configured = state_with_stream(Some("true".into()), Some("true".into()));
+    let (_, health) = request_json(&configured, Method::GET, "/healthz", None).await;
+    assert_eq!(health["stt_configured"], true);
+    assert_eq!(health["stt_stream_configured"], true);
+}
+
+#[tokio::test]
 async fn http_contract_exposes_status_health_and_page_controls() {
     let state = state();
     let (code, status) = request_json(&state, Method::GET, "/status", None).await;
@@ -112,7 +150,6 @@ async fn http_contract_exposes_status_health_and_page_controls() {
     let (code, health) = request_json(&state, Method::GET, "/healthz", None).await;
     assert_eq!(code, StatusCode::OK);
     assert_eq!(health["status"], "ok");
-    assert_eq!(health["stt_adapter"], "sidecar");
     assert_eq!(health["stt_configured"], false);
 
     let (code, connected) = request_json(
