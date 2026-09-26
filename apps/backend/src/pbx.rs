@@ -18,6 +18,9 @@ use tokio::sync::Mutex;
 use tokio::time::Duration;
 
 pub const OPERATOR: &str = "operator";
+/// How long a project leg may go silent inside one turn, its intro included,
+/// before it is dropped as wedged.
+const PROJECT_TURN_TIMEOUT: Duration = Duration::from_secs(600);
 pub type RouteCallback =
     Arc<dyn Fn(serde_json::Value) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
@@ -223,6 +226,9 @@ pub struct Switchboard {
     /// The only owner of launch setup: transports, catalogs, staged
     /// extensions, and prepare reports are all settled here at startup.
     prewarm: Arc<Prewarm>,
+    /// `PROJECT_TURN_TIMEOUT`, held per switchboard so a test can wait out a
+    /// silent leg without waiting ten minutes.
+    project_turn_timeout: Duration,
 }
 impl Switchboard {
     pub fn new(config: &crate::Config, registry: Registry, prewarm: Arc<Prewarm>) -> Self {
@@ -255,6 +261,7 @@ impl Switchboard {
             operator_note: None,
             coordinator: None,
             prewarm,
+            project_turn_timeout: PROJECT_TURN_TIMEOUT,
         }
     }
     pub fn set_coordinator(&mut self, coordinator: Coordinator) {
@@ -862,7 +869,7 @@ impl Switchboard {
                 .then(|| project.cwd.clone())
                 .filter(|p| !p.is_empty()),
             Some(env),
-            Duration::from_secs(600),
+            self.project_turn_timeout,
             self.activity_callback.clone(),
         )
         .await
