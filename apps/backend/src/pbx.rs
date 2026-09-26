@@ -670,7 +670,10 @@ impl Switchboard {
             "transferring caller"
         );
 
-        let previous_agent = self.agent.clone();
+        // The leg the caller is on now, which every failure below hands the
+        // line back to: the project leg on an agent-to-agent transfer, else
+        // the operator, as in `drop_agent`.
+        let live_session = self.agent.clone().or_else(|| self.operator.clone());
 
         let plan = match self.prewarm.launch_plan(&project).await {
             Ok(plan) => plan,
@@ -736,7 +739,7 @@ impl Switchboard {
                     "could not connect to project"
                 );
                 self.rollback_startup(format!("startup failed: {e}"));
-                self.set_active_session(previous_agent.clone()).await;
+                self.set_active_session(live_session.clone()).await;
                 self.operator_note = Some(format!("Transfer to {} failed: {e}", project.id));
                 return self.reply_transfer_error(
                     format!("I couldn't get {} on the line: {e}", project.id),
@@ -775,7 +778,7 @@ impl Switchboard {
             };
             tracing::error!(project = %project.id, %detail, "project intro turn failed");
             session.close().await;
-            self.set_active_session(previous_agent.clone()).await;
+            self.set_active_session(live_session.clone()).await;
             self.rollback_startup(format!("intro failed: {detail}"));
             self.operator_note = Some(format!("Transfer to {} failed: {detail}", project.id));
             return self.reply_transfer_error(
@@ -788,7 +791,7 @@ impl Switchboard {
             if coordinator.is_candidate() {
                 if let Err(error) = coordinator.adopt_candidate() {
                     session.close().await;
-                    self.set_active_session(previous_agent.clone()).await;
+                    self.set_active_session(live_session.clone()).await;
                     self.rollback_startup(format!("adoption failed: {error}"));
                     return self.reply_transfer_error(
                         format!("{} did not come up.", project.id),
