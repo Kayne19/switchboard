@@ -165,9 +165,11 @@ reconnected, discarded, or replayed.
 
 ### 6. Protocols are contracts, not implementation details
 
-The browser/server WebSocket protocol is defined in `apps/frontend/src/protocol.ts` and its
-Rust counterpart. Changes to message types, framing, MIME rules, sequence
-numbers, generations, or environment variables are public contract changes.
+The browser/server WebSocket protocol is the contract between
+`apps/frontend/src/protocol.ts` and `api.rs` (see the known non-purity below:
+only one direction is typed today). Changes to message types, framing, MIME
+rules, sequence numbers, generations, or environment variables are public
+contract changes.
 
 Every protocol addition must define:
 
@@ -400,6 +402,13 @@ Switchboard is not currently a perfect hexagonal implementation:
 - The display precedence rule is implemented twice, in `DisplayProjection`
   (`api.rs`, for `/view`) and in the browser's `sceneModel.ts`. Tests pin both
   to the same rule.
+- Only the browser-to-server half of the WebSocket protocol is defined
+  (`apps/frontend/src/protocol.ts`). Server-to-browser messages are built with
+  ad hoc `json!` in `api.rs` and read as one optional-field bag in the browser
+  (#61).
+- RPC activity from a pi process carries no leg identity, so it is published,
+  and promotes a starting candidate, without the freshness check rule 7 asks
+  for. The PBX lock makes that safe today by serializing turns (#60).
 - `apps/frontend/src/runtime/callRuntime.ts` still coordinates several
   concerns (socket lifecycle, outbox, line requests, hands-free wiring); the
   recorder and playback are separate modules, the rest is one class.
