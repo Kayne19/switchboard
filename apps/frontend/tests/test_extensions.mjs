@@ -295,7 +295,7 @@ async function agentExtensionHttpFailures() {
 					{ status: 400, headers: { "Content-Type": "application/json" } },
 				);
 			}
-			if (speakMode === "legacy-422") {
+			if (speakMode === "unreadable-422") {
 				return new Response("Unprocessable Entity", { status: 422 });
 			}
 			if (speakMode === "not-found-404") {
@@ -314,6 +314,9 @@ async function agentExtensionHttpFailures() {
 				JSON.stringify({ delivered: false, reason: "no browser connected" }),
 				{ status: 200, headers: { "Content-Type": "application/json" } },
 			);
+		}
+		if (speakMode === "not-found-404") {
+			return new Response("Not Found", { status: 404 });
 		}
 		if (speakMode === "network-error") throw new Error("connection refused");
 		if (speakMode === "not-delivered") {
@@ -344,10 +347,22 @@ async function agentExtensionHttpFailures() {
 		assert.equal(detailedRefusal.isError, true);
 		assert.match(detailedRefusal.content[0].text, /at most one active item allowed/);
 
-		speakMode = "legacy-422";
-		const legacyRefusal = await pi.tools.get("display").execute("call", { op: "clear" });
-		assert.equal(legacyRefusal.isError, true);
-		assert.match(legacyRefusal.content[0].text, /no display screen/);
+		// A body the endpoint could not read is its own refusal, not a
+		// missing screen.
+		speakMode = "unreadable-422";
+		const unreadable = await pi.tools.get("display").execute("call", { op: "clear" });
+		assert.equal(unreadable.isError, true);
+		assert.match(unreadable.content[0].text, /refused that display \(HTTP 422\)/);
+
+		// A switchboard with no endpoint for the tool.
+		speakMode = "not-found-404";
+		const noScreen = await pi.tools.get("display").execute("call", { op: "clear" });
+		assert.equal(noScreen.isError, true);
+		assert.match(noScreen.content[0].text, /no display screen/);
+		const noVoice = await pi.tools.get("speak").execute("call", { text: "Hello" });
+		assert.equal(noVoice.isError, true);
+		assert.match(noVoice.content[0].text, /cannot speak for you/);
+		assert.doesNotMatch(noVoice.content[0].text, /diagram/);
 
 		speakMode = "network-error";
 		const unreachable = await pi.tools

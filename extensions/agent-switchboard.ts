@@ -50,18 +50,23 @@ const SPEECH_DEADLINE_MS =
 		? parsedSpeechDeadline
 		: 25000;
 
-async function refusal(resp: Response, action: string): Promise<string> {
-	if (resp.status === 422 || resp.status === 404) {
-		const screen = action === "line" ? "diagram" : action;
-		const description =
-			action === "display"
-				? "describe it in words"
-				: action === "diff"
-					? "describe the changes in words"
-					: action === "timeline"
-						? "describe the timeline in words"
-						: "describe the steps in words";
-		return `this deployment has no ${screen} screen; ${description}`;
+type SwitchboardTool = "speak" | "display" | "view";
+
+// What each tool asked for, in the refusal sentence below.
+const REQUEST_NOUN: Record<SwitchboardTool, string> = {
+	speak: "line",
+	display: "display",
+	view: "view request",
+};
+
+async function refusal(resp: Response, tool: SwitchboardTool): Promise<string> {
+	// A 404 is a switchboard with no endpoint for this tool. Any other refusal,
+	// including a 422 for a body the endpoint could not read, is reported with
+	// the switchboard's own reason.
+	if (resp.status === 404) {
+		return tool === "speak"
+			? "this switchboard cannot speak for you; put the answer in your written reply"
+			: "this switchboard has no display screen; describe it in words";
 	}
 	let detail = "";
 	try {
@@ -80,9 +85,9 @@ async function refusal(resp: Response, action: string): Promise<string> {
 		detail = `${detail.slice(0, 500)}…`;
 	}
 	if (detail) {
-		return `The switchboard refused that ${action} (HTTP ${resp.status}): ${detail}`;
+		return `The switchboard refused that ${REQUEST_NOUN[tool]} (HTTP ${resp.status}): ${detail}`;
 	}
-	return `The switchboard refused that ${action} (HTTP ${resp.status}).`;
+	return `The switchboard refused that ${REQUEST_NOUN[tool]} (HTTP ${resp.status}).`;
 }
 
 export default function agentSwitchboard(pi: ExtensionAPI) {
@@ -155,7 +160,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 						content: [
 							{
 								type: "text",
-								text: await refusal(resp, "line"),
+								text: await refusal(resp, "speak"),
 							},
 						],
 						details: {},
@@ -586,7 +591,7 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 		description:
 			"Inspect or direct the caller's live screen. Call with no target when what is already visible matters. Set a target when the caller asks to pull up, focus, maximize, dismiss, or return to something. The caller can also click around; their explicit focus wins until they dismiss it.\n\n" +
 			"Targets:\n" +
-			"- `visual`: Focuses the current diagram, diff, plan, or timeline.\n" +
+			"- `visual`: Focuses what the display tool put on screen.\n" +
 			"- `comms`: Focuses the conversation and live tool activity.\n" +
 			"- `system`: Focuses the active project, model, and route controls.\n" +
 			"- `theater`: Gives the current visual the entire display.\n" +
