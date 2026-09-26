@@ -1775,6 +1775,40 @@ done
 }
 
 #[tokio::test]
+async fn a_turn_dropped_by_a_rescue_before_it_is_registered_is_dropped_with_notice() {
+    let state = state();
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    // Hold the registry a turn joins when it is spawned, so a rescue can land
+    // after the turn passed its stamp check and before it is registered.
+    let registry = state.0.active_operations.lock().await;
+    state.0.queued_turns.store(1, Ordering::Release);
+    state
+        .0
+        .turns
+        .send((
+            "just-dispatched".into(),
+            "and check the logs".into(),
+            state.0.coordinator.generation(),
+        ))
+        .await
+        .unwrap();
+    let turn_worker = tokio::spawn(process_turns(state.clone()));
+    assert_eq!(
+        types_of(&frames_until(&mut connection, "thinking").await),
+        ["thinking"]
+    );
+
+    state.0.coordinator.begin_rescue("test rescue");
+    drop(registry);
+
+    let frames = frames_until(&mut connection, "error").await;
+    assert_eq!(types_of(&frames), ["error"]);
+    assert_dropped_with_notice(&frames[0], "just-dispatched");
+    assert!(!state.0.turn_in_flight.load(Ordering::Acquire));
+    turn_worker.abort();
+}
+
+#[tokio::test]
 async fn shutdown_notifies_upgraded_connections_before_reaping_the_pbx() {
     let state = state();
     let mut shutdown_notice = state.0.shutdown.subscribe();

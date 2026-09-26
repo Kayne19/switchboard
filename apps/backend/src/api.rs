@@ -1571,7 +1571,7 @@ fn emit_stale_clip(state: &AppState, id: &str) {
             "type":"error",
             "id":id,
             "code":"stale_epoch",
-            "message":"that recording belongs to the previous leg"
+            "message":"The line changed before that got through. Please repeat it."
         }),
     );
 }
@@ -1629,6 +1629,7 @@ async fn process_turns(state: AppState) {
         .await
         else {
             tracing::info!(clip = %id, stamped = generation, "dropping turn because rescue occurred before registration");
+            emit_stale_clip(&state, &id);
             if let Some(operation) = &operation {
                 state.0.coordinator.finish_operation(operation);
             }
