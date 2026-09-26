@@ -15,15 +15,15 @@ fn caller_ids_round_trip_and_old_entries_still_load() {
         .add_with_id(CALLER, "hello", "operator", Some("clip-1".into()))
         .unwrap();
     assert_eq!(entry.id.as_deref(), Some("clip-1"));
-    let encoded = serde_json::to_string(&log.payload()).unwrap();
+    let encoded = serde_json::to_string(&log.entries()).unwrap();
     assert!(encoded.contains("clip-1"));
-    let old = r#"{"type":"history","entries":[{"role":"caller","text":"old","route":"operator","ts":1.0}]}"#;
-    let payload: HistoryPayload = serde_json::from_str(old).unwrap();
-    assert_eq!(payload.entries[0].id, None);
+    let old = r#"{"role":"caller","text":"old","route":"operator","ts":1.0}"#;
+    let entry: TranscriptEntry = serde_json::from_str(old).unwrap();
+    assert_eq!(entry.id, None);
 }
 
 #[test]
-fn is_bounded_and_payload_is_independent() {
+fn is_bounded_to_the_newest_entries() {
     let mut log = TranscriptLog::new(2);
     for value in ["one", "two", "three"] {
         log.add(AGENT, value, "project");
@@ -35,5 +35,4 @@ fn is_bounded_and_payload_is_independent() {
             .collect::<Vec<_>>(),
         ["two", "three"]
     );
-    assert_eq!(log.payload().kind, "history");
 }

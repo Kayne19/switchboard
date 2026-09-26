@@ -4,22 +4,24 @@ import {
   OPERATOR_LINE,
   pickerAvailability,
 } from "../../src/runtime/lineStatus";
+import { statusMessage as status } from "../fixtures/serverMessages";
 
 describe("lineStateFromStatus", () => {
   it("lists the catalog models and keeps the live model selected", () => {
-    const line = lineStateFromStatus({
-      type: "status",
-      route: "alpha",
-      label: "alpha",
-      model_name: "openai/gpt-5.6",
-      models: [
-        { provider: "openai", model: "gpt-5.6", thinks: true },
-        { provider: "moonshot", model: "luna", thinks: true },
-        { provider: "openai", model: "sol", thinks: false },
-      ],
-      levels: ["off", "high"],
-      model_swaps: true,
-    });
+    const line = lineStateFromStatus(
+      status({
+        route: "alpha",
+        label: "alpha",
+        model_name: "openai/gpt-5.6",
+        models: [
+          { provider: "openai", model: "gpt-5.6", thinks: true },
+          { provider: "moonshot", model: "luna", thinks: true },
+          { provider: "openai", model: "sol", thinks: false },
+        ],
+        levels: ["off", "high"],
+        model_swaps: true,
+      }),
+    );
     expect(line.models.map((option) => option.value)).toEqual([
       "openai/gpt-5.6",
       "moonshot/luna",
@@ -31,12 +33,13 @@ describe("lineStateFromStatus", () => {
   });
 
   it("keeps a live model that the catalog does not list", () => {
-    const line = lineStateFromStatus({
-      type: "status",
-      route: "alpha",
-      model_name: "provider/unlisted",
-      models: [{ provider: "openai", model: "sol", thinks: false }],
-    });
+    const line = lineStateFromStatus(
+      status({
+        route: "alpha",
+        model_name: "provider/unlisted",
+        models: [{ provider: "openai", model: "sol", thinks: false }],
+      }),
+    );
     expect(line.models.map((option) => option.value)).toEqual([
       "openai/sol",
       "provider/unlisted",
@@ -45,16 +48,17 @@ describe("lineStateFromStatus", () => {
   });
 
   it("disables only the model picker when the catalog is unavailable", () => {
-    const line = lineStateFromStatus({
-      type: "status",
-      route: "alpha",
-      model_name: "provider/model",
-      models: [],
-      models_available: false,
-      models_diagnostic: "model listing failed or timed out",
-      levels: ["off", "high"],
-      model_swaps: true,
-    });
+    const line = lineStateFromStatus(
+      status({
+        route: "alpha",
+        model_name: "provider/model",
+        models: [],
+        models_available: false,
+        models_diagnostic: "model listing failed or timed out",
+        levels: ["off", "high"],
+        model_swaps: true,
+      }),
+    );
     const availability = pickerAvailability(line, false);
     expect(availability.modelDisabled).toBe(true);
     expect(availability.modelTitle).toBe("model listing failed or timed out");
@@ -62,15 +66,16 @@ describe("lineStateFromStatus", () => {
   });
 
   it("names the operator line and the requested thinking level", () => {
-    const line = lineStateFromStatus({
-      type: "status",
-      route: "operator",
-      projects: ["alpha", "beta"],
-      model_name: "openai/gpt-5.6",
-      thinking: "high",
-      thinking_confirmed: false,
-      levels: ["off", "high"],
-    });
+    const line = lineStateFromStatus(
+      status({
+        route: "operator",
+        projects: ["alpha", "beta"],
+        model_name: "openai/gpt-5.6",
+        thinking: "high",
+        thinking_confirmed: false,
+        levels: ["off", "high"],
+      }),
+    );
     expect(line.onProject).toBe(false);
     expect(line.label).toBe("Operator");
     expect(line.routes.map((option) => option.value)).toEqual([
@@ -91,12 +96,13 @@ describe("lineStateFromStatus", () => {
   });
 
   it("locks thinking on a project leg that cannot swap models", () => {
-    const line = lineStateFromStatus({
-      type: "status",
-      route: "alpha",
-      model_swaps: false,
-      levels: ["off", "high"],
-    });
+    const line = lineStateFromStatus(
+      status({
+        route: "alpha",
+        model_swaps: false,
+        levels: ["off", "high"],
+      }),
+    );
     expect(pickerAvailability(line, false).thinkingDisabled).toBe(true);
   });
 });

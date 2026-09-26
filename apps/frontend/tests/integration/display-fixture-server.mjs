@@ -38,7 +38,7 @@ export class DisplayFixtureServer {
           req.on('data', chunk => body += chunk);
           req.on('end', () => {
             const data = JSON.parse(body);
-            this.broadcast({ type: 'view', target: data.view });
+            this.broadcast({ type: 'view', target: data.view, reason: data.reason ?? '' });
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ ok: true }));
           });
@@ -79,20 +79,31 @@ export class DisplayFixtureServer {
                 type: 'hello_ack',
                 version: 1,
                 stt_streaming: true,
+                audio_streaming: false,
                 mse_mp3: false,
               }));
               ws.send(JSON.stringify({
                 type: 'epoch',
                 generation: this.generation,
               }));
+              // Every field of a status (StatusMessage in
+              // apps/frontend/src/protocol.ts); the page drops a partial one.
               ws.send(JSON.stringify({
                 type: 'status',
                 route: 'operator',
-                routes: [{ value: 'operator', label: 'Operator' }],
+                label: 'Operator',
                 model: 'gpt-5',
-                models: [{ value: 'gpt-5', label: 'gpt-5' }],
+                model_name: 'gpt-5',
                 thinking: 'high',
-                thinking_levels: [{ value: 'high', label: 'High' }],
+                thinking_requested: 'high',
+                thinking_confirmed: false,
+                thinking_default: 'high',
+                levels: ['high'],
+                models: [],
+                models_available: true,
+                models_diagnostic: null,
+                model_swaps: true,
+                projects: [],
               }));
 
               // Send replay display actions
@@ -105,7 +116,7 @@ export class DisplayFixtureServer {
             } else if (msg.type === 'ping') {
               ws.send(JSON.stringify({ type: 'pong', nonce: msg.nonce, time: msg.time }));
             } else if (msg.type === 'clip') {
-              ws.send(JSON.stringify({ type: 'accepted', id: msg.id, streaming: false }));
+              ws.send(JSON.stringify({ type: 'accepted', id: msg.id }));
             } else if (msg.type === 'typed_turn') {
               // As route_final_transcript in apps/backend/src/api.rs: a typed
               // turn under the current epoch is taken and echoed back as the

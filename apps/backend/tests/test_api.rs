@@ -3044,7 +3044,7 @@ async fn a_connection_gets_epoch_status_history_and_scene_before_any_live_event(
     let transcript = state.0.transcript_log.lock().await;
     let mut browser = served.connect().await;
     wait_until(|| state.0.delivery.connected()).await;
-    assert!(emit_json(&state, json!({"type":"probe"})));
+    assert!(emit(&state, Event::Json(json!({"type":"probe"}))));
     drop(transcript);
 
     let frames = json_until(&mut browser, "probe").await;
@@ -3213,10 +3213,16 @@ async fn a_connection_that_falls_a_queue_behind_is_dropped_and_a_reconnect_is_wh
     let mut lagging = served.connect().await;
     wait_until(|| state.0.delivery.connected()).await;
     for n in 0..DELIVERY_QUEUE {
-        assert!(emit_json(&state, json!({"type":"probe", "n":n})), "{n}");
+        assert!(
+            emit(&state, Event::Json(json!({"type":"probe", "n":n}))),
+            "{n}"
+        );
     }
     assert!(
-        !emit_json(&state, json!({"type":"probe", "n":DELIVERY_QUEUE})),
+        !emit(
+            &state,
+            Event::Json(json!({"type":"probe", "n":DELIVERY_QUEUE}))
+        ),
         "one past the bound is not delivered"
     );
     assert!(
@@ -3244,7 +3250,10 @@ async fn a_connection_that_falls_a_queue_behind_is_dropped_and_a_reconnect_is_wh
     let frames = json_until(&mut browser, "history").await;
     assert_eq!(types_of(&frames), ["epoch", "status", "history"]);
     assert_eq!(frames[2]["entries"][0]["text"], "still here");
-    assert!(emit_json(&state, json!({"type":"probe", "n":"live"})));
+    assert!(emit(
+        &state,
+        Event::Json(json!({"type":"probe", "n":"live"}))
+    ));
     assert_eq!(next_json(&mut browser).await["n"], "live");
 }
 

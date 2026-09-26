@@ -1,0 +1,365 @@
+{
+  "version": 1,
+  "messages": [
+    {
+      "name": "hello_ack",
+      "message": {
+        "type": "hello_ack",
+        "version": 1,
+        "stt_streaming": false,
+        "audio_streaming": true,
+        "mse_mp3": true
+      }
+    },
+    {
+      "name": "pong",
+      "message": {
+        "type": "pong",
+        "nonce": "2:1758844800000:7",
+        "time": 1758844800000
+      }
+    },
+    {
+      "name": "epoch",
+      "message": {
+        "type": "epoch",
+        "generation": 4
+      }
+    },
+    {
+      "name": "candidate",
+      "message": {
+        "type": "candidate",
+        "route": "alpha",
+        "generation": 4
+      }
+    },
+    {
+      "name": "candidate_cleared",
+      "message": {
+        "type": "candidate_cleared",
+        "generation": 5
+      }
+    },
+    {
+      "name": "status_operator",
+      "message": {
+        "type": "status",
+        "route": "operator",
+        "label": "Operator",
+        "model": "provider/operator-model:low",
+        "model_name": "provider/operator-model",
+        "thinking": "low",
+        "thinking_requested": "low",
+        "thinking_confirmed": false,
+        "thinking_default": "medium",
+        "levels": [
+          "off",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "models": [],
+        "models_available": true,
+        "models_diagnostic": null,
+        "model_swaps": true,
+        "projects": [
+          "alpha"
+        ]
+      }
+    },
+    {
+      "name": "status_project",
+      "message": {
+        "type": "status",
+        "route": "alpha",
+        "label": "alpha",
+        "model": "provider/model-a:high",
+        "model_name": "provider/model-a",
+        "thinking": "high",
+        "thinking_requested": "high",
+        "thinking_confirmed": true,
+        "thinking_default": "medium",
+        "levels": [
+          "off",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "models": [
+          {
+            "provider": "provider",
+            "model": "model-a",
+            "thinks": true
+          },
+          {
+            "provider": "provider",
+            "model": "model-b",
+            "thinks": false
+          }
+        ],
+        "models_available": true,
+        "models_diagnostic": null,
+        "model_swaps": true,
+        "projects": [
+          "alpha",
+          "beta"
+        ]
+      }
+    },
+    {
+      "name": "status_project_without_a_catalog",
+      "message": {
+        "type": "status",
+        "route": "beta",
+        "label": "beta",
+        "model": "provider/model-a",
+        "model_name": "provider/model-a",
+        "thinking": "medium",
+        "thinking_requested": "medium",
+        "thinking_confirmed": false,
+        "thinking_default": "medium",
+        "levels": [
+          "off",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "models": [],
+        "models_available": false,
+        "models_diagnostic": "model catalog has not been loaded",
+        "model_swaps": true,
+        "projects": [
+          "alpha",
+          "beta"
+        ]
+      }
+    },
+    {
+      "name": "accepted_clip",
+      "message": {
+        "type": "accepted",
+        "id": "clip-1"
+      }
+    },
+    {
+      "name": "accepted_stream",
+      "message": {
+        "type": "accepted",
+        "id": "clip-2",
+        "streaming": true
+      }
+    },
+    {
+      "name": "abandoned",
+      "message": {
+        "type": "abandoned",
+        "id": "clip-2",
+        "reason": "stream worker unavailable"
+      }
+    },
+    {
+      "name": "transcript",
+      "message": {
+        "type": "transcript",
+        "id": "clip-1",
+        "text": "Put me through to alpha."
+      }
+    },
+    {
+      "name": "queued_behind_turns",
+      "message": {
+        "type": "queued",
+        "id": "clip-3",
+        "waiting": 2,
+        "steered": false
+      }
+    },
+    {
+      "name": "queued_steered",
+      "message": {
+        "type": "queued",
+        "id": "clip-4",
+        "waiting": 0,
+        "steered": true
+      }
+    },
+    {
+      "name": "error",
+      "message": {
+        "type": "error",
+        "message": "Unknown websocket command."
+      }
+    },
+    {
+      "name": "error_for_a_clip",
+      "message": {
+        "type": "error",
+        "id": "clip-1",
+        "message": "I didn't catch that — say it again."
+      }
+    },
+    {
+      "name": "error_stale_epoch",
+      "message": {
+        "type": "error",
+        "id": "clip-5",
+        "code": "stale_epoch",
+        "message": "that recording belongs to the previous leg"
+      }
+    },
+    {
+      "name": "thinking",
+      "message": {
+        "type": "thinking",
+        "route": "alpha",
+        "waiting": 0
+      }
+    },
+    {
+      "name": "activity_start",
+      "message": {
+        "type": "activity",
+        "state": "start",
+        "tool": "bash",
+        "detail": "cargo test --locked",
+        "label": "alpha"
+      }
+    },
+    {
+      "name": "activity_end",
+      "message": {
+        "type": "activity",
+        "state": "end",
+        "tool": "bash",
+        "detail": "",
+        "label": "alpha"
+      }
+    },
+    {
+      "name": "reply",
+      "message": {
+        "type": "reply",
+        "text": "The tests pass.",
+        "route": "alpha"
+      }
+    },
+    {
+      "name": "spoken",
+      "message": {
+        "type": "spoken",
+        "entry": {
+          "role": "agent",
+          "text": "Running the tests now.",
+          "route": "alpha",
+          "ts": 1758844800.25
+        }
+      }
+    },
+    {
+      "name": "history_empty",
+      "message": {
+        "type": "history",
+        "entries": []
+      }
+    },
+    {
+      "name": "history",
+      "message": {
+        "type": "history",
+        "entries": [
+          {
+            "role": "caller",
+            "text": "Put me through to alpha.",
+            "route": "operator",
+            "ts": 1758844790.5,
+            "id": "clip-1"
+          },
+          {
+            "role": "agent",
+            "text": "Alpha here.",
+            "route": "alpha",
+            "ts": 1758844795.0
+          }
+        ]
+      }
+    },
+    {
+      "name": "audio_start",
+      "message": {
+        "type": "audio_start",
+        "generation": 4,
+        "sequence": 12,
+        "mime": "audio/mpeg",
+        "format": "mp3"
+      }
+    },
+    {
+      "name": "audio_done",
+      "message": {
+        "type": "audio_done",
+        "generation": 4,
+        "sequence": 12,
+        "done": true
+      }
+    },
+    {
+      "name": "final_response_audio_closed",
+      "message": {
+        "type": "final_response_audio_closed",
+        "response_id": "clip-3",
+        "generation": 4,
+        "success": true
+      }
+    },
+    {
+      "name": "display",
+      "message": {
+        "type": "display",
+        "action": {
+          "op": "show",
+          "id": "gpu",
+          "type": "metric",
+          "role": "primary",
+          "data": {
+            "label": "GPU",
+            "value": "94%"
+          }
+        },
+        "seq": 17
+      }
+    },
+    {
+      "name": "display_without_a_sequence",
+      "message": {
+        "type": "display",
+        "action": {
+          "op": "clear"
+        }
+      }
+    },
+    {
+      "name": "view",
+      "message": {
+        "type": "view",
+        "target": "visual",
+        "reason": "the diagram is ready"
+      }
+    },
+    {
+      "name": "screen_state_ack",
+      "message": {
+        "type": "screen_state_ack"
+      }
+    }
+  ]
+}

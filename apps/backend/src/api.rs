@@ -4,6 +4,7 @@ use crate::history::{TranscriptLog, AGENT, CALLER};
 use crate::lifecycle::Coordinator;
 use crate::pbx::{LiveLegState, RouteCallback, Switchboard};
 use crate::pi_client::{Activity, ActivityCallback, PiSession};
+use crate::protocol::{ErrorCode, ServerMessage};
 use axum::extract::ws::{Message, WebSocket};
 use axum::{
     extract::rejection::{BytesRejection, JsonRejection},
@@ -399,7 +400,8 @@ struct LegAnnouncer {
 }
 
 impl LegAnnouncer {
-    fn publish(&self, event: Event) {
+    fn publish(&self, message: ServerMessage) {
+        let event = Event::Json(message.to_value());
         let _ = self.events.send(event.clone());
         self.delivery.publish(event);
     }
@@ -434,7 +436,7 @@ impl LegAnnouncer {
             },
         )
         .await;
-        self.publish(Event::Json(status));
+        self.publish(ServerMessage::status(status));
         true
     }
 
@@ -449,7 +451,7 @@ impl LegAnnouncer {
         self.begin_scene(&mut gate, SceneLeg { route, generation })
             .await;
         self.coordinator.publish_status(status.clone());
-        self.publish(Event::Json(status));
+        self.publish(ServerMessage::status(status));
     }
 
     /// Clears the scene for `leg` and sends the epoch that tells the browser
@@ -473,10 +475,9 @@ impl LegAnnouncer {
             confirm.watermark = None;
             confirm.rejection = None;
         });
-        self.publish(Event::Json(json!({
-            "type": "epoch",
-            "generation": leg.generation,
-        })));
+        self.publish(ServerMessage::Epoch {
+            generation: leg.generation,
+        });
         gate.scene_leg = Some(leg);
     }
 }
@@ -884,13 +885,15 @@ impl AppState {
                 if activity.state == "life" {
                     return;
                 }
-                let event = Event::Json(json!({
-                    "type": "activity",
-                    "state": activity.state,
-                    "tool": activity.tool,
-                    "detail": activity.detail,
-                    "label": activity.label,
-                }));
+                let event = Event::Json(
+                    ServerMessage::Activity {
+                        state: activity.state,
+                        tool: activity.tool,
+                        detail: activity.detail,
+                        label: activity.label,
+                    }
+                    .to_value(),
+                );
                 let _ = events.send(event.clone());
                 delivery.publish(event);
             })
@@ -901,18 +904,17 @@ impl AppState {
             move |notice: &crate::lifecycle::CandidateNotice| {
                 // The callback fires under the coordinator's lock: publish
                 // non-blockingly and never re-enter the coordinator here.
-                let event = Event::Json(if notice.active {
-                    json!({
-                        "type": "candidate",
-                        "route": notice.route,
-                        "generation": notice.generation,
-                    })
+                let message = if notice.active {
+                    ServerMessage::Candidate {
+                        route: notice.route.clone(),
+                        generation: notice.generation,
+                    }
                 } else {
-                    json!({
-                        "type": "candidate_cleared",
-                        "generation": notice.generation,
-                    })
-                });
+                    ServerMessage::CandidateCleared {
+                        generation: notice.generation,
+                    }
+                };
+                let event = Event::Json(message.to_value());
                 let _ = candidate_events.send(event.clone());
                 candidate_delivery.publish(event);
             },
@@ -1054,12 +1056,14 @@ pub fn spawn_idle_worker(state: AppState, idle_timeout: f64, poll_seconds: f64) 
                 drop(board);
                 let Some(left) = left else { continue };
                 let minutes = (idle_timeout / 60.0).floor() as u64;
-                emit_json(
+                emit_message(
                     &state,
-                    json!({"type":"epoch", "generation":state.0.coordinator.generation()}),
+                    ServerMessage::Epoch {
+                        generation: state.0.coordinator.generation(),
+                    },
                 );
                 if let Some(entry) = state.0.transcript_log.lock().await.add(AGENT, &format!("Nothing was said for {minutes} minutes, so the line to {left} was dropped. You're back with the operator."), route) {
-                    emit_json(&state, json!({"type":"spoken", "entry":entry}));
+                    emit_message(&state, ServerMessage::Spoken { entry });
                 }
                 publish_status(&state, current_status(&state));
             }
@@ -1071,15 +1075,15 @@ fn emit(state: &AppState, event: Event) -> bool {
     let _ = state.0.events.send(event);
     browser_delivered
 }
-fn emit_json(state: &AppState, value: Value) -> bool {
-    emit(state, Event::Json(value))
+fn emit_message(state: &AppState, message: ServerMessage) -> bool {
+    emit(state, Event::Json(message.to_value()))
 }
 fn current_status(state: &AppState) -> Value {
     state.0.coordinator.status_json()
 }
 fn publish_status(state: &AppState, status: Value) {
     state.0.coordinator.publish_status(status.clone());
-    emit_json(state, status);
+    emit_message(state, ServerMessage::status(status));
 }
 
 async fn promote_candidate_for_token(state: &AppState, token: &str) {
@@ -1265,7 +1269,7 @@ async fn process_speech(state: AppState) {
                     if let Some(entry) =
                         state.0.transcript_log.lock().await.add(AGENT, &text, route)
                     {
-                        emit_json(&state, json!({"type":"spoken", "entry":entry}));
+                        emit_message(&state, ServerMessage::Spoken { entry });
                     }
                     let _ = result.send(Ok(()));
                 } else {
@@ -1278,7 +1282,7 @@ async fn process_speech(state: AppState) {
                 finish_audio(&state, sequence, generation, Vec::new()).await;
                 let _ = result.send(Err(error.to_string()));
                 tracing::error!(%error, chars = text.chars().count(), "synthesis failed for an agent-spoken line");
-                emit_json(&state, json!({"type":"error", "message":error.to_string()}));
+                emit_message(&state, ServerMessage::error(error.to_string()));
             }
         }
     }
@@ -1292,16 +1296,15 @@ async fn process_stream_results(state: AppState) {
     while let Some(result) = results.recv().await {
         match result {
             StreamResult::Partial(partial) => {
-                let valid = {
-                    let clips = state.0.stream_clips.lock().await;
-                    matches!(clips.get(&partial.clip_id), Some(StreamClipState::Open { generation, next_sequence, .. }) if *generation == partial.generation && partial.sequence <= *next_sequence)
-                };
-                if valid && partial.generation == state.0.coordinator.generation() {
-                    emit_json(
-                        &state,
-                        json!({"type":"partial", "id":partial.clip_id, "generation":partial.generation, "sequence":partial.sequence, "text":partial.text}),
-                    );
-                }
+                // Only the final result is shown and acted on. The page has no
+                // place for a caller line that is still being recognized.
+                tracing::debug!(
+                    clip = %partial.clip_id,
+                    generation = partial.generation,
+                    sequence = partial.sequence,
+                    chars = partial.text.chars().count(),
+                    "streaming STT partial"
+                );
             }
             StreamResult::Final(final_result) => {
                 let claim = {
@@ -1344,10 +1347,13 @@ async fn process_stream_results(state: AppState) {
                     abandoned
                 };
                 for (id, connection) in abandoned {
-                    let _ = send_json(
+                    let _ = send_message(
                         &state,
                         connection,
-                        json!({"type":"abandoned", "id":id, "reason":"stream worker unavailable"}),
+                        ServerMessage::Abandoned {
+                            id,
+                            reason: "stream worker unavailable".into(),
+                        },
                     )
                     .await;
                 }
@@ -1358,9 +1364,9 @@ async fn process_stream_results(state: AppState) {
 
 async fn route_final_transcript(state: &AppState, id: &str, generation: u64, transcript: String) {
     if transcript.trim().is_empty() {
-        emit_json(
+        emit_message(
             state,
-            json!({"type":"error", "id":id, "message":"I didn't catch that — say it again."}),
+            ServerMessage::error_for(id, "I didn't catch that — say it again."),
         );
         return;
     }
@@ -1376,9 +1382,12 @@ async fn route_final_transcript(state: &AppState, id: &str, generation: u64, tra
         route.clone(),
         Some(id.to_owned()),
     );
-    emit_json(
+    emit_message(
         state,
-        json!({"type":"transcript", "id":id, "text":transcript}),
+        ServerMessage::Transcript {
+            id: id.to_owned(),
+            text: transcript.clone(),
+        },
     );
     drop(_transition);
     let steer_operation = state
@@ -1404,9 +1413,13 @@ async fn route_final_transcript(state: &AppState, id: &str, generation: u64, tra
     };
     drop(active);
     if steered {
-        emit_json(
+        emit_message(
             state,
-            json!({"type":"queued", "id":id, "waiting":0, "steered":true}),
+            ServerMessage::Queued {
+                id: id.to_owned(),
+                waiting: 0,
+                steered: true,
+            },
         );
     } else {
         let waiting = state.0.queued_turns.fetch_add(1, Ordering::AcqRel) + 1;
@@ -1418,16 +1431,20 @@ async fn route_final_transcript(state: &AppState, id: &str, generation: u64, tra
             .is_ok()
         {
             if waiting > 1 || state.0.turn_in_flight.load(Ordering::Acquire) {
-                emit_json(
+                emit_message(
                     state,
-                    json!({"type":"queued", "id":id, "waiting":waiting, "steered":false}),
+                    ServerMessage::Queued {
+                        id: id.to_owned(),
+                        waiting,
+                        steered: false,
+                    },
                 );
             }
         } else {
             state.0.queued_turns.fetch_sub(1, Ordering::AcqRel);
-            emit_json(
+            emit_message(
                 state,
-                json!({"type":"error", "id":id, "message":"The call worker is unavailable."}),
+                ServerMessage::error_for(id, "The call worker is unavailable."),
             );
         }
     }
@@ -1454,18 +1471,21 @@ async fn process_clips(state: AppState) {
             Ok(text) => text,
             Err(error) => {
                 tracing::error!(clip = %clip.id, bytes = clip.audio.len(), %error, "transcription failed");
-                emit_json(
+                emit_message(
                     &state,
-                    json!({"type":"error", "id":clip.id, "message":format!("Transcription failed: {error}")}),
+                    ServerMessage::error_for(
+                        clip.id.clone(),
+                        format!("Transcription failed: {error}"),
+                    ),
                 );
                 continue;
             }
         };
         if transcript.trim().is_empty() {
             tracing::info!(clip = %clip.id, elapsed = ?started.elapsed(), "transcription returned nothing");
-            emit_json(
+            emit_message(
                 &state,
-                json!({"type":"error", "id":clip.id, "message":"I didn't catch that — say it again."}),
+                ServerMessage::error_for(clip.id.clone(), "I didn't catch that — say it again."),
             );
             continue;
         }
@@ -1489,9 +1509,12 @@ async fn process_clips(state: AppState) {
             route.clone(),
             Some(clip.id.clone()),
         );
-        emit_json(
+        emit_message(
             &state,
-            json!({"type":"transcript", "id":clip.id, "text":transcript}),
+            ServerMessage::Transcript {
+                id: clip.id.clone(),
+                text: transcript.clone(),
+            },
         );
         drop(_transition);
         // Steering is deliberately performed through the shared session handle,
@@ -1553,9 +1576,13 @@ async fn process_clips(state: AppState) {
         };
         if steered {
             tracing::info!(clip = %clip.id, %route, "steered the live turn");
-            emit_json(
+            emit_message(
                 &state,
-                json!({"type":"queued", "id":clip.id, "waiting":0, "steered":true}),
+                ServerMessage::Queued {
+                    id: clip.id.clone(),
+                    waiting: 0,
+                    steered: true,
+                },
             );
         } else {
             let waiting = state.0.queued_turns.fetch_add(1, Ordering::AcqRel) + 1;
@@ -1567,9 +1594,13 @@ async fn process_clips(state: AppState) {
                 .is_ok()
             {
                 if waiting > 1 || state.0.turn_in_flight.load(Ordering::Acquire) {
-                    emit_json(
+                    emit_message(
                         &state,
-                        json!({"type":"queued", "id":clip.id, "waiting":waiting, "steered":false}),
+                        ServerMessage::Queued {
+                            id: clip.id.clone(),
+                            waiting,
+                            steered: false,
+                        },
                     );
                 }
             } else {
@@ -1581,14 +1612,13 @@ async fn process_clips(state: AppState) {
     tracing::warn!("the clip worker stopped; no further speech will be transcribed");
 }
 fn emit_stale_clip(state: &AppState, id: &str) {
-    emit_json(
+    emit_message(
         state,
-        json!({
-            "type":"error",
-            "id":id,
-            "code":"stale_epoch",
-            "message":"The line changed before that got through. Please repeat it."
-        }),
+        ServerMessage::Error {
+            id: Some(id.to_owned()),
+            code: Some(ErrorCode::StaleEpoch),
+            message: "The line changed before that got through. Please repeat it.".into(),
+        },
     );
 }
 
@@ -1625,9 +1655,15 @@ async fn process_turns(state: AppState) {
             let status = current_status(&state);
             let waiting = state.0.queued_turns.load(Ordering::Acquire);
             tracing::info!(clip = %id, route = %status["route"], waiting, "dispatching a turn");
-            emit_json(
+            emit_message(
                 &state,
-                json!({"type":"thinking", "route":status["route"], "waiting":waiting}),
+                ServerMessage::Thinking {
+                    route: status["route"]
+                        .as_str()
+                        .unwrap_or(crate::pbx::OPERATOR)
+                        .to_owned(),
+                    waiting,
+                },
             );
             let operation = state
                 .0
@@ -1677,9 +1713,9 @@ async fn process_turns(state: AppState) {
                     state.0.coordinator.finish_operation(operation);
                 }
                 state.0.turn_in_flight.store(false, Ordering::Release);
-                emit_json(
+                emit_message(
                     &state,
-                    json!({"type":"error", "message":format!("The call worker failed on that turn: {error}")}),
+                    ServerMessage::error(format!("The call worker failed on that turn: {error}")),
                 );
                 continue;
             }
@@ -1729,7 +1765,7 @@ async fn cancel_active_operations(state: &AppState) -> Option<String> {
     state.0.audio.lock().await.clear();
     // Tell the browser at once, so speech it starts recording after this point
     // is stamped with the new epoch rather than the one being retired.
-    emit_json(state, json!({"type":"epoch", "generation":generation}));
+    emit_message(state, ServerMessage::Epoch { generation });
     let operations = std::mem::take(&mut *state.0.active_operations.lock().await);
     for operation in operations.into_values() {
         operation.abort();
@@ -1853,7 +1889,7 @@ async fn hangup(State(state): State<AppState>) -> impl IntoResponse {
             &format!("You hung up the line to {left}. You're back with the operator."),
             status["route"].as_str().unwrap_or("operator"),
         ) {
-            emit_json(&state, json!({"type":"spoken", "entry":entry}));
+            emit_message(&state, ServerMessage::Spoken { entry });
         }
         publish_status(&state, status);
     }
@@ -2292,7 +2328,11 @@ async fn display(
             .into_response();
     }
 
-    let value = json!({"type":"display", "action": normalized_action});
+    let value = ServerMessage::Display {
+        action: normalized_action.clone(),
+        seq: None,
+    }
+    .to_value();
     let event = Event::Json(value.clone());
     let _ = state.0.events.send(event.clone());
     let (delivered, sequence) = state.0.delivery.publish_sequenced(event);
@@ -2508,12 +2548,13 @@ async fn view(
     }
 
     drop(gate);
-    let value = json!({
-        "type": "view",
-        "target": target,
-        "reason": req.reason,
-    });
-    let delivered = emit_json(&state, value);
+    let delivered = emit_message(
+        &state,
+        ServerMessage::View {
+            target,
+            reason: req.reason,
+        },
+    );
     if delivered {
         tracing::info!(
             generation = permit_generation,
@@ -2568,7 +2609,7 @@ async fn deliver_page_reply_if_current(
                 .await
                 .add(AGENT, &reply.text, reply.route.clone())
         {
-            emit_json(state, json!({"type":"spoken", "entry":entry}));
+            emit_message(state, ServerMessage::Spoken { entry });
         }
     }
     publish_status(state, status);
@@ -2602,9 +2643,12 @@ async fn deliver_turn_if_current(
             .await
             .add(AGENT, &reply.text, reply.route.clone());
     }
-    emit_json(
+    emit_message(
         state,
-        json!({"type":"reply", "text":reply.text, "route":reply.route}),
+        ServerMessage::Reply {
+            text: reply.text.clone(),
+            route: reply.route.clone(),
+        },
     );
     publish_status(state, status);
     drop(_transition);
@@ -2621,12 +2665,12 @@ async fn deliver_turn_if_current(
     let Some(sequence) = reserve_audio(state, generation).await else {
         return false;
     };
-    let barrier = json!({
-        "type": "final_response_audio_closed",
-        "response_id": response_id,
-        "generation": generation,
-        "success": success,
-    });
+    let barrier = ServerMessage::FinalResponseAudioClosed {
+        response_id: response_id.to_owned(),
+        generation,
+        success,
+    }
+    .to_value();
     let events = {
         let mut audio = state.0.audio.lock().await;
         audio.barrier(sequence, generation, barrier)
@@ -2661,7 +2705,7 @@ async fn synthesize_reply_if_current(
             Err(error) => {
                 finish_audio(state, sequence, generation, Vec::new()).await;
                 tracing::error!(%error, chars = spoken.chars().count(), "synthesis failed; the caller hears nothing for this reply");
-                emit_json(state, json!({"type":"error", "message":error.to_string()}));
+                emit_message(state, ServerMessage::error(error.to_string()));
                 success = false;
             }
         }
@@ -2775,24 +2819,23 @@ async fn send_snapshot_sink(
     watermark: u64,
 ) -> Result<(), axum::Error> {
     let initial = [
-        Event::Json(json!({"type":"epoch", "generation":state.0.coordinator.generation()})),
-        Event::Json(current_status(state)),
-        Event::Json(
-            serde_json::to_value(state.0.transcript_log.lock().await.payload()).unwrap_or_default(),
-        ),
+        ServerMessage::Epoch {
+            generation: state.0.coordinator.generation(),
+        },
+        ServerMessage::status(current_status(state)),
+        ServerMessage::History {
+            entries: state.0.transcript_log.lock().await.entries(),
+        },
     ];
-    for event in initial {
-        send_event_sink(sink, event).await?;
+    for message in initial {
+        send_event_sink(sink, Event::Json(message.to_value())).await?;
     }
     for action in snapshot_actions {
-        send_event_sink(
-            sink,
-            stamp_display_seq(
-                Event::Json(json!({"type":"display", "action":action})),
-                watermark,
-            ),
-        )
-        .await?;
+        let replay = ServerMessage::Display {
+            action: action.clone(),
+            seq: Some(watermark),
+        };
+        send_event_sink(sink, Event::Json(replay.to_value())).await?;
     }
     Ok(())
 }
@@ -2860,10 +2903,10 @@ async fn start_stream_clip(
         .and_then(Value::as_str)
         .filter(|id| !id.is_empty() && id.len() <= 128)
     else {
-        return send_json(
+        return send_message(
             state,
             epoch,
-            json!({"type":"error", "message":"Invalid streaming clip id."}),
+            ServerMessage::error("Invalid streaming clip id."),
         )
         .await;
     };
@@ -2873,7 +2916,15 @@ async fn start_stream_clip(
         .unwrap_or_else(|| state.0.coordinator.generation());
     let mime = command.get("mime").and_then(Value::as_str).unwrap_or("");
     if mime != "audio/webm;codecs=opus" || !state.0.stt_stream.configured() {
-        return send_json(state, epoch, json!({"type":"abandoned", "id":id, "reason":"streaming STT is unavailable for this clip"})).await;
+        return send_message(
+            state,
+            epoch,
+            ServerMessage::Abandoned {
+                id: id.to_owned(),
+                reason: "streaming STT is unavailable for this clip".into(),
+            },
+        )
+        .await;
     }
     let mut clips = state.0.stream_clips.lock().await;
     match clips.get(id).copied() {
@@ -2901,10 +2952,13 @@ async fn start_stream_clip(
         Some(
             StreamClipState::Abandoned | StreamClipState::Cancelled | StreamClipState::Finalized,
         ) => {
-            return send_json(
+            return send_message(
                 state,
                 epoch,
-                json!({"type":"abandoned", "id":id, "reason":"clip is no longer resumable"}),
+                ServerMessage::Abandoned {
+                    id: id.to_owned(),
+                    reason: "clip is no longer resumable".into(),
+                },
             )
             .await;
         }
@@ -2927,10 +2981,13 @@ async fn start_stream_clip(
         }
     }
     if clips.len() >= 512 {
-        return send_json(
+        return send_message(
             state,
             epoch,
-            json!({"type":"abandoned", "id":id, "reason":"too many active streaming clips"}),
+            ServerMessage::Abandoned {
+                id: id.to_owned(),
+                reason: "too many active streaming clips".into(),
+            },
         )
         .await;
     }
@@ -2947,10 +3004,13 @@ async fn start_stream_clip(
 }
 
 async fn accept_stream_clip(state: &AppState, epoch: u64, id: &str) -> Result<(), ()> {
-    send_json(
+    send_message(
         state,
         epoch,
-        json!({"type":"accepted", "id":id, "streaming":true}),
+        ServerMessage::Accepted {
+            id: id.to_owned(),
+            streaming: true,
+        },
     )
     .await
 }
@@ -2976,10 +3036,13 @@ async fn open_worker_stream(
             .lock()
             .await
             .insert(id.to_owned(), StreamClipState::Abandoned);
-        return send_json(
+        return send_message(
             state,
             epoch,
-            json!({"type":"abandoned", "id":id, "reason":reason}),
+            ServerMessage::Abandoned {
+                id: id.to_owned(),
+                reason: reason.into(),
+            },
         )
         .await;
     }
@@ -2999,12 +3062,7 @@ async fn apply_screen_state(
         .and_then(Value::as_str)
         .filter(|view| matches!(*view, "auto" | "system" | "visual" | "comms" | "theater"))
     else {
-        return send_json(
-            state,
-            epoch,
-            json!({"type":"error", "message":"Invalid screen view."}),
-        )
-        .await;
+        return send_message(state, epoch, ServerMessage::error("Invalid screen view.")).await;
     };
     let title = command
         .get("title")
@@ -3089,7 +3147,7 @@ async fn apply_screen_state(
         c.rejection = rejected.clone();
     });
 
-    send_json(state, epoch, json!({"type":"screen_state_ack"})).await
+    send_message(state, epoch, ServerMessage::ScreenStateAck).await
 }
 
 async fn handle_text_frame(
@@ -3102,21 +3160,11 @@ async fn handle_text_frame(
     let command: Value = match serde_json::from_str(text) {
         Ok(value) => value,
         Err(_) => {
-            return send_json(
-                state,
-                epoch,
-                json!({"type":"error", "message":"Invalid JSON frame."}),
-            )
-            .await
+            return send_message(state, epoch, ServerMessage::error("Invalid JSON frame.")).await
         }
     };
     let Some(command) = command.as_object() else {
-        return send_json(
-            state,
-            epoch,
-            json!({"type":"error", "message":"Invalid command shape."}),
-        )
-        .await;
+        return send_message(state, epoch, ServerMessage::error("Invalid command shape.")).await;
     };
 
     match command.get("type").and_then(Value::as_str) {
@@ -3132,7 +3180,19 @@ async fn handle_text_frame(
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
             let mse_selected = version == 1 && mse_requested;
-            send_json(state, epoch, json!({"type":"hello_ack", "version":1, "stt_streaming": version == 1 && stream_requested && state.0.stt_stream.configured(), "audio_streaming":mse_selected, "mse_mp3":mse_selected})).await
+            send_message(
+                state,
+                epoch,
+                ServerMessage::HelloAck {
+                    version: 1,
+                    stt_streaming: version == 1
+                        && stream_requested
+                        && state.0.stt_stream.configured(),
+                    audio_streaming: mse_selected,
+                    mse_mp3: mse_selected,
+                },
+            )
+            .await
         }
         Some("stt_start") => {
             pending_header.take();
@@ -3144,10 +3204,10 @@ async fn handle_text_frame(
                 .and_then(Value::as_str)
                 .filter(|id| !id.is_empty() && id.len() <= 128)
             else {
-                return send_json(
+                return send_message(
                     state,
                     epoch,
-                    json!({"type":"error", "message":"Invalid streaming clip id."}),
+                    ServerMessage::error("Invalid streaming clip id."),
                 )
                 .await;
             };
@@ -3202,10 +3262,13 @@ async fn handle_text_frame(
                         .lock()
                         .await
                         .insert(id.to_owned(), StreamClipState::Abandoned);
-                    return send_json(
+                    return send_message(
                         state,
                         epoch,
-                        json!({"type":"abandoned", "id":id, "reason":reason}),
+                        ServerMessage::Abandoned {
+                            id: id.to_owned(),
+                            reason: reason.into(),
+                        },
                     )
                     .await;
                 }
@@ -3240,19 +3303,26 @@ async fn handle_text_frame(
         }
         Some("screen_state") => apply_screen_state(state, epoch, command).await,
         Some("ping") => {
-            send_json(
+            send_message(
                 state,
                 epoch,
-                json!({"type":"pong", "nonce":command.get("nonce"), "time":command.get("time")}),
+                ServerMessage::Pong {
+                    nonce: command.get("nonce").cloned().unwrap_or(Value::Null),
+                    time: command.get("time").cloned().unwrap_or(Value::Null),
+                },
             )
             .await
         }
         Some("typed_turn") => {
             let Some((id, generation, text)) = parse_typed_turn(command) else {
-                return send_json(
+                return send_message(
                     state,
                     epoch,
-                    json!({"type":"error", "id":command.get("id"), "message":"That message could not be sent."}),
+                    ServerMessage::Error {
+                        id: command.get("id").and_then(Value::as_str).map(str::to_owned),
+                        code: None,
+                        message: "That message could not be sent.".into(),
+                    },
                 )
                 .await;
             };
@@ -3272,21 +3342,16 @@ async fn handle_text_frame(
         Some("clip") => {
             let Some(header) = parse_clip_header(command) else {
                 pending_header.take();
-                return send_json(
-                    state,
-                    epoch,
-                    json!({"type":"error", "message":"Invalid clip id."}),
-                )
-                .await;
+                return send_message(state, epoch, ServerMessage::error("Invalid clip id.")).await;
             };
             *pending_header = Some(header);
             Ok(())
         }
         _ => {
-            send_json(
+            send_message(
                 state,
                 epoch,
-                json!({"type":"error", "message":"Unknown websocket command."}),
+                ServerMessage::error("Unknown websocket command."),
             )
             .await
         }
@@ -3319,7 +3384,12 @@ async fn handle_audio_frame(
             }
         };
         if !admitted {
-            return send_json(state, epoch, json!({"type":"error", "id":id, "message":"Invalid or out-of-order streaming chunk."})).await;
+            return send_message(
+                state,
+                epoch,
+                ServerMessage::error_for(id, "Invalid or out-of-order streaming chunk."),
+            )
+            .await;
         }
         if let Err(reason) = state
             .0
@@ -3332,10 +3402,13 @@ async fn handle_audio_frame(
                 .lock()
                 .await
                 .insert(id.clone(), StreamClipState::Abandoned);
-            return send_json(
+            return send_message(
                 state,
                 epoch,
-                json!({"type":"abandoned", "id":id, "reason":reason}),
+                ServerMessage::Abandoned {
+                    id: id.to_owned(),
+                    reason: reason.into(),
+                },
             )
             .await;
         }
@@ -3343,10 +3416,10 @@ async fn handle_audio_frame(
     }
     let Some((id, mime, generation)) = pending_header.take() else {
         tracing::warn!(bytes = audio.len(), "audio arrived without a clip header");
-        return send_json(
+        return send_message(
             state,
             epoch,
-            json!({"type":"error", "message":"Audio arrived without a clip header."}),
+            ServerMessage::error("Audio arrived without a clip header."),
         )
         .await;
     };
@@ -3393,21 +3466,29 @@ async fn handle_audio_frame(
         let mut accepted = state.0.accepted_clips.lock().await;
         accepted.0.remove(&id);
         accepted.1.retain(|accepted_id| accepted_id != &id);
-        return send_json(
+        return send_message(
             state,
             epoch,
-            json!({"type":"error", "id":id, "message":"The call worker is unavailable."}),
+            ServerMessage::error_for(id.clone(), "The call worker is unavailable."),
         )
         .await;
     }
-    send_json(state, epoch, json!({"type":"accepted", "id":id})).await
+    send_message(
+        state,
+        epoch,
+        ServerMessage::Accepted {
+            id,
+            streaming: false,
+        },
+    )
+    .await
 }
 
-async fn send_json(state: &AppState, epoch: u64, value: Value) -> Result<(), ()> {
+async fn send_message(state: &AppState, epoch: u64, message: ServerMessage) -> Result<(), ()> {
     state
         .0
         .delivery
-        .send(epoch, Message::Text(value.to_string().into()))
+        .send(epoch, Message::Text(message.to_value().to_string().into()))
         .then_some(())
         .ok_or(())
 }
@@ -3417,12 +3498,35 @@ async fn send_event_sink(
 ) -> Result<(), axum::Error> {
     match event {
         Event::Json(value) => socket.send(Message::Text(value.to_string().into())).await,
-        Event::AudioStart { generation, sequence, mime, format } => {
-            socket.send(Message::Text(json!({"type":"audio_start", "generation":generation, "sequence":sequence, "mime":mime, "format":format}).to_string().into())).await
+        Event::AudioStart {
+            generation,
+            sequence,
+            mime,
+            format,
+        } => {
+            let message = ServerMessage::AudioStart {
+                generation,
+                sequence,
+                mime,
+                format,
+            };
+            socket
+                .send(Message::Text(message.to_value().to_string().into()))
+                .await
         }
         Event::AudioChunk { audio } => socket.send(Message::Binary(audio.into())).await,
-        Event::AudioDone { generation, sequence } => {
-            socket.send(Message::Text(json!({"type":"audio_done", "generation":generation, "sequence":sequence, "done":true}).to_string().into())).await
+        Event::AudioDone {
+            generation,
+            sequence,
+        } => {
+            let message = ServerMessage::AudioDone {
+                generation,
+                sequence,
+                done: true,
+            };
+            socket
+                .send(Message::Text(message.to_value().to_string().into()))
+                .await
         }
     }
 }

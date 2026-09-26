@@ -15,13 +15,6 @@ pub struct TranscriptEntry {
     pub id: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct HistoryPayload {
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub entries: Vec<TranscriptEntry>,
-}
-
 #[derive(Debug)]
 pub struct TranscriptLog {
     limit: usize,
@@ -75,13 +68,6 @@ impl TranscriptLog {
 
     pub fn entries(&self) -> Vec<TranscriptEntry> {
         self.entries.iter().cloned().collect()
-    }
-
-    pub fn payload(&self) -> HistoryPayload {
-        HistoryPayload {
-            kind: "history".to_owned(),
-            entries: self.entries(),
-        }
     }
 }
 

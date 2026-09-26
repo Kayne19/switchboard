@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { DisplayFixtureServer } from "../integration/display-fixture-server.mjs";
+import { statusMessage, transcriptEntry } from "../fixtures/serverMessages";
 
 test("production adapter maps backend traffic into semantic scenes", async ({
   page,
@@ -16,23 +17,24 @@ test("production adapter maps backend traffic into semantic scenes", async ({
       .poll(() => fixtureServer.frames.some((frame) => frame.type === "hello"))
       .toBe(true);
 
-    fixtureServer.broadcast({
-      type: "status",
-      route: "switchboard",
-      label: "switchboard",
-      projects: ["switchboard"],
-      model_name: "openai/gpt-5",
-      models: [{ provider: "openai", model: "gpt-5", thinks: true }],
-      thinking: "high",
-      thinking_confirmed: true,
-      levels: ["high"],
-    });
+    fixtureServer.broadcast(
+      statusMessage({
+        route: "switchboard",
+        label: "switchboard",
+        projects: ["switchboard"],
+        model_name: "openai/gpt-5",
+        models: [{ provider: "openai", model: "gpt-5", thinks: true }],
+        thinking: "high",
+        thinking_confirmed: true,
+        levels: ["high"],
+      }),
+    );
 
     fixtureServer.broadcast({
       type: "history",
       entries: [
-        { role: "caller", text: "Show me the call path.", id: "clip-1" },
-        { role: "agent", text: "I have the route on screen." },
+        transcriptEntry({ role: "caller", text: "Show me the call path.", id: "clip-1" }),
+        transcriptEntry({ role: "agent", text: "I have the route on screen." }),
       ],
     });
     await expect(page.locator('[data-scene="conversation"]')).toBeVisible();
@@ -85,7 +87,7 @@ test("production adapter maps backend traffic into semantic scenes", async ({
       "+new shell",
     );
 
-    fixtureServer.broadcast({ type: "view", target: "comms" });
+    fixtureServer.broadcast({ type: "view", target: "comms", reason: "" });
     await expect(page.locator('[data-scene="conversation"]')).toBeVisible();
     await expect(page.locator(".transcript-toggle")).toBeVisible();
   } finally {

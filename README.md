@@ -275,6 +275,7 @@ test it manually and then fails with "command not found" for the switchboard.
 | `apps/backend/src/registry.rs` | the project registry and spoken-name resolution |
 | `apps/backend/src/audio.rs` | speech-to-text sidecar, ElevenLabs, and reply-length shaping |
 | `apps/backend/src/visual_protocol.rs` | validation of display actions |
+| `apps/backend/src/protocol.rs` | every WebSocket message the service sends the browser; its browser half is `apps/frontend/src/protocol.ts` |
 | `apps/backend/src/history.rs` | the transcript kept for page reloads |
 | `apps/backend/tests/` | Rust tests, one file per source module |
 | `apps/frontend/src/` | V17.2 React presentation and its call runtime |
@@ -300,7 +301,8 @@ transcript to stdout. Deployments may additionally set
 `SWITCHBOARD_STT_STREAM_COMMAND` to a long-lived worker. It receives
 length-prefixed frames (kind byte, big-endian `u32` payload length, payload),
 starts with a JSONL `{"type":"ready"}` line, and emits bounded JSONL
-`partial`/`final` records. A chunk payload starts with an id length byte, the
+`partial`/`final` records; partials are logged, and only a final result
+becomes a turn. A chunk payload starts with an id length byte, the
 UTF-8 clip id, big-endian generation and sequence numbers, then the WebM bytes,
 so concurrent clips remain attributable. Streaming is selected only for
 WebM/Opus clients after the WebSocket hello handshake; unavailable or

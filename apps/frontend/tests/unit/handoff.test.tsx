@@ -10,6 +10,7 @@ import { ControllerProvider, useController } from '../../src/controller/context'
 import type { ControllerState, MessageData } from '../../src/controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../../src/controller/types';
 import { RuntimeIntegration } from '../../src/integration/runtime';
+import { helloAck, statusMessage, transcriptEntry } from '../fixtures/serverMessages';
 
 class FakeSocket {
   static latest: FakeSocket | null = null;
@@ -41,14 +42,13 @@ class FakeSocket {
   }
 }
 
-const operatorStatus = {
-  type: 'status',
+const operatorStatus = statusMessage({
   route: 'operator',
   label: 'Operator',
   projects: ['switchboard'],
   thinking: 'medium',
   levels: ['low', 'medium', 'high'],
-};
+});
 const projectStatus = { ...operatorStatus, route: 'switchboard', label: 'switchboard' };
 
 const diagram = {
@@ -82,7 +82,7 @@ function SceneRecorder() {
   return null;
 }
 
-async function receive(message: Record<string, unknown>) {
+async function receive(message: object) {
   await act(async () => {
     socket.onmessage?.({ data: JSON.stringify(message) } as MessageEvent);
   });
@@ -109,7 +109,7 @@ async function callTheOperator() {
     socket.readyState = 1;
     socket.onopen?.({} as Event);
   });
-  await receive({ type: 'hello_ack', version: 1, stt_streaming: false, mse_mp3: false });
+  await receive(helloAck());
   await receive({ type: 'epoch', generation: 1 });
   await receive(operatorStatus);
   await receive({ type: 'history', entries: [] });
@@ -118,7 +118,7 @@ async function callTheOperator() {
   await receive({ type: 'transcript', id: 'c1', text: 'Put me through to switchboard.' });
   await receive({
     type: 'spoken',
-    entry: { id: 'a1', role: 'agent', text: 'Putting you through to switchboard.' },
+    entry: transcriptEntry({ id: 'a1', role: 'agent', text: 'Putting you through to switchboard.' }),
   });
   expect(sceneKind(latest)).toBe('conversation');
   scenes = ['conversation'];
@@ -179,7 +179,7 @@ describe('operator-to-project handoff', () => {
 
     // The PBX settles the transfer: it restates the status, not the epoch.
     await receive(projectStatus);
-    await receive({ type: 'reply', text: 'Switchboard here. What do you need?' });
+    await receive({ type: 'reply', text: 'Switchboard here. What do you need?', route: 'switchboard' });
 
     expect(conversation().segments[0].text).toBe('Switchboard here. What do you need?');
     expect(scenes).toEqual(['conversation']);
@@ -193,7 +193,7 @@ describe('operator-to-project handoff', () => {
     expect(sceneKind(latest)).toBe('architecture');
 
     await receive(projectStatus);
-    await receive({ type: 'reply', text: 'That is the call path.' });
+    await receive({ type: 'reply', text: 'That is the call path.', route: 'switchboard' });
 
     expect(sceneKind(latest)).toBe('architecture');
     expect(latest.agentOrder).toEqual(['call-path']);

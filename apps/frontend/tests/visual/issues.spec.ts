@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { DisplayFixtureServer } from '../integration/display-fixture-server.mjs';
+import { statusMessage, transcriptEntry } from '../fixtures/serverMessages';
 
 async function openController(page: Page) {
   await page.goto('/?scene=architecture&chrome=0');
@@ -164,7 +165,7 @@ test('explicit anchored note survives later chat messages', async ({ page }) => 
     }));
     expect(noteOverflow.scrollWidth).toBeLessThanOrEqual(noteOverflow.clientWidth + 1);
 
-    fixtureServer.broadcast({ type: 'spoken', entry: { role: 'agent', text: 'A newer chat response.', id: 'reply-2' } });
+    fixtureServer.broadcast({ type: 'spoken', entry: transcriptEntry({ role: 'agent', text: 'A newer chat response.', id: 'reply-2' }) });
     await expect(note).toContainText('This annotation stays attached to the validation spike.');
     await expect(note).not.toContainText('A newer chat response.');
     await expect(note.locator('.annotation-card__history')).toHaveCount(0);
@@ -246,7 +247,7 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   });
 }
 
-test('long current response scrolls above configurable lower-right caption', async ({ page }) => {
+test('long current response scrolls above the lower-right caption', async ({ page }) => {
   const fixtureServer = new DisplayFixtureServer({ initialGeneration: 6 });
   const { wsUrl } = await fixtureServer.start();
   const reply = Array.from({ length: 18 }, (_, index) => `Response paragraph ${index + 1} remains readable.`).join('\n\n');
@@ -257,13 +258,13 @@ test('long current response scrolls above configurable lower-right caption', asy
     await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === 'hello')).toBe(true);
     fixtureServer.broadcast({
       type: 'spoken',
-      entry: { role: 'agent', text: reply, id: 'reply-long', caption: 'MODEL / REVIEWER' },
+      entry: transcriptEntry({ role: 'agent', text: reply, id: 'reply-long' }),
     });
 
     const response = page.locator('.conversation-answer__text');
     const caption = page.locator('.conversation-answer__index');
     await expect(response).toBeVisible();
-    await expect(caption).toHaveText('MODEL / REVIEWER');
+    await expect(caption).toHaveText('VOICE / 01');
     const geometry = await response.evaluate((element) => {
       const responseBox = element.getBoundingClientRect();
       const captionBox = document.querySelector<HTMLElement>('.conversation-answer__index')!.getBoundingClientRect();
@@ -303,7 +304,7 @@ test('progress value sent as a percentage fills the matching width', async ({ pa
 });
 
 
-test('long caption cannot grow into the response text at minimum box height', async ({ page }) => {
+test('the caption stays one line clear of a long response at minimum box height', async ({ page }) => {
   const fixtureServer = new DisplayFixtureServer({ initialGeneration: 9 });
   const { wsUrl } = await fixtureServer.start();
   const reply = Array.from({ length: 18 }, (_, index) => `Response paragraph ${index + 1} remains readable.`).join('\n\n');
@@ -314,7 +315,7 @@ test('long caption cannot grow into the response text at minimum box height', as
     await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === 'hello')).toBe(true);
     fixtureServer.broadcast({
       type: 'spoken',
-      entry: { role: 'agent', text: reply, id: 'reply-long', caption: 'MODEL / GPT OPENAI-CODEX / PROJECT / BAY-2 / REVIEWER' },
+      entry: transcriptEntry({ role: 'agent', text: reply, id: 'reply-long' }),
     });
 
     const response = page.locator('.conversation-answer__text');
@@ -565,7 +566,7 @@ test('note and live chat output coexist; neither mutates the other', async ({ pa
     const note = page.locator('.chart-note .annotation-card');
     await expect(note).toContainText('This annotation stays attached to the validation spike.');
 
-    fixtureServer.broadcast({ type: 'spoken', entry: { role: 'agent', text: 'The spike is contained.', id: 'reply-1' } });
+    fixtureServer.broadcast({ type: 'spoken', entry: transcriptEntry({ role: 'agent', text: 'The spike is contained.', id: 'reply-1' }) });
     const live = page.locator('.live-chat-card');
     await expect(live).toBeVisible();
     await expect(live).toContainText('The spike is contained.');
@@ -581,7 +582,7 @@ test('note and live chat output coexist; neither mutates the other', async ({ pa
     });
     expect(overlap, 'note and live card must not overlap').toBe(false);
 
-    fixtureServer.broadcast({ type: 'spoken', entry: { role: 'agent', text: 'A newer response replaces the live card only.', id: 'reply-2' } });
+    fixtureServer.broadcast({ type: 'spoken', entry: transcriptEntry({ role: 'agent', text: 'A newer response replaces the live card only.', id: 'reply-2' }) });
     await expect(live).toContainText('A newer response replaces the live card only.');
     await expect(note).toContainText('This annotation stays attached to the validation spike.');
 
@@ -614,7 +615,7 @@ test('long chat output scrolls inside the live card', async ({ page }) => {
         },
       },
     });
-    fixtureServer.broadcast({ type: 'spoken', entry: { role: 'agent', text: reply, id: 'reply-long' } });
+    fixtureServer.broadcast({ type: 'spoken', entry: transcriptEntry({ role: 'agent', text: reply, id: 'reply-long' }) });
 
     const card = page.locator('.live-chat-card');
     await expect(card).toBeVisible();
@@ -668,7 +669,7 @@ test('wide chat output wraps inside the live card instead of scrolling sideways'
         },
       },
     });
-    fixtureServer.broadcast({ type: 'spoken', entry: { role: 'agent', text: reply, id: 'reply-wide' } });
+    fixtureServer.broadcast({ type: 'spoken', entry: transcriptEntry({ role: 'agent', text: reply, id: 'reply-wide' }) });
 
     const card = page.locator('.live-chat-card');
     await expect(card).toBeVisible();
@@ -725,7 +726,7 @@ test('tool activity panel appears, flips to done, and clears when idle', async (
     await expect(panel).toContainText('\u25cf RUNNING');
     await expect(panel).toContainText('shell');
 
-    fixtureServer.broadcast({ type: 'activity', state: 'end', tool: 'shell' });
+    fixtureServer.broadcast({ type: 'activity', state: 'end', tool: 'shell', label: 'Running tests', detail: '' });
     await expect(panel).toContainText('LAST TOOL USED');
     await expect(panel).toContainText('\u25a0 DONE');
 
@@ -765,7 +766,7 @@ test('every call of one tool registers on the activity panel (#27)', async ({ pa
       const call = await panel.getAttribute('data-call');
       expect(call).not.toBeNull();
       seen.push(call!);
-      fixtureServer.broadcast({ type: 'activity', state: 'end', tool: 'read' });
+      fixtureServer.broadcast({ type: 'activity', state: 'end', tool: 'read', label: 'Reading', detail: '' });
       await expect(panel).toContainText('LAST TOOL USED');
       // Steps apart, as an agent's separate steps are: calls back to back
       // within the burst window are counted as one burst instead (#50).
@@ -816,16 +817,16 @@ test('a burst of tool calls reads as its count on the activity panel', async ({ 
     await expect(page.locator('.damocles-presence__caption')).toContainText('WORKING / read / 20 files');
 
     // Nineteen done, one still running: the panel stays up.
-    for (let n = 0; n < 19; n += 1) fixtureServer.broadcast({ type: 'activity', state: 'end', tool: 'read' });
+    for (let n = 0; n < 19; n += 1) fixtureServer.broadcast({ type: 'activity', state: 'end', tool: 'read', label: 'Reading', detail: '' });
     fixtureServer.broadcast({ type: 'activity', state: 'start', tool: 'grep', label: 'Searching', detail: 'TODO' });
     fixtureServer.broadcast({ type: 'activity', state: 'start', tool: 'grep', label: 'Searching', detail: 'FIXME' });
     await expect(tool).toHaveText('22 tool calls');
     await expect(detail).toHaveText('read 20 / grep 2');
     await expect(panel).toContainText('\u25cf RUNNING');
 
-    fixtureServer.broadcast({ type: 'activity', state: 'end', tool: 'read' });
-    fixtureServer.broadcast({ type: 'activity', state: 'end', tool: 'grep' });
-    fixtureServer.broadcast({ type: 'activity', state: 'end', tool: 'grep' });
+    fixtureServer.broadcast({ type: 'activity', state: 'end', tool: 'read', label: 'Reading', detail: '' });
+    fixtureServer.broadcast({ type: 'activity', state: 'end', tool: 'grep', label: 'Searching', detail: '' });
+    fixtureServer.broadcast({ type: 'activity', state: 'end', tool: 'grep', label: 'Searching', detail: '' });
     await expect(panel).toContainText('LAST TOOLS USED');
     await expect(panel).toContainText('\u25a0 DONE');
     await expect(tool).toHaveText('22 tool calls');
@@ -885,7 +886,7 @@ test('tool activity panel truncates long names and stays clear of the response',
     expect(railGeometry.toolTruncated).toBe(true);
     expect(railGeometry.detailTruncated).toBe(true);
 
-    fixtureServer.broadcast({ type: 'view', target: 'comms' });
+    fixtureServer.broadcast({ type: 'view', target: 'comms', reason: '' });
     const conversationPanel = page.locator('.tool-activity--conversation');
     await expect(page.locator('[data-scene="conversation"]')).toBeVisible();
     await expect(conversationPanel).toBeVisible();
@@ -930,7 +931,7 @@ test('tool activity clears when the route changes', async ({ page }) => {
     // A handoff is always an epoch frame followed by the new route's status;
     // the epoch reset is what ends the previous line's activity.
     fixtureServer.broadcast({ type: 'epoch', generation: 13 });
-    fixtureServer.broadcast({ type: 'status', route: 'damocles', routes: [{ value: 'damocles', label: 'Damocles' }] });
+    fixtureServer.broadcast(statusMessage({ route: 'damocles', label: 'Damocles' }));
     await expect.poll(async () => (await panel.count()) === 0).toBe(true);
   } finally {
     await fixtureServer.stop();
@@ -960,7 +961,7 @@ test('an agent say and a line error still show beside the live chat card', async
   try {
     await openLine(page, fixtureServer);
     fixtureServer.broadcast({ type: 'display', action: MAP_ACTION });
-    fixtureServer.broadcast({ type: 'spoken', entry: { role: 'agent', text: 'The map is up.', id: 'reply-1' } });
+    fixtureServer.broadcast({ type: 'spoken', entry: transcriptEntry({ role: 'agent', text: 'The map is up.', id: 'reply-1' }) });
     const live = page.locator('.live-chat-card');
     await expect(live).toContainText('The map is up.');
     // The spoken reply reads in the live card only, never twice.
@@ -1001,12 +1002,12 @@ test('no live chat card stands in before the first response', async ({ page }) =
   try {
     await openLine(page, fixtureServer);
     fixtureServer.broadcast({ type: 'display', action: MAP_ACTION });
-    fixtureServer.broadcast({ type: 'transcript', text: 'Show me the map.' });
+    fixtureServer.broadcast({ type: 'transcript', id: 'clip-1', text: 'Show me the map.' });
     await expect(page.locator('[data-scene="architecture"]')).toBeVisible();
     await expect(page.locator('.live-chat-card')).toHaveCount(0);
 
     // The conversation scene keeps its own open-line prompt.
-    fixtureServer.broadcast({ type: 'view', target: 'comms' });
+    fixtureServer.broadcast({ type: 'view', target: 'comms', reason: '' });
     await expect(page.locator('.conversation-answer__text')).toHaveText('Line open. Speak when ready.');
   } finally {
     await fixtureServer.stop();
@@ -1056,7 +1057,7 @@ test('a crowded phone rail scrolls instead of collapsing the response and the no
     fixtureServer.broadcast({ type: 'display', action: { op: 'show', id: 'm2', type: 'metric', role: 'secondary', data: { label: 'LATENCY', value: '182 ms' } } });
     fixtureServer.broadcast({ type: 'display', action: { op: 'show', id: 'p1', type: 'progress', role: 'secondary', data: { label: 'DEPLOY', value: 40 } } });
     fixtureServer.broadcast({ type: 'display', action: { op: 'show', id: 'n1', type: 'note', role: 'secondary', data: { segments: [{ text: 'The durable note.' }] } } });
-    fixtureServer.broadcast({ type: 'spoken', entry: { role: 'agent', text: 'The current response.', id: 'reply-1' } });
+    fixtureServer.broadcast({ type: 'spoken', entry: transcriptEntry({ role: 'agent', text: 'The current response.', id: 'reply-1' }) });
     fixtureServer.broadcast({ type: 'activity', state: 'start', tool: 'shell', label: 'Working', detail: 'ls' });
     await expect(page.locator('[data-testid="tool-activity"]')).toBeAttached();
 
@@ -1083,7 +1084,7 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 820, height: 1180 
     const fixtureServer = new DisplayFixtureServer({ initialGeneration: 7 });
     try {
       await openLine(page, fixtureServer, viewport);
-      fixtureServer.broadcast({ type: 'spoken', entry: { role: 'agent', text: 'Working on it.', id: 'reply-1' } });
+      fixtureServer.broadcast({ type: 'spoken', entry: transcriptEntry({ role: 'agent', text: 'Working on it.', id: 'reply-1' }) });
       fixtureServer.broadcast({ type: 'activity', state: 'start', tool: 'a_rather_long_tool_name_for_the_panel', label: 'Working', detail: 'a detail long enough to fill the panel width' });
       await expect(page.locator('[data-scene="conversation"]')).toBeVisible();
       await expect(page.locator('[data-testid="tool-activity"]')).toBeVisible();

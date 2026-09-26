@@ -79,7 +79,7 @@ are rejected.
 
 ## Runtime boundary
 
-`src/controller/validation.ts` validates untrusted browser or WebSocket payloads before they reach the reducer. Internal React code remains strongly typed, while the external `window.SwitchboardController` boundary rejects unknown operations, malformed IDs, oversized payloads, and model-controlled layout fields.
+`src/controller/validation.ts` validates untrusted browser or WebSocket payloads before they reach the reducer. From the backend, an action arrives as the `action` of a `display` message; `decodeServerMessage` in `src/protocol.ts` admits the message by its shape, and this validation then decides whether the action inside it is one the page will render. Internal React code remains strongly typed, while the external `window.SwitchboardController` boundary rejects unknown operations, malformed IDs, oversized payloads, and model-controlled layout fields.
 
 ## Deliberate omissions
 
