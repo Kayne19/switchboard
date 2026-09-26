@@ -1,5 +1,7 @@
 mod api;
 mod audio;
+mod delivery;
+mod display;
 mod history;
 mod lifecycle;
 mod models;

@@ -1,0 +1,203 @@
+{
+  "version": 1,
+  "description": "The display precedence rule -- which object is primary, its kind and title, and which ids are visible -- implemented once in the backend's DisplayProjection (apps/backend/src/display.rs, for /view and the snapshot) and once in the browser's sceneModel.ts (for rendering without a round trip). Each case is a sequence of display actions applied in order (sequence numbers 1..N) and the outcome both sides must compute: has_visual, the primary object's kind and title, and the visible ids in show order. Built from the existing tests on each side (apps/backend/tests/test_display.rs and apps/frontend/tests/unit/primaryMetricCluster.test.ts, plus the /view precedence tests in apps/backend/tests/test_api.rs) so this fixture pins the rule they already agreed on rather than a new one.",
+  "cases": [
+    {
+      "name": "later_primary_claim_demotes_earlier",
+      "actions": [
+        { "op": "show", "id": "a", "type": "diagram", "role": "primary", "data": { "title": "a" } },
+        { "op": "show", "id": "b", "type": "code", "role": "primary", "data": { "title": "b" } }
+      ],
+      "expected": { "has_visual": true, "kind": "code", "title": "b", "visible_ids": ["a", "b"] }
+    },
+    {
+      "name": "metric_cluster_join",
+      "actions": [
+        { "op": "show", "id": "m1", "type": "metric", "role": "primary", "data": { "label": "m1", "value": "10" } },
+        { "op": "show", "id": "m2", "type": "metric", "role": "primary", "data": { "label": "m2", "value": "10" } }
+      ],
+      "expected": { "has_visual": true, "kind": "metric", "title": "m1", "visible_ids": ["m1", "m2"] }
+    },
+    {
+      "name": "non_metric_claim_demotes_all_primary_metrics",
+      "actions": [
+        { "op": "show", "id": "m1", "type": "metric", "role": "primary", "data": { "label": "m1", "value": "10" } },
+        { "op": "show", "id": "m2", "type": "metric", "role": "primary", "data": { "label": "m2", "value": "10" } },
+        { "op": "show", "id": "c1", "type": "chart", "role": "primary", "data": { "title": "c1" } }
+      ],
+      "expected": { "has_visual": true, "kind": "chart", "title": "c1", "visible_ids": ["m1", "m2", "c1"] }
+    },
+    {
+      "name": "metric_claim_demotes_non_metric",
+      "actions": [
+        { "op": "show", "id": "d1", "type": "diagram", "role": "primary", "data": { "title": "d1" } },
+        { "op": "show", "id": "m1", "type": "metric", "role": "primary", "data": { "label": "m1", "value": "10" } }
+      ],
+      "expected": { "has_visual": true, "kind": "metric", "title": "m1", "visible_ids": ["d1", "m1"] }
+    },
+    {
+      "name": "removing_one_metric_leaves_others_primary",
+      "actions": [
+        { "op": "show", "id": "m1", "type": "metric", "role": "primary", "data": { "label": "m1", "value": "10" } },
+        { "op": "show", "id": "m2", "type": "metric", "role": "primary", "data": { "label": "m2", "value": "10" } },
+        { "op": "show", "id": "m3", "type": "metric", "role": "primary", "data": { "label": "m3", "value": "10" } },
+        { "op": "hide", "id": "m2" }
+      ],
+      "expected": { "has_visual": true, "kind": "metric", "title": "m1", "visible_ids": ["m1", "m3"] }
+    },
+    {
+      "name": "role_change_to_secondary_leaves_other_primary",
+      "actions": [
+        { "op": "show", "id": "m1", "type": "metric", "role": "primary", "data": { "label": "m1", "value": "10" } },
+        { "op": "show", "id": "m2", "type": "metric", "role": "primary", "data": { "label": "m2", "value": "10" } },
+        { "op": "show", "id": "m1", "type": "metric", "role": "secondary", "data": { "label": "m1", "value": "10" } }
+      ],
+      "expected": { "has_visual": true, "kind": "metric", "title": "m2", "visible_ids": ["m1", "m2"] }
+    },
+    {
+      "name": "claim_order_stable_on_update",
+      "actions": [
+        { "op": "show", "id": "m1", "type": "metric", "role": "primary", "data": { "label": "m1", "value": "10" } },
+        { "op": "show", "id": "m2", "type": "metric", "role": "primary", "data": { "label": "m2", "value": "10" } },
+        { "op": "show", "id": "m1", "type": "metric", "role": "primary", "data": { "label": "m1", "value": "49" } }
+      ],
+      "expected": { "has_visual": true, "kind": "metric", "title": "m1", "visible_ids": ["m1", "m2"] }
+    },
+    {
+      "name": "secondary_metric_appended_to_cluster_end",
+      "actions": [
+        { "op": "show", "id": "m-sec", "type": "metric", "role": "secondary", "data": { "label": "m-sec", "value": "10" } },
+        { "op": "show", "id": "m1", "type": "metric", "role": "primary", "data": { "label": "m1", "value": "10" } },
+        { "op": "show", "id": "m2", "type": "metric", "role": "primary", "data": { "label": "m2", "value": "10" } },
+        { "op": "show", "id": "m-sec", "type": "metric", "role": "primary", "data": { "label": "m-sec", "value": "10" } }
+      ],
+      "expected": { "has_visual": true, "kind": "metric", "title": "m1", "visible_ids": ["m-sec", "m1", "m2"] }
+    },
+    {
+      "name": "cluster_full_at_cap",
+      "actions": [
+        { "op": "show", "id": "m0", "type": "metric", "role": "primary", "data": { "label": "m0", "value": "1" } },
+        { "op": "show", "id": "m1", "type": "metric", "role": "primary", "data": { "label": "m1", "value": "1" } },
+        { "op": "show", "id": "m2", "type": "metric", "role": "primary", "data": { "label": "m2", "value": "1" } },
+        { "op": "show", "id": "m3", "type": "metric", "role": "primary", "data": { "label": "m3", "value": "1" } },
+        { "op": "show", "id": "m4", "type": "metric", "role": "primary", "data": { "label": "m4", "value": "1" } },
+        { "op": "show", "id": "m5", "type": "metric", "role": "primary", "data": { "label": "m5", "value": "1" } },
+        { "op": "show", "id": "m6", "type": "metric", "role": "primary", "data": { "label": "m6", "value": "1" } },
+        { "op": "show", "id": "m7", "type": "metric", "role": "primary", "data": { "label": "m7", "value": "1" } },
+        { "op": "show", "id": "m8", "type": "metric", "role": "primary", "data": { "label": "m8", "value": "1" } }
+      ],
+      "expected": {
+        "has_visual": true,
+        "kind": "metric",
+        "title": "m0",
+        "visible_ids": ["m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8"]
+      }
+    },
+    {
+      "name": "cluster_update_inside_full_cluster_evicts_nobody",
+      "actions": [
+        { "op": "show", "id": "m0", "type": "metric", "role": "primary", "data": { "label": "m0", "value": "1" } },
+        { "op": "show", "id": "m1", "type": "metric", "role": "primary", "data": { "label": "m1", "value": "1" } },
+        { "op": "show", "id": "m2", "type": "metric", "role": "primary", "data": { "label": "m2", "value": "1" } },
+        { "op": "show", "id": "m3", "type": "metric", "role": "primary", "data": { "label": "m3", "value": "1" } },
+        { "op": "show", "id": "m4", "type": "metric", "role": "primary", "data": { "label": "m4", "value": "1" } },
+        { "op": "show", "id": "m5", "type": "metric", "role": "primary", "data": { "label": "m5", "value": "1" } },
+        { "op": "show", "id": "m6", "type": "metric", "role": "primary", "data": { "label": "m6", "value": "1" } },
+        { "op": "show", "id": "m7", "type": "metric", "role": "primary", "data": { "label": "m7", "value": "1" } },
+        { "op": "show", "id": "m8", "type": "metric", "role": "primary", "data": { "label": "m8", "value": "1" } },
+        { "op": "show", "id": "m3", "type": "metric", "role": "primary", "data": { "label": "m3", "value": "2" } }
+      ],
+      "expected": {
+        "has_visual": true,
+        "kind": "metric",
+        "title": "m0",
+        "visible_ids": ["m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8"]
+      }
+    },
+    {
+      "name": "cluster_overflow_evicts_earliest_claimant",
+      "actions": [
+        { "op": "show", "id": "m0", "type": "metric", "role": "primary", "data": { "label": "m0", "value": "1" } },
+        { "op": "show", "id": "m1", "type": "metric", "role": "primary", "data": { "label": "m1", "value": "1" } },
+        { "op": "show", "id": "m2", "type": "metric", "role": "primary", "data": { "label": "m2", "value": "1" } },
+        { "op": "show", "id": "m3", "type": "metric", "role": "primary", "data": { "label": "m3", "value": "1" } },
+        { "op": "show", "id": "m4", "type": "metric", "role": "primary", "data": { "label": "m4", "value": "1" } },
+        { "op": "show", "id": "m5", "type": "metric", "role": "primary", "data": { "label": "m5", "value": "1" } },
+        { "op": "show", "id": "m6", "type": "metric", "role": "primary", "data": { "label": "m6", "value": "1" } },
+        { "op": "show", "id": "m7", "type": "metric", "role": "primary", "data": { "label": "m7", "value": "1" } },
+        { "op": "show", "id": "m8", "type": "metric", "role": "primary", "data": { "label": "m8", "value": "1" } },
+        { "op": "show", "id": "m3", "type": "metric", "role": "primary", "data": { "label": "m3", "value": "2" } },
+        { "op": "show", "id": "extra", "type": "metric", "role": "primary", "data": { "label": "extra", "value": "1" } }
+      ],
+      "expected": {
+        "has_visual": true,
+        "kind": "metric",
+        "title": "m1",
+        "visible_ids": ["m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "extra"]
+      }
+    },
+    {
+      "name": "primary_type_change_reclaims_role",
+      "actions": [
+        { "op": "show", "id": "m1", "type": "metric", "role": "primary", "data": { "title": "m1", "label": "m1" } },
+        { "op": "show", "id": "m2", "type": "metric", "role": "primary", "data": { "title": "m2", "label": "m2" } },
+        { "op": "show", "id": "m1", "type": "chart", "data": { "title": "m1", "label": "m1" } }
+      ],
+      "expected": { "has_visual": true, "kind": "chart", "title": "m1", "visible_ids": ["m1", "m2"] }
+    },
+    {
+      "name": "first_non_ambient_wins_without_focus_or_primary",
+      "actions": [
+        { "op": "show", "id": "first", "type": "diagram", "data": { "title": "diagram-title" } },
+        { "op": "show", "id": "second", "type": "document", "data": { "subject": "document-title" } }
+      ],
+      "expected": { "has_visual": true, "kind": "diagram", "title": "diagram-title", "visible_ids": ["first", "second"] }
+    },
+    {
+      "name": "role_primary_wins_even_shown_first",
+      "actions": [
+        { "op": "show", "id": "first", "type": "document", "role": "primary", "data": { "subject": "document-title" } },
+        { "op": "show", "id": "second", "type": "diagram", "data": { "title": "diagram-title" } }
+      ],
+      "expected": { "has_visual": true, "kind": "document", "title": "document-title", "visible_ids": ["first", "second"] }
+    },
+    {
+      "name": "focus_overrides_primary_claim",
+      "actions": [
+        { "op": "show", "id": "c1", "type": "chart", "role": "primary", "data": { "title": "c1" } },
+        { "op": "show", "id": "c2", "type": "document", "data": { "subject": "c2" } },
+        { "op": "focus", "id": "c2" }
+      ],
+      "expected": { "has_visual": true, "kind": "document", "title": "c2", "visible_ids": ["c1", "c2"] }
+    },
+    {
+      "name": "hide_falls_back_to_remaining_object",
+      "actions": [
+        { "op": "show", "id": "a", "type": "chart", "role": "primary", "data": { "title": "a" } },
+        { "op": "show", "id": "b", "type": "document", "data": { "subject": "b" } },
+        { "op": "hide", "id": "a" }
+      ],
+      "expected": { "has_visual": true, "kind": "document", "title": "b", "visible_ids": ["b"] }
+    },
+    {
+      "name": "ambient_objects_are_skipped_for_fallback_primary",
+      "actions": [
+        { "op": "show", "id": "amb1", "type": "note", "role": "ambient", "data": { "title": "amb1" } },
+        { "op": "show", "id": "real1", "type": "chart", "data": { "title": "real1" } }
+      ],
+      "expected": { "has_visual": true, "kind": "chart", "title": "real1", "visible_ids": ["amb1", "real1"] }
+    },
+    {
+      "name": "all_ambient_falls_back_to_first_object_overall",
+      "actions": [
+        { "op": "show", "id": "amb1", "type": "note", "role": "ambient", "data": { "title": "amb1" } }
+      ],
+      "expected": { "has_visual": true, "kind": "note", "title": "amb1", "visible_ids": ["amb1"] }
+    },
+    {
+      "name": "empty_stage_has_no_visual",
+      "actions": [],
+      "expected": { "has_visual": false, "kind": null, "title": null, "visible_ids": [] }
+    }
+  ]
+}
