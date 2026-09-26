@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
-use tokio::sync::{watch, Mutex, RwLock, Semaphore};
+use tokio::sync::{watch, Mutex, Semaphore};
 use tokio::time::timeout;
 
 const STDOUT_LIMIT: usize = 64 * 1024;
@@ -110,8 +110,24 @@ pub enum ArtifactDecision {
 pub struct ProjectReadiness {
     pub prepare_report: Option<PrepareReport>,
     pub artifact_decision: ArtifactDecision,
-    pub catalog: Option<ModelCatalog>,
+    /// The host's catalog; `available: false` when listing failed. Whether a
+    /// requested model can still be used is `ModelCatalog::resolve`'s call,
+    /// not prewarm's.
+    pub catalog: ModelCatalog,
     pub transport_generation: u64,
+}
+
+/// Everything a project leg launches with, all of it settled by startup work,
+/// so a transfer or redial does no setup of its own.
+#[derive(Clone, Debug)]
+pub struct LaunchPlan {
+    pub prepare_report: Option<PrepareReport>,
+    pub catalog: ModelCatalog,
+    /// The extension to load with `-e`. `None` launches without one, and the
+    /// agent is briefed to end its turn with the return sentinel instead.
+    pub extension: Option<String>,
+    /// How to reach a remote project's host; `None` for a local project.
+    pub ssh: Option<SshClientOptions>,
 }
 
 #[derive(Debug)]
@@ -135,12 +151,15 @@ pub struct PrewarmInner {
     remote_cache_dir: String,
     registry: Registry,
 
-    transports: RwLock<HashMap<String, Arc<Mutex<HostTransportInner>>>>,
-    transport_watchers: RwLock<HashMap<String, watch::Receiver<TransportState>>>,
+    // One entry per host, catalog, staging host, and project in the
+    // registry, all created at construction and never added to afterwards,
+    // so they need no lock of their own; each state lives in its channel.
+    transports: HashMap<String, Arc<Mutex<HostTransportInner>>>,
+    transport_watchers: HashMap<String, watch::Receiver<TransportState>>,
 
-    catalogs: RwLock<HashMap<CatalogKey, watch::Sender<CatalogState>>>,
-    artifacts: RwLock<HashMap<String, watch::Sender<ArtifactState>>>,
-    prepares: RwLock<HashMap<String, watch::Sender<PrepareState>>>,
+    catalogs: HashMap<CatalogKey, watch::Sender<CatalogState>>,
+    artifacts: HashMap<String, watch::Sender<ArtifactState>>,
+    prepares: HashMap<String, watch::Sender<PrepareState>>,
 
     cwd_semaphores: Mutex<HashMap<(String, String), Arc<Semaphore>>>,
     ssh_semaphore: Arc<Semaphore>,
@@ -218,7 +237,17 @@ async fn drain_bounded<R: tokio::io::AsyncRead + Unpin>(reader: &mut R, limit: u
 }
 
 impl Prewarm {
-    pub async fn start(config: &crate::Config, registry: &Registry) -> Self {
+    /// Registers every piece of startup work the registry needs and starts
+    /// it in the background. Must be called inside the Tokio runtime.
+    pub fn start(config: &crate::Config, registry: &Registry) -> Self {
+        let prewarm = Self::register(config, registry);
+        prewarm.spawn_jobs();
+        prewarm
+    }
+
+    /// A state channel for every remote host, catalog, staging host, and
+    /// project in the registry, all `Pending`, with no work started.
+    fn register(config: &crate::Config, registry: &Registry) -> Self {
         let (shutdown_tx, _) = watch::channel(false);
 
         let locks_dir = config.state_dir.join("ssh").join("locks");
@@ -226,30 +255,78 @@ impl Prewarm {
         let _ = ensure_private_dir(&locks_dir);
         let _ = ensure_private_dir(&control_dir);
 
-        let inner = Arc::new(PrewarmInner {
-            state_dir: config.state_dir.clone(),
-            ssh_program: config.ssh_program.clone(),
-            agent_extension_file: config.agent_extension.clone(),
-            remote_cache_dir: config.remote_cache_dir.clone(),
-            registry: registry.clone(),
+        let mut transports = HashMap::new();
+        let mut transport_watchers = HashMap::new();
+        let mut catalogs = HashMap::new();
+        let mut artifacts = HashMap::new();
+        let mut prepares = HashMap::new();
+        for project in &registry.projects {
+            if let Some(host) = project.canonical_host() {
+                if !transports.contains_key(host) {
+                    let (state_tx, state_rx) = watch::channel(TransportState::Pending);
+                    let transport = HostTransportInner {
+                        state_tx,
+                        lock_file: None,
+                        master: None,
+                        generation: 1,
+                        control_path: control_dir.join(format!("{}.sock", host_hash(host))),
+                    };
+                    transports.insert(host.to_owned(), Arc::new(Mutex::new(transport)));
+                    transport_watchers.insert(host.to_owned(), state_rx);
+                }
+                if project.stage_extension {
+                    artifacts
+                        .entry(host.to_owned())
+                        .or_insert_with(|| watch::channel(ArtifactState::Pending).0);
+                }
+            }
+            catalogs
+                .entry(CatalogKey::for_project(project))
+                .or_insert_with(|| watch::channel(CatalogState::Pending).0);
+            prepares.insert(project.id.clone(), watch::channel(PrepareState::Pending).0);
+        }
 
-            transports: RwLock::new(HashMap::new()),
-            transport_watchers: RwLock::new(HashMap::new()),
+        Self {
+            inner: Arc::new(PrewarmInner {
+                state_dir: config.state_dir.clone(),
+                ssh_program: config.ssh_program.clone(),
+                agent_extension_file: config.agent_extension.clone(),
+                remote_cache_dir: config.remote_cache_dir.clone(),
+                registry: registry.clone(),
 
-            catalogs: RwLock::new(HashMap::new()),
-            artifacts: RwLock::new(HashMap::new()),
-            prepares: RwLock::new(HashMap::new()),
+                transports,
+                transport_watchers,
 
-            cwd_semaphores: Mutex::new(HashMap::new()),
-            ssh_semaphore: Arc::new(Semaphore::new(10)),
-            prepare_semaphore: Arc::new(Semaphore::new(5)),
+                catalogs,
+                artifacts,
+                prepares,
 
-            shutdown_tx,
-        });
+                cwd_semaphores: Mutex::new(HashMap::new()),
+                ssh_semaphore: Arc::new(Semaphore::new(10)),
+                prepare_semaphore: Arc::new(Semaphore::new(5)),
 
-        let prewarm = Self { inner };
-        prewarm.schedule_all().await;
-        prewarm
+                shutdown_tx,
+            }),
+        }
+    }
+
+    fn spawn_jobs(&self) {
+        for host in self.inner.transports.keys() {
+            let (this, host) = (self.clone(), host.clone());
+            tokio::spawn(async move { this.run_transport_manager(&host).await });
+        }
+        for key in self.inner.catalogs.keys() {
+            let (this, key) = (self.clone(), key.clone());
+            tokio::spawn(async move { this.run_catalog_job(key).await });
+        }
+        for host in self.inner.artifacts.keys() {
+            let (this, host) = (self.clone(), host.clone());
+            tokio::spawn(async move { this.run_artifact_job(&host).await });
+        }
+        for project in &self.inner.registry.projects {
+            let (this, project) = (self.clone(), project.clone());
+            tokio::spawn(async move { this.run_prepare_job(project).await });
+        }
     }
 
     pub fn client_for(&self, host: &str, generation: u64) -> Result<SshClientOptions, String> {
@@ -261,12 +338,9 @@ impl Prewarm {
         }
 
         let target = ValidatedSshTarget::new(canonical).map_err(|e| e.to_string())?;
-        let watchers = self
+        let watcher = self
             .inner
             .transport_watchers
-            .try_read()
-            .map_err(|_| format!("transport watchers lock busy for host {canonical:?}"))?;
-        let watcher = watchers
             .get(canonical)
             .ok_or_else(|| format!("no transport registered for host {canonical:?}"))?;
 
@@ -304,8 +378,9 @@ impl Prewarm {
         let prepare_report = self.await_prepare_settled(&project.id).await?;
 
         // 3. Wait for catalog
-        let catalog_key = CatalogKey::for_project(project);
-        let catalog = self.await_catalog(&catalog_key, &project.model).await?;
+        let catalog = self
+            .await_catalog(&CatalogKey::for_project(project))
+            .await?;
 
         // 4. Wait for artifact decision if needed
         let artifact_decision = if project.is_remote() && project.stage_extension {
@@ -322,36 +397,35 @@ impl Prewarm {
         })
     }
 
-    pub fn prepare_report(&self, project_id: &str) -> Option<PrepareReport> {
-        let prepares = self.inner.prepares.try_read().ok()?;
-        if let Some(rx) = prepares.get(project_id) {
-            if let PrepareState::Settled { report } = rx.borrow().clone() {
-                return Some(report);
+    /// Waits for the project's startup work and turns it into what the leg
+    /// launches with. Errors name the piece of setup that is not usable.
+    pub async fn launch_plan(&self, project: &Project) -> Result<LaunchPlan, String> {
+        let readiness = self.await_project(project).await?;
+        let ssh = match project.canonical_host() {
+            Some(host) => Some(self.client_for(host, readiness.transport_generation)?),
+            None => None,
+        };
+        let extension = if project.is_remote() {
+            match readiness.artifact_decision {
+                ArtifactDecision::Ready(path) => Some(path),
+                ArtifactDecision::Sentinel(reason) => {
+                    tracing::info!(project = %project.id, %reason, "launching without the switchboard extension; the agent is briefed to use the return sentinel");
+                    None
+                }
+                ArtifactDecision::None => None,
             }
-        }
-        None
-    }
-
-    pub fn catalog_snapshot(&self, project: &Project) -> Option<ModelCatalog> {
-        let catalog_key = CatalogKey::for_project(project);
-        let catalogs = self.inner.catalogs.try_read().ok()?;
-        if let Some(rx) = catalogs.get(&catalog_key) {
-            if let CatalogState::Ready { snapshot, .. } = rx.borrow().clone() {
-                return Some(snapshot);
-            }
-        }
-        None
-    }
-
-    pub fn artifact_path(&self, host: &str) -> Option<String> {
-        let canonical = host.trim();
-        let artifacts = self.inner.artifacts.try_read().ok()?;
-        if let Some(rx) = artifacts.get(canonical) {
-            if let ArtifactState::Ready { path, .. } = rx.borrow().clone() {
-                return Some(path);
-            }
-        }
-        None
+        } else {
+            self.inner
+                .agent_extension_file
+                .clone()
+                .filter(|path| Path::new(path).is_file())
+        };
+        Ok(LaunchPlan {
+            prepare_report: readiness.prepare_report,
+            catalog: readiness.catalog,
+            extension,
+            ssh,
+        })
     }
 
     async fn await_transport_ready(&self, canonical_host: &str) -> Result<u64, String> {
@@ -359,15 +433,12 @@ impl Prewarm {
             return Ok(0);
         }
 
-        let rx = {
-            let watchers = self.inner.transport_watchers.read().await;
-            watchers
-                .get(canonical_host)
-                .cloned()
-                .ok_or_else(|| format!("no transport found for host {canonical_host:?}"))?
-        };
-
-        let mut rx = rx;
+        let mut rx = self
+            .inner
+            .transport_watchers
+            .get(canonical_host)
+            .cloned()
+            .ok_or_else(|| format!("no transport found for host {canonical_host:?}"))?;
         loop {
             let state = rx.borrow().clone();
             match state {
@@ -388,13 +459,12 @@ impl Prewarm {
         &self,
         project_id: &str,
     ) -> Result<Option<PrepareReport>, String> {
-        let mut rx = {
-            let prepares = self.inner.prepares.read().await;
-            prepares
-                .get(project_id)
-                .map(|tx| tx.subscribe())
-                .ok_or_else(|| format!("no prepare task found for project {project_id}"))?
-        };
+        let mut rx = self
+            .inner
+            .prepares
+            .get(project_id)
+            .map(|tx| tx.subscribe())
+            .ok_or_else(|| format!("no prepare task found for project {project_id}"))?;
 
         loop {
             let state = rx.borrow().clone();
@@ -414,36 +484,20 @@ impl Prewarm {
         }
     }
 
-    async fn await_catalog(
-        &self,
-        key: &CatalogKey,
-        requested_model: &Option<String>,
-    ) -> Result<Option<ModelCatalog>, String> {
-        let mut rx = {
-            let catalogs = self.inner.catalogs.read().await;
-            catalogs
-                .get(key)
-                .map(|tx| tx.subscribe())
-                .ok_or_else(|| format!("no catalog task for key {:?}", key.to_key_string()))?
-        };
+    async fn await_catalog(&self, key: &CatalogKey) -> Result<ModelCatalog, String> {
+        let mut rx = self
+            .inner
+            .catalogs
+            .get(key)
+            .map(|tx| tx.subscribe())
+            .ok_or_else(|| format!("no catalog task for key {:?}", key.to_key_string()))?;
 
         loop {
             let state = rx.borrow().clone();
             match state {
-                CatalogState::Ready { snapshot, .. } => return Ok(Some(snapshot)),
+                CatalogState::Ready { snapshot, .. } => return Ok(snapshot),
                 CatalogState::Unavailable { reason } => {
-                    // Check if requested model contains slash (qualified name)
-                    let is_qualified = requested_model
-                        .as_deref()
-                        .map(|m| m.contains('/'))
-                        .unwrap_or(false);
-                    if is_qualified {
-                        return Ok(None);
-                    }
-                    return Err(format!(
-                        "catalog unavailable for key {:?}: {reason}",
-                        key.to_key_string()
-                    ));
+                    return Ok(ModelCatalog::unavailable(reason));
                 }
                 _ => {
                     if rx.changed().await.is_err() {
@@ -458,13 +512,12 @@ impl Prewarm {
     }
 
     async fn await_artifact(&self, canonical_host: &str) -> Result<ArtifactDecision, String> {
-        let mut rx = {
-            let artifacts = self.inner.artifacts.read().await;
-            artifacts
-                .get(canonical_host)
-                .map(|tx| tx.subscribe())
-                .ok_or_else(|| format!("no artifact task for host {canonical_host:?}"))?
-        };
+        let mut rx = self
+            .inner
+            .artifacts
+            .get(canonical_host)
+            .map(|tx| tx.subscribe())
+            .ok_or_else(|| format!("no artifact task for host {canonical_host:?}"))?;
 
         loop {
             let state = rx.borrow().clone();
@@ -483,104 +536,6 @@ impl Prewarm {
         }
     }
 
-    async fn schedule_all(&self) {
-        // Collect distinct canonical hosts
-        let mut remote_hosts = std::collections::HashSet::new();
-        let mut catalog_keys = std::collections::HashSet::new();
-        let mut staging_hosts = std::collections::HashSet::new();
-
-        for project in &self.inner.registry.projects {
-            let host = project.canonical_host().unwrap_or("");
-            if !host.is_empty() {
-                remote_hosts.insert(host.to_string());
-                if project.stage_extension {
-                    staging_hosts.insert(host.to_string());
-                }
-            }
-            catalog_keys.insert(CatalogKey::for_project(project));
-        }
-
-        // Initialize state channels
-        for host in &remote_hosts {
-            let (tx, rx) = watch::channel(TransportState::Pending);
-            let control_path = self
-                .inner
-                .state_dir
-                .join("ssh")
-                .join("control")
-                .join(format!("{}.sock", host_hash(host)));
-
-            let inner_transport = HostTransportInner {
-                state_tx: tx,
-                lock_file: None,
-                master: None,
-                generation: 1,
-                control_path,
-            };
-            self.inner
-                .transports
-                .write()
-                .await
-                .insert(host.clone(), Arc::new(Mutex::new(inner_transport)));
-            self.inner
-                .transport_watchers
-                .write()
-                .await
-                .insert(host.clone(), rx);
-        }
-
-        for key in &catalog_keys {
-            let (tx, _) = watch::channel(CatalogState::Pending);
-            self.inner.catalogs.write().await.insert(key.clone(), tx);
-        }
-
-        for host in &staging_hosts {
-            let (tx, _) = watch::channel(ArtifactState::Pending);
-            self.inner.artifacts.write().await.insert(host.clone(), tx);
-        }
-
-        for project in &self.inner.registry.projects {
-            let (tx, _) = watch::channel(PrepareState::Pending);
-            self.inner
-                .prepares
-                .write()
-                .await
-                .insert(project.id.clone(), tx);
-        }
-
-        // Spawn transport managers for remote hosts
-        for host in remote_hosts {
-            let this = self.clone();
-            tokio::spawn(async move {
-                this.run_transport_manager(&host).await;
-            });
-        }
-
-        // Spawn catalog prewarm tasks
-        for key in catalog_keys {
-            let this = self.clone();
-            tokio::spawn(async move {
-                this.run_catalog_job(key).await;
-            });
-        }
-
-        // Spawn staging prewarm tasks
-        for host in staging_hosts {
-            let this = self.clone();
-            tokio::spawn(async move {
-                this.run_artifact_job(&host).await;
-            });
-        }
-
-        // Spawn prepare tasks
-        for project in self.inner.registry.projects.clone() {
-            let this = self.clone();
-            tokio::spawn(async move {
-                this.run_prepare_job(project).await;
-            });
-        }
-    }
-
     async fn run_transport_manager(&self, host: &str) {
         let lock_path = self
             .inner
@@ -589,10 +544,7 @@ impl Prewarm {
             .join("locks")
             .join(format!("{}.lock", host_hash(host)));
 
-        let transport_lock = {
-            let transports = self.inner.transports.read().await;
-            transports.get(host).cloned().unwrap()
-        };
+        let transport_lock = Arc::clone(&self.inner.transports[host]);
 
         let mut shutdown_rx = self.inner.shutdown_tx.subscribe();
         const MAX_ATTEMPTS: u32 = 3;
@@ -909,10 +861,7 @@ impl Prewarm {
     }
 
     async fn run_catalog_job(&self, key: CatalogKey) {
-        let tx = {
-            let catalogs = self.inner.catalogs.read().await;
-            catalogs.get(&key).cloned().unwrap()
-        };
+        let tx = &self.inner.catalogs[&key];
 
         let host = key.host.as_deref().unwrap_or("");
         let mut prior_snapshot: Option<ModelCatalog> = None;
@@ -990,6 +939,7 @@ impl Prewarm {
                 c
             };
 
+            cmd.stdin(std::process::Stdio::null());
             cmd.stdout(std::process::Stdio::piped());
             cmd.stderr(std::process::Stdio::piped());
 
@@ -1109,10 +1059,7 @@ impl Prewarm {
     }
 
     async fn run_artifact_job(&self, host: &str) {
-        let tx = {
-            let artifacts = self.inner.artifacts.read().await;
-            artifacts.get(host).cloned().unwrap()
-        };
+        let tx = &self.inner.artifacts[host];
         let mut shutdown_rx = self.inner.shutdown_tx.subscribe();
 
         let source_file = match &self.inner.agent_extension_file {
@@ -1373,10 +1320,7 @@ impl Prewarm {
     }
 
     async fn run_prepare_job(&self, project: Project) {
-        let tx = {
-            let prepares = self.inner.prepares.read().await;
-            prepares.get(&project.id).cloned().unwrap()
-        };
+        let tx = &self.inner.prepares[&project.id];
         let mut shutdown_rx = self.inner.shutdown_tx.subscribe();
 
         let timestamp_unix_ms = std::time::SystemTime::now()
@@ -1457,6 +1401,7 @@ impl Prewarm {
             client_opts.remote_command(&remote)
         };
 
+        cmd.stdin(std::process::Stdio::null());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
         isolate_process(&mut cmd);
@@ -1547,10 +1492,79 @@ impl Prewarm {
 
     pub async fn shutdown(&self) {
         let _ = self.inner.shutdown_tx.send_replace(true);
-        let transports = self.inner.transports.read().await;
-        for (host, transport_lock) in transports.iter() {
+        for (host, transport_lock) in &self.inner.transports {
             self.cleanup_transport(host, transport_lock).await;
         }
+    }
+}
+
+#[cfg(test)]
+impl Prewarm {
+    /// A prewarm whose startup work has already finished, with no jobs
+    /// running: every host transport ready at generation 1, every catalog
+    /// `catalog`, every prepare an empty success, and every staging host on
+    /// the sentinel. Tests change one piece with the `settle_*` methods and
+    /// then drive the PBX through the same reads production uses.
+    pub(crate) fn settled(
+        config: &crate::Config,
+        registry: &Registry,
+        catalog: ModelCatalog,
+    ) -> Self {
+        let prewarm = Self::register(config, registry);
+        for (host, transport) in &prewarm.inner.transports {
+            let control_path = transport.try_lock().unwrap().control_path.clone();
+            prewarm.settle_transport(
+                host,
+                TransportState::Ready {
+                    generation: 1,
+                    control_path: Some(control_path),
+                },
+            );
+        }
+        for sender in prewarm.inner.catalogs.values() {
+            sender.send_replace(CatalogState::Ready {
+                snapshot: catalog.clone(),
+                degraded_reason: None,
+            });
+        }
+        for sender in prewarm.inner.prepares.values() {
+            sender.send_replace(PrepareState::Settled {
+                report: PrepareReport {
+                    timestamp_unix_ms: 0,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: Some(0),
+                    duration_ms: 0,
+                    source: PrepareSource::Startup,
+                    outcome: PrepareOutcome::Success,
+                },
+            });
+        }
+        for host in prewarm.inner.artifacts.keys() {
+            prewarm.settle_artifact(
+                host,
+                ArtifactState::Sentinel {
+                    reason: "not staged in this test".into(),
+                },
+            );
+        }
+        prewarm
+    }
+
+    pub(crate) fn settle_transport(&self, host: &str, state: TransportState) {
+        self.inner.transports[host]
+            .try_lock()
+            .unwrap()
+            .state_tx
+            .send_replace(state);
+    }
+
+    pub(crate) fn settle_artifact(&self, host: &str, state: ArtifactState) {
+        self.inner.artifacts[host].send_replace(state);
+    }
+
+    pub(crate) fn settle_catalog(&self, project: &Project, state: CatalogState) {
+        self.inner.catalogs[&CatalogKey::for_project(project)].send_replace(state);
     }
 }
 

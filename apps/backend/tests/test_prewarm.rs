@@ -118,7 +118,7 @@ async fn local_catalog_and_prepare_prewarm() {
     let mut config = test_config(&root);
     config.pi_binary = runtime.to_string_lossy().into_owned();
 
-    let prewarm = Prewarm::start(&config, &registry).await;
+    let prewarm = Prewarm::start(&config, &registry);
 
     let readiness = prewarm
         .await_project(&project)
@@ -130,7 +130,7 @@ async fn local_catalog_and_prepare_prewarm() {
     assert_eq!(prep.outcome, PrepareOutcome::Success);
     assert!(prep.stdout.contains("prepare_done"));
 
-    let cat = readiness.catalog.expect("catalog");
+    let cat = readiness.catalog;
     assert!(cat.available);
     assert_eq!(cat.entries.len(), 1);
 
@@ -176,14 +176,9 @@ async fn host_deduplication_and_canonicalization() {
     let mut config = test_config(&root);
     config.ssh_program = ssh.to_string_lossy().into_owned();
 
-    let prewarm = Prewarm::start(&config, &registry).await;
-    assert_eq!(prewarm.inner.transports.read().await.len(), 1);
-    assert!(prewarm
-        .inner
-        .transports
-        .read()
-        .await
-        .contains_key("host.example.com"));
+    let prewarm = Prewarm::start(&config, &registry);
+    assert_eq!(prewarm.inner.transports.len(), 1);
+    assert!(prewarm.inner.transports.contains_key("host.example.com"));
 
     prewarm.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
@@ -221,7 +216,7 @@ async fn remote_transport_degraded_on_ssh_failure_returns_error_to_await_project
     let mut config = test_config(&root);
     config.ssh_program = ssh.to_string_lossy().into_owned();
 
-    let prewarm = Prewarm::start(&config, &registry).await;
+    let prewarm = Prewarm::start(&config, &registry);
 
     let res = timeout(Duration::from_secs(5), prewarm.await_project(&proj)).await;
     assert!(
@@ -270,7 +265,7 @@ async fn failed_prepare_is_terminal_and_launchable() {
     let mut config = test_config(&root);
     config.pi_binary = runtime.to_string_lossy().into_owned();
 
-    let prewarm = Prewarm::start(&config, &registry).await;
+    let prewarm = Prewarm::start(&config, &registry);
     let readiness = prewarm
         .await_project(&project)
         .await
@@ -313,7 +308,7 @@ async fn startup_returns_before_delayed_work() {
     config.pi_binary = runtime.to_string_lossy().into_owned();
 
     let start_time = Instant::now();
-    let prewarm = Prewarm::start(&config, &registry).await;
+    let prewarm = Prewarm::start(&config, &registry);
     let elapsed = start_time.elapsed();
 
     assert!(elapsed < Duration::from_millis(150));
@@ -354,13 +349,11 @@ async fn transport_generation_mismatch_and_reconnect() {
     let mut config = test_config(&root);
     config.ssh_program = ssh.to_string_lossy().into_owned();
 
-    let prewarm = Prewarm::start(&config, &registry).await;
+    let prewarm = Prewarm::start(&config, &registry);
 
     let transport_lock = prewarm
         .inner
         .transports
-        .read()
-        .await
         .get("remote.example.com")
         .cloned()
         .unwrap();
@@ -427,13 +420,11 @@ async fn injected_ssh_program_in_prewarm() {
     let mut config = test_config(&root);
     config.ssh_program = custom_ssh.to_string_lossy().into_owned();
 
-    let prewarm = Prewarm::start(&config, &registry).await;
+    let prewarm = Prewarm::start(&config, &registry);
 
     let transport_lock = prewarm
         .inner
         .transports
-        .read()
-        .await
         .get("remote.example.com")
         .cloned()
         .unwrap();
@@ -489,7 +480,7 @@ async fn prepare_caching_nonzero_exit_not_retried() {
     let mut config = test_config(&root);
     config.pi_binary = runtime.to_string_lossy().into_owned();
 
-    let prewarm = Prewarm::start(&config, &registry).await;
+    let prewarm = Prewarm::start(&config, &registry);
 
     let r1 = prewarm.await_project(&project).await.unwrap();
     let prep1 = r1.prepare_report.unwrap();
@@ -542,7 +533,7 @@ async fn no_duplicate_prewarm_work_on_concurrent_or_late_transfers() {
     let mut config = test_config(&root);
     config.pi_binary = runtime.to_string_lossy().into_owned();
 
-    let prewarm = Prewarm::start(&config, &registry).await;
+    let prewarm = Prewarm::start(&config, &registry);
 
     let p_clone1 = project.clone();
     let p_clone2 = project.clone();
@@ -606,7 +597,7 @@ async fn prepare_shutdown_reaps_child_process() {
     let registry = Registry::new(vec![project]);
     let mut config = test_config(&root);
     config.pi_binary = runtime.to_string_lossy().into_owned();
-    let prewarm = Prewarm::start(&config, &registry).await;
+    let prewarm = Prewarm::start(&config, &registry);
 
     for _ in 0..100 {
         if pid_file.exists() {
@@ -671,7 +662,7 @@ async fn stage_extension_opt_out() {
     config.ssh_program = ssh.to_string_lossy().into_owned();
     config.agent_extension = Some(ext_file.to_string_lossy().into_owned());
 
-    let prewarm = Prewarm::start(&config, &registry).await;
+    let prewarm = Prewarm::start(&config, &registry);
 
     let readiness = prewarm.await_project(&project).await.unwrap();
     assert!(matches!(
@@ -831,7 +822,7 @@ async fn bounded_shutdown() {
     let mut config = test_config(&root);
     config.ssh_program = ssh.to_string_lossy().into_owned();
 
-    let prewarm = Prewarm::start(&config, &registry).await;
+    let prewarm = Prewarm::start(&config, &registry);
 
     let start = Instant::now();
     prewarm.shutdown().await;
@@ -839,5 +830,170 @@ async fn bounded_shutdown() {
 
     assert!(elapsed < Duration::from_secs(1));
 
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// An ssh stand-in whose master checks always succeed (so prewarm adopts a
+/// "live" master) and which answers every remote command with `on_command`,
+/// given the command as `$command`.
+fn staging_ssh(root: &Path, on_command: &str) -> PathBuf {
+    let ssh = root.join("fake-staging-ssh");
+    write_executable_script(
+        &ssh,
+        &format!(
+            "for arg in \"$@\"; do if [ \"$arg\" = \"-O\" ]; then exit 0; fi; done\nfor command; do :; done\n{on_command}\n"
+        ),
+    );
+    ssh
+}
+
+fn staged_project(stage_extension: bool) -> Project {
+    Project {
+        id: "remote-proj".into(),
+        description: String::new(),
+        aliases: vec![],
+        host: Some("stage.example.com".into()),
+        cwd: "/srv/remote-proj".into(),
+        runtime: "pi".into(),
+        model: Some("custom/pi-model".into()),
+        stage_extension,
+        extra_args: vec![],
+        prepare: String::new(),
+    }
+}
+
+async fn staged_decision(config: &crate::Config, project: &Project) -> ArtifactDecision {
+    let prewarm = Prewarm::start(config, &Registry::new(vec![project.clone()]));
+    let readiness = timeout(Duration::from_secs(10), prewarm.await_project(project))
+        .await
+        .expect("staging should settle")
+        .expect("the host transport is live");
+    prewarm.shutdown().await;
+    readiness.artifact_decision
+}
+
+#[tokio::test]
+async fn staging_copies_the_extension_to_the_host_and_reports_its_path() {
+    let root = std::env::temp_dir().join(format!("switchboard-test-stage-{}", uuid_like_test()));
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let extension = root.join("agent.ts");
+    std::fs::write(&extension, "export default 'staged';\n").unwrap();
+    let ssh = staging_ssh(
+        &root,
+        &format!(
+            "HOME={}; export HOME\nexec sh -c \"$command\"",
+            crate::pi_client::shell_quote(&home.to_string_lossy())
+        ),
+    );
+    let config = crate::Config::for_tests(&[
+        (
+            "SWITCHBOARD_STATE_DIR",
+            &root.join("state").to_string_lossy(),
+        ),
+        ("SWITCHBOARD_SSH_PROGRAM", &ssh.to_string_lossy()),
+        ("SWITCHBOARD_AGENT_EXTENSION", &extension.to_string_lossy()),
+    ]);
+
+    let ArtifactDecision::Ready(staged) = staged_decision(&config, &staged_project(true)).await
+    else {
+        panic!("the extension should have been staged");
+    };
+
+    assert_eq!(
+        Path::new(&staged),
+        home.join(".cache/switchboard/extensions/agent.ts")
+    );
+    assert_eq!(
+        std::fs::read_to_string(&staged).unwrap(),
+        "export default 'staged';\n"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn staging_survives_a_remote_that_stops_reading_before_the_extension_ends() {
+    let root = std::env::temp_dir().join(format!(
+        "switchboard-test-stage-early-close-{}",
+        uuid_like_test()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    // Far larger than a pipe buffer, so a remote that stops reading early is
+    // guaranteed to break the write rather than merely maybe breaking it.
+    let extension = root.join("agent.ts");
+    std::fs::write(&extension, "x".repeat(1 << 20)).unwrap();
+    let config_with = |ssh: &Path| {
+        crate::Config::for_tests(&[
+            (
+                "SWITCHBOARD_STATE_DIR",
+                &root.join("state").to_string_lossy(),
+            ),
+            ("SWITCHBOARD_SSH_PROGRAM", &ssh.to_string_lossy()),
+            ("SWITCHBOARD_AGENT_EXTENSION", &extension.to_string_lossy()),
+        ])
+    };
+
+    // The broken pipe is the remote's choice, not a staging failure: the
+    // exit status decides.
+    let succeeds = staging_ssh(
+        &root,
+        "head -c 16 > /dev/null\nprintf '%s' /remote/agent.ts\nexit 0",
+    );
+    assert!(matches!(
+        staged_decision(&config_with(&succeeds), &staged_project(true)).await,
+        ArtifactDecision::Ready(path) if path == "/remote/agent.ts"
+    ));
+
+    // A remote that genuinely fails falls back to the sentinel and says why.
+    let fails = root.join("failing");
+    std::fs::create_dir_all(&fails).unwrap();
+    let fails = staging_ssh(&fails, "printf 'mkdir: permission denied\\n' >&2\nexit 1");
+    let decision = staged_decision(&config_with(&fails), &staged_project(true)).await;
+    assert!(
+        matches!(&decision, ArtifactDecision::Sentinel(reason) if reason.contains("permission denied")),
+        "{decision:?}"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn a_failed_listing_leaves_an_unavailable_catalog_that_says_why() {
+    let root = std::env::temp_dir().join(format!(
+        "switchboard-test-listing-fails-{}",
+        uuid_like_test()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let runtime = root.join("broken-pi");
+    write_executable_script(&runtime, "printf 'no providers configured' >&2\nexit 9\n");
+    let project = Project {
+        id: "broken".into(),
+        description: String::new(),
+        aliases: vec![],
+        host: None,
+        cwd: root.to_string_lossy().into_owned(),
+        runtime: runtime.to_string_lossy().into_owned(),
+        model: None,
+        stage_extension: false,
+        extra_args: vec![],
+        prepare: String::new(),
+    };
+    let prewarm = Prewarm::start(&test_config(&root), &Registry::new(vec![project.clone()]));
+
+    let plan = timeout(Duration::from_secs(10), prewarm.launch_plan(&project))
+        .await
+        .expect("the listing should settle")
+        .expect("a failed listing is not a failed launch");
+
+    assert!(!plan.catalog.available);
+    assert!(plan.catalog.entries.is_empty());
+    assert!(
+        plan.catalog
+            .diagnostic
+            .as_deref()
+            .is_some_and(|reason| reason.contains("no providers configured")),
+        "{:?}",
+        plan.catalog.diagnostic
+    );
+    prewarm.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }

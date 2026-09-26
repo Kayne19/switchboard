@@ -45,13 +45,24 @@ done
 
 fn board_with(projects: Vec<Project>, model_swaps: bool) -> Switchboard {
     let swaps = if model_swaps { "1" } else { "0" };
-    Switchboard::new(
-        &crate::Config::for_tests(&[
-            ("SWITCHBOARD_MODEL_SWAPS", swaps),
-            ("SWITCHBOARD_REMOTE_CACHE_DIR", ".cache"),
-        ]),
-        Registry::new(projects),
+    board_on(
+        projects,
+        &[("SWITCHBOARD_MODEL_SWAPS", swaps)],
+        two_model_catalog(),
     )
+}
+
+/// A switchboard over a prewarm that has already settled, every project's
+/// catalog being `catalog`.
+fn board_on(
+    projects: Vec<Project>,
+    settings: &[(&str, &str)],
+    catalog: ModelCatalog,
+) -> Switchboard {
+    let config = crate::Config::for_tests(settings);
+    let registry = Registry::new(projects);
+    let prewarm = crate::prewarm::Prewarm::settled(&config, &registry, catalog);
+    Switchboard::new(&config, registry, Arc::new(prewarm))
 }
 
 #[test]
@@ -89,7 +100,7 @@ fn state_starts_on_operator() {
 }
 
 #[test]
-fn status_exposes_cached_models_for_the_current_project() {
+fn status_exposes_the_launch_catalog_for_the_current_project() {
     let project = Project {
         id: "alpha".into(),
         description: String::new(),
@@ -106,71 +117,58 @@ fn status_exposes_cached_models_for_the_current_project() {
     board.route = project.id.clone();
     board.project = Some(project);
     board.model_spec = "anthropic/current:high".into();
-    board.catalogs.insert(
-        ":pi".into(),
-        ModelCatalog {
-            entries: vec![crate::models::CatalogEntry {
-                provider: "anthropic".into(),
-                model: "current".into(),
-                thinks: true,
-            }],
-            available: true,
-            diagnostic: None,
-        },
-    );
+    board.leg_catalog = Some(ModelCatalog {
+        entries: vec![crate::models::CatalogEntry {
+            provider: "anthropic".into(),
+            model: "current".into(),
+            thinks: true,
+        }],
+        available: true,
+        diagnostic: None,
+    });
     assert_eq!(
         board.status()["models"],
         serde_json::json!([{"provider":"anthropic","model":"current","thinks":true}])
     );
 }
 
-#[tokio::test]
-async fn transfer_model_requests_obey_the_swap_gate_and_pin_defaults() {
+#[test]
+fn transfer_model_requests_obey_the_swap_gate_and_pin_defaults() {
     let project = Project {
         id: "alpha".into(),
         description: String::new(),
         aliases: vec![],
         host: None,
         cwd: String::new(),
-        runtime: "definitely-missing-pi".into(),
+        runtime: "pi".into(),
         model: Some("anthropic/default".into()),
         stage_extension: true,
         extra_args: vec![],
         prepare: String::new(),
     };
+    let unlisted = ModelCatalog::unavailable("listing failed");
 
-    let mut disabled = board_with(vec![project.clone()], false);
-    let (model, note) = disabled
-        .select_transfer_model(&project, "other/requested", "high")
-        .await;
-    assert_eq!(model, "anthropic/default:medium");
-    assert!(note.is_empty());
+    let disabled = board_with(vec![project.clone()], false);
+    assert_eq!(
+        disabled.select_transfer_model(&project, &unlisted, "other/requested", "high"),
+        Ok("anthropic/default:medium".into())
+    );
 
-    let mut enabled = board_with(vec![project.clone()], true);
-    let (model, note) = enabled.select_transfer_model(&project, "", "").await;
-    assert_eq!(model, "anthropic/default:medium");
-    assert!(note.is_empty());
-    assert!(enabled.catalogs.contains_key(":definitely-missing-pi"));
-
-    let (model, note) = enabled
-        .select_transfer_model(&project, "other/requested:high", "")
-        .await;
-    assert_eq!(model, "other/requested:high");
-    assert!(note.is_empty());
-}
-
-#[tokio::test]
-async fn missing_extension_is_recorded_per_candidate_for_cleanup() {
-    let board = board_with(vec![], true);
-    assert_eq!(board.stage_extension("host-a", "candidate-a").await, None);
-    assert_eq!(board.stage_extension("host-a", "candidate-b").await, None);
-    assert_eq!(board.staged_extensions.lock().await.len(), 2);
+    let enabled = board_with(vec![project.clone()], true);
+    assert_eq!(
+        enabled.select_transfer_model(&project, &unlisted, "", ""),
+        Ok("anthropic/default:medium".into())
+    );
+    assert_eq!(
+        enabled.select_transfer_model(&project, &unlisted, "other/requested:high", ""),
+        Ok("other/requested:high".into())
+    );
 }
 
 #[test]
 fn transfer_handoff_is_silent_but_model_notes_and_failures_are_spoken() {
     let board = board_with(vec![], true);
-    let reply = board.reply_with_transfer_turn(Turn {
+    let reply = board.reply_with_turn(Turn {
         text: "Ready.".into(),
         signals: vec![],
         failed: false,
@@ -201,18 +199,6 @@ async fn model_swap_refuses_unknown_catalog_model_without_replacing_live_spec() 
     board.project = Some(project);
     board.route = "alpha".into();
     board.model_spec = "anthropic/current:high".into();
-    board.catalogs.insert(
-        ":pi".into(),
-        ModelCatalog {
-            entries: vec![crate::models::CatalogEntry {
-                provider: "anthropic".into(),
-                model: "current".into(),
-                thinks: true,
-            }],
-            available: true,
-            diagnostic: None,
-        },
-    );
 
     let reply = board.set_model("anthropic/missing").await;
 
@@ -240,25 +226,6 @@ async fn page_model_swap_preserves_requested_thinking() {
     board.project = Some(project.clone());
     board.route = "alpha".into();
     board.model_spec = "anthropic/current:high".into();
-    board.catalogs.insert(
-        crate::models::CatalogKey::for_project(&project).to_key_string(),
-        ModelCatalog {
-            entries: vec![
-                crate::models::CatalogEntry {
-                    provider: "anthropic".into(),
-                    model: "current".into(),
-                    thinks: true,
-                },
-                crate::models::CatalogEntry {
-                    provider: "anthropic".into(),
-                    model: "next".into(),
-                    thinks: true,
-                },
-            ],
-            available: true,
-            diagnostic: None,
-        },
-    );
 
     let reply = board.set_model("anthropic/next").await;
 
@@ -268,8 +235,8 @@ async fn page_model_swap_preserves_requested_thinking() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-#[tokio::test]
-async fn transfer_model_selection_honors_thinking_without_model() {
+#[test]
+fn transfer_model_selection_honors_thinking_without_model() {
     let project = Project {
         id: "alpha".into(),
         description: String::new(),
@@ -277,29 +244,16 @@ async fn transfer_model_selection_honors_thinking_without_model() {
         host: None,
         cwd: String::new(),
         runtime: "pi".into(),
-        model: Some("anthropic/claude-3-5-sonnet".into()),
+        model: Some("anthropic/current".into()),
         stage_extension: true,
         extra_args: vec![],
         prepare: String::new(),
     };
-
-    let mut board = board_with(vec![project.clone()], true);
-    board.catalogs.insert(
-        ":pi".into(),
-        ModelCatalog {
-            entries: vec![crate::models::CatalogEntry {
-                provider: "anthropic".into(),
-                model: "claude-3-5-sonnet".into(),
-                thinks: true,
-            }],
-            available: true,
-            diagnostic: None,
-        },
+    let board = board_with(vec![project.clone()], true);
+    assert_eq!(
+        board.select_transfer_model(&project, &two_model_catalog(), "", "high"),
+        Ok("anthropic/current:high".into())
     );
-
-    let (model, note) = board.select_transfer_model(&project, "", "high").await;
-    assert_eq!(model, "anthropic/claude-3-5-sonnet:high");
-    assert!(note.is_empty());
 }
 
 #[tokio::test]
@@ -362,14 +316,15 @@ async fn fake_pi_process_completes_transfer_and_return_lifecycle() {
         host: None,
         cwd: root.to_string_lossy().into_owned(),
         runtime: runtime.to_string_lossy().into_owned(),
-        model: None,
+        model: Some("anthropic/current".into()),
         stage_extension: false,
         extra_args: Vec::new(),
         prepare: String::new(),
     };
-    let mut board = Switchboard::new(
-        &crate::Config::for_tests(&[("SWITCHBOARD_PI_BINARY", &runtime.to_string_lossy())]),
-        Registry::new(vec![project]),
+    let mut board = board_on(
+        vec![project],
+        &[("SWITCHBOARD_PI_BINARY", &runtime.to_string_lossy())],
+        two_model_catalog(),
     );
     let statuses = Arc::new(StdMutex::new(Vec::new()));
     let statuses_for_callback = Arc::clone(&statuses);
@@ -403,111 +358,6 @@ async fn fake_pi_process_completes_transfer_and_return_lifecycle() {
     assert_eq!(board.route(), OPERATOR);
 
     board.shutdown().await;
-    std::fs::remove_dir_all(root).unwrap();
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn fake_ssh_stages_the_extension_and_returns_its_remote_path() {
-    let root = std::env::temp_dir().join(format!(
-        "switchboard-stage-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let home = root.join("home");
-    std::fs::create_dir_all(&home).unwrap();
-    let extension = root.join("agent.ts");
-    std::fs::write(&extension, "export default 'staged';\n").unwrap();
-    let ssh = root.join("fake-ssh");
-    crate::pi_client::write_executable_script(
-        &ssh,
-        &format!(
-            "HOME={}; export HOME\nfor arg in \"$@\"; do command=$arg; done\nexec sh -c \"$command\"\n",
-            crate::pi_client::shell_quote(&home.to_string_lossy())
-        ),
-    );
-
-    let board = Switchboard::new(
-        &crate::Config::for_tests(&[("SWITCHBOARD_AGENT_EXTENSION", &extension.to_string_lossy())]),
-        Registry::new(Vec::new()),
-    );
-    let staged = board
-        .upload_extension_with(&ssh.to_string_lossy(), "fake-host")
-        .await
-        .unwrap();
-    assert_eq!(
-        staged,
-        home.join(".cache/switchboard/agent.fake-host.ts")
-            .to_string_lossy()
-    );
-    assert_eq!(
-        std::fs::read_to_string(&staged).unwrap(),
-        "export default 'staged';\n"
-    );
-    std::fs::remove_dir_all(root).unwrap();
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn staging_survives_a_remote_that_stops_reading_before_the_extension_ends() {
-    let root = std::env::temp_dir().join(format!(
-        "switchboard-earlyclose-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&root).unwrap();
-    // Far larger than a pipe buffer, so a remote that stops reading early
-    // is guaranteed to break the write rather than merely maybe breaking it.
-    let extension = root.join("agent.ts");
-    std::fs::write(&extension, "x".repeat(1 << 20)).unwrap();
-
-    // Succeeds, reports the staged path, but consumes only the first bytes.
-    let succeeds = root.join("fake-ssh-ok");
-    crate::pi_client::write_executable_script(
-        &succeeds,
-        "head -c 16 > /dev/null\nprintf '%s' /remote/agent.ts\nexit 0\n",
-    );
-    // Fails the way a missing directory or denied permission would.
-    let fails = root.join("fake-ssh-fail");
-    crate::pi_client::write_executable_script(
-        &fails,
-        "printf 'mkdir: permission denied\\n' >&2\nexit 1\n",
-    );
-
-    let board = || {
-        Switchboard::new(
-            &crate::Config::for_tests(&[(
-                "SWITCHBOARD_AGENT_EXTENSION",
-                &extension.to_string_lossy(),
-            )]),
-            Registry::new(Vec::new()),
-        )
-    };
-
-    // The broken pipe is the remote's choice, not a staging failure. Before
-    // this was fixed the write error short-circuited and the caller was told
-    // staging had failed.
-    assert_eq!(
-        board()
-            .upload_extension_with(&succeeds.to_string_lossy(), "fake-host")
-            .await
-            .as_deref(),
-        Some("/remote/agent.ts")
-    );
-    // A remote that genuinely fails still falls back to the sentinel, and
-    // now does so on the strength of its exit status rather than the write.
-    assert_eq!(
-        board()
-            .upload_extension_with(&fails.to_string_lossy(), "fake-host")
-            .await,
-        None
-    );
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -555,31 +405,14 @@ fn model_fallback_preserves_qualified_and_rejects_bare_when_catalog_unavailable(
         prepare: String::new(),
     };
     let board = board_with(vec![project.clone()], true);
+    let unlisted = ModelCatalog::unavailable("listing failed");
 
-    // Catalog unavailable (None)
-    let qualified =
-        board.resolve_model_with_catalog(&project, None, "anthropic/claude-3-5-sonnet", "high");
-    assert!(qualified.is_ok());
-    let choice = qualified.unwrap();
-    assert_eq!(choice.provider, "anthropic");
-    assert_eq!(choice.model, "claude-3-5-sonnet");
-    assert_eq!(choice.thinking, "high");
-
-    let bare = board.resolve_model_with_catalog(&project, None, "claude-3-5-sonnet", "high");
-    assert!(bare.is_err());
-
-    // Catalog marked unavailable (ModelCatalog::unavailable)
-    let unavail_cat = ModelCatalog {
-        entries: vec![],
-        available: false,
-        diagnostic: Some("listing failed".into()),
-    };
-    let qualified_unavail =
-        board.resolve_model_with_catalog(&project, Some(&unavail_cat), "openai/gpt-4o", "medium");
-    assert!(qualified_unavail.is_ok());
-    let bare_unavail =
-        board.resolve_model_with_catalog(&project, Some(&unavail_cat), "gpt-4o", "medium");
-    assert!(bare_unavail.is_err());
+    assert_eq!(
+        board.select_transfer_model(&project, &unlisted, "anthropic/claude-3-5-sonnet", "high"),
+        Ok("anthropic/claude-3-5-sonnet:high".into())
+    );
+    let bare = board.select_transfer_model(&project, &unlisted, "claude-3-5-sonnet", "high");
+    assert!(bare.unwrap_err().contains("listing failed"));
 }
 
 #[cfg(unix)]
@@ -653,9 +486,13 @@ done
         prepare: String::new(),
     };
 
-    let mut board = Switchboard::new(
-        &crate::Config::for_tests(&[("SWITCHBOARD_PI_BINARY", &runtime.to_string_lossy())]),
-        Registry::new(vec![alpha, beta]),
+    let mut board = board_on(
+        vec![alpha, beta],
+        &[
+            ("SWITCHBOARD_PI_BINARY", &runtime.to_string_lossy()),
+            ("SWITCHBOARD_AGENT_MODEL", "anthropic/current"),
+        ],
+        two_model_catalog(),
     );
 
     let r1 = board.handle("connect me to alpha").await;
@@ -674,47 +511,11 @@ done
 }
 
 #[tokio::test]
-async fn no_live_setup_when_prewarm_attached() {
-    let temp_dir = std::env::temp_dir().join(format!("switchboard-prewarm-test-{}", uuid_like()));
-    std::fs::create_dir_all(&temp_dir).unwrap();
-    let state_dir = temp_dir.join("state");
-    let config =
-        crate::Config::for_tests(&[("SWITCHBOARD_STATE_DIR", &state_dir.to_string_lossy())]);
-
-    let project = Project {
-        id: "local_proj".into(),
-        description: "Local Project".into(),
-        aliases: vec![],
-        host: None,
-        cwd: temp_dir.to_string_lossy().into_owned(),
-        runtime: "pi".into(),
-        model: Some("anthropic/claude-3-5-sonnet".into()),
-        stage_extension: false,
-        extra_args: vec![],
-        prepare: "echo 'prepare executed'".into(),
-    };
-
-    let registry = Registry::new(vec![project.clone()]);
-    let prewarm = Arc::new(crate::prewarm::Prewarm::start(&config, &registry).await);
-    let mut board = board_with(vec![project.clone()], true);
-    board.set_prewarm(prewarm.clone());
-
-    // Select model uses prewarm catalog snapshot without live catalog fetch
-    let (model, note) = board.select_transfer_model(&project, "", "").await;
-    assert_eq!(model, "anthropic/claude-3-5-sonnet:medium");
-    assert!(note.is_empty());
-
-    let readiness = prewarm.await_project(&project).await.unwrap();
-    assert_eq!(readiness.transport_generation, 0);
-
-    let _ = std::fs::remove_dir_all(temp_dir);
-}
-
-#[tokio::test]
 async fn display_pbx_env_and_token_rotation() {
-    let board = Switchboard::new(
-        &crate::Config::for_tests(&[("SWITCHBOARD_DISPLAY_URL", "http://127.0.0.1:8765/display")]),
-        Registry::new(vec![]),
+    let board = board_on(
+        vec![],
+        &[("SWITCHBOARD_DISPLAY_URL", "http://127.0.0.1:8765/display")],
+        two_model_catalog(),
     );
 
     assert_eq!(board.display_url, "http://127.0.0.1:8765/display");
@@ -804,27 +605,11 @@ done
         extra_args: vec![],
         prepare: String::new(),
     };
-    // Use Switchboard::new directly so the operator process also uses the
-    // fake-pi binary (board_with hardcodes "pi" as the operator runtime).
-    let mut board = Switchboard::new(
-        &crate::Config::for_tests(&[("SWITCHBOARD_PI_BINARY", &runtime.to_string_lossy())]),
-        Registry::new(vec![project.clone()]),
-    );
-
-    // Pre-seed an available catalog so the transfer can resolve the bare
-    // model name (without this, load_catalog fetches an unavailable catalog
-    // from the fake-pi and the transfer fails with "no model was named").
-    board.catalogs.insert(
-        crate::models::CatalogKey::for_project(&project).to_key_string(),
-        ModelCatalog {
-            entries: vec![crate::models::CatalogEntry {
-                provider: "anthropic".into(),
-                model: "current".into(),
-                thinks: true,
-            }],
-            available: true,
-            diagnostic: None,
-        },
+    // The operator runs the same fake runtime as the project leg.
+    let mut board = board_on(
+        vec![project.clone()],
+        &[("SWITCHBOARD_PI_BINARY", &runtime.to_string_lossy())],
+        two_model_catalog(),
     );
 
     // Operator transfers to alpha.
@@ -854,7 +639,7 @@ done
 
 #[cfg(unix)]
 #[tokio::test]
-async fn non_prewarmed_transfer_resolves_bare_model() {
+async fn a_transfer_resolves_a_bare_model_against_the_launch_catalog() {
     let (root, runtime) = fake_runtime();
     let project = Project {
         id: "alpha".into(),
@@ -870,20 +655,6 @@ async fn non_prewarmed_transfer_resolves_bare_model() {
     };
     let mut board = board_with(vec![project.clone()], true);
 
-    // Pre-seed the catalog so load_catalog (Vacant entry) skips the real fetch.
-    board.catalogs.insert(
-        crate::models::CatalogKey::for_project(&project).to_key_string(),
-        ModelCatalog {
-            entries: vec![crate::models::CatalogEntry {
-                provider: "anthropic".into(),
-                model: "current".into(),
-                thinks: true,
-            }],
-            available: true,
-            diagnostic: None,
-        },
-    );
-
     let ctx = TransferContext {
         exact_caller_transcript: "connect me".into(),
         derived_intent: String::new(),
@@ -893,8 +664,6 @@ async fn non_prewarmed_transfer_resolves_bare_model() {
         project_summary: None,
     };
 
-    // Transfer with a bare model name — previously failed with
-    // "catalog unavailable to resolve bare model" on non-prewarm paths.
     let reply = board.transfer_ctx(&ctx, "alpha", "current", "").await;
     assert!(reply.error.is_none(), "transfer failed: {:?}", reply.error);
     assert_eq!(board.route(), "alpha");
@@ -906,4 +675,279 @@ async fn non_prewarmed_transfer_resolves_bare_model() {
 
     board.shutdown().await;
     std::fs::remove_dir_all(root).unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Prewarm is the only owner of launch setup. These drive the PBX through a
+// prewarm whose startup work has already settled (`Prewarm::settled`) and
+// check that a transfer or redial does no setup of its own.
+
+#[cfg(unix)]
+fn scratch_dir(label: &str) -> std::path::PathBuf {
+    let root = std::env::temp_dir().join(format!("switchboard-{label}-{}", uuid_like()));
+    std::fs::create_dir_all(&root).unwrap();
+    root
+}
+
+/// An ssh stand-in that records every remote command it is given, one line
+/// each, and runs only agent launches (`... exec <runtime> ...`), locally.
+/// Anything else -- extension staging, a catalog listing -- is recorded and
+/// refused, so a test can see that it was attempted without it touching this
+/// machine.
+#[cfg(unix)]
+fn recording_ssh(root: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let ssh = root.join("fake-ssh");
+    let log = root.join("ssh.log");
+    crate::pi_client::write_executable_script(
+        &ssh,
+        &format!(
+            r#"for last; do :; done
+printf '%s\n' "$(printf '%s' "$last" | tr '\n' ' ')" >> '{log}'
+case "$last" in
+  *"exec "*) exec sh -c "$last" ;;
+  *) exit 1 ;;
+esac
+"#,
+            log = log.display()
+        ),
+    );
+    (ssh, log)
+}
+
+/// A project runtime that answers every prompt and records any
+/// `--list-models` call, so a test can tell whether the catalog was listed
+/// live rather than taken from prewarm.
+#[cfg(unix)]
+fn recording_runtime(root: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let runtime = root.join("fake-project-pi");
+    let log = root.join("listings.log");
+    crate::pi_client::write_executable_script(
+        &runtime,
+        &format!(
+            r#"if [ "$1" = "--list-models" ]; then
+  printf 'listed\n' >> '{log}'
+  printf 'provider model alias default thinks\nanthropic current current yes yes\nanthropic next next no yes\n'
+  exit 0
+fi
+while IFS= read -r line; do
+  printf '%s\n' '{{"type":"message_update","assistantMessageEvent":{{"type":"text_end","content":"On it."}}}}'
+  printf '%s\n' '{{"type":"agent_settled"}}'
+done
+"#,
+            log = log.display()
+        ),
+    );
+    (runtime, log)
+}
+
+fn two_model_catalog() -> ModelCatalog {
+    ModelCatalog {
+        entries: ["current", "next"]
+            .into_iter()
+            .map(|model| crate::models::CatalogEntry {
+                provider: "anthropic".into(),
+                model: model.into(),
+                thinks: true,
+            })
+            .collect(),
+        available: true,
+        diagnostic: None,
+    }
+}
+
+fn project_on(host: Option<&str>, cwd: &std::path::Path, runtime: &std::path::Path) -> Project {
+    Project {
+        id: "alpha".into(),
+        description: String::new(),
+        aliases: vec![],
+        host: host.map(str::to_owned),
+        cwd: cwd.to_string_lossy().into_owned(),
+        runtime: runtime.to_string_lossy().into_owned(),
+        model: Some("anthropic/current".into()),
+        stage_extension: true,
+        extra_args: vec![],
+        prepare: String::new(),
+    }
+}
+
+fn transcript(text: &str) -> TransferContext {
+    TransferContext {
+        exact_caller_transcript: text.into(),
+        ..TransferContext::default()
+    }
+}
+
+fn read_lines(path: &std::path::Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_sentinel_extension_launches_the_remote_leg_without_staging_anything() {
+    let root = scratch_dir("sentinel");
+    let (ssh, ssh_log) = recording_ssh(&root);
+    let (runtime, _) = recording_runtime(&root);
+    let extension = root.join("agent-switchboard.ts");
+    std::fs::write(&extension, "export default () => {};").unwrap();
+    let config = crate::Config::for_tests(&[
+        ("SWITCHBOARD_SSH_PROGRAM", &ssh.to_string_lossy()),
+        ("SWITCHBOARD_AGENT_EXTENSION", &extension.to_string_lossy()),
+        (
+            "SWITCHBOARD_STATE_DIR",
+            &root.join("state").to_string_lossy(),
+        ),
+    ]);
+    let project = project_on(Some("fake-host"), &root, &runtime);
+    let registry = Registry::new(vec![project.clone()]);
+    // Startup could not stage the extension on this host.
+    let prewarm = crate::prewarm::Prewarm::settled(&config, &registry, two_model_catalog());
+    let mut board = Switchboard::new(&config, registry, Arc::new(prewarm));
+
+    let reply = board
+        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+        .await;
+
+    assert_eq!(reply.route, "alpha", "{reply:?}");
+    assert_eq!(reply.error, None);
+    let commands = read_lines(&ssh_log);
+    assert_eq!(
+        commands.len(),
+        1,
+        "the transfer should run the agent and nothing else: {commands:#?}"
+    );
+    assert!(commands[0].contains("exec "));
+    assert!(
+        !commands[0].contains("'-e'"),
+        "no extension was staged, so none may be loaded: {}",
+        commands[0]
+    );
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_redial_resolves_against_the_launch_catalog_without_listing_models() {
+    let root = scratch_dir("redial-catalog");
+    let (runtime, listings) = recording_runtime(&root);
+    let config = crate::Config::for_tests(&[(
+        "SWITCHBOARD_STATE_DIR",
+        &root.join("state").to_string_lossy(),
+    )]);
+    let project = project_on(None, &root, &runtime);
+    let registry = Registry::new(vec![project.clone()]);
+    let prewarm = crate::prewarm::Prewarm::settled(&config, &registry, two_model_catalog());
+    let mut board = Switchboard::new(&config, registry, Arc::new(prewarm));
+
+    let reply = board
+        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+        .await;
+    assert_eq!(reply.route, "alpha", "{reply:?}");
+    let reply = board.set_model("next").await;
+
+    assert_eq!(reply.error, None, "{reply:?}");
+    assert_eq!(board.model_spec, "anthropic/next:medium");
+    assert_eq!(
+        read_lines(&listings),
+        Vec::<String>::new(),
+        "the model catalog was listed at redial time instead of taken from prewarm"
+    );
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_redial_that_cannot_reach_the_host_refuses_and_keeps_the_live_leg() {
+    let root = scratch_dir("redial-degraded");
+    let (ssh, ssh_log) = recording_ssh(&root);
+    let (runtime, _) = recording_runtime(&root);
+    let config = crate::Config::for_tests(&[
+        ("SWITCHBOARD_SSH_PROGRAM", &ssh.to_string_lossy()),
+        (
+            "SWITCHBOARD_STATE_DIR",
+            &root.join("state").to_string_lossy(),
+        ),
+    ]);
+    let mut project = project_on(Some("fake-host"), &root, &runtime);
+    project.stage_extension = false;
+    let registry = Registry::new(vec![project.clone()]);
+    let prewarm = Arc::new(crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        two_model_catalog(),
+    ));
+    let mut board = Switchboard::new(&config, registry, Arc::clone(&prewarm));
+    let reply = board
+        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+        .await;
+    assert_eq!(reply.route, "alpha", "{reply:?}");
+    let live_session = board.session_id.clone();
+
+    prewarm.settle_transport(
+        "fake-host",
+        crate::prewarm::TransportState::Degraded {
+            generation: 1,
+            reason: "master connection lost".into(),
+        },
+    );
+    let reply = board.redial("anthropic/next", "", "", false).await;
+
+    assert!(reply.error.is_some(), "{reply:?}");
+    assert_eq!(board.route(), "alpha");
+    assert_eq!(board.session_id, live_session);
+    assert_eq!(board.model_spec, "anthropic/current:medium");
+    assert_eq!(
+        read_lines(&ssh_log).len(),
+        1,
+        "the redial opened a connection of its own instead of refusing"
+    );
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unavailable_catalog_admits_a_qualified_model_and_refuses_a_bare_one() {
+    for (agent_model, admitted) in [("anthropic/current", true), ("current", false)] {
+        let root = scratch_dir("catalog-unavailable");
+        let (runtime, _) = recording_runtime(&root);
+        let config = crate::Config::for_tests(&[
+            ("SWITCHBOARD_AGENT_MODEL", agent_model),
+            (
+                "SWITCHBOARD_STATE_DIR",
+                &root.join("state").to_string_lossy(),
+            ),
+        ]);
+        let mut project = project_on(None, &root, &runtime);
+        project.model = None;
+        let registry = Registry::new(vec![project.clone()]);
+        let prewarm = crate::prewarm::Prewarm::settled(&config, &registry, two_model_catalog());
+        prewarm.settle_catalog(
+            &project,
+            crate::prewarm::CatalogState::Unavailable {
+                reason: "listing timed out".into(),
+            },
+        );
+        let mut board = Switchboard::new(&config, registry, Arc::new(prewarm));
+
+        let reply = board
+            .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+            .await;
+
+        if admitted {
+            assert_eq!(reply.route, "alpha", "{reply:?}");
+            assert_eq!(board.model_spec, "anthropic/current:medium");
+        } else {
+            assert_eq!(reply.route, OPERATOR, "{reply:?}");
+            let error = reply.error.unwrap_or_default();
+            assert!(error.contains("bare model"), "{error}");
+        }
+        board.shutdown().await;
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

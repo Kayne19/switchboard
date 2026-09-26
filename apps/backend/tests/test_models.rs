@@ -151,17 +151,3 @@ fn unavailable_catalog_passes_through_qualified_models_and_suffixes() {
         .to_string()
         .contains("ssh failed"));
 }
-
-#[tokio::test]
-async fn catalog_command_success_and_failure_are_degraded_safely() {
-    let table = "printf 'provider model context max-out thinking images\\nanthropic opus 1M 128K yes yes\\n'";
-    let catalog = fetch_catalog(&["sh".into(), "-c".into(), table.into()]).await;
-    assert_eq!(catalog.entries.len(), 1);
-    assert_eq!(catalog.entries[0].provider, "anthropic");
-
-    let failed =
-        fetch_catalog(&["sh".into(), "-c".into(), "printf broken >&2; exit 9".into()]).await;
-    assert!(failed.entries.is_empty());
-    assert!(!failed.available);
-    assert!(failed.diagnostic.is_some());
-}

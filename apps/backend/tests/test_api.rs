@@ -18,7 +18,14 @@ fn state_with_stt(stt: Option<String>) -> AppState {
 }
 
 fn state_with_stream(stt: Option<String>, stream: Option<String>) -> AppState {
-    let board = Switchboard::new(&crate::Config::for_tests(&[]), Registry::new(vec![]));
+    let config = crate::Config::for_tests(&[]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    let board = Switchboard::new(&config, registry, std::sync::Arc::new(prewarm));
     AppState::new(
         board,
         TranscriptLog::new(10),

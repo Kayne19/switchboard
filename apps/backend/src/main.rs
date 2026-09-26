@@ -406,9 +406,11 @@ async fn main() {
         "switchboard configuration"
     );
     let registry = registry::Registry::load(&config.projects_file);
-    let prewarm = std::sync::Arc::new(prewarm::Prewarm::start(&config, &registry).await);
-    let mut board = pbx::Switchboard::new(&config, registry);
-    board.set_prewarm(prewarm);
+    // Startup work for every project -- transports, catalogs, staged
+    // extensions, prepare commands -- begins now, before the listener opens;
+    // a transfer waits on it rather than doing any of it itself.
+    let prewarm = std::sync::Arc::new(prewarm::Prewarm::start(&config, &registry));
+    let board = pbx::Switchboard::new(&config, registry, prewarm);
     let state = api::AppState::new(
         board,
         history::TranscriptLog::new(config.history_limit),

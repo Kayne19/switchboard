@@ -973,27 +973,6 @@ impl SshClientOptions {
     }
 }
 
-pub fn list_models_argv(binary: &str, ssh_host: &str) -> Vec<String> {
-    list_models_argv_with_program("ssh", binary, ssh_host)
-}
-
-pub fn list_models_argv_with_program(
-    ssh_program: &str,
-    binary: &str,
-    ssh_host: &str,
-) -> Vec<String> {
-    if ssh_host.is_empty() {
-        return vec![binary.into(), "--list-models".into()];
-    }
-    let Ok(target) = ValidatedSshTarget::new(ssh_host) else {
-        return vec!["ssh-target-invalid".into()];
-    };
-    SshClientOptions::new(ssh_program, target).catalog_argv(binary)
-}
-
-pub fn list_models_argv_checked(binary: &str, target: &ValidatedSshTarget) -> Vec<String> {
-    SshClientOptions::new("ssh", target.clone()).catalog_argv(binary)
-}
 pub fn local_argv(
     binary: &str,
     model: Option<&str>,
@@ -1031,61 +1010,6 @@ pub fn local_argv(
     argv.extend(extra_args.iter().cloned());
     Ok(argv)
 }
-#[allow(clippy::too_many_arguments)]
-pub fn remote_argv(
-    host: &str,
-    cwd: &str,
-    binary: &str,
-    model: Option<&str>,
-    extension: Option<&str>,
-    append_system_prompt: Option<&str>,
-    session_id: Option<&str>,
-    extra_args: &[String],
-    env: &HashMap<String, String>,
-) -> Vec<String> {
-    remote_argv_with_program(
-        "ssh",
-        host,
-        cwd,
-        binary,
-        model,
-        extension,
-        append_system_prompt,
-        session_id,
-        extra_args,
-        env,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn remote_argv_with_program(
-    ssh_program: &str,
-    host: &str,
-    cwd: &str,
-    binary: &str,
-    model: Option<&str>,
-    extension: Option<&str>,
-    append_system_prompt: Option<&str>,
-    session_id: Option<&str>,
-    extra_args: &[String],
-    env: &HashMap<String, String>,
-) -> Vec<String> {
-    let Ok(target) = ValidatedSshTarget::new(host) else {
-        return vec!["ssh-target-invalid".into()];
-    };
-    let options = SshClientOptions::new(ssh_program, target);
-    options.remote_argv(
-        cwd,
-        binary,
-        model,
-        extension,
-        append_system_prompt,
-        session_id,
-        extra_args,
-        env,
-    )
-}
-
 /// Writes `body` as a `/bin/sh` script, marks it executable, and does not return
 /// until the kernel will actually run it.
 ///
