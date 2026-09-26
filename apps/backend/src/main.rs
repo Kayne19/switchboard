@@ -21,11 +21,15 @@ use std::path::PathBuf;
 /// checked against its pin with one request.
 pub const GIT_SHA: &str = env!("SWITCHBOARD_GIT_SHA");
 
+/// Everything the service reads from its environment, parsed once.
+///
+/// Every `SWITCHBOARD_*` name here is interface with the homelab deployment
+/// (see `docs/environment.md`); modules take their settings from this struct
+/// rather than reading the environment again.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
     pub env_file: PathBuf,
     pub state_dir: PathBuf,
-    pub config_dir: PathBuf,
     pub projects_file: PathBuf,
     pub operator_prompt: PathBuf,
     pub operator_extension: Option<String>,
@@ -47,23 +51,24 @@ pub struct Config {
     pub max_spoken_chars: usize,
     pub speech_deadline_ms: u64,
     pub history_limit: usize,
-    pub session: String,
+    /// Where a project agent's `speak` tool posts: `SWITCHBOARD_SPEAK_URL`,
+    /// else `<SWITCHBOARD_SELF_URL>/speak`, else empty (no callback).
     pub speak_url: String,
+    /// Where a project agent reports its thinking level: `SWITCHBOARD_STATE_URL`,
+    /// else `<SWITCHBOARD_SELF_URL>/leg-state`.
     pub state_url: String,
-    pub diagram_url: String,
+    /// Where a project agent's `display` tool posts: `SWITCHBOARD_DISPLAY_URL`,
+    /// else `<SWITCHBOARD_SELF_URL>/display`. The `view` tool derives `/view`
+    /// from its origin.
+    pub display_url: String,
     /// Environment values loaded from the deployment env file and inherited
     /// process environment. Project legs receive this plus their callback vars.
     pub environment: HashMap<String, String>,
 }
 
 impl Config {
-    pub fn display_url(&self) -> &str {
-        &self.diagram_url
-    }
-
-    pub fn from_env() -> Self {
-        let (values, env_file) = Self::values_from_env();
-        Self::from_values(&values, env_file)
+    pub fn speech_deadline(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.speech_deadline_ms)
     }
 
     /// The deployment env file merged under the inherited process environment.
@@ -84,7 +89,7 @@ impl Config {
         (values, env_file)
     }
 
-    fn from_values(values: &HashMap<String, String>, env_file: PathBuf) -> Self {
+    pub fn from_values(values: &HashMap<String, String>, env_file: PathBuf) -> Self {
         let config_dir = PathBuf::from(get(values, "SWITCHBOARD_CONFIG_DIR", "/etc/switchboard"));
         let state_dir = PathBuf::from(get(values, "SWITCHBOARD_STATE_DIR", "/var/lib/switchboard"));
         let projects_file = PathBuf::from(get(
@@ -97,10 +102,20 @@ impl Config {
             "SWITCHBOARD_OPERATOR_PROMPT",
             &config_dir.join("operator.system.md").to_string_lossy(),
         ));
+        let self_url = get(values, "SWITCHBOARD_SELF_URL", "")
+            .trim_end_matches('/')
+            .to_owned();
+        let callback_url = |name: &str, path: &str| {
+            let configured = get(values, name, "");
+            if configured.is_empty() && !self_url.is_empty() {
+                format!("{self_url}/{path}")
+            } else {
+                configured
+            }
+        };
         Self {
             env_file,
             state_dir,
-            config_dir,
             projects_file,
             operator_prompt,
             operator_extension: optional(values, "SWITCHBOARD_OPERATOR_EXTENSION"),
@@ -121,20 +136,30 @@ impl Config {
                     .as_str(),
                 "0" | "false" | "no"
             ),
-            self_url: get(values, "SWITCHBOARD_SELF_URL", "")
-                .trim_end_matches('/')
-                .to_owned(),
             idle_timeout: number(values, "SWITCHBOARD_IDLE_TIMEOUT", 3600.0),
             idle_poll: number(values, "SWITCHBOARD_IDLE_POLL", 30.0),
             max_spoken_chars: usize_value(values, "SWITCHBOARD_MAX_SPOKEN_CHARS", 700, false),
             speech_deadline_ms: bounded_ms(values, "SWITCHBOARD_SPEECH_DEADLINE_MS", 25_000),
             history_limit: usize_value(values, "SWITCHBOARD_HISTORY_LIMIT", 200, true),
-            session: get(values, "SWITCHBOARD_SESSION", ""),
-            speak_url: get(values, "SWITCHBOARD_SPEAK_URL", ""),
-            state_url: get(values, "SWITCHBOARD_STATE_URL", ""),
-            diagram_url: get(values, "SWITCHBOARD_DISPLAY_URL", ""),
+            speak_url: callback_url("SWITCHBOARD_SPEAK_URL", "speak"),
+            state_url: callback_url("SWITCHBOARD_STATE_URL", "leg-state"),
+            display_url: callback_url("SWITCHBOARD_DISPLAY_URL", "display"),
+            self_url,
             environment: values.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+impl Config {
+    /// A configuration parsed from `values` alone, the way the service parses
+    /// its env file: tests name only the settings they depend on.
+    pub(crate) fn for_tests(values: &[(&str, &str)]) -> Self {
+        let values = values
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect();
+        Self::from_values(&values, PathBuf::from("/nonexistent/switchboard.env"))
     }
 }
 
@@ -168,15 +193,19 @@ fn number(values: &HashMap<String, String>, name: &str, default: f64) -> f64 {
         }
     }
 }
+/// A deadline the extensions also enforce, so a value the service would
+/// silently replace with its default would leave the two sides disagreeing.
+/// A malformed one stops startup instead.
 fn bounded_ms(values: &HashMap<String, String>, name: &str, default: u64) -> u64 {
+    const MAX_MS: u64 = 120_000;
     match values.get(name) {
         None => default,
         Some(raw) => raw
             .trim()
             .parse::<u64>()
             .ok()
-            .filter(|value| (1..=120_000).contains(value))
-            .unwrap_or_else(|| panic!("{name} must be a positive integer from 1 to 120000 ms")),
+            .filter(|value| (1..=MAX_MS).contains(value))
+            .unwrap_or_else(|| panic!("{name} must be a positive integer from 1 to {MAX_MS} ms")),
     }
 }
 fn usize_value(
@@ -365,6 +394,9 @@ async fn main() {
         operator_extension = config.operator_extension.as_deref().unwrap_or("<none>"),
         agent_extension = config.agent_extension.as_deref().unwrap_or("<none>"),
         self_url = %config.self_url,
+        speak_url = %config.speak_url,
+        state_url = %config.state_url,
+        display_url = %config.display_url,
         idle_timeout = config.idle_timeout,
         idle_poll = config.idle_poll,
         max_spoken_chars = config.max_spoken_chars,
@@ -374,41 +406,20 @@ async fn main() {
         "switchboard configuration"
     );
     let registry = registry::Registry::load(&config.projects_file);
-    let callback_url = |configured: &str, path: &str| {
-        if configured.is_empty() && !config.self_url.is_empty() {
-            format!("{}/{path}", config.self_url)
-        } else {
-            configured.to_owned()
-        }
-    };
-    let board = pbx::Switchboard::new(
-        registry,
-        config.pi_binary.clone(),
-        config.operator_model.clone(),
-        config.operator_prompt.to_string_lossy().into_owned(),
-        config.operator_extension.clone(),
-        config.agent_extension.clone(),
-        config.agent_model.clone(),
-        config.agent_thinking.clone(),
-        config.remote_cache_dir.clone(),
-        config.model_swaps,
-        callback_url(&config.speak_url, "speak"),
-        callback_url(&config.state_url, "leg-state"),
-        callback_url(config.display_url(), "display"),
-        config.persona.clone(),
-        config.environment.clone(),
-    );
-    let state = api::AppState::new_with_stream(
+    let prewarm = std::sync::Arc::new(prewarm::Prewarm::start(&config, &registry).await);
+    let mut board = pbx::Switchboard::new(&config, registry);
+    board.set_prewarm(prewarm);
+    let state = api::AppState::new(
         board,
         history::TranscriptLog::new(config.history_limit),
-        audio::Speaker::from_values(config.max_spoken_chars, &config.environment),
+        audio::Speaker::from_values(
+            config.max_spoken_chars,
+            config.speech_deadline(),
+            &config.environment,
+        ),
         audio::SttAdapter::from_command(config.stt_command.clone()),
         audio::SttStreamAdapter::from_command(config.stt_stream_command.clone()),
     );
-    let prewarm = std::sync::Arc::new(
-        prewarm::Prewarm::start(&config, &state.0.switchboard.lock().await.registry).await,
-    );
-    state.0.switchboard.lock().await.set_prewarm(prewarm);
     api::spawn_workers(state.clone());
     api::spawn_idle_worker(state.clone(), config.idle_timeout, config.idle_poll);
     let bind = config.bind.clone();

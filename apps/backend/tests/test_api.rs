@@ -18,28 +18,13 @@ fn state_with_stt(stt: Option<String>) -> AppState {
 }
 
 fn state_with_stream(stt: Option<String>, stream: Option<String>) -> AppState {
-    let board = Switchboard::new(
-        Registry::new(vec![]),
-        "pi".into(),
-        None,
-        "".into(),
-        None,
-        None,
-        None,
-        "medium".into(),
-        ".cache".into(),
-        true,
-        "".into(),
-        "".into(),
-        "".into(),
-        "".into(),
-        HashMap::new(),
-    );
-    AppState::new_with_stream(
+    let board = Switchboard::new(&crate::Config::for_tests(&[]), Registry::new(vec![]));
+    AppState::new(
         board,
         TranscriptLog::new(10),
         Speaker::from_values(
             100,
+            std::time::Duration::from_millis(25_000),
             &HashMap::from([("ELEVENLABS_API_KEY".into(), "test-key".into())]),
         ),
         SttAdapter::from_command(stt),

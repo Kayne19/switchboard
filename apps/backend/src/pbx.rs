@@ -322,21 +322,21 @@ fn build_intro_prompt(
 
 pub struct Switchboard {
     pub registry: Registry,
-    pub pi_binary: String,
-    pub ssh_program: String,
-    pub operator_model: Option<String>,
-    pub operator_system_prompt: String,
-    pub operator_extension: Option<String>,
-    pub agent_extension_file: Option<String>,
-    pub agent_model: Option<String>,
-    pub agent_thinking: String,
-    pub remote_cache_dir: String,
-    pub model_swaps: bool,
-    pub speak_url: String,
-    pub state_url: String,
-    pub display_url: String,
-    pub persona: String,
-    pub env: HashMap<String, String>,
+    pi_binary: String,
+    ssh_program: String,
+    operator_model: Option<String>,
+    operator_system_prompt: String,
+    operator_extension: Option<String>,
+    agent_extension_file: Option<String>,
+    agent_model: Option<String>,
+    agent_thinking: String,
+    remote_cache_dir: String,
+    model_swaps: bool,
+    speak_url: String,
+    state_url: String,
+    display_url: String,
+    persona: String,
+    env: HashMap<String, String>,
     speech_deadline_ms: u64,
     activity_callback: Option<ActivityCallback>,
     route_callback: Option<RouteCallback>,
@@ -353,62 +353,28 @@ pub struct Switchboard {
     operator_note: Option<String>,
     last_activity: ActivityClock,
     coordinator: Option<Coordinator>,
-    pub prewarm: Option<Arc<crate::prewarm::Prewarm>>,
+    prewarm: Option<Arc<crate::prewarm::Prewarm>>,
 }
 impl Switchboard {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        registry: Registry,
-        pi_binary: String,
-        operator_model: Option<String>,
-        operator_system_prompt: String,
-        operator_extension: Option<String>,
-        agent_extension_file: Option<String>,
-        agent_model: Option<String>,
-        agent_thinking: String,
-        remote_cache_dir: String,
-        model_swaps: bool,
-        speak_url: String,
-        state_url: String,
-        display_url: String,
-        persona: String,
-        env: HashMap<String, String>,
-    ) -> Self {
-        let speech_deadline_ms = match env.get("SWITCHBOARD_SPEECH_DEADLINE_MS") {
-            None => 25_000,
-            Some(raw) => raw
-                .trim()
-                .parse::<u64>()
-                .ok()
-                .filter(|value| (1..=120_000).contains(value))
-                .unwrap_or_else(|| {
-                    panic!("SWITCHBOARD_SPEECH_DEADLINE_MS must be a positive integer from 1 to 120000 ms")
-                }),
-        };
-        let ssh_program = env
-            .get("SWITCHBOARD_SSH_PROGRAM")
-            .map(String::as_str)
-            .unwrap_or("ssh")
-            .trim()
-            .to_owned();
+    pub fn new(config: &crate::Config, registry: Registry) -> Self {
         Self {
             registry,
-            pi_binary,
-            ssh_program,
-            operator_model,
-            operator_system_prompt,
-            operator_extension,
-            agent_extension_file,
-            agent_model,
-            agent_thinking,
-            remote_cache_dir,
-            model_swaps,
-            speak_url,
-            state_url,
-            display_url,
-            persona,
-            env,
-            speech_deadline_ms,
+            pi_binary: config.pi_binary.clone(),
+            ssh_program: config.ssh_program.clone(),
+            operator_model: config.operator_model.clone(),
+            operator_system_prompt: config.operator_prompt.to_string_lossy().into_owned(),
+            operator_extension: config.operator_extension.clone(),
+            agent_extension_file: config.agent_extension.clone(),
+            agent_model: config.agent_model.clone(),
+            agent_thinking: config.agent_thinking.clone(),
+            remote_cache_dir: config.remote_cache_dir.clone(),
+            model_swaps: config.model_swaps,
+            speak_url: config.speak_url.clone(),
+            state_url: config.state_url.clone(),
+            display_url: config.display_url.clone(),
+            persona: config.persona.clone(),
+            env: config.environment.clone(),
+            speech_deadline_ms: config.speech_deadline_ms,
             activity_callback: None,
             route_callback: None,
             active_session: Arc::new(Mutex::new(None)),

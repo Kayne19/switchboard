@@ -32,37 +32,13 @@ fn uuid_like_test() -> String {
 }
 
 fn test_config(root: &Path) -> crate::Config {
-    crate::Config {
-        env_file: root.join("env"),
-        state_dir: root.join("state"),
-        config_dir: root.join("config"),
-        projects_file: root.join("projects.json"),
-        operator_prompt: root.join("prompt.md"),
-        operator_extension: None,
-        agent_extension: None,
-        persona: "".into(),
-        stt_command: None,
-        stt_stream_command: None,
-        bind: "127.0.0.1:0".into(),
-        pi_binary: "pi".into(),
-        ssh_program: "ssh".into(),
-        operator_model: None,
-        agent_model: None,
-        agent_thinking: "medium".into(),
-        remote_cache_dir: ".cache/switchboard".into(),
-        model_swaps: true,
-        speak_url: "".into(),
-        state_url: "".into(),
-        diagram_url: "".into(),
-        self_url: "".into(),
-        idle_timeout: 300.0,
-        idle_poll: 10.0,
-        max_spoken_chars: 1000,
-        speech_deadline_ms: 25000,
-        history_limit: 100,
-        session: "test-session".into(),
-        environment: HashMap::new(),
-    }
+    crate::Config::for_tests(&[
+        (
+            "SWITCHBOARD_STATE_DIR",
+            &root.join("state").to_string_lossy(),
+        ),
+        ("SWITCHBOARD_IDLE_TIMEOUT", "300"),
+    ])
 }
 
 fn fake_pi_script(root: &Path) -> PathBuf {

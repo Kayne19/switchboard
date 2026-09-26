@@ -815,21 +815,6 @@ impl AppState {
         transcript_log: TranscriptLog,
         speaker: Speaker,
         stt: SttAdapter,
-    ) -> Self {
-        Self::new_with_stream(
-            switchboard,
-            transcript_log,
-            speaker,
-            stt,
-            SttStreamAdapter::from_env(),
-        )
-    }
-
-    pub fn new_with_stream(
-        switchboard: Switchboard,
-        transcript_log: TranscriptLog,
-        speaker: Speaker,
-        stt: SttAdapter,
         stt_stream: SttStreamAdapter,
     ) -> Self {
         let (events, _) = broadcast::channel(256);

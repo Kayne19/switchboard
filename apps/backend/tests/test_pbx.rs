@@ -44,22 +44,13 @@ done
 }
 
 fn board_with(projects: Vec<Project>, model_swaps: bool) -> Switchboard {
+    let swaps = if model_swaps { "1" } else { "0" };
     Switchboard::new(
+        &crate::Config::for_tests(&[
+            ("SWITCHBOARD_MODEL_SWAPS", swaps),
+            ("SWITCHBOARD_REMOTE_CACHE_DIR", ".cache"),
+        ]),
         Registry::new(projects),
-        "pi".into(),
-        None,
-        "".into(),
-        None,
-        None,
-        None,
-        "medium".into(),
-        ".cache".into(),
-        model_swaps,
-        "".into(),
-        "".into(),
-        "".into(),
-        "".into(),
-        HashMap::new(),
     )
 }
 
@@ -190,32 +181,6 @@ fn transfer_handoff_is_silent_but_model_notes_and_failures_are_spoken() {
     let failed =
         board.reply_transfer_error("The project did not answer.".into(), Some("failed".into()));
     assert_eq!(failed.to_speak, ["The project did not answer."]);
-}
-
-#[test]
-#[should_panic(expected = "SWITCHBOARD_SPEECH_DEADLINE_MS must be a positive integer")]
-fn invalid_speech_deadline_panics() {
-    let env = HashMap::from([(
-        "SWITCHBOARD_SPEECH_DEADLINE_MS".to_owned(),
-        "invalid".to_owned(),
-    )]);
-    Switchboard::new(
-        Registry::new(vec![]),
-        "pi".into(),
-        None,
-        String::new(),
-        None,
-        None,
-        None,
-        "medium".into(),
-        ".cache".into(),
-        true,
-        String::new(),
-        String::new(),
-        String::new(),
-        String::new(),
-        env,
-    );
 }
 
 #[tokio::test]
@@ -403,21 +368,8 @@ async fn fake_pi_process_completes_transfer_and_return_lifecycle() {
         prepare: String::new(),
     };
     let mut board = Switchboard::new(
+        &crate::Config::for_tests(&[("SWITCHBOARD_PI_BINARY", &runtime.to_string_lossy())]),
         Registry::new(vec![project]),
-        runtime.to_string_lossy().into_owned(),
-        None,
-        String::new(),
-        None,
-        None,
-        None,
-        "medium".into(),
-        ".cache/switchboard".into(),
-        true,
-        String::new(),
-        String::new(),
-        String::new(),
-        String::new(),
-        HashMap::new(),
     );
     let statuses = Arc::new(StdMutex::new(Vec::new()));
     let statuses_for_callback = Arc::clone(&statuses);
@@ -479,21 +431,8 @@ async fn fake_ssh_stages_the_extension_and_returns_its_remote_path() {
     );
 
     let board = Switchboard::new(
+        &crate::Config::for_tests(&[("SWITCHBOARD_AGENT_EXTENSION", &extension.to_string_lossy())]),
         Registry::new(Vec::new()),
-        "pi".into(),
-        None,
-        String::new(),
-        None,
-        Some(extension.to_string_lossy().into_owned()),
-        None,
-        "medium".into(),
-        ".cache/switchboard".into(),
-        true,
-        String::new(),
-        String::new(),
-        String::new(),
-        String::new(),
-        HashMap::new(),
     );
     let staged = board
         .upload_extension_with(&ssh.to_string_lossy(), "fake-host")
@@ -543,21 +482,11 @@ async fn staging_survives_a_remote_that_stops_reading_before_the_extension_ends(
 
     let board = || {
         Switchboard::new(
+            &crate::Config::for_tests(&[(
+                "SWITCHBOARD_AGENT_EXTENSION",
+                &extension.to_string_lossy(),
+            )]),
             Registry::new(Vec::new()),
-            "pi".into(),
-            None,
-            String::new(),
-            None,
-            Some(extension.to_string_lossy().into_owned()),
-            None,
-            "medium".into(),
-            ".cache/switchboard".into(),
-            true,
-            String::new(),
-            String::new(),
-            String::new(),
-            String::new(),
-            HashMap::new(),
         )
     };
 
@@ -725,21 +654,8 @@ done
     };
 
     let mut board = Switchboard::new(
+        &crate::Config::for_tests(&[("SWITCHBOARD_PI_BINARY", &runtime.to_string_lossy())]),
         Registry::new(vec![alpha, beta]),
-        runtime.to_string_lossy().into_owned(),
-        None,
-        String::new(),
-        None,
-        None,
-        None,
-        "medium".into(),
-        ".cache/switchboard".into(),
-        true,
-        String::new(),
-        String::new(),
-        String::new(),
-        String::new(),
-        HashMap::new(),
     );
 
     let r1 = board.handle("connect me to alpha").await;
@@ -761,37 +677,9 @@ done
 async fn no_live_setup_when_prewarm_attached() {
     let temp_dir = std::env::temp_dir().join(format!("switchboard-prewarm-test-{}", uuid_like()));
     std::fs::create_dir_all(&temp_dir).unwrap();
-    let config = crate::Config {
-        env_file: temp_dir.join("env"),
-        state_dir: temp_dir.join("state"),
-        config_dir: temp_dir.join("config"),
-        projects_file: temp_dir.join("projects.json"),
-        operator_prompt: temp_dir.join("op.md"),
-        operator_extension: None,
-        agent_extension: None,
-        persona: String::new(),
-        stt_command: None,
-        stt_stream_command: None,
-        bind: "127.0.0.1:0".into(),
-        pi_binary: "pi".into(),
-        ssh_program: "ssh".into(),
-        operator_model: None,
-        agent_model: None,
-        agent_thinking: "medium".into(),
-        remote_cache_dir: ".cache/switchboard".into(),
-        model_swaps: true,
-        self_url: String::new(),
-        idle_timeout: 3600.0,
-        idle_poll: 30.0,
-        max_spoken_chars: 700,
-        speech_deadline_ms: 25000,
-        history_limit: 100,
-        session: String::new(),
-        speak_url: String::new(),
-        state_url: String::new(),
-        diagram_url: String::new(),
-        environment: HashMap::new(),
-    };
+    let state_dir = temp_dir.join("state");
+    let config =
+        crate::Config::for_tests(&[("SWITCHBOARD_STATE_DIR", &state_dir.to_string_lossy())]);
 
     let project = Project {
         id: "local_proj".into(),
@@ -825,21 +713,8 @@ async fn no_live_setup_when_prewarm_attached() {
 #[tokio::test]
 async fn display_pbx_env_and_token_rotation() {
     let board = Switchboard::new(
+        &crate::Config::for_tests(&[("SWITCHBOARD_DISPLAY_URL", "http://127.0.0.1:8765/display")]),
         Registry::new(vec![]),
-        "pi".into(),
-        None,
-        "".into(),
-        None,
-        None,
-        None,
-        "medium".into(),
-        ".cache".into(),
-        true,
-        "".into(),
-        "".into(),
-        "http://127.0.0.1:8765/display".into(),
-        "".into(),
-        HashMap::new(),
     );
 
     assert_eq!(board.display_url, "http://127.0.0.1:8765/display");
@@ -932,21 +807,8 @@ done
     // Use Switchboard::new directly so the operator process also uses the
     // fake-pi binary (board_with hardcodes "pi" as the operator runtime).
     let mut board = Switchboard::new(
+        &crate::Config::for_tests(&[("SWITCHBOARD_PI_BINARY", &runtime.to_string_lossy())]),
         Registry::new(vec![project.clone()]),
-        runtime.to_string_lossy().into_owned(),
-        None,
-        String::new(),
-        None,
-        None,
-        None,
-        "medium".into(),
-        ".cache/switchboard".into(),
-        true,
-        String::new(),
-        String::new(),
-        String::new(),
-        String::new(),
-        HashMap::new(),
     );
 
     // Pre-seed an available catalog so the transfer can resolve the bare

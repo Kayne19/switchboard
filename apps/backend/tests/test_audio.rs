@@ -45,7 +45,7 @@ fn speaker_with_response(
         ("ELEVENLABS_MODEL_ID".into(), "model-a".into()),
     ]);
     let request = Arc::new(StdMutex::new(None));
-    let mut speaker = Speaker::from_values(100, &values);
+    let mut speaker = Speaker::from_values(100, Duration::from_millis(25_000), &values);
     speaker.transport = Arc::new(FakeTtsTransport {
         status,
         bytes: bytes.to_vec(),

@@ -27,22 +27,6 @@ const STT_TIMEOUT: Duration = Duration::from_secs(120);
 const STT_STDOUT_LIMIT: usize = 1024 * 1024;
 const STT_STDERR_LIMIT: usize = 64 * 1024;
 const TTS_RESPONSE_LIMIT: usize = 32 * 1024 * 1024;
-const SPEECH_DEADLINE_MAX_MS: u64 = 120_000;
-
-fn duration_value(values: &HashMap<String, String>, name: &str, default_ms: u64) -> Duration {
-    let millis = match values.get(name) {
-        None => default_ms,
-        Some(raw) => raw
-            .trim()
-            .parse::<u64>()
-            .ok()
-            .filter(|value| (1..=SPEECH_DEADLINE_MAX_MS).contains(value))
-            .unwrap_or_else(|| {
-                panic!("{name} must be a positive integer from 1 to {SPEECH_DEADLINE_MAX_MS} ms")
-            }),
-    };
-    Duration::from_millis(millis)
-}
 
 #[derive(Debug)]
 pub enum AudioError {
@@ -259,10 +243,6 @@ impl SttAdapter {
         }
     }
 
-    pub fn from_env() -> Self {
-        Self::from_command(std::env::var("SWITCHBOARD_STT_COMMAND").ok())
-    }
-
     pub async fn transcribe(&self, webm: &[u8]) -> Result<String, AudioError> {
         let command = self
             .command
@@ -447,10 +427,6 @@ impl SttStreamAdapter {
             adapter.spawn_worker(request_rx, results);
         }
         adapter
-    }
-
-    pub fn from_env() -> Self {
-        Self::from_command(std::env::var("SWITCHBOARD_STT_STREAM_COMMAND").ok())
     }
 
     pub fn configured(&self) -> bool {
@@ -745,12 +721,13 @@ impl std::fmt::Debug for Speaker {
     }
 }
 impl Speaker {
-    pub fn from_env(max_chars: usize) -> Self {
-        let values = std::env::vars().collect::<HashMap<_, _>>();
-        Self::from_values(max_chars, &values)
-    }
-
-    pub fn from_values(max_chars: usize, values: &HashMap<String, String>) -> Self {
+    /// `values` supplies the ElevenLabs settings; the deadline is the parsed
+    /// `SWITCHBOARD_SPEECH_DEADLINE_MS`, shared with the project extension.
+    pub fn from_values(
+        max_chars: usize,
+        speech_deadline: Duration,
+        values: &HashMap<String, String>,
+    ) -> Self {
         fn value(values: &HashMap<String, String>, name: &str, default: &str) -> String {
             values
                 .get(name)
@@ -775,7 +752,7 @@ impl Speaker {
             style: number(values, "ELEVENLABS_STYLE", 0.0),
             speed: number(values, "ELEVENLABS_SPEED", 1.0),
             max_chars,
-            speech_deadline: duration_value(values, "SWITCHBOARD_SPEECH_DEADLINE_MS", 25_000),
+            speech_deadline,
             transport: Arc::new(HttpTtsTransport::new()),
         }
     }
