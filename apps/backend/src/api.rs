@@ -1,10 +1,10 @@
 //! HTTP, WebSocket and application workers.
 use crate::audio::{Speaker, StreamResult, SttAdapter, SttStreamAdapter};
 use crate::history::{TranscriptLog, AGENT, CALLER};
-use crate::lifecycle::Coordinator;
-use crate::pbx::{LiveLegState, RouteCallback, Switchboard};
+use crate::lifecycle::{ActivityDisposition, Coordinator};
+use crate::pbx::{RouteCallback, Switchboard};
 use crate::pi_client::{Activity, ActivityCallback, PiSession};
-use crate::protocol::{ErrorCode, ServerMessage};
+use crate::protocol::{ErrorCode, ServerMessage, Status};
 use axum::extract::ws::{Message, WebSocket};
 use axum::{
     extract::rejection::{BytesRejection, JsonRejection},
@@ -385,13 +385,12 @@ fn stamp_display_seq(event: Event, sequence: u64) -> Event {
 ///
 /// A transfer is announced from two places: candidate promotion, when the
 /// incoming agent first shows life or acts, and the route callback, when the
-/// PBX finishes the transfer after the intro turn. Both hold one of these.
-/// They are built before `AppInner` exists, which is why this holds clones
-/// rather than the state.
+/// PBX finishes the transfer after the intro turn. Both hold one of these, and
+/// both announce the leg the coordinator names. They are built before
+/// `AppInner` exists, which is why this holds clones rather than the state.
 #[derive(Clone)]
 struct LegAnnouncer {
     coordinator: Coordinator,
-    live_leg: LiveLegState,
     events: broadcast::Sender<Event>,
     delivery: DeliveryState,
     display_gate: Arc<Mutex<DisplayGateState>>,
@@ -406,52 +405,68 @@ impl LegAnnouncer {
         self.delivery.publish(event);
     }
 
-    /// Adopts the candidate leg and announces it. False when there was no
-    /// candidate to adopt.
-    async fn promote_candidate(&self) -> bool {
+    /// Adopts the candidate leg `token` names and announces it. False when
+    /// that leg is not the one staged.
+    async fn promote_candidate(&self, token: &str) -> bool {
         // Held from adoption until the epoch is out, so a display from the
         // new leg cannot be applied ahead of its own scene reset.
         let mut gate = self.display_gate.lock().await;
-        let Ok(identity) = self.coordinator.adopt_candidate() else {
+        let Ok(identity) = self.coordinator.adopt_candidate(token) else {
             return false;
         };
-        let status = self.coordinator.status_json();
-        let route = status["route"]
-            .as_str()
-            .unwrap_or(crate::pbx::OPERATOR)
-            .to_owned();
-        self.live_leg.set_session(
-            &route,
-            if route == crate::pbx::OPERATOR {
-                ""
-            } else {
-                &identity.token
-            },
-        );
+        let status = self.coordinator.status();
         self.begin_scene(
             &mut gate,
             SceneLeg {
-                route,
+                route: status.route.clone(),
                 generation: identity.generation,
             },
         )
         .await;
-        self.publish(ServerMessage::status(status));
+        self.publish(ServerMessage::Status(status));
         true
     }
 
-    /// The route callback: the PBX has settled on a leg.
-    async fn announce_route(&self, status: Value) {
-        let route = status["route"]
-            .as_str()
-            .unwrap_or(crate::pbx::OPERATOR)
-            .to_owned();
+    /// RPC activity from a pi process. Only the leg on the line is shown, and
+    /// only the starting candidate's own activity promotes it; anything else
+    /// comes from a leg the call has left, or never joined, and is dropped.
+    async fn on_activity(&self, activity: Activity) {
+        let disposition = self.coordinator.classify_activity(&activity.leg);
+        let current = match disposition {
+            ActivityDisposition::Promote => self.promote_candidate(&activity.leg).await,
+            ActivityDisposition::Publish => true,
+            ActivityDisposition::Discard => false,
+        };
+        if !current {
+            tracing::debug!(
+                leg = %activity.leg,
+                label = %activity.label,
+                state = %activity.state,
+                tool = %activity.tool,
+                ?disposition,
+                "dropping activity from a leg that is not on the line"
+            );
+            return;
+        }
+        if activity.state == "life" {
+            return;
+        }
+        self.publish(ServerMessage::Activity {
+            state: activity.state,
+            tool: activity.tool,
+            detail: activity.detail,
+            label: activity.label,
+        });
+    }
+
+    /// The route callback: the PBX has settled on a leg, which the
+    /// coordinator names.
+    async fn announce_route(&self) {
         let mut gate = self.display_gate.lock().await;
-        let generation = self.coordinator.generation();
+        let (route, generation) = self.coordinator.route_and_generation();
         self.begin_scene(&mut gate, SceneLeg { route, generation })
             .await;
-        self.coordinator.publish_status(status.clone());
-        self.publish(ServerMessage::status(status));
+        self.publish(ServerMessage::Status(self.coordinator.status()));
     }
 
     /// Clears the scene for `leg` and sends the epoch that tells the browser
@@ -506,7 +521,6 @@ pub struct AppInner {
     pub display_gate: Arc<Mutex<DisplayGateState>>,
     pub display_confirm: watch::Sender<ConfirmState>,
     pub active_session: Arc<Mutex<Option<PiSession>>>,
-    live_leg: LiveLegState,
     leg_announcer: LegAnnouncer,
     operation_transition: Mutex<()>,
     active_operations: Mutex<HashMap<TaskId, AbortHandle>>,
@@ -841,8 +855,7 @@ impl AppState {
         let last_display = Arc::new(Mutex::new(None));
         let delivery = DeliveryState::new();
         let speech_deadline = speaker.speech_deadline;
-        let mut coordinator = Coordinator::new(switchboard.status());
-        let live_leg = switchboard.live_leg_state();
+        let mut coordinator = switchboard.coordinator();
         let display_gate = Arc::new(Mutex::new(DisplayGateState {
             projection: DisplayProjection::default(),
             screen_state: json!({
@@ -864,39 +877,16 @@ impl AppState {
         let (display_confirm_tx, _) = watch::channel(ConfirmState::default());
         let leg_announcer = LegAnnouncer {
             coordinator: coordinator.clone(),
-            live_leg: live_leg.clone(),
             events: events.clone(),
             delivery: delivery.clone(),
             display_gate: display_gate.clone(),
             display_confirm: display_confirm_tx.clone(),
             last_display: last_display.clone(),
         };
-        let activity_events = events.clone();
-        let activity_delivery = delivery.clone();
         let activity_announcer = leg_announcer.clone();
         let activity_callback: ActivityCallback = Arc::new(move |activity: Activity| {
-            let events = activity_events.clone();
-            let delivery = activity_delivery.clone();
             let announcer = activity_announcer.clone();
-            Box::pin(async move {
-                if announcer.coordinator.is_candidate() {
-                    let _ = announcer.promote_candidate().await;
-                }
-                if activity.state == "life" {
-                    return;
-                }
-                let event = Event::Json(
-                    ServerMessage::Activity {
-                        state: activity.state,
-                        tool: activity.tool,
-                        detail: activity.detail,
-                        label: activity.label,
-                    }
-                    .to_value(),
-                );
-                let _ = events.send(event.clone());
-                delivery.publish(event);
-            })
+            Box::pin(async move { announcer.on_activity(activity).await })
         });
         let candidate_events = events.clone();
         let candidate_delivery = delivery.clone();
@@ -920,13 +910,12 @@ impl AppState {
             },
         ));
         let route_announcer = leg_announcer.clone();
-        let route_callback: RouteCallback = Arc::new(move |status| {
+        let route_callback: RouteCallback = Arc::new(move || {
             let announcer = route_announcer.clone();
-            Box::pin(async move { announcer.announce_route(status).await })
+            Box::pin(async move { announcer.announce_route().await })
         });
         let active_session = switchboard.session_control();
         let mut switchboard = switchboard;
-        switchboard.set_coordinator(coordinator.clone());
         switchboard.set_activity_callback(Some(activity_callback));
         switchboard.set_route_callback(Some(route_callback));
         Self(Arc::new(AppInner {
@@ -960,7 +949,6 @@ impl AppState {
             display_gate,
             display_confirm: display_confirm_tx,
             active_session,
-            live_leg,
             leg_announcer,
             operation_transition: Mutex::new(()),
             active_operations: Mutex::new(HashMap::new()),
@@ -1050,11 +1038,11 @@ pub fn spawn_idle_worker(state: AppState, idle_timeout: f64, poll_seconds: f64) 
                 .return_if_idle(std::time::Duration::from_secs_f64(idle_timeout))
                 .is_some()
             {
-                let mut board = state.0.switchboard.lock().await;
-                let left = board.force_hangup().await;
-                let route = board.route().to_owned();
-                drop(board);
-                let Some(left) = left else { continue };
+                let left = state.0.switchboard.lock().await.force_hangup().await;
+                let Some(left) = left else {
+                    publish_status(&state);
+                    continue;
+                };
                 let minutes = (idle_timeout / 60.0).floor() as u64;
                 emit_message(
                     &state,
@@ -1062,10 +1050,10 @@ pub fn spawn_idle_worker(state: AppState, idle_timeout: f64, poll_seconds: f64) 
                         generation: state.0.coordinator.generation(),
                     },
                 );
-                if let Some(entry) = state.0.transcript_log.lock().await.add(AGENT, &format!("Nothing was said for {minutes} minutes, so the line to {left} was dropped. You're back with the operator."), route) {
+                if let Some(entry) = state.0.transcript_log.lock().await.add(AGENT, &format!("Nothing was said for {minutes} minutes, so the line to {left} was dropped. You're back with the operator."), state.0.coordinator.route()) {
                     emit_message(&state, ServerMessage::Spoken { entry });
                 }
-                publish_status(&state, current_status(&state));
+                publish_status(&state);
             }
         }
     });
@@ -1078,12 +1066,21 @@ fn emit(state: &AppState, event: Event) -> bool {
 fn emit_message(state: &AppState, message: ServerMessage) -> bool {
     emit(state, Event::Json(message.to_value()))
 }
-fn current_status(state: &AppState) -> Value {
-    state.0.coordinator.status_json()
+fn current_status(state: &AppState) -> Status {
+    state.0.coordinator.status()
 }
-fn publish_status(state: &AppState, status: Value) {
-    state.0.coordinator.publish_status(status.clone());
-    emit_message(state, ServerMessage::status(status));
+/// Settles the call (see `Coordinator::settle`) and tells the browser where
+/// it is.
+fn publish_status(state: &AppState) {
+    emit_message(state, ServerMessage::Status(state.0.coordinator.settle()));
+}
+/// Settles the call a control rescued at `generation`, unless a newer rescue
+/// has taken it over since; that one settles it instead.
+async fn settle_if_current(state: &AppState, generation: u64) {
+    let _transition = state.0.operation_transition.lock().await;
+    if generation == state.0.coordinator.generation() {
+        publish_status(state);
+    }
 }
 
 async fn promote_candidate_for_token(state: &AppState, token: &str) {
@@ -1093,7 +1090,7 @@ async fn promote_candidate_for_token(state: &AppState, token: &str) {
         .candidate_identity()
         .is_some_and(|candidate| candidate.token == token)
     {
-        let _ = state.0.leg_announcer.promote_candidate().await;
+        let _ = state.0.leg_announcer.promote_candidate(token).await;
     }
 }
 
@@ -1265,7 +1262,7 @@ async fn process_speech(state: AppState) {
             Ok((bytes, delivered)) => {
                 tracing::info!(chars = text.chars().count(), bytes, elapsed = ?started.elapsed(), "synthesized a mid-turn line");
                 if delivered {
-                    let route = state.0.live_leg.route();
+                    let route = state.0.coordinator.route();
                     if let Some(entry) =
                         state.0.transcript_log.lock().await.add(AGENT, &text, route)
                     {
@@ -1375,7 +1372,7 @@ async fn route_final_transcript(state: &AppState, id: &str, generation: u64, tra
         emit_stale_clip(state, id);
         return;
     }
-    let route = state.0.live_leg.route();
+    let route = state.0.coordinator.route();
     state.0.transcript_log.lock().await.add_with_id(
         CALLER,
         &transcript,
@@ -1495,7 +1492,7 @@ async fn process_clips(state: AppState) {
             emit_stale_clip(&state, &clip.id);
             continue;
         }
-        let route = state.0.live_leg.route();
+        let route = state.0.coordinator.route();
         tracing::info!(
             clip = %clip.id,
             %route,
@@ -1643,7 +1640,7 @@ async fn process_turns(state: AppState) {
         // Register the abort handle before awaiting the task. Page-level rescue
         // endpoints can now cancel work even while transfer setup has no
         // PiSession yet.
-        let (operation, _status) = {
+        let operation = {
             let _transition = state.0.operation_transition.lock().await;
             let current = state.0.coordinator.generation();
             if generation != current {
@@ -1652,34 +1649,22 @@ async fn process_turns(state: AppState) {
                 continue;
             }
             state.0.turn_in_flight.store(true, Ordering::Release);
-            let status = current_status(&state);
+            let route = state.0.coordinator.route();
             let waiting = state.0.queued_turns.load(Ordering::Acquire);
-            tracing::info!(clip = %id, route = %status["route"], waiting, "dispatching a turn");
-            emit_message(
-                &state,
-                ServerMessage::Thinking {
-                    route: status["route"]
-                        .as_str()
-                        .unwrap_or(crate::pbx::OPERATOR)
-                        .to_owned(),
-                    waiting,
-                },
-            );
-            let operation = state
+            tracing::info!(clip = %id, %route, waiting, "dispatching a turn");
+            emit_message(&state, ServerMessage::Thinking { route, waiting });
+            state
                 .0
                 .coordinator
                 .begin_prompt(&state.0.coordinator.current_identity())
-                .ok();
-            (operation, status)
+                .ok()
         };
         // The PBX, the agent, and the reply's synthesis all log under the
         // clip that started the turn.
         let turn = tracing::info_span!("turn", clip = %id);
         let handle_turn = async move {
             let mut board = turn_state.0.switchboard.lock().await;
-            let reply = board.handle(&transcript).await;
-            let status = board.status();
-            (reply, status)
+            board.handle(&transcript).await
         };
         let Some((task, task_id)) =
             spawn_registered_operation(&state, generation, handle_turn.instrument(turn.clone()))
@@ -1693,7 +1678,7 @@ async fn process_turns(state: AppState) {
             state.0.turn_in_flight.store(false, Ordering::Release);
             continue;
         };
-        let (reply, status) = match task.await {
+        let reply = match task.await {
             Ok(result) => result,
             Err(error) if error.is_cancelled() => {
                 tracing::info!(clip = %id, elapsed = ?started.elapsed(), "the turn was cancelled by a page rescue");
@@ -1733,7 +1718,6 @@ async fn process_turns(state: AppState) {
         deliver_turn_if_current(
             &state,
             &reply,
-            status,
             reply.delivery_generation.unwrap_or(generation),
             &id,
         )
@@ -1747,11 +1731,12 @@ async fn process_turns(state: AppState) {
 async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
     let status = current_status(&state);
     Json(
-        json!({"status":"ok", "git":crate::GIT_SHA, "stt_configured":state.0.stt.command.is_some(), "stt_stream_configured":state.0.stt_stream.configured(), "elevenlabs_configured":state.0.speaker.configured(), "route":status["route"], "model":status["model"], "thinking":status["thinking"], "model_swaps":status["model_swaps"], "projects":status["projects"]}),
+        json!({"status":"ok", "git":crate::GIT_SHA, "stt_configured":state.0.stt.command.is_some(), "stt_stream_configured":state.0.stt_stream.configured(), "elevenlabs_configured":state.0.speaker.configured(), "route":status.route, "model":status.model, "thinking":status.thinking, "model_swaps":status.model_swaps, "projects":status.projects}),
     )
 }
+/// The status message the page is sent, `type` included.
 async fn status(State(state): State<AppState>) -> impl IntoResponse {
-    Json(current_status(&state))
+    Json(ServerMessage::Status(current_status(&state)).to_value())
 }
 async fn interrupt_active_turn(state: &AppState) -> Option<String> {
     cancel_active_operations(state).await
@@ -1770,7 +1755,10 @@ async fn cancel_active_operations(state: &AppState) -> Option<String> {
     for operation in operations.into_values() {
         operation.abort();
     }
-    let active = state.0.active_session.lock().await.clone();
+    // Taken as well as closed: the PBX names the live session again when it
+    // settles on a leg, and a later rescue must not report a process this one
+    // has already closed.
+    let active = state.0.active_session.lock().await.take();
     let label = active.as_ref().map(|session| session.label().to_owned());
     if let Some(session) = active {
         session.close().await;
@@ -1803,7 +1791,7 @@ enum RunningWork {
 /// behind the turn it is replacing. On the operator it only records a setting
 /// for the next project call, so nothing needs to stop.
 fn running_work_for_a_redial(state: &AppState) -> RunningWork {
-    if state.0.live_leg.route() == crate::pbx::OPERATOR {
+    if state.0.coordinator.route() == crate::pbx::OPERATOR {
         RunningWork::Keep
     } else {
         RunningWork::Cancel
@@ -1813,8 +1801,9 @@ fn running_work_for_a_redial(state: &AppState) -> RunningWork {
 /// The lifecycle shared by the page controls that act through the PBX
 /// (`/connect`, `/thinking`, `/model`): run the PBX operation as a registered
 /// operation a rescue can cancel, answer 409 if it is cancelled or its leg is
-/// superseded before the reply can be delivered, and 500 if it fails. `what`
-/// names the control in those answers ("connection attempt").
+/// superseded before the reply can be delivered, and 500 if it fails. A
+/// delivered reply settles the call (`publish_status`). `what` names the
+/// control in those answers ("connection attempt").
 async fn run_page_control<F>(
     state: &AppState,
     what: &str,
@@ -1822,7 +1811,7 @@ async fn run_page_control<F>(
     operation: F,
 ) -> Result<crate::pbx::Reply, Response>
 where
-    F: Future<Output = (crate::pbx::Reply, Value)> + Send + 'static,
+    F: Future<Output = crate::pbx::Reply> + Send + 'static,
 {
     let refused = |status: axum::http::StatusCode, detail: String| {
         (status, Json(json!({ "detail": detail }))).into_response()
@@ -1844,8 +1833,9 @@ where
     };
     let joined = task.await;
     clear_active_operation(state, task_id).await;
-    let (reply, status) = match joined {
-        Ok(result) => result,
+    let reply = match joined {
+        Ok(reply) => reply,
+        // Cancelled by a newer rescue, which settles the call itself.
         Err(error) if error.is_cancelled() => {
             tracing::info!(
                 elapsed = ?started.elapsed(),
@@ -1855,6 +1845,7 @@ where
         }
         Err(error) => {
             tracing::error!(%error, elapsed = ?started.elapsed(), "failed");
+            settle_if_current(state, spawned_generation).await;
             return Err(refused(
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 format!("{what} failed: {error}"),
@@ -1862,7 +1853,7 @@ where
         }
     };
     let generation = reply.delivery_generation.unwrap_or(spawned_generation);
-    if !deliver_page_reply_if_current(state, &reply, status, generation).await {
+    if !deliver_page_reply_if_current(state, &reply, generation).await {
         tracing::info!(
             generation,
             current = state.0.coordinator.generation(),
@@ -1877,24 +1868,29 @@ where
 #[tracing::instrument(name = "http", skip_all, fields(endpoint = "/hangup"))]
 async fn hangup(State(state): State<AppState>) -> impl IntoResponse {
     let started = std::time::Instant::now();
-    tracing::info!(route = %state.0.live_leg.route(), "the page asked to hang up");
-    let interrupted = interrupt_active_turn(&state).await;
-    let mut board = state.0.switchboard.lock().await;
-    let left = board.force_hangup().await.or(interrupted);
-    let status = board.status();
-    drop(board);
-    if let Some(left) = &left {
-        if let Some(entry) = state.0.transcript_log.lock().await.add(
-            AGENT,
-            &format!("You hung up the line to {left}. You're back with the operator."),
-            status["route"].as_str().unwrap_or("operator"),
-        ) {
+    tracing::info!(route = %state.0.coordinator.route(), "the page asked to hang up");
+    // The process the rescue closed, and the leg the PBX then dropped.
+    let closed = interrupt_active_turn(&state).await;
+    let dropped = state.0.switchboard.lock().await.force_hangup().await;
+    let hung_up = hangup_outcome(dropped, closed);
+    if let Some((_, line)) = &hung_up {
+        if let Some(entry) =
+            state
+                .0
+                .transcript_log
+                .lock()
+                .await
+                .add(AGENT, line, state.0.coordinator.route())
+        {
             emit_message(&state, ServerMessage::Spoken { entry });
         }
-        publish_status(&state, status);
     }
-    match left {
-        Some(left) => {
+    // Like every page control, a hangup settles the call on its way out, even
+    // with nothing on the line: its rescue left the call quiescing, which
+    // refuses callbacks and steers until something settles it.
+    publish_status(&state);
+    match hung_up {
+        Some((left, _)) => {
             tracing::info!(%left, elapsed = ?started.elapsed(), "hung up; the caller is back on the operator");
             Json(json!({"hungup":true, "left":left}))
         }
@@ -1902,6 +1898,32 @@ async fn hangup(State(state): State<AppState>) -> impl IntoResponse {
             tracing::info!(elapsed = ?started.elapsed(), "nothing to hang up: already on the operator");
             Json(json!({"hungup":false, "reason":"already on the operator"}))
         }
+    }
+}
+
+/// What a hangup hung up on, and the line the transcript keeps for it.
+/// `dropped` is what `force_hangup` let go of: a project leg by name, or
+/// `operator` when it discarded the operator's process. `closed` is the
+/// process the rescue closed first, which names a leg that was still starting
+/// when the caller hung up on it.
+fn hangup_outcome(dropped: Option<String>, closed: Option<String>) -> Option<(String, String)> {
+    use crate::pbx::OPERATOR;
+    match (dropped, closed) {
+        (Some(project), _) if project != OPERATOR => {
+            let line = format!("You hung up the line to {project}. You're back with the operator.");
+            Some((project, line))
+        }
+        (_, Some(starting)) if starting != OPERATOR => {
+            let line = format!(
+                "You hung up on {starting} before it picked up. You're back with the operator."
+            );
+            Some((starting, line))
+        }
+        (Some(_), _) | (None, Some(_)) => Some((
+            OPERATOR.to_owned(),
+            "You cut the operator off. It starts fresh when you speak again.".to_owned(),
+        )),
+        (None, None) => None,
     }
 }
 #[derive(Deserialize)]
@@ -1920,7 +1942,7 @@ async fn connect(
         Err(rejection) => return refuse_body(rejection),
     };
     let started = std::time::Instant::now();
-    tracing::info!(project = %req.project, from = %state.0.live_leg.route(), "the page asked to connect");
+    tracing::info!(project = %req.project, from = %state.0.coordinator.route(), "the page asked to connect");
     // The picker is also an escape hatch. Cancel setup or a wedged live turn
     // before taking the PBX lock; otherwise a direct connection can wait for
     // the very leg the caller is trying to leave.
@@ -1931,8 +1953,7 @@ async fn connect(
         RunningWork::Cancel,
         async move {
             let mut board = board_state.0.switchboard.lock().await;
-            let reply = board.dial(&req.project, &req.intent).await;
-            (reply, board.status())
+            board.dial(&req.project, &req.intent).await
         },
     )
     .await;
@@ -1965,7 +1986,7 @@ async fn thinking(
         Err(rejection) => return refuse_body(rejection),
     };
     let started = std::time::Instant::now();
-    tracing::info!(thinking = %req.level, route = %state.0.live_leg.route(), "the page asked for a thinking level");
+    tracing::info!(thinking = %req.level, route = %state.0.coordinator.route(), "the page asked for a thinking level");
     let board_state = state.clone();
     let controlled = run_page_control(
         &state,
@@ -1973,21 +1994,19 @@ async fn thinking(
         running_work_for_a_redial(&state),
         async move {
             let mut board = board_state.0.switchboard.lock().await;
-            let reply = board.set_thinking(&req.level).await;
-            (reply, board.status())
+            board.set_thinking(&req.level).await
         },
     )
     .await;
     match controlled {
         Ok(reply) => {
-            let thinking = current_status(&state)["thinking"].clone();
-            let level = thinking.as_str().unwrap_or_default();
+            let thinking = current_status(&state).thinking;
             match &reply.error {
                 None => {
-                    tracing::info!(thinking = level, elapsed = ?started.elapsed(), "thinking level set")
+                    tracing::info!(%thinking, elapsed = ?started.elapsed(), "thinking level set")
                 }
                 Some(error) => {
-                    tracing::info!(thinking = level, %error, elapsed = ?started.elapsed(), "thinking level not changed")
+                    tracing::info!(%thinking, %error, elapsed = ?started.elapsed(), "thinking level not changed")
                 }
             }
             Json(json!({"thinking":thinking, "error":reply.error})).into_response()
@@ -2009,7 +2028,7 @@ async fn model(
         Err(rejection) => return refuse_body(rejection),
     };
     let started = std::time::Instant::now();
-    tracing::info!(model = %req.model, route = %state.0.live_leg.route(), "the page asked for a model");
+    tracing::info!(model = %req.model, route = %state.0.coordinator.route(), "the page asked for a model");
     let board_state = state.clone();
     let controlled = run_page_control(
         &state,
@@ -2017,19 +2036,17 @@ async fn model(
         running_work_for_a_redial(&state),
         async move {
             let mut board = board_state.0.switchboard.lock().await;
-            let reply = board.set_model(&req.model).await;
-            (reply, board.status())
+            board.set_model(&req.model).await
         },
     )
     .await;
     match controlled {
         Ok(reply) => {
-            let model = current_status(&state)["model_name"].clone();
-            let name = model.as_str().unwrap_or_default();
+            let model = current_status(&state).model_name;
             match &reply.error {
-                None => tracing::info!(model = name, elapsed = ?started.elapsed(), "model set"),
+                None => tracing::info!(%model, elapsed = ?started.elapsed(), "model set"),
                 Some(error) => {
-                    tracing::info!(model = name, %error, elapsed = ?started.elapsed(), "model not changed")
+                    tracing::info!(%model, %error, elapsed = ?started.elapsed(), "model not changed")
                 }
             }
             Json(json!({"model":model, "error":reply.error})).into_response()
@@ -2062,11 +2079,7 @@ async fn leg_state(
         Ok(public) => {
             if public {
                 tracing::info!("accepted; the page shows the reported level");
-                let _ = state.0.live_leg.report_thinking(&req.token, &req.thinking);
-                let mut status = current_status(&state);
-                status["thinking"] = Value::String(req.thinking.clone());
-                status["thinking_confirmed"] = Value::Bool(true);
-                publish_status(&state, status);
+                publish_status(&state);
             } else {
                 tracing::info!(
                     "accepted from the starting leg; it applies once the leg is adopted"
@@ -2593,7 +2606,6 @@ where
 async fn deliver_page_reply_if_current(
     state: &AppState,
     reply: &crate::pbx::Reply,
-    status: Value,
     generation: u64,
 ) -> bool {
     let _transition = state.0.operation_transition.lock().await;
@@ -2612,7 +2624,7 @@ async fn deliver_page_reply_if_current(
             emit_message(state, ServerMessage::Spoken { entry });
         }
     }
-    publish_status(state, status);
+    publish_status(state);
     drop(_transition);
     let _ = synthesize_reply_if_current(
         state,
@@ -2627,7 +2639,6 @@ async fn deliver_page_reply_if_current(
 async fn deliver_turn_if_current(
     state: &AppState,
     reply: &crate::pbx::Reply,
-    status: Value,
     generation: u64,
     response_id: &str,
 ) -> bool {
@@ -2650,7 +2661,7 @@ async fn deliver_turn_if_current(
             route: reply.route.clone(),
         },
     );
-    publish_status(state, status);
+    publish_status(state);
     drop(_transition);
     let success = synthesize_reply_if_current(
         state,
@@ -2822,7 +2833,7 @@ async fn send_snapshot_sink(
         ServerMessage::Epoch {
             generation: state.0.coordinator.generation(),
         },
-        ServerMessage::status(current_status(state)),
+        ServerMessage::Status(current_status(state)),
         ServerMessage::History {
             entries: state.0.transcript_log.lock().await.entries(),
         },

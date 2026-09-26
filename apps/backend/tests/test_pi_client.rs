@@ -231,6 +231,7 @@ async fn steer_writes_into_the_running_process() {
         PiSession::start(
             vec!["sh".into(), "-c".into(), script.into()],
             "test",
+            "test-leg",
             None,
             None,
             Duration::from_secs(1),
@@ -259,6 +260,7 @@ async fn process_prompt_collects_text_signal_and_sentinel() {
     let session = PiSession::start(
         vec!["sh".into(), "-c".into(), script.into()],
         "test",
+        "test-leg",
         None,
         None,
         Duration::from_secs(1),
@@ -286,6 +288,7 @@ async fn first_text_delta_reports_agent_life_before_the_turn_settles() {
     let session = PiSession::start(
         vec!["sh".into(), "-c".into(), script.into()],
         "test",
+        "test-leg",
         None,
         None,
         Duration::from_secs(1),
@@ -305,6 +308,7 @@ async fn speak_requires_matching_successful_tool_end() {
     let session = PiSession::start(
         vec!["sh".into(), "-c".into(), script.into()],
         "test",
+        "test-leg",
         None,
         None,
         Duration::from_secs(1),
@@ -323,6 +327,7 @@ async fn speak_tool_end_without_is_error_is_successful() {
     let session = PiSession::start(
         vec!["sh".into(), "-c".into(), script.into()],
         "test",
+        "test-leg",
         None,
         None,
         Duration::from_secs(1),
@@ -341,6 +346,7 @@ async fn speak_tool_end_with_is_error_true_is_unsuccessful() {
     let session = PiSession::start(
         vec!["sh".into(), "-c".into(), script.into()],
         "test",
+        "test-leg",
         None,
         None,
         Duration::from_secs(1),
@@ -366,6 +372,7 @@ async fn a_turn_whose_agent_exits_reports_what_it_said_after_its_output_closed()
     let session = PiSession::start(
         vec!["sh".into(), "-c".into(), script.into()],
         "test",
+        "test-leg",
         None,
         None,
         Duration::from_secs(5),
@@ -387,6 +394,7 @@ async fn a_prompt_the_agent_stopped_reading_reports_why_not_the_broken_pipe() {
     let session = PiSession::start(
         vec!["sh".into(), "-c".into(), script.into()],
         "test",
+        "test-leg",
         None,
         None,
         Duration::from_secs(5),
@@ -431,6 +439,7 @@ async fn broken_activity_callback_does_not_fail_the_turn() {
     let session = PiSession::start(
         vec!["sh".into(), "-c".into(), script.into()],
         "test",
+        "test-leg",
         None,
         None,
         Duration::from_secs(1),
@@ -483,6 +492,7 @@ async fn fake_ssh_executes_remote_rpc_command_with_callback_environment() {
     let session = PiSession::start(
         argv,
         "remote-test",
+        "remote-test-leg",
         None,
         None,
         Duration::from_secs(1),
