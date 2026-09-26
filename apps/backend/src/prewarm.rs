@@ -1514,6 +1514,15 @@ impl Prewarm {
     pub(crate) fn settle_catalog(&self, project: &Project, state: CatalogState) {
         self.inner.catalogs[&CatalogKey::for_project(project)].send_replace(state);
     }
+
+    pub(crate) fn settle_prepare(&self, project: &Project, state: PrepareState) {
+        self.inner.prepares[&project.id].send_replace(state);
+    }
+
+    /// How many launch plans are waiting for `project`'s catalog to settle.
+    pub(crate) fn catalog_waiters(&self, project: &Project) -> usize {
+        self.inner.catalogs[&CatalogKey::for_project(project)].receiver_count()
+    }
 }
 
 #[cfg(test)]
