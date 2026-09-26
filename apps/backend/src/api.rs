@@ -2,7 +2,7 @@
 use crate::audio::{Speaker, StreamResult, SttAdapter, SttStreamAdapter};
 use crate::history::{TranscriptLog, AGENT, CALLER};
 use crate::lifecycle::Coordinator;
-use crate::pbx::{ActivityClock, LiveLegState, RouteCallback, Switchboard};
+use crate::pbx::{LiveLegState, RouteCallback, Switchboard};
 use crate::pi_client::{Activity, ActivityCallback, PiSession};
 use axum::extract::ws::{Message, WebSocket};
 use axum::{
@@ -503,7 +503,6 @@ pub struct AppInner {
     pub display_gate: Arc<Mutex<DisplayGateState>>,
     pub display_confirm: watch::Sender<ConfirmState>,
     pub active_session: Arc<Mutex<Option<PiSession>>>,
-    activity_clock: ActivityClock,
     live_leg: LiveLegState,
     leg_announcer: LegAnnouncer,
     operation_transition: Mutex<()>,
@@ -542,7 +541,6 @@ pub enum Event {
     },
     AudioChunk {
         audio: Vec<u8>,
-        generation: u64,
         sequence: u64,
     },
     AudioDone {
@@ -706,11 +704,7 @@ impl AudioQueue {
             return Vec::new();
         };
         if slot.generation == generation && !audio.is_empty() {
-            slot.events.push(Event::AudioChunk {
-                audio,
-                generation,
-                sequence,
-            });
+            slot.events.push(Event::AudioChunk { audio, sequence });
         }
         self.drain_ready()
     }
@@ -912,7 +906,6 @@ impl AppState {
             Box::pin(async move { announcer.announce_route(status).await })
         });
         let active_session = switchboard.session_control();
-        let activity_clock = switchboard.activity_clock();
         let mut switchboard = switchboard;
         switchboard.set_coordinator(coordinator.clone());
         switchboard.set_activity_callback(Some(activity_callback));
@@ -948,7 +941,6 @@ impl AppState {
             display_gate,
             display_confirm: display_confirm_tx,
             active_session,
-            activity_clock,
             live_leg,
             leg_announcer,
             operation_transition: Mutex::new(()),
@@ -1388,7 +1380,6 @@ async fn route_final_transcript(state: &AppState, id: &str, generation: u64, tra
     };
     drop(active);
     if steered {
-        state.0.activity_clock.touch();
         emit_json(
             state,
             json!({"type":"queued", "id":id, "waiting":0, "steered":true}),
@@ -1537,7 +1528,6 @@ async fn process_clips(state: AppState) {
         };
         if steered {
             tracing::info!(clip = %clip.id, %route, "steered the live turn");
-            state.0.activity_clock.touch();
             emit_json(
                 &state,
                 json!({"type":"queued", "id":clip.id, "waiting":0, "steered":true}),

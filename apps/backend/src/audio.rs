@@ -56,8 +56,6 @@ struct TtsRequest {
     deadline: Instant,
 }
 
-type TtsFuture =
-    Pin<Box<dyn Future<Output = Result<(StatusCode, Vec<u8>), AudioError>> + Send + 'static>>;
 type TtsByteStream = Pin<Box<dyn Stream<Item = Result<Vec<u8>, AudioError>> + Send>>;
 type TtsStreamFuture = Pin<
     Box<
@@ -68,7 +66,6 @@ type TtsStreamFuture = Pin<
 >;
 
 trait TtsTransport: Send + Sync {
-    fn send(&self, request: TtsRequest) -> TtsFuture;
     fn send_stream(&self, request: TtsRequest) -> TtsStreamFuture;
 }
 
@@ -86,24 +83,6 @@ impl HttpTtsTransport {
 }
 
 impl TtsTransport for HttpTtsTransport {
-    fn send(&self, request: TtsRequest) -> TtsFuture {
-        let transport = self.clone();
-        Box::pin(async move {
-            let (status, _, mut stream) = transport.send_stream(request).await?;
-            let mut bytes = Vec::new();
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk?;
-                if bytes.len().saturating_add(chunk.len()) > TTS_RESPONSE_LIMIT {
-                    return Err(AudioError::Tts(
-                        "ElevenLabs response exceeded the audio size limit".into(),
-                    ));
-                }
-                bytes.extend_from_slice(&chunk);
-            }
-            Ok((status, bytes))
-        })
-    }
-
     fn send_stream(&self, request: TtsRequest) -> TtsStreamFuture {
         let client = self.client.clone();
         Box::pin(async move {
@@ -778,56 +757,6 @@ impl Speaker {
             |count| chars.chars().take(count).collect(),
         );
         format!("{} — there's more on screen.", clipped.trim_end())
-    }
-    pub async fn synthesize(&self, text: &str) -> Result<Vec<u8>, AudioError> {
-        self.synthesize_until(text, Instant::now() + self.speech_deadline)
-            .await
-    }
-
-    pub async fn synthesize_until(
-        &self,
-        text: &str,
-        deadline: Instant,
-    ) -> Result<Vec<u8>, AudioError> {
-        if deadline <= Instant::now() {
-            return Err(AudioError::Deadline);
-        }
-        if !self.configured() {
-            return Err(AudioError::Tts("ELEVENLABS_API_KEY is not set".into()));
-        }
-        #[derive(Serialize)]
-        struct Settings {
-            stability: f32,
-            similarity_boost: f32,
-            style: f32,
-            speed: f32,
-        }
-        let body = serde_json::json!({"text": text, "model_id": self.model_id, "voice_settings": Settings { stability: self.stability, similarity_boost: self.similarity_boost, style: self.style, speed: self.speed }});
-        let request = TtsRequest {
-            url: format!(
-                "{}?output_format=mp3_44100_128",
-                ELEVENLABS_TTS_URL.replace("{voice_id}", &self.voice_id)
-            ),
-            api_key: self.api_key.clone(),
-            body,
-            deadline,
-        };
-        let (status, bytes) = self.transport.send(request).await?;
-        if bytes.len() > TTS_RESPONSE_LIMIT {
-            return Err(AudioError::Tts(
-                "ElevenLabs response exceeded the audio size limit".into(),
-            ));
-        }
-        if status != StatusCode::OK {
-            return Err(AudioError::Tts(format!(
-                "ElevenLabs TTS failed ({status}): {}",
-                String::from_utf8_lossy(&bytes)
-                    .chars()
-                    .take(500)
-                    .collect::<String>()
-            )));
-        }
-        Ok(bytes)
     }
 
     pub async fn stream_until(

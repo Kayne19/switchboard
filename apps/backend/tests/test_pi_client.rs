@@ -18,9 +18,13 @@ fn ssh_options_injected_program_and_control_master_no() {
     assert!(base_args.contains(&"ControlMaster=no".into()));
     assert!(base_args.contains(&"ControlPath=/tmp/control.sock".into()));
 
-    let cat_argv = options.catalog_argv("pi");
-    assert_eq!(cat_argv[0], "/usr/local/bin/custom-ssh");
-    assert!(cat_argv.contains(&"ControlMaster=no".into()));
+    // Prewarm's listing, staging, and prepare commands all go through here.
+    let command = options.remote_command("pi --list-models");
+    assert_eq!(command.as_std().get_program(), "/usr/local/bin/custom-ssh");
+    assert!(command
+        .as_std()
+        .get_args()
+        .any(|arg| arg == "ControlMaster=no"));
 
     let remote_args =
         options.remote_argv("/tmp", "pi", None, None, None, None, &[], &HashMap::new());

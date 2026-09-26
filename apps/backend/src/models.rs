@@ -72,11 +72,6 @@ impl CatalogKey {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CatalogSpec {
-    pub key: CatalogKey,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogEntry {
     pub provider: String,
     pub model: String,

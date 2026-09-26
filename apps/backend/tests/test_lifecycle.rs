@@ -109,7 +109,7 @@ fn prompt_and_steer_share_one_operation_identity() {
     let leg = coordinator.current_identity();
     let operation = coordinator.begin_prompt(&leg).unwrap();
     assert_eq!(coordinator.attach_steer(&leg).unwrap(), operation);
-    assert!(coordinator.accept_callback(&leg, &operation));
+    assert_eq!(coordinator.accept_side_effect(&leg.token), Ok(()));
     assert!(coordinator.finish_operation(&operation));
     assert!(!coordinator.finish_operation(&operation));
 }
@@ -145,12 +145,13 @@ fn startup_thinking_is_private_until_candidate_adoption() {
     );
     coordinator.begin_candidate(candidate).unwrap();
     assert!(coordinator
-        .accept_startup_thinking("candidate", "not-a-level")
+        .accept_thinking_callback("candidate", "not-a-level")
         .is_err());
     assert_eq!(coordinator.status_json()["thinking"], "");
-    coordinator
-        .accept_startup_thinking("candidate", "high")
-        .unwrap();
+    assert_eq!(
+        coordinator.accept_thinking_callback("candidate", "high"),
+        Ok(false)
+    );
     assert_eq!(coordinator.status_json()["route"], "operator");
     let identity = coordinator.adopt_candidate().unwrap();
     assert_eq!(identity.generation, 1);
@@ -180,7 +181,7 @@ fn invalid_startup_thinking_is_rejected() {
     let candidate = CandidateLeg::new("alpha", "alpha", "session", "candidate", "model", "medium");
     coordinator.begin_candidate(candidate).unwrap();
     assert_eq!(
-        coordinator.accept_startup_thinking("candidate", "invalid_level"),
+        coordinator.accept_thinking_callback("candidate", "invalid_level"),
         Err(LifecycleError::WrongPhase)
     );
     coordinator.adopt_candidate().unwrap();
@@ -201,14 +202,14 @@ fn candidate_failure_rolls_back_private_state_and_side_effects_are_rejected() {
         ))
         .unwrap();
     assert_eq!(
-        coordinator.reject_candidate_side_effect(),
+        coordinator.accept_side_effect("candidate"),
         Err(LifecycleError::CandidateSideEffect)
     );
     assert_eq!(
         coordinator.accept_thinking_callback("candidate", "high"),
         Ok(false)
     );
-    assert!(coordinator.rollback_candidate("intro failed"));
+    assert!(coordinator.rollback_startup("intro failed"));
     assert_eq!(coordinator.status_json()["route"], "operator");
     assert!(coordinator.candidate_identity().is_none());
     assert!(!coordinator.is_candidate());
@@ -279,9 +280,7 @@ fn catalog_publication_matches_adoption_generation() {
         )
         .unwrap();
     coordinator.adopt_candidate().unwrap();
-    let status = coordinator.status_snapshot();
-    assert!(status.is_catalog_current());
-    assert_eq!(status.json()["models"][0]["model"], "opus");
+    assert_eq!(coordinator.status_json()["models"][0]["model"], "opus");
 }
 
 #[test]
@@ -315,4 +314,41 @@ fn status_read_does_not_wait_for_lifecycle_linearization() {
     assert_eq!(coordinator.status_json()["route"], "operator");
     release.wait();
     worker.join().unwrap();
+}
+
+#[test]
+fn idle_time_is_measured_from_the_last_turn_boundary() {
+    let coordinator = coordinator();
+    coordinator
+        .begin_candidate(CandidateLeg::new(
+            "alpha", "alpha", "session", "token", "model", "medium",
+        ))
+        .unwrap();
+    coordinator.adopt_candidate().unwrap();
+    coordinator.finish_intro();
+    let idle = std::time::Duration::from_millis(40);
+
+    // A turn that outlasts the idle timeout has not left the caller silent:
+    // silence starts when it ends.
+    let operation = coordinator
+        .begin_prompt(&coordinator.current_identity())
+        .unwrap();
+    std::thread::sleep(idle * 2);
+    coordinator.finish_operation(&operation);
+    assert_eq!(coordinator.return_if_idle(idle), None);
+
+    // A steer is the caller speaking.
+    let operation = coordinator
+        .begin_prompt(&coordinator.current_identity())
+        .unwrap();
+    std::thread::sleep(idle * 2);
+    coordinator
+        .attach_steer(&coordinator.current_identity())
+        .unwrap();
+    coordinator.finish_operation(&operation);
+    std::thread::sleep(idle / 2);
+    assert_eq!(coordinator.return_if_idle(idle), None);
+
+    std::thread::sleep(idle * 2);
+    assert!(coordinator.return_if_idle(idle).is_some());
 }

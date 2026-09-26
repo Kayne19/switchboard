@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const DEFAULT_LIMIT: usize = 200;
 pub const CALLER: &str = "caller";
 pub const AGENT: &str = "agent";
 
@@ -35,10 +34,6 @@ impl TranscriptLog {
             limit,
             entries: VecDeque::with_capacity(limit),
         }
-    }
-
-    pub fn limit(&self) -> usize {
-        self.limit
     }
 
     pub fn add(
@@ -80,22 +75,6 @@ impl TranscriptLog {
 
     pub fn entries(&self) -> Vec<TranscriptEntry> {
         self.entries.iter().cloned().collect()
-    }
-
-    pub fn replace<I>(&mut self, entries: I)
-    where
-        I: IntoIterator<Item = TranscriptEntry>,
-    {
-        self.entries.clear();
-        for entry in entries {
-            if self.limit == 0 {
-                break;
-            }
-            if self.entries.len() == self.limit {
-                self.entries.pop_front();
-            }
-            self.entries.push_back(entry);
-        }
     }
 
     pub fn payload(&self) -> HistoryPayload {

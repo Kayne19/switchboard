@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Mutex as StdMutex;
 
 #[cfg(unix)]
 fn fake_runtime() -> (std::path::PathBuf, std::path::PathBuf) {
@@ -287,10 +288,6 @@ async fn transfer_ctx_ambiguous_project_returns_candidate_options() {
     let ctx = TransferContext {
         exact_caller_transcript: "transfer to shared".into(),
         derived_intent: String::new(),
-        direct_page_transfer_context: None,
-        selected_project_id: None,
-        return_operator_note: None,
-        project_summary: None,
     };
 
     let reply = board.transfer_ctx(&ctx, "shared", "", "").await;
@@ -367,10 +364,6 @@ fn unicode_payload_preserved_in_transfer_context_and_intro_prompt() {
     let context = TransferContext {
         exact_caller_transcript: unicode_text.to_owned(),
         derived_intent: "intent with 日本語".to_owned(),
-        direct_page_transfer_context: None,
-        selected_project_id: Some("alpha".to_owned()),
-        return_operator_note: None,
-        project_summary: None,
     };
     let project = Project {
         id: "alpha".into(),
@@ -658,10 +651,6 @@ async fn a_transfer_resolves_a_bare_model_against_the_launch_catalog() {
     let ctx = TransferContext {
         exact_caller_transcript: "connect me".into(),
         derived_intent: String::new(),
-        direct_page_transfer_context: None,
-        selected_project_id: None,
-        return_operator_note: None,
-        project_summary: None,
     };
 
     let reply = board.transfer_ctx(&ctx, "alpha", "current", "").await;

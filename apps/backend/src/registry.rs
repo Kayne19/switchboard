@@ -61,15 +61,6 @@ impl Project {
     pub fn is_remote(&self) -> bool {
         self.canonical_host().is_some()
     }
-
-    pub fn public(&self) -> serde_json::Value {
-        serde_json::json!({
-            "id": self.id,
-            "description": self.description,
-            "aliases": self.aliases,
-            "location": format!("{}:{}", self.canonical_host().unwrap_or("damocles"), self.cwd),
-        })
-    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -284,17 +275,6 @@ impl Registry {
                 ResolveResult::Ambiguous(candidates)
             }
         }
-    }
-
-    pub fn resolve(&self, spoken: &str) -> Option<&Project> {
-        match self.resolve_detailed(spoken) {
-            ResolveResult::Exact(project) => Some(project),
-            _ => None,
-        }
-    }
-
-    pub fn catalog(&self) -> Vec<serde_json::Value> {
-        self.projects.iter().map(Project::public).collect()
     }
 
     pub fn operator_prompt_catalog(&self) -> String {

@@ -50,7 +50,6 @@ pub enum ArtifactState {
     Sentinel {
         reason: String,
     },
-    NotRequired,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -526,7 +525,6 @@ impl Prewarm {
                 ArtifactState::Sentinel { reason } => {
                     return Ok(ArtifactDecision::Sentinel(reason))
                 }
-                ArtifactState::NotRequired => return Ok(ArtifactDecision::None),
                 _ => {
                     if rx.changed().await.is_err() {
                         return Err(format!("artifact watch closed for host {canonical_host:?}"));

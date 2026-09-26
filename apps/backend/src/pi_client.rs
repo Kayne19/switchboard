@@ -96,8 +96,6 @@ struct SessionInner {
 #[derive(Clone)]
 pub struct PiSession {
     inner: Arc<SessionInner>,
-    pub argv: Vec<String>,
-    pub cwd: Option<String>,
 }
 
 impl PiSession {
@@ -162,7 +160,7 @@ impl PiSession {
             stderr_task: StdMutex::new(Some(stderr_task)),
             process_guard,
         });
-        Ok(Self { inner, argv, cwd })
+        Ok(Self { inner })
     }
 
     pub fn busy(&self) -> bool {
@@ -918,14 +916,6 @@ impl SshClientOptions {
         let mut argv = vec![self.ssh_program.clone()];
         argv.extend(self.base_args());
         argv.push(command);
-        argv
-    }
-
-    pub fn catalog_argv(&self, binary: &str) -> Vec<String> {
-        let remote_cmd = format!("{} --list-models", shell_quote(binary));
-        let mut argv = vec![self.ssh_program.clone()];
-        argv.extend(self.base_args());
-        argv.push(remote_cmd);
         argv
     }
 

@@ -8,12 +8,6 @@ struct FakeTtsTransport {
     request: Arc<StdMutex<Option<TtsRequest>>>,
 }
 impl TtsTransport for FakeTtsTransport {
-    fn send(&self, request: TtsRequest) -> TtsFuture {
-        *self.request.lock().unwrap() = Some(request);
-        let response = Ok((self.status, self.bytes.clone()));
-        Box::pin(async move { response })
-    }
-
     fn send_stream(&self, request: TtsRequest) -> TtsStreamFuture {
         *self.request.lock().unwrap() = Some(request);
         let status = self.status;
@@ -312,19 +306,23 @@ async fn tts_stream_preserves_provider_chunk_boundaries_and_request_contract() {
 
 #[tokio::test]
 async fn tts_adapter_sends_expected_request_and_surfaces_http_failure() {
+    let deadline = Instant::now() + Duration::from_secs(1);
     let (speaker, request) = speaker_with_response(StatusCode::OK, b"mp3");
-    assert_eq!(speaker.synthesize("Hello there").await.unwrap(), b"mp3");
+    let mut stream = speaker.stream_until("Hello there", deadline).await.unwrap();
+    let mut audio = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        audio.extend(chunk.unwrap());
+    }
+    assert_eq!(audio, b"mp3");
     let request = request.lock().unwrap().clone().unwrap();
-    assert_eq!(
-        request.url,
-        "https://api.elevenlabs.io/v1/text-to-speech/voice-a?output_format=mp3_44100_128"
-    );
     assert_eq!(request.api_key, "test-secret");
     assert_eq!(request.body["text"], "Hello there");
     assert_eq!(request.body["model_id"], "model-a");
 
     let (speaker, _) = speaker_with_response(StatusCode::TOO_MANY_REQUESTS, b"slow down");
-    let error = speaker.synthesize("Hello").await.unwrap_err();
+    let Err(error) = speaker.stream_until("Hello", deadline).await else {
+        panic!("a 429 must not start an audio stream");
+    };
     assert!(error.to_string().contains("429 Too Many Requests"));
     assert!(error.to_string().contains("slow down"));
 }

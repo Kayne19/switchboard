@@ -13,37 +13,13 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
-use std::time::Instant;
+use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::Mutex;
 use tokio::time::Duration;
 
 pub const OPERATOR: &str = "operator";
 pub type RouteCallback =
     Arc<dyn Fn(serde_json::Value) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
-
-#[derive(Clone, Debug)]
-pub struct ActivityClock(Arc<StdMutex<Instant>>);
-impl ActivityClock {
-    fn new() -> Self {
-        Self(Arc::new(StdMutex::new(Instant::now())))
-    }
-
-    pub fn touch(&self) {
-        *self
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Instant::now();
-    }
-
-    fn elapsed(&self) -> f64 {
-        self.0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .elapsed()
-            .as_secs_f64()
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct LiveLegState(Arc<StdRwLock<LiveLegSnapshot>>);
@@ -154,14 +130,13 @@ impl Reply {
     }
 }
 
+/// What the incoming project leg is told about why the caller is arriving.
 #[derive(Clone, Debug, Default)]
 pub struct TransferContext {
+    /// The caller's words, verbatim; empty when the page connected them.
     pub exact_caller_transcript: String,
+    /// The transferring agent's reading of what the caller wants.
     pub derived_intent: String,
-    pub direct_page_transfer_context: Option<String>,
-    pub selected_project_id: Option<String>,
-    pub return_operator_note: Option<String>,
-    pub project_summary: Option<String>,
 }
 
 fn build_intro_prompt(
@@ -178,22 +153,16 @@ fn build_intro_prompt(
         prompt.push_str(&format!("Description: {}\n", project.description));
     }
 
-    if let Some(page_ctx) = &context.direct_page_transfer_context {
-        prompt.push_str("\n[DIRECT PAGE TRANSFER]\n");
+    prompt.push_str("\n[CALLER TRANSCRIPT]\n");
+    if context.exact_caller_transcript.is_empty() {
         prompt.push_str("No caller transcript was supplied.\n");
-        prompt.push_str(&format!("Context: {page_ctx}\n"));
     } else {
-        prompt.push_str("\n[CALLER TRANSCRIPT]\n");
-        if context.exact_caller_transcript.is_empty() {
-            prompt.push_str("No caller transcript was supplied.\n");
-        } else {
-            prompt.push_str(&format!(
-                "Bytes: {}\n",
-                context.exact_caller_transcript.len()
-            ));
-            prompt.push_str(&context.exact_caller_transcript);
-            prompt.push('\n');
-        }
+        prompt.push_str(&format!(
+            "Bytes: {}\n",
+            context.exact_caller_transcript.len()
+        ));
+        prompt.push_str(&context.exact_caller_transcript);
+        prompt.push('\n');
     }
 
     if !context.derived_intent.is_empty() {
@@ -250,7 +219,6 @@ pub struct Switchboard {
     leg_catalog: Option<ModelCatalog>,
     live_leg: LiveLegState,
     operator_note: Option<String>,
-    last_activity: ActivityClock,
     coordinator: Option<Coordinator>,
     /// The only owner of launch setup: transports, catalogs, staged
     /// extensions, and prepare reports are all settled here at startup.
@@ -285,7 +253,6 @@ impl Switchboard {
             leg_catalog: None,
             live_leg: LiveLegState::new(),
             operator_note: None,
-            last_activity: ActivityClock::new(),
             coordinator: None,
             prewarm,
         }
@@ -346,14 +313,8 @@ impl Switchboard {
     pub fn route(&self) -> &str {
         &self.route
     }
-    pub fn activity_clock(&self) -> ActivityClock {
-        self.last_activity.clone()
-    }
     pub fn live_leg_state(&self) -> LiveLegState {
         self.live_leg.clone()
-    }
-    pub fn touch_activity(&self) {
-        self.last_activity.touch();
     }
     pub fn status(&self) -> serde_json::Value {
         let spec = if self.route == OPERATOR {
@@ -412,9 +373,6 @@ impl Switchboard {
                 .unwrap_or_else(|| self.route.clone())
         }
     }
-    pub fn report_leg_state(&self, token: &str, thinking: &str) -> bool {
-        self.live_leg.report_thinking(token, thinking)
-    }
     pub async fn shutdown(&mut self) {
         if let Some(session) = self.agent.take() {
             session.close().await;
@@ -426,54 +384,21 @@ impl Switchboard {
         // Idempotent: the service's shutdown path may reach here twice.
         self.prewarm.shutdown().await;
     }
-    fn active(&self) -> Option<&PiSession> {
-        if self.route == OPERATOR {
-            self.operator.as_ref()
-        } else {
-            self.agent.as_ref()
-        }
-    }
 
     pub async fn handle(&mut self, text: &str) -> Reply {
         let context = TransferContext {
             exact_caller_transcript: text.to_owned(),
             derived_intent: String::new(),
-            direct_page_transfer_context: None,
-            selected_project_id: None,
-            return_operator_note: None,
-            project_summary: None,
         };
         self.handle_ctx(&context).await
     }
 
     pub async fn handle_ctx(&mut self, context: &TransferContext) -> Reply {
-        self.touch_activity();
-        let reply = if self.route == OPERATOR {
+        if self.route == OPERATOR {
             self.handle_operator_ctx(context).await
         } else {
             self.handle_agent_ctx(context).await
-        };
-        self.touch_activity();
-        reply
-    }
-    pub async fn steer_if_busy(&self, text: &str) -> bool {
-        let Some(session) = self.active() else {
-            return false;
-        };
-        if !session.busy() || !session.alive().await {
-            return false;
         }
-        let steered = match session.steer(text).await {
-            Ok(()) => true,
-            Err(error) => {
-                tracing::info!(route = %self.route, %error, "could not steer; queueing the utterance");
-                false
-            }
-        };
-        if steered {
-            self.touch_activity();
-        }
-        steered
     }
     async fn ensure_operator(&mut self) -> Result<&PiSession, PiSessionError> {
         let alive = match self.operator.as_ref() {
@@ -561,7 +486,6 @@ impl Switchboard {
         if let Some(signal) = turn.signals.iter().find(|s| s.name == TRANSFER_TOOL) {
             let mut onward_ctx = context.clone();
             onward_ctx.derived_intent = arg(signal, "intent");
-            onward_ctx.selected_project_id = Some(arg(signal, "project"));
             return self
                 .transfer_ctx(
                     &onward_ctx,
@@ -624,7 +548,6 @@ impl Switchboard {
         if let Some(signal) = transfer {
             let mut onward_ctx = context.clone();
             onward_ctx.derived_intent = arg(signal, "intent");
-            onward_ctx.selected_project_id = Some(arg(signal, "project"));
             let onward = self
                 .transfer_ctx(
                     &onward_ctx,
@@ -679,37 +602,6 @@ impl Switchboard {
             return reply;
         }
         self.reply_with_turn(turn)
-    }
-    pub async fn transfer_direct_page(&mut self, spoken: &str, page_context: &str) -> Reply {
-        let context = TransferContext {
-            exact_caller_transcript: String::new(),
-            derived_intent: String::new(),
-            direct_page_transfer_context: Some(page_context.to_owned()),
-            selected_project_id: Some(spoken.to_owned()),
-            return_operator_note: None,
-            project_summary: None,
-        };
-        self.transfer_ctx(&context, spoken, "", "").await
-    }
-
-    pub async fn transfer(
-        &mut self,
-        spoken: &str,
-        intent: &str,
-        _handoff: String,
-        requested_model: &str,
-        requested_thinking: &str,
-    ) -> Reply {
-        let context = TransferContext {
-            exact_caller_transcript: String::new(),
-            derived_intent: intent.to_owned(),
-            direct_page_transfer_context: None,
-            selected_project_id: Some(spoken.to_owned()),
-            return_operator_note: None,
-            project_summary: None,
-        };
-        self.transfer_ctx(&context, spoken, requested_model, requested_thinking)
-            .await
     }
 
     pub async fn transfer_ctx(
@@ -1299,18 +1191,6 @@ impl Switchboard {
         self.announce_route().await;
         self.reply_with_turn(turn)
     }
-    #[allow(dead_code)]
-    async fn return_operator(&mut self, note: &str) -> Reply {
-        let context = TransferContext {
-            exact_caller_transcript: String::new(),
-            derived_intent: String::new(),
-            direct_page_transfer_context: None,
-            selected_project_id: None,
-            return_operator_note: Some(note.to_owned()),
-            project_summary: None,
-        };
-        self.return_operator_ctx(&context, note).await
-    }
 
     async fn return_operator_ctx(&mut self, context: &TransferContext, note: &str) -> Reply {
         self.drop_agent().await;
@@ -1425,10 +1305,13 @@ impl Switchboard {
         if project.eq_ignore_ascii_case(OPERATOR) {
             return self.reply(["You're back with the operator."], None);
         }
-        self.transfer(project, intent, String::new(), "", "").await
+        let context = TransferContext {
+            derived_intent: intent.to_owned(),
+            ..TransferContext::default()
+        };
+        self.transfer_ctx(&context, project, "", "").await
     }
     pub async fn force_hangup(&mut self) -> Option<String> {
-        self.touch_activity();
         if self.route == OPERATOR {
             if let Some(session) = self.operator.take() {
                 tracing::info!("caller hung up a wedged operator turn from the page");
@@ -1442,19 +1325,6 @@ impl Switchboard {
         tracing::info!(%left, "caller hung up the project leg from the page");
         self.drop_agent().await;
         self.operator_note = Some(format!("The caller dropped the line to {left}."));
-        Some(left)
-    }
-    pub async fn return_if_idle(&mut self, seconds: f64) -> Option<String> {
-        if seconds <= 0.0 || self.route == OPERATOR || self.last_activity.elapsed() < seconds {
-            return None;
-        }
-        let left = self.route.clone();
-        tracing::info!(%left, idle_seconds = self.last_activity.elapsed(), "dropping the idle leg");
-        self.drop_agent().await;
-        self.operator_note = Some(format!(
-            "The caller went quiet, so the line to {left} was dropped."
-        ));
-        self.touch_activity();
         Some(left)
     }
     pub async fn set_model(&mut self, model: &str) -> Reply {

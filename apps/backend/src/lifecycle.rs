@@ -26,47 +26,25 @@ impl LegIdentity {
             generation,
         }
     }
-
-    pub fn matches(&self, other: &Self) -> bool {
-        self == other
-    }
 }
 
+/// Where the call is. `Starting` is the only phase in which a candidate leg
+/// exists; its side effects stay private until it is adopted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
     Operator,
     Starting,
-    Intro,
     Active,
     TurnRunning,
     Quiescing,
     Shutdown,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OperationKind {
-    Prompt,
-}
-
+/// One prompt turn on one leg. A steer attaches to the turn already running.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OperationIdentity {
     pub id: u64,
     pub leg: LegIdentity,
-    pub kind: OperationKind,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LifecycleSnapshot {
-    pub route: String,
-    pub project: Option<String>,
-    pub persistent_session_id: String,
-    pub leg: LegIdentity,
-    pub phase: Phase,
-    pub model: String,
-    pub thinking_requested: String,
-    pub thinking_effective: String,
-    pub operation: Option<OperationIdentity>,
-    pub terminal_reason: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -126,29 +104,6 @@ pub struct CatalogPublication {
     pub project: String,
     pub generation: u64,
     pub catalog: Arc<ModelCatalog>,
-}
-
-#[derive(Clone, Debug)]
-pub struct StatusProjection {
-    pub lifecycle: LifecycleSnapshot,
-    pub catalog: Option<CatalogPublication>,
-    value: Value,
-}
-
-impl StatusProjection {
-    pub fn json(&self) -> Value {
-        self.value.clone()
-    }
-
-    pub fn is_catalog_current(&self) -> bool {
-        match (&self.catalog, &self.lifecycle.project) {
-            (Some(catalog), Some(project)) => {
-                catalog.project == *project && catalog.generation == self.lifecycle.leg.generation
-            }
-            (None, _) => true,
-            _ => false,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -233,22 +188,9 @@ impl CallLifecycle {
         }
     }
 
-    fn snapshot(&self) -> LifecycleSnapshot {
-        LifecycleSnapshot {
-            route: self.route.clone(),
-            project: self.project.clone(),
-            persistent_session_id: self.persistent_session_id.clone(),
-            leg: self.leg.clone(),
-            phase: self.phase,
-            model: self.model.clone(),
-            thinking_requested: self.thinking_requested.clone(),
-            thinking_effective: self.thinking_effective.clone(),
-            operation: self.operation.clone(),
-            terminal_reason: self.terminal_reason.clone(),
-        }
-    }
-
-    fn publish_projection(&self) -> StatusProjection {
+    /// The status the page is shown: the PBX's last status with this
+    /// lifecycle's route, model, thinking, and adopted catalog laid over it.
+    fn status_projection(&self) -> Value {
         let mut value = self.status_value.clone();
         if !value.is_object() {
             value = json!({"type":"status"});
@@ -306,18 +248,14 @@ impl CallLifecycle {
             value["models_available"] = json!(false);
             value["models_diagnostic"] = json!("model catalog is stale");
         }
-        StatusProjection {
-            lifecycle: self.snapshot(),
-            catalog: self.catalog.clone(),
-            value,
-        }
+        value
     }
 }
 
 #[derive(Clone)]
 pub struct Coordinator {
     state: Arc<Mutex<CallLifecycle>>,
-    projection: Arc<RwLock<Arc<StatusProjection>>>,
+    projection: Arc<RwLock<Arc<Value>>>,
     next_operation: Arc<AtomicU64>,
     on_candidate: Arc<Mutex<Option<CandidateCallback>>>,
 }
@@ -325,7 +263,7 @@ pub struct Coordinator {
 impl Coordinator {
     pub fn new(status: Value) -> Self {
         let lifecycle = CallLifecycle::operator(status);
-        let projection = Arc::new(RwLock::new(Arc::new(lifecycle.publish_projection())));
+        let projection = Arc::new(RwLock::new(Arc::new(lifecycle.status_projection())));
         Self {
             state: Arc::new(Mutex::new(lifecycle)),
             projection,
@@ -364,22 +302,20 @@ impl Coordinator {
     }
 
     fn refresh_locked(&self, state: &CallLifecycle) {
-        let projection = Arc::new(state.publish_projection());
+        let projection = Arc::new(state.status_projection());
         *self
             .projection
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = projection;
     }
 
-    pub fn status_snapshot(&self) -> Arc<StatusProjection> {
-        self.projection
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-    }
-
     pub fn status_json(&self) -> Value {
-        self.status_snapshot().json()
+        Value::clone(
+            &self
+                .projection
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
     }
 
     pub fn current_identity(&self) -> LegIdentity {
@@ -409,10 +345,10 @@ impl Coordinator {
             let operation = OperationIdentity {
                 id,
                 leg: leg.clone(),
-                kind: OperationKind::Prompt,
             };
             state.operation = Some(operation.clone());
             state.phase = Phase::TurnRunning;
+            state.last_activity = Instant::now();
             self.refresh_locked(state);
             Ok(operation)
         })
@@ -426,6 +362,7 @@ impl Coordinator {
             if !matches!(state.phase, Phase::TurnRunning | Phase::Active) {
                 return Err(LifecycleError::WrongPhase);
             }
+            state.last_activity = Instant::now();
             state
                 .operation
                 .clone()
@@ -439,6 +376,7 @@ impl Coordinator {
                 return false;
             }
             state.operation = None;
+            state.last_activity = Instant::now();
             if state.phase == Phase::TurnRunning {
                 state.phase = if state.route == OPERATOR {
                     Phase::Operator
@@ -451,25 +389,7 @@ impl Coordinator {
         })
     }
 
-    pub fn accept_callback(&self, leg: &LegIdentity, operation: &OperationIdentity) -> bool {
-        self.linearize(|state| {
-            state.leg == *leg
-                && state.operation.as_ref() == Some(operation)
-                && matches!(state.phase, Phase::TurnRunning | Phase::Active)
-        })
-    }
-
-    pub fn rotate_leg_token(&self, token: impl Into<String>) -> LegIdentity {
-        self.linearize(|state| {
-            state.operation = None;
-            state.leg = LegIdentity::new(token, state.leg.generation + 1);
-            self.refresh_locked(state);
-            state.leg.clone()
-        })
-    }
-
     pub fn begin_rescue(&self, reason: impl Into<String>) -> LegIdentity {
-        let trace = crate::diagnostic::DiagnosticTrace::global();
         // A rescue abandons any in-flight startup: a rescued candidate must
         // never be adopted, and the browser must stop showing "connecting".
         // The clear notice carries the post-rescue generation.
@@ -496,10 +416,17 @@ impl Coordinator {
                 active: false,
             });
         }
-        trace.record("lifecycle", "rescue", next.generation, "");
+        tracing::info!(
+            generation = next.generation,
+            abandoned_candidate,
+            "rescue retired the current leg"
+        );
         next
     }
 
+    /// Caller or agent activity outside a turn boundary: a clip arriving, a
+    /// reply being spoken. Starting, steering, and ending a turn count on
+    /// their own; the idle timeout measures silence from the latest of these.
     pub fn touch_activity(&self) {
         self.linearize(|state| state.last_activity = Instant::now());
     }
@@ -526,7 +453,7 @@ impl Coordinator {
             if state.phase == Phase::Shutdown {
                 return Err(LifecycleError::Shutdown);
             }
-            if state.candidate.is_some() || matches!(state.phase, Phase::Starting | Phase::Intro) {
+            if state.candidate.is_some() || matches!(state.phase, Phase::Starting) {
                 return Err(LifecycleError::CandidateActive);
             }
             if candidate.identity.token.trim().is_empty() {
@@ -557,22 +484,12 @@ impl Coordinator {
     }
 
     pub fn is_candidate(&self) -> bool {
-        self.linearize(|state| matches!(state.phase, Phase::Starting | Phase::Intro))
-    }
-
-    pub fn reject_candidate_side_effect(&self) -> Result<(), LifecycleError> {
-        self.linearize(|state| {
-            if matches!(state.phase, Phase::Starting | Phase::Intro) {
-                Err(LifecycleError::CandidateSideEffect)
-            } else {
-                Ok(())
-            }
-        })
+        self.linearize(|state| matches!(state.phase, Phase::Starting))
     }
 
     pub fn accept_side_effect(&self, token: &str) -> Result<(), LifecycleError> {
         self.linearize(|state| {
-            if matches!(state.phase, Phase::Starting | Phase::Intro) {
+            if matches!(state.phase, Phase::Starting) {
                 return Err(LifecycleError::CandidateSideEffect);
             }
             if matches!(state.phase, Phase::Quiescing | Phase::Shutdown) {
@@ -601,9 +518,7 @@ impl Coordinator {
                 return Err(LifecycleError::WrongPhase);
             }
             if let Some(candidate) = state.candidate.as_mut() {
-                if candidate.identity.token == token
-                    && matches!(state.phase, Phase::Starting | Phase::Intro)
-                {
+                if candidate.identity.token == token && matches!(state.phase, Phase::Starting) {
                     candidate.startup_thinking = thinking.to_owned();
                     return Ok(false);
                 }
@@ -618,60 +533,12 @@ impl Coordinator {
         })
     }
 
-    pub fn accept_startup_thinking(
-        &self,
-        token: &str,
-        thinking: &str,
-    ) -> Result<(), LifecycleError> {
-        self.linearize(|state| {
-            if !crate::models::THINKING_LEVELS.contains(&thinking) {
-                return Err(LifecycleError::WrongPhase);
-            }
-            let candidate = state
-                .candidate
-                .as_mut()
-                .ok_or(LifecycleError::NoCandidate)?;
-            if candidate.identity.token != token {
-                return Err(LifecycleError::CandidateTokenMismatch);
-            }
-            if !matches!(state.phase, Phase::Starting | Phase::Intro) {
-                return Err(LifecycleError::WrongPhase);
-            }
-            candidate.startup_thinking = thinking.to_owned();
-            Ok(())
-        })
-    }
-
     pub fn candidate_identity(&self) -> Option<LegIdentity> {
         self.linearize(|state| {
             state
                 .candidate
                 .as_ref()
                 .map(|candidate| candidate.identity.clone())
-        })
-    }
-
-    pub fn rollback_candidate(&self, reason: impl Into<String>) -> bool {
-        self.linearize(|state| {
-            if state.candidate.take().is_none() {
-                return false;
-            }
-            state.startup_rollback = None;
-            state.terminal_reason = Some(reason.into());
-            if state.phase == Phase::Starting || state.phase == Phase::Intro {
-                state.phase = if state.route == OPERATOR {
-                    Phase::Operator
-                } else {
-                    Phase::Active
-                };
-            }
-            self.notify_candidate(&CandidateNotice {
-                route: state.route.clone(),
-                generation: state.leg.generation,
-                active: false,
-            });
-            self.refresh_locked(state);
-            true
         })
     }
 
@@ -696,7 +563,6 @@ impl Coordinator {
             state.operation = Some(OperationIdentity {
                 id: self.next_operation.fetch_add(1, Ordering::Relaxed),
                 leg: identity.clone(),
-                kind: OperationKind::Prompt,
             });
             state.terminal_reason = None;
             state.catalog = candidate.catalog.map(|catalog| CatalogPublication {
@@ -722,6 +588,7 @@ impl Coordinator {
             state.operation = None;
             state.phase = Phase::Active;
             state.startup_rollback = None;
+            state.last_activity = Instant::now();
             self.refresh_locked(state);
             true
         })

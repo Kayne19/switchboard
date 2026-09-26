@@ -1,6 +1,5 @@
 pub mod api;
 pub mod audio;
-pub mod diagnostic;
 pub mod history;
 pub mod lifecycle;
 pub mod models;
