@@ -6,6 +6,7 @@ mod models;
 mod pbx;
 mod pi_client;
 mod prewarm;
+mod protocol;
 mod registry;
 mod visual_protocol;
 
