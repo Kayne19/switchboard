@@ -816,6 +816,31 @@ impl Speaker {
     }
 }
 
+/// Refuses every request without leaving the process, the way ElevenLabs
+/// refuses a bad key. Tests of other modules speak through it: tests never
+/// reach the network (`AGENTS.md`).
+#[cfg(test)]
+struct OfflineTtsTransport;
+
+#[cfg(test)]
+impl TtsTransport for OfflineTtsTransport {
+    fn send_stream(&self, _request: TtsRequest) -> TtsStreamFuture {
+        Box::pin(async { Err(AudioError::Tts("tests do not reach ElevenLabs".into())) })
+    }
+}
+
+#[cfg(test)]
+impl Speaker {
+    /// A configured speaker whose every request fails in-process, so callers
+    /// exercise the synthesis path and its failure without a network.
+    pub(crate) fn offline(max_chars: usize, speech_deadline: Duration) -> Self {
+        let values = HashMap::from([("ELEVENLABS_API_KEY".into(), "offline-test-key".into())]);
+        let mut speaker = Self::from_values(max_chars, speech_deadline, &values);
+        speaker.transport = Arc::new(OfflineTtsTransport);
+        speaker
+    }
+}
+
 #[cfg(test)]
 #[path = "../tests/test_audio.rs"]
 mod tests;
