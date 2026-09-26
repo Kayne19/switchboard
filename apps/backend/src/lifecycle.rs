@@ -88,8 +88,8 @@ impl CandidateLeg {
 
 /// Notice to the presentation layer that a candidate leg began or ended.
 /// The browser shows "connecting to {route}" while a notice is active and
-/// resubmits speech recorded during that window once the epoch moves; the
-/// clear notice arrives on adoption, rollback, and rescue.
+/// resubmits speech recorded during that window, and not yet sent, once the
+/// epoch moves; the clear notice arrives on adoption, rollback, and rescue.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CandidateNotice {
     pub route: String,
