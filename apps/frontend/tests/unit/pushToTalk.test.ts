@@ -214,5 +214,6 @@ describe("PushToTalk", () => {
     expect(frames).toEqual(["stt_start", "stt_chunk", chunk, "stt_start", "stt_end"]);
     expect(h.outbox[0].streaming).toBe(true);
     expect(h.outbox[0].sent, "a streamed clip is already on the wire").toBe(true);
+    expect(h.outbox[0].transmitted, "and keeps the stamp it went out with").toBe(true);
   });
 });

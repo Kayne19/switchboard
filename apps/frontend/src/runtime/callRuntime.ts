@@ -524,6 +524,7 @@ export class CallRuntime {
         ws.send(clip.audio);
       }
       clip.sent = true;
+      clip.transmitted = true;
       this.setStatus("Waiting for the server to accept your clip...", false);
     } catch {
       // The socket died between frames. The same id and bytes are retried on
@@ -792,6 +793,12 @@ export class CallRuntime {
         if (typeof message.generation === "number") {
           const epoch = message.generation;
           const resubmitted = restampStaleClips(this.outbox.all, epoch);
+          // Clips from a retired epoch are dropped here. The server tells the
+          // caller about the ones it received; these it never saw, so the
+          // caller is told here.
+          const neverSent = this.outbox.all.filter(
+            (clip) => clip.epoch !== epoch && !clip.transmitted,
+          ).length;
           this.handsFree?.epochChanged();
           this.clearResponseBarrier();
           this.outbox.retain((clip) => clip.epoch === epoch);
@@ -808,6 +815,12 @@ export class CallRuntime {
             }
           }
           this.flushOutbox();
+          if (neverSent > 0) {
+            this.setStatus(
+              `The line changed before ${neverSent} clip(s) went out. Please repeat that.`,
+              true,
+            );
+          }
           this.playback.resetForGeneration(epoch);
         }
         break;

@@ -244,6 +244,7 @@ export class PushToTalk {
           endSocket.send(sttStartHeader(clip));
           endSocket.send(sttEndHeader(clip));
           clip.sent = true;
+          clip.transmitted = true;
         } catch {
           clip.sent = false;
         }
