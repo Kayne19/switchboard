@@ -87,6 +87,18 @@ fn put_on(board: &Switchboard, project: &str, spec: &str, catalog: ModelCatalog)
     assert!(board.coordinator.finish_intro());
 }
 
+/// A model or thinking change as the switchboard makes one: decided without
+/// the PBX lock, then run if it goes ahead.
+async fn redialed(board: &mut Switchboard, decided: Redial) -> Reply {
+    match decided {
+        Redial::Answered(reply) => reply,
+        Redial::Planned(plan) => board
+            .redial(*plan)
+            .await
+            .expect("the leg the redial was planned for is still on the line"),
+    }
+}
+
 #[test]
 fn status_exposes_project_ids() {
     let project = Project {
@@ -215,7 +227,7 @@ async fn model_swap_refuses_unknown_catalog_model_without_replacing_live_spec() 
         extra_args: Vec::new(),
         prepare: String::new(),
     };
-    let mut board = board_with(vec![project.clone()], true);
+    let board = board_with(vec![project.clone()], true);
     put_on(
         &board,
         &project.id,
@@ -223,10 +235,12 @@ async fn model_swap_refuses_unknown_catalog_model_without_replacing_live_spec() 
         two_model_catalog(),
     );
 
-    let reply = board.set_model("anthropic/missing").await;
+    let Redial::Answered(reply) = board.planner.model_change("anthropic/missing").await else {
+        panic!("a model the catalog does not resolve is refused before anything is torn down");
+    };
 
     assert!(reply.error.is_some());
-    assert_eq!(board.coordinator.model(), "anthropic/current:high");
+    assert_eq!(board.coordinator.status().model, "anthropic/current:high");
 }
 
 #[cfg(unix)]
@@ -253,7 +267,8 @@ async fn page_model_swap_preserves_requested_thinking() {
         two_model_catalog(),
     );
 
-    let reply = board.set_model("anthropic/next").await;
+    let decided = board.planner.model_change("anthropic/next").await;
+    let reply = redialed(&mut board, decided).await;
 
     assert!(reply.error.is_none());
     assert_eq!(board.coordinator.status().model, "anthropic/next:high");
@@ -692,9 +707,13 @@ async fn a_transfer_resolves_a_bare_model_against_the_launch_catalog() {
     assert!(reply.error.is_none(), "transfer failed: {:?}", reply.error);
     assert_eq!(board.coordinator.route(), "alpha");
     assert!(
-        board.coordinator.model().contains("anthropic/current"),
+        board
+            .coordinator
+            .status()
+            .model
+            .contains("anthropic/current"),
         "the model did not resolve the bare name; got: {:?}",
-        board.coordinator.model()
+        board.coordinator.status().model
     );
 
     board.shutdown().await;
@@ -871,10 +890,11 @@ async fn a_redial_resolves_against_the_launch_catalog_without_listing_models() {
         .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
         .await;
     assert_eq!(reply.route, "alpha", "{reply:?}");
-    let reply = board.set_model("next").await;
+    let decided = board.planner.model_change("next").await;
+    let reply = redialed(&mut board, decided).await;
 
     assert_eq!(reply.error, None, "{reply:?}");
-    assert_eq!(board.coordinator.model(), "anthropic/next:medium");
+    assert_eq!(board.coordinator.status().model, "anthropic/next:medium");
     assert_eq!(
         read_lines(&listings),
         Vec::<String>::new(),
@@ -910,7 +930,11 @@ async fn a_redial_that_cannot_reach_the_host_refuses_and_keeps_the_live_leg() {
         .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
         .await;
     assert_eq!(reply.route, "alpha", "{reply:?}");
-    let live_session = board.coordinator.persistent_session_id();
+    let live_session = board
+        .coordinator
+        .project_leg()
+        .unwrap()
+        .persistent_session_id;
 
     prewarm.settle_transport(
         "fake-host",
@@ -919,12 +943,21 @@ async fn a_redial_that_cannot_reach_the_host_refuses_and_keeps_the_live_leg() {
             reason: "master connection lost".into(),
         },
     );
-    let reply = board.redial("anthropic/next", "", "", false).await;
+    let Redial::Answered(reply) = board.planner.plan("anthropic/next", "", "", false).await else {
+        panic!("a host prewarm cannot vouch for is refused before anything is torn down");
+    };
 
     assert!(reply.error.is_some(), "{reply:?}");
     assert_eq!(board.coordinator.route(), "alpha");
-    assert_eq!(board.coordinator.persistent_session_id(), live_session);
-    assert_eq!(board.coordinator.model(), "anthropic/current:medium");
+    assert_eq!(
+        board
+            .coordinator
+            .project_leg()
+            .unwrap()
+            .persistent_session_id,
+        live_session
+    );
+    assert_eq!(board.coordinator.status().model, "anthropic/current:medium");
     assert_eq!(
         read_lines(&ssh_log).len(),
         1,
@@ -965,7 +998,7 @@ async fn an_unavailable_catalog_admits_a_qualified_model_and_refuses_a_bare_one(
 
         if admitted {
             assert_eq!(reply.route, "alpha", "{reply:?}");
-            assert_eq!(board.coordinator.model(), "anthropic/current:medium");
+            assert_eq!(board.coordinator.status().model, "anthropic/current:medium");
         } else {
             assert_eq!(reply.route, OPERATOR, "{reply:?}");
             let error = reply.error.unwrap_or_default();
@@ -998,16 +1031,29 @@ async fn a_remote_redial_that_keeps_context_is_refused_without_dropping_the_leg(
         .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
         .await;
     assert_eq!(reply.route, "alpha", "{reply:?}");
-    let live_session = board.coordinator.persistent_session_id();
+    let live_session = board
+        .coordinator
+        .project_leg()
+        .unwrap()
+        .persistent_session_id;
 
     // The thinking picker and set_model both keep context by default.
-    let reply = board.set_thinking("high").await;
+    let Redial::Answered(reply) = board.planner.thinking_change("high").await else {
+        panic!("a remote redial that keeps context is refused before anything is torn down");
+    };
 
     assert_eq!(reply.error.as_deref(), Some("remote_shutdown_unverified"));
     assert!(reply.text.contains("fresh start"), "{}", reply.text);
     assert_eq!(reply.route, "alpha");
     assert_eq!(board.coordinator.route(), "alpha");
-    assert_eq!(board.coordinator.persistent_session_id(), live_session);
+    assert_eq!(
+        board
+            .coordinator
+            .project_leg()
+            .unwrap()
+            .persistent_session_id,
+        live_session
+    );
     assert!(board.agent.is_some(), "the live leg must keep running");
     assert_eq!(read_lines(&ssh_log).len(), 1);
     board.shutdown().await;
@@ -1081,7 +1127,10 @@ async fn the_route_follows_adoption_while_the_intro_turn_is_still_running() {
     // The intro turn has not ended, yet the line already names alpha: what
     // the PBX reads, replies with, or hangs up from here on is alpha.
     assert_eq!(coordinator.route(), "alpha");
-    assert_eq!(coordinator.project().as_deref(), Some("alpha"));
+    assert_eq!(
+        coordinator.project_leg().map(|leg| leg.project).as_deref(),
+        Some("alpha")
+    );
     let status = coordinator.status();
     assert_eq!(
         (status.route.as_str(), status.label.as_str()),
@@ -1105,4 +1154,144 @@ async fn the_route_follows_adoption_while_the_intro_turn_is_still_running() {
     assert_eq!(coordinator.route(), "alpha");
     board.lock().await.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
+}
+
+/// A switchboard with the caller on alpha, which runs `runtime` locally.
+#[cfg(unix)]
+async fn on_alpha_with(
+    root: &std::path::Path,
+    runtime: &std::path::Path,
+    settings: &[(&str, &str)],
+) -> Switchboard {
+    let state_dir = root.join("state").to_string_lossy().into_owned();
+    let mut settings = settings.to_vec();
+    settings.push(("SWITCHBOARD_STATE_DIR", &state_dir));
+    let mut board = board_on(
+        vec![project_on(None, root, runtime)],
+        &settings,
+        two_model_catalog(),
+    );
+    let reply = board
+        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+        .await;
+    assert_eq!(reply.route, "alpha", "{reply:?}");
+    board
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_redial_whose_leg_has_moved_since_it_was_planned_is_refused() {
+    let root = scratch_dir("redial-moved");
+    let (runtime, _) = recording_runtime(&root);
+    let mut board = on_alpha_with(&root, &runtime, &[]).await;
+    let live = board.agent.clone().expect("alpha is on the line");
+
+    // A rescue that was not made for this redial retires the leg it was
+    // planned for.
+    let Redial::Planned(plan) = board.planner.model_change("anthropic/next").await else {
+        panic!("a swap to a listed model goes ahead");
+    };
+    let rescued = board.coordinator.begin_rescue("hangup");
+    assert_eq!(
+        board.redial(*plan).await.unwrap_err(),
+        LifecycleError::StaleLeg
+    );
+    assert_eq!(board.coordinator.current_identity(), rescued);
+    assert!(!board.coordinator.is_candidate());
+    assert_eq!(board.coordinator.status().model, "anthropic/current:medium");
+    assert!(board
+        .agent
+        .as_ref()
+        .is_some_and(|agent| agent.same_session(&live)));
+    assert!(live.alive().await);
+    board.coordinator.settle();
+
+    // The caller went back to the operator, which keeps the generation.
+    let Redial::Planned(plan) = board.planner.model_change("anthropic/next").await else {
+        panic!("a swap to a listed model goes ahead");
+    };
+    board.force_hangup().await;
+    let generation = board.coordinator.generation();
+    assert_eq!(
+        board.redial(*plan).await.unwrap_err(),
+        LifecycleError::StaleLeg
+    );
+    assert_eq!(board.coordinator.route(), OPERATOR);
+    assert_eq!(board.coordinator.generation(), generation);
+    assert!(board.agent.is_none(), "a leg was launched for nobody");
+
+    // The rescue made for it hands the plan on to the leg that rescue left.
+    let reply = board
+        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+        .await;
+    assert_eq!(reply.route, "alpha", "{reply:?}");
+    let Redial::Planned(plan) = board.planner.model_change("anthropic/next").await else {
+        panic!("a swap to a listed model goes ahead");
+    };
+    let rescued = board
+        .coordinator
+        .begin_rescue_of(plan.leg(), "redial")
+        .expect("the leg is still on the line");
+    let reply = board.redial(plan.rescued(rescued)).await.unwrap();
+    assert_eq!(reply.error, None, "{reply:?}");
+    assert_eq!(board.coordinator.status().model, "anthropic/next:medium");
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A project runtime whose agent calls `set_model` for anthropic/next when
+/// the caller says "use next", and otherwise answers "On it.".
+#[cfg(unix)]
+fn runtime_that_changes_model(root: &std::path::Path) -> std::path::PathBuf {
+    let runtime = root.join("fake-pi");
+    crate::pi_client::write_executable_script(
+        &runtime,
+        r##"while IFS= read -r line; do
+case "$line" in
+  *"use next"*)
+    printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Switching."}}'
+    printf '%s\n' '{"type":"tool_execution_start","toolName":"set_model","args":{"model":"anthropic/next"}}'
+    ;;
+  *)
+    printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"On it."}}'
+    ;;
+esac
+printf '%s\n' '{"type":"agent_settled"}'
+done
+"##,
+    );
+    runtime
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_agents_own_set_model_is_decided_by_the_pickers_checks() {
+    for swaps in ["0", "1"] {
+        let root = scratch_dir("agent-set-model");
+        let runtime = runtime_that_changes_model(&root);
+        let mut board = on_alpha_with(&root, &runtime, &[("SWITCHBOARD_MODEL_SWAPS", swaps)]).await;
+        let live = board.agent.clone().expect("alpha is on the line");
+
+        let reply = board.handle("use next").await;
+
+        assert_eq!(reply.route, "alpha", "{reply:?}");
+        if swaps == "0" {
+            assert_eq!(
+                reply.text,
+                "Switching.\n\nModel swapping is turned off on this switchboard."
+            );
+            assert!(board
+                .agent
+                .as_ref()
+                .is_some_and(|agent| agent.same_session(&live)));
+            assert!(live.alive().await);
+            assert_eq!(board.coordinator.status().model, "anthropic/current:medium");
+        } else {
+            assert_eq!(reply.text, "Switching.\n\nOn it.");
+            assert!(!live.alive().await);
+            assert_eq!(board.coordinator.status().model, "anthropic/next:medium");
+        }
+        board.shutdown().await;
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

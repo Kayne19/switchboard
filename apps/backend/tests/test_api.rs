@@ -29,9 +29,21 @@ fn state_with_stream(stt: Option<String>, stream: Option<String>) -> AppState {
     state_on_with_stream(board, stt, stream)
 }
 
-/// The application around `board`, with no speech-to-text configured.
+/// The application around `board`, with nothing configured to transcribe or
+/// to speak: a reply it delivers fails synthesis at once rather than reaching
+/// for ElevenLabs.
 fn state_on(board: Switchboard) -> AppState {
-    state_on_with_stream(board, None, None)
+    AppState::new(
+        board,
+        TranscriptLog::new(10),
+        Speaker::from_values(
+            100,
+            std::time::Duration::from_millis(25_000),
+            &HashMap::new(),
+        ),
+        SttAdapter::from_command(None),
+        SttStreamAdapter::from_command(None),
+    )
 }
 
 fn state_on_with_stream(
@@ -2289,7 +2301,7 @@ async fn refusal_of(response: Response) -> (StatusCode, Value) {
 async fn a_page_control_whose_leg_is_rescued_mid_operation_is_refused_as_superseded() {
     let state = state();
     let rescuer = state.clone();
-    let controlled = run_page_control(&state, "model change", RunningWork::Keep, async move {
+    let controlled = run_page_control(&state, "connection attempt", async move {
         rescuer.0.coordinator.begin_rescue("page rescue");
         operator_reply()
     })
@@ -2302,7 +2314,7 @@ async fn a_page_control_whose_leg_is_rescued_mid_operation_is_refused_as_superse
         refusal_of(refused).await,
         (
             StatusCode::CONFLICT,
-            json!({"detail":"model change was superseded"})
+            json!({"detail":"connection attempt was superseded"})
         )
     );
     assert!(state.0.active_operations.lock().await.is_empty());
@@ -2311,14 +2323,9 @@ async fn a_page_control_whose_leg_is_rescued_mid_operation_is_refused_as_superse
 #[tokio::test]
 async fn a_page_control_that_fails_is_refused_as_a_server_error() {
     let state = state();
-    let controlled = run_page_control(
-        &state,
-        "connection attempt",
-        RunningWork::Cancel,
-        async move {
-            panic!("the PBX operation failed");
-        },
-    )
+    let controlled = run_page_control(&state, "connection attempt", async move {
+        panic!("the PBX operation failed");
+    })
     .await;
 
     let Err(refused) = controlled else {
@@ -2658,4 +2665,589 @@ async fn a_hangup_mid_intro_after_adoption_drops_the_incoming_leg_by_name() {
 
     state.0.switchboard.lock().await.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
+}
+
+// ---------------------------------------------------------------------------
+// The model and thinking pickers decide a redial before they touch the live
+// leg (#63). A refusal leaves the leg running and the caller's next turn
+// reaches it; only a redial that goes ahead cancels running work.
+
+/// A project runtime that answers every prompt "On it.", and records each
+/// start in `launches.log` so a test can tell whether a leg was relaunched.
+#[cfg(unix)]
+fn answering_runtime(root: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let runtime = root.join("fake-pi");
+    let launches = root.join("launches.log");
+    crate::pi_client::write_executable_script(
+        &runtime,
+        &format!(
+            r#"printf 'launch\n' >> '{log}'
+while IFS= read -r line; do
+  printf '%s\n' '{{"type":"message_update","assistantMessageEvent":{{"type":"text_end","content":"On it."}}}}'
+  printf '%s\n' '{{"type":"agent_settled"}}'
+done
+"#,
+            log = launches.display()
+        ),
+    );
+    (runtime, launches)
+}
+
+/// An ssh stand-in that runs the agent launch it is given on this machine,
+/// and refuses anything else.
+#[cfg(unix)]
+fn local_ssh(root: &std::path::Path) -> std::path::PathBuf {
+    let ssh = root.join("fake-ssh");
+    crate::pi_client::write_executable_script(
+        &ssh,
+        r#"for last; do :; done
+case "$last" in
+  *"exec "*) exec sh -c "$last" ;;
+  *) exit 1 ;;
+esac
+"#,
+    );
+    ssh
+}
+
+fn read_lines(path: &std::path::Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+fn catalog_of(models: &[&str]) -> crate::models::ModelCatalog {
+    crate::models::ModelCatalog {
+        entries: models
+            .iter()
+            .map(|model| crate::models::CatalogEntry {
+                provider: "anthropic".into(),
+                model: (*model).into(),
+                thinks: true,
+            })
+            .collect(),
+        available: true,
+        diagnostic: None,
+    }
+}
+
+/// A call the page has put through to alpha. alpha's agent runs locally, or
+/// on `fake-host` through an ssh stand-in that runs it here.
+#[cfg(unix)]
+struct AlphaCall {
+    state: AppState,
+    prewarm: Arc<crate::prewarm::Prewarm>,
+    project: crate::registry::Project,
+    /// alpha's process, as the page put the caller through to it.
+    live: PiSession,
+    launches: std::path::PathBuf,
+    root: std::path::PathBuf,
+}
+
+#[cfg(unix)]
+async fn call_on_alpha(host: Option<&str>, settings: &[(&str, &str)]) -> AlphaCall {
+    let root = std::env::temp_dir().join(format!("switchboard-picker-{}", crate::pbx::uuid_like()));
+    std::fs::create_dir_all(&root).unwrap();
+    let (runtime, launches) = answering_runtime(&root);
+    let ssh = local_ssh(&root).to_string_lossy().into_owned();
+    let state_dir = root.join("state").to_string_lossy().into_owned();
+    let mut settings = settings.to_vec();
+    settings.push(("SWITCHBOARD_SSH_PROGRAM", &ssh));
+    settings.push(("SWITCHBOARD_STATE_DIR", &state_dir));
+    let config = crate::Config::for_tests(&settings);
+    let project: crate::registry::Project = serde_json::from_value(json!({
+        "id": "alpha",
+        "host": host,
+        "cwd": root.to_string_lossy(),
+        "runtime": runtime.to_string_lossy(),
+        "model": "anthropic/current",
+        "stage_extension": false,
+    }))
+    .unwrap();
+    let registry = Registry::new(vec![project.clone()]);
+    let prewarm = Arc::new(crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        catalog_of(&["current", "next"]),
+    ));
+    let state = state_on(Switchboard::new(&config, registry, Arc::clone(&prewarm)));
+    let (code, connected) = request_json(
+        &state,
+        Method::POST,
+        "/connect",
+        Some(json!({"project":"alpha"})),
+    )
+    .await;
+    assert_eq!(
+        (code, connected),
+        (StatusCode::OK, json!({"route":"alpha", "error":null}))
+    );
+    assert_eq!(
+        state.0.coordinator.status().model,
+        "anthropic/current:medium"
+    );
+    let live = state
+        .0
+        .active_session
+        .lock()
+        .await
+        .clone()
+        .expect("alpha is the live session");
+    assert_eq!(live.label(), "alpha");
+    AlphaCall {
+        state,
+        prewarm,
+        project,
+        live,
+        launches,
+        root,
+    }
+}
+
+#[cfg(unix)]
+impl AlphaCall {
+    /// Posts a picker request the switchboard refuses and checks that it left
+    /// the live leg alone: nothing rescued (the generation stays put and no
+    /// epoch is sent), alpha's process still running, and the refusal told to
+    /// the caller the way any page reply is. Returns the answer's `error`.
+    async fn refused(&self, path: &str, body: Value, told: &str) -> Value {
+        let state = &self.state;
+        let generation = state.0.coordinator.generation();
+        let before = state.0.coordinator.status();
+        let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+
+        let (code, answer) = request_json(state, Method::POST, path, Some(body.clone())).await;
+
+        assert_eq!(code, StatusCode::OK, "{path} {body}: {answer}");
+        assert!(
+            self.live.alive().await,
+            "{path} {body} closed the live leg: {answer}"
+        );
+        assert_eq!(
+            state.0.coordinator.generation(),
+            generation,
+            "{path} {body} rescued the call"
+        );
+        let after = state.0.coordinator.status();
+        assert_eq!(
+            (after.route.as_str(), after.model.as_str()),
+            (before.route.as_str(), before.model.as_str())
+        );
+        let frames = queued_frames(&mut connection);
+        assert!(!types_of(&frames).contains(&"epoch"), "{frames:#?}");
+        let spoken = frames
+            .iter()
+            .find(|frame| frame["type"] == "spoken")
+            .expect("the refusal is told to the caller");
+        assert!(
+            spoken["entry"]["text"].as_str().unwrap().contains(told),
+            "{spoken}"
+        );
+        assert_eq!(spoken["entry"]["route"], "alpha");
+        answer["error"].clone()
+    }
+
+    /// The caller's next turn reaches alpha's live process, which was never
+    /// relaunched.
+    async fn assert_next_turn_reaches_alpha(&self) {
+        let reply = self
+            .state
+            .0
+            .switchboard
+            .lock()
+            .await
+            .handle("are you still there?")
+            .await;
+        assert_eq!(
+            (
+                reply.route.as_str(),
+                reply.text.as_str(),
+                reply.error.as_deref()
+            ),
+            ("alpha", "On it.", None)
+        );
+        assert!(self.live.alive().await);
+        assert_eq!(read_lines(&self.launches).len(), 1, "alpha was relaunched");
+    }
+
+    async fn hang_up(self) {
+        self.state.0.switchboard.lock().await.shutdown().await;
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_picker_that_would_keep_context_on_a_remote_project_leaves_its_leg_running() {
+    let call = call_on_alpha(Some("fake-host"), &[]).await;
+
+    // Both pickers keep context, which a remote project refuses.
+    for (path, body) in [
+        ("/model", json!({"model":"anthropic/next"})),
+        ("/thinking", json!({"level":"high"})),
+    ] {
+        let error = call.refused(path, body, "fresh start").await;
+        assert_eq!(error, "remote_shutdown_unverified");
+    }
+
+    call.assert_next_turn_reaches_alpha().await;
+    call.hang_up().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_picker_asking_for_what_is_running_leaves_its_leg_running() {
+    let call = call_on_alpha(None, &[]).await;
+
+    for (path, body) in [
+        ("/model", json!({"model":"anthropic/current"})),
+        ("/thinking", json!({"level":"medium"})),
+    ] {
+        let error = call
+            .refused(
+                path,
+                body,
+                "Already on current on anthropic, thinking medium.",
+            )
+            .await;
+        assert_eq!(error, Value::Null);
+    }
+
+    call.assert_next_turn_reaches_alpha().await;
+    call.hang_up().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_picker_the_catalog_does_not_resolve_leaves_its_leg_running() {
+    let call = call_on_alpha(None, &[]).await;
+
+    let error = call
+        .refused(
+            "/model",
+            json!({"model":"anthropic/missing"}),
+            "I didn't switch",
+        )
+        .await;
+    assert!(error.is_string(), "{error}");
+    // A refreshed catalog that no longer lists alpha's model: the thinking
+    // picker keeps the model, and it no longer resolves.
+    call.prewarm.settle_catalog(
+        &call.project,
+        crate::prewarm::CatalogState::Ready {
+            snapshot: catalog_of(&["next"]),
+            degraded_reason: None,
+        },
+    );
+    let error = call
+        .refused("/thinking", json!({"level":"high"}), "I didn't switch")
+        .await;
+    assert!(error.is_string(), "{error}");
+
+    call.assert_next_turn_reaches_alpha().await;
+    call.hang_up().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_picker_on_a_host_prewarm_cannot_vouch_for_leaves_its_leg_running() {
+    let call = call_on_alpha(None, &[]).await;
+    call.prewarm.settle_prepare(
+        &call.project,
+        crate::prewarm::PrepareState::InfrastructureFailed {
+            reason: "the prepare runner is gone".into(),
+        },
+    );
+
+    for (path, body) in [
+        ("/model", json!({"model":"anthropic/next"})),
+        ("/thinking", json!({"level":"high"})),
+    ] {
+        let error = call.refused(path, body, "I didn't switch").await;
+        assert!(
+            error
+                .as_str()
+                .is_some_and(|error| error.contains("prepare infrastructure failed")),
+            "{error}"
+        );
+    }
+
+    call.assert_next_turn_reaches_alpha().await;
+    call.hang_up().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_picker_with_swaps_turned_off_leaves_its_leg_running() {
+    let call = call_on_alpha(None, &[("SWITCHBOARD_MODEL_SWAPS", "0")]).await;
+
+    for (path, body) in [
+        ("/model", json!({"model":"anthropic/next"})),
+        ("/thinking", json!({"level":"high"})),
+    ] {
+        let error = call
+            .refused(path, body, "Model swapping is turned off")
+            .await;
+        assert_eq!(error, Value::Null);
+    }
+
+    call.assert_next_turn_reaches_alpha().await;
+    call.hang_up().await;
+}
+
+#[tokio::test]
+async fn a_picker_on_the_operator_answers_without_touching_its_turn() {
+    let config = crate::Config::for_tests(&[]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    let state = state_on(Switchboard::new(&config, registry, Arc::new(prewarm)));
+    let operator = PiSession::start(
+        vec!["sh".into(), "-c".into(), "sleep 60".into()],
+        OPERATOR,
+        OPERATOR,
+        None,
+        None,
+        Duration::from_secs(60),
+        None,
+    )
+    .await
+    .unwrap();
+    *state.0.active_session.lock().await = Some(operator.clone());
+    // The operator's turn holds the PBX lock and does not let go.
+    let (locked_tx, locked_rx) = oneshot::channel();
+    let turn_state = state.clone();
+    let turn = tokio::spawn(async move {
+        hold_turn_lock(&turn_state, Some(locked_tx)).await;
+    });
+    let abort = turn.abort_handle();
+    state
+        .0
+        .active_operations
+        .lock()
+        .await
+        .insert(abort.id(), abort);
+    locked_rx.await.unwrap();
+    let generation = state.0.coordinator.generation();
+
+    for (path, body, told, error) in [
+        (
+            "/model",
+            json!({"model":"anthropic/next"}),
+            "Model changes are only available on a project leg.",
+            json!("Model changes are only available on a project leg."),
+        ),
+        (
+            "/thinking",
+            json!({"level":"high"}),
+            "Thinking is set to high for the next project call.",
+            Value::Null,
+        ),
+    ] {
+        let (code, answer) = timeout(
+            Duration::from_secs(1),
+            request_json(&state, Method::POST, path, Some(body)),
+        )
+        .await
+        .expect("a picker on the operator must not wait for the operator's turn");
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(answer["error"], error);
+        assert_eq!(
+            last_transcript_line(&state).await,
+            Some((told.to_owned(), OPERATOR.to_owned()))
+        );
+    }
+
+    assert!(!turn.is_finished(), "the operator's turn was cancelled");
+    assert!(operator.alive().await);
+    assert_eq!(state.0.coordinator.generation(), generation);
+    assert_eq!(state.0.coordinator.status().thinking_default, "high");
+    turn.abort();
+    operator.close().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_picker_redial_that_goes_ahead_cancels_a_wedged_turn_and_swaps_the_leg() {
+    let call = call_on_alpha(None, &[]).await;
+    let state = &call.state;
+    // alpha's turn holds the PBX lock and does not let go.
+    let (locked_tx, locked_rx) = oneshot::channel();
+    let turn_state = state.clone();
+    let turn = tokio::spawn(async move {
+        hold_turn_lock(&turn_state, Some(locked_tx)).await;
+    });
+    let abort = turn.abort_handle();
+    state
+        .0
+        .active_operations
+        .lock()
+        .await
+        .insert(abort.id(), abort);
+    locked_rx.await.unwrap();
+    let generation = state.0.coordinator.generation();
+
+    let (code, answer) = timeout(
+        Duration::from_secs(5),
+        request_json(
+            state,
+            Method::POST,
+            "/model",
+            Some(json!({"model":"anthropic/next"})),
+        ),
+    )
+    .await
+    .expect("a redial must not wait for the turn it replaces");
+
+    assert_eq!(
+        (code, answer),
+        (
+            StatusCode::OK,
+            json!({"model":"anthropic/next", "error":null})
+        )
+    );
+    assert!(turn.await.unwrap_err().is_cancelled());
+    assert!(!call.live.alive().await, "the old leg was not replaced");
+    let swapped = state
+        .0
+        .active_session
+        .lock()
+        .await
+        .clone()
+        .expect("the new leg is live");
+    assert!(!swapped.same_session(&call.live));
+    assert!(swapped.alive().await);
+    assert_eq!(state.0.coordinator.status().model, "anthropic/next:medium");
+    assert!(state.0.coordinator.generation() > generation);
+    assert_eq!(read_lines(&call.launches).len(), 2);
+    let reply = state.0.switchboard.lock().await.handle("go on").await;
+    assert_eq!(
+        (reply.route.as_str(), reply.text.as_str()),
+        ("alpha", "On it.")
+    );
+    call.hang_up().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_picker_redial_decided_for_a_leg_the_caller_has_left_cancels_nothing() {
+    let call = call_on_alpha(None, &[]).await;
+    let state = &call.state;
+    // Prewarm is refreshing alpha's catalog, so the decision waits on it.
+    call.prewarm
+        .settle_catalog(&call.project, crate::prewarm::CatalogState::Pending);
+    let request_state = state.clone();
+    let request = tokio::spawn(async move {
+        request_json(
+            &request_state,
+            Method::POST,
+            "/model",
+            Some(json!({"model":"anthropic/next"})),
+        )
+        .await
+    });
+    // The decision has read alpha's leg and waits for the catalog.
+    let mut polls = 0;
+    while call.prewarm.catalog_waiters(&call.project) == 0 {
+        polls += 1;
+        assert!(polls < 10_000, "the decision never asked for a launch plan");
+        tokio::task::yield_now().await;
+    }
+    // Meanwhile the caller leaves alpha. A return to the operator keeps the
+    // generation, so any rescue from here on would show.
+    let left = state.0.switchboard.lock().await.force_hangup().await;
+    assert_eq!(left.as_deref(), Some("alpha"));
+    let generation = state.0.coordinator.generation();
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    call.prewarm.settle_catalog(
+        &call.project,
+        crate::prewarm::CatalogState::Ready {
+            snapshot: catalog_of(&["current", "next"]),
+            degraded_reason: None,
+        },
+    );
+
+    let (code, answer) = request.await.unwrap();
+
+    assert_eq!(
+        (code, answer),
+        (
+            StatusCode::CONFLICT,
+            json!({"detail":"model change was superseded"})
+        )
+    );
+    assert_eq!(state.0.coordinator.generation(), generation);
+    assert!(queued_frames(&mut connection).is_empty());
+    assert_eq!(state.0.coordinator.route(), OPERATOR);
+    assert_eq!(read_lines(&call.launches).len(), 1, "alpha was relaunched");
+    call.hang_up().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_picker_redial_whose_leg_is_left_after_its_rescue_is_refused() {
+    let call = call_on_alpha(None, &[]).await;
+    let state = &call.state;
+    // alpha's turn holds the PBX lock and does not let go; the redial's
+    // rescue cancels it.
+    let (locked_tx, locked_rx) = oneshot::channel();
+    let turn_state = state.clone();
+    let turn = tokio::spawn(async move {
+        hold_turn_lock(&turn_state, Some(locked_tx)).await;
+    });
+    let abort = turn.abort_handle();
+    state
+        .0
+        .active_operations
+        .lock()
+        .await
+        .insert(abort.id(), abort);
+    locked_rx.await.unwrap();
+    // Queued behind that turn for the PBX lock, and not an operation a rescue
+    // cancels: something that moves the caller before the redial gets the
+    // lock. Here it hangs up. Its lock request is queued by the time the
+    // signal is received.
+    let (queued_tx, queued_rx) = oneshot::channel();
+    let mover_state = state.clone();
+    let mover = tokio::spawn(async move {
+        let board = mover_state.0.switchboard.lock();
+        let _ = queued_tx.send(());
+        board.await.force_hangup().await
+    });
+    queued_rx.await.unwrap();
+
+    let (code, answer) = timeout(
+        Duration::from_secs(5),
+        request_json(
+            state,
+            Method::POST,
+            "/model",
+            Some(json!({"model":"anthropic/next"})),
+        ),
+    )
+    .await
+    .expect("the redial must not wait for the turn it replaces");
+
+    assert_eq!(
+        (code, answer),
+        (
+            StatusCode::CONFLICT,
+            json!({"detail":"model change was superseded"})
+        )
+    );
+    assert!(turn.await.unwrap_err().is_cancelled());
+    assert_eq!(mover.await.unwrap().as_deref(), Some("alpha"));
+    assert_eq!(state.0.coordinator.route(), OPERATOR);
+    assert_eq!(read_lines(&call.launches).len(), 1, "alpha was relaunched");
+    // The redial's rescue is settled on its way out.
+    let coordinator = &state.0.coordinator;
+    assert!(coordinator
+        .begin_prompt(&coordinator.current_identity())
+        .is_ok());
+    call.hang_up().await;
 }

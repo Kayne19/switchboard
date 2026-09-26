@@ -2,7 +2,7 @@
 use crate::audio::{Speaker, StreamResult, SttAdapter, SttStreamAdapter};
 use crate::history::{TranscriptLog, AGENT, CALLER};
 use crate::lifecycle::{ActivityDisposition, Coordinator};
-use crate::pbx::{RouteCallback, Switchboard};
+use crate::pbx::{Redial, RedialPlan, RedialPlanner, RouteCallback, Switchboard};
 use crate::pi_client::{Activity, ActivityCallback, PiSession};
 use crate::protocol::{ErrorCode, ServerMessage, Status};
 use axum::extract::ws::{Message, WebSocket};
@@ -506,6 +506,8 @@ pub struct AppInner {
     pub stt_stream: SttStreamAdapter,
     pub events: broadcast::Sender<Event>,
     pub coordinator: Coordinator,
+    /// Decides the pickers' redials without the PBX lock.
+    redials: RedialPlanner,
     speech: mpsc::Sender<SpeechRequest>,
     speech_rx: Mutex<Option<mpsc::Receiver<SpeechRequest>>>,
     clips: mpsc::Sender<Clip>,
@@ -907,6 +909,7 @@ impl AppState {
             Box::pin(async move { announcer.announce_route().await })
         });
         let active_session = switchboard.session_control();
+        let redials = switchboard.redial_planner();
         let mut switchboard = switchboard;
         switchboard.set_activity_callback(Some(activity_callback));
         switchboard.set_route_callback(Some(route_callback));
@@ -919,6 +922,7 @@ impl AppState {
             stt_stream,
             events,
             coordinator,
+            redials,
             speech,
             speech_rx: Mutex::new(Some(speech_rx)),
             clips,
@@ -1723,6 +1727,21 @@ async fn cancel_active_operations(state: &AppState) -> Option<String> {
         .coordinator
         .begin_rescue("operation interrupted")
         .generation;
+    release_rescued_work(state, generation).await
+}
+/// Cancels running work to make way for `plan`, but only while its leg is
+/// still the one on the line: a caller who has moved since the redial was
+/// decided keeps whatever they moved to, untouched. Returns the plan for the
+/// leg as the rescue left it.
+async fn cancel_active_operations_for(state: &AppState, plan: RedialPlan) -> Option<RedialPlan> {
+    let rescued = state.0.coordinator.begin_rescue_of(plan.leg(), "redial")?;
+    release_rescued_work(state, rescued.identity.generation).await;
+    Some(plan.rescued(rescued))
+}
+/// What a rescue does once the coordinator has retired the leg: drop queued
+/// audio, announce the new epoch, abort registered work, and close the live
+/// session. Returns the label of the session it closed.
+async fn release_rescued_work(state: &AppState, generation: u64) -> Option<String> {
     state.0.audio.lock().await.clear();
     // Tell the browser at once, so speech it starts recording after this point
     // is stamped with the new epoch rather than the one being retired.
@@ -1754,76 +1773,125 @@ where
     let (task, id) = spawn_registered_operation(state, generation, future).await?;
     Some((task, id, generation))
 }
-/// What a page control does with work already running on the line.
-#[derive(Clone, Copy)]
-enum RunningWork {
-    /// Cancel it first: the control is a way out of whatever is running.
-    Cancel,
-    /// Leave it running; the control does not touch the live leg.
-    Keep,
+/// A page control's refusal: `{"detail": ...}` under `status`.
+fn page_refusal(status: axum::http::StatusCode, detail: String) -> Response {
+    (status, Json(json!({ "detail": detail }))).into_response()
 }
 
-/// A thinking or model change redials a project leg, which must not wait
-/// behind the turn it is replacing. On the operator it only records a setting
-/// for the next project call, so nothing needs to stop.
-fn running_work_for_a_redial(state: &AppState) -> RunningWork {
-    if state.0.coordinator.route() == crate::pbx::OPERATOR {
-        RunningWork::Keep
-    } else {
-        RunningWork::Cancel
+/// A page control that lost to something newer: 409, "{what} was {outcome}".
+fn page_conflict(what: &str, outcome: &str) -> Response {
+    page_refusal(
+        axum::http::StatusCode::CONFLICT,
+        format!("{what} was {outcome}"),
+    )
+}
+
+/// Waits for a page control's registered operation and returns its output
+/// with the generation it was spawned on. An operation that could not be
+/// registered, or was cancelled, lost to a newer rescue, which settles the
+/// call itself: 409. One that failed settles the call unless something newer
+/// has: 500.
+async fn join_page_operation<T>(
+    state: &AppState,
+    what: &str,
+    spawned: Option<(JoinHandle<T>, TaskId, u64)>,
+) -> Result<(T, u64), Response> {
+    let Some((task, task_id, generation)) = spawned else {
+        return Err(page_conflict(what, "cancelled"));
+    };
+    let joined = task.await;
+    clear_active_operation(state, task_id).await;
+    match joined {
+        Ok(output) => Ok((output, generation)),
+        Err(error) if error.is_cancelled() => Err(page_conflict(what, "cancelled")),
+        Err(error) => {
+            settle_if_current(state, generation).await;
+            Err(page_refusal(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{what} failed: {error}"),
+            ))
+        }
     }
 }
 
-/// The lifecycle shared by the page controls that act through the PBX
-/// (`/connect`, `/thinking`, `/model`): run the PBX operation as a registered
-/// operation a rescue can cancel, answer 409 if it is cancelled or its leg is
-/// superseded before the reply can be delivered, and 500 if it fails. A
-/// delivered reply settles the call (`publish_status`). `what` names the
-/// control in those answers ("connection attempt").
+/// Delivers a page control's reply, which settles the call
+/// (`publish_status`), or answers 409 if its leg was superseded first.
+async fn deliver_page_control(
+    state: &AppState,
+    what: &str,
+    reply: crate::pbx::Reply,
+    generation: u64,
+) -> Result<crate::pbx::Reply, Response> {
+    let generation = reply.delivery_generation.unwrap_or(generation);
+    if !deliver_page_reply_if_current(state, &reply, generation).await {
+        return Err(page_conflict(what, "superseded"));
+    }
+    Ok(reply)
+}
+
+/// `/connect`: cancel whatever is running, then run the PBX operation as a
+/// registered operation a newer rescue can cancel in turn, and deliver its
+/// reply. `what` names the control in its refusals ("connection attempt").
 async fn run_page_control<F>(
     state: &AppState,
     what: &str,
-    running: RunningWork,
     operation: F,
 ) -> Result<crate::pbx::Reply, Response>
 where
     F: Future<Output = crate::pbx::Reply> + Send + 'static,
 {
-    let refused = |status: axum::http::StatusCode, detail: String| {
-        (status, Json(json!({ "detail": detail }))).into_response()
-    };
-    let conflict = |outcome: &str| {
-        refused(
-            axum::http::StatusCode::CONFLICT,
-            format!("{what} was {outcome}"),
-        )
-    };
-    let spawned = match running {
-        RunningWork::Cancel => spawn_replacing_operation(state, operation).await,
-        RunningWork::Keep => spawn_active_operation(state, operation).await,
-    };
-    let Some((task, task_id, spawned_generation)) = spawned else {
-        return Err(conflict("cancelled"));
-    };
-    let joined = task.await;
-    clear_active_operation(state, task_id).await;
-    let reply = match joined {
-        Ok(reply) => reply,
-        // Cancelled by a newer rescue, which settles the call itself.
-        Err(error) if error.is_cancelled() => return Err(conflict("cancelled")),
-        Err(error) => {
-            settle_if_current(state, spawned_generation).await;
-            return Err(refused(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                format!("{what} failed: {error}"),
-            ));
+    let spawned = spawn_replacing_operation(state, operation).await;
+    let (reply, generation) = join_page_operation(state, what, spawned).await?;
+    deliver_page_control(state, what, reply, generation).await
+}
+
+/// `/model` and `/thinking`: decide first, and touch the live leg only for a
+/// redial that will go ahead.
+///
+/// The decision needs no PBX lock, so a wedged turn cannot hold it up; it
+/// runs as a registered operation a rescue can cancel, and leaves running
+/// work alone. An answer (a refusal, or a setting recorded on the operator)
+/// is delivered at the generation the decision started on, and the live leg
+/// keeps running: the caller's next turn reaches it. A redial that will go
+/// ahead cancels running work only if the caller is still on the leg it was
+/// decided for, and the PBX refuses it if the caller has left that leg by the
+/// time it holds the lock. Either way the caller keeps the leg they moved to,
+/// and the control answers 409 as superseded.
+async fn run_redial_control<D>(
+    state: &AppState,
+    what: &str,
+    decide: D,
+) -> Result<crate::pbx::Reply, Response>
+where
+    D: Future<Output = Redial> + Send + 'static,
+{
+    let spawned = spawn_active_operation(state, decide).await;
+    let (decided, generation) = join_page_operation(state, what, spawned).await?;
+    let plan = match decided {
+        Redial::Answered(reply) => {
+            return deliver_page_control(state, what, reply, generation).await
         }
+        Redial::Planned(plan) => *plan,
     };
-    let generation = reply.delivery_generation.unwrap_or(spawned_generation);
-    if !deliver_page_reply_if_current(state, &reply, generation).await {
-        return Err(conflict("superseded"));
+    let Some(plan) = cancel_active_operations_for(state, plan).await else {
+        return Err(page_conflict(what, "superseded"));
+    };
+    let generation = plan.leg().identity.generation;
+    let board_state = state.clone();
+    let spawned = spawn_registered_operation(state, generation, async move {
+        board_state.0.switchboard.lock().await.redial(plan).await
+    })
+    .await
+    .map(|(task, task_id)| (task, task_id, generation));
+    let (redialed, generation) = join_page_operation(state, what, spawned).await?;
+    match redialed {
+        Ok(reply) => deliver_page_control(state, what, reply, generation).await,
+        Err(_left) => {
+            // This control's rescue left the call quiescing.
+            settle_if_current(state, generation).await;
+            Err(page_conflict(what, "superseded"))
+        }
     }
-    Ok(reply)
 }
 
 async fn hangup(State(state): State<AppState>) -> impl IntoResponse {
@@ -1889,15 +1957,10 @@ async fn connect(State(state): State<AppState>, Json(req): Json<Connect>) -> Res
     // before taking the PBX lock; otherwise a direct connection can wait for
     // the very leg the caller is trying to leave.
     let board_state = state.clone();
-    let controlled = run_page_control(
-        &state,
-        "connection attempt",
-        RunningWork::Cancel,
-        async move {
-            let mut board = board_state.0.switchboard.lock().await;
-            board.dial(&req.project, &req.intent).await
-        },
-    )
+    let controlled = run_page_control(&state, "connection attempt", async move {
+        let mut board = board_state.0.switchboard.lock().await;
+        board.dial(&req.project, &req.intent).await
+    })
     .await;
     match controlled {
         Ok(reply) => Json(json!({"route":reply.route, "error":reply.error})).into_response(),
@@ -1909,16 +1972,10 @@ struct Thinking {
     level: String,
 }
 async fn thinking(State(state): State<AppState>, Json(req): Json<Thinking>) -> Response {
-    let board_state = state.clone();
-    let controlled = run_page_control(
-        &state,
-        "thinking change",
-        running_work_for_a_redial(&state),
-        async move {
-            let mut board = board_state.0.switchboard.lock().await;
-            board.set_thinking(&req.level).await
-        },
-    )
+    let redials = state.0.redials.clone();
+    let controlled = run_redial_control(&state, "thinking change", async move {
+        redials.thinking_change(&req.level).await
+    })
     .await;
     match controlled {
         Ok(reply) => Json(json!({"thinking":current_status(&state).thinking, "error":reply.error}))
@@ -1931,16 +1988,10 @@ struct Model {
     model: String,
 }
 async fn model(State(state): State<AppState>, Json(req): Json<Model>) -> Response {
-    let board_state = state.clone();
-    let controlled = run_page_control(
-        &state,
-        "model change",
-        running_work_for_a_redial(&state),
-        async move {
-            let mut board = board_state.0.switchboard.lock().await;
-            board.set_model(&req.model).await
-        },
-    )
+    let redials = state.0.redials.clone();
+    let controlled = run_redial_control(&state, "model change", async move {
+        redials.model_change(&req.model).await
+    })
     .await;
     match controlled {
         Ok(reply) => Json(json!({"model":current_status(&state).model_name, "error":reply.error}))

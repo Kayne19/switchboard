@@ -364,9 +364,11 @@ fn on_alpha(coordinator: &Coordinator) {
 /// Asserts nothing of the project leg is left on the call.
 fn assert_on_the_operator(coordinator: &Coordinator) {
     assert_eq!(coordinator.route(), "operator");
-    assert_eq!(coordinator.project(), None);
-    assert_eq!(coordinator.model(), "");
-    assert_eq!(coordinator.persistent_session_id(), "");
+    assert_eq!(coordinator.project_leg(), None);
+    assert_eq!(
+        coordinator.linearize(|state| (state.model.clone(), state.persistent_session_id.clone())),
+        (String::new(), String::new())
+    );
     let status = coordinator.status();
     assert_eq!(
         (status.route.as_str(), status.label.as_str()),
@@ -608,4 +610,95 @@ fn activity_is_classified_by_the_leg_it_came_from() {
     .unwrap();
     call.begin_rescue("hangup mid-startup");
     assert_eq!(call.classify_activity("beta-leg"), Discard);
+}
+
+#[test]
+fn the_project_leg_is_read_in_one_piece() {
+    let call = coordinator();
+    assert_eq!(call.project_leg(), None);
+
+    // A starting leg is not on the line yet.
+    call.begin_candidate(alpha_candidate()).unwrap();
+    assert_eq!(call.project_leg(), None);
+
+    call.adopt_candidate("cand").unwrap();
+    assert_eq!(
+        call.project_leg(),
+        Some(ProjectLeg {
+            project: "alpha".into(),
+            identity: LegIdentity::new("cand", 1),
+            model: "anthropic/opus".into(),
+            persistent_session_id: "pi-session".into(),
+        })
+    );
+
+    call.return_to_operator();
+    assert_eq!(call.project_leg(), None);
+}
+
+#[test]
+fn a_rescue_of_a_named_leg_happens_only_while_that_leg_is_on_the_line() {
+    // Still on the line: rescued like any other rescue, and the same project,
+    // model, and session come back under the new identity.
+    let call = coordinator();
+    on_alpha(&call);
+    let leg = call.project_leg().unwrap();
+    let rescued = call.begin_rescue_of(&leg, "redial").unwrap();
+    assert_eq!(rescued.identity, call.current_identity());
+    assert_eq!(rescued.identity.generation, leg.identity.generation + 1);
+    assert_eq!(
+        ProjectLeg {
+            identity: leg.identity.clone(),
+            ..rescued.clone()
+        },
+        leg
+    );
+    assert_eq!(phase(&call), Phase::Quiescing);
+    assert_eq!(call.project_leg(), Some(rescued.clone()));
+    // The leg as it was read before the rescue is gone.
+    assert_eq!(call.begin_rescue_of(&leg, "redial"), None);
+
+    // Every way the leg is left refuses the rescue and changes nothing.
+    let refused = |call: &Coordinator, leg: &ProjectLeg| {
+        let generation = call.generation();
+        let before = phase(call);
+        assert_eq!(call.begin_rescue_of(leg, "redial"), None);
+        assert_eq!(call.generation(), generation);
+        assert_eq!(phase(call), before);
+    };
+    // Returned to the operator, which keeps the generation.
+    let call = coordinator();
+    on_alpha(&call);
+    let leg = call.project_leg().unwrap();
+    call.return_to_operator();
+    refused(&call, &leg);
+    // Rescued by something else.
+    let call = coordinator();
+    on_alpha(&call);
+    let leg = call.project_leg().unwrap();
+    call.begin_rescue("hangup");
+    call.settle();
+    refused(&call, &leg);
+    // Replaced by another leg.
+    let call = coordinator();
+    on_alpha(&call);
+    let leg = call.project_leg().unwrap();
+    call.begin_candidate(CandidateLeg::new(
+        "alpha",
+        "alpha",
+        "pi-session",
+        "next",
+        "anthropic/opus",
+        "medium",
+    ))
+    .unwrap();
+    call.adopt_candidate("next").unwrap();
+    call.finish_intro();
+    refused(&call, &leg);
+    // Shutting down.
+    let call = coordinator();
+    on_alpha(&call);
+    call.begin_shutdown();
+    let leg = call.project_leg().unwrap();
+    refused(&call, &leg);
 }

@@ -33,6 +33,20 @@ impl LegIdentity {
     }
 }
 
+/// The project leg on the line, read in one piece. Every adoption, rescue,
+/// and idle return gives the leg a new identity, and a return to the operator
+/// ends it, so an equal value read later means nothing has replaced the leg
+/// in between.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectLeg {
+    pub project: String,
+    pub identity: LegIdentity,
+    /// The model spec the leg was started with.
+    pub model: String,
+    /// The pi session the leg writes; a redial that keeps context reopens it.
+    pub persistent_session_id: String,
+}
+
 /// Where the call is. `Starting` is the only phase in which a candidate leg
 /// exists; its side effects stay private until it is adopted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -158,6 +172,13 @@ impl fmt::Display for LifecycleError {
 }
 impl std::error::Error for LifecycleError {}
 
+/// What a rescue retired, for the notice sent once the state lock is released.
+struct Rescue {
+    abandoned_candidate: bool,
+    route: String,
+    next: LegIdentity,
+}
+
 /// The leg a startup replaces, restored if the startup fails.
 #[derive(Clone)]
 struct StartupRollback {
@@ -236,6 +257,15 @@ impl CallLifecycle {
         } else {
             self.project.clone().unwrap_or_else(|| self.route.clone())
         }
+    }
+
+    fn project_leg(&self) -> Option<ProjectLeg> {
+        Some(ProjectLeg {
+            project: self.project.clone()?,
+            identity: self.leg.clone(),
+            model: self.model.clone(),
+            persistent_session_id: self.persistent_session_id.clone(),
+        })
     }
 
     /// The status the page is shown, built from this lifecycle alone. On the
@@ -396,20 +426,9 @@ impl Coordinator {
         self.linearize(|state| state.route_label())
     }
 
-    /// The project on the line, `None` on the operator.
-    pub fn project(&self) -> Option<String> {
-        self.linearize(|state| state.project.clone())
-    }
-
-    /// The model spec the project leg was started with; empty on the operator.
-    pub fn model(&self) -> String {
-        self.linearize(|state| state.model.clone())
-    }
-
-    /// The pi session the project leg writes; a redial that keeps context
-    /// reopens it.
-    pub fn persistent_session_id(&self) -> String {
-        self.linearize(|state| state.persistent_session_id.clone())
+    /// The project leg on the line; `None` on the operator.
+    pub fn project_leg(&self) -> Option<ProjectLeg> {
+        self.linearize(|state| state.project_leg())
     }
 
     /// The level the next project call is asked for when the caller names
@@ -486,38 +505,68 @@ impl Coordinator {
     }
 
     pub fn begin_rescue(&self, reason: impl Into<String>) -> LegIdentity {
-        // A rescue abandons any in-flight startup: a rescued candidate must
-        // never be adopted, and the browser must stop showing "connecting".
-        // The clear notice carries the post-rescue generation.
-        let (abandoned_candidate, route, next) = self.linearize(|state| {
-            let abandoned = state.candidate.take().is_some();
-            let route = state.route.clone();
-            let next_token = format!("{}-rescue-{}", state.leg.token, state.leg.generation + 1);
-            if state.phase == Phase::Shutdown {
-                state.leg = LegIdentity::new(next_token, state.leg.generation + 1);
-                self.refresh_locked(state);
-                return (abandoned, route, state.leg.clone());
+        let rescue = self.linearize(|state| self.rescue_locked(state, reason.into()));
+        self.announce_rescue(&rescue);
+        rescue.next
+    }
+
+    /// `begin_rescue`, only while `leg` is still the leg on the line; `None`
+    /// rescues nothing. A control that decided on the leg it read earlier
+    /// does not cancel work on a leg the caller has since moved to. Returns
+    /// the leg as the rescue left it: the same project, model, and session
+    /// under a new identity.
+    pub fn begin_rescue_of(
+        &self,
+        leg: &ProjectLeg,
+        reason: impl Into<String>,
+    ) -> Option<ProjectLeg> {
+        let (rescue, rescued) = self.linearize(|state| {
+            if state.phase == Phase::Shutdown || state.project_leg().as_ref() != Some(leg) {
+                return None;
             }
+            let rescue = self.rescue_locked(state, reason.into());
+            Some((rescue, state.project_leg()?))
+        })?;
+        self.announce_rescue(&rescue);
+        Some(rescued)
+    }
+
+    /// Retires the current leg. A rescue abandons any in-flight startup: a
+    /// rescued candidate must never be adopted, and the browser must stop
+    /// showing "connecting".
+    fn rescue_locked(&self, state: &mut CallLifecycle, reason: String) -> Rescue {
+        let abandoned_candidate = state.candidate.take().is_some();
+        let route = state.route.clone();
+        let next_token = format!("{}-rescue-{}", state.leg.token, state.leg.generation + 1);
+        state.leg = LegIdentity::new(next_token, state.leg.generation + 1);
+        if state.phase != Phase::Shutdown {
             state.phase = Phase::Quiescing;
             state.operation = None;
-            state.terminal_reason = Some(reason.into());
-            state.leg = LegIdentity::new(next_token, state.leg.generation + 1);
-            self.refresh_locked(state);
-            (abandoned, route, state.leg.clone())
-        });
-        if abandoned_candidate {
+            state.terminal_reason = Some(reason);
+        }
+        self.refresh_locked(state);
+        Rescue {
+            abandoned_candidate,
+            route,
+            next: state.leg.clone(),
+        }
+    }
+
+    /// Tells the presentation layer what a rescue ended. The clear notice
+    /// carries the post-rescue generation.
+    fn announce_rescue(&self, rescue: &Rescue) {
+        if rescue.abandoned_candidate {
             self.notify_candidate(&CandidateNotice {
-                route,
-                generation: next.generation,
+                route: rescue.route.clone(),
+                generation: rescue.next.generation,
                 active: false,
             });
         }
         tracing::info!(
-            generation = next.generation,
-            abandoned_candidate,
+            generation = rescue.next.generation,
+            abandoned_candidate = rescue.abandoned_candidate,
             "rescue retired the current leg"
         );
-        next
     }
 
     /// Caller or agent activity outside a turn boundary: a clip arriving, a
