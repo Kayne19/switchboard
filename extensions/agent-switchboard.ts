@@ -96,10 +96,14 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 	// holes in their level map, and the clamp is silent. This session is the only
 	// place the effective level is known, so it reports it: the page then states
 	// a level the caller can act on rather than one that was merely requested.
+	//
+	// A label on a web page is never worth failing a call over, so a failed
+	// report does not throw. It is written to stderr instead, which the
+	// switchboard keeps and shows an operator when the leg fails.
 	const reportThinking = async () => {
 		if (!STATE_URL) return;
 		try {
-			await fetch(STATE_URL, {
+			const resp = await fetch(STATE_URL, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
@@ -108,8 +112,15 @@ export default function agentSwitchboard(pi: ExtensionAPI) {
 				}),
 				signal: AbortSignal.timeout(10_000),
 			});
-		} catch {
-			// A label on a web page is never worth failing a call over.
+			if (!resp.ok) {
+				console.error(
+					`switchboard: the thinking level report to ${STATE_URL} was refused (HTTP ${resp.status})`,
+				);
+			}
+		} catch (err) {
+			console.error(
+				`switchboard: could not report the thinking level to ${STATE_URL}: ${err}`,
+			);
 		}
 	};
 

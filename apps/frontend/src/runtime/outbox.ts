@@ -20,6 +20,10 @@ export interface Clip {
   // generation and resubmitted instead of being discarded.
   transferEra?: string;
   sent: boolean;
+  // Set once the whole clip has gone out on some socket. Unlike `sent`, a
+  // reconnect does not clear it: the server keeps the first stamp it saw for
+  // a clip id, so from then on the clip belongs to that stamp for good.
+  transmitted?: boolean;
   accepted?: boolean;
   streaming?: boolean;
   chunks?: Blob[];
@@ -77,13 +81,19 @@ export class ClipOutbox {
 // those to the new generation so the flush that follows delivers them. Any
 // other stale clip is left to be discarded: that is the server's safety
 // invariant for speech begun before the transfer was known.
+//
+// A clip that already went out is not re-stamped. The server holds it under
+// the stamp it went out with and drops it with a `stale_epoch` error that
+// names it, which is how the caller hears about it; sent again under a new
+// stamp it would be taken as the clip the server already has, and never
+// answered.
 export function restampStaleClips(
   clips: readonly Clip[],
   generation: number,
 ): number {
   let resubmitted = 0;
   for (const clip of clips) {
-    if (clip.epoch !== generation && clip.transferEra) {
+    if (clip.epoch !== generation && clip.transferEra && !clip.transmitted) {
       clip.epoch = generation;
       resubmitted += 1;
     }
