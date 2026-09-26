@@ -58,8 +58,9 @@ the clip dropped. A wrong number can discard speech, never misroute it.
 
 What this trades away: speech that started before the browser learned of a
 change is discarded, and the caller has to repeat it. Browser-initiated bumps
-(`/hangup`, `/connect`, `/thinking` off the operator leg) are one message
-delivery away, so the tab is already awake and waiting on that exchange.
+(`/hangup`, `/connect`, and a `/model` or `/thinking` swap that goes ahead) are
+one message delivery away, so the tab is already awake and waiting on that
+exchange. A picker request that is refused bumps nothing.
 
 An agent-initiated `transfer_to_project` bumps the epoch at *adoption*, not at
 startup: the generation stays put while the new leg is starting, and the new
@@ -140,6 +141,38 @@ The route/model/thinking pickers serialize their HTTP operations. A failed picke
 request restores the value that was selected before that request, unless a newer
 status snapshot has already invalidated it; this prevents late failures from
 rewriting a newer leg selection.
+
+### A swap is decided before its rescue
+
+A rescue closes the live process. `/model` and `/thinking` used to rescue first
+and let the PBX decide afterwards, so a swap the PBX then refused (a remote
+project asked to keep its conversation, a model the catalog does not resolve,
+the model already running) left the caller on a closed leg, and their next turn
+dropped them to the operator (#63).
+
+They now decide first. `RedialPlanner` in `apps/backend/src/pbx.rs` makes every
+refusal from the leg the coordinator names (`project_leg`, read once) and the
+launch plan prewarm holds, so it needs no PBX lock and a wedged turn cannot hold
+it up. `run_redial_control` in `apps/backend/src/api.rs` runs that decision as a
+registered operation that leaves running work alone. A refusal is delivered at
+the generation the decision started on; nothing is cancelled and no epoch is
+sent. Only a plan that will go ahead is followed by a rescue and then
+`Switchboard::redial`. The agent's own `set_model` goes through the same
+planner, so there is one copy of each check.
+
+Deciding early opens two windows in which the caller can leave the leg the plan
+was made for, and each is closed where its side effect happens:
+
+- **Before the rescue.** `Coordinator::begin_rescue_of` rescues only while the
+  leg the plan read is still on the line, checked and rescued under the
+  coordinator's lock. A caller who moved while the decision ran keeps what they
+  moved to, untouched, and the picker is answered 409.
+- **After the rescue, before the PBX lock.** A turn queued for the lock can
+  return the caller to the operator first. `Switchboard::redial` compares the
+  leg again under the PBX lock, against the leg as this control's rescue left
+  it, and refuses (`StaleLeg`) without launching anything. The comparison is
+  the whole leg (project, identity, model, session), not the generation alone,
+  because a return to the operator keeps the generation.
 
 ## `ETXTBSY` when tests write their own executables
 
