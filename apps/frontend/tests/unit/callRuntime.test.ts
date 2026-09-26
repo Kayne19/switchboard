@@ -11,6 +11,8 @@ import {
   type CallRuntimeOptions,
   type RuntimeState,
 } from "../../src/runtime/callRuntime";
+import type { HelloAckMessage, ServerMessage } from "../../src/protocol";
+import { helloAck, statusMessage } from "../fixtures/serverMessages";
 
 class FakeSocket {
   static instances: FakeSocket[] = [];
@@ -52,7 +54,7 @@ class FakeSocket {
     this.onclose?.({} as CloseEvent);
   }
 
-  receive(message: Record<string, unknown>) {
+  receive(message: object) {
     this.onmessage?.({ data: JSON.stringify(message) } as MessageEvent);
   }
 
@@ -104,7 +106,7 @@ async function settle() {
 
 function makeRuntime(overrides: Partial<CallRuntimeOptions> = {}) {
   const states: RuntimeState[] = [];
-  const messages: BrowserMessage[] = [];
+  const messages: ServerMessage[] = [];
   const runtime = new CallRuntime({
     socketUrl: "ws://backend/ws",
     onState: (state) => states.push(state),
@@ -125,12 +127,12 @@ function makeRuntime(overrides: Partial<CallRuntimeOptions> = {}) {
 async function connectAt(
   runtime: CallRuntime,
   generation = 1,
-  helloAck: Record<string, unknown> = {},
+  helloAckFields: Partial<HelloAckMessage> = {},
 ) {
   runtime.start();
   const socket = FakeSocket.latest();
   socket.open();
-  socket.receive({ type: "hello_ack", version: 1, stt_streaming: false, mse_mp3: false, ...helloAck });
+  socket.receive(helloAck(helloAckFields));
   socket.receive({ type: "epoch", generation });
   await settle();
   return socket;
@@ -196,7 +198,7 @@ describe("CallRuntime connection", () => {
     vi.advanceTimersByTime(20_000);
     const ping = socket.sentJson().find((frame) => frame.type === "ping");
     expect(ping).toBeDefined();
-    socket.receive({ type: "pong", nonce: ping!.nonce });
+    socket.receive({ type: "pong", nonce: ping!.nonce, time: ping!.time });
     vi.advanceTimersByTime(8_000);
     expect(FakeSocket.instances.length, "an answered ping keeps the socket").toBe(1);
 
@@ -281,7 +283,7 @@ describe("CallRuntime typed turns", () => {
     socket.open();
     // Open, but the server has not announced the epoch the turn must carry.
     expect(runtime.sendText("hello")).toBe(false);
-    socket.receive({ type: "hello_ack", version: 1 });
+    socket.receive(helloAck());
     socket.receive({ type: "epoch", generation: 2 });
     await settle();
     expect(runtime.sendText("   ")).toBe(false);
@@ -318,7 +320,7 @@ describe("CallRuntime voice clips", () => {
     runtime.retry();
     const next = FakeSocket.latest();
     next.open();
-    next.receive({ type: "hello_ack", version: 1 });
+    next.receive(helloAck());
     next.receive({ type: "epoch", generation: 3 });
     expect(next.sentJson().some((frame) => frame.type === "clip")).toBe(false);
     runtime.dispose();
@@ -335,7 +337,7 @@ describe("CallRuntime voice clips", () => {
     runtime.retry();
     const next = FakeSocket.latest();
     next.open();
-    next.receive({ type: "hello_ack", version: 1 });
+    next.receive(helloAck());
     next.receive({ type: "epoch", generation: 2 });
     const resent = next.sentJson().find((frame) => frame.type === "clip");
     expect(resent?.id).toBe(first?.id);
@@ -345,7 +347,7 @@ describe("CallRuntime voice clips", () => {
   it("carries unsent speech recorded during a transfer onto the new leg", async () => {
     const { runtime, latestState } = makeRuntime();
     const socket = await connectAt(runtime, 3);
-    socket.receive({ type: "candidate", route: "alpha" });
+    socket.receive({ type: "candidate", route: "alpha", generation: 3 });
     await settle();
     expect(latestState().status).toBe("Connecting to alpha\u2026");
     runtime.talk();
@@ -356,7 +358,7 @@ describe("CallRuntime voice clips", () => {
     runtime.retry();
     const next = FakeSocket.latest();
     next.open();
-    next.receive({ type: "hello_ack", version: 1 });
+    next.receive(helloAck());
     next.receive({ type: "epoch", generation: 4 });
     await settle();
     const clips = next.sentJson().filter((frame) => frame.type === "clip");
@@ -401,16 +403,17 @@ describe("CallRuntime line controls", () => {
       },
     });
     const socket = await connectAt(runtime);
-    socket.receive({
-      type: "status",
-      route: "fixture-project",
-      label: "fixture-project",
-      model_name: "fixture-provider/fixture-model",
-      models: [{ provider: "fixture-provider", model: "fixture-model", thinks: true }],
-      levels: ["off", "high"],
-      model_swaps: true,
-      models_available: true,
-    });
+    socket.receive(
+      statusMessage({
+        route: "fixture-project",
+        label: "fixture-project",
+        model_name: "fixture-provider/fixture-model",
+        models: [{ provider: "fixture-provider", model: "fixture-model", thinks: true }],
+        levels: ["off", "high"],
+        model_swaps: true,
+        models_available: true,
+      }),
+    );
     await settle();
     const thinkingBefore = latestState().thinking;
 
@@ -455,7 +458,7 @@ describe("CallRuntime line controls", () => {
     const socket = await connectAt(runtime);
     runtime.selectModel("provider/model");
     await settle();
-    socket.receive({ type: "status", route: "alpha", model_name: "provider/model" });
+    socket.receive(statusMessage({ route: "alpha", model_name: "provider/model" }));
     fail(new Error("stale"));
     await settle();
     expect(latestState().status).not.toMatch(/did not go through/);

@@ -90,8 +90,10 @@ The production boundary is a bidirectional WebSocket:
 Damocles backend <-> src/runtime/callRuntime.ts <-> src/integration/runtime.tsx <-> controller.dispatch(action)
 ```
 
-`callRuntime.ts` owns the socket and the call's audio and reports decoded
-backend messages and runtime state; it owns no DOM. `runtime.tsx` validates
+`callRuntime.ts` owns the socket and the call's audio and reports runtime
+state and each backend message, decoded into the `ServerMessage` union of
+`src/protocol.ts` (a frame that is not one of its messages is dropped); it
+owns no DOM. `runtime.tsx` validates
 incoming display actions, dispatches them, and reports the rendered scene back
 to the backend. Neither contains layout logic.
 

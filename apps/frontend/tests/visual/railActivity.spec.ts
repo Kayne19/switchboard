@@ -1,5 +1,6 @@
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { DisplayFixtureServer } from '../integration/display-fixture-server.mjs';
+import { transcriptEntry } from '../fixtures/serverMessages';
 
 interface Box {
   x: number;
@@ -37,7 +38,7 @@ async function openConversation(page: Page, testInfo: TestInfo) {
   const { wsUrl } = await fixtureServer.start();
   await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
   await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === 'hello')).toBe(true);
-  fixtureServer.broadcast({ type: 'spoken', entry: { role: 'agent', text: 'Working on it.', id: 'reply-1' } });
+  fixtureServer.broadcast({ type: 'spoken', entry: transcriptEntry({ role: 'agent', text: 'Working on it.', id: 'reply-1' }) });
   fixtureServer.broadcast({
     type: 'activity',
     state: 'start',
@@ -103,7 +104,7 @@ test('the shared content rail keeps one semantic surface order', async ({ page }
       type: 'display',
       action: { op: 'show', id: 'note', type: 'note', role: 'secondary', data: { segments: [{ text: 'The active path is healthy.' }] } },
     });
-    fixtureServer.broadcast({ type: 'spoken', entry: { role: 'agent', text: 'I am checking it now.', id: 'reply-1' } });
+    fixtureServer.broadcast({ type: 'spoken', entry: transcriptEntry({ role: 'agent', text: 'I am checking it now.', id: 'reply-1' }) });
     fixtureServer.broadcast({
       type: 'display',
       action: { op: 'show', id: 'latency', type: 'metric', role: 'secondary', data: { label: 'LATENCY', value: '182 ms' } },
@@ -245,7 +246,7 @@ for (const viewport of viewports) {
       });
       fixtureServer.broadcast({
         type: 'spoken',
-        entry: { role: 'agent', text: 'Monitoring active routes.', id: 'reply-1' },
+        entry: transcriptEntry({ role: 'agent', text: 'Monitoring active routes.', id: 'reply-1' }),
       });
 
       await expect(page.locator('.content-rail__details .metrics')).toBeVisible();
@@ -345,7 +346,7 @@ for (const viewport of viewports) {
         type: 'display',
         action: { op: 'show', id: 'note', type: 'note', role: 'secondary', data: { segments: [{ text: 'The active path is healthy.' }] } },
       });
-      fixtureServer.broadcast({ type: 'spoken', entry: { role: 'agent', text: 'Monitoring active routes.', id: 'reply-1' } });
+      fixtureServer.broadcast({ type: 'spoken', entry: transcriptEntry({ role: 'agent', text: 'Monitoring active routes.', id: 'reply-1' }) });
       await expect(page.locator('.content-rail__details .rail-note')).toBeVisible();
       await expect(page.locator('.content-rail__details .live-chat-card')).toBeVisible();
 

@@ -60,6 +60,8 @@ browser mic / page controls
           |       +--> ElevenLabs or local TTS transport
           |
           +--> history / registry / models / visual_protocol
+          |
+          +--> protocol.rs: every message the service sends the browser
 
 apps/backend/ ------- the Rust service (src/) and its tests (tests/)
 apps/frontend/ ------ browser: call runtime (socket, capture, playback) and rendering
@@ -166,10 +168,19 @@ reconnected, discarded, or replayed.
 ### 6. Protocols are contracts, not implementation details
 
 The browser/server WebSocket protocol is the contract between
-`apps/frontend/src/protocol.ts` and `api.rs` (see the known non-purity below:
-only one direction is typed today). Changes to message types, framing, MIME
-rules, sequence numbers, generations, or environment variables are public
-contract changes.
+`apps/frontend/src/protocol.ts` and the service. Each message the service
+sends the browser is a variant of `ServerMessage`, defined once in
+`apps/backend/src/protocol.rs` and once in `protocol.ts`, and `api.rs` builds
+every one through it. Both definitions are held to the same examples,
+`apps/frontend/tests/fixtures/server-messages.json`: each example must
+serialize to itself in Rust and decode to itself in the browser, and a type
+with no example fails on both sides. The browser admits a text frame only as
+one of those messages and drops anything else. The commands the browser sends
+are built by `protocol.ts` and handled in `handle_text_frame`.
+
+Changes to message types, framing, MIME rules, sequence numbers, generations,
+or environment variables are public contract changes. A new or changed
+server-to-browser message changes both definitions and the fixture together.
 
 Every protocol addition must define:
 
@@ -307,6 +318,7 @@ removes the real coupling; do not create interfaces for ceremony.
 | `registry.rs` | the project registry and spoken-name resolution | agent reasoning |
 | `history.rs` | transcript storage shape | deciding when a turn routes |
 | `visual_protocol.rs` | display action validation and normalization | layout |
+| `protocol.rs` | the shape of every message sent to the browser (`ServerMessage`) | when or to whom a message is sent |
 | `apps/frontend/` | capture, protocol client, playback, UI | server authority or durable state |
 | `extensions/` | Pi-side tool/callback signals | direct route mutation |
 | homelab | deployment and secrets | application implementation |
@@ -319,7 +331,6 @@ A normal voice turn should remain traceable as:
 capture
   -> WebSocket admission
   -> STT adapter / streaming worker
-  -> partial transcript (display only)
   -> final transcript claim
   -> current-generation turn dispatch
   -> Pi session and tool loop
@@ -329,8 +340,10 @@ capture
   -> browser playback
 ```
 
-Partial results must not be persisted, routed, steered, or spoken as if they
-were final. A final result may be claimed only once. A failed or abandoned
+A streaming worker's partial results are logged and go no further: they are
+not shown, persisted, routed, steered, or spoken. The page has no place for a
+caller line that is still being recognized, so the service does not send
+them. A final result may be claimed only once. A failed or abandoned
 stream must either complete through the complete-clip contract or report a bounded,
 visible failure; it must not silently create a duplicate turn.
 
@@ -402,10 +415,12 @@ Switchboard is not currently a perfect hexagonal implementation:
 - The display precedence rule is implemented twice, in `DisplayProjection`
   (`api.rs`, for `/view`) and in the browser's `sceneModel.ts`. Tests pin both
   to the same rule.
-- Only the browser-to-server half of the WebSocket protocol is defined
-  (`apps/frontend/src/protocol.ts`). Server-to-browser messages are built with
-  ad hoc `json!` in `api.rs` and read as one optional-field bag in the browser
-  (#61).
+- The `status` message is typed field by field only in the browser. In Rust
+  `ServerMessage::Status` carries the projection the PBX and the coordinator
+  build as JSON; the fixture test holds that projection to the browser's
+  fields until the projection itself is typed (#60).
+- Browser-to-server commands have builders in `protocol.ts` but no type on
+  the Rust side: `handle_text_frame` reads each one field by field.
 - RPC activity from a pi process carries no leg identity, so it is published,
   and promotes a starting candidate, without the freshness check rule 7 asks
   for. The PBX lock makes that safe today by serializing turns (#60).

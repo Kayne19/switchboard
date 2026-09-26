@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { DisplayFixtureServer } from "../integration/display-fixture-server.mjs";
+import { transcriptEntry } from "../fixtures/serverMessages";
 
 const longReply = [
   "The **route** is on screen. I checked `route_final_transcript` and it gates both paths:",
@@ -28,7 +29,7 @@ test("tool activity never flashes over the explanation", async ({ page }) => {
         data: { mode: "graph", title: "Route", nodes: [{ id: "a", label: "A" }, { id: "b", label: "B" }], edges: [{ from: "a", to: "b" }] },
       },
     });
-    fixtureServer.broadcast({ type: "spoken", entry: { role: "agent", text: explanation, id: "reply-1" } });
+    fixtureServer.broadcast({ type: "spoken", entry: transcriptEntry({ role: "agent", text: explanation, id: "reply-1" }) });
     const explanationText = page.locator(".live-chat-card__text");
     await expect(explanationText).toHaveText(explanation);
 
@@ -73,7 +74,7 @@ test("the transcript input types in the transcript's own face at every size", as
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
     await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === "hello")).toBe(true);
-    fixtureServer.broadcast({ type: "history", entries: [{ role: "caller", text: "Show me the call path.", id: "clip-1" }] });
+    fixtureServer.broadcast({ type: "history", entries: [transcriptEntry({ role: "caller", text: "Show me the call path.", id: "clip-1" })] });
     await page.locator(".transcript-toggle").click();
     const input = page.getByRole("textbox", { name: "Conversation input" });
     await input.fill("Typed text keeps its proportions");
@@ -131,7 +132,7 @@ test("explanations read Markdown, scroll, and open a history the caller can type
 
     fixtureServer.broadcast({
       type: "history",
-      entries: [{ role: "caller", text: "Show me the call path.", id: "clip-1" }],
+      entries: [transcriptEntry({ role: "caller", text: "Show me the call path.", id: "clip-1" })],
     });
     fixtureServer.broadcast({
       type: "display",
@@ -151,7 +152,7 @@ test("explanations read Markdown, scroll, and open a history the caller can type
         },
       },
     });
-    fixtureServer.broadcast({ type: "spoken", entry: { role: "agent", text: longReply, id: "reply-1" } });
+    fixtureServer.broadcast({ type: "spoken", entry: transcriptEntry({ role: "agent", text: longReply, id: "reply-1" }) });
     await expect(page.locator('[data-scene="architecture"]')).toBeVisible();
 
     const explanation = page.locator(".live-chat-card__text");

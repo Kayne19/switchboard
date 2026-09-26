@@ -7,6 +7,7 @@
 // time, and every event handler is bound to the clip that installed it, so a
 // late event from a replaced clip can never advance or requeue the new one.
 
+import type { AudioDoneMessage, AudioStartMessage } from "../protocol";
 import { errorName } from "./errors";
 
 export const MAX_AUDIO_UTTERANCE = 32 * 1024 * 1024;
@@ -224,7 +225,9 @@ export class AudioPlayback {
     this.attemptPlay(owner);
   }
 
-  receiveAudioStart(message: BrowserMessage): void {
+  receiveAudioStart(
+    message: Pick<AudioStartMessage, "generation" | "sequence" | "mime">,
+  ): void {
     const generation = message.generation;
     const sequence = message.sequence;
     if (
@@ -276,7 +279,9 @@ export class AudioPlayback {
     this.notifyPlaybackChange();
   }
 
-  receiveAudioDone(message: BrowserMessage): void {
+  receiveAudioDone(
+    message: Pick<AudioDoneMessage, "generation" | "sequence" | "done">,
+  ): void {
     if (
       message.generation !== this.audioEpoch ||
       typeof message.sequence !== "number"
