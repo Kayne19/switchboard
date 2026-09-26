@@ -26,6 +26,9 @@ use tokio::sync::Mutex;
 use tokio::time::Duration;
 
 pub const OPERATOR: &str = "operator";
+/// How long a project leg may go silent inside one turn, its intro included,
+/// before it is dropped as wedged.
+const PROJECT_TURN_TIMEOUT: Duration = Duration::from_secs(600);
 /// Told the switchboard has settled on a leg; it reads which one from the
 /// coordinator.
 pub type RouteCallback = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
@@ -360,6 +363,9 @@ pub struct Switchboard {
     prewarm: Arc<Prewarm>,
     /// Decides model and thinking changes, and which model a leg asks for.
     planner: RedialPlanner,
+    /// `PROJECT_TURN_TIMEOUT`, held per switchboard so a test can wait out a
+    /// silent leg without waiting ten minutes.
+    project_turn_timeout: Duration,
 }
 impl Switchboard {
     pub fn new(config: &crate::Config, registry: Registry, prewarm: Arc<Prewarm>) -> Self {
@@ -400,6 +406,7 @@ impl Switchboard {
             coordinator,
             prewarm,
             planner,
+            project_turn_timeout: PROJECT_TURN_TIMEOUT,
         }
     }
     /// The coordinator this switchboard reports to; the application shares it.
@@ -748,7 +755,10 @@ impl Switchboard {
             "transferring caller"
         );
 
-        let previous_agent = self.agent.clone();
+        // The leg the caller is on now, which every failure below hands the
+        // line back to: the project leg on an agent-to-agent transfer, else
+        // the operator, as in `drop_agent`.
+        let live_session = self.agent.clone().or_else(|| self.operator.clone());
 
         let plan = match self.prewarm.launch_plan(&project).await {
             Ok(plan) => plan,
@@ -812,7 +822,7 @@ impl Switchboard {
                     "could not connect to project"
                 );
                 self.rollback_startup(format!("startup failed: {e}"));
-                self.set_active_session(previous_agent.clone()).await;
+                self.set_active_session(live_session.clone()).await;
                 self.operator_note = Some(format!("Transfer to {} failed: {e}", project.id));
                 return self.reply_transfer_error(
                     format!("I couldn't get {} on the line: {e}", project.id),
@@ -851,7 +861,7 @@ impl Switchboard {
             };
             tracing::error!(project = %project.id, %detail, "project intro turn failed");
             session.close().await;
-            self.set_active_session(previous_agent.clone()).await;
+            self.set_active_session(live_session.clone()).await;
             self.rollback_startup(format!("intro failed: {detail}"));
             self.operator_note = Some(format!("Transfer to {} failed: {detail}", project.id));
             return self.reply_transfer_error(
@@ -867,7 +877,7 @@ impl Switchboard {
         if self.coordinator.is_candidate() {
             if let Err(error) = self.coordinator.adopt_candidate(&leg_token) {
                 session.close().await;
-                self.set_active_session(previous_agent.clone()).await;
+                self.set_active_session(live_session.clone()).await;
                 self.rollback_startup(format!("adoption failed: {error}"));
                 return self.reply_transfer_error(
                     format!("{} did not come up.", project.id),
@@ -942,7 +952,7 @@ impl Switchboard {
                 .then(|| project.cwd.clone())
                 .filter(|p| !p.is_empty()),
             Some(env),
-            Duration::from_secs(600),
+            self.project_turn_timeout,
             self.activity_callback.clone(),
         )
         .await
