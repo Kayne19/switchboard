@@ -1134,6 +1134,62 @@ async fn a_transfer_whose_agent_cannot_start_leaves_the_caller_on_the_operator_w
 
 #[cfg(unix)]
 #[tokio::test]
+async fn a_remote_agent_whose_directory_is_missing_is_reported_by_the_shell_error() {
+    // The ssh session comes up, but `cd` fails and `set -e` stops the remote
+    // shell before pi is launched. The leg's process exits without a word on
+    // its output, and what the caller and the operator are told is the
+    // shell's error, however the exit lines up with the intro being written.
+    let root = scratch_dir("transfer-bad-cwd");
+    let (operator, operator_log) = logging_operator(&root);
+    let (ssh, ssh_log) = recording_ssh(&root);
+    let (runtime, _) = recording_runtime(&root);
+    let missing = root.join("no-such-project");
+    let mut project = project_on(Some("fake-host"), &missing, &runtime);
+    project.stage_extension = false;
+    let state_dir = root.join("state");
+    let (mut board, coordinator, notices) = coordinated_board(
+        project,
+        &[
+            ("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy()),
+            ("SWITCHBOARD_SSH_PROGRAM", &ssh.to_string_lossy()),
+            ("SWITCHBOARD_STATE_DIR", &state_dir.to_string_lossy()),
+        ],
+    );
+    board.handle("hello").await;
+    let generation = coordinator.generation();
+
+    let reply = board
+        .transfer_ctx(&transcript("put me through to alpha"), "alpha", "", "")
+        .await;
+
+    assert_eq!(read_lines(&ssh_log).len(), 1, "the launch reached the host");
+    let error = reply.error.clone().expect("the transfer failed");
+    assert!(
+        error.contains(&*missing.to_string_lossy()),
+        "the caller should hear the shell's error, which names the directory: {error}"
+    );
+    assert_eq!(reply.route, OPERATOR);
+    assert_eq!(reply.to_speak, [format!("alpha didn't pick up: {error}")]);
+    assert_back_on_the_operator(
+        &board,
+        &coordinator,
+        &notices,
+        generation,
+        &format!("Transfer to alpha failed: {error}"),
+    )
+    .await;
+
+    board.handle("what happened?").await;
+    assert!(operator_prompts(&operator_log)
+        .last()
+        .unwrap()
+        .starts_with(&format!("[switchboard] Transfer to alpha failed: {error}")));
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn an_intro_that_is_never_answered_is_dropped_at_the_turn_deadline() {
     let root = scratch_dir("transfer-silent");
     let (operator, operator_log) = logging_operator(&root);

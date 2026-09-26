@@ -353,6 +353,73 @@ async fn speak_tool_end_with_is_error_true_is_unsuccessful() {
     session.close().await;
 }
 
+// A process that fails says why on stderr on its way out, and a drain task
+// reads stderr while the turn reads stdout. A failure report must wait for
+// the drain rather than read whatever it has reached, and must prefer what
+// the process said to the broken pipe it left behind.
+
+#[tokio::test]
+async fn a_turn_whose_agent_exits_reports_what_it_said_after_its_output_closed() {
+    // Output closes first, then the reason arrives: the order the drain can
+    // lose on its own, fixed here so it always does.
+    let script = "read line; exec 1>&-; sleep 0.3; echo 'pi: no API key for anthropic' >&2; exit 3";
+    let session = PiSession::start(
+        vec!["sh".into(), "-c".into(), script.into()],
+        "test",
+        None,
+        None,
+        Duration::from_secs(5),
+        None,
+    )
+    .await
+    .unwrap();
+    let turn = session.prompt("hello").await.unwrap();
+    assert!(turn.failed);
+    assert_eq!(session.stderr_tail(5), "pi: no API key for anthropic");
+    session.close().await;
+}
+
+#[tokio::test]
+async fn a_prompt_the_agent_stopped_reading_reports_why_not_the_broken_pipe() {
+    // The process stops reading, says why, and has not exited yet when the
+    // prompt is written, so the write fails with a broken pipe.
+    let script = "exec 0<&-; echo 'pi: unknown flag --mdoel' >&2; sleep 0.3; exit 2";
+    let session = PiSession::start(
+        vec!["sh".into(), "-c".into(), script.into()],
+        "test",
+        None,
+        None,
+        Duration::from_secs(5),
+        None,
+    )
+    .await
+    .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while session.stderr_tail(1).is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the process never wrote its error"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    match session.prompt("hello").await {
+        Err(error) => assert_eq!(
+            error.to_string(),
+            "agent process is not running (pi: unknown flag --mdoel)"
+        ),
+        // A test on another thread that forks while this session is being
+        // spawned holds a copy of the stdin pipe until it execs. Under load
+        // that can outlast the wait above; then the write succeeds and the
+        // failure arrives as the end of output instead, the other path the
+        // reason has to survive.
+        Ok(turn) => {
+            assert!(turn.failed, "{turn:?}");
+            assert_eq!(session.stderr_tail(5), "pi: unknown flag --mdoel");
+        }
+    }
+    session.close().await;
+}
+
 #[tokio::test]
 async fn broken_activity_callback_does_not_fail_the_turn() {
     let callback: ActivityCallback = Arc::new(|_| {

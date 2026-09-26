@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, Command};
-use tokio::sync::Mutex;
-use tokio::time::{timeout, Duration};
+use tokio::sync::{watch, Mutex};
+use tokio::time::{timeout, timeout_at, Duration, Instant};
 
 pub const STREAM_LIMIT: usize = 16 * 1024 * 1024;
 pub const TRANSFER_TOOL: &str = "transfer_to_project";
@@ -23,6 +23,9 @@ const ERROR_STOP_REASON: &str = "error";
 const ERROR_DETAIL_CHARS: usize = 160;
 const ACTIVITY_DETAIL_CHARS: usize = 80;
 const STDERR_LINE_LIMIT: usize = 16 * 1024;
+/// How long a failure report waits for a process that has stopped talking
+/// to exit and finish saying why on stderr.
+const EXIT_REPORT_GRACE: Duration = Duration::from_secs(5);
 const ACTIVITY_ARG_ORDER: [&str; 11] = [
     "path",
     "file_path",
@@ -90,6 +93,8 @@ struct SessionInner {
     turn_timeout: Duration,
     on_activity: Option<ActivityCallback>,
     stderr_task: StdMutex<Option<tokio::task::JoinHandle<()>>>,
+    /// True once stderr has been read to its end.
+    stderr_closed: watch::Receiver<bool>,
     process_guard: ProcessTreeGuard,
 }
 
@@ -146,7 +151,12 @@ impl PiSession {
             .ok_or_else(|| PiSessionError("agent process has no stderr".into()))?;
         let stderr_tail = Arc::new(StdMutex::new(Vec::new()));
         let tail = Arc::clone(&stderr_tail);
-        let stderr_task = tokio::spawn(drain_stderr(stderr, tail, label.clone()));
+        let (stderr_done, stderr_closed) = watch::channel(false);
+        let drain_label = label.clone();
+        let stderr_task = tokio::spawn(async move {
+            drain_stderr(stderr, tail, drain_label).await;
+            stderr_done.send_replace(true);
+        });
         let inner = Arc::new(SessionInner {
             child: Mutex::new(Some(child)),
             stdin: Mutex::new(Some(stdin)),
@@ -158,9 +168,44 @@ impl PiSession {
             turn_timeout,
             on_activity,
             stderr_task: StdMutex::new(Some(stderr_task)),
+            stderr_closed,
             process_guard,
         });
         Ok(Self { inner })
+    }
+
+    /// Waits, at most `EXIT_REPORT_GRACE`, for a process that has stopped
+    /// talking to finish writing to stderr and exit. True when it has exited.
+    ///
+    /// A failing process says why on stderr on its way out, while a separate
+    /// task drains that pipe. Reading the tail the moment stdout ends, or the
+    /// moment a write to stdin fails, races that task and usually reports
+    /// nothing, or reports the broken pipe instead of its cause.
+    async fn settle_exit(&self) -> bool {
+        let deadline = Instant::now() + EXIT_REPORT_GRACE;
+        let mut stderr_closed = self.inner.stderr_closed.clone();
+        let _ = timeout_at(deadline, stderr_closed.wait_for(|closed| *closed)).await;
+        // Stderr closes as the process exits, so this is normally one check.
+        // The child lock is taken per check rather than held across a wait:
+        // `alive` callers, and a rescue closing this session, must not queue
+        // behind a process that closed its pipes and kept running.
+        loop {
+            if !self.alive().await {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    async fn exited_error(&self) -> PiSessionError {
+        self.settle_exit().await;
+        PiSessionError(format!(
+            "agent process is not running ({})",
+            self.stderr_tail(5)
+        ))
     }
 
     pub fn busy(&self) -> bool {
@@ -215,13 +260,19 @@ impl PiSession {
     pub async fn prompt(&self, message: &str) -> Result<Turn, PiSessionError> {
         let _turn = self.inner.turn_lock.lock().await;
         if !self.alive().await {
-            return Err(PiSessionError(format!(
-                "agent process is not running ({})",
-                self.stderr_tail(5).as_str()
-            )));
+            return Err(self.exited_error().await);
         }
-        self.write(json!({"type":"prompt", "message":message}), false)
-            .await?;
+        if let Err(error) = self
+            .write(json!({"type":"prompt", "message":message}), false)
+            .await
+        {
+            // A process that stops reading has usually failed; its exit and
+            // stderr say why, and the broken pipe is only the symptom.
+            if self.settle_exit().await {
+                return Err(self.exited_error().await);
+            }
+            return Err(error);
+        }
         self.inner.busy.store(true, Ordering::Release);
         let result = self.collect().await;
         self.inner.busy.store(false, Ordering::Release);
@@ -292,6 +343,9 @@ impl PiSession {
             let line = match read {
                 Ok(Ok(LimitedLine::Line(line))) => line,
                 Ok(Ok(LimitedLine::Eof)) => {
+                    // Callers report the stderr tail when a turn fails with no
+                    // error of its own, so it has to be complete first.
+                    self.settle_exit().await;
                     tracing::warn!(
                         %label,
                         stderr_lines = self.stderr_tail(5).lines().count(),

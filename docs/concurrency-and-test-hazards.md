@@ -196,6 +196,17 @@ sentinel. `staging_survives_a_remote_that_stops_reading_before_the_extension_end
 in `apps/backend/tests/test_prewarm.rs` covers exactly that, by sending a
 megabyte to a remote that reads sixteen bytes and exits zero.
 
+An agent leg follows it too, with a second half: the stderr worth reporting
+is read by a separate drain task, so reading the tail at the moment of failure
+races that task. A remote launch into a missing `cwd` showed both halves. The
+shell prints why and exits while the switchboard writes the intro prompt, and
+the caller was told the broken pipe, "the agent never answered", or "agent
+process is not running ()", depending on timing, about one run in eight under
+load. `PiSession::settle_exit` in `apps/backend/src/pi_client.rs` now waits, at
+most five seconds, for the process to exit and its stderr to be read to the end
+whenever its output ends mid-turn or a prompt cannot be written, and a failed
+write is reported as the exit it led to.
+
 ### Why the toolchain is pinned
 
 CI used to install whatever `stable` currently was, which could be several
