@@ -1066,6 +1066,14 @@ fn current_status(state: &AppState) -> Status {
 fn publish_status(state: &AppState) {
     emit_message(state, ServerMessage::Status(state.0.coordinator.settle()));
 }
+/// Settles the call a control rescued at `generation`, unless a newer rescue
+/// has taken it over since; that one settles it instead.
+async fn settle_if_current(state: &AppState, generation: u64) {
+    let _transition = state.0.operation_transition.lock().await;
+    if generation == state.0.coordinator.generation() {
+        publish_status(state);
+    }
+}
 
 async fn promote_candidate_for_token(state: &AppState, token: &str) {
     if state
@@ -1723,7 +1731,10 @@ async fn cancel_active_operations(state: &AppState) -> Option<String> {
     for operation in operations.into_values() {
         operation.abort();
     }
-    let active = state.0.active_session.lock().await.clone();
+    // Taken as well as closed: the PBX names the live session again when it
+    // settles on a leg, and a later rescue must not report a process this one
+    // has already closed.
+    let active = state.0.active_session.lock().await.take();
     let label = active.as_ref().map(|session| session.label().to_owned());
     if let Some(session) = active {
         session.close().await;
@@ -1798,12 +1809,14 @@ where
     clear_active_operation(state, task_id).await;
     let reply = match joined {
         Ok(reply) => reply,
+        // Cancelled by a newer rescue, which settles the call itself.
         Err(error) if error.is_cancelled() => return Err(conflict("cancelled")),
         Err(error) => {
+            settle_if_current(state, spawned_generation).await;
             return Err(refused(
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 format!("{what} failed: {error}"),
-            ))
+            ));
         }
     };
     let generation = reply.delivery_generation.unwrap_or(spawned_generation);
@@ -1814,28 +1827,55 @@ where
 }
 
 async fn hangup(State(state): State<AppState>) -> impl IntoResponse {
-    let interrupted = interrupt_active_turn(&state).await;
-    let left = state
-        .0
-        .switchboard
-        .lock()
-        .await
-        .force_hangup()
-        .await
-        .or(interrupted);
-    if let Some(left) = &left {
-        if let Some(entry) = state.0.transcript_log.lock().await.add(
-            AGENT,
-            &format!("You hung up the line to {left}. You're back with the operator."),
-            state.0.coordinator.route(),
-        ) {
+    // The process the rescue closed, and the leg the PBX then dropped.
+    let closed = interrupt_active_turn(&state).await;
+    let dropped = state.0.switchboard.lock().await.force_hangup().await;
+    let hung_up = hangup_outcome(dropped, closed);
+    if let Some((_, line)) = &hung_up {
+        if let Some(entry) =
+            state
+                .0
+                .transcript_log
+                .lock()
+                .await
+                .add(AGENT, line, state.0.coordinator.route())
+        {
             emit_message(&state, ServerMessage::Spoken { entry });
         }
-        publish_status(&state);
     }
-    match left {
-        Some(left) => Json(json!({"hungup":true, "left":left})),
+    // Like every page control, a hangup settles the call on its way out, even
+    // with nothing on the line: its rescue left the call quiescing, which
+    // refuses callbacks and steers until something settles it.
+    publish_status(&state);
+    match hung_up {
+        Some((left, _)) => Json(json!({"hungup":true, "left":left})),
         None => Json(json!({"hungup":false, "reason":"already on the operator"})),
+    }
+}
+
+/// What a hangup hung up on, and the line the transcript keeps for it.
+/// `dropped` is what `force_hangup` let go of: a project leg by name, or
+/// `operator` when it discarded the operator's process. `closed` is the
+/// process the rescue closed first, which names a leg that was still starting
+/// when the caller hung up on it.
+fn hangup_outcome(dropped: Option<String>, closed: Option<String>) -> Option<(String, String)> {
+    use crate::pbx::OPERATOR;
+    match (dropped, closed) {
+        (Some(project), _) if project != OPERATOR => {
+            let line = format!("You hung up the line to {project}. You're back with the operator.");
+            Some((project, line))
+        }
+        (_, Some(starting)) if starting != OPERATOR => {
+            let line = format!(
+                "You hung up on {starting} before it picked up. You're back with the operator."
+            );
+            Some((starting, line))
+        }
+        (Some(_), _) | (None, Some(_)) => Some((
+            OPERATOR.to_owned(),
+            "You cut the operator off. It starts fresh when you speak again.".to_owned(),
+        )),
+        (None, None) => None,
     }
 }
 #[derive(Deserialize)]

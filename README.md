@@ -222,7 +222,10 @@ the route straight back.
 
 The operator route remains the home base. If a page control reaches the service
 while the operator process itself is wedged, that process is discarded and
-recreated on the next utterance; the route still remains `operator`.
+recreated on the next utterance; the route still remains `operator`. The
+transcript records what was hung up on: the project leg by name (including
+one still in its intro once it has shown life), a leg that had not yet
+picked up, or the operator's turn.
 
 ## When nobody says anything
 

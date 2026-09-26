@@ -1013,3 +1013,96 @@ async fn a_remote_redial_that_keeps_context_is_refused_without_dropping_the_leg(
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// A pi stand-in whose operator puts the caller through to alpha, and whose
+/// project leg shows life on its intro, then waits for a steer before ending
+/// it. The steer is the test's gate on the intro turn.
+#[cfg(unix)]
+fn runtime_with_a_gated_intro(root: &std::path::Path) -> std::path::PathBuf {
+    let runtime = root.join("fake-pi");
+    crate::pi_client::write_executable_script(
+        &runtime,
+        r##"operator=0
+for arg in "$@"; do
+if [ "$arg" = "--no-builtin-tools" ]; then operator=1; fi
+done
+while IFS= read -r line; do
+if [ "$operator" -eq 1 ]; then
+    printf '%s\n' '{"type":"tool_execution_start","toolName":"transfer_to_project","args":{"project":"alpha","intent":"look"}}'
+else
+    printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Alpha here."}}'
+    IFS= read -r release
+    printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Alpha here."}}'
+fi
+printf '%s\n' '{"type":"agent_settled"}'
+done
+"##,
+    );
+    runtime
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_route_follows_adoption_while_the_intro_turn_is_still_running() {
+    use crate::lifecycle::ActivityDisposition;
+    use crate::pi_client::Activity;
+
+    let root = scratch_dir("mid-intro");
+    let runtime = runtime_with_a_gated_intro(&root);
+    let mut board = board_on(
+        vec![project_on(None, &root, &runtime)],
+        &[("SWITCHBOARD_PI_BINARY", &runtime.to_string_lossy())],
+        two_model_catalog(),
+    );
+    // Promotion as the application does it: the candidate's own sign of life
+    // adopts it. Each adoption is reported on a channel.
+    let coordinator = board.coordinator();
+    let (adopted_tx, mut adopted) = tokio::sync::mpsc::unbounded_channel();
+    let promoting = coordinator.clone();
+    board.set_activity_callback(Some(Arc::new(move |activity: Activity| {
+        let coordinator = promoting.clone();
+        let adopted = adopted_tx.clone();
+        Box::pin(async move {
+            if coordinator.classify_activity(&activity.leg) == ActivityDisposition::Promote {
+                let _ = adopted.send(coordinator.adopt_candidate(&activity.leg));
+            }
+        })
+    })));
+    let control = board.session_control();
+    let board = Arc::new(Mutex::new(board));
+    let turn_board = Arc::clone(&board);
+    let turn = tokio::spawn(async move { turn_board.lock().await.handle("put me through").await });
+
+    adopted
+        .recv()
+        .await
+        .expect("the incoming leg shows life")
+        .expect("and is adopted");
+    // The intro turn has not ended, yet the line already names alpha: what
+    // the PBX reads, replies with, or hangs up from here on is alpha.
+    assert_eq!(coordinator.route(), "alpha");
+    assert_eq!(coordinator.project().as_deref(), Some("alpha"));
+    let status = coordinator.status();
+    assert_eq!(
+        (status.route.as_str(), status.label.as_str()),
+        ("alpha", "alpha")
+    );
+    assert_eq!(status.model, "anthropic/current:medium");
+    assert_eq!(status.models.len(), 2);
+
+    control
+        .lock()
+        .await
+        .as_ref()
+        .expect("the incoming leg is the live session")
+        .steer("go on")
+        .await
+        .unwrap();
+    let reply = turn.await.unwrap();
+
+    assert_eq!(reply.route, "alpha");
+    assert_eq!(reply.text, "Alpha here.");
+    assert_eq!(coordinator.route(), "alpha");
+    board.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
