@@ -318,6 +318,11 @@ impl Registry {
             .map(|project| project.id.clone())
             .collect()
     }
+
+    /// The project registered under `id`, exactly.
+    pub fn get(&self, id: &str) -> Option<&Project> {
+        self.projects.iter().find(|project| project.id == id)
+    }
 }
 
 #[cfg(test)]

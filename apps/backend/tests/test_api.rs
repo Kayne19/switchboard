@@ -26,6 +26,19 @@ fn state_with_stream(stt: Option<String>, stream: Option<String>) -> AppState {
         crate::models::ModelCatalog::unavailable("no projects are registered"),
     );
     let board = Switchboard::new(&config, registry, std::sync::Arc::new(prewarm));
+    state_on_with_stream(board, stt, stream)
+}
+
+/// The application around `board`, with no speech-to-text configured.
+fn state_on(board: Switchboard) -> AppState {
+    state_on_with_stream(board, None, None)
+}
+
+fn state_on_with_stream(
+    board: Switchboard,
+    stt: Option<String>,
+    stream: Option<String>,
+) -> AppState {
     AppState::new(
         board,
         TranscriptLog::new(10),
@@ -134,10 +147,7 @@ async fn http_contract_exposes_status_health_and_page_controls() {
     .await;
     assert_eq!(code, StatusCode::OK);
     assert_eq!(thinking, json!({"thinking":"", "error":null}));
-    assert_eq!(
-        state.0.switchboard.lock().await.status()["thinking_default"],
-        "high"
-    );
+    assert_eq!(state.0.coordinator.status().thinking_default, "high");
 
     let (code, model) = request_json(
         &state,
@@ -702,10 +712,7 @@ async fn final_response_barrier_is_emitted_once_after_a_settled_turn() {
         delivery_generation: None,
     };
 
-    assert!(
-        deliver_turn_if_current(&state, &reply, current_status(&state), generation, "clip-1",)
-            .await
-    );
+    assert!(deliver_turn_if_current(&state, &reply, generation, "clip-1",).await);
     let mut barriers = Vec::new();
     while let Ok(Event::Json(value)) = events.try_recv() {
         if value["type"] == "final_response_audio_closed" {
@@ -739,16 +746,7 @@ async fn stale_final_response_does_not_emit_a_barrier() {
         delivery_generation: None,
     };
 
-    assert!(
-        !deliver_turn_if_current(
-            &state,
-            &reply,
-            current_status(&state),
-            generation,
-            "stale-clip",
-        )
-        .await
-    );
+    assert!(!deliver_turn_if_current(&state, &reply, generation, "stale-clip").await);
     assert!(matches!(
         events.try_recv(),
         Err(broadcast::error::TryRecvError::Empty)
@@ -981,6 +979,7 @@ async fn page_rescue_aborts_work_before_waiting_for_the_pbx_lock() {
     let session = PiSession::start(
         vec!["sh".into(), "-c".into(), "sleep 60".into()],
         OPERATOR,
+        OPERATOR,
         None,
         None,
         Duration::from_secs(60),
@@ -1086,9 +1085,7 @@ async fn superseded_reply_is_not_logged_or_broadcast() {
         delivery_generation: None,
     };
 
-    assert!(
-        !deliver_page_reply_if_current(&state, &reply, current_status(&state), generation).await
-    );
+    assert!(!deliver_page_reply_if_current(&state, &reply, generation).await);
     assert!(state.0.transcript_log.lock().await.entries().is_empty());
     assert!(matches!(
         events.try_recv(),
@@ -1650,11 +1647,9 @@ async fn display_projection_generation_race() {
     assert_eq!(code, StatusCode::CONFLICT);
     assert_eq!(resp["code"], "invalid_leg");
 
-    // Un-quiesce route back to operator so new calls can proceed with rotated token
-    state
-        .0
-        .coordinator
-        .publish_status(json!({"type": "status", "route": "operator"}));
+    // Settle back onto the operator so new calls can proceed with the rotated
+    // token.
+    state.0.coordinator.settle();
     let current_token = state.0.coordinator.current_identity().token;
 
     let fresh_display = json!({
@@ -1950,8 +1945,7 @@ fn types_of(frames: &[Value]) -> Vec<&str> {
 
 /// The PBX finishing a transfer to the leg the coordinator already holds.
 async fn settle_transfer(state: &AppState) {
-    let status = state.0.coordinator.status_json();
-    state.0.leg_announcer.announce_route(status).await;
+    state.0.leg_announcer.announce_route().await;
 }
 
 #[tokio::test]
@@ -2035,7 +2029,7 @@ async fn the_incoming_legs_first_words_are_not_cut_off_by_the_transfer_settling(
 
     // The agent's first streamed text is the sign of life that promotes it,
     // and it may already be speaking when the intro turn ends.
-    assert!(state.0.leg_announcer.promote_candidate().await);
+    assert!(state.0.leg_announcer.promote_candidate("alpha-leg").await);
     assert_eq!(
         types_of(&queued_frames(&mut connection)),
         ["candidate", "candidate_cleared", "epoch", "status"]
@@ -2060,9 +2054,12 @@ async fn returning_to_the_operator_still_clears_the_project_scene() {
     settle_transfer(&state).await;
     queued_frames(&mut connection);
 
-    // Handing back keeps the generation and changes the route. The switchboard
-    // here never left the operator, so its announcement is exactly that shape.
-    state.0.switchboard.lock().await.announce_route().await;
+    // Handing back keeps the generation and changes the route. Hanging up the
+    // project leg is the shortest way there.
+    assert_eq!(
+        state.0.switchboard.lock().await.force_hangup().await,
+        Some("alpha".to_owned())
+    );
 
     let returned = queued_frames(&mut connection);
     assert_eq!(types_of(&returned), ["epoch", "status"]);
@@ -2294,7 +2291,7 @@ async fn a_page_control_whose_leg_is_rescued_mid_operation_is_refused_as_superse
     let rescuer = state.clone();
     let controlled = run_page_control(&state, "model change", RunningWork::Keep, async move {
         rescuer.0.coordinator.begin_rescue("page rescue");
-        (operator_reply(), current_status(&rescuer))
+        operator_reply()
     })
     .await;
 
@@ -2334,4 +2331,331 @@ async fn a_page_control_that_fails_is_refused_as_a_server_error() {
         .unwrap()
         .starts_with("connection attempt failed:"));
     assert!(state.0.active_operations.lock().await.is_empty());
+    // The control rescued the call before it failed; it still settles it.
+    let coordinator = &state.0.coordinator;
+    assert!(coordinator
+        .begin_prompt(&coordinator.current_identity())
+        .is_ok());
+}
+
+/// RPC activity as the pi process started for `leg` reports it.
+fn activity_from(leg: &str, state: &str) -> Activity {
+    Activity {
+        state: state.into(),
+        tool: if state == "life" { "" } else { "bash" }.into(),
+        detail: String::new(),
+        label: "alpha".into(),
+        leg: leg.into(),
+    }
+}
+
+#[tokio::test]
+async fn activity_from_a_leg_retired_by_a_rescue_is_not_published() {
+    let state = state();
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    begin_alpha_candidate(&state, "alpha-leg");
+    assert!(state.0.leg_announcer.promote_candidate("alpha-leg").await);
+    queued_frames(&mut connection);
+
+    state
+        .0
+        .leg_announcer
+        .on_activity(activity_from("alpha-leg", "start"))
+        .await;
+    assert_eq!(types_of(&queued_frames(&mut connection)), ["activity"]);
+
+    // The rescue retires the leg before its process is reaped, and a tool
+    // call it reports in that window must not reach the page.
+    state.0.coordinator.begin_rescue("page rescue");
+    state
+        .0
+        .leg_announcer
+        .on_activity(activity_from("alpha-leg", "end"))
+        .await;
+    assert!(queued_frames(&mut connection).is_empty());
+    state.0.coordinator.settle();
+    state
+        .0
+        .leg_announcer
+        .on_activity(activity_from("alpha-leg", "start"))
+        .await;
+    assert!(queued_frames(&mut connection).is_empty());
+}
+
+#[tokio::test]
+async fn activity_from_a_process_that_is_not_the_candidate_does_not_promote_it() {
+    let state = state();
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    begin_alpha_candidate(&state, "alpha-leg");
+    assert_eq!(types_of(&queued_frames(&mut connection)), ["candidate"]);
+
+    // Neither the operator nor a stray process is the incoming leg, whatever
+    // it reports.
+    for leg in [OPERATOR, "beta-leg"] {
+        state
+            .0
+            .leg_announcer
+            .on_activity(activity_from(leg, "life"))
+            .await;
+    }
+    assert_eq!(
+        state
+            .0
+            .coordinator
+            .candidate_identity()
+            .map(|leg| leg.token),
+        Some("alpha-leg".to_owned())
+    );
+    assert_eq!(state.0.coordinator.route(), OPERATOR);
+    assert!(queued_frames(&mut connection).is_empty());
+
+    // The operator is still on the line: its own tool calls are shown, and
+    // they promote nothing.
+    state
+        .0
+        .leg_announcer
+        .on_activity(activity_from(OPERATOR, "start"))
+        .await;
+    assert_eq!(types_of(&queued_frames(&mut connection)), ["activity"]);
+    assert!(state.0.coordinator.candidate_identity().is_some());
+
+    // The candidate's own first sign of life adopts it.
+    state
+        .0
+        .leg_announcer
+        .on_activity(activity_from("alpha-leg", "life"))
+        .await;
+    assert_eq!(
+        types_of(&queued_frames(&mut connection)),
+        ["candidate_cleared", "epoch", "status"]
+    );
+    assert_eq!(state.0.coordinator.route(), "alpha");
+}
+
+/// The last line the transcript kept, with the route it was kept under.
+async fn last_transcript_line(state: &AppState) -> Option<(String, String)> {
+    state
+        .0
+        .transcript_log
+        .lock()
+        .await
+        .entries()
+        .pop()
+        .map(|entry| (entry.text, entry.route))
+}
+
+#[tokio::test]
+async fn a_hangup_with_nothing_on_the_line_settles_the_call() {
+    let state = state();
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+
+    let (code, body) = request_json(&state, Method::POST, "/hangup", None).await;
+
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(
+        body,
+        json!({"hungup":false, "reason":"already on the operator"})
+    );
+    // The rescue moved the epoch; the call then settled and said so.
+    assert_eq!(
+        types_of(&queued_frames(&mut connection)),
+        ["epoch", "status"]
+    );
+    assert_eq!(last_transcript_line(&state).await, None);
+    // Settled, not quiescing: the operator's callbacks and turns are taken.
+    let coordinator = &state.0.coordinator;
+    assert_eq!(coordinator.accept_side_effect(""), Ok(()));
+    assert!(coordinator
+        .begin_prompt(&coordinator.current_identity())
+        .is_ok());
+}
+
+#[tokio::test]
+async fn hanging_up_on_the_operator_says_it_was_cut_off() {
+    let state = state();
+    let operator = PiSession::start(
+        vec!["sh".into(), "-c".into(), "sleep 60".into()],
+        OPERATOR,
+        OPERATOR,
+        None,
+        None,
+        Duration::from_secs(60),
+        None,
+    )
+    .await
+    .unwrap();
+    *state.0.active_session.lock().await = Some(operator.clone());
+
+    let (code, body) = request_json(&state, Method::POST, "/hangup", None).await;
+
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(body, json!({"hungup":true, "left":OPERATOR}));
+    assert!(!operator.alive().await);
+    assert!(state.0.active_session.lock().await.is_none());
+    assert_eq!(
+        last_transcript_line(&state).await,
+        Some((
+            "You cut the operator off. It starts fresh when you speak again.".to_owned(),
+            OPERATOR.to_owned()
+        ))
+    );
+}
+
+#[test]
+fn a_hangup_names_what_the_caller_hung_up_on() {
+    let owned = |text: &str| Some(text.to_owned());
+    // A project leg, however the rescue found it.
+    assert_eq!(
+        hangup_outcome(owned("alpha"), owned("alpha")),
+        Some((
+            "alpha".to_owned(),
+            "You hung up the line to alpha. You're back with the operator.".to_owned()
+        ))
+    );
+    // A leg still starting from the operator: the rescue closed it and
+    // abandoned the candidate, and the PBX found the operator on the route.
+    assert_eq!(
+        hangup_outcome(owned(OPERATOR), owned("beta")),
+        Some((
+            "beta".to_owned(),
+            "You hung up on beta before it picked up. You're back with the operator.".to_owned()
+        ))
+    );
+    assert_eq!(
+        hangup_outcome(None, owned("beta")).map(|(left, _)| left),
+        owned("beta")
+    );
+    // The operator itself.
+    for (dropped, closed) in [
+        (owned(OPERATOR), owned(OPERATOR)),
+        (owned(OPERATOR), None),
+        (None, owned(OPERATOR)),
+    ] {
+        assert_eq!(
+            hangup_outcome(dropped, closed),
+            Some((
+                OPERATOR.to_owned(),
+                "You cut the operator off. It starts fresh when you speak again.".to_owned()
+            ))
+        );
+    }
+    assert_eq!(hangup_outcome(None, None), None);
+}
+
+/// A pi stand-in: the operator puts every caller through to alpha, and
+/// alpha's intro turn shows life, then waits for a steer before it ends. The
+/// steer is the test's gate on the intro.
+#[cfg(unix)]
+fn runtime_with_a_gated_intro(root: &std::path::Path) -> std::path::PathBuf {
+    let runtime = root.join("fake-pi");
+    crate::pi_client::write_executable_script(
+        &runtime,
+        r##"operator=0
+for arg in "$@"; do
+if [ "$arg" = "--no-builtin-tools" ]; then operator=1; fi
+done
+while IFS= read -r line; do
+if [ "$operator" -eq 1 ]; then
+    printf '%s\n' '{"type":"tool_execution_start","toolName":"transfer_to_project","args":{"project":"alpha","intent":"look"}}'
+else
+    printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Alpha here."}}'
+    IFS= read -r release
+    printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Alpha here."}}'
+fi
+printf '%s\n' '{"type":"agent_settled"}'
+done
+"##,
+    );
+    runtime
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_hangup_mid_intro_after_adoption_drops_the_incoming_leg_by_name() {
+    let root = std::env::temp_dir().join(format!(
+        "switchboard-mid-intro-hangup-{}",
+        crate::pbx::uuid_like()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let runtime = runtime_with_a_gated_intro(&root);
+    let alpha: crate::registry::Project = serde_json::from_value(json!({
+        "id": "alpha",
+        "cwd": root.to_string_lossy(),
+        "runtime": runtime.to_string_lossy(),
+        "model": "anthropic/current",
+        "stage_extension": false,
+    }))
+    .unwrap();
+    let config = crate::Config::for_tests(&[("SWITCHBOARD_PI_BINARY", &runtime.to_string_lossy())]);
+    let registry = Registry::new(vec![alpha]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no catalog in this test"),
+    );
+    let state = state_on(Switchboard::new(
+        &config,
+        registry,
+        std::sync::Arc::new(prewarm),
+    ));
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+
+    // The operator puts the caller through, as a turn the rescue can cancel.
+    let turn_state = state.clone();
+    let (turn, _id, _generation) = spawn_active_operation(&state, async move {
+        let mut board = turn_state.0.switchboard.lock().await;
+        board.handle("put me through to alpha").await
+    })
+    .await
+    .unwrap();
+    // Alpha's first sign of life adopts it while its intro is still running.
+    frames_until(&mut connection, "status").await;
+    assert_eq!(state.0.coordinator.route(), "alpha");
+    let incoming = state
+        .0
+        .active_session
+        .lock()
+        .await
+        .clone()
+        .expect("the incoming leg is the live session during its intro");
+    assert_eq!(incoming.label(), "alpha");
+
+    let (code, body) = request_json(&state, Method::POST, "/hangup", None).await;
+
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(body, json!({"hungup":true, "left":"alpha"}));
+    assert!(turn.await.unwrap_err().is_cancelled());
+    assert!(!incoming.alive().await);
+    // The operator was never the one hung up on: its process is the live
+    // session again, still running.
+    let operator = state
+        .0
+        .active_session
+        .lock()
+        .await
+        .clone()
+        .expect("the operator is the live session again");
+    assert_eq!(operator.label(), OPERATOR);
+    assert!(operator.alive().await);
+    assert_eq!(state.0.coordinator.route(), OPERATOR);
+    assert_eq!(
+        last_transcript_line(&state).await,
+        Some((
+            "You hung up the line to alpha. You're back with the operator.".to_owned(),
+            OPERATOR.to_owned()
+        ))
+    );
+    let frames = queued_frames(&mut connection);
+    let last_status = frames
+        .iter()
+        .rfind(|frame| frame["type"] == "status")
+        .expect("the return is published");
+    assert_eq!(last_status["route"], OPERATOR);
+    let coordinator = &state.0.coordinator;
+    assert!(coordinator
+        .begin_prompt(&coordinator.current_identity())
+        .is_ok());
+
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
 }

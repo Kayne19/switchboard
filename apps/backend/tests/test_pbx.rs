@@ -66,12 +66,25 @@ fn board_on(
     Switchboard::new(&config, registry, Arc::new(prewarm))
 }
 
-#[test]
-fn leg_state_rejects_stale_session_tokens() {
-    let leg = LiveLegState::new();
-    leg.set_session("alpha", "new-session");
-    assert!(!leg.report_thinking("old-session", "high"));
-    assert!(leg.report_thinking("new-session", "high"));
+/// Puts the call on `project` the way a transfer leaves it, without launching
+/// anything: a candidate on `spec` and `catalog`, adopted, its intro finished.
+fn put_on(board: &Switchboard, project: &str, spec: &str, catalog: ModelCatalog) {
+    board
+        .coordinator
+        .begin_candidate(
+            CandidateLeg::new(
+                project,
+                project,
+                "live-session",
+                "live-leg",
+                spec,
+                thinking_in_spec(spec),
+            )
+            .with_catalog(catalog),
+        )
+        .unwrap();
+    board.coordinator.adopt_candidate("live-leg").unwrap();
+    assert!(board.coordinator.finish_intro());
 }
 
 #[test]
@@ -89,15 +102,15 @@ fn status_exposes_project_ids() {
         prepare: String::new(),
     };
     let board = board_with(vec![project], true);
-    assert_eq!(board.status()["projects"], serde_json::json!(["alpha"]));
+    assert_eq!(board.coordinator.status().projects, ["alpha"]);
 }
 
 #[test]
 fn state_starts_on_operator() {
     let board = board_with(vec![], true);
-    assert_eq!(board.route(), OPERATOR);
-    assert_eq!(board.status()["route"], OPERATOR);
-    assert_eq!(board.status()["models"], serde_json::json!([]));
+    assert_eq!(board.coordinator.route(), OPERATOR);
+    assert_eq!(board.coordinator.status().route, OPERATOR);
+    assert!(board.coordinator.status().models.is_empty());
 }
 
 #[test]
@@ -114,22 +127,28 @@ fn status_exposes_the_launch_catalog_for_the_current_project() {
         extra_args: vec![],
         prepare: String::new(),
     };
-    let mut board = board_with(vec![project.clone()], true);
-    board.route = project.id.clone();
-    board.project = Some(project);
-    board.model_spec = "anthropic/current:high".into();
-    board.leg_catalog = Some(ModelCatalog {
-        entries: vec![crate::models::CatalogEntry {
+    let board = board_with(vec![project.clone()], true);
+    put_on(
+        &board,
+        &project.id,
+        "anthropic/current:high",
+        ModelCatalog {
+            entries: vec![crate::models::CatalogEntry {
+                provider: "anthropic".into(),
+                model: "current".into(),
+                thinks: true,
+            }],
+            available: true,
+            diagnostic: None,
+        },
+    );
+    assert_eq!(
+        board.coordinator.status().models,
+        [crate::protocol::ModelEntry {
             provider: "anthropic".into(),
             model: "current".into(),
             thinks: true,
-        }],
-        available: true,
-        diagnostic: None,
-    });
-    assert_eq!(
-        board.status()["models"],
-        serde_json::json!([{"provider":"anthropic","model":"current","thinks":true}])
+        }]
     );
 }
 
@@ -197,14 +216,17 @@ async fn model_swap_refuses_unknown_catalog_model_without_replacing_live_spec() 
         prepare: String::new(),
     };
     let mut board = board_with(vec![project.clone()], true);
-    board.project = Some(project);
-    board.route = "alpha".into();
-    board.model_spec = "anthropic/current:high".into();
+    put_on(
+        &board,
+        &project.id,
+        "anthropic/current:high",
+        two_model_catalog(),
+    );
 
     let reply = board.set_model("anthropic/missing").await;
 
     assert!(reply.error.is_some());
-    assert_eq!(board.model_spec, "anthropic/current:high");
+    assert_eq!(board.coordinator.model(), "anthropic/current:high");
 }
 
 #[cfg(unix)]
@@ -224,14 +246,17 @@ async fn page_model_swap_preserves_requested_thinking() {
         prepare: String::new(),
     };
     let mut board = board_with(vec![project.clone()], true);
-    board.project = Some(project.clone());
-    board.route = "alpha".into();
-    board.model_spec = "anthropic/current:high".into();
+    put_on(
+        &board,
+        &project.id,
+        "anthropic/current:high",
+        two_model_catalog(),
+    );
 
     let reply = board.set_model("anthropic/next").await;
 
     assert!(reply.error.is_none());
-    assert_eq!(board.status()["model"], "anthropic/next:high");
+    assert_eq!(board.coordinator.status().model, "anthropic/next:high");
     board.shutdown().await;
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -323,10 +348,13 @@ async fn fake_pi_process_completes_transfer_and_return_lifecycle() {
         &[("SWITCHBOARD_PI_BINARY", &runtime.to_string_lossy())],
         two_model_catalog(),
     );
+    // What the route callback finds when it is told the line has settled.
     let statuses = Arc::new(StdMutex::new(Vec::new()));
     let statuses_for_callback = Arc::clone(&statuses);
-    board.set_route_callback(Some(Arc::new(move |status| {
+    let coordinator = board.coordinator();
+    board.set_route_callback(Some(Arc::new(move || {
         let statuses = Arc::clone(&statuses_for_callback);
+        let status = coordinator.status();
         Box::pin(async move {
             statuses.lock().unwrap().push(status);
         })
@@ -335,24 +363,31 @@ async fn fake_pi_process_completes_transfer_and_return_lifecycle() {
     let connected = board.handle("put me through").await;
     assert_eq!(connected.route, "alpha");
     assert_eq!(connected.text, "Alpha is ready.");
-    assert_eq!(board.route(), "alpha");
+    assert_eq!(board.coordinator.route(), "alpha");
     let first_project_status = statuses
         .lock()
         .unwrap()
         .iter()
-        .find(|status| status["route"] == "alpha")
+        .find(|status| status.route == "alpha")
         .cloned()
         .expect("project status should be announced");
-    assert_ne!(
-        first_project_status["models_diagnostic"],
-        "model catalog has not been loaded"
-    );
+    assert_eq!(first_project_status.models_diagnostic, None);
+    assert_eq!(first_project_status.models.len(), 2);
 
     let returned = board.handle("we are done").await;
     assert_eq!(returned.route, OPERATOR);
     assert!(returned.text.contains("Alpha finished."));
     assert!(returned.text.contains("Operator has you again."));
-    assert_eq!(board.route(), OPERATOR);
+    assert_eq!(board.coordinator.route(), OPERATOR);
+    assert_eq!(
+        statuses
+            .lock()
+            .unwrap()
+            .last()
+            .map(|status| status.route.clone()),
+        Some(OPERATOR.to_owned()),
+        "the return is announced too"
+    );
 
     board.shutdown().await;
     std::fs::remove_dir_all(root).unwrap();
@@ -608,7 +643,7 @@ done
     // Operator transfers to alpha.
     let transfer_reply = board.handle("put me through").await;
     assert_eq!(
-        board.route(),
+        board.coordinator.route(),
         "alpha",
         "transfer failed; reply text: {:?}, error: {:?}",
         transfer_reply.text,
@@ -617,7 +652,7 @@ done
 
     // Agent returns to operator with summary "work complete".
     let return_reply = board.handle("we are done").await;
-    assert_eq!(board.route(), OPERATOR);
+    assert_eq!(board.coordinator.route(), OPERATOR);
     // The operator's second prompt must contain the handback note; the fake-pi
     // emits NOTE_DELIVERED only if it saw "work complete" in that prompt line.
     assert!(
@@ -655,11 +690,11 @@ async fn a_transfer_resolves_a_bare_model_against_the_launch_catalog() {
 
     let reply = board.transfer_ctx(&ctx, "alpha", "current", "").await;
     assert!(reply.error.is_none(), "transfer failed: {:?}", reply.error);
-    assert_eq!(board.route(), "alpha");
+    assert_eq!(board.coordinator.route(), "alpha");
     assert!(
-        board.model_spec.contains("anthropic/current"),
-        "model_spec did not resolve bare name; got: {:?}",
-        board.model_spec
+        board.coordinator.model().contains("anthropic/current"),
+        "the model did not resolve the bare name; got: {:?}",
+        board.coordinator.model()
     );
 
     board.shutdown().await;
@@ -839,7 +874,7 @@ async fn a_redial_resolves_against_the_launch_catalog_without_listing_models() {
     let reply = board.set_model("next").await;
 
     assert_eq!(reply.error, None, "{reply:?}");
-    assert_eq!(board.model_spec, "anthropic/next:medium");
+    assert_eq!(board.coordinator.model(), "anthropic/next:medium");
     assert_eq!(
         read_lines(&listings),
         Vec::<String>::new(),
@@ -875,7 +910,7 @@ async fn a_redial_that_cannot_reach_the_host_refuses_and_keeps_the_live_leg() {
         .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
         .await;
     assert_eq!(reply.route, "alpha", "{reply:?}");
-    let live_session = board.session_id.clone();
+    let live_session = board.coordinator.persistent_session_id();
 
     prewarm.settle_transport(
         "fake-host",
@@ -887,9 +922,9 @@ async fn a_redial_that_cannot_reach_the_host_refuses_and_keeps_the_live_leg() {
     let reply = board.redial("anthropic/next", "", "", false).await;
 
     assert!(reply.error.is_some(), "{reply:?}");
-    assert_eq!(board.route(), "alpha");
-    assert_eq!(board.session_id, live_session);
-    assert_eq!(board.model_spec, "anthropic/current:medium");
+    assert_eq!(board.coordinator.route(), "alpha");
+    assert_eq!(board.coordinator.persistent_session_id(), live_session);
+    assert_eq!(board.coordinator.model(), "anthropic/current:medium");
     assert_eq!(
         read_lines(&ssh_log).len(),
         1,
@@ -930,7 +965,7 @@ async fn an_unavailable_catalog_admits_a_qualified_model_and_refuses_a_bare_one(
 
         if admitted {
             assert_eq!(reply.route, "alpha", "{reply:?}");
-            assert_eq!(board.model_spec, "anthropic/current:medium");
+            assert_eq!(board.coordinator.model(), "anthropic/current:medium");
         } else {
             assert_eq!(reply.route, OPERATOR, "{reply:?}");
             let error = reply.error.unwrap_or_default();
@@ -963,7 +998,7 @@ async fn a_remote_redial_that_keeps_context_is_refused_without_dropping_the_leg(
         .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
         .await;
     assert_eq!(reply.route, "alpha", "{reply:?}");
-    let live_session = board.session_id.clone();
+    let live_session = board.coordinator.persistent_session_id();
 
     // The thinking picker and set_model both keep context by default.
     let reply = board.set_thinking("high").await;
@@ -971,10 +1006,103 @@ async fn a_remote_redial_that_keeps_context_is_refused_without_dropping_the_leg(
     assert_eq!(reply.error.as_deref(), Some("remote_shutdown_unverified"));
     assert!(reply.text.contains("fresh start"), "{}", reply.text);
     assert_eq!(reply.route, "alpha");
-    assert_eq!(board.route(), "alpha");
-    assert_eq!(board.session_id, live_session);
+    assert_eq!(board.coordinator.route(), "alpha");
+    assert_eq!(board.coordinator.persistent_session_id(), live_session);
     assert!(board.agent.is_some(), "the live leg must keep running");
     assert_eq!(read_lines(&ssh_log).len(), 1);
     board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A pi stand-in whose operator puts the caller through to alpha, and whose
+/// project leg shows life on its intro, then waits for a steer before ending
+/// it. The steer is the test's gate on the intro turn.
+#[cfg(unix)]
+fn runtime_with_a_gated_intro(root: &std::path::Path) -> std::path::PathBuf {
+    let runtime = root.join("fake-pi");
+    crate::pi_client::write_executable_script(
+        &runtime,
+        r##"operator=0
+for arg in "$@"; do
+if [ "$arg" = "--no-builtin-tools" ]; then operator=1; fi
+done
+while IFS= read -r line; do
+if [ "$operator" -eq 1 ]; then
+    printf '%s\n' '{"type":"tool_execution_start","toolName":"transfer_to_project","args":{"project":"alpha","intent":"look"}}'
+else
+    printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Alpha here."}}'
+    IFS= read -r release
+    printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Alpha here."}}'
+fi
+printf '%s\n' '{"type":"agent_settled"}'
+done
+"##,
+    );
+    runtime
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_route_follows_adoption_while_the_intro_turn_is_still_running() {
+    use crate::lifecycle::ActivityDisposition;
+    use crate::pi_client::Activity;
+
+    let root = scratch_dir("mid-intro");
+    let runtime = runtime_with_a_gated_intro(&root);
+    let mut board = board_on(
+        vec![project_on(None, &root, &runtime)],
+        &[("SWITCHBOARD_PI_BINARY", &runtime.to_string_lossy())],
+        two_model_catalog(),
+    );
+    // Promotion as the application does it: the candidate's own sign of life
+    // adopts it. Each adoption is reported on a channel.
+    let coordinator = board.coordinator();
+    let (adopted_tx, mut adopted) = tokio::sync::mpsc::unbounded_channel();
+    let promoting = coordinator.clone();
+    board.set_activity_callback(Some(Arc::new(move |activity: Activity| {
+        let coordinator = promoting.clone();
+        let adopted = adopted_tx.clone();
+        Box::pin(async move {
+            if coordinator.classify_activity(&activity.leg) == ActivityDisposition::Promote {
+                let _ = adopted.send(coordinator.adopt_candidate(&activity.leg));
+            }
+        })
+    })));
+    let control = board.session_control();
+    let board = Arc::new(Mutex::new(board));
+    let turn_board = Arc::clone(&board);
+    let turn = tokio::spawn(async move { turn_board.lock().await.handle("put me through").await });
+
+    adopted
+        .recv()
+        .await
+        .expect("the incoming leg shows life")
+        .expect("and is adopted");
+    // The intro turn has not ended, yet the line already names alpha: what
+    // the PBX reads, replies with, or hangs up from here on is alpha.
+    assert_eq!(coordinator.route(), "alpha");
+    assert_eq!(coordinator.project().as_deref(), Some("alpha"));
+    let status = coordinator.status();
+    assert_eq!(
+        (status.route.as_str(), status.label.as_str()),
+        ("alpha", "alpha")
+    );
+    assert_eq!(status.model, "anthropic/current:medium");
+    assert_eq!(status.models.len(), 2);
+
+    control
+        .lock()
+        .await
+        .as_ref()
+        .expect("the incoming leg is the live session")
+        .steer("go on")
+        .await
+        .unwrap();
+    let reply = turn.await.unwrap();
+
+    assert_eq!(reply.route, "alpha");
+    assert_eq!(reply.text, "Alpha here.");
+    assert_eq!(coordinator.route(), "alpha");
+    board.lock().await.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }

@@ -44,9 +44,10 @@ browser mic / page controls
           v
   api.rs: application coordination
           |
-          +--> lifecycle.rs: the coordinator -- call identity, phases, freshness
+          +--> lifecycle.rs: the coordinator -- call identity, the current
+          |       route and leg, phases, freshness, the status
           |
-          +--> pbx.rs: leg and route lifecycle
+          +--> pbx.rs: leg lifecycle and the processes behind it
           |       |
           |       +--> operator Pi process
           |       +--> project Pi process, launched from a prewarm plan
@@ -82,7 +83,13 @@ The dependency direction is intentional:
 
 ### 1. Switchboard owns the call lifecycle
 
-`apps/backend/src/pbx.rs` and the coordinator (`lifecycle.rs`) own:
+`apps/backend/src/pbx.rs` and the coordinator (`lifecycle.rs`) own the call.
+The coordinator owns which leg is on the line (route, project, model, session,
+thinking, catalog) and builds the status from it alone; the PBX owns the
+processes and changes the leg only through the coordinator's named transitions
+(`begin_candidate`, `adopt_candidate`, `rollback_startup`,
+`return_to_operator`). A rescue ends in `settle`, which every page control and
+delivered turn passes through. Between them they own:
 
 - operator and project legs
 - transfer and return
@@ -309,8 +316,8 @@ removes the real coupling; do not create interfaces for ceremony.
 |---|---|---|
 | `apps/backend/src/main.rs` | composition root; `Config`, the only reader of the environment | turn policy |
 | `api.rs` | HTTP/WebSocket coordination, workers, delivery, generation checks | provider wire formats, PBX policy |
-| `lifecycle.rs` | call identity, phases, candidate legs, operations, the idle clock, the status projection | async work or I/O |
-| `pbx.rs` | leg lifecycle: transfer, return, rescue, redial | host setup, browser rendering, TTS encoding |
+| `lifecycle.rs` | call identity, the current route and the leg on it, phases, candidate legs, operations, the idle clock, the status | async work or I/O |
+| `pbx.rs` | leg lifecycle: transfer, return, rescue, redial; the operator and project processes | host setup, browser rendering, TTS encoding, a copy of the route |
 | `prewarm.rs` | startup setup and launch plans: SSH masters, catalogs, staged extensions, prepare | routing decisions, model policy |
 | `pi_client.rs` | Pi process/RPC transport, SSH command construction, process-tree cleanup | route authority or deployment registry |
 | `audio.rs` | STT/TTS transports, workers, bounds, deadlines | project selection or persistence policy |
@@ -408,22 +415,11 @@ Switchboard is not currently a perfect hexagonal implementation:
 - `apps/backend/src/api.rs` is a thick application coordinator. Besides HTTP
   and WebSocket handling it holds the display projection and the audio queue,
   and knows several concrete audio/delivery structures.
-- The current route is held in three places: `Switchboard.route`,
-  `LiveLegState` (read by callbacks without the PBX lock), and the
-  coordinator's lifecycle, which takes it from the status JSON the PBX
-  publishes. Each transition keeps them in step by hand.
 - The display precedence rule is implemented twice, in `DisplayProjection`
   (`api.rs`, for `/view`) and in the browser's `sceneModel.ts`. Tests pin both
   to the same rule.
-- The `status` message is typed field by field only in the browser. In Rust
-  `ServerMessage::Status` carries the projection the PBX and the coordinator
-  build as JSON; the fixture test holds that projection to the browser's
-  fields until the projection itself is typed (#60).
 - Browser-to-server commands have builders in `protocol.ts` but no type on
   the Rust side: `handle_text_frame` reads each one field by field.
-- RPC activity from a pi process carries no leg identity, so it is published,
-  and promotes a starting candidate, without the freshness check rule 7 asks
-  for. The PBX lock makes that safe today by serializing turns (#60).
 - `apps/frontend/src/runtime/callRuntime.ts` still coordinates several
   concerns (socket lifecycle, outbox, line requests, hands-free wiring); the
   recorder and playback are separate modules, the rest is one class.
