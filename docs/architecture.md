@@ -89,7 +89,11 @@ thinking, catalog) and builds the status from it alone; the PBX owns the
 processes and changes the leg only through the coordinator's named transitions
 (`begin_candidate`, `adopt_candidate`, `rollback_startup`,
 `return_to_operator`). A rescue ends in `settle`, which every page control and
-delivered turn passes through. Between them they own:
+delivered turn passes through. A model or thinking redial is decided before
+anything is torn down: `RedialPlanner` (`pbx.rs`) makes every refusal from the
+coordinator's leg and prewarm's launch plan, without the PBX lock, so a refused
+page swap never rescues the live leg; `Switchboard::redial` runs a plan only
+while the leg it was made for is still on the line. Between them they own:
 
 - operator and project legs
 - transfer and return
@@ -317,7 +321,7 @@ removes the real coupling; do not create interfaces for ceremony.
 | `apps/backend/src/main.rs` | composition root; `Config`, the only reader of the environment | turn policy |
 | `api.rs` | HTTP/WebSocket coordination, workers, delivery, generation checks | provider wire formats, PBX policy |
 | `lifecycle.rs` | call identity, the current route and the leg on it, phases, candidate legs, operations, the idle clock, the status | async work or I/O |
-| `pbx.rs` | leg lifecycle: transfer, return, rescue, redial; the operator and project processes | host setup, browser rendering, TTS encoding, a copy of the route |
+| `pbx.rs` | leg lifecycle: transfer, return, rescue, redial and its decision; the operator and project processes | host setup, browser rendering, TTS encoding, a copy of the route |
 | `prewarm.rs` | startup setup and launch plans: SSH masters, catalogs, staged extensions, prepare | routing decisions, model policy |
 | `pi_client.rs` | Pi process/RPC transport, SSH command construction, process-tree cleanup | route authority or deployment registry |
 | `audio.rs` | STT/TTS transports, workers, bounds, deadlines | project selection or persistence policy |

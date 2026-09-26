@@ -171,6 +171,18 @@ that fallback and on a context-preserving redial. When discovery succeeds, the
 picker contains only the provider-qualified entries from that host's catalog;
 the current entry is retained even if a refreshed catalog no longer lists it.
 
+A swap is decided before anything is torn down. Every refusal (no project on
+the line, swaps turned off, a remote project asked to keep its conversation, a
+host prewarm cannot vouch for, a model the catalog does not resolve, the model
+already running) is made from the leg the coordinator names and the launch
+plan prewarm holds, without the PBX lock, and the live leg keeps running: the
+caller hears why, and their next turn reaches the same agent. That holds for the
+page's pickers (`POST /model`, `POST /thinking`) and for the agent's own
+`set_model` alike. Only a swap that will go ahead cancels the turn in flight,
+and only while the caller is still on the leg it was decided for; a caller who
+has moved on by then, or moves before the swap reaches the PBX, stays where
+they went, and the picker is answered 409.
+
 The operator is never swappable. It is where a failed swap lands the caller, so
 it always answers on `switchboard_operator_model`. Set
 `switchboard_model_swaps: false` in the role to turn the whole thing off.
@@ -192,6 +204,7 @@ level as requested rather than stating it.
 
 `POST /thinking` (the picker on the page) sets the level for the rest of the
 process and re-dials the live project leg onto it, keeping the session file. The
+level is kept for the next project call even when that re-dial is refused. The
 operator is never re-dialled for this; its level is a deployed setting.
 
 Project callbacks carry `SWITCHBOARD_SESSION_TOKEN`, an opaque token freshly
@@ -339,9 +352,10 @@ the pinned commit in that variable. It is a build-time input, not part of the
 env file, but under `AGENTS.md` it is interface all the same: renaming it or
 changing what it accepts needs a homelab PR.
 
-PBX mutation is serialized, while live status, agent callbacks, steering, and
-forced page rescue bypass that lock through bounded shared controls. The
-forced-rescue path is covered under a deliberately wedged turn in the Rust
+PBX mutation is serialized, while live status, agent callbacks, steering,
+forced page rescue, and the pickers' swap decisions bypass that lock through
+bounded shared controls. The forced-rescue path, and a picker refusal that
+leaves the leg alone, are covered under a deliberately wedged turn in the Rust
 tests. Fake pi, SSH, TTS, and STT paths are exercised without network access.
 Unit tests cannot establish microphone, model, or remote-host behavior; check
 those on the deployment host after a pin bump.
