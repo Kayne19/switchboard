@@ -694,13 +694,15 @@ export function validateControllerAction(value: unknown): ActionValidationResult
           return { ok: false, error: 'show.type is unknown' };
       }
 
-      const action: DisplayAction = {
+      // The switch above validated `type` and `data` together; TypeScript
+      // cannot correlate the two across it, so the pair is asserted once here.
+      const action = {
         op: 'show',
         id: idCheck.id,
-        type: value.type as any,
+        type: value.type,
         ...(value.role !== undefined ? { role: value.role as SceneObjectRole } : {}),
-        data: validatedData as any,
-      };
+        data: validatedData,
+      } as DisplayAction;
       return { ok: true, action };
     }
     case 'hide': {

@@ -33,6 +33,14 @@ import { TranscriptToggle } from '../primitives/TranscriptToggle';
 import { ChartNotes, type ChartNote } from './ChartNotes';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
+/** A text field an object's data may carry for the scene frame, or undefined
+ * when that shape has none. */
+function frameText(data: unknown, field: 'title' | 'subject' | 'label' | 'subtitle' | 'context'): string | undefined {
+  if (data === null || typeof data !== 'object') return undefined;
+  const value = (data as Record<string, unknown>)[field];
+  return typeof value === 'string' ? value : undefined;
+}
+
 interface SceneProps {
   state: ControllerState;
   onToggleListening: () => void;
@@ -505,8 +513,9 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
     ...progressList.filter((p) => p.id !== primary.id && !comp.compare.some((c) => c.id === p.id)),
   ];
 
-  const title = (primary.data as any)?.title ?? (primary.data as any)?.subject ?? (primary.data as any)?.label ?? 'COMPOSED WORKSPACE';
-  const subtitle = (primary.data as any)?.subtitle ?? 'STRUCTURED SCENE';
+  // The same precedence the backend's view summary reports to the agent.
+  const title = frameText(primary.data, 'title') ?? frameText(primary.data, 'subject') ?? frameText(primary.data, 'label') ?? 'COMPOSED WORKSPACE';
+  const subtitle = frameText(primary.data, 'subtitle') ?? 'STRUCTURED SCENE';
 
   return (
     <motion.section className="scene scene--content scene--composed" data-scene="composed" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -571,7 +580,7 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
           <DamoclesPresence
             listening={state.listening}
             onToggleListening={onToggleListening}
-            context={(primary.data as any)?.context ?? 'COMPOSED'}
+            context={frameText(primary.data, 'context') ?? 'COMPOSED'}
             size="rail"
             activity={state.activity}
           />
