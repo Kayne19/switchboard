@@ -62,6 +62,100 @@ fn quotes_shell_values_and_builds_remote_commands() {
 }
 
 #[test]
+fn the_remote_launch_stops_on_the_first_failed_step_and_execs_pi_last() {
+    // `set -e` has to come first: without it a `cd` that fails is just a
+    // failed command, and the shell carries on and launches pi in whatever
+    // directory the ssh session started in. The environment is exported
+    // before the `exec`, so the agent inherits it, and sorted, so the command
+    // is the same on every launch.
+    let options = SshClientOptions::new("ssh", ValidatedSshTarget::new("host").unwrap());
+    let argv = options.remote_argv(
+        "/srv/alpha",
+        "pi",
+        Some("anthropic/current"),
+        Some("/home/pi/.cache/switchboard/extensions/agent.ts"),
+        Some("brief"),
+        Some("session-a"),
+        &["--verbose".into()],
+        &HashMap::from([
+            ("SWITCHBOARD_SESSION_TOKEN".into(), "it's-a-token".into()),
+            ("SWITCHBOARD_SESSION".into(), "1".into()),
+        ]),
+    );
+    assert_eq!(
+        argv.last().unwrap(),
+        "set -e; cd '/srv/alpha'; \
+         export SWITCHBOARD_SESSION='1'; \
+         export SWITCHBOARD_SESSION_TOKEN='it'\"'\"'s-a-token'; \
+         exec 'pi' '--mode' 'rpc' '--model' 'anthropic/current' '--session-id' 'session-a' \
+         '-e' '/home/pi/.cache/switchboard/extensions/agent.ts' \
+         '--append-system-prompt' 'brief' '--verbose'"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_remote_launch_into_a_missing_directory_never_starts_the_agent() {
+    // The same command the ssh stand-ins in the PBX tests run, run here by the
+    // shell directly: once into a directory that exists and once into one that
+    // does not.
+    let root = std::env::temp_dir().join(format!(
+        "switchboard-remote-cwd-{}",
+        crate::pbx::uuid_like()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let launched = root.join("launched");
+    let runtime = executable(
+        &root,
+        "fake-pi",
+        &format!(
+            "printf '%s %s\\n' \"$(pwd -P)\" \"$SWITCHBOARD_SESSION\" > '{}'\n",
+            launched.display()
+        ),
+    );
+    let options = SshClientOptions::new("ssh", ValidatedSshTarget::new("host").unwrap());
+    let run = |cwd: &Path| {
+        let argv = options.remote_argv(
+            &cwd.to_string_lossy(),
+            &runtime.to_string_lossy(),
+            None,
+            None,
+            None,
+            None,
+            &[],
+            &HashMap::from([("SWITCHBOARD_SESSION".into(), "1".into())]),
+        );
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(argv.last().unwrap())
+            .output()
+            .unwrap()
+    };
+
+    let missing = root.join("no-such-project");
+    let refused = run(&missing);
+    assert!(!refused.status.success(), "{refused:?}");
+    assert!(
+        !launched.exists(),
+        "the agent started even though the cd failed: {:?}",
+        std::fs::read_to_string(&launched)
+    );
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        stderr.contains(&*missing.to_string_lossy()),
+        "the shell's own error names the directory, and that is what the caller is told: {stderr}"
+    );
+
+    let started = run(&root);
+    assert!(started.status.success(), "{started:?}");
+    assert_eq!(
+        std::fs::read_to_string(&launched).unwrap(),
+        format!("{} 1\n", root.canonicalize().unwrap().display())
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn builds_local_rpc_argv() {
     let args = local_argv(
         "pi",
@@ -256,6 +350,73 @@ async fn speak_tool_end_with_is_error_true_is_unsuccessful() {
     .unwrap();
     let turn = session.prompt("hello").await.unwrap();
     assert!(!turn.agent_spoke());
+    session.close().await;
+}
+
+// A process that fails says why on stderr on its way out, and a drain task
+// reads stderr while the turn reads stdout. A failure report must wait for
+// the drain rather than read whatever it has reached, and must prefer what
+// the process said to the broken pipe it left behind.
+
+#[tokio::test]
+async fn a_turn_whose_agent_exits_reports_what_it_said_after_its_output_closed() {
+    // Output closes first, then the reason arrives: the order the drain can
+    // lose on its own, fixed here so it always does.
+    let script = "read line; exec 1>&-; sleep 0.3; echo 'pi: no API key for anthropic' >&2; exit 3";
+    let session = PiSession::start(
+        vec!["sh".into(), "-c".into(), script.into()],
+        "test",
+        None,
+        None,
+        Duration::from_secs(5),
+        None,
+    )
+    .await
+    .unwrap();
+    let turn = session.prompt("hello").await.unwrap();
+    assert!(turn.failed);
+    assert_eq!(session.stderr_tail(5), "pi: no API key for anthropic");
+    session.close().await;
+}
+
+#[tokio::test]
+async fn a_prompt_the_agent_stopped_reading_reports_why_not_the_broken_pipe() {
+    // The process stops reading, says why, and has not exited yet when the
+    // prompt is written, so the write fails with a broken pipe.
+    let script = "exec 0<&-; echo 'pi: unknown flag --mdoel' >&2; sleep 0.3; exit 2";
+    let session = PiSession::start(
+        vec!["sh".into(), "-c".into(), script.into()],
+        "test",
+        None,
+        None,
+        Duration::from_secs(5),
+        None,
+    )
+    .await
+    .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while session.stderr_tail(1).is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the process never wrote its error"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    match session.prompt("hello").await {
+        Err(error) => assert_eq!(
+            error.to_string(),
+            "agent process is not running (pi: unknown flag --mdoel)"
+        ),
+        // A test on another thread that forks while this session is being
+        // spawned holds a copy of the stdin pipe until it execs. Under load
+        // that can outlast the wait above; then the write succeeds and the
+        // failure arrives as the end of output instead, the other path the
+        // reason has to survive.
+        Ok(turn) => {
+            assert!(turn.failed, "{turn:?}");
+            assert_eq!(session.stderr_tail(5), "pi: unknown flag --mdoel");
+        }
+    }
     session.close().await;
 }
 

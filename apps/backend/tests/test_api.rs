@@ -2335,3 +2335,531 @@ async fn a_page_control_that_fails_is_refused_as_a_server_error() {
         .starts_with("connection attempt failed:"));
     assert!(state.0.active_operations.lock().await.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// #56: the WebSocket handler over a real socket, and POST /hangup on the
+// operator and on a project leg. The router is served on a loopback port the
+// way `main` serves it, and a tungstenite client stands in for the browser.
+
+type Browser =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+type Wire = tokio_tungstenite::tungstenite::Message;
+
+/// The router listening on 127.0.0.1; stops accepting when dropped.
+struct Served {
+    address: std::net::SocketAddr,
+    server: tokio::task::JoinHandle<()>,
+}
+
+impl Served {
+    async fn start(state: &AppState) -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let router = state.clone().router(None);
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        Self { address, server }
+    }
+
+    async fn connect(&self) -> Browser {
+        let (browser, _) = tokio_tungstenite::connect_async(format!("ws://{}/ws", self.address))
+            .await
+            .unwrap();
+        browser
+    }
+}
+
+impl Drop for Served {
+    fn drop(&mut self) {
+        self.server.abort();
+    }
+}
+
+/// The next frame the browser reads, failing the test if none arrives.
+async fn next_wire(browser: &mut Browser) -> Wire {
+    timeout(Duration::from_secs(5), browser.next())
+        .await
+        .expect("a frame before the deadline")
+        .expect("an open socket")
+        .expect("a readable frame")
+}
+
+async fn next_json(browser: &mut Browser) -> Value {
+    match next_wire(browser).await {
+        Wire::Text(text) => serde_json::from_str(text.as_str()).unwrap(),
+        other => panic!("expected a text frame, got {other:?}"),
+    }
+}
+
+/// Frames up to and including the first of type `until`.
+async fn json_until(browser: &mut Browser, until: &str) -> Vec<Value> {
+    let mut frames = Vec::new();
+    loop {
+        let frame = next_json(browser).await;
+        let done = frame["type"] == until;
+        frames.push(frame);
+        if done {
+            return frames;
+        }
+    }
+}
+
+async fn send_json_frame(browser: &mut Browser, value: Value) {
+    browser.send(Wire::text(value.to_string())).await.unwrap();
+}
+
+/// Sends a heartbeat and expects its answer, which is how these tests show
+/// the connection is still up after something it refused.
+async fn assert_still_answering(browser: &mut Browser, nonce: &str) {
+    send_json_frame(browser, json!({"type":"ping", "nonce":nonce})).await;
+    assert_eq!(
+        next_json(browser).await,
+        json!({"type":"pong", "nonce":nonce, "time":null})
+    );
+}
+
+/// Waits for `condition`, failing the test if it never holds.
+async fn wait_until(condition: impl Fn() -> bool) {
+    timeout(Duration::from_secs(5), async {
+        while !condition() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the condition never held");
+}
+
+#[tokio::test]
+async fn a_connection_gets_epoch_status_history_and_scene_before_any_live_event() {
+    let state = state();
+    // Something in every part of the snapshot: an epoch that has moved, a
+    // transcript, and an object on stage.
+    state.0.coordinator.begin_rescue("an earlier rescue");
+    state.0.coordinator.publish_status(current_status(&state));
+    let generation = state.0.coordinator.generation();
+    state
+        .0
+        .transcript_log
+        .lock()
+        .await
+        .add(CALLER, "put me through", OPERATOR);
+    let mut show = diagram_show();
+    show["token"] = json!(state.0.coordinator.current_identity().token);
+    let (code, _) = request_json(&state, Method::POST, "/display", Some(show)).await;
+    assert_eq!(code, StatusCode::OK);
+    let watermark = state.0.display_gate.lock().await.watermark;
+
+    // Hold the transcript so the connection is registered but cannot finish
+    // reading its snapshot, and publish a live event in that window.
+    let served = Served::start(&state).await;
+    let transcript = state.0.transcript_log.lock().await;
+    let mut browser = served.connect().await;
+    wait_until(|| state.0.delivery.connected()).await;
+    assert!(emit_json(&state, json!({"type":"probe"})));
+    drop(transcript);
+
+    let frames = json_until(&mut browser, "probe").await;
+    assert_eq!(
+        types_of(&frames),
+        ["epoch", "status", "history", "display", "probe"]
+    );
+    assert_eq!(frames[0]["generation"], generation);
+    assert_eq!(frames[1]["route"], OPERATOR);
+    assert_eq!(frames[2]["entries"][0]["text"], "put me through");
+    assert_eq!(frames[3]["action"]["id"], "d1");
+    assert_eq!(
+        frames[3]["seq"], watermark,
+        "a replayed display carries the watermark, so the live stream's older displays are skipped"
+    );
+}
+
+#[tokio::test]
+async fn the_socket_answers_both_kinds_of_ping() {
+    let state = state();
+    let served = Served::start(&state).await;
+    let mut browser = served.connect().await;
+    json_until(&mut browser, "history").await;
+
+    // The browser's heartbeat is a JSON frame, echoed with its fields.
+    send_json_frame(
+        &mut browser,
+        json!({"type":"ping", "nonce":"beat-1", "time":1_700_000_000_000_u64}),
+    )
+    .await;
+    assert_eq!(
+        next_json(&mut browser).await,
+        json!({"type":"pong", "nonce":"beat-1", "time":1_700_000_000_000_u64})
+    );
+
+    // A protocol ping, as a proxy might send. The WebSocket library queues
+    // its own pong and the handler sends one too, so one or two arrive
+    // depending on whether the second replaces the first before it is
+    // flushed; what matters is that it is answered with the same payload.
+    browser
+        .send(Wire::Ping(b"are you there".to_vec().into()))
+        .await
+        .unwrap();
+    send_json_frame(&mut browser, json!({"type":"ping", "nonce":"after"})).await;
+    let mut pongs = Vec::new();
+    loop {
+        match next_wire(&mut browser).await {
+            Wire::Pong(payload) => pongs.push(payload.to_vec()),
+            Wire::Text(text) => {
+                let frame: Value = serde_json::from_str(text.as_str()).unwrap();
+                assert_eq!(frame["nonce"], "after", "{frame}");
+                break;
+            }
+            other => panic!("unexpected frame {other:?}"),
+        }
+    }
+    assert!(!pongs.is_empty(), "the protocol ping went unanswered");
+    assert!(
+        pongs.iter().all(|pong| pong == b"are you there"),
+        "{pongs:?}"
+    );
+}
+
+#[tokio::test]
+async fn frames_the_socket_cannot_act_on_are_refused_without_hanging_up() {
+    let state = state();
+    let served = Served::start(&state).await;
+    let mut browser = served.connect().await;
+    json_until(&mut browser, "history").await;
+    let error = |message: &str| json!({"type":"error", "message":message});
+
+    browser.send(Wire::text("not json")).await.unwrap();
+    assert_eq!(next_json(&mut browser).await, error("Invalid JSON frame."));
+    browser.send(Wire::text("[1, 2]")).await.unwrap();
+    assert_eq!(
+        next_json(&mut browser).await,
+        error("Invalid command shape.")
+    );
+    send_json_frame(&mut browser, json!({"type":"dance"})).await;
+    assert_eq!(
+        next_json(&mut browser).await,
+        error("Unknown websocket command.")
+    );
+    send_json_frame(&mut browser, json!({"id":"no-type"})).await;
+    assert_eq!(
+        next_json(&mut browser).await,
+        error("Unknown websocket command.")
+    );
+    assert_still_answering(&mut browser, "after-bad-commands").await;
+
+    // Audio is only taken after the header that names it. A header that is
+    // refused names nothing, so the audio after it is refused as well.
+    browser.send(Wire::binary(vec![1, 2, 3])).await.unwrap();
+    let headerless = error("Audio arrived without a clip header.");
+    assert_eq!(next_json(&mut browser).await, headerless);
+    send_json_frame(&mut browser, json!({"type":"clip", "id":""})).await;
+    assert_eq!(next_json(&mut browser).await, error("Invalid clip id."));
+    browser.send(Wire::binary(vec![1, 2, 3])).await.unwrap();
+    assert_eq!(next_json(&mut browser).await, headerless);
+    assert_still_answering(&mut browser, "after-bad-audio").await;
+    assert!(state.0.accepted_clips.lock().await.0.is_empty());
+}
+
+#[tokio::test]
+async fn a_clip_is_its_header_and_the_audio_frame_after_it() {
+    let state = state();
+    let served = Served::start(&state).await;
+    let mut browser = served.connect().await;
+    json_until(&mut browser, "history").await;
+    let generation = state.0.coordinator.generation();
+    let header =
+        json!({"type":"clip", "id":"clip-1", "mime":"audio/webm", "generation":generation});
+
+    send_json_frame(&mut browser, header.clone()).await;
+    browser.send(Wire::binary(vec![4, 5, 6])).await.unwrap();
+    assert_eq!(
+        next_json(&mut browser).await,
+        json!({"type":"accepted", "id":"clip-1"})
+    );
+    let mut clips = state.0.clip_rx.lock().await.take().unwrap();
+    let clip = clips.try_recv().expect("the clip reached the clip worker");
+    assert_eq!(
+        (clip.id.as_str(), clip.audio.as_slice(), clip.generation),
+        ("clip-1", &[4_u8, 5, 6][..], generation)
+    );
+
+    // The header is used up by the frame it named.
+    browser.send(Wire::binary(vec![7])).await.unwrap();
+    assert_eq!(
+        next_json(&mut browser).await,
+        json!({"type":"error", "message":"Audio arrived without a clip header."})
+    );
+
+    // A reconnecting browser resends what it has not seen acknowledged; the
+    // same id is acknowledged again but not transcribed twice.
+    send_json_frame(&mut browser, header).await;
+    browser.send(Wire::binary(vec![4, 5, 6])).await.unwrap();
+    assert_eq!(
+        next_json(&mut browser).await,
+        json!({"type":"accepted", "id":"clip-1"})
+    );
+    assert!(matches!(
+        clips.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+}
+
+#[tokio::test]
+async fn a_connection_that_falls_a_queue_behind_is_dropped_and_a_reconnect_is_whole_again() {
+    // Each connection has a bounded queue. A browser that stops draining it
+    // is retired rather than waited on, so it cannot stall the call; it
+    // loses the events past the bound and recovers them by reconnecting,
+    // which delivers a fresh snapshot.
+    let state = state();
+    state
+        .0
+        .transcript_log
+        .lock()
+        .await
+        .add(CALLER, "still here", OPERATOR);
+    let served = Served::start(&state).await;
+
+    // Holding the transcript keeps the connection's writer on its snapshot,
+    // so nothing leaves its queue.
+    let transcript = state.0.transcript_log.lock().await;
+    let mut lagging = served.connect().await;
+    wait_until(|| state.0.delivery.connected()).await;
+    for n in 0..DELIVERY_QUEUE {
+        assert!(emit_json(&state, json!({"type":"probe", "n":n})), "{n}");
+    }
+    assert!(
+        !emit_json(&state, json!({"type":"probe", "n":DELIVERY_QUEUE})),
+        "one past the bound is not delivered"
+    );
+    assert!(
+        !state.0.delivery.connected(),
+        "the lagging socket is retired"
+    );
+    drop(transcript);
+
+    // It still gets its snapshot and what it had queued, then the socket
+    // closes.
+    let frames = json_until(&mut lagging, "history").await;
+    assert_eq!(types_of(&frames), ["epoch", "status", "history"]);
+    for n in 0..DELIVERY_QUEUE {
+        assert_eq!(next_json(&mut lagging).await["n"], n);
+    }
+    let end = timeout(Duration::from_secs(5), lagging.next())
+        .await
+        .expect("the retired socket closes");
+    assert!(
+        matches!(end, None | Some(Err(_)) | Some(Ok(Wire::Close(_)))),
+        "{end:?}"
+    );
+
+    let mut browser = served.connect().await;
+    let frames = json_until(&mut browser, "history").await;
+    assert_eq!(types_of(&frames), ["epoch", "status", "history"]);
+    assert_eq!(frames[2]["entries"][0]["text"], "still here");
+    assert!(emit_json(&state, json!({"type":"probe", "n":"live"})));
+    assert_eq!(next_json(&mut browser).await["n"], "live");
+}
+
+#[cfg(unix)]
+fn scratch_root(label: &str) -> std::path::PathBuf {
+    let root =
+        std::env::temp_dir().join(format!("switchboard-{label}-{}", crate::pbx::uuid_like()));
+    std::fs::create_dir_all(&root).unwrap();
+    root
+}
+
+/// A pi stand-in that answers every prompt with `reply`.
+#[cfg(unix)]
+fn answering_agent(root: &std::path::Path, name: &str, reply: &str) -> std::path::PathBuf {
+    let path = root.join(name);
+    crate::pi_client::write_executable_script(
+        &path,
+        &format!(
+            r#"while IFS= read -r line; do
+  printf '%s\n' '{{"type":"message_update","assistantMessageEvent":{{"type":"text_end","content":"{reply}"}}}}'
+  printf '%s\n' '{{"type":"agent_settled"}}'
+done
+"#
+        ),
+    );
+    path
+}
+
+/// An app whose operator and one local project, alpha, are pi stand-ins
+/// under `root`.
+#[cfg(unix)]
+fn state_with_agents(root: &std::path::Path) -> AppState {
+    let operator = answering_agent(root, "fake-operator", "Operator here.");
+    let runtime = answering_agent(root, "fake-project-pi", "Alpha here.");
+    let config =
+        crate::Config::for_tests(&[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())]);
+    let registry = Registry::new(vec![crate::registry::Project {
+        id: "alpha".into(),
+        description: String::new(),
+        aliases: vec![],
+        host: None,
+        cwd: root.to_string_lossy().into_owned(),
+        runtime: runtime.to_string_lossy().into_owned(),
+        model: Some("anthropic/current".into()),
+        stage_extension: false,
+        extra_args: vec![],
+        prepare: String::new(),
+    }]);
+    let catalog = crate::models::ModelCatalog {
+        entries: vec![crate::models::CatalogEntry {
+            provider: "anthropic".into(),
+            model: "current".into(),
+            thinks: true,
+        }],
+        available: true,
+        diagnostic: None,
+    };
+    let prewarm = crate::prewarm::Prewarm::settled(&config, &registry, catalog);
+    AppState::new(
+        Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
+        TranscriptLog::new(10),
+        Speaker::from_values(
+            100,
+            std::time::Duration::from_millis(25_000),
+            &HashMap::from([("ELEVENLABS_API_KEY".into(), "test-key".into())]),
+        ),
+        SttAdapter::from_command(None),
+        SttStreamAdapter::from_command(None),
+    )
+}
+
+#[tokio::test]
+async fn hanging_up_with_nothing_on_the_line_says_so() {
+    let state = state();
+    let (mut connection, _, _) = state.register_connection().await;
+    let before = state.0.coordinator.generation();
+
+    let (code, body) = request_json(&state, Method::POST, "/hangup", None).await;
+
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(
+        body,
+        json!({"hungup":false, "reason":"already on the operator"})
+    );
+    assert!(state.0.transcript_log.lock().await.entries().is_empty());
+    // It is still a rescue: the epoch moves, so speech recorded before the
+    // press is not acted on.
+    let frames = queued_frames(&mut connection);
+    assert_eq!(types_of(&frames), ["epoch"]);
+    assert_eq!(frames[0]["generation"], before + 1);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn hanging_up_the_operator_from_the_page_discards_its_process() {
+    let root = scratch_root("api-hangup-operator");
+    let state = state_with_agents(&root);
+    let (mut connection, _, _) = state.register_connection().await;
+    state.0.switchboard.lock().await.handle("hello").await;
+    let operator = state
+        .0
+        .active_session
+        .lock()
+        .await
+        .clone()
+        .expect("the operator is live");
+    queued_frames(&mut connection);
+    let before = state.0.coordinator.generation();
+
+    let (code, body) = request_json(&state, Method::POST, "/hangup", None).await;
+
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(body, json!({"hungup":true, "left":"operator"}));
+    assert!(!operator.alive().await);
+    assert!(state.0.active_session.lock().await.is_none());
+    let frames = queued_frames(&mut connection);
+    assert_eq!(types_of(&frames), ["epoch", "spoken", "status"]);
+    assert_eq!(frames[0]["generation"], before + 1);
+    assert_eq!(
+        frames[1]["entry"]["text"],
+        "You hung up the line to operator. You're back with the operator."
+    );
+    assert_eq!(frames[2]["route"], OPERATOR);
+
+    // The operator is the home base: the next utterance starts a new one.
+    let reply = state.0.switchboard.lock().await.handle("hello again").await;
+    assert_eq!(reply.text, "Operator here.");
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn hanging_up_a_project_leg_from_the_page_does_not_wait_for_its_turn() {
+    let root = scratch_root("api-hangup-project");
+    let state = state_with_agents(&root);
+    {
+        let mut board = state.0.switchboard.lock().await;
+        board.handle("hello").await;
+        let context = crate::pbx::TransferContext {
+            exact_caller_transcript: "put me through to alpha".into(),
+            ..Default::default()
+        };
+        let reply = board.transfer_ctx(&context, "alpha", "", "").await;
+        assert_eq!(reply.route, "alpha", "{reply:?}");
+    }
+    let project = state
+        .0
+        .active_session
+        .lock()
+        .await
+        .clone()
+        .expect("alpha is live");
+    assert_eq!(project.label(), "alpha");
+
+    // A turn that will never settle holds the PBX lock.
+    let (locked_tx, locked_rx) = oneshot::channel();
+    let turn_state = state.clone();
+    let (wedged, _, _) = spawn_active_operation(&state, async move {
+        hold_turn_lock(&turn_state, Some(locked_tx)).await;
+    })
+    .await
+    .unwrap();
+    locked_rx.await.unwrap();
+    let (mut connection, _, _) = state.register_connection().await;
+    let before = state.0.coordinator.generation();
+
+    let (code, body) = timeout(
+        Duration::from_secs(5),
+        request_json(&state, Method::POST, "/hangup", None),
+    )
+    .await
+    .expect("a hangup must not wait for the turn it rescues the caller from");
+
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(body, json!({"hungup":true, "left":"alpha"}));
+    assert!(wedged.await.unwrap_err().is_cancelled());
+    assert!(!project.alive().await, "alpha was left running");
+    assert_eq!(state.0.live_leg.route(), OPERATOR);
+    assert_eq!(current_status(&state)["route"], OPERATOR);
+    let active = state.0.active_session.lock().await.clone();
+    assert_eq!(active.as_ref().map(PiSession::label), Some(OPERATOR));
+    assert!(active.unwrap().alive().await, "the operator keeps running");
+
+    let frames = queued_frames(&mut connection);
+    assert_eq!(frames[0]["type"], "epoch", "{frames:#?}");
+    for epoch in frames.iter().filter(|frame| frame["type"] == "epoch") {
+        assert_eq!(epoch["generation"], before + 1, "{frames:#?}");
+    }
+    let spoken = frames
+        .iter()
+        .find(|frame| frame["type"] == "spoken")
+        .expect("the hangup is written into the transcript");
+    assert_eq!(
+        spoken["entry"]["text"],
+        "You hung up the line to alpha. You're back with the operator."
+    );
+    assert_eq!(spoken["entry"]["route"], OPERATOR);
+    let last = frames.last().unwrap();
+    assert_eq!(
+        (&last["type"], &last["route"]),
+        (&json!("status"), &json!(OPERATOR))
+    );
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}

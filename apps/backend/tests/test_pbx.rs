@@ -978,3 +978,366 @@ async fn a_remote_redial_that_keeps_context_is_refused_without_dropping_the_leg(
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }
+
+// ---------------------------------------------------------------------------
+// A transfer that cannot bring its leg up, and a hangup (#56). A failed
+// transfer leaves the caller on the operator with a note saying why and rolls
+// the candidate back; a hangup drops whatever leg is live. The operator here
+// is a real process, so these check what it is told on its next turn rather
+// than only the note waiting for it.
+
+/// An operator that answers every prompt and appends each one to a log, so a
+/// test can read what the switchboard told it.
+#[cfg(unix)]
+fn logging_operator(root: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let operator = root.join("fake-operator");
+    let log = root.join("operator.log");
+    crate::pi_client::write_executable_script(
+        &operator,
+        &format!(
+            r#"while IFS= read -r line; do
+  printf '%s\n' "$line" >> '{log}'
+  printf '%s\n' '{{"type":"message_update","assistantMessageEvent":{{"type":"text_end","content":"Operator here."}}}}'
+  printf '%s\n' '{{"type":"agent_settled"}}'
+done
+"#,
+            log = log.display()
+        ),
+    );
+    (operator, log)
+}
+
+/// The messages the operator was prompted with, oldest first.
+fn operator_prompts(log: &std::path::Path) -> Vec<String> {
+    read_lines(log)
+        .iter()
+        .map(|line| {
+            let command: serde_json::Value = serde_json::from_str(line).unwrap();
+            command["message"].as_str().unwrap().to_owned()
+        })
+        .collect()
+}
+
+/// A switchboard on `project` whose coordinator records its candidate
+/// notices the way `AppState` relays them to the browser.
+fn coordinated_board(
+    project: Project,
+    settings: &[(&str, &str)],
+) -> (
+    Switchboard,
+    Coordinator,
+    Arc<StdMutex<Vec<crate::lifecycle::CandidateNotice>>>,
+) {
+    let mut board = board_on(vec![project], settings, two_model_catalog());
+    let mut coordinator = Coordinator::new(board.status());
+    let notices = Arc::new(StdMutex::new(Vec::new()));
+    let recorded = Arc::clone(&notices);
+    coordinator.set_candidate_callback(Arc::new(move |notice| {
+        recorded.lock().unwrap().push(notice.clone());
+    }));
+    board.set_coordinator(coordinator.clone());
+    (board, coordinator, notices)
+}
+
+/// Everything a failed transfer must leave as it found it: the caller on the
+/// operator's live session, no candidate, the generation where it was, and a
+/// note for the operator that starts with `why`.
+async fn assert_back_on_the_operator(
+    board: &Switchboard,
+    coordinator: &Coordinator,
+    notices: &StdMutex<Vec<crate::lifecycle::CandidateNotice>>,
+    generation: u64,
+    why: &str,
+) {
+    assert_eq!(board.route(), OPERATOR);
+    assert!(board.agent.is_none() && board.project.is_none());
+    assert_eq!(board.live_leg.route(), OPERATOR);
+    let operator = board.operator.as_ref().expect("the operator keeps running");
+    assert!(operator.alive().await);
+    assert!(
+        board
+            .active_session
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|active| active.same_session(operator)),
+        "the operator must be the live session again, so a steer or a rescue reaches it"
+    );
+
+    assert!(!coordinator.is_candidate());
+    assert_eq!(coordinator.candidate_identity(), None);
+    assert_eq!(coordinator.generation(), generation);
+    assert_eq!(coordinator.status_json()["route"], OPERATOR);
+    assert_eq!(
+        notices
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|notice| notice.active)
+            .collect::<Vec<_>>(),
+        [true, false],
+        "the browser is told the candidate began and that it ended"
+    );
+
+    let note = board.operator_note.as_deref().unwrap_or_default();
+    assert!(
+        note.starts_with(why),
+        "{note:?} does not start with {why:?}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_transfer_whose_agent_cannot_start_leaves_the_caller_on_the_operator_with_the_reason() {
+    let root = scratch_dir("transfer-no-agent");
+    let (operator, operator_log) = logging_operator(&root);
+    let missing = root.join("no-such-pi");
+    let (mut board, coordinator, notices) = coordinated_board(
+        project_on(None, &root, &missing),
+        &[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())],
+    );
+    board.handle("hello").await;
+    let generation = coordinator.generation();
+
+    let reply = board
+        .transfer_ctx(&transcript("put me through to alpha"), "alpha", "", "")
+        .await;
+
+    let error = reply.error.clone().expect("the transfer failed");
+    assert!(
+        error.starts_with(&format!("could not start {}", missing.display())),
+        "{error}"
+    );
+    assert_eq!(reply.route, OPERATOR);
+    assert_eq!(
+        reply.to_speak,
+        [format!("I couldn't get alpha on the line: {error}")]
+    );
+    assert_back_on_the_operator(
+        &board,
+        &coordinator,
+        &notices,
+        generation,
+        &format!("Transfer to alpha failed: {error}"),
+    )
+    .await;
+
+    board.handle("what happened?").await;
+    assert_eq!(
+        operator_prompts(&operator_log).last().unwrap(),
+        &format!("[switchboard] Transfer to alpha failed: {error}\n\nwhat happened?")
+    );
+    assert_eq!(board.operator_note, None, "the note is delivered once");
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_remote_agent_whose_directory_is_missing_is_reported_by_the_shell_error() {
+    // The ssh session comes up, but `cd` fails and `set -e` stops the remote
+    // shell before pi is launched. The leg's process exits without a word on
+    // its output, and what the caller and the operator are told is the
+    // shell's error, however the exit lines up with the intro being written.
+    let root = scratch_dir("transfer-bad-cwd");
+    let (operator, operator_log) = logging_operator(&root);
+    let (ssh, ssh_log) = recording_ssh(&root);
+    let (runtime, _) = recording_runtime(&root);
+    let missing = root.join("no-such-project");
+    let mut project = project_on(Some("fake-host"), &missing, &runtime);
+    project.stage_extension = false;
+    let state_dir = root.join("state");
+    let (mut board, coordinator, notices) = coordinated_board(
+        project,
+        &[
+            ("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy()),
+            ("SWITCHBOARD_SSH_PROGRAM", &ssh.to_string_lossy()),
+            ("SWITCHBOARD_STATE_DIR", &state_dir.to_string_lossy()),
+        ],
+    );
+    board.handle("hello").await;
+    let generation = coordinator.generation();
+
+    let reply = board
+        .transfer_ctx(&transcript("put me through to alpha"), "alpha", "", "")
+        .await;
+
+    assert_eq!(read_lines(&ssh_log).len(), 1, "the launch reached the host");
+    let error = reply.error.clone().expect("the transfer failed");
+    assert!(
+        error.contains(&*missing.to_string_lossy()),
+        "the caller should hear the shell's error, which names the directory: {error}"
+    );
+    assert_eq!(reply.route, OPERATOR);
+    assert_eq!(reply.to_speak, [format!("alpha didn't pick up: {error}")]);
+    assert_back_on_the_operator(
+        &board,
+        &coordinator,
+        &notices,
+        generation,
+        &format!("Transfer to alpha failed: {error}"),
+    )
+    .await;
+
+    board.handle("what happened?").await;
+    assert!(operator_prompts(&operator_log)
+        .last()
+        .unwrap()
+        .starts_with(&format!("[switchboard] Transfer to alpha failed: {error}")));
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_intro_that_is_never_answered_is_dropped_at_the_turn_deadline() {
+    let root = scratch_dir("transfer-silent");
+    let (operator, operator_log) = logging_operator(&root);
+    let pid_file = root.join("agent.pid");
+    let silent = root.join("silent-pi");
+    // Reads every prompt and writes nothing, with its output still open: a
+    // closed output would be an agent that exited, which is a different
+    // failure.
+    crate::pi_client::write_executable_script(
+        &silent,
+        &format!(
+            "printf '%s\\n' \"$$\" > '{}'\nwhile IFS= read -r line; do :; done\n",
+            pid_file.display()
+        ),
+    );
+    let (mut board, coordinator, notices) = coordinated_board(
+        project_on(None, &root, &silent),
+        &[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())],
+    );
+    // The agent reads its intro and never answers, so the only thing that
+    // ends the transfer is the deadline. Reaching it is the outcome under
+    // test, not a wait for something else, so it can be short.
+    board.project_turn_timeout = Duration::from_millis(200);
+    board.handle("hello").await;
+    let generation = coordinator.generation();
+
+    let reply = board
+        .transfer_ctx(&transcript("put me through to alpha"), "alpha", "", "")
+        .await;
+
+    assert_eq!(reply.error.as_deref(), Some("the agent stopped responding"));
+    assert_eq!(reply.route, OPERATOR);
+    assert_eq!(
+        reply.to_speak,
+        ["alpha didn't pick up: the agent stopped responding"]
+    );
+    assert_back_on_the_operator(
+        &board,
+        &coordinator,
+        &notices,
+        generation,
+        "Transfer to alpha failed: the agent stopped responding",
+    )
+    .await;
+    let pid: i32 = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_eq!(
+        unsafe { libc::kill(pid, 0) },
+        -1,
+        "the silent agent was left running"
+    );
+
+    board.handle("what happened?").await;
+    assert_eq!(
+        operator_prompts(&operator_log).last().unwrap(),
+        "[switchboard] Transfer to alpha failed: the agent stopped responding\n\nwhat happened?"
+    );
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn hanging_up_an_operator_with_nothing_running_does_nothing() {
+    let mut board = board_with(vec![], true);
+    assert_eq!(board.force_hangup().await, None);
+    assert_eq!(board.route(), OPERATOR);
+    assert_eq!(board.operator_note, None);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn hanging_up_the_operator_discards_its_process_and_the_next_turn_starts_another() {
+    // The operator stays the route; a wedged operator process is simply
+    // replaced on the next utterance.
+    let root = scratch_dir("hangup-operator");
+    let (operator, _) = logging_operator(&root);
+    let mut board = board_on(
+        vec![],
+        &[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())],
+        two_model_catalog(),
+    );
+    board.handle("hello").await;
+    let first = board.operator.clone().expect("the operator started");
+
+    assert_eq!(board.force_hangup().await.as_deref(), Some(OPERATOR));
+
+    assert!(!first.alive().await);
+    assert!(board.operator.is_none());
+    assert!(board.active_session.lock().await.is_none());
+    assert_eq!(board.route(), OPERATOR);
+    assert_eq!(board.operator_note, None);
+    let reply = board.handle("are you there?").await;
+    assert_eq!(reply.text, "Operator here.");
+    let second = board.operator.as_ref().expect("a fresh operator");
+    assert!(!second.same_session(&first));
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn hanging_up_a_project_leg_returns_the_caller_to_the_operator_and_tells_it_why() {
+    let root = scratch_dir("hangup-project");
+    let (operator, operator_log) = logging_operator(&root);
+    let (runtime, _) = recording_runtime(&root);
+    let mut board = board_on(
+        vec![project_on(None, &root, &runtime)],
+        &[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())],
+        two_model_catalog(),
+    );
+    let routes = Arc::new(StdMutex::new(Vec::new()));
+    let announced = Arc::clone(&routes);
+    board.set_route_callback(Some(Arc::new(move |status| {
+        let announced = Arc::clone(&announced);
+        Box::pin(async move {
+            announced.lock().unwrap().push(status["route"].clone());
+        })
+    })));
+    board.handle("hello").await;
+    let reply = board
+        .transfer_ctx(&transcript("put me through to alpha"), "alpha", "", "")
+        .await;
+    assert_eq!(reply.route, "alpha", "{reply:?}");
+    let agent = board.agent.clone().expect("the project leg is live");
+
+    assert_eq!(board.force_hangup().await.as_deref(), Some("alpha"));
+
+    assert!(!agent.alive().await, "the project leg was left running");
+    assert_eq!(board.route(), OPERATOR);
+    assert_eq!(board.live_leg.route(), OPERATOR);
+    assert!(board.agent.is_none() && board.project.is_none());
+    let operator_session = board.operator.as_ref().expect("the operator keeps running");
+    assert!(board
+        .active_session
+        .lock()
+        .await
+        .as_ref()
+        .is_some_and(|active| active.same_session(operator_session)));
+    assert_eq!(*routes.lock().unwrap(), ["alpha", OPERATOR]);
+
+    board.handle("I'm back").await;
+    assert_eq!(
+        operator_prompts(&operator_log).last().unwrap(),
+        "[switchboard] The caller dropped the line to alpha.\n\nI'm back"
+    );
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
