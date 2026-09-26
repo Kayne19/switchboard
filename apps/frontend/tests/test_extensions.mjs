@@ -282,9 +282,20 @@ async function agentExtensionHttpFailures() {
 	process.env.SWITCHBOARD_STATE_URL = "http://switchboard.test/leg-state";
 	process.env.SWITCHBOARD_DISPLAY_URL = "http://switchboard.test/display";
 	const previousFetch = globalThis.fetch;
+	const previousConsoleError = console.error;
+	const reported = [];
+	console.error = (...args) => {
+		reported.push(args.join(" "));
+	};
 	let speakMode = "http-error";
+	let stateMode = "network-error";
 	globalThis.fetch = async (url) => {
-		if (String(url).endsWith("leg-state")) throw new Error("page went away");
+		if (String(url).endsWith("leg-state")) {
+			if (stateMode === "refused") {
+				return new Response("Service Unavailable", { status: 503 });
+			}
+			throw new Error("page went away");
+		}
 		if (String(url).endsWith("display")) {
 			if (speakMode === "bad-request-detail") {
 				return new Response(
@@ -331,8 +342,18 @@ async function agentExtensionHttpFailures() {
 		const extension = await loadExtension("extensions/agent-switchboard.ts");
 		const pi = fakePi();
 		extension.default(pi);
-		// State reporting is advisory and must never fail session startup.
+		// State reporting is advisory and must never fail session startup,
+		// but a failed report says why on stderr, which the switchboard keeps.
 		await pi.handlers.get("session_start")();
+		assert.equal(reported.length, 1);
+		assert.match(
+			reported[0],
+			/could not report the thinking level to http:\/\/switchboard\.test\/leg-state: .*page went away/,
+		);
+		stateMode = "refused";
+		await pi.handlers.get("thinking_level_select")();
+		assert.equal(reported.length, 2);
+		assert.match(reported[1], /thinking level report .* was refused \(HTTP 503\)/);
 
 		const refused = await pi.tools
 			.get("speak")
@@ -385,6 +406,7 @@ async function agentExtensionHttpFailures() {
 		assert.match(held.content[0].text, /It will be there/);
 	} finally {
 		globalThis.fetch = previousFetch;
+		console.error = previousConsoleError;
 	}
 }
 
