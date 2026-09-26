@@ -58,3 +58,31 @@ fn env_file_parser_keeps_audio_secrets_available() {
     assert_eq!(values.get("UNCHANGED"), Some(&"a#b".to_owned()));
     assert!(!values.contains_key("9INVALID"));
 }
+
+#[test]
+fn callback_urls_derive_from_self_url_unless_configured() {
+    let config = Config::for_tests(&[
+        ("SWITCHBOARD_SELF_URL", "http://damocles:8765/"),
+        ("SWITCHBOARD_STATE_URL", "http://elsewhere/state"),
+    ]);
+    assert_eq!(config.speak_url, "http://damocles:8765/speak");
+    assert_eq!(config.state_url, "http://elsewhere/state");
+    assert_eq!(config.display_url, "http://damocles:8765/display");
+
+    let unset = Config::for_tests(&[]);
+    assert_eq!(unset.speak_url, "");
+    assert_eq!(unset.display_url, "");
+}
+
+#[test]
+fn speech_deadline_is_parsed_once_with_its_default() {
+    assert_eq!(Config::for_tests(&[]).speech_deadline_ms, 25_000);
+    let config = Config::for_tests(&[("SWITCHBOARD_SPEECH_DEADLINE_MS", " 9000 ")]);
+    assert_eq!(config.speech_deadline(), std::time::Duration::from_secs(9));
+}
+
+#[test]
+#[should_panic(expected = "SWITCHBOARD_SPEECH_DEADLINE_MS must be a positive integer")]
+fn invalid_speech_deadline_stops_startup() {
+    Config::for_tests(&[("SWITCHBOARD_SPEECH_DEADLINE_MS", "invalid")]);
+}

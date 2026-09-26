@@ -1,4 +1,3 @@
-use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 
@@ -6,39 +5,11 @@ pub const MAX_ACTION_BYTES: usize = 48_000;
 pub const MAX_ID_UTF16: usize = 128;
 pub const MAX_TEXT_UTF16: usize = 50_000;
 pub const RESERVED_ID_PREFIX: &str = "__runtime/";
-
-#[derive(Debug, Clone, Deserialize, serde::Serialize)]
-pub struct DisplayRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub op: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub object_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub role: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub at: Option<Value>,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub token: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub action: Option<Value>,
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
-
-#[derive(Debug, Clone, Deserialize, serde::Serialize)]
-pub struct DisplayEnvelope {
-    #[serde(default)]
-    pub token: String,
-    pub action: Value,
-}
+/// What an agent may `show`. The browser reports the same kinds back in its
+/// screen state, so this list is the one both directions are checked against.
+pub const CONTENT_TYPES: [&str; 7] = [
+    "chart", "metric", "progress", "diagram", "document", "code", "note",
+];
 
 fn utf16_len(s: &str) -> usize {
     s.encode_utf16().count()
@@ -859,10 +830,7 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
                 .get("type")
                 .and_then(Value::as_str)
                 .ok_or("show.type is unknown")?;
-            if !matches!(
-                ty,
-                "chart" | "metric" | "progress" | "diagram" | "document" | "code" | "note"
-            ) {
+            if !CONTENT_TYPES.contains(&ty) {
                 return Err("show.type is unknown".into());
             }
 
@@ -984,104 +952,6 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
     Ok(Value::Object(out))
 }
 
-pub fn validate(req: &DisplayRequest, raw: &Value) -> Result<Value, String> {
-    if let Some(action) = &req.action {
-        return validate_action(action);
-    }
-
-    // In legacy/transitional wire, raw is the direct action, but might contain "token" synthesized by to_value(&req).
-    if let Value::Object(m) = raw {
-        let mut clean = m.clone();
-        clean.remove("token");
-        validate_action(&Value::Object(clean))
-    } else {
-        validate_action(raw)
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::validate_action;
-    use serde_json::{json, Value};
-
-    #[test]
-    fn normalizes_note_anchor_and_caption() {
-        let action = json!({
-            "op": "show",
-            "id": "spike-note",
-            "type": "note",
-            "role": "secondary",
-            "data": {
-                "tag": "LOOK HERE",
-                "caption": "ANNOTATION / VALIDATION SPIKE",
-                "segments": [{"text": "Validation turns upward here."}],
-                "anchor": {"target": "loss-chart", "x": 32, "series": "VAL LOSS"}
-            }
-        });
-
-        assert_eq!(validate_action(&action), Ok(action));
-    }
-
-    #[test]
-    fn rejects_note_anchor_without_a_target() {
-        let action = json!({
-            "op": "show",
-            "id": "spike-note",
-            "type": "note",
-            "data": {
-                "segments": [{"text": "No target."}],
-                "anchor": {"x": 32}
-            }
-        });
-
-        assert_eq!(
-            validate_action(&action),
-            Err("note.anchor.target must be a non-empty identifier".into())
-        );
-    }
-
-    fn progress_value(value: Value) -> Value {
-        let action = json!({
-            "op": "show",
-            "id": "deploy",
-            "type": "progress",
-            "data": { "label": "DEPLOY", "value": value, "text": "65% COMPLETE" }
-        });
-        match validate_action(&action) {
-            Ok(normalized) => normalized["data"]["value"].clone(),
-            Err(error) => panic!("expected progress action to validate, got: {error}"),
-        }
-    }
-
-    #[test]
-    fn normalizes_progress_percentage_values() {
-        assert_eq!(progress_value(json!(0)), json!(0));
-        assert_eq!(progress_value(json!(1)), json!(1));
-        assert_eq!(progress_value(json!(1.02)), json!(1.02));
-        assert_eq!(progress_value(json!(65)), json!(65));
-        assert_eq!(progress_value(json!(100)), json!(100));
-        assert_eq!(progress_value(json!(-5)), json!(0));
-        assert_eq!(progress_value(json!(150)), json!(100));
-    }
-
-    // The browser's normalizeProgressValue rounds the same way; its test
-    // pins the same cases.
-    #[test]
-    fn rounds_progress_values_to_two_decimal_places() {
-        assert_eq!(progress_value(json!(33.333)), json!(33.33));
-        assert_eq!(progress_value(json!(66.666)), json!(66.67));
-    }
-
-    #[test]
-    fn rejects_non_finite_progress_values() {
-        for non_finite in [json!("NaN"), json!("Infinity"), json!("-Infinity")] {
-            let action = json!({
-                "op": "show",
-                "id": "deploy",
-                "type": "progress",
-                "data": { "label": "DEPLOY", "value": non_finite }
-            });
-            assert!(validate_action(&action).is_err());
-        }
-    }
-}
+#[path = "../tests/test_visual_protocol.rs"]
+mod tests;

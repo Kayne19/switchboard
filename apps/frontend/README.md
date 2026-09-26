@@ -20,7 +20,7 @@ Vite treats the package as external.
 
 Production integration coverage lives in `tests/integration/callRuntime.spec.ts`
 (a fixture WebSocket plus Chromium's fake microphone). The semantic event
-mapping and live Mermaid path are covered by `tests/visual/runtime.spec.ts`.
+mapping is covered by `tests/visual/runtime.spec.ts`.
 
 ## Start
 

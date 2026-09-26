@@ -18,9 +18,13 @@ fn ssh_options_injected_program_and_control_master_no() {
     assert!(base_args.contains(&"ControlMaster=no".into()));
     assert!(base_args.contains(&"ControlPath=/tmp/control.sock".into()));
 
-    let cat_argv = options.catalog_argv("pi");
-    assert_eq!(cat_argv[0], "/usr/local/bin/custom-ssh");
-    assert!(cat_argv.contains(&"ControlMaster=no".into()));
+    // Prewarm's listing, staging, and prepare commands all go through here.
+    let command = options.remote_command("pi --list-models");
+    assert_eq!(command.as_std().get_program(), "/usr/local/bin/custom-ssh");
+    assert!(command
+        .as_std()
+        .get_args()
+        .any(|arg| arg == "ControlMaster=no"));
 
     let remote_args =
         options.remote_argv("/tmp", "pi", None, None, None, None, &[], &HashMap::new());
@@ -36,32 +40,14 @@ fn ssh_targets_are_validated_once_and_fail_closed() {
             ValidatedSshTarget::new(value).is_err(),
             "accepted {value:?}"
         );
-        assert_eq!(
-            remote_argv(
-                value,
-                "/tmp",
-                "pi",
-                None,
-                None,
-                None,
-                None,
-                &[],
-                &HashMap::new()
-            ),
-            vec!["ssh-target-invalid"]
-        );
     }
-    assert_eq!(
-        list_models_argv("pi", "host;rm"),
-        vec!["ssh-target-invalid"]
-    );
 }
 
 #[test]
 fn quotes_shell_values_and_builds_remote_commands() {
     assert_eq!(shell_quote("a b; rm -rf /"), "'a b; rm -rf /'");
-    let args = remote_argv(
-        "host",
+    let options = SshClientOptions::new("ssh", ValidatedSshTarget::new("host").unwrap());
+    let args = options.remote_argv(
         "/tmp/a b; rm -rf /",
         "pi",
         None,
@@ -319,8 +305,11 @@ async fn fake_ssh_executes_remote_rpc_command_with_callback_environment() {
         "fake-ssh",
         "for arg in \"$@\"; do command=$arg; done\nexec sh -c \"$command\"\n",
     );
-    let mut argv = remote_argv(
-        "fake-host",
+    let options = SshClientOptions::new(
+        ssh.to_string_lossy(),
+        ValidatedSshTarget::new("fake-host").unwrap(),
+    );
+    let argv = options.remote_argv(
         &root.to_string_lossy(),
         &runtime.to_string_lossy(),
         None,
@@ -330,7 +319,6 @@ async fn fake_ssh_executes_remote_rpc_command_with_callback_environment() {
         &[],
         &HashMap::from([("SWITCHBOARD_SESSION".into(), "remote-test".into())]),
     );
-    argv[0] = ssh.to_string_lossy().into_owned();
     let session = PiSession::start(
         argv,
         "remote-test",

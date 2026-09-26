@@ -26,6 +26,14 @@ impl Project {
     }
 }
 
+/// The project a phrase names outright, if it names exactly one.
+fn exact<'a>(registry: &'a Registry, spoken: &str) -> Option<&'a Project> {
+    match registry.resolve_detailed(spoken) {
+        ResolveResult::Exact(project) => Some(project),
+        _ => None,
+    }
+}
+
 #[test]
 fn resolves_forgiving_spoken_phrases_and_refuses_ambiguity() {
     let registry = Registry::new(vec![
@@ -33,18 +41,17 @@ fn resolves_forgiving_spoken_phrases_and_refuses_ambiguity() {
         project("ledger", &["accounts"]),
     ]);
     assert_eq!(
-        registry
-            .resolve("Put me in the GRAPE segmentation project")
+        exact(&registry, "Put me in the GRAPE segmentation project")
             .unwrap()
             .id,
         "grape-segmentation"
     );
-    assert!(registry.resolve("tomato").is_none());
+    assert!(exact(&registry, "tomato").is_none());
     let ambiguous = Registry::new(vec![
         project("alpha", &["the thing"]),
         project("beta", &["the other"]),
     ]);
-    assert!(ambiguous.resolve("the").is_none());
+    assert!(exact(&ambiguous, "the").is_none());
 }
 
 #[test]
@@ -75,7 +82,7 @@ fn blank_optional_values_use_the_registry_defaults() {
     assert_eq!(project.host, None);
     assert_eq!(project.runtime, "pi");
     assert_eq!(project.model, None);
-    assert_eq!(project.public()["location"], "damocles:");
+    assert!(!project.is_remote());
 }
 
 #[test]
@@ -87,8 +94,8 @@ fn host_canonicalization_and_descriptions_never_resolve() {
     let registry = Registry::new(vec![proj]);
     assert_eq!(registry.projects[0].host.as_deref(), Some("host-one"));
     assert_eq!(registry.projects[0].canonical_host(), Some("host-one"));
-    assert!(registry.resolve("secret").is_none());
-    assert!(registry.resolve("unknown key").is_none());
+    assert!(exact(&registry, "secret").is_none());
+    assert!(exact(&registry, "unknown key").is_none());
 }
 
 #[test]
@@ -108,7 +115,7 @@ fn duplicate_and_overlapping_keys_are_ambiguous() {
         project("proj-a", &["shared-alias"]),
         project("proj-b", &["shared-alias"]),
     ]);
-    assert!(registry.resolve("shared-alias").is_none());
+    assert!(exact(&registry, "shared-alias").is_none());
     assert_eq!(
         registry.resolve_detailed("shared-alias"),
         ResolveResult::Ambiguous(vec!["proj-a".into(), "proj-b".into()])
@@ -118,7 +125,7 @@ fn duplicate_and_overlapping_keys_are_ambiguous() {
         project("apple-pie", &["pie"]),
         project("apple-tart", &["tart"]),
     ]);
-    assert!(overlapping.resolve("apple").is_none());
+    assert!(exact(&overlapping, "apple").is_none());
     assert_eq!(
         overlapping.resolve_detailed("apple"),
         ResolveResult::Ambiguous(vec!["apple-pie".into(), "apple-tart".into()])

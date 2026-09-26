@@ -1,12 +1,6 @@
 use std::fmt;
-use std::process::Stdio;
-use tokio::process::Command;
-use tokio::time::{timeout, Duration};
 
 pub const THINKING_LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-const LIST_TIMEOUT: Duration = Duration::from_secs(30);
-const CATALOG_OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
-const CATALOG_ERROR_LIMIT: usize = 64 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModelChoice {
@@ -78,11 +72,6 @@ impl CatalogKey {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CatalogSpec {
-    pub key: CatalogKey,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogEntry {
     pub provider: String,
     pub model: String,
@@ -96,7 +85,7 @@ pub struct ModelCatalog {
     pub diagnostic: Option<String>,
 }
 impl ModelCatalog {
-    fn unavailable(diagnostic: impl Into<String>) -> Self {
+    pub fn unavailable(diagnostic: impl Into<String>) -> Self {
         Self {
             entries: Vec::new(),
             available: false,
@@ -352,82 +341,6 @@ impl ModelCatalog {
             thinking: level,
         })
     }
-}
-
-pub async fn fetch_catalog(argv: &[String]) -> ModelCatalog {
-    let mut command = Command::new(argv.first().map(String::as_str).unwrap_or(""));
-    command
-        .args(argv.iter().skip(1))
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    crate::pi_client::isolate_process(&mut command);
-    // An empty catalog is not an error the caller ever hears about — it just
-    // narrows what models may be requested. Without these lines, "the model I
-    // asked for was refused" and "listing models never worked on that host"
-    // look identical from outside.
-    let program = argv.first().map(String::as_str).unwrap_or("<missing>");
-    let argc = argv.len();
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            tracing::warn!(%program, argc, %error, "could not list models");
-            return ModelCatalog::unavailable(format!("could not run model listing: {error}"));
-        }
-    };
-    let process_guard = crate::pi_client::ProcessTreeGuard::new(&child);
-    let stdout_task = child.stdout.take().map(|mut output| {
-        tokio::spawn(async move {
-            crate::pi_client::drain_bounded(&mut output, CATALOG_OUTPUT_LIMIT).await
-        })
-    });
-    let stderr_task = child.stderr.take().map(|mut output| {
-        tokio::spawn(async move {
-            crate::pi_client::drain_bounded(&mut output, CATALOG_ERROR_LIMIT).await
-        })
-    });
-    let status = match timeout(LIST_TIMEOUT, child.wait()).await {
-        Ok(Ok(status)) => {
-            process_guard.disarm();
-            status
-        }
-        outcome => {
-            match outcome {
-                Ok(Err(error)) => {
-                    tracing::warn!(%program, argc, %error, "listing models failed")
-                }
-                _ => tracing::warn!(
-                    %program,
-                    argc,
-                    timeout = ?LIST_TIMEOUT,
-                    "listing models timed out"
-                ),
-            }
-            crate::pi_client::terminate_process(&mut child).await;
-            process_guard.disarm();
-            if let Some(task) = stdout_task {
-                task.abort();
-            }
-            if let Some(task) = stderr_task {
-                task.abort();
-            }
-            return ModelCatalog::unavailable("model listing failed or timed out");
-        }
-    };
-    let stdout = match stdout_task {
-        Some(task) => task.await.unwrap_or_default(),
-        None => crate::pi_client::BoundedOutput::default(),
-    };
-    if let Some(task) = stderr_task {
-        let _ = task.await;
-    }
-    if !status.success() || stdout.truncated {
-        return ModelCatalog::unavailable("model listing failed or exceeded its output limit");
-    }
-    let table = match String::from_utf8(stdout.bytes) {
-        Ok(table) => table,
-        Err(_) => return ModelCatalog::unavailable("model listing was not valid UTF-8"),
-    };
-    ModelCatalog::parse(&table)
 }
 
 #[cfg(test)]

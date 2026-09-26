@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn stores_trimmed_entries_and_drops_blank_text() {
-    let mut log = TranscriptLog::new(DEFAULT_LIMIT);
+    let mut log = TranscriptLog::new(200);
     assert!(log.add(CALLER, "  hello  ", "").is_some());
     assert!(log.add(CALLER, "   ", "").is_none());
     assert_eq!(log.entries()[0].text, "hello");
@@ -10,7 +10,7 @@ fn stores_trimmed_entries_and_drops_blank_text() {
 
 #[test]
 fn caller_ids_round_trip_and_old_entries_still_load() {
-    let mut log = TranscriptLog::new(DEFAULT_LIMIT);
+    let mut log = TranscriptLog::new(200);
     let entry = log
         .add_with_id(CALLER, "hello", "operator", Some("clip-1".into()))
         .unwrap();
@@ -36,5 +36,4 @@ fn is_bounded_and_payload_is_independent() {
         ["two", "three"]
     );
     assert_eq!(log.payload().kind, "history");
-    assert_eq!(log.limit(), 2);
 }

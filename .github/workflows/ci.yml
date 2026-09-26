@@ -17,10 +17,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
@@ -37,12 +33,6 @@ jobs:
 
       - name: Install browser build dependencies
         run: npm ci
-
-      - name: Install Python compatibility dependencies
-        run: python3 -m pip install -r requirements.txt
-
-      - name: Python compatibility tests
-        run: python3 -m unittest discover -s legacy/tests
 
       - name: TypeScript build and browser/extension tests
         run: |

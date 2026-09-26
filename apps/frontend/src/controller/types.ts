@@ -149,16 +149,6 @@ export interface SpeechState {
 
 export const RUNTIME_ID_PREFIX = '__runtime/';
 export const RUNTIME_CONVERSATION_ID = '__runtime/conversation';
-export const RUNTIME_LIVE_VISUAL_ID = '__runtime/live-visual';
-export const RUNTIME_LIVE_PROGRESS_ID = '__runtime/live-progress';
-export const RUNTIME_SPEECH_ID = '__runtime/speech';
-
-export const RESERVED_RUNTIME_IDS = [
-  RUNTIME_CONVERSATION_ID,
-  RUNTIME_LIVE_VISUAL_ID,
-  RUNTIME_LIVE_PROGRESS_ID,
-  RUNTIME_SPEECH_ID,
-] as const;
 
 /**
  * A tool the agent on the line is running, from the backend's `activity`
@@ -283,10 +273,5 @@ export type ControllerAction =
   | { op: 'show'; id: string; type: SceneObjectType; role?: SceneObjectRole; data: unknown }
   | { op: 'focus'; id?: string | null }
   | { op: 'listen'; on: boolean };
-
-export interface DisplayEnvelope {
-  token: string;
-  action: DisplayAction;
-}
 
 export type FixtureName = 'idle' | 'conversation' | 'training' | 'architecture' | 'email' | 'code';

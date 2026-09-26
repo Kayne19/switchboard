@@ -2,7 +2,7 @@
 use crate::audio::{Speaker, StreamResult, SttAdapter, SttStreamAdapter};
 use crate::history::{TranscriptLog, AGENT, CALLER};
 use crate::lifecycle::Coordinator;
-use crate::pbx::{ActivityClock, LiveLegState, RouteCallback, Switchboard};
+use crate::pbx::{LiveLegState, RouteCallback, Switchboard};
 use crate::pi_client::{Activity, ActivityCallback, PiSession};
 use axum::extract::ws::{Message, WebSocket};
 use axum::{
@@ -503,7 +503,6 @@ pub struct AppInner {
     pub display_gate: Arc<Mutex<DisplayGateState>>,
     pub display_confirm: watch::Sender<ConfirmState>,
     pub active_session: Arc<Mutex<Option<PiSession>>>,
-    activity_clock: ActivityClock,
     live_leg: LiveLegState,
     leg_announcer: LegAnnouncer,
     operation_transition: Mutex<()>,
@@ -540,10 +539,10 @@ pub enum Event {
         mime: String,
         format: String,
     },
+    /// Belongs to the utterance of the last `AudioStart`; the browser gets
+    /// it as a bare binary frame.
     AudioChunk {
         audio: Vec<u8>,
-        generation: u64,
-        sequence: u64,
     },
     AudioDone {
         generation: u64,
@@ -589,16 +588,26 @@ impl DeliveryState {
         }
     }
 
+    /// The connection table. Held only for map operations with no await and no
+    /// callback, so a panic cannot leave it half-updated; like every other
+    /// lock in the service, a poisoned one is recovered rather than allowed to
+    /// take every later delivery down with it.
+    fn connections(&self) -> std::sync::MutexGuard<'_, HashMap<u64, mpsc::Sender<DeliveryFrame>>> {
+        self.connections
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn register(&self) -> DeliveryConnection {
         let epoch = self.next_epoch.fetch_add(1, Ordering::Relaxed);
         self.active_epoch.store(epoch, Ordering::Relaxed);
         let (sender, receiver) = mpsc::channel(DELIVERY_QUEUE);
-        self.connections.lock().unwrap().insert(epoch, sender);
+        self.connections().insert(epoch, sender);
         DeliveryConnection { epoch, receiver }
     }
 
     fn retire(&self, epoch: u64) {
-        self.connections.lock().unwrap().remove(&epoch);
+        self.connections().remove(&epoch);
         let _ = self
             .active_epoch
             .compare_exchange(epoch, 0, Ordering::Relaxed, Ordering::Relaxed);
@@ -617,7 +626,7 @@ impl DeliveryState {
         let sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
         let mut delivered = false;
         let mut dead = Vec::new();
-        let connections = self.connections.lock().unwrap();
+        let connections = self.connections();
         for (&epoch, sender) in connections.iter() {
             match sender.try_send(DeliveryFrame::Event {
                 sequence,
@@ -629,7 +638,7 @@ impl DeliveryState {
         }
         drop(connections);
         if !dead.is_empty() {
-            let mut connections = self.connections.lock().unwrap();
+            let mut connections = self.connections();
             for epoch in dead {
                 connections.remove(&epoch);
             }
@@ -642,15 +651,13 @@ impl DeliveryState {
     }
 
     fn send(&self, epoch: u64, message: Message) -> bool {
-        self.connections
-            .lock()
-            .unwrap()
+        self.connections()
             .get(&epoch)
             .is_some_and(|sender| sender.try_send(DeliveryFrame::Message(message)).is_ok())
     }
 
     fn connected(&self) -> bool {
-        !self.connections.lock().unwrap().is_empty()
+        !self.connections().is_empty()
     }
 }
 struct AudioSlot {
@@ -706,11 +713,7 @@ impl AudioQueue {
             return Vec::new();
         };
         if slot.generation == generation && !audio.is_empty() {
-            slot.events.push(Event::AudioChunk {
-                audio,
-                generation,
-                sequence,
-            });
+            slot.events.push(Event::AudioChunk { audio });
         }
         self.drain_ready()
     }
@@ -815,21 +818,6 @@ impl AppState {
         transcript_log: TranscriptLog,
         speaker: Speaker,
         stt: SttAdapter,
-    ) -> Self {
-        Self::new_with_stream(
-            switchboard,
-            transcript_log,
-            speaker,
-            stt,
-            SttStreamAdapter::from_env(),
-        )
-    }
-
-    pub fn new_with_stream(
-        switchboard: Switchboard,
-        transcript_log: TranscriptLog,
-        speaker: Speaker,
-        stt: SttAdapter,
         stt_stream: SttStreamAdapter,
     ) -> Self {
         let (events, _) = broadcast::channel(256);
@@ -927,7 +915,6 @@ impl AppState {
             Box::pin(async move { announcer.announce_route(status).await })
         });
         let active_session = switchboard.session_control();
-        let activity_clock = switchboard.activity_clock();
         let mut switchboard = switchboard;
         switchboard.set_coordinator(coordinator.clone());
         switchboard.set_activity_callback(Some(activity_callback));
@@ -963,7 +950,6 @@ impl AppState {
             display_gate,
             display_confirm: display_confirm_tx,
             active_session,
-            activity_clock,
             live_leg,
             leg_announcer,
             operation_transition: Mutex::new(()),
@@ -1403,7 +1389,6 @@ async fn route_final_transcript(state: &AppState, id: &str, generation: u64, tra
     };
     drop(active);
     if steered {
-        state.0.activity_clock.touch();
         emit_json(
             state,
             json!({"type":"queued", "id":id, "waiting":0, "steered":true}),
@@ -1552,7 +1537,6 @@ async fn process_clips(state: AppState) {
         };
         if steered {
             tracing::info!(clip = %clip.id, %route, "steered the live turn");
-            state.0.activity_clock.touch();
             emit_json(
                 &state,
                 json!({"type":"queued", "id":clip.id, "waiting":0, "steered":true}),
@@ -1741,6 +1725,75 @@ where
     let (task, id) = spawn_registered_operation(state, generation, future).await?;
     Some((task, id, generation))
 }
+/// What a page control does with work already running on the line.
+#[derive(Clone, Copy)]
+enum RunningWork {
+    /// Cancel it first: the control is a way out of whatever is running.
+    Cancel,
+    /// Leave it running; the control does not touch the live leg.
+    Keep,
+}
+
+/// A thinking or model change redials a project leg, which must not wait
+/// behind the turn it is replacing. On the operator it only records a setting
+/// for the next project call, so nothing needs to stop.
+fn running_work_for_a_redial(state: &AppState) -> RunningWork {
+    if state.0.live_leg.route() == crate::pbx::OPERATOR {
+        RunningWork::Keep
+    } else {
+        RunningWork::Cancel
+    }
+}
+
+/// The lifecycle shared by the page controls that act through the PBX
+/// (`/connect`, `/thinking`, `/model`): run the PBX operation as a registered
+/// operation a rescue can cancel, answer 409 if it is cancelled or its leg is
+/// superseded before the reply can be delivered, and 500 if it fails. `what`
+/// names the control in those answers ("connection attempt").
+async fn run_page_control<F>(
+    state: &AppState,
+    what: &str,
+    running: RunningWork,
+    operation: F,
+) -> Result<crate::pbx::Reply, Response>
+where
+    F: Future<Output = (crate::pbx::Reply, Value)> + Send + 'static,
+{
+    let refused = |status: axum::http::StatusCode, detail: String| {
+        (status, Json(json!({ "detail": detail }))).into_response()
+    };
+    let conflict = |outcome: &str| {
+        refused(
+            axum::http::StatusCode::CONFLICT,
+            format!("{what} was {outcome}"),
+        )
+    };
+    let spawned = match running {
+        RunningWork::Cancel => spawn_replacing_operation(state, operation).await,
+        RunningWork::Keep => spawn_active_operation(state, operation).await,
+    };
+    let Some((task, task_id, spawned_generation)) = spawned else {
+        return Err(conflict("cancelled"));
+    };
+    let joined = task.await;
+    clear_active_operation(state, task_id).await;
+    let (reply, status) = match joined {
+        Ok(result) => result,
+        Err(error) if error.is_cancelled() => return Err(conflict("cancelled")),
+        Err(error) => {
+            return Err(refused(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{what} failed: {error}"),
+            ))
+        }
+    };
+    let generation = reply.delivery_generation.unwrap_or(spawned_generation);
+    if !deliver_page_reply_if_current(state, &reply, status, generation).await {
+        return Err(conflict("superseded"));
+    }
+    Ok(reply)
+}
+
 async fn hangup(State(state): State<AppState>) -> impl IntoResponse {
     let interrupted = interrupt_active_turn(&state).await;
     let mut board = state.0.switchboard.lock().await;
@@ -1772,176 +1825,72 @@ async fn connect(State(state): State<AppState>, Json(req): Json<Connect>) -> Res
     // The picker is also an escape hatch. Cancel setup or a wedged live turn
     // before taking the PBX lock; otherwise a direct connection can wait for
     // the very leg the caller is trying to leave.
-    let operation_state = state.clone();
-    let Some((task, task_id, _generation)) = spawn_replacing_operation(&state, async move {
-        let mut board = operation_state.0.switchboard.lock().await;
-        let reply = board.dial(&req.project, &req.intent).await;
-        let status = board.status();
-        (reply, status)
-    })
-    .await
-    else {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({"detail":"connection attempt was cancelled"})),
-        )
-            .into_response();
-    };
-    let (reply, status) = match task.await {
-        Ok(result) => result,
-        Err(error) if error.is_cancelled() => {
-            clear_active_operation(&state, task_id).await;
-            return (
-                axum::http::StatusCode::CONFLICT,
-                Json(json!({"detail":"connection attempt was cancelled"})),
-            )
-                .into_response();
-        }
-        Err(error) => {
-            clear_active_operation(&state, task_id).await;
-            return (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"detail":format!("connection attempt failed: {error}")})),
-            )
-                .into_response();
-        }
-    };
-    clear_active_operation(&state, task_id).await;
-    if !deliver_page_reply_if_current(
+    let board_state = state.clone();
+    let controlled = run_page_control(
         &state,
-        &reply,
-        status,
-        reply.delivery_generation.unwrap_or(_generation),
+        "connection attempt",
+        RunningWork::Cancel,
+        async move {
+            let mut board = board_state.0.switchboard.lock().await;
+            let reply = board.dial(&req.project, &req.intent).await;
+            (reply, board.status())
+        },
     )
-    .await
-    {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({"detail":"connection attempt was superseded"})),
-        )
-            .into_response();
+    .await;
+    match controlled {
+        Ok(reply) => Json(json!({"route":reply.route, "error":reply.error})).into_response(),
+        Err(refused) => refused,
     }
-    Json(json!({"route":reply.route, "error":reply.error.clone()})).into_response()
 }
 #[derive(Deserialize)]
 struct Thinking {
     level: String,
 }
 async fn thinking(State(state): State<AppState>, Json(req): Json<Thinking>) -> Response {
-    let operation_state = state.clone();
-    let operation = async move {
-        let mut board = operation_state.0.switchboard.lock().await;
-        let reply = board.set_thinking(&req.level).await;
-        let status = board.status();
-        (reply, status)
-    };
-    let Some((task, task_id, _generation)) = (if state.0.live_leg.route() == crate::pbx::OPERATOR {
-        spawn_active_operation(&state, operation).await
-    } else {
-        spawn_replacing_operation(&state, operation).await
-    }) else {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({"detail":"thinking change was cancelled"})),
-        )
-            .into_response();
-    };
-    let (reply, status) = match task.await {
-        Ok(result) => result,
-        Err(error) if error.is_cancelled() => {
-            clear_active_operation(&state, task_id).await;
-            return (
-                axum::http::StatusCode::CONFLICT,
-                Json(json!({"detail":"thinking change was cancelled"})),
-            )
-                .into_response();
-        }
-        Err(error) => {
-            clear_active_operation(&state, task_id).await;
-            return (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"detail":format!("thinking change failed: {error}")})),
-            )
-                .into_response();
-        }
-    };
-    clear_active_operation(&state, task_id).await;
-    if !deliver_page_reply_if_current(
+    let board_state = state.clone();
+    let controlled = run_page_control(
         &state,
-        &reply,
-        status,
-        reply.delivery_generation.unwrap_or(_generation),
+        "thinking change",
+        running_work_for_a_redial(&state),
+        async move {
+            let mut board = board_state.0.switchboard.lock().await;
+            let reply = board.set_thinking(&req.level).await;
+            (reply, board.status())
+        },
     )
-    .await
-    {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({"detail":"thinking change was superseded"})),
-        )
-            .into_response();
+    .await;
+    match controlled {
+        Ok(reply) => {
+            Json(json!({"thinking":current_status(&state)["thinking"], "error":reply.error}))
+                .into_response()
+        }
+        Err(refused) => refused,
     }
-    Json(json!({"thinking":current_status(&state)["thinking"], "error":reply.error.clone()}))
-        .into_response()
 }
 #[derive(Deserialize)]
 struct Model {
     model: String,
 }
 async fn model(State(state): State<AppState>, Json(req): Json<Model>) -> Response {
-    let operation_state = state.clone();
-    let operation = async move {
-        let mut board = operation_state.0.switchboard.lock().await;
-        let reply = board.set_model(&req.model).await;
-        let status = board.status();
-        (reply, status)
-    };
-    let Some((task, task_id, _generation)) = (if state.0.live_leg.route() == crate::pbx::OPERATOR {
-        spawn_active_operation(&state, operation).await
-    } else {
-        spawn_replacing_operation(&state, operation).await
-    }) else {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({"detail":"model change was cancelled"})),
-        )
-            .into_response();
-    };
-    let (reply, status) = match task.await {
-        Ok(result) => result,
-        Err(error) if error.is_cancelled() => {
-            clear_active_operation(&state, task_id).await;
-            return (
-                axum::http::StatusCode::CONFLICT,
-                Json(json!({"detail":"model change was cancelled"})),
-            )
-                .into_response();
-        }
-        Err(error) => {
-            clear_active_operation(&state, task_id).await;
-            return (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"detail":format!("model change failed: {error}")})),
-            )
-                .into_response();
-        }
-    };
-    clear_active_operation(&state, task_id).await;
-    if !deliver_page_reply_if_current(
+    let board_state = state.clone();
+    let controlled = run_page_control(
         &state,
-        &reply,
-        status,
-        reply.delivery_generation.unwrap_or(_generation),
+        "model change",
+        running_work_for_a_redial(&state),
+        async move {
+            let mut board = board_state.0.switchboard.lock().await;
+            let reply = board.set_model(&req.model).await;
+            (reply, board.status())
+        },
     )
-    .await
-    {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({"detail":"model change was superseded"})),
-        )
-            .into_response();
+    .await;
+    match controlled {
+        Ok(reply) => {
+            Json(json!({"model":current_status(&state)["model_name"], "error":reply.error}))
+                .into_response()
+        }
+        Err(refused) => refused,
     }
-    Json(json!({"model":current_status(&state)["model_name"], "error":reply.error.clone()}))
-        .into_response()
 }
 #[derive(Deserialize)]
 struct LegState {
@@ -2596,6 +2545,251 @@ fn parse_typed_turn(command: &serde_json::Map<String, Value>) -> Option<(String,
     Some((id.to_owned(), generation, text.to_owned()))
 }
 
+/// `stt_start`: opens a streaming clip for this connection, or resumes one it
+/// already holds, and starts its worker stream. Answers `accepted`, or
+/// `abandoned` with the reason the clip must go the complete-clip way instead.
+async fn start_stream_clip(
+    state: &AppState,
+    epoch: u64,
+    command: &serde_json::Map<String, Value>,
+) -> Result<(), ()> {
+    let Some(id) = command
+        .get("clip_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty() && id.len() <= 128)
+    else {
+        return send_json(
+            state,
+            epoch,
+            json!({"type":"error", "message":"Invalid streaming clip id."}),
+        )
+        .await;
+    };
+    let generation = command
+        .get("generation")
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| state.0.coordinator.generation());
+    let mime = command.get("mime").and_then(Value::as_str).unwrap_or("");
+    if mime != "audio/webm;codecs=opus" || !state.0.stt_stream.configured() {
+        return send_json(state, epoch, json!({"type":"abandoned", "id":id, "reason":"streaming STT is unavailable for this clip"})).await;
+    }
+    let mut clips = state.0.stream_clips.lock().await;
+    match clips.get(id).copied() {
+        Some(StreamClipState::Open { connection, .. }) if connection == epoch => {
+            return accept_stream_clip(state, epoch, id).await;
+        }
+        Some(StreamClipState::Ended {
+            generation: _,
+            connection,
+        }) if connection == epoch => {
+            return accept_stream_clip(state, epoch, id).await;
+        }
+        Some(StreamClipState::Ended { generation, .. }) => {
+            clips.insert(
+                id.to_owned(),
+                StreamClipState::Open {
+                    generation,
+                    next_sequence: 0,
+                    connection: epoch,
+                },
+            );
+            drop(clips);
+            return open_worker_stream(state, epoch, id, generation, mime).await;
+        }
+        Some(
+            StreamClipState::Abandoned | StreamClipState::Cancelled | StreamClipState::Finalized,
+        ) => {
+            return send_json(
+                state,
+                epoch,
+                json!({"type":"abandoned", "id":id, "reason":"clip is no longer resumable"}),
+            )
+            .await;
+        }
+        _ => {}
+    }
+    if clips.len() >= 512 {
+        let retired = clips
+            .iter()
+            .find(|(_, state)| {
+                matches!(
+                    state,
+                    StreamClipState::Cancelled
+                        | StreamClipState::Abandoned
+                        | StreamClipState::Finalized
+                )
+            })
+            .map(|(id, _)| id.clone());
+        if let Some(retired) = retired {
+            clips.remove(&retired);
+        }
+    }
+    if clips.len() >= 512 {
+        return send_json(
+            state,
+            epoch,
+            json!({"type":"abandoned", "id":id, "reason":"too many active streaming clips"}),
+        )
+        .await;
+    }
+    clips.insert(
+        id.to_owned(),
+        StreamClipState::Open {
+            generation,
+            next_sequence: 0,
+            connection: epoch,
+        },
+    );
+    drop(clips);
+    open_worker_stream(state, epoch, id, generation, mime).await
+}
+
+async fn accept_stream_clip(state: &AppState, epoch: u64, id: &str) -> Result<(), ()> {
+    send_json(
+        state,
+        epoch,
+        json!({"type":"accepted", "id":id, "streaming":true}),
+    )
+    .await
+}
+
+/// Starts the worker stream for a clip already recorded as open. If the worker
+/// will not take it, the clip is marked abandoned and the browser is told why,
+/// so it sends the clip whole instead.
+async fn open_worker_stream(
+    state: &AppState,
+    epoch: u64,
+    id: &str,
+    generation: u64,
+    mime: &str,
+) -> Result<(), ()> {
+    if let Err(reason) = state
+        .0
+        .stt_stream
+        .try_start(id.to_owned(), generation, mime.to_owned())
+    {
+        state
+            .0
+            .stream_clips
+            .lock()
+            .await
+            .insert(id.to_owned(), StreamClipState::Abandoned);
+        return send_json(
+            state,
+            epoch,
+            json!({"type":"abandoned", "id":id, "reason":reason}),
+        )
+        .await;
+    }
+    accept_stream_clip(state, epoch, id).await
+}
+
+/// `screen_state`: the browser's report of what it is showing. Updates the
+/// view the agent's `view` tool reads and confirms or rejects the display
+/// actions the browser has applied.
+async fn apply_screen_state(
+    state: &AppState,
+    epoch: u64,
+    command: &serde_json::Map<String, Value>,
+) -> Result<(), ()> {
+    let Some(view) = command
+        .get("view")
+        .and_then(Value::as_str)
+        .filter(|view| matches!(*view, "auto" | "system" | "visual" | "comms" | "theater"))
+    else {
+        return send_json(
+            state,
+            epoch,
+            json!({"type":"error", "message":"Invalid screen view."}),
+        )
+        .await;
+    };
+    let title = command
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .chars()
+        .take(200)
+        .collect::<String>();
+    let visual_kind = command
+        .get("visual_kind")
+        .and_then(Value::as_str)
+        .filter(|kind| crate::visual_protocol::CONTENT_TYPES.contains(kind))
+        .map_or(Value::Null, |kind| Value::String(kind.to_owned()));
+    let object_ids = command
+        .get("object_ids")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let pinned = command
+        .get("pinned")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let has_visual = command
+        .get("has_visual")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let stale = command
+        .get("stale")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let report_gen = command
+        .get("generation")
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| state.0.coordinator.generation());
+
+    let current_gen = state.0.coordinator.generation();
+    let active_ep = state.0.delivery.active_epoch();
+    if active_ep != Some(epoch) || report_gen != current_gen {
+        return Ok(());
+    }
+    let mut gate = state.0.display_gate.lock().await;
+
+    let report = json!({
+        "view": view,
+        "pinned": pinned,
+        "has_visual": has_visual,
+        "visual_kind": visual_kind,
+        "object_ids": object_ids,
+        "title": title,
+        "stale": stale,
+        "generation": current_gen,
+    });
+    gate.screen_state = report.clone();
+    gate.report_epoch = Some(epoch);
+    gate.report_generation = Some(current_gen);
+    *state.0.screen_state.lock().await = report;
+    drop(gate);
+
+    let applied_seq = command.get("applied_seq").and_then(Value::as_u64);
+    let rejected = command
+        .get("rejected")
+        .and_then(Value::as_object)
+        .and_then(|m| {
+            let seq = m.get("seq").and_then(Value::as_u64)?;
+            let reason = m
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("the caller's screen could not render it")
+                .to_string();
+            Some((seq, reason))
+        });
+    state.0.display_confirm.send_modify(|c| {
+        if c.generation != current_gen {
+            c.generation = current_gen;
+            c.watermark = None;
+        }
+        if let Some(seq) = applied_seq {
+            if c.watermark.is_none_or(|w| seq > w) {
+                c.watermark = Some(seq);
+            }
+        }
+        c.rejection = rejected.clone();
+    });
+
+    send_json(state, epoch, json!({"type":"screen_state_ack"})).await
+}
+
 async fn handle_text_frame(
     state: &AppState,
     epoch: u64,
@@ -2640,145 +2834,7 @@ async fn handle_text_frame(
         }
         Some("stt_start") => {
             pending_header.take();
-            let Some(id) = command
-                .get("clip_id")
-                .and_then(Value::as_str)
-                .filter(|id| !id.is_empty() && id.len() <= 128)
-            else {
-                return send_json(
-                    state,
-                    epoch,
-                    json!({"type":"error", "message":"Invalid streaming clip id."}),
-                )
-                .await;
-            };
-            let generation = command
-                .get("generation")
-                .and_then(Value::as_u64)
-                .unwrap_or_else(|| state.0.coordinator.generation());
-            let mime = command.get("mime").and_then(Value::as_str).unwrap_or("");
-            if mime != "audio/webm;codecs=opus" || !state.0.stt_stream.configured() {
-                return send_json(state, epoch, json!({"type":"abandoned", "id":id, "reason":"streaming STT is unavailable for this clip"})).await;
-            }
-            let mut clips = state.0.stream_clips.lock().await;
-            match clips.get(id).copied() {
-                Some(StreamClipState::Open { connection, .. }) if connection == epoch => {
-                    return send_json(
-                        state,
-                        epoch,
-                        json!({"type":"accepted", "id":id, "streaming":true}),
-                    )
-                    .await;
-                }
-                Some(StreamClipState::Ended {
-                    generation: _,
-                    connection,
-                }) if connection == epoch => {
-                    return send_json(
-                        state,
-                        epoch,
-                        json!({"type":"accepted", "id":id, "streaming":true}),
-                    )
-                    .await;
-                }
-                Some(StreamClipState::Ended { generation, .. }) => {
-                    clips.insert(
-                        id.to_owned(),
-                        StreamClipState::Open {
-                            generation,
-                            next_sequence: 0,
-                            connection: epoch,
-                        },
-                    );
-                    drop(clips);
-                    if let Err(reason) =
-                        state
-                            .0
-                            .stt_stream
-                            .try_start(id.to_owned(), generation, mime.to_owned())
-                    {
-                        state
-                            .0
-                            .stream_clips
-                            .lock()
-                            .await
-                            .insert(id.to_owned(), StreamClipState::Abandoned);
-                        return send_json(
-                            state,
-                            epoch,
-                            json!({"type":"abandoned", "id":id, "reason":reason}),
-                        )
-                        .await;
-                    }
-                    return send_json(
-                        state,
-                        epoch,
-                        json!({"type":"accepted", "id":id, "streaming":true}),
-                    )
-                    .await;
-                }
-                Some(
-                    StreamClipState::Abandoned
-                    | StreamClipState::Cancelled
-                    | StreamClipState::Finalized,
-                ) => {
-                    return send_json(state, epoch, json!({"type":"abandoned", "id":id, "reason":"clip is no longer resumable"})).await;
-                }
-                _ => {}
-            }
-            if clips.len() >= 512 {
-                let retired = clips
-                    .iter()
-                    .find(|(_, state)| {
-                        matches!(
-                            state,
-                            StreamClipState::Cancelled
-                                | StreamClipState::Abandoned
-                                | StreamClipState::Finalized
-                        )
-                    })
-                    .map(|(id, _)| id.clone());
-                if let Some(retired) = retired {
-                    clips.remove(&retired);
-                }
-            }
-            if clips.len() >= 512 {
-                return send_json(state, epoch, json!({"type":"abandoned", "id":id, "reason":"too many active streaming clips"})).await;
-            }
-            clips.insert(
-                id.to_owned(),
-                StreamClipState::Open {
-                    generation,
-                    next_sequence: 0,
-                    connection: epoch,
-                },
-            );
-            drop(clips);
-            if let Err(reason) =
-                state
-                    .0
-                    .stt_stream
-                    .try_start(id.to_owned(), generation, mime.to_owned())
-            {
-                state
-                    .0
-                    .stream_clips
-                    .lock()
-                    .await
-                    .insert(id.to_owned(), StreamClipState::Abandoned);
-                return send_json(
-                    state,
-                    epoch,
-                    json!({"type":"abandoned", "id":id, "reason":reason}),
-                )
-                .await;
-            }
-            send_json(
-                state,
-                epoch,
-                json!({"type":"accepted", "id":id, "streaming":true}),
-            )
-            .await
+            start_stream_clip(state, epoch, command).await
         }
         Some("stt_chunk") => {
             let Some(id) = command
@@ -2880,112 +2936,7 @@ async fn handle_text_frame(
             }
             Ok(())
         }
-        Some("screen_state") => {
-            let Some(view) = command
-                .get("view")
-                .and_then(Value::as_str)
-                .filter(|view| matches!(*view, "auto" | "system" | "visual" | "comms" | "theater"))
-            else {
-                return send_json(
-                    state,
-                    epoch,
-                    json!({"type":"error", "message":"Invalid screen view."}),
-                )
-                .await;
-            };
-            let title = command
-                .get("title")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .chars()
-                .take(200)
-                .collect::<String>();
-            let visual_kind = match command.get("visual_kind") {
-                Some(Value::String(s)) => {
-                    if matches!(
-                        s.as_str(),
-                        "chart" | "metric" | "progress" | "diagram" | "document" | "code" | "note"
-                    ) {
-                        Value::String(s.clone())
-                    } else {
-                        Value::Null
-                    }
-                }
-                _ => Value::Null,
-            };
-            let object_ids = command
-                .get("object_ids")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            let pinned = command
-                .get("pinned")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let has_visual = command
-                .get("has_visual")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let stale = command
-                .get("stale")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let report_gen = command
-                .get("generation")
-                .and_then(Value::as_u64)
-                .unwrap_or_else(|| state.0.coordinator.generation());
-
-            let current_gen = state.0.coordinator.generation();
-            let active_ep = state.0.delivery.active_epoch();
-            if active_ep != Some(epoch) || report_gen != current_gen {
-                return Ok(());
-            }
-            let mut gate = state.0.display_gate.lock().await;
-
-            let report = json!({
-                "view": view,
-                "pinned": pinned,
-                "has_visual": has_visual,
-                "visual_kind": visual_kind,
-                "object_ids": object_ids,
-                "title": title,
-                "stale": stale,
-                "generation": current_gen,
-            });
-            gate.screen_state = report.clone();
-            gate.report_epoch = Some(epoch);
-            gate.report_generation = Some(current_gen);
-            *state.0.screen_state.lock().await = report;
-            drop(gate);
-
-            let applied_seq = command.get("applied_seq").and_then(Value::as_u64);
-            let rejected = command
-                .get("rejected")
-                .and_then(Value::as_object)
-                .and_then(|m| {
-                    let seq = m.get("seq").and_then(Value::as_u64)?;
-                    let reason = m
-                        .get("reason")
-                        .and_then(Value::as_str)
-                        .unwrap_or("the caller's screen could not render it")
-                        .to_string();
-                    Some((seq, reason))
-                });
-            state.0.display_confirm.send_modify(|c| {
-                if c.generation != current_gen {
-                    c.generation = current_gen;
-                    c.watermark = None;
-                }
-                if let Some(seq) = applied_seq {
-                    if c.watermark.is_none_or(|w| seq > w) {
-                        c.watermark = Some(seq);
-                    }
-                }
-                c.rejection = rejected.clone();
-            });
-
-            send_json(state, epoch, json!({"type":"screen_state_ack"})).await
-        }
+        Some("screen_state") => apply_screen_state(state, epoch, command).await,
         Some("ping") => {
             send_json(
                 state,
@@ -3165,7 +3116,7 @@ async fn send_event_sink(
         Event::AudioStart { generation, sequence, mime, format } => {
             socket.send(Message::Text(json!({"type":"audio_start", "generation":generation, "sequence":sequence, "mime":mime, "format":format}).to_string().into())).await
         }
-        Event::AudioChunk { audio, .. } => socket.send(Message::Binary(audio.into())).await,
+        Event::AudioChunk { audio } => socket.send(Message::Binary(audio.into())).await,
         Event::AudioDone { generation, sequence } => {
             socket.send(Message::Text(json!({"type":"audio_done", "generation":generation, "sequence":sequence, "done":true}).to_string().into())).await
         }
