@@ -588,16 +588,26 @@ impl DeliveryState {
         }
     }
 
+    /// The connection table. Held only for map operations with no await and no
+    /// callback, so a panic cannot leave it half-updated; like every other
+    /// lock in the service, a poisoned one is recovered rather than allowed to
+    /// take every later delivery down with it.
+    fn connections(&self) -> std::sync::MutexGuard<'_, HashMap<u64, mpsc::Sender<DeliveryFrame>>> {
+        self.connections
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn register(&self) -> DeliveryConnection {
         let epoch = self.next_epoch.fetch_add(1, Ordering::Relaxed);
         self.active_epoch.store(epoch, Ordering::Relaxed);
         let (sender, receiver) = mpsc::channel(DELIVERY_QUEUE);
-        self.connections.lock().unwrap().insert(epoch, sender);
+        self.connections().insert(epoch, sender);
         DeliveryConnection { epoch, receiver }
     }
 
     fn retire(&self, epoch: u64) {
-        self.connections.lock().unwrap().remove(&epoch);
+        self.connections().remove(&epoch);
         let _ = self
             .active_epoch
             .compare_exchange(epoch, 0, Ordering::Relaxed, Ordering::Relaxed);
@@ -616,7 +626,7 @@ impl DeliveryState {
         let sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
         let mut delivered = false;
         let mut dead = Vec::new();
-        let connections = self.connections.lock().unwrap();
+        let connections = self.connections();
         for (&epoch, sender) in connections.iter() {
             match sender.try_send(DeliveryFrame::Event {
                 sequence,
@@ -628,7 +638,7 @@ impl DeliveryState {
         }
         drop(connections);
         if !dead.is_empty() {
-            let mut connections = self.connections.lock().unwrap();
+            let mut connections = self.connections();
             for epoch in dead {
                 connections.remove(&epoch);
             }
@@ -641,15 +651,13 @@ impl DeliveryState {
     }
 
     fn send(&self, epoch: u64, message: Message) -> bool {
-        self.connections
-            .lock()
-            .unwrap()
+        self.connections()
             .get(&epoch)
             .is_some_and(|sender| sender.try_send(DeliveryFrame::Message(message)).is_ok())
     }
 
     fn connected(&self) -> bool {
-        !self.connections.lock().unwrap().is_empty()
+        !self.connections().is_empty()
     }
 }
 struct AudioSlot {
@@ -1717,6 +1725,75 @@ where
     let (task, id) = spawn_registered_operation(state, generation, future).await?;
     Some((task, id, generation))
 }
+/// What a page control does with work already running on the line.
+#[derive(Clone, Copy)]
+enum RunningWork {
+    /// Cancel it first: the control is a way out of whatever is running.
+    Cancel,
+    /// Leave it running; the control does not touch the live leg.
+    Keep,
+}
+
+/// A thinking or model change redials a project leg, which must not wait
+/// behind the turn it is replacing. On the operator it only records a setting
+/// for the next project call, so nothing needs to stop.
+fn running_work_for_a_redial(state: &AppState) -> RunningWork {
+    if state.0.live_leg.route() == crate::pbx::OPERATOR {
+        RunningWork::Keep
+    } else {
+        RunningWork::Cancel
+    }
+}
+
+/// The lifecycle shared by the page controls that act through the PBX
+/// (`/connect`, `/thinking`, `/model`): run the PBX operation as a registered
+/// operation a rescue can cancel, answer 409 if it is cancelled or its leg is
+/// superseded before the reply can be delivered, and 500 if it fails. `what`
+/// names the control in those answers ("connection attempt").
+async fn run_page_control<F>(
+    state: &AppState,
+    what: &str,
+    running: RunningWork,
+    operation: F,
+) -> Result<crate::pbx::Reply, Response>
+where
+    F: Future<Output = (crate::pbx::Reply, Value)> + Send + 'static,
+{
+    let refused = |status: axum::http::StatusCode, detail: String| {
+        (status, Json(json!({ "detail": detail }))).into_response()
+    };
+    let conflict = |outcome: &str| {
+        refused(
+            axum::http::StatusCode::CONFLICT,
+            format!("{what} was {outcome}"),
+        )
+    };
+    let spawned = match running {
+        RunningWork::Cancel => spawn_replacing_operation(state, operation).await,
+        RunningWork::Keep => spawn_active_operation(state, operation).await,
+    };
+    let Some((task, task_id, spawned_generation)) = spawned else {
+        return Err(conflict("cancelled"));
+    };
+    let joined = task.await;
+    clear_active_operation(state, task_id).await;
+    let (reply, status) = match joined {
+        Ok(result) => result,
+        Err(error) if error.is_cancelled() => return Err(conflict("cancelled")),
+        Err(error) => {
+            return Err(refused(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{what} failed: {error}"),
+            ))
+        }
+    };
+    let generation = reply.delivery_generation.unwrap_or(spawned_generation);
+    if !deliver_page_reply_if_current(state, &reply, status, generation).await {
+        return Err(conflict("superseded"));
+    }
+    Ok(reply)
+}
+
 async fn hangup(State(state): State<AppState>) -> impl IntoResponse {
     let interrupted = interrupt_active_turn(&state).await;
     let mut board = state.0.switchboard.lock().await;
@@ -1748,176 +1825,72 @@ async fn connect(State(state): State<AppState>, Json(req): Json<Connect>) -> Res
     // The picker is also an escape hatch. Cancel setup or a wedged live turn
     // before taking the PBX lock; otherwise a direct connection can wait for
     // the very leg the caller is trying to leave.
-    let operation_state = state.clone();
-    let Some((task, task_id, _generation)) = spawn_replacing_operation(&state, async move {
-        let mut board = operation_state.0.switchboard.lock().await;
-        let reply = board.dial(&req.project, &req.intent).await;
-        let status = board.status();
-        (reply, status)
-    })
-    .await
-    else {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({"detail":"connection attempt was cancelled"})),
-        )
-            .into_response();
-    };
-    let (reply, status) = match task.await {
-        Ok(result) => result,
-        Err(error) if error.is_cancelled() => {
-            clear_active_operation(&state, task_id).await;
-            return (
-                axum::http::StatusCode::CONFLICT,
-                Json(json!({"detail":"connection attempt was cancelled"})),
-            )
-                .into_response();
-        }
-        Err(error) => {
-            clear_active_operation(&state, task_id).await;
-            return (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"detail":format!("connection attempt failed: {error}")})),
-            )
-                .into_response();
-        }
-    };
-    clear_active_operation(&state, task_id).await;
-    if !deliver_page_reply_if_current(
+    let board_state = state.clone();
+    let controlled = run_page_control(
         &state,
-        &reply,
-        status,
-        reply.delivery_generation.unwrap_or(_generation),
+        "connection attempt",
+        RunningWork::Cancel,
+        async move {
+            let mut board = board_state.0.switchboard.lock().await;
+            let reply = board.dial(&req.project, &req.intent).await;
+            (reply, board.status())
+        },
     )
-    .await
-    {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({"detail":"connection attempt was superseded"})),
-        )
-            .into_response();
+    .await;
+    match controlled {
+        Ok(reply) => Json(json!({"route":reply.route, "error":reply.error})).into_response(),
+        Err(refused) => refused,
     }
-    Json(json!({"route":reply.route, "error":reply.error.clone()})).into_response()
 }
 #[derive(Deserialize)]
 struct Thinking {
     level: String,
 }
 async fn thinking(State(state): State<AppState>, Json(req): Json<Thinking>) -> Response {
-    let operation_state = state.clone();
-    let operation = async move {
-        let mut board = operation_state.0.switchboard.lock().await;
-        let reply = board.set_thinking(&req.level).await;
-        let status = board.status();
-        (reply, status)
-    };
-    let Some((task, task_id, _generation)) = (if state.0.live_leg.route() == crate::pbx::OPERATOR {
-        spawn_active_operation(&state, operation).await
-    } else {
-        spawn_replacing_operation(&state, operation).await
-    }) else {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({"detail":"thinking change was cancelled"})),
-        )
-            .into_response();
-    };
-    let (reply, status) = match task.await {
-        Ok(result) => result,
-        Err(error) if error.is_cancelled() => {
-            clear_active_operation(&state, task_id).await;
-            return (
-                axum::http::StatusCode::CONFLICT,
-                Json(json!({"detail":"thinking change was cancelled"})),
-            )
-                .into_response();
-        }
-        Err(error) => {
-            clear_active_operation(&state, task_id).await;
-            return (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"detail":format!("thinking change failed: {error}")})),
-            )
-                .into_response();
-        }
-    };
-    clear_active_operation(&state, task_id).await;
-    if !deliver_page_reply_if_current(
+    let board_state = state.clone();
+    let controlled = run_page_control(
         &state,
-        &reply,
-        status,
-        reply.delivery_generation.unwrap_or(_generation),
+        "thinking change",
+        running_work_for_a_redial(&state),
+        async move {
+            let mut board = board_state.0.switchboard.lock().await;
+            let reply = board.set_thinking(&req.level).await;
+            (reply, board.status())
+        },
     )
-    .await
-    {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({"detail":"thinking change was superseded"})),
-        )
-            .into_response();
+    .await;
+    match controlled {
+        Ok(reply) => {
+            Json(json!({"thinking":current_status(&state)["thinking"], "error":reply.error}))
+                .into_response()
+        }
+        Err(refused) => refused,
     }
-    Json(json!({"thinking":current_status(&state)["thinking"], "error":reply.error.clone()}))
-        .into_response()
 }
 #[derive(Deserialize)]
 struct Model {
     model: String,
 }
 async fn model(State(state): State<AppState>, Json(req): Json<Model>) -> Response {
-    let operation_state = state.clone();
-    let operation = async move {
-        let mut board = operation_state.0.switchboard.lock().await;
-        let reply = board.set_model(&req.model).await;
-        let status = board.status();
-        (reply, status)
-    };
-    let Some((task, task_id, _generation)) = (if state.0.live_leg.route() == crate::pbx::OPERATOR {
-        spawn_active_operation(&state, operation).await
-    } else {
-        spawn_replacing_operation(&state, operation).await
-    }) else {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({"detail":"model change was cancelled"})),
-        )
-            .into_response();
-    };
-    let (reply, status) = match task.await {
-        Ok(result) => result,
-        Err(error) if error.is_cancelled() => {
-            clear_active_operation(&state, task_id).await;
-            return (
-                axum::http::StatusCode::CONFLICT,
-                Json(json!({"detail":"model change was cancelled"})),
-            )
-                .into_response();
-        }
-        Err(error) => {
-            clear_active_operation(&state, task_id).await;
-            return (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"detail":format!("model change failed: {error}")})),
-            )
-                .into_response();
-        }
-    };
-    clear_active_operation(&state, task_id).await;
-    if !deliver_page_reply_if_current(
+    let board_state = state.clone();
+    let controlled = run_page_control(
         &state,
-        &reply,
-        status,
-        reply.delivery_generation.unwrap_or(_generation),
+        "model change",
+        running_work_for_a_redial(&state),
+        async move {
+            let mut board = board_state.0.switchboard.lock().await;
+            let reply = board.set_model(&req.model).await;
+            (reply, board.status())
+        },
     )
-    .await
-    {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({"detail":"model change was superseded"})),
-        )
-            .into_response();
+    .await;
+    match controlled {
+        Ok(reply) => {
+            Json(json!({"model":current_status(&state)["model_name"], "error":reply.error}))
+                .into_response()
+        }
+        Err(refused) => refused,
     }
-    Json(json!({"model":current_status(&state)["model_name"], "error":reply.error.clone()}))
-        .into_response()
 }
 #[derive(Deserialize)]
 struct LegState {

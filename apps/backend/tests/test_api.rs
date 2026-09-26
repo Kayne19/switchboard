@@ -2270,3 +2270,68 @@ async fn display_frames_carry_the_delivery_sequence() {
     };
     assert!(value.get("seq").is_none());
 }
+
+fn operator_reply() -> crate::pbx::Reply {
+    crate::pbx::Reply {
+        text: String::new(),
+        route: OPERATOR.into(),
+        route_label: "Operator".into(),
+        error: None,
+        to_speak: Vec::new(),
+        delivery_generation: None,
+    }
+}
+
+async fn refusal_of(response: Response) -> (StatusCode, Value) {
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+#[tokio::test]
+async fn a_page_control_whose_leg_is_rescued_mid_operation_is_refused_as_superseded() {
+    let state = state();
+    let rescuer = state.clone();
+    let controlled = run_page_control(&state, "model change", RunningWork::Keep, async move {
+        rescuer.0.coordinator.begin_rescue("page rescue");
+        (operator_reply(), current_status(&rescuer))
+    })
+    .await;
+
+    let Err(refused) = controlled else {
+        panic!("a reply from a rescued leg must not be delivered");
+    };
+    assert_eq!(
+        refusal_of(refused).await,
+        (
+            StatusCode::CONFLICT,
+            json!({"detail":"model change was superseded"})
+        )
+    );
+    assert!(state.0.active_operations.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_page_control_that_fails_is_refused_as_a_server_error() {
+    let state = state();
+    let controlled = run_page_control(
+        &state,
+        "connection attempt",
+        RunningWork::Cancel,
+        async move {
+            panic!("the PBX operation failed");
+        },
+    )
+    .await;
+
+    let Err(refused) = controlled else {
+        panic!("a failed operation has no reply to deliver");
+    };
+    let (status, body) = refusal_of(refused).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(body["detail"]
+        .as_str()
+        .unwrap()
+        .starts_with("connection attempt failed:"));
+    assert!(state.0.active_operations.lock().await.is_empty());
+}
