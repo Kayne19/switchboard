@@ -98,6 +98,44 @@ async fn healthz_reports_the_commit_the_binary_was_stamped_with() {
 }
 
 #[tokio::test]
+async fn healthz_reports_only_what_the_service_knows() {
+    // "whisper_model" and "stt_adapter" were constants kept from the Python
+    // response ("sidecar", on every deploy); they described nothing. Every
+    // field left is state this process holds.
+    let (code, health) = request_json(&state(), Method::GET, "/healthz", None).await;
+    assert_eq!(code, StatusCode::OK);
+    let fields = health
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        fields,
+        std::collections::BTreeSet::from([
+            "status",
+            "git",
+            "stt_configured",
+            "stt_stream_configured",
+            "elevenlabs_configured",
+            "route",
+            "model",
+            "thinking",
+            "model_swaps",
+            "projects",
+        ])
+    );
+    assert_eq!(health["stt_configured"], false);
+    assert_eq!(health["stt_stream_configured"], false);
+    assert_eq!(health["elevenlabs_configured"], true);
+
+    let configured = state_with_stream(Some("true".into()), Some("true".into()));
+    let (_, health) = request_json(&configured, Method::GET, "/healthz", None).await;
+    assert_eq!(health["stt_configured"], true);
+    assert_eq!(health["stt_stream_configured"], true);
+}
+
+#[tokio::test]
 async fn http_contract_exposes_status_health_and_page_controls() {
     let state = state();
     let (code, status) = request_json(&state, Method::GET, "/status", None).await;
@@ -112,7 +150,6 @@ async fn http_contract_exposes_status_health_and_page_controls() {
     let (code, health) = request_json(&state, Method::GET, "/healthz", None).await;
     assert_eq!(code, StatusCode::OK);
     assert_eq!(health["status"], "ok");
-    assert_eq!(health["stt_adapter"], "sidecar");
     assert_eq!(health["stt_configured"], false);
 
     let (code, connected) = request_json(
@@ -890,6 +927,40 @@ async fn streaming_clip_rejects_duplicate_chunks_and_repeats_end_cancel_safely()
 }
 
 #[tokio::test]
+async fn a_body_the_handler_cannot_read_gets_axums_own_answer() {
+    // Controls and callbacks take axum's rejection so they can log it; the
+    // page or agent that sent the body must still get the answer axum gives.
+    async fn send(path: &str, content_type: Option<&str>, body: Vec<u8>) -> (StatusCode, String) {
+        let mut request = Request::builder().method(Method::POST).uri(path);
+        if let Some(content_type) = content_type {
+            request = request.header("content-type", content_type);
+        }
+        let response = state()
+            .router(None)
+            .oneshot(request.body(Body::from(body)).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+    let json = Some("application/json");
+
+    let (code, body) = send("/view", json, br#"{"target":"","colour":"red"}"#.to_vec()).await;
+    assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body.contains("colour"), "{body}");
+
+    let (code, _) = send("/connect", json, b"{not json".to_vec()).await;
+    assert_eq!(code, StatusCode::BAD_REQUEST);
+
+    let (code, _) = send("/speak", None, br#"{"text":"hello"}"#.to_vec()).await;
+    assert_eq!(code, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+    let (code, _) = send("/display", json, vec![b' '; 65 * 1024]).await;
+    assert_eq!(code, StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
 async fn speak_rejects_blank_text_without_logging_it() {
     let state = state();
     let (code, body) =
@@ -1263,6 +1334,7 @@ async fn clip_accepted_before_a_page_rescue_is_dropped_after_transcription() {
             audio: vec![0],
             _mime: "audio/webm".into(),
             generation: state.0.coordinator.generation(),
+            connection: tracing::Span::none(),
         })
         .await
         .unwrap();

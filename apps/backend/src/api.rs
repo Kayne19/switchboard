@@ -6,6 +6,7 @@ use crate::pbx::{LiveLegState, RouteCallback, Switchboard};
 use crate::pi_client::{Activity, ActivityCallback, PiSession};
 use axum::extract::ws::{Message, WebSocket};
 use axum::{
+    extract::rejection::{BytesRejection, JsonRejection},
     extract::{DefaultBodyLimit, State, WebSocketUpgrade},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -25,6 +26,7 @@ use std::{
 use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex};
 use tokio::task::{AbortHandle, Id as TaskId, JoinHandle};
 use tower_http::services::ServeDir;
+use tracing::Instrument;
 
 const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
@@ -555,6 +557,9 @@ struct SpeechRequest {
     sequence: u64,
     deadline: std::time::Instant,
     result: oneshot::Sender<Result<(), String>>,
+    /// The `/speak` request it answers; the synthesis logs under it although
+    /// the speech worker runs it.
+    span: tracing::Span,
 }
 
 const DELIVERY_QUEUE: usize = 256;
@@ -786,6 +791,9 @@ pub struct Clip {
     // inside it; without this the reply epoch would be read after the rescue
     // and pre-rescue speech would count as current.
     generation: u64,
+    /// The browser connection it arrived on, so its transcription logs there
+    /// too although the clip worker serves every connection.
+    connection: tracing::Span,
 }
 
 impl AppState {
@@ -1113,7 +1121,8 @@ where
     if state.0.coordinator.generation() != generation {
         return None;
     }
-    let task = tokio::spawn(future);
+    // A page control's operation logs under the request that started it.
+    let task = tokio::spawn(future.in_current_span());
     let abort = task.abort_handle();
     let id = abort.id();
     active.insert(id, abort);
@@ -1208,12 +1217,13 @@ async fn process_speech(state: AppState) {
             sequence,
             deadline,
             result,
+            span,
         } = request;
         state.0.coordinator.touch_activity();
         let started = std::time::Instant::now();
         let operation_state = state.clone();
         let operation_text = text.clone();
-        let synthesized = match spawn_registered_operation(&state, generation, async move {
+        let operation = async move {
             synthesize_audio_stream(
                 &operation_state,
                 &operation_text,
@@ -1222,7 +1232,12 @@ async fn process_speech(state: AppState) {
                 deadline,
             )
             .await
-        })
+        };
+        let synthesized = match spawn_registered_operation(
+            &state,
+            generation,
+            operation.instrument(span),
+        )
         .await
         {
             Some((task, id)) => {
@@ -1433,8 +1448,9 @@ async fn process_clips(state: AppState) {
         // "it broke when I said X" answerable from the journal.
         let started = std::time::Instant::now();
         state.0.coordinator.touch_activity();
-        tracing::info!(clip = %clip.id, bytes = clip.audio.len(), "transcribing clip");
-        let transcript = match state.0.stt.transcribe(&clip.audio).await {
+        tracing::info!(parent: &clip.connection, clip = %clip.id, bytes = clip.audio.len(), "transcribing clip");
+        let stt = tracing::info_span!(parent: &clip.connection, "stt", clip = %clip.id);
+        let transcript = match state.0.stt.transcribe(&clip.audio).instrument(stt).await {
             Ok(text) => text,
             Err(error) => {
                 tracing::error!(clip = %clip.id, bytes = clip.audio.len(), %error, "transcription failed");
@@ -1614,13 +1630,18 @@ async fn process_turns(state: AppState) {
                 .ok();
             (operation, status)
         };
-        let Some((task, task_id)) = spawn_registered_operation(&state, generation, async move {
+        // The PBX, the agent, and the reply's synthesis all log under the
+        // clip that started the turn.
+        let turn = tracing::info_span!("turn", clip = %id);
+        let handle_turn = async move {
             let mut board = turn_state.0.switchboard.lock().await;
             let reply = board.handle(&transcript).await;
             let status = board.status();
             (reply, status)
-        })
-        .await
+        };
+        let Some((task, task_id)) =
+            spawn_registered_operation(&state, generation, handle_turn.instrument(turn.clone()))
+                .await
         else {
             tracing::info!(clip = %id, stamped = generation, "dropping turn because rescue occurred before registration");
             if let Some(operation) = &operation {
@@ -1673,6 +1694,7 @@ async fn process_turns(state: AppState) {
             reply.delivery_generation.unwrap_or(generation),
             &id,
         )
+        .instrument(turn)
         .await;
         state.0.turn_in_flight.store(false, Ordering::Release);
     }
@@ -1682,7 +1704,7 @@ async fn process_turns(state: AppState) {
 async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
     let status = current_status(&state);
     Json(
-        json!({"status":"ok", "git":crate::GIT_SHA, "whisper_model":"sidecar", "stt_configured":state.0.stt.command.is_some(), "stt_stream_configured":state.0.stt_stream.configured(), "stt_adapter":"sidecar", "elevenlabs_configured":state.0.speaker.configured(), "route":status["route"], "model":status["model"], "thinking":status["thinking"], "model_swaps":status["model_swaps"], "projects":status["projects"]}),
+        json!({"status":"ok", "git":crate::GIT_SHA, "stt_configured":state.0.stt.command.is_some(), "stt_stream_configured":state.0.stt_stream.configured(), "elevenlabs_configured":state.0.speaker.configured(), "route":status["route"], "model":status["model"], "thinking":status["thinking"], "model_swaps":status["model_swaps"], "projects":status["projects"]}),
     )
 }
 async fn status(State(state): State<AppState>) -> impl IntoResponse {
@@ -1768,33 +1790,51 @@ where
             format!("{what} was {outcome}"),
         )
     };
+    let started = std::time::Instant::now();
     let spawned = match running {
         RunningWork::Cancel => spawn_replacing_operation(state, operation).await,
         RunningWork::Keep => spawn_active_operation(state, operation).await,
     };
     let Some((task, task_id, spawned_generation)) = spawned else {
+        tracing::info!("cancelled before it could start: a rescue retired the leg first");
         return Err(conflict("cancelled"));
     };
     let joined = task.await;
     clear_active_operation(state, task_id).await;
     let (reply, status) = match joined {
         Ok(result) => result,
-        Err(error) if error.is_cancelled() => return Err(conflict("cancelled")),
+        Err(error) if error.is_cancelled() => {
+            tracing::info!(
+                elapsed = ?started.elapsed(),
+                "cancelled: a rescue or a newer control replaced it"
+            );
+            return Err(conflict("cancelled"));
+        }
         Err(error) => {
+            tracing::error!(%error, elapsed = ?started.elapsed(), "failed");
             return Err(refused(
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 format!("{what} failed: {error}"),
-            ))
+            ));
         }
     };
     let generation = reply.delivery_generation.unwrap_or(spawned_generation);
     if !deliver_page_reply_if_current(state, &reply, status, generation).await {
+        tracing::info!(
+            generation,
+            current = state.0.coordinator.generation(),
+            elapsed = ?started.elapsed(),
+            "superseded: the leg changed before the reply was delivered"
+        );
         return Err(conflict("superseded"));
     }
     Ok(reply)
 }
 
+#[tracing::instrument(name = "http", skip_all, fields(endpoint = "/hangup"))]
 async fn hangup(State(state): State<AppState>) -> impl IntoResponse {
+    let started = std::time::Instant::now();
+    tracing::info!(route = %state.0.live_leg.route(), "the page asked to hang up");
     let interrupted = interrupt_active_turn(&state).await;
     let mut board = state.0.switchboard.lock().await;
     let left = board.force_hangup().await.or(interrupted);
@@ -1811,8 +1851,14 @@ async fn hangup(State(state): State<AppState>) -> impl IntoResponse {
         publish_status(&state, status);
     }
     match left {
-        Some(left) => Json(json!({"hungup":true, "left":left})),
-        None => Json(json!({"hungup":false, "reason":"already on the operator"})),
+        Some(left) => {
+            tracing::info!(%left, elapsed = ?started.elapsed(), "hung up; the caller is back on the operator");
+            Json(json!({"hungup":true, "left":left}))
+        }
+        None => {
+            tracing::info!(elapsed = ?started.elapsed(), "nothing to hang up: already on the operator");
+            Json(json!({"hungup":false, "reason":"already on the operator"}))
+        }
     }
 }
 #[derive(Deserialize)]
@@ -1821,7 +1867,17 @@ struct Connect {
     #[serde(default)]
     intent: String,
 }
-async fn connect(State(state): State<AppState>, Json(req): Json<Connect>) -> Response {
+#[tracing::instrument(name = "http", skip_all, fields(endpoint = "/connect"))]
+async fn connect(
+    State(state): State<AppState>,
+    body: Result<Json<Connect>, JsonRejection>,
+) -> Response {
+    let req = match body {
+        Ok(Json(req)) => req,
+        Err(rejection) => return refuse_body(rejection),
+    };
+    let started = std::time::Instant::now();
+    tracing::info!(project = %req.project, from = %state.0.live_leg.route(), "the page asked to connect");
     // The picker is also an escape hatch. Cancel setup or a wedged live turn
     // before taking the PBX lock; otherwise a direct connection can wait for
     // the very leg the caller is trying to leave.
@@ -1838,7 +1894,17 @@ async fn connect(State(state): State<AppState>, Json(req): Json<Connect>) -> Res
     )
     .await;
     match controlled {
-        Ok(reply) => Json(json!({"route":reply.route, "error":reply.error})).into_response(),
+        Ok(reply) => {
+            match &reply.error {
+                None => {
+                    tracing::info!(route = %reply.route, elapsed = ?started.elapsed(), "connected")
+                }
+                Some(error) => {
+                    tracing::info!(route = %reply.route, %error, elapsed = ?started.elapsed(), "the connection failed")
+                }
+            }
+            Json(json!({"route":reply.route, "error":reply.error})).into_response()
+        }
         Err(refused) => refused,
     }
 }
@@ -1846,7 +1912,17 @@ async fn connect(State(state): State<AppState>, Json(req): Json<Connect>) -> Res
 struct Thinking {
     level: String,
 }
-async fn thinking(State(state): State<AppState>, Json(req): Json<Thinking>) -> Response {
+#[tracing::instrument(name = "http", skip_all, fields(endpoint = "/thinking"))]
+async fn thinking(
+    State(state): State<AppState>,
+    body: Result<Json<Thinking>, JsonRejection>,
+) -> Response {
+    let req = match body {
+        Ok(Json(req)) => req,
+        Err(rejection) => return refuse_body(rejection),
+    };
+    let started = std::time::Instant::now();
+    tracing::info!(thinking = %req.level, route = %state.0.live_leg.route(), "the page asked for a thinking level");
     let board_state = state.clone();
     let controlled = run_page_control(
         &state,
@@ -1861,8 +1937,17 @@ async fn thinking(State(state): State<AppState>, Json(req): Json<Thinking>) -> R
     .await;
     match controlled {
         Ok(reply) => {
-            Json(json!({"thinking":current_status(&state)["thinking"], "error":reply.error}))
-                .into_response()
+            let thinking = current_status(&state)["thinking"].clone();
+            let level = thinking.as_str().unwrap_or_default();
+            match &reply.error {
+                None => {
+                    tracing::info!(thinking = level, elapsed = ?started.elapsed(), "thinking level set")
+                }
+                Some(error) => {
+                    tracing::info!(thinking = level, %error, elapsed = ?started.elapsed(), "thinking level not changed")
+                }
+            }
+            Json(json!({"thinking":thinking, "error":reply.error})).into_response()
         }
         Err(refused) => refused,
     }
@@ -1871,7 +1956,17 @@ async fn thinking(State(state): State<AppState>, Json(req): Json<Thinking>) -> R
 struct Model {
     model: String,
 }
-async fn model(State(state): State<AppState>, Json(req): Json<Model>) -> Response {
+#[tracing::instrument(name = "http", skip_all, fields(endpoint = "/model"))]
+async fn model(
+    State(state): State<AppState>,
+    body: Result<Json<Model>, JsonRejection>,
+) -> Response {
+    let req = match body {
+        Ok(Json(req)) => req,
+        Err(rejection) => return refuse_body(rejection),
+    };
+    let started = std::time::Instant::now();
+    tracing::info!(model = %req.model, route = %state.0.live_leg.route(), "the page asked for a model");
     let board_state = state.clone();
     let controlled = run_page_control(
         &state,
@@ -1886,8 +1981,15 @@ async fn model(State(state): State<AppState>, Json(req): Json<Model>) -> Respons
     .await;
     match controlled {
         Ok(reply) => {
-            Json(json!({"model":current_status(&state)["model_name"], "error":reply.error}))
-                .into_response()
+            let model = current_status(&state)["model_name"].clone();
+            let name = model.as_str().unwrap_or_default();
+            match &reply.error {
+                None => tracing::info!(model = name, elapsed = ?started.elapsed(), "model set"),
+                Some(error) => {
+                    tracing::info!(model = name, %error, elapsed = ?started.elapsed(), "model not changed")
+                }
+            }
+            Json(json!({"model":model, "error":reply.error})).into_response()
         }
         Err(refused) => refused,
     }
@@ -1899,7 +2001,16 @@ struct LegState {
     #[serde(default)]
     token: String,
 }
-async fn leg_state(State(state): State<AppState>, Json(req): Json<LegState>) -> impl IntoResponse {
+#[tracing::instrument(name = "http", skip_all, fields(endpoint = "/leg-state"))]
+async fn leg_state(
+    State(state): State<AppState>,
+    body: Result<Json<LegState>, JsonRejection>,
+) -> Response {
+    let req = match body {
+        Ok(Json(req)) => req,
+        Err(rejection) => return refuse_body(rejection),
+    };
+    tracing::info!(thinking = %req.thinking, "a leg reported its thinking level");
     let accepted = match state
         .0
         .coordinator
@@ -1907,17 +2018,25 @@ async fn leg_state(State(state): State<AppState>, Json(req): Json<LegState>) -> 
     {
         Ok(public) => {
             if public {
+                tracing::info!("accepted; the page shows the reported level");
                 let _ = state.0.live_leg.report_thinking(&req.token, &req.thinking);
                 let mut status = current_status(&state);
                 status["thinking"] = Value::String(req.thinking.clone());
                 status["thinking_confirmed"] = Value::Bool(true);
                 publish_status(&state, status);
+            } else {
+                tracing::info!(
+                    "accepted from the starting leg; it applies once the leg is adopted"
+                );
             }
             true
         }
-        Err(_) => false,
+        Err(error) => {
+            tracing::info!(reason = %error, "refused");
+            false
+        }
     };
-    Json(json!({"accepted":accepted}))
+    Json(json!({"accepted":accepted})).into_response()
 }
 #[derive(Deserialize)]
 struct Speak {
@@ -1925,8 +2044,20 @@ struct Speak {
     #[serde(default)]
     token: String,
 }
-async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Response {
+#[tracing::instrument(name = "http", skip_all, fields(endpoint = "/speak"))]
+async fn speak(
+    State(state): State<AppState>,
+    body: Result<Json<Speak>, JsonRejection>,
+) -> Response {
+    let req = match body {
+        Ok(Json(req)) => req,
+        Err(rejection) => return refuse_body(rejection),
+    };
+    let started = std::time::Instant::now();
+    // The words are the caller's to hear, not the journal's to keep.
+    tracing::info!(chars = req.text.chars().count(), "an agent asked to speak");
     if req.text.trim().is_empty() {
+        tracing::info!("refused: the text is empty");
         return (
             axum::http::StatusCode::BAD_REQUEST,
             Json(json!({"detail":"text must not be empty"})),
@@ -1935,6 +2066,7 @@ async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Respons
     }
     promote_candidate_for_token(&state, &req.token).await;
     if let Err(error) = state.0.coordinator.accept_side_effect(&req.token) {
+        tracing::info!(reason = %error, "refused: the leg is not live on the call");
         let (code, detail) = match error {
             crate::lifecycle::LifecycleError::CandidateSideEffect => (
                 axum::http::StatusCode::CONFLICT,
@@ -1952,6 +2084,7 @@ async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Respons
             .into_response();
     }
     if !state.0.delivery.connected() {
+        tracing::info!("not spoken: no browser is connected");
         return (
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})),
@@ -1959,6 +2092,7 @@ async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Respons
             .into_response();
     }
     if !state.0.speaker.configured() {
+        tracing::warn!("not spoken: ELEVENLABS_API_KEY is not set");
         return (
             axum::http::StatusCode::BAD_GATEWAY,
             Json(json!({"detail":"ELEVENLABS_API_KEY is not set"})),
@@ -1968,16 +2102,18 @@ async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Respons
 
     let spoken = state.0.speaker.clip_for_speech(&req.text);
     let speech_permit = if spoken.is_empty() {
+        tracing::info!("not spoken: nothing in the text can be said aloud");
         return Json(json!({"delivered":false, "reason":"text contained no speakable audio", "detail":"text contained no speakable audio"})).into_response();
     } else {
         match state.0.speech.try_reserve() {
             Ok(permit) => Some(permit),
             Err(_) => {
+                tracing::warn!("not spoken: the speech worker is busy or gone");
                 return (
                     axum::http::StatusCode::SERVICE_UNAVAILABLE,
                     Json(json!({"delivered":false, "reason":"speech worker is unavailable or busy", "detail":"speech worker is unavailable or busy"})),
                 )
-                    .into_response()
+                    .into_response();
             }
         }
     };
@@ -1986,7 +2122,13 @@ async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Respons
         let generation = state.0.coordinator.generation();
         let sequence = match reserve_audio(&state, generation).await {
             Some(sequence) => sequence,
-            None => return Json(json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})).into_response(),
+            None => {
+                tracing::info!(
+                    generation,
+                    "not spoken: the leg changed or the audio queue is full"
+                );
+                return Json(json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})).into_response();
+            }
         };
         let (result_tx, result_rx) = oneshot::channel();
         permit.send(SpeechRequest {
@@ -1995,10 +2137,15 @@ async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Respons
             sequence,
             deadline: std::time::Instant::now() + state.0.speech_deadline,
             result: result_tx,
+            span: tracing::Span::current(),
         });
         match result_rx.await {
-            Ok(Ok(())) => return Json(delivery_response(true)).into_response(),
+            Ok(Ok(())) => {
+                tracing::info!(generation, sequence, elapsed = ?started.elapsed(), "spoken");
+                return Json(delivery_response(true)).into_response();
+            }
             Ok(Err(detail)) => {
+                tracing::info!(generation, sequence, %detail, elapsed = ?started.elapsed(), "not spoken");
                 return (
                     axum::http::StatusCode::BAD_GATEWAY,
                     Json(json!({"delivered":false, "reason":detail.clone(), "detail":detail})),
@@ -2006,6 +2153,7 @@ async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Respons
                     .into_response();
             }
             Err(_) => {
+                tracing::warn!(elapsed = ?started.elapsed(), "not spoken: the speech worker stopped");
                 return (
                     axum::http::StatusCode::SERVICE_UNAVAILABLE,
                     Json(json!({"delivered":false, "reason":"speech worker stopped", "detail":"speech worker stopped"})),
@@ -2017,10 +2165,32 @@ async fn speak(State(state): State<AppState>, Json(req): Json<Speak>) -> Respons
 
     Json(json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})).into_response()
 }
-async fn display(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
+#[tracing::instrument(
+    name = "http",
+    skip_all,
+    fields(
+        endpoint = "/display",
+        op = tracing::field::Empty,
+        kind = tracing::field::Empty,
+        id = tracing::field::Empty,
+    )
+)]
+async fn display(
+    State(state): State<AppState>,
+    body: Result<axum::body::Bytes, BytesRejection>,
+) -> Response {
+    let body = match body {
+        Ok(body) => body,
+        Err(rejection) => return refuse_body(rejection),
+    };
+    let started = std::time::Instant::now();
+    // Logged by size and, once it validates, by what it does and to which
+    // object; the content is the caller's screen, not the journal's.
+    tracing::info!(bytes = body.len(), "an agent sent a display action");
     let raw: Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
-        Err(_) => {
+        Err(error) => {
+            tracing::info!(%error, "refused: the body is not JSON");
             return (
                 axum::http::StatusCode::BAD_REQUEST,
                 Json(json!({"delivered":false, "detail":"invalid JSON payload"})),
@@ -2029,6 +2199,7 @@ async fn display(State(state): State<AppState>, body: axum::body::Bytes) -> Resp
         }
     };
     let Some(map) = raw.as_object() else {
+        tracing::info!("refused: the body is not an object");
         return (
             axum::http::StatusCode::BAD_REQUEST,
             Json(json!({"delivered":false, "detail":"request must be an object"})),
@@ -2038,6 +2209,7 @@ async fn display(State(state): State<AppState>, body: axum::body::Bytes) -> Resp
 
     for k in map.keys() {
         if k != "token" && k != "action" {
+            tracing::info!(field = %k, "refused: unknown field in the envelope");
             return (
                 axum::http::StatusCode::BAD_REQUEST,
                 Json(
@@ -2049,6 +2221,7 @@ async fn display(State(state): State<AppState>, body: axum::body::Bytes) -> Resp
     }
 
     let Some(action_val) = map.get("action") else {
+        tracing::info!("refused: no action");
         return (
             axum::http::StatusCode::BAD_REQUEST,
             Json(json!({"delivered":false, "detail":"action is required"})),
@@ -2061,6 +2234,7 @@ async fn display(State(state): State<AppState>, body: axum::body::Bytes) -> Resp
     let normalized_action = match crate::visual_protocol::validate_action(action_val) {
         Ok(act) => act,
         Err(detail) => {
+            tracing::info!(%detail, "refused: the action is invalid");
             return (
                 axum::http::StatusCode::BAD_REQUEST,
                 Json(json!({"delivered":false, "detail":detail})),
@@ -2068,9 +2242,16 @@ async fn display(State(state): State<AppState>, body: axum::body::Bytes) -> Resp
                 .into_response();
         }
     };
+    let span = tracing::Span::current();
+    for (field, key) in [("op", "op"), ("kind", "type"), ("id", "id")] {
+        if let Some(value) = normalized_action.get(key).and_then(Value::as_str) {
+            span.record(field, value);
+        }
+    }
 
     promote_candidate_for_token(&state, token).await;
     if let Err(error) = state.0.coordinator.accept_side_effect(token) {
+        tracing::info!(reason = %error, "refused: the leg is not live on the call");
         let detail = match error {
             crate::lifecycle::LifecycleError::CandidateSideEffect => {
                 "the caller's screen is not live until this transfer completes: draw it again on your next turn"
@@ -2089,6 +2270,10 @@ async fn display(State(state): State<AppState>, body: axum::body::Bytes) -> Resp
     if state.0.coordinator.generation() != permit_generation
         || state.0.coordinator.accept_side_effect(token).is_err()
     {
+        tracing::info!(
+            generation = permit_generation,
+            "refused: the leg changed while it waited for the screen"
+        );
         return (
             axum::http::StatusCode::CONFLICT,
             Json(json!({
@@ -2111,6 +2296,11 @@ async fn display(State(state): State<AppState>, body: axum::body::Bytes) -> Resp
     drop(gate);
 
     if !delivered {
+        tracing::info!(
+            generation = permit_generation,
+            sequence,
+            "applied to the scene; no browser is connected to show it"
+        );
         return Json(json!({"delivered": false, "reason": "no browser connected"})).into_response();
     }
 
@@ -2125,6 +2315,13 @@ async fn display(State(state): State<AppState>, body: axum::body::Bytes) -> Resp
             if c.generation == permit_generation {
                 if let Some((rseq, reason)) = &c.rejection {
                     if *rseq == sequence {
+                        tracing::info!(
+                            generation = permit_generation,
+                            sequence,
+                            %reason,
+                            elapsed = ?started.elapsed(),
+                            "the browser could not render it"
+                        );
                         return Json(json!({
                             "delivered": true, "rendered": false,
                             "rejected": true, "reason": reason
@@ -2133,9 +2330,22 @@ async fn display(State(state): State<AppState>, body: axum::body::Bytes) -> Resp
                     }
                 }
                 if c.watermark.is_some_and(|w| w >= sequence) {
+                    tracing::info!(
+                        generation = permit_generation,
+                        sequence,
+                        elapsed = ?started.elapsed(),
+                        "rendered"
+                    );
                     return Json(json!({"delivered": true, "rendered": true})).into_response();
                 }
             } else if c.generation > permit_generation {
+                tracing::info!(
+                    generation = permit_generation,
+                    sequence,
+                    current = c.generation,
+                    elapsed = ?started.elapsed(),
+                    "not confirmed: the screen moved to a new leg first"
+                );
                 return Json(json!({
                     "delivered": true, "rendered": false,
                     "reason": "the caller's screen moved to a new leg before this was confirmed"
@@ -2148,6 +2358,12 @@ async fn display(State(state): State<AppState>, body: axum::body::Bytes) -> Resp
             _ = &mut deadline => { break; }
         }
     }
+    tracing::info!(
+        generation = permit_generation,
+        sequence,
+        elapsed = ?started.elapsed(),
+        "delivered; the browser did not confirm it in time"
+    );
     Json(json!({
         "delivered": true, "rendered": false,
         "reason": "no confirmation from the browser"
@@ -2166,9 +2382,24 @@ struct ViewRequest {
     token: String,
 }
 
-async fn view(State(state): State<AppState>, Json(req): Json<ViewRequest>) -> Response {
+#[tracing::instrument(name = "http", skip_all, fields(endpoint = "/view"))]
+async fn view(
+    State(state): State<AppState>,
+    body: Result<Json<ViewRequest>, JsonRejection>,
+) -> Response {
+    let req = match body {
+        Ok(Json(req)) => req,
+        Err(rejection) => return refuse_body(rejection),
+    };
+    // An empty target asks what the caller can see; anything else asks the
+    // page to change it. The agent's stated reason is not logged.
+    tracing::info!(
+        requested = %req.target.chars().take(64).collect::<String>(),
+        "an agent asked about the caller's view"
+    );
     promote_candidate_for_token(&state, &req.token).await;
     if let Err(error) = state.0.coordinator.accept_side_effect(&req.token) {
+        tracing::info!(reason = %error, "refused: the leg is not live on the call");
         let detail = match error {
             crate::lifecycle::LifecycleError::CandidateSideEffect => {
                 "the caller's screen is not live until this transfer completes: switch view again on your next turn"
@@ -2188,6 +2419,10 @@ async fn view(State(state): State<AppState>, Json(req): Json<ViewRequest>) -> Re
     if state.0.coordinator.generation() != permit_generation
         || state.0.coordinator.accept_side_effect(&req.token).is_err()
     {
+        tracing::info!(
+            generation = permit_generation,
+            "refused: the leg changed while it waited for the screen"
+        );
         return (
             axum::http::StatusCode::CONFLICT,
             Json(json!({
@@ -2215,6 +2450,14 @@ async fn view(State(state): State<AppState>, Json(req): Json<ViewRequest>) -> Re
         let confirmed = !has_visual
             || (confirm.generation == permit_generation
                 && confirm.watermark.is_some_and(|w| w >= gate.watermark));
+        tracing::info!(
+            %view,
+            has_visual,
+            kind = kind.as_deref().unwrap_or_default(),
+            confirmed,
+            connected,
+            "reported the caller's view"
+        );
         let screen = json!({
             "view": view,
             "has_visual": has_visual,
@@ -2246,6 +2489,7 @@ async fn view(State(state): State<AppState>, Json(req): Json<ViewRequest>) -> Re
             | "split"
             | "theater"
     ) {
+        tracing::info!("refused: not a view the page has");
         return (
             axum::http::StatusCode::BAD_REQUEST,
             Json(json!({
@@ -2263,6 +2507,14 @@ async fn view(State(state): State<AppState>, Json(req): Json<ViewRequest>) -> Re
         "reason": req.reason,
     });
     let delivered = emit_json(&state, value);
+    if delivered {
+        tracing::info!(
+            generation = permit_generation,
+            "asked the page to change the view"
+        );
+    } else {
+        tracing::info!("not delivered: no browser is connected");
+    }
     Json(delivery_response(delivered)).into_response()
 }
 
@@ -2272,6 +2524,23 @@ fn delivery_response(delivered: bool) -> Value {
     } else {
         json!({"delivered":false, "reason":"no browser connected"})
     }
+}
+
+/// Axum's rejection of a control's or callback's request body, answered
+/// unchanged and recorded: a body that never reached its handler is otherwise
+/// a refusal only the page or agent that sent it hears about.
+fn refuse_body<R>(rejection: R) -> Response
+where
+    R: IntoResponse + std::fmt::Display,
+{
+    let reason = rejection.to_string();
+    let response = rejection.into_response();
+    tracing::info!(
+        status = response.status().as_u16(),
+        %reason,
+        "refused: the request body could not be read"
+    );
+    response
 }
 async fn deliver_page_reply_if_current(
     state: &AppState,
@@ -2401,11 +2670,32 @@ async fn ws(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> impl In
 }
 async fn websocket(socket: WebSocket, state: AppState) {
     let (connection, snapshot_actions, watermark) = state.register_connection().await;
+    // Two tabs are two connections. Everything one does, and the work it
+    // starts, logs under its id and the generation it joined at.
+    let span = tracing::info_span!(
+        "ws",
+        connection = connection.epoch,
+        joined_generation = state.0.coordinator.generation()
+    );
+    serve_connection(socket, state, connection, snapshot_actions, watermark)
+        .instrument(span)
+        .await;
+}
+
+async fn serve_connection(
+    socket: WebSocket,
+    state: AppState,
+    connection: DeliveryConnection,
+    snapshot_actions: Vec<Value>,
+    watermark: u64,
+) {
     let epoch = connection.epoch;
+    let connected_at = std::time::Instant::now();
+    tracing::info!("browser connected");
     let (mut sink, mut incoming) = socket.split();
     let mut frames = connection.receiver;
     let writer_state = state.clone();
-    let mut writer = Box::pin(tokio::spawn(async move {
+    let deliver = async move {
         send_snapshot_sink(&mut sink, &writer_state, &snapshot_actions, watermark).await?;
         while let Some(frame) = frames.recv().await {
             match frame {
@@ -2425,7 +2715,8 @@ async fn websocket(socket: WebSocket, state: AppState) {
             }
         }
         Ok::<(), axum::Error>(())
-    }));
+    };
+    let mut writer = Box::pin(tokio::spawn(deliver.in_current_span()));
     let writer_id = writer.id();
     let mut shutdown = state.0.shutdown.subscribe();
     let mut pending_header: Option<ClipHeader> = None;
@@ -2463,7 +2754,11 @@ async fn websocket(socket: WebSocket, state: AppState) {
     // The writer owns the only sink. Retiring first prevents new events from
     // being accepted while its final send is being canceled.
     writer.abort();
-    tracing::debug!(?writer_id, epoch, "browser connection retired");
+    tracing::info!(
+        ?writer_id,
+        connected_for = ?connected_at.elapsed(),
+        "browser connection retired"
+    );
 }
 
 async fn send_snapshot_sink(
@@ -2962,7 +3257,8 @@ async fn handle_text_frame(
             // seconds, and the reader must keep answering pings meanwhile.
             let state = state.clone();
             tokio::spawn(
-                async move { route_final_transcript(&state, &id, generation, text).await },
+                async move { route_final_transcript(&state, &id, generation, text).await }
+                    .in_current_span(),
             );
             Ok(())
         }
@@ -3080,6 +3376,7 @@ async fn handle_audio_frame(
                 // closes the upload window too. Arrival time is the fallback
                 // for clients that do not send one.
                 generation: generation.unwrap_or_else(|| state.0.coordinator.generation()),
+                connection: tracing::Span::current(),
             })
             .await
             .is_err()
