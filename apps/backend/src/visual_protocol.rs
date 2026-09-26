@@ -5,6 +5,11 @@ pub const MAX_ACTION_BYTES: usize = 48_000;
 pub const MAX_ID_UTF16: usize = 128;
 pub const MAX_TEXT_UTF16: usize = 50_000;
 pub const RESERVED_ID_PREFIX: &str = "__runtime/";
+/// What an agent may `show`. The browser reports the same kinds back in its
+/// screen state, so this list is the one both directions are checked against.
+pub const CONTENT_TYPES: [&str; 7] = [
+    "chart", "metric", "progress", "diagram", "document", "code", "note",
+];
 
 fn utf16_len(s: &str) -> usize {
     s.encode_utf16().count()
@@ -825,10 +830,7 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
                 .get("type")
                 .and_then(Value::as_str)
                 .ok_or("show.type is unknown")?;
-            if !matches!(
-                ty,
-                "chart" | "metric" | "progress" | "diagram" | "document" | "code" | "note"
-            ) {
+            if !CONTENT_TYPES.contains(&ty) {
                 return Err("show.type is unknown".into());
             }
 

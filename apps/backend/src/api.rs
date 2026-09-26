@@ -2545,6 +2545,251 @@ fn parse_typed_turn(command: &serde_json::Map<String, Value>) -> Option<(String,
     Some((id.to_owned(), generation, text.to_owned()))
 }
 
+/// `stt_start`: opens a streaming clip for this connection, or resumes one it
+/// already holds, and starts its worker stream. Answers `accepted`, or
+/// `abandoned` with the reason the clip must go the complete-clip way instead.
+async fn start_stream_clip(
+    state: &AppState,
+    epoch: u64,
+    command: &serde_json::Map<String, Value>,
+) -> Result<(), ()> {
+    let Some(id) = command
+        .get("clip_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty() && id.len() <= 128)
+    else {
+        return send_json(
+            state,
+            epoch,
+            json!({"type":"error", "message":"Invalid streaming clip id."}),
+        )
+        .await;
+    };
+    let generation = command
+        .get("generation")
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| state.0.coordinator.generation());
+    let mime = command.get("mime").and_then(Value::as_str).unwrap_or("");
+    if mime != "audio/webm;codecs=opus" || !state.0.stt_stream.configured() {
+        return send_json(state, epoch, json!({"type":"abandoned", "id":id, "reason":"streaming STT is unavailable for this clip"})).await;
+    }
+    let mut clips = state.0.stream_clips.lock().await;
+    match clips.get(id).copied() {
+        Some(StreamClipState::Open { connection, .. }) if connection == epoch => {
+            return accept_stream_clip(state, epoch, id).await;
+        }
+        Some(StreamClipState::Ended {
+            generation: _,
+            connection,
+        }) if connection == epoch => {
+            return accept_stream_clip(state, epoch, id).await;
+        }
+        Some(StreamClipState::Ended { generation, .. }) => {
+            clips.insert(
+                id.to_owned(),
+                StreamClipState::Open {
+                    generation,
+                    next_sequence: 0,
+                    connection: epoch,
+                },
+            );
+            drop(clips);
+            return open_worker_stream(state, epoch, id, generation, mime).await;
+        }
+        Some(
+            StreamClipState::Abandoned | StreamClipState::Cancelled | StreamClipState::Finalized,
+        ) => {
+            return send_json(
+                state,
+                epoch,
+                json!({"type":"abandoned", "id":id, "reason":"clip is no longer resumable"}),
+            )
+            .await;
+        }
+        _ => {}
+    }
+    if clips.len() >= 512 {
+        let retired = clips
+            .iter()
+            .find(|(_, state)| {
+                matches!(
+                    state,
+                    StreamClipState::Cancelled
+                        | StreamClipState::Abandoned
+                        | StreamClipState::Finalized
+                )
+            })
+            .map(|(id, _)| id.clone());
+        if let Some(retired) = retired {
+            clips.remove(&retired);
+        }
+    }
+    if clips.len() >= 512 {
+        return send_json(
+            state,
+            epoch,
+            json!({"type":"abandoned", "id":id, "reason":"too many active streaming clips"}),
+        )
+        .await;
+    }
+    clips.insert(
+        id.to_owned(),
+        StreamClipState::Open {
+            generation,
+            next_sequence: 0,
+            connection: epoch,
+        },
+    );
+    drop(clips);
+    open_worker_stream(state, epoch, id, generation, mime).await
+}
+
+async fn accept_stream_clip(state: &AppState, epoch: u64, id: &str) -> Result<(), ()> {
+    send_json(
+        state,
+        epoch,
+        json!({"type":"accepted", "id":id, "streaming":true}),
+    )
+    .await
+}
+
+/// Starts the worker stream for a clip already recorded as open. If the worker
+/// will not take it, the clip is marked abandoned and the browser is told why,
+/// so it sends the clip whole instead.
+async fn open_worker_stream(
+    state: &AppState,
+    epoch: u64,
+    id: &str,
+    generation: u64,
+    mime: &str,
+) -> Result<(), ()> {
+    if let Err(reason) = state
+        .0
+        .stt_stream
+        .try_start(id.to_owned(), generation, mime.to_owned())
+    {
+        state
+            .0
+            .stream_clips
+            .lock()
+            .await
+            .insert(id.to_owned(), StreamClipState::Abandoned);
+        return send_json(
+            state,
+            epoch,
+            json!({"type":"abandoned", "id":id, "reason":reason}),
+        )
+        .await;
+    }
+    accept_stream_clip(state, epoch, id).await
+}
+
+/// `screen_state`: the browser's report of what it is showing. Updates the
+/// view the agent's `view` tool reads and confirms or rejects the display
+/// actions the browser has applied.
+async fn apply_screen_state(
+    state: &AppState,
+    epoch: u64,
+    command: &serde_json::Map<String, Value>,
+) -> Result<(), ()> {
+    let Some(view) = command
+        .get("view")
+        .and_then(Value::as_str)
+        .filter(|view| matches!(*view, "auto" | "system" | "visual" | "comms" | "theater"))
+    else {
+        return send_json(
+            state,
+            epoch,
+            json!({"type":"error", "message":"Invalid screen view."}),
+        )
+        .await;
+    };
+    let title = command
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .chars()
+        .take(200)
+        .collect::<String>();
+    let visual_kind = command
+        .get("visual_kind")
+        .and_then(Value::as_str)
+        .filter(|kind| crate::visual_protocol::CONTENT_TYPES.contains(kind))
+        .map_or(Value::Null, |kind| Value::String(kind.to_owned()));
+    let object_ids = command
+        .get("object_ids")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let pinned = command
+        .get("pinned")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let has_visual = command
+        .get("has_visual")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let stale = command
+        .get("stale")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let report_gen = command
+        .get("generation")
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| state.0.coordinator.generation());
+
+    let current_gen = state.0.coordinator.generation();
+    let active_ep = state.0.delivery.active_epoch();
+    if active_ep != Some(epoch) || report_gen != current_gen {
+        return Ok(());
+    }
+    let mut gate = state.0.display_gate.lock().await;
+
+    let report = json!({
+        "view": view,
+        "pinned": pinned,
+        "has_visual": has_visual,
+        "visual_kind": visual_kind,
+        "object_ids": object_ids,
+        "title": title,
+        "stale": stale,
+        "generation": current_gen,
+    });
+    gate.screen_state = report.clone();
+    gate.report_epoch = Some(epoch);
+    gate.report_generation = Some(current_gen);
+    *state.0.screen_state.lock().await = report;
+    drop(gate);
+
+    let applied_seq = command.get("applied_seq").and_then(Value::as_u64);
+    let rejected = command
+        .get("rejected")
+        .and_then(Value::as_object)
+        .and_then(|m| {
+            let seq = m.get("seq").and_then(Value::as_u64)?;
+            let reason = m
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("the caller's screen could not render it")
+                .to_string();
+            Some((seq, reason))
+        });
+    state.0.display_confirm.send_modify(|c| {
+        if c.generation != current_gen {
+            c.generation = current_gen;
+            c.watermark = None;
+        }
+        if let Some(seq) = applied_seq {
+            if c.watermark.is_none_or(|w| seq > w) {
+                c.watermark = Some(seq);
+            }
+        }
+        c.rejection = rejected.clone();
+    });
+
+    send_json(state, epoch, json!({"type":"screen_state_ack"})).await
+}
+
 async fn handle_text_frame(
     state: &AppState,
     epoch: u64,
@@ -2589,145 +2834,7 @@ async fn handle_text_frame(
         }
         Some("stt_start") => {
             pending_header.take();
-            let Some(id) = command
-                .get("clip_id")
-                .and_then(Value::as_str)
-                .filter(|id| !id.is_empty() && id.len() <= 128)
-            else {
-                return send_json(
-                    state,
-                    epoch,
-                    json!({"type":"error", "message":"Invalid streaming clip id."}),
-                )
-                .await;
-            };
-            let generation = command
-                .get("generation")
-                .and_then(Value::as_u64)
-                .unwrap_or_else(|| state.0.coordinator.generation());
-            let mime = command.get("mime").and_then(Value::as_str).unwrap_or("");
-            if mime != "audio/webm;codecs=opus" || !state.0.stt_stream.configured() {
-                return send_json(state, epoch, json!({"type":"abandoned", "id":id, "reason":"streaming STT is unavailable for this clip"})).await;
-            }
-            let mut clips = state.0.stream_clips.lock().await;
-            match clips.get(id).copied() {
-                Some(StreamClipState::Open { connection, .. }) if connection == epoch => {
-                    return send_json(
-                        state,
-                        epoch,
-                        json!({"type":"accepted", "id":id, "streaming":true}),
-                    )
-                    .await;
-                }
-                Some(StreamClipState::Ended {
-                    generation: _,
-                    connection,
-                }) if connection == epoch => {
-                    return send_json(
-                        state,
-                        epoch,
-                        json!({"type":"accepted", "id":id, "streaming":true}),
-                    )
-                    .await;
-                }
-                Some(StreamClipState::Ended { generation, .. }) => {
-                    clips.insert(
-                        id.to_owned(),
-                        StreamClipState::Open {
-                            generation,
-                            next_sequence: 0,
-                            connection: epoch,
-                        },
-                    );
-                    drop(clips);
-                    if let Err(reason) =
-                        state
-                            .0
-                            .stt_stream
-                            .try_start(id.to_owned(), generation, mime.to_owned())
-                    {
-                        state
-                            .0
-                            .stream_clips
-                            .lock()
-                            .await
-                            .insert(id.to_owned(), StreamClipState::Abandoned);
-                        return send_json(
-                            state,
-                            epoch,
-                            json!({"type":"abandoned", "id":id, "reason":reason}),
-                        )
-                        .await;
-                    }
-                    return send_json(
-                        state,
-                        epoch,
-                        json!({"type":"accepted", "id":id, "streaming":true}),
-                    )
-                    .await;
-                }
-                Some(
-                    StreamClipState::Abandoned
-                    | StreamClipState::Cancelled
-                    | StreamClipState::Finalized,
-                ) => {
-                    return send_json(state, epoch, json!({"type":"abandoned", "id":id, "reason":"clip is no longer resumable"})).await;
-                }
-                _ => {}
-            }
-            if clips.len() >= 512 {
-                let retired = clips
-                    .iter()
-                    .find(|(_, state)| {
-                        matches!(
-                            state,
-                            StreamClipState::Cancelled
-                                | StreamClipState::Abandoned
-                                | StreamClipState::Finalized
-                        )
-                    })
-                    .map(|(id, _)| id.clone());
-                if let Some(retired) = retired {
-                    clips.remove(&retired);
-                }
-            }
-            if clips.len() >= 512 {
-                return send_json(state, epoch, json!({"type":"abandoned", "id":id, "reason":"too many active streaming clips"})).await;
-            }
-            clips.insert(
-                id.to_owned(),
-                StreamClipState::Open {
-                    generation,
-                    next_sequence: 0,
-                    connection: epoch,
-                },
-            );
-            drop(clips);
-            if let Err(reason) =
-                state
-                    .0
-                    .stt_stream
-                    .try_start(id.to_owned(), generation, mime.to_owned())
-            {
-                state
-                    .0
-                    .stream_clips
-                    .lock()
-                    .await
-                    .insert(id.to_owned(), StreamClipState::Abandoned);
-                return send_json(
-                    state,
-                    epoch,
-                    json!({"type":"abandoned", "id":id, "reason":reason}),
-                )
-                .await;
-            }
-            send_json(
-                state,
-                epoch,
-                json!({"type":"accepted", "id":id, "streaming":true}),
-            )
-            .await
+            start_stream_clip(state, epoch, command).await
         }
         Some("stt_chunk") => {
             let Some(id) = command
@@ -2829,112 +2936,7 @@ async fn handle_text_frame(
             }
             Ok(())
         }
-        Some("screen_state") => {
-            let Some(view) = command
-                .get("view")
-                .and_then(Value::as_str)
-                .filter(|view| matches!(*view, "auto" | "system" | "visual" | "comms" | "theater"))
-            else {
-                return send_json(
-                    state,
-                    epoch,
-                    json!({"type":"error", "message":"Invalid screen view."}),
-                )
-                .await;
-            };
-            let title = command
-                .get("title")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .chars()
-                .take(200)
-                .collect::<String>();
-            let visual_kind = match command.get("visual_kind") {
-                Some(Value::String(s)) => {
-                    if matches!(
-                        s.as_str(),
-                        "chart" | "metric" | "progress" | "diagram" | "document" | "code" | "note"
-                    ) {
-                        Value::String(s.clone())
-                    } else {
-                        Value::Null
-                    }
-                }
-                _ => Value::Null,
-            };
-            let object_ids = command
-                .get("object_ids")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            let pinned = command
-                .get("pinned")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let has_visual = command
-                .get("has_visual")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let stale = command
-                .get("stale")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let report_gen = command
-                .get("generation")
-                .and_then(Value::as_u64)
-                .unwrap_or_else(|| state.0.coordinator.generation());
-
-            let current_gen = state.0.coordinator.generation();
-            let active_ep = state.0.delivery.active_epoch();
-            if active_ep != Some(epoch) || report_gen != current_gen {
-                return Ok(());
-            }
-            let mut gate = state.0.display_gate.lock().await;
-
-            let report = json!({
-                "view": view,
-                "pinned": pinned,
-                "has_visual": has_visual,
-                "visual_kind": visual_kind,
-                "object_ids": object_ids,
-                "title": title,
-                "stale": stale,
-                "generation": current_gen,
-            });
-            gate.screen_state = report.clone();
-            gate.report_epoch = Some(epoch);
-            gate.report_generation = Some(current_gen);
-            *state.0.screen_state.lock().await = report;
-            drop(gate);
-
-            let applied_seq = command.get("applied_seq").and_then(Value::as_u64);
-            let rejected = command
-                .get("rejected")
-                .and_then(Value::as_object)
-                .and_then(|m| {
-                    let seq = m.get("seq").and_then(Value::as_u64)?;
-                    let reason = m
-                        .get("reason")
-                        .and_then(Value::as_str)
-                        .unwrap_or("the caller's screen could not render it")
-                        .to_string();
-                    Some((seq, reason))
-                });
-            state.0.display_confirm.send_modify(|c| {
-                if c.generation != current_gen {
-                    c.generation = current_gen;
-                    c.watermark = None;
-                }
-                if let Some(seq) = applied_seq {
-                    if c.watermark.is_none_or(|w| seq > w) {
-                        c.watermark = Some(seq);
-                    }
-                }
-                c.rejection = rejected.clone();
-            });
-
-            send_json(state, epoch, json!({"type":"screen_state_ack"})).await
-        }
+        Some("screen_state") => apply_screen_state(state, epoch, command).await,
         Some("ping") => {
             send_json(
                 state,
