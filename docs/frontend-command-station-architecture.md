@@ -176,7 +176,7 @@ The running client architecture:
 - `apps/frontend/src/controller/`: semantic state machine, reducer, and validation boundary
 - `apps/frontend/src/integration/runtime.tsx`: connects the call runtime to the controller and reports screen state
 - `apps/frontend/src/runtime/`: backend WebSocket, push-to-talk, playback, and hands-free wiring
-- `apps/frontend/src/protocol.ts`: browser/server message contract
+- `apps/frontend/src/protocol.ts`: the WebSocket protocol in both directions; `apps/backend/src/protocol.rs` is the service's half of the messages it sends
 - `extensions/agent-switchboard.ts`: agent-facing `display` and `view` tools
 - `apps/backend/src/api.rs`: WebSocket state and HTTP tool endpoints
 
