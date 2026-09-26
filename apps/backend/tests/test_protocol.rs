@@ -180,7 +180,7 @@ fn the_status_examples_are_the_statuses_the_coordinator_publishes() {
             .with_catalog(catalog),
         )
         .unwrap();
-    coordinator.adopt_candidate().unwrap();
+    coordinator.adopt_candidate("alpha-leg").unwrap();
     coordinator.finish_intro();
     assert_eq!(
         coordinator.accept_thinking_callback("alpha-leg", "high"),
@@ -200,7 +200,7 @@ fn the_status_examples_are_the_statuses_the_coordinator_publishes() {
             "medium",
         ))
         .unwrap();
-    coordinator.adopt_candidate().unwrap();
+    coordinator.adopt_candidate("beta-leg").unwrap();
     assert_eq!(
         published(&coordinator),
         example("status_project_without_a_catalog")

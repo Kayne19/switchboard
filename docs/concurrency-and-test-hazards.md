@@ -95,6 +95,16 @@ the project's scene. Promotion holds the display gate from adoption until the
 `epoch` is published, so a display from the new leg cannot be applied, and then
 wiped, ahead of its own reset.
 
+Promotion only ever adopts the leg that asked for it. HTTP callbacks name
+their leg by its session token. RPC activity names it too: every pi process is
+started with the token of the leg it serves (`operator` for the operator), and
+each `Activity` carries it. `Coordinator::classify_activity` promotes only on
+the candidate's own token, publishes only the current leg's activity, and
+drops the rest (a rescued leg, the operator after a transfer, a process that
+is neither). Adoption checks the token again under the coordinator's lock, so
+a candidate replaced in between is never adopted on another's behalf. This
+used to hold only because the PBX lock serializes turns.
+
 Neither announcement carries its own idea of the leg. Both read it from the
 coordinator, the one owner of the route: adoption moves the route, so from
 promotion on, everything that reads it (the transcript, the PBX's replies, a

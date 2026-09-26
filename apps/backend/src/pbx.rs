@@ -296,6 +296,7 @@ impl Switchboard {
             let session = PiSession::start(
                 argv,
                 OPERATOR,
+                OPERATOR,
                 None,
                 Some(self.env.clone()),
                 Duration::from_secs(180),
@@ -646,7 +647,7 @@ impl Switchboard {
         // way the coordinator names it from here on; the switchboard only
         // swaps the process handles.
         if self.coordinator.is_candidate() {
-            if let Err(error) = self.coordinator.adopt_candidate() {
+            if let Err(error) = self.coordinator.adopt_candidate(&leg_token) {
                 session.close().await;
                 self.set_active_session(previous_agent.clone()).await;
                 self.rollback_startup(format!("adoption failed: {error}"));
@@ -718,6 +719,7 @@ impl Switchboard {
         PiSession::start(
             argv,
             project.id.clone(),
+            leg_token,
             (!project.is_remote())
                 .then(|| project.cwd.clone())
                 .filter(|p| !p.is_empty()),
@@ -1019,7 +1021,7 @@ impl Switchboard {
         }
 
         if self.coordinator.is_candidate() {
-            if let Err(error) = self.coordinator.adopt_candidate() {
+            if let Err(error) = self.coordinator.adopt_candidate(&leg_token) {
                 session.close().await;
                 self.rollback_startup(format!("adoption failed: {error}"));
                 self.drop_agent().await;

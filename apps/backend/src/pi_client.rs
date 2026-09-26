@@ -69,12 +69,18 @@ impl fmt::Display for PiSessionError {
 }
 impl std::error::Error for PiSessionError {}
 
+/// An RPC event worth reporting: a tool call starting or ending, or the
+/// turn's first sign of life.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Activity {
     pub state: String,
     pub tool: String,
     pub detail: String,
+    /// The name the page shows for the process's leg.
     pub label: String,
+    /// The token of the leg the process was started for: `operator` for the
+    /// operator, the leg's session token for a project leg.
+    pub leg: String,
 }
 pub type ActivityCallback =
     Arc<dyn Fn(Activity) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
@@ -87,6 +93,7 @@ struct SessionInner {
     busy: AtomicBool,
     turn_lock: Mutex<()>,
     label: String,
+    leg: String,
     turn_timeout: Duration,
     on_activity: Option<ActivityCallback>,
     stderr_task: StdMutex<Option<tokio::task::JoinHandle<()>>>,
@@ -99,9 +106,13 @@ pub struct PiSession {
 }
 
 impl PiSession {
+    /// Starts a leg's process. `label` names it in logs and on the page;
+    /// `leg` is the token of the leg it serves, which every `Activity` it
+    /// reports carries so the application can tell whose it is.
     pub async fn start(
         argv: Vec<String>,
         label: impl Into<String>,
+        leg: impl Into<String>,
         cwd: Option<String>,
         env: Option<HashMap<String, String>>,
         turn_timeout: Duration,
@@ -155,6 +166,7 @@ impl PiSession {
             busy: AtomicBool::new(false),
             turn_lock: Mutex::new(()),
             label,
+            leg: leg.into(),
             turn_timeout,
             on_activity,
             stderr_task: StdMutex::new(Some(stderr_task)),
@@ -503,6 +515,7 @@ impl PiSession {
                 tool: tool.into(),
                 detail,
                 label: self.inner.label.clone(),
+                leg: self.inner.leg.clone(),
             };
             if let Err(panic) = AssertUnwindSafe(callback(activity)).catch_unwind().await {
                 tracing::error!(

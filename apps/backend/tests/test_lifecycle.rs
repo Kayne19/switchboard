@@ -65,7 +65,7 @@ fn candidate_notices_track_startup_adopt_rollback_and_rescue() {
 
     let (coordinator, notices) = coordinator_with_notices();
     coordinator.begin_candidate(alpha_candidate()).unwrap();
-    coordinator.adopt_candidate().unwrap();
+    coordinator.adopt_candidate("cand").unwrap();
     assert_eq!(
         *notices.lock().unwrap(),
         vec![
@@ -152,7 +152,7 @@ fn startup_thinking_is_private_until_candidate_adoption() {
         Ok(false)
     );
     assert_eq!(coordinator.status().route, "operator");
-    let identity = coordinator.adopt_candidate().unwrap();
+    let identity = coordinator.adopt_candidate("candidate").unwrap();
     assert_eq!(identity.generation, 1);
     assert_eq!(coordinator.status().route, "alpha");
     assert_eq!(coordinator.status().thinking, "high");
@@ -183,7 +183,7 @@ fn invalid_startup_thinking_is_rejected() {
         coordinator.accept_thinking_callback("candidate", "invalid_level"),
         Err(LifecycleError::WrongPhase)
     );
-    coordinator.adopt_candidate().unwrap();
+    coordinator.adopt_candidate("candidate").unwrap();
     assert_eq!(coordinator.status().thinking, "medium");
 }
 
@@ -227,7 +227,7 @@ fn callbacks_require_the_current_leg_token_and_stale_work_is_rejected() {
         coordinator.accept_thinking_callback("old", "high"),
         Err(LifecycleError::StaleLeg)
     );
-    coordinator.adopt_candidate().unwrap();
+    coordinator.adopt_candidate("candidate").unwrap();
     assert!(coordinator.accept_side_effect("candidate").is_ok());
     assert_eq!(
         coordinator.accept_side_effect("candidate-old"),
@@ -278,7 +278,7 @@ fn the_launch_catalog_is_shown_once_its_leg_is_adopted() {
             .with_catalog(catalog),
         )
         .unwrap();
-    coordinator.adopt_candidate().unwrap();
+    coordinator.adopt_candidate("token").unwrap();
     assert_eq!(coordinator.status().models[0].model, "opus");
 }
 
@@ -310,7 +310,7 @@ fn idle_time_is_measured_from_the_last_turn_boundary() {
             "alpha", "alpha", "session", "token", "model", "medium",
         ))
         .unwrap();
-    coordinator.adopt_candidate().unwrap();
+    coordinator.adopt_candidate("token").unwrap();
     coordinator.finish_intro();
     let idle = std::time::Duration::from_millis(40);
 
@@ -357,7 +357,7 @@ fn on_alpha(coordinator: &Coordinator) {
     coordinator
         .begin_candidate(alpha_candidate().with_catalog(alpha_catalog()))
         .unwrap();
-    coordinator.adopt_candidate().unwrap();
+    coordinator.adopt_candidate("cand").unwrap();
     assert!(coordinator.finish_intro());
 }
 
@@ -512,7 +512,7 @@ fn the_status_is_built_from_the_coordinators_own_state() {
 
     // On the project: its model, the level it was asked for, and the catalog
     // it launched with.
-    coordinator.adopt_candidate().unwrap();
+    coordinator.adopt_candidate("alpha-leg").unwrap();
     coordinator.finish_intro();
     let project = Status {
         route: "alpha".into(),
@@ -558,4 +558,54 @@ fn the_status_is_built_from_the_coordinators_own_state() {
     coordinator.set_thinking_default("xhigh");
     assert_eq!(coordinator.status().thinking_default, "xhigh");
     assert_eq!(coordinator.thinking_default(), "xhigh");
+}
+
+#[test]
+fn activity_is_classified_by_the_leg_it_came_from() {
+    use ActivityDisposition::{Discard, Promote, Publish};
+    let call = coordinator();
+    // On the operator: the operator's process is the leg on the line.
+    assert_eq!(call.classify_activity("operator"), Publish);
+    assert_eq!(call.classify_activity("stray"), Discard);
+
+    // A candidate is starting. Only its own activity promotes it; the
+    // operator is still on the line, and nothing else is.
+    call.begin_candidate(alpha_candidate()).unwrap();
+    assert_eq!(call.classify_activity("cand"), Promote);
+    assert_eq!(call.classify_activity("operator"), Publish);
+    assert_eq!(call.classify_activity("stray"), Discard);
+    assert_eq!(
+        call.adopt_candidate("stray"),
+        Err(LifecycleError::CandidateTokenMismatch)
+    );
+    assert!(call.candidate_identity().is_some());
+
+    // Adopted: the new leg is current, and the operator it replaced is not.
+    call.adopt_candidate("cand").unwrap();
+    assert_eq!(call.classify_activity("cand"), Publish);
+    assert_eq!(call.classify_activity("operator"), Discard);
+    assert_eq!(
+        call.adopt_candidate("cand"),
+        Err(LifecycleError::NoCandidate)
+    );
+
+    // Rescued: whatever the retired leg reports before it is reaped is stale,
+    // and stays stale once the call settles on a new generation.
+    call.begin_rescue("page rescue");
+    assert_eq!(call.classify_activity("cand"), Discard);
+    call.settle();
+    assert_eq!(call.classify_activity("cand"), Discard);
+
+    // Back on the operator.
+    call.return_to_operator();
+    assert_eq!(call.classify_activity("operator"), Publish);
+    assert_eq!(call.classify_activity("cand"), Discard);
+
+    // A candidate a rescue abandoned never promotes.
+    call.begin_candidate(CandidateLeg::new(
+        "beta", "beta", "session", "beta-leg", "model", "medium",
+    ))
+    .unwrap();
+    call.begin_rescue("hangup mid-startup");
+    assert_eq!(call.classify_activity("beta-leg"), Discard);
 }

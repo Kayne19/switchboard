@@ -104,6 +104,19 @@ pub struct CandidateNotice {
 
 pub type CandidateCallback = Arc<dyn Fn(&CandidateNotice) + Send + Sync>;
 
+/// What becomes of RPC activity from a pi process, decided by the leg the
+/// process was started for (`Coordinator::classify_activity`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActivityDisposition {
+    /// The starting candidate's own sign of life: adopt it, then publish.
+    Promote,
+    /// The leg on the line: publish it.
+    Publish,
+    /// A leg the call has left, a rescued one, or a process that is neither
+    /// the candidate nor the current leg: drop it.
+    Discard,
+}
+
 /// What the status needs besides the call's state: the deployment's settings,
 /// which no transition changes.
 #[derive(Clone, Debug, Default)]
@@ -650,9 +663,47 @@ impl Coordinator {
         })
     }
 
-    pub fn adopt_candidate(&self) -> Result<LegIdentity, LifecycleError> {
+    /// Classifies activity from the process started for `leg`. The operator's
+    /// process is started for the leg `operator`; a project leg's, for its
+    /// session token.
+    pub fn classify_activity(&self, leg: &str) -> ActivityDisposition {
         self.linearize(|state| {
-            let candidate = state.candidate.take().ok_or(LifecycleError::NoCandidate)?;
+            let candidate = state.candidate.as_ref();
+            if state.phase == Phase::Starting
+                && candidate.is_some_and(|candidate| candidate.identity.token == leg)
+            {
+                return ActivityDisposition::Promote;
+            }
+            if matches!(state.phase, Phase::Quiescing | Phase::Shutdown) {
+                return ActivityDisposition::Discard;
+            }
+            let current = if state.on_operator() {
+                OPERATOR
+            } else {
+                state.leg.token.as_str()
+            };
+            if leg == current {
+                ActivityDisposition::Publish
+            } else {
+                ActivityDisposition::Discard
+            }
+        })
+    }
+
+    /// Adopts the staged candidate if it is the leg `token` names: the PBX
+    /// once its intro turn ends, or a sign of life from the candidate itself.
+    pub fn adopt_candidate(&self, token: &str) -> Result<LegIdentity, LifecycleError> {
+        self.linearize(|state| {
+            let candidate = match state
+                .candidate
+                .take_if(|candidate| candidate.identity.token == token)
+            {
+                Some(candidate) => candidate,
+                None if state.candidate.is_some() => {
+                    return Err(LifecycleError::CandidateTokenMismatch)
+                }
+                None => return Err(LifecycleError::NoCandidate),
+            };
             let identity = candidate.identity.clone();
             let route = candidate.route.clone();
             state.route = candidate.route;

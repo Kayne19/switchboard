@@ -83,7 +83,7 @@ fn put_on(board: &Switchboard, project: &str, spec: &str, catalog: ModelCatalog)
             .with_catalog(catalog),
         )
         .unwrap();
-    board.coordinator.adopt_candidate().unwrap();
+    board.coordinator.adopt_candidate("live-leg").unwrap();
     assert!(board.coordinator.finish_intro());
 }
 

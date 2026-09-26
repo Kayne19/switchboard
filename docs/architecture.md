@@ -420,9 +420,6 @@ Switchboard is not currently a perfect hexagonal implementation:
   to the same rule.
 - Browser-to-server commands have builders in `protocol.ts` but no type on
   the Rust side: `handle_text_frame` reads each one field by field.
-- RPC activity from a pi process carries no leg identity, so it is published,
-  and promotes a starting candidate, without the freshness check rule 7 asks
-  for. The PBX lock makes that safe today by serializing turns (#60).
 - `apps/frontend/src/runtime/callRuntime.ts` still coordinates several
   concerns (socket lifecycle, outbox, line requests, hands-free wiring); the
   recorder and playback are separate modules, the rest is one class.

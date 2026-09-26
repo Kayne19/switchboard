@@ -1,7 +1,7 @@
 //! HTTP, WebSocket and application workers.
 use crate::audio::{Speaker, StreamResult, SttAdapter, SttStreamAdapter};
 use crate::history::{TranscriptLog, AGENT, CALLER};
-use crate::lifecycle::Coordinator;
+use crate::lifecycle::{ActivityDisposition, Coordinator};
 use crate::pbx::{RouteCallback, Switchboard};
 use crate::pi_client::{Activity, ActivityCallback, PiSession};
 use crate::protocol::{ErrorCode, ServerMessage, Status};
@@ -403,13 +403,13 @@ impl LegAnnouncer {
         self.delivery.publish(event);
     }
 
-    /// Adopts the candidate leg and announces it. False when there was no
-    /// candidate to adopt.
-    async fn promote_candidate(&self) -> bool {
+    /// Adopts the candidate leg `token` names and announces it. False when
+    /// that leg is not the one staged.
+    async fn promote_candidate(&self, token: &str) -> bool {
         // Held from adoption until the epoch is out, so a display from the
         // new leg cannot be applied ahead of its own scene reset.
         let mut gate = self.display_gate.lock().await;
-        let Ok(identity) = self.coordinator.adopt_candidate() else {
+        let Ok(identity) = self.coordinator.adopt_candidate(token) else {
             return false;
         };
         let status = self.coordinator.status();
@@ -423,6 +423,38 @@ impl LegAnnouncer {
         .await;
         self.publish(ServerMessage::Status(status));
         true
+    }
+
+    /// RPC activity from a pi process. Only the leg on the line is shown, and
+    /// only the starting candidate's own activity promotes it; anything else
+    /// comes from a leg the call has left, or never joined, and is dropped.
+    async fn on_activity(&self, activity: Activity) {
+        let disposition = self.coordinator.classify_activity(&activity.leg);
+        let current = match disposition {
+            ActivityDisposition::Promote => self.promote_candidate(&activity.leg).await,
+            ActivityDisposition::Publish => true,
+            ActivityDisposition::Discard => false,
+        };
+        if !current {
+            tracing::debug!(
+                leg = %activity.leg,
+                label = %activity.label,
+                state = %activity.state,
+                tool = %activity.tool,
+                ?disposition,
+                "dropping activity from a leg that is not on the line"
+            );
+            return;
+        }
+        if activity.state == "life" {
+            return;
+        }
+        self.publish(ServerMessage::Activity {
+            state: activity.state,
+            tool: activity.tool,
+            detail: activity.detail,
+            label: activity.label,
+        });
     }
 
     /// The route callback: the PBX has settled on a leg, which the
@@ -843,32 +875,10 @@ impl AppState {
             display_confirm: display_confirm_tx.clone(),
             last_display: last_display.clone(),
         };
-        let activity_events = events.clone();
-        let activity_delivery = delivery.clone();
         let activity_announcer = leg_announcer.clone();
         let activity_callback: ActivityCallback = Arc::new(move |activity: Activity| {
-            let events = activity_events.clone();
-            let delivery = activity_delivery.clone();
             let announcer = activity_announcer.clone();
-            Box::pin(async move {
-                if announcer.coordinator.is_candidate() {
-                    let _ = announcer.promote_candidate().await;
-                }
-                if activity.state == "life" {
-                    return;
-                }
-                let event = Event::Json(
-                    ServerMessage::Activity {
-                        state: activity.state,
-                        tool: activity.tool,
-                        detail: activity.detail,
-                        label: activity.label,
-                    }
-                    .to_value(),
-                );
-                let _ = events.send(event.clone());
-                delivery.publish(event);
-            })
+            Box::pin(async move { announcer.on_activity(activity).await })
         });
         let candidate_events = events.clone();
         let candidate_delivery = delivery.clone();
@@ -1064,7 +1074,7 @@ async fn promote_candidate_for_token(state: &AppState, token: &str) {
         .candidate_identity()
         .is_some_and(|candidate| candidate.token == token)
     {
-        let _ = state.0.leg_announcer.promote_candidate().await;
+        let _ = state.0.leg_announcer.promote_candidate(token).await;
     }
 }
 

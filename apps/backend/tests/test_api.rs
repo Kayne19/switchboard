@@ -966,6 +966,7 @@ async fn page_rescue_aborts_work_before_waiting_for_the_pbx_lock() {
     let session = PiSession::start(
         vec!["sh".into(), "-c".into(), "sleep 60".into()],
         OPERATOR,
+        OPERATOR,
         None,
         None,
         Duration::from_secs(60),
@@ -2015,7 +2016,7 @@ async fn the_incoming_legs_first_words_are_not_cut_off_by_the_transfer_settling(
 
     // The agent's first streamed text is the sign of life that promotes it,
     // and it may already be speaking when the intro turn ends.
-    assert!(state.0.leg_announcer.promote_candidate().await);
+    assert!(state.0.leg_announcer.promote_candidate("alpha-leg").await);
     assert_eq!(
         types_of(&queued_frames(&mut connection)),
         ["candidate", "candidate_cleared", "epoch", "status"]
@@ -2317,4 +2318,98 @@ async fn a_page_control_that_fails_is_refused_as_a_server_error() {
         .unwrap()
         .starts_with("connection attempt failed:"));
     assert!(state.0.active_operations.lock().await.is_empty());
+}
+
+/// RPC activity as the pi process started for `leg` reports it.
+fn activity_from(leg: &str, state: &str) -> Activity {
+    Activity {
+        state: state.into(),
+        tool: if state == "life" { "" } else { "bash" }.into(),
+        detail: String::new(),
+        label: "alpha".into(),
+        leg: leg.into(),
+    }
+}
+
+#[tokio::test]
+async fn activity_from_a_leg_retired_by_a_rescue_is_not_published() {
+    let state = state();
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    begin_alpha_candidate(&state, "alpha-leg");
+    assert!(state.0.leg_announcer.promote_candidate("alpha-leg").await);
+    queued_frames(&mut connection);
+
+    state
+        .0
+        .leg_announcer
+        .on_activity(activity_from("alpha-leg", "start"))
+        .await;
+    assert_eq!(types_of(&queued_frames(&mut connection)), ["activity"]);
+
+    // The rescue retires the leg before its process is reaped, and a tool
+    // call it reports in that window must not reach the page.
+    state.0.coordinator.begin_rescue("page rescue");
+    state
+        .0
+        .leg_announcer
+        .on_activity(activity_from("alpha-leg", "end"))
+        .await;
+    assert!(queued_frames(&mut connection).is_empty());
+    state.0.coordinator.settle();
+    state
+        .0
+        .leg_announcer
+        .on_activity(activity_from("alpha-leg", "start"))
+        .await;
+    assert!(queued_frames(&mut connection).is_empty());
+}
+
+#[tokio::test]
+async fn activity_from_a_process_that_is_not_the_candidate_does_not_promote_it() {
+    let state = state();
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    begin_alpha_candidate(&state, "alpha-leg");
+    assert_eq!(types_of(&queued_frames(&mut connection)), ["candidate"]);
+
+    // Neither the operator nor a stray process is the incoming leg, whatever
+    // it reports.
+    for leg in [OPERATOR, "beta-leg"] {
+        state
+            .0
+            .leg_announcer
+            .on_activity(activity_from(leg, "life"))
+            .await;
+    }
+    assert_eq!(
+        state
+            .0
+            .coordinator
+            .candidate_identity()
+            .map(|leg| leg.token),
+        Some("alpha-leg".to_owned())
+    );
+    assert_eq!(state.0.coordinator.route(), OPERATOR);
+    assert!(queued_frames(&mut connection).is_empty());
+
+    // The operator is still on the line: its own tool calls are shown, and
+    // they promote nothing.
+    state
+        .0
+        .leg_announcer
+        .on_activity(activity_from(OPERATOR, "start"))
+        .await;
+    assert_eq!(types_of(&queued_frames(&mut connection)), ["activity"]);
+    assert!(state.0.coordinator.candidate_identity().is_some());
+
+    // The candidate's own first sign of life adopts it.
+    state
+        .0
+        .leg_announcer
+        .on_activity(activity_from("alpha-leg", "life"))
+        .await;
+    assert_eq!(
+        types_of(&queued_frames(&mut connection)),
+        ["candidate_cleared", "epoch", "status"]
+    );
+    assert_eq!(state.0.coordinator.route(), "alpha");
 }
