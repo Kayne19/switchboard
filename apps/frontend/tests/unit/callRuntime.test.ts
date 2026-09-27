@@ -359,10 +359,57 @@ describe("CallRuntime voice clips", () => {
     const next = FakeSocket.latest();
     next.open();
     next.receive(helloAck());
+    // The snapshot says the epoch is alpha's adoption.
+    next.receive({ type: "candidate_cleared", route: "alpha", generation: 4, reason: "adopted" });
     next.receive({ type: "epoch", generation: 4 });
     await settle();
     const clips = next.sentJson().filter((frame) => frame.type === "clip");
     expect(clips.map((frame) => frame.generation)).toEqual([4]);
+    runtime.dispose();
+  });
+
+  // Issue #70: a hangup while connecting sends the same two signals an
+  // adoption does, a clear notice and a new epoch; a tab that was away sees
+  // only the epoch. Carried along, the words meant for alpha would have run
+  // on the operator.
+  it("drops unsent speech for a connecting leg when a reconnect finds it was never adopted", async () => {
+    const { runtime, latestState } = makeRuntime();
+    const socket = await connectAt(runtime, 3);
+    socket.receive({ type: "candidate", route: "alpha", generation: 3 });
+    runtime.talk();
+    await settle();
+    // The line drops mid-sentence, and the caller hangs up while it is down.
+    socket.drop();
+    runtime.retry();
+    const next = FakeSocket.latest();
+    next.open();
+    next.receive(helloAck());
+    next.receive({ type: "epoch", generation: 4 });
+    await settle();
+    expect(next.sentJson().filter((frame) => frame.type === "clip")).toEqual([]);
+    expect(latestState()).toMatchObject({
+      status: "The line changed before 1 clip(s) went out. Please repeat that.",
+      statusError: true,
+    });
+    runtime.dispose();
+  });
+
+  it("carries speech along only to the adoption of the candidate it was recorded for", async () => {
+    const { runtime } = makeRuntime();
+    const socket = await connectAt(runtime, 3);
+    socket.receive({ type: "candidate", route: "alpha", generation: 3 });
+    runtime.talk();
+    await settle();
+    socket.drop();
+    runtime.retry();
+    const next = FakeSocket.latest();
+    next.open();
+    next.receive(helloAck());
+    // While the tab was away, alpha was hung up on and beta adopted.
+    next.receive({ type: "candidate_cleared", route: "beta", generation: 5, reason: "adopted" });
+    next.receive({ type: "epoch", generation: 5 });
+    await settle();
+    expect(next.sentJson().filter((frame) => frame.type === "clip")).toEqual([]);
     runtime.dispose();
   });
 
@@ -385,7 +432,7 @@ describe("CallRuntime voice clips", () => {
     socket.receive({ type: "accepted", id });
 
     // The incoming leg is adopted.
-    socket.receive({ type: "candidate_cleared", generation: 4 });
+    socket.receive({ type: "candidate_cleared", route: "alpha", generation: 4, reason: "adopted" });
     socket.receive({ type: "epoch", generation: 4 });
     await settle();
     expect(clipFrames().length, "the clip is not sent again").toBe(1);
@@ -397,16 +444,20 @@ describe("CallRuntime voice clips", () => {
     runtime.dispose();
   });
 
-  it("does not resend a clip already on the wire under the new epoch after a reconnect", async () => {
-    const { runtime } = makeRuntime();
+  // Issue #71: the verdict on a clip that was on the wire can land while the
+  // tab is away. The clip is sent again under the stamp it went out with, so
+  // the server recognizes it and answers with the verdict the tab missed.
+  it("asks again about a clip already on the wire, under its own stamp, after a reconnect", async () => {
+    const { runtime, latestState } = makeRuntime();
     const socket = await connectAt(runtime, 3);
     socket.receive({ type: "candidate", route: "alpha", generation: 3 });
     runtime.talk();
     await settle();
     runtime.send();
     await settle();
-    expect(socket.sentJson().filter((frame) => frame.type === "clip").length).toBe(1);
-    socket.receive({ type: "candidate_cleared", generation: 4 });
+    const first = socket.sentJson().filter((frame) => frame.type === "clip");
+    expect(first.length).toBe(1);
+    socket.receive({ type: "candidate_cleared", route: "alpha", generation: 4, reason: "adopted" });
     socket.receive({ type: "epoch", generation: 4 });
 
     // The line drops before the server's verdict on the clip arrives.
@@ -414,10 +465,26 @@ describe("CallRuntime voice clips", () => {
     runtime.retry();
     const next = FakeSocket.latest();
     next.open();
-    next.receive({ type: "hello_ack", version: 1 });
+    next.receive(helloAck());
+    next.receive({ type: "candidate_cleared", route: "alpha", generation: 4, reason: "adopted" });
     next.receive({ type: "epoch", generation: 4 });
     await settle();
-    expect(next.sentJson().filter((frame) => frame.type === "clip")).toEqual([]);
+    const resent = next.sentJson().filter((frame) => frame.type === "clip");
+    expect(resent.map((frame) => [frame.id, frame.generation])).toEqual([[first[0].id, 3]]);
+
+    const notice = "The line changed before that got through. Please repeat it.";
+    next.receive({ type: "error", id: first[0].id, code: "stale_epoch", message: notice });
+    await settle();
+    expect(latestState()).toMatchObject({ status: "Error: " + notice, statusError: true });
+    // Answered: a further reconnect has nothing to ask about.
+    next.drop();
+    runtime.retry();
+    const last = FakeSocket.latest();
+    last.open();
+    last.receive(helloAck());
+    last.receive({ type: "epoch", generation: 4 });
+    await settle();
+    expect(last.sentJson().filter((frame) => frame.type === "clip")).toEqual([]);
     runtime.dispose();
   });
 

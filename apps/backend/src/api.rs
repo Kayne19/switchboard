@@ -9,7 +9,7 @@ use crate::history::{TranscriptLog, AGENT, CALLER};
 use crate::lifecycle::{ActivityDisposition, Coordinator};
 use crate::pbx::{Redial, RedialPlan, RedialPlanner, RouteCallback, Switchboard};
 use crate::pi_client::{Activity, ActivityCallback, PiSession};
-use crate::protocol::{ErrorCode, ServerMessage, Status};
+use crate::protocol::{CandidateEnd, ErrorCode, ServerMessage, Status};
 use axum::extract::ws::{Message, WebSocket};
 use axum::{
     extract::rejection::{BytesRejection, JsonRejection},
@@ -172,6 +172,8 @@ pub struct AppInner {
     pub turns: mpsc::Sender<(String, String, u64)>,
     turn_rx: Mutex<Option<mpsc::Receiver<(String, String, u64)>>>,
     pub accepted_clips: Mutex<(HashSet<String>, VecDeque<String>)>,
+    /// The last word sent on each recent clip, replayed when it comes again.
+    clip_verdicts: std::sync::Mutex<ClipVerdicts>,
     stream_clips: Mutex<HashMap<String, StreamClipState>>,
     pub last_display: Arc<Mutex<Option<Value>>>,
     pub screen_state: Mutex<Value>,
@@ -186,6 +188,45 @@ pub struct AppInner {
     shutdown: watch::Sender<bool>,
     audio: Mutex<AudioQueue>,
     speech_deadline: std::time::Duration,
+}
+
+/// How many settled clips `ClipVerdicts` remembers; the same bound as the
+/// accepted-clip window, so a clip the server still recognizes as a
+/// duplicate is one it can still answer.
+const REMEMBERED_CLIP_VERDICTS: usize = 512;
+
+/// The message that settled each recent clip: its transcript, or the error
+/// that ended it.
+///
+/// A verdict goes to whichever connection is registered when it is known. If
+/// the tab is down at that moment it is lost, and the browser, still holding
+/// the clip, sends it again after the reconnect. The server keeps the first
+/// stamp it saw for a clip id, so without this the resend would be taken as
+/// the clip it already has and never answered (#71). With it, the resend is
+/// answered with the verdict instead.
+#[derive(Default)]
+struct ClipVerdicts {
+    by_id: HashMap<String, ServerMessage>,
+    oldest_first: VecDeque<String>,
+}
+
+impl ClipVerdicts {
+    /// Records `verdict` as the last word on `id`, replacing an earlier one:
+    /// a transcript can be followed by a `stale_epoch` from turn dispatch.
+    fn record(&mut self, id: &str, verdict: ServerMessage) {
+        if self.by_id.insert(id.to_owned(), verdict).is_none() {
+            self.oldest_first.push_back(id.to_owned());
+            while self.oldest_first.len() > REMEMBERED_CLIP_VERDICTS {
+                if let Some(old) = self.oldest_first.pop_front() {
+                    self.by_id.remove(&old);
+                }
+            }
+        }
+    }
+
+    fn get(&self, id: &str) -> Option<ServerMessage> {
+        self.by_id.get(id).cloned()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -313,15 +354,16 @@ impl AppState {
             move |notice: &crate::lifecycle::CandidateNotice| {
                 // The callback fires under the coordinator's lock: publish
                 // non-blockingly and never re-enter the coordinator here.
-                let message = if notice.active {
-                    ServerMessage::Candidate {
+                let message = match notice.ended {
+                    None => ServerMessage::Candidate {
                         route: notice.route.clone(),
                         generation: notice.generation,
-                    }
-                } else {
-                    ServerMessage::CandidateCleared {
+                    },
+                    Some(reason) => ServerMessage::CandidateCleared {
+                        route: notice.route.clone(),
                         generation: notice.generation,
-                    }
+                        reason,
+                    },
                 };
                 let event = Event::Json(message.to_value());
                 let _ = candidate_events.send(event.clone());
@@ -355,6 +397,7 @@ impl AppState {
             turns,
             turn_rx: Mutex::new(Some(turn_rx)),
             accepted_clips: Mutex::new((HashSet::new(), VecDeque::new())),
+            clip_verdicts: std::sync::Mutex::new(ClipVerdicts::default()),
             stream_clips: Mutex::new(HashMap::new()),
             last_display,
             screen_state: Mutex::new(json!({
@@ -486,6 +529,32 @@ fn emit(state: &AppState, event: Event) -> bool {
 }
 fn emit_message(state: &AppState, message: ServerMessage) -> bool {
     emit(state, Event::Json(message.to_value()))
+}
+/// Sends the message that settles clip `id` and remembers it, so a resend
+/// of the clip after a reconnect is answered (`replay_clip_verdict`).
+/// Recorded before it is sent: a resend that races it either finds the
+/// verdict or is registered in time to receive it.
+fn emit_clip_verdict(state: &AppState, id: &str, verdict: ServerMessage) -> bool {
+    state
+        .0
+        .clip_verdicts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .record(id, verdict.clone());
+    emit_message(state, verdict)
+}
+/// Answers a clip the server has already settled with the verdict it was
+/// sent, on the connection that sent it again. `None` when the clip is not
+/// settled (or long forgotten), and the caller handles it as it arrived.
+async fn replay_clip_verdict(state: &AppState, epoch: u64, id: &str) -> Option<Result<(), ()>> {
+    let verdict = state
+        .0
+        .clip_verdicts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(id)?;
+    tracing::info!(clip = %id, "answering a resent clip with its verdict");
+    Some(send_message(state, epoch, verdict).await)
 }
 fn current_status(state: &AppState) -> Status {
     state.0.coordinator.status()
@@ -782,8 +851,9 @@ async fn process_stream_results(state: AppState) {
 
 async fn route_final_transcript(state: &AppState, id: &str, generation: u64, transcript: String) {
     if transcript.trim().is_empty() {
-        emit_message(
+        emit_clip_verdict(
             state,
+            id,
             ServerMessage::error_for(id, "I didn't catch that — say it again."),
         );
         return;
@@ -800,8 +870,9 @@ async fn route_final_transcript(state: &AppState, id: &str, generation: u64, tra
         route.clone(),
         Some(id.to_owned()),
     );
-    emit_message(
+    emit_clip_verdict(
         state,
+        id,
         ServerMessage::Transcript {
             id: id.to_owned(),
             text: transcript.clone(),
@@ -860,8 +931,9 @@ async fn route_final_transcript(state: &AppState, id: &str, generation: u64, tra
             }
         } else {
             state.0.queued_turns.fetch_sub(1, Ordering::AcqRel);
-            emit_message(
+            emit_clip_verdict(
                 state,
+                id,
                 ServerMessage::error_for(id, "The call worker is unavailable."),
             );
         }
@@ -889,8 +961,9 @@ async fn process_clips(state: AppState) {
             Ok(text) => text,
             Err(error) => {
                 tracing::error!(clip = %clip.id, bytes = clip.audio.len(), %error, "transcription failed");
-                emit_message(
+                emit_clip_verdict(
                     &state,
+                    &clip.id,
                     ServerMessage::error_for(
                         clip.id.clone(),
                         format!("Transcription failed: {error}"),
@@ -901,8 +974,9 @@ async fn process_clips(state: AppState) {
         };
         if transcript.trim().is_empty() {
             tracing::info!(clip = %clip.id, elapsed = ?started.elapsed(), "transcription returned nothing");
-            emit_message(
+            emit_clip_verdict(
                 &state,
+                &clip.id,
                 ServerMessage::error_for(clip.id.clone(), "I didn't catch that — say it again."),
             );
             continue;
@@ -927,8 +1001,9 @@ async fn process_clips(state: AppState) {
             route.clone(),
             Some(clip.id.clone()),
         );
-        emit_message(
+        emit_clip_verdict(
             &state,
+            &clip.id,
             ServerMessage::Transcript {
                 id: clip.id.clone(),
                 text: transcript.clone(),
@@ -1030,8 +1105,9 @@ async fn process_clips(state: AppState) {
     tracing::warn!("the clip worker stopped; no further speech will be transcribed");
 }
 fn emit_stale_clip(state: &AppState, id: &str) {
-    emit_message(
+    emit_clip_verdict(
         state,
+        id,
         ServerMessage::Error {
             id: Some(id.to_owned()),
             code: Some(ErrorCode::StaleEpoch),
@@ -2313,22 +2389,37 @@ async fn serve_connection(
     );
 }
 
+/// What a connection is told before any live event: the epoch, the line's
+/// status, and the conversation. The epoch is preceded by an `adopted`
+/// candidate notice when the leg on the line was adopted at it, which a tab
+/// that was away for the adoption needs in order to carry speech recorded
+/// while that leg was connecting (#70). Without it, the tab cannot tell an
+/// adoption from the hangup that moves the epoch the same way.
+async fn snapshot_messages(state: &AppState) -> Vec<ServerMessage> {
+    let mut messages = Vec::with_capacity(4);
+    let (generation, adopted_route) = state.0.coordinator.generation_and_adoption();
+    if let Some(route) = adopted_route {
+        messages.push(ServerMessage::CandidateCleared {
+            route,
+            generation,
+            reason: CandidateEnd::Adopted,
+        });
+    }
+    messages.push(ServerMessage::Epoch { generation });
+    messages.push(ServerMessage::Status(current_status(state)));
+    messages.push(ServerMessage::History {
+        entries: state.0.transcript_log.lock().await.entries(),
+    });
+    messages
+}
+
 async fn send_snapshot_sink(
     sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
     state: &AppState,
     snapshot_actions: &[Value],
     watermark: u64,
 ) -> Result<(), axum::Error> {
-    let initial = [
-        ServerMessage::Epoch {
-            generation: state.0.coordinator.generation(),
-        },
-        ServerMessage::Status(current_status(state)),
-        ServerMessage::History {
-            entries: state.0.transcript_log.lock().await.entries(),
-        },
-    ];
-    for message in initial {
+    for message in snapshot_messages(state).await {
         send_event_sink(sink, Event::Json(message.to_value())).await?;
     }
     for action in snapshot_actions {
@@ -2411,6 +2502,9 @@ async fn start_stream_clip(
         )
         .await;
     };
+    if let Some(replayed) = replay_clip_verdict(state, epoch, id).await {
+        return replayed;
+    }
     let generation = command
         .get("generation")
         .and_then(Value::as_u64)
@@ -2924,6 +3018,9 @@ async fn handle_audio_frame(
         )
         .await;
     };
+    if let Some(replayed) = replay_clip_verdict(state, epoch, &id).await {
+        return replayed;
+    }
 
     let fresh = {
         let mut accepted = state.0.accepted_clips.lock().await;

@@ -160,7 +160,12 @@ test.describe("call runtime", () => {
 
       // The incoming leg shows life: it is adopted and the epoch moves.
       fixtureServer.broadcast({ type: "candidate", route: "switchboard", generation: 1 });
-      fixtureServer.broadcast({ type: "candidate_cleared", generation: 2 });
+      fixtureServer.broadcast({
+        type: "candidate_cleared",
+        route: "switchboard",
+        generation: 2,
+        reason: "adopted",
+      });
       fixtureServer.setGeneration(2);
       fixtureServer.broadcast(projectStatus);
 

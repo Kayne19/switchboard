@@ -31,8 +31,16 @@ pub enum ServerMessage {
     /// A transfer began starting a leg on `route`. Clips recorded until the
     /// next `epoch` are addressed to that leg.
     Candidate { route: String, generation: u64 },
-    /// The candidate leg was adopted, rolled back, or rescued away.
-    CandidateCleared { generation: u64 },
+    /// The candidate leg on `route` ended, and `reason` says how. Only an
+    /// adopted candidate's clips are carried to its epoch; the others stay on
+    /// the stamp they were recorded under. A connection's snapshot starts
+    /// with an `adopted` one when the leg on the line was adopted at the
+    /// current epoch, so a tab that missed the live one still knows.
+    CandidateCleared {
+        route: String,
+        generation: u64,
+        reason: CandidateEnd,
+    },
     /// The line's status: who is on it, their model and thinking level, and
     /// which of those the caller may change. The coordinator builds it from
     /// its own state (`Coordinator::status`).
@@ -154,6 +162,20 @@ pub struct ModelEntry {
     pub provider: String,
     pub model: String,
     pub thinks: bool,
+}
+
+/// How a candidate leg ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(serde::Deserialize))]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateEnd {
+    /// It became the leg on the line; the `epoch` that follows is its own.
+    Adopted,
+    /// Its startup failed and the call stayed on the leg it was on.
+    RolledBack,
+    /// A rescue retired the call's leg, candidate and all: a hangup or a
+    /// page control while it was connecting.
+    Rescued,
 }
 
 /// Why an `error` needs handling beyond showing its message.

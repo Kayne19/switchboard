@@ -3912,3 +3912,197 @@ async fn a_picker_redial_whose_leg_is_left_after_its_rescue_is_refused() {
         .is_ok());
     call.hang_up().await;
 }
+
+/// Sends clip `id` again as the browser's outbox does after a reconnect: the
+/// same id, bytes, and stamp.
+async fn resend_clip(state: &AppState, connection: &DeliveryConnection, id: &str, generation: u64) {
+    let mut header = None;
+    let clip = json!({"type":"clip", "id":id, "mime":"audio/webm", "generation":generation});
+    handle_text_frame(
+        state,
+        connection.epoch,
+        &mut header,
+        &mut None,
+        &clip.to_string(),
+    )
+    .await
+    .unwrap();
+    handle_audio_frame(
+        state,
+        connection.epoch,
+        &mut header,
+        &mut None,
+        b"speech".to_vec(),
+    )
+    .await
+    .unwrap();
+}
+
+/// Waits for the verdict on clip `id` to be emitted, whether or not a
+/// connection is there to receive it.
+async fn verdict_emitted(events: &mut broadcast::Receiver<Event>, id: &str) -> Value {
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("a verdict before the deadline")
+            .expect("the event stream stays open");
+        if let Event::Json(value) = event {
+            if value["id"] == id && matches!(value["type"].as_str(), Some("transcript" | "error")) {
+                return value;
+            }
+        }
+    }
+}
+
+// Issue #71: a verdict that lands while the tab is disconnected went nowhere,
+// and the resend after the reconnect was taken as a duplicate and never
+// answered.
+#[tokio::test]
+async fn a_clip_resent_after_its_verdict_was_missed_is_answered_with_it() {
+    let state = state_with_stt(Some(HEARD_WHILE_CONNECTING.into()));
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let generation = state.0.coordinator.generation();
+    upload_clip(&state, &mut connection, "missed", generation).await;
+
+    // The tab drops before the clip is transcribed.
+    state.0.delivery.retire(connection.epoch);
+    let mut events = state.0.events.subscribe();
+    let clip_worker = tokio::spawn(process_clips(state.clone()));
+    let verdict = verdict_emitted(&mut events, "missed").await;
+    assert_eq!(verdict["type"], "transcript");
+
+    // The tab is back and sends the clip it never heard about.
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    resend_clip(&state, &connection, "missed", generation).await;
+    let frames = frames_until(&mut connection, "transcript").await;
+    assert_eq!(
+        types_of(&frames),
+        ["transcript"],
+        "answered, not accepted again"
+    );
+    assert_eq!(frames[0], verdict);
+    // Answered from memory: the clip is not transcribed or queued twice.
+    assert_eq!(state.0.queued_turns.load(Ordering::Acquire), 1);
+    assert_eq!(state.0.transcript_log.lock().await.entries().len(), 1);
+
+    clip_worker.abort();
+}
+
+#[tokio::test]
+async fn a_stale_clip_resent_after_a_reconnect_is_told_it_was_dropped() {
+    let state = state_with_stt(Some(HEARD_WHILE_CONNECTING.into()));
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let old = state.0.coordinator.generation();
+    upload_clip(&state, &mut connection, "stale", old).await;
+    state.0.delivery.retire(connection.epoch);
+    // The leg changes while the tab is away, so the clip is dropped.
+    state.0.coordinator.begin_rescue("page rescue");
+    let mut events = state.0.events.subscribe();
+    let clip_worker = tokio::spawn(process_clips(state.clone()));
+    verdict_emitted(&mut events, "stale").await;
+
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    resend_clip(&state, &connection, "stale", old).await;
+    let frames = frames_until(&mut connection, "error").await;
+    assert_eq!(types_of(&frames), ["error"]);
+    assert_dropped_with_notice(&frames[0], "stale");
+    assert_never_queued(&state).await;
+
+    clip_worker.abort();
+}
+
+#[test]
+fn clip_verdicts_are_bounded_and_keep_the_latest_word() {
+    let mut verdicts = ClipVerdicts::default();
+    verdicts.record("first", ServerMessage::error_for("first", "one"));
+    verdicts.record("first", ServerMessage::error_for("first", "two"));
+    assert_eq!(
+        verdicts.get("first"),
+        Some(ServerMessage::error_for("first", "two"))
+    );
+    for index in 0..REMEMBERED_CLIP_VERDICTS {
+        verdicts.record(&format!("clip-{index}"), ServerMessage::error("x"));
+    }
+    assert_eq!(
+        verdicts.get("first"),
+        None,
+        "the oldest verdict is forgotten"
+    );
+    assert!(verdicts.get("clip-0").is_some());
+    assert_eq!(verdicts.by_id.len(), REMEMBERED_CLIP_VERDICTS);
+    assert_eq!(verdicts.oldest_first.len(), REMEMBERED_CLIP_VERDICTS);
+}
+
+// Issue #70: the browser carries speech recorded while a leg was connecting
+// to the next epoch only when that leg was adopted, so the clear notice must
+// say which way the candidate ended.
+#[tokio::test]
+async fn the_candidate_clear_notice_says_how_the_candidate_ended() {
+    let state = state();
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    begin_alpha_candidate(&state, "alpha-leg");
+    let frames = frames_until(&mut connection, "candidate").await;
+    assert_eq!(frames.last().unwrap()["route"], "alpha");
+
+    // A hangup while connecting: the clear notice comes first, then the epoch.
+    cancel_active_operations(&state).await;
+    let frames = frames_until(&mut connection, "epoch").await;
+    assert_eq!(types_of(&frames), ["candidate_cleared", "epoch"]);
+    assert_eq!(frames[0]["reason"], "rescued");
+    assert_eq!(
+        frames[0]["route"], "alpha",
+        "it names the leg that was starting"
+    );
+
+    begin_alpha_candidate(&state, "alpha-leg-2");
+    frames_until(&mut connection, "candidate").await;
+    assert!(state.0.leg_announcer.promote_candidate("alpha-leg-2").await);
+    let frames = frames_until(&mut connection, "epoch").await;
+    assert_eq!(types_of(&frames), ["candidate_cleared", "epoch"]);
+    assert_eq!(frames[0]["reason"], "adopted");
+    assert_eq!(frames[0]["route"], "alpha");
+    assert_eq!(frames[0]["generation"], frames[1]["generation"]);
+}
+
+fn snapshot_types(messages: &[ServerMessage]) -> Vec<String> {
+    messages
+        .iter()
+        .map(|message| message.to_value()["type"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+// Issue #70, for a tab that was away: it misses the live clear notice, so the
+// snapshot has to say whether the epoch it announces is an adoption's.
+#[tokio::test]
+async fn a_snapshot_names_the_adoption_only_while_the_adopted_leg_is_on_the_line() {
+    let state = state();
+    assert_eq!(
+        snapshot_types(&snapshot_messages(&state).await),
+        ["epoch", "status", "history"]
+    );
+
+    begin_alpha_candidate(&state, "alpha-leg");
+    assert!(state.0.leg_announcer.promote_candidate("alpha-leg").await);
+    let generation = state.0.coordinator.generation();
+    let snapshot = snapshot_messages(&state).await;
+    assert_eq!(
+        snapshot_types(&snapshot),
+        ["candidate_cleared", "epoch", "status", "history"]
+    );
+    assert_eq!(
+        snapshot[0],
+        ServerMessage::CandidateCleared {
+            route: "alpha".into(),
+            generation,
+            reason: CandidateEnd::Adopted,
+        }
+    );
+    assert_eq!(snapshot[1], ServerMessage::Epoch { generation });
+
+    // The caller hangs up: the epoch moves, and it is not an adoption's.
+    cancel_active_operations(&state).await;
+    assert_eq!(
+        snapshot_types(&snapshot_messages(&state).await),
+        ["epoch", "status", "history"]
+    );
+}

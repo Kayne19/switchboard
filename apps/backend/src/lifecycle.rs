@@ -10,7 +10,7 @@
 //! leg only through the named transitions here; everything else reads it.
 
 use crate::models::{parse_spec, ModelCatalog, THINKING_LEVELS};
-use crate::protocol::{ModelEntry, Status};
+use crate::protocol::{CandidateEnd, ModelEntry, Status};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -106,14 +106,18 @@ impl CandidateLeg {
 }
 
 /// Notice to the presentation layer that a candidate leg began or ended.
-/// The browser shows "connecting to {route}" while a notice is active and
-/// resubmits speech recorded during that window, and not yet sent, once the
-/// epoch moves; the clear notice arrives on adoption, rollback, and rescue.
+/// The browser shows "connecting to {route}" while a candidate is starting.
+/// Speech recorded during that window, and not yet sent, is carried to the
+/// next epoch only when the candidate ends `Adopted`: a rollback or a rescue
+/// sends the same clear notice, and a rescue a new epoch as well, but the
+/// caller never reached the leg those words were addressed to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CandidateNotice {
+    /// The route of the leg that was starting, however it ended.
     pub route: String,
     pub generation: u64,
-    pub active: bool,
+    /// `None` while the candidate is starting; how it ended once it has.
+    pub ended: Option<CandidateEnd>,
 }
 
 pub type CandidateCallback = Arc<dyn Fn(&CandidateNotice) + Send + Sync>;
@@ -174,8 +178,8 @@ impl std::error::Error for LifecycleError {}
 
 /// What a rescue retired, for the notice sent once the state lock is released.
 struct Rescue {
-    abandoned_candidate: bool,
-    route: String,
+    /// The route of the candidate the rescue abandoned, if one was starting.
+    abandoned_candidate: Option<String>,
     next: LegIdentity,
 }
 
@@ -213,6 +217,9 @@ pub struct CallLifecycle {
     terminal_reason: Option<String>,
     candidate: Option<CandidateLeg>,
     startup_rollback: Option<StartupRollback>,
+    /// The leg the last adoption put on the line. While it is still the leg
+    /// on the line, the generation is the one it was adopted at.
+    adopted: Option<LegIdentity>,
     /// The catalog the project leg launched with.
     catalog: Option<Arc<ModelCatalog>>,
 }
@@ -223,7 +230,7 @@ impl CallLifecycle {
             route: OPERATOR.into(),
             project: None,
             persistent_session_id: String::new(),
-            leg: LegIdentity::new("operator", 0),
+            leg: LegIdentity::new(OPERATOR, 0),
             phase: Phase::Operator,
             model: String::new(),
             thinking_requested: String::new(),
@@ -234,6 +241,7 @@ impl CallLifecycle {
             terminal_reason: None,
             candidate: None,
             startup_rollback: None,
+            adopted: None,
             catalog: None,
         }
     }
@@ -541,8 +549,7 @@ impl Coordinator {
     /// rescued candidate must never be adopted, and the browser must stop
     /// showing "connecting".
     fn rescue_locked(&self, state: &mut CallLifecycle, reason: String) -> Rescue {
-        let abandoned_candidate = state.candidate.take().is_some();
-        let route = state.route.clone();
+        let abandoned_candidate = state.candidate.take().map(|candidate| candidate.route);
         let next_token = format!("{}-rescue-{}", state.leg.token, state.leg.generation + 1);
         state.leg = LegIdentity::new(next_token, state.leg.generation + 1);
         if state.phase != Phase::Shutdown {
@@ -553,7 +560,6 @@ impl Coordinator {
         self.refresh_locked(state);
         Rescue {
             abandoned_candidate,
-            route,
             next: state.leg.clone(),
         }
     }
@@ -561,16 +567,16 @@ impl Coordinator {
     /// Tells the presentation layer what a rescue ended. The clear notice
     /// carries the post-rescue generation.
     fn announce_rescue(&self, rescue: &Rescue) {
-        if rescue.abandoned_candidate {
+        if let Some(route) = &rescue.abandoned_candidate {
             self.notify_candidate(&CandidateNotice {
-                route: rescue.route.clone(),
+                route: route.clone(),
                 generation: rescue.next.generation,
-                active: false,
+                ended: Some(CandidateEnd::Rescued),
             });
         }
         tracing::info!(
             generation = rescue.next.generation,
-            abandoned_candidate = rescue.abandoned_candidate,
+            abandoned_candidate = rescue.abandoned_candidate.as_deref(),
             "rescue retired the current leg"
         );
     }
@@ -600,8 +606,17 @@ impl Coordinator {
     /// thinking, and catalog are gone with its leg. A call at rest or
     /// quiescing is now at rest on the operator; a turn still running (the
     /// operator is being told why the caller came back) settles when it ends.
+    ///
+    /// The project leg's token is retired with it. The leg takes the
+    /// operator's identity at the same generation, so a callback still
+    /// carrying the project's token (a remote process that outlived its ssh
+    /// client, a request already in flight) is refused rather than taken as
+    /// the operator's.
     pub fn return_to_operator(&self) {
         self.linearize(|state| {
+            if !state.on_operator() {
+                state.leg = LegIdentity::new(OPERATOR, state.leg.generation);
+            }
             state.route = OPERATOR.into();
             state.project = None;
             state.persistent_session_id.clear();
@@ -653,7 +668,7 @@ impl Coordinator {
             self.notify_candidate(&CandidateNotice {
                 route,
                 generation: state.leg.generation,
-                active: true,
+                ended: None,
             });
             Ok(())
         })
@@ -671,6 +686,9 @@ impl Coordinator {
             if matches!(state.phase, Phase::Quiescing | Phase::Shutdown) {
                 return Err(LifecycleError::StaleLeg);
             }
+            // The operator's leg has an identity of its own: a project leg's
+            // token is retired when the caller comes back
+            // (`return_to_operator`), so it cannot speak for the operator.
             if state.on_operator() {
                 if token.is_empty() || token == state.leg.token {
                     return Ok(());
@@ -706,6 +724,19 @@ impl Coordinator {
             state.thinking_effective = thinking.to_owned();
             self.refresh_locked(state);
             Ok(true)
+        })
+    }
+
+    /// The generation, read together with the route of the leg on the line
+    /// if an adoption put it there at that generation and nothing has
+    /// replaced it since: no rescue, idle return, or return to the operator,
+    /// each of which gives the line a new identity. A reconnecting browser is
+    /// told of the adoption, because it may hold speech recorded while that
+    /// leg was connecting (see `CandidateNotice`).
+    pub fn generation_and_adoption(&self) -> (u64, Option<String>) {
+        self.linearize(|state| {
+            let adopted = (state.adopted.as_ref() == Some(&state.leg)).then(|| state.route.clone());
+            (state.leg.generation, adopted)
         })
     }
 
@@ -782,10 +813,11 @@ impl Coordinator {
             });
             state.terminal_reason = None;
             state.catalog = candidate.catalog;
+            state.adopted = Some(identity.clone());
             self.notify_candidate(&CandidateNotice {
                 route,
                 generation: identity.generation,
-                active: false,
+                ended: Some(CandidateEnd::Adopted),
             });
             self.refresh_locked(state);
             Ok(identity)
@@ -808,14 +840,14 @@ impl Coordinator {
 
     pub fn rollback_startup(&self, reason: impl Into<String>) -> bool {
         self.linearize(|state| {
-            if state.candidate.take().is_some() {
+            if let Some(candidate) = state.candidate.take() {
                 state.startup_rollback = None;
                 state.terminal_reason = Some(reason.into());
                 state.phase = state.resting_phase();
                 self.notify_candidate(&CandidateNotice {
-                    route: state.route.clone(),
+                    route: candidate.route,
                     generation: state.leg.generation,
-                    active: false,
+                    ended: Some(CandidateEnd::RolledBack),
                 });
                 self.refresh_locked(state);
                 return true;
@@ -824,7 +856,7 @@ impl Coordinator {
                 return false;
             };
             let generation = state.leg.generation;
-            state.route = previous.route;
+            let abandoned_route = std::mem::replace(&mut state.route, previous.route);
             state.project = previous.project;
             state.persistent_session_id = previous.persistent_session_id;
             state.leg = LegIdentity::new(previous.leg.token, generation);
@@ -836,9 +868,9 @@ impl Coordinator {
             state.terminal_reason = Some(reason.into());
             state.catalog = previous.catalog;
             self.notify_candidate(&CandidateNotice {
-                route: state.route.clone(),
+                route: abandoned_route,
                 generation: state.leg.generation,
-                active: false,
+                ended: Some(CandidateEnd::RolledBack),
             });
             self.refresh_locked(state);
             true

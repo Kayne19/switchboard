@@ -63,10 +63,18 @@ export interface CandidateMessage {
 	generation: number;
 }
 
-/// The candidate leg was adopted, rolled back, or rescued away.
+/// How a candidate leg ended.
+export type CandidateEnd = "adopted" | "rolled_back" | "rescued";
+
+/// The candidate leg on `route` ended, and `reason` says how. Only an adopted
+/// candidate's clips are carried to its epoch. A connection's snapshot starts
+/// with an `adopted` one when the leg on the line was adopted at the current
+/// epoch.
 export interface CandidateClearedMessage {
 	type: "candidate_cleared";
+	route: string;
 	generation: number;
+	reason: CandidateEnd;
 }
 
 /// The line's status: who is on it, their model and thinking level, and which
@@ -266,6 +274,11 @@ function literal<T extends string>(expected: T): Read<T> {
 	return (value) => (value === expected ? expected : INVALID);
 }
 
+function oneOf<T extends string>(...expected: T[]): Read<T> {
+	return (value) =>
+		expected.includes(value as T) ? (value as T) : INVALID;
+}
+
 function optional<T>(read: Read<T>): Read<T | undefined> {
 	return (value) => (value === undefined ? undefined : read(value));
 }
@@ -333,7 +346,11 @@ const MESSAGE_FIELDS: { [Type in MessageType]: MessageFields<Type> } = {
 	pong: { nonce: string, time: number },
 	epoch: { generation: number },
 	candidate: { route: string, generation: number },
-	candidate_cleared: { generation: number },
+	candidate_cleared: {
+		route: string,
+		generation: number,
+		reason: oneOf<CandidateEnd>("adopted", "rolled_back", "rescued"),
+	},
 	status: {
 		route: string,
 		label: string,

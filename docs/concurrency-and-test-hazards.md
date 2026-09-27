@@ -78,6 +78,21 @@ the `epoch` event arrives, so the caller's words reach the new leg as a fresh
 turn. Any clip without that mark keeps the discard: a wrong number can only
 lose speech, never misroute it.
 
+Only an adoption carries the marked clips along. A hangup while the leg is
+connecting rescues the call, and a rescue sends the browser the same two
+signals an adoption does: a clear notice and an epoch one higher. Taken for
+an adoption, it re-stamped the caller's words to alpha and they ran as a turn
+on the operator (#70). So `candidate_cleared` names the candidate's `route`
+and says how it ended (`reason`: `adopted`, `rolled_back`, or `rescued`), and
+the browser re-stamps a clip only on the epoch that notice names, for an
+`adopted` candidate on the route the clip was marked with, one epoch after
+the stamp it was recorded under. Any other ending strips the mark. A tab that
+was disconnected through the whole change sees no notice, only the snapshot's
+epoch, so the snapshot sends an `adopted` notice ahead of its epoch while the
+adopted leg is still the one on the line (`Coordinator::generation_and_adoption`).
+A rescue, an idle return, and a return to the operator each give the line a
+new identity, and end that.
+
 ### A clip on the wire when the leg is adopted
 
 A marked clip that already went out carries the old epoch, and the server keeps
@@ -112,12 +127,30 @@ to. Dropping can only lose speech.
 
 The browser therefore leaves a clip that went out whole on the stamp it went
 out with (`transmitted` in `apps/frontend/src/runtime/outbox.ts`, which a
-reconnect does not clear), drops it with the other clips from the retired epoch,
-and leaves the telling to the server. Re-stamping it used to announce that it
-was being carried along; and after a reconnect it went out again under the new
-epoch and the server, seeing an id it already held, accepted it and never
-answered. A clip the browser drops that never went out gets a notice from the
-browser, because the server never saw it.
+reconnect does not clear) and leaves the telling to the server. Re-stamping it
+used to announce that it was being carried along; and after a reconnect it
+went out again under the new epoch and the server, seeing an id it already
+held, accepted it and never answered. A clip the browser drops that never went
+out gets a notice from the browser, because the server never saw it.
+
+### A verdict that lands while the tab is away
+
+The server sends a clip's outcome, its `transcript` or an ID-bearing `error`
+such as `stale_epoch`, to whichever connection is registered when the outcome
+is known. If the tab is disconnected then, the message goes nowhere. The
+browser keeps every clip that went out until it hears back, the stale ones
+included, and sends them again after a reconnect under the stamp each went out
+with. The server used to take such a resend as the duplicate it was and say
+nothing, so the clip sat at "Transcribing" (#71).
+
+It now remembers the message that settled each recent clip (`ClipVerdicts` in
+`apps/backend/src/api.rs`, bounded like the accepted-clip window) and answers
+a resend of a settled clip with it, on the connection that sent it. A verdict
+is recorded before it is sent, so a resend that races it either finds it or is
+registered in time to receive it live. A clip still in the pipeline is
+acknowledged again and answered live, and a clip the server has forgotten,
+after a restart, is processed as it arrives: under its old stamp it is dropped
+with a `stale_epoch`, as it would have been the first time.
 
 A leg started from the page differs in one way: no turn is running, so the
 turn worker is free while the leg starts. It used to take a queued clip at
@@ -147,7 +180,10 @@ conversation (issue #22).
 reset once per leg, keyed by route and generation, by whichever announcement
 gets there first; the later one only restates the status. Route is part of the
 key because a return to the operator keeps the generation and must still clear
-the project's scene. Promotion holds the display gate from adoption until the
+the project's scene. It does not keep the project leg's token: the line takes
+the operator's own identity at that generation, so a callback still carrying
+the project's token (a remote process that outlived its ssh client, a request
+already in flight) is refused rather than taken as the operator's (#77). Promotion holds the display gate from adoption until the
 `epoch` is published, so a display from the new leg cannot be applied, and then
 wiped, ahead of its own reset.
 
@@ -188,10 +224,10 @@ retires a lagging socket rather than blocking the call.
 
 Audio reservations are generation-stamped and sequenced across mid-turn speech
 and settled replies. Cancellation releases a slot so a stale TTS result cannot
-wedge later speech. The browser drops queued/playing audio and outbox clips on a
-new epoch, and tells the caller when any of those clips never went out. A stale
-clip that did go out receives an ID-bearing `stale_epoch` error and is removed
-from the outbox rather than retried forever.
+wedge later speech. The browser drops queued/playing audio and the outbox clips
+that never went out on a new epoch, and tells the caller about those. A stale
+clip that did go out stays until it receives its ID-bearing `stale_epoch`
+error, then is removed from the outbox rather than retried forever.
 
 The route/model/thinking pickers serialize their HTTP operations. A failed picker
 request restores the value that was selected before that request, unless a newer

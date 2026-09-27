@@ -128,7 +128,7 @@ async function callTheOperator() {
 // adopted, the scene moves to the new leg, and its status follows.
 async function adoptTheProjectLeg() {
   await receive({ type: 'candidate', route: 'switchboard', generation: 1 });
-  await receive({ type: 'candidate_cleared', generation: 2 });
+  await receive({ type: 'candidate_cleared', route: 'switchboard', generation: 2, reason: 'adopted' });
   await receive({ type: 'epoch', generation: 2 });
   await receive(projectStatus);
 }

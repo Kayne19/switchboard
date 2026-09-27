@@ -1,5 +1,6 @@
 use super::*;
 use crate::models::{CatalogEntry, ModelCatalog};
+use crate::protocol::CandidateEnd;
 use std::sync::Arc;
 use std::thread;
 
@@ -41,7 +42,7 @@ fn candidate_notices_track_startup_adopt_rollback_and_rescue() {
         vec![CandidateNotice {
             route: "alpha".into(),
             generation: 0,
-            active: true,
+            ended: None,
         }]
     );
     // A rescue abandons the in-flight startup and must clear the notice.
@@ -52,12 +53,12 @@ fn candidate_notices_track_startup_adopt_rollback_and_rescue() {
             CandidateNotice {
                 route: "alpha".into(),
                 generation: 0,
-                active: true,
+                ended: None,
             },
             CandidateNotice {
-                route: "operator".into(),
+                route: "alpha".into(),
                 generation: 1,
-                active: false,
+                ended: Some(CandidateEnd::Rescued),
             },
         ]
     );
@@ -72,12 +73,12 @@ fn candidate_notices_track_startup_adopt_rollback_and_rescue() {
             CandidateNotice {
                 route: "alpha".into(),
                 generation: 0,
-                active: true
+                ended: None,
             },
             CandidateNotice {
                 route: "alpha".into(),
                 generation: 1,
-                active: false
+                ended: Some(CandidateEnd::Adopted),
             },
         ]
     );
@@ -91,12 +92,12 @@ fn candidate_notices_track_startup_adopt_rollback_and_rescue() {
             CandidateNotice {
                 route: "alpha".into(),
                 generation: 0,
-                active: true
+                ended: None,
             },
             CandidateNotice {
-                route: "operator".into(),
+                route: "alpha".into(),
                 generation: 0,
-                active: false,
+                ended: Some(CandidateEnd::RolledBack),
             },
         ]
     );
@@ -449,6 +450,69 @@ fn return_to_operator_clears_the_leg_from_every_phase() {
     call.return_to_operator();
     assert_eq!(phase(&call), Phase::Shutdown);
     assert_on_the_operator(&call);
+}
+
+#[test]
+fn the_adoption_is_on_the_line_until_the_leg_is_replaced() {
+    let call = coordinator();
+    assert_eq!(call.generation_and_adoption(), (0, None));
+    on_alpha(&call);
+    assert_eq!(call.generation_and_adoption(), (1, Some("alpha".into())));
+    // A hangup while on alpha: the rescue, then the return. Neither leaves
+    // the adoption on the line, although the return keeps the generation.
+    call.begin_rescue("hangup");
+    assert_eq!(call.generation_and_adoption(), (2, None));
+
+    let call = coordinator();
+    on_alpha(&call);
+    call.return_to_operator();
+    assert_eq!(call.generation_and_adoption(), (1, None));
+
+    // A candidate rescued while it starts was never adopted.
+    let call = coordinator();
+    call.begin_candidate(alpha_candidate()).unwrap();
+    call.begin_rescue("hangup");
+    assert_eq!(call.generation_and_adoption(), (1, None));
+}
+
+// Issue #77: a return to the operator kept the project leg's identity, so a
+// callback carrying that leg's token was taken as the operator's own.
+#[test]
+fn a_return_to_the_operator_retires_the_project_legs_token() {
+    let call = coordinator();
+    on_alpha(&call);
+    let project = call.current_identity();
+    assert_eq!(project.token, "cand");
+
+    // Mid-turn, as when the agent hands the caller back: the operator is
+    // being told why, and the project's process may still be on its way out.
+    let operation = call.begin_prompt(&project).unwrap();
+    call.return_to_operator();
+    let operator = call.current_identity();
+    assert_eq!(operator, LegIdentity::new("operator", project.generation));
+    assert_eq!(
+        call.accept_side_effect("cand"),
+        Err(LifecycleError::StaleLeg),
+        "the project leg's token no longer speaks for the line"
+    );
+    assert_eq!(
+        call.accept_thinking_callback("cand", "high"),
+        Err(LifecycleError::StaleLeg)
+    );
+    assert_eq!(call.accept_side_effect(""), Ok(()));
+    assert_eq!(call.accept_side_effect("operator"), Ok(()));
+    // The turn that brought the caller back still ends as its own.
+    assert!(call.finish_operation(&operation));
+
+    // At rest, and after the operator itself is rescued, the project's token
+    // stays refused.
+    call.begin_rescue("page rescue");
+    call.settle();
+    assert_eq!(
+        call.accept_side_effect("cand"),
+        Err(LifecycleError::StaleLeg)
+    );
+    assert_eq!(call.accept_side_effect(""), Ok(()));
 }
 
 #[test]
