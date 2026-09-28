@@ -11,11 +11,12 @@
     "build:v17": "npm run typecheck && node scripts/clean_v17_assets.mjs && vite build --config apps/frontend/vite.config.ts",
     "dev": "vite --config apps/frontend/vite.config.ts",
     "preview": "vite preview --config apps/frontend/vite.config.ts",
-    "test": "npm run build && npm run test:skill && npm run test:node && npm run test:v17 && npm run test:host-agent",
+    "test": "npm run build && npm run test:skill && npm run test:node && npm run test:v17 && npm run test:host-agent && npm run test:no-ssh",
     "test:skill": "python3 -m unittest discover skills/switchboard/tests",
     "test:node": "node apps/frontend/tests/test_protocol.mjs && node apps/frontend/tests/test_extensions.mjs && node apps/frontend/tests/test_hands_free.mjs",
     "test:v17": "node apps/frontend/scripts/verify-syntax.mjs && vitest run --root apps/frontend tests/unit && node apps/frontend/scripts/verify-design-lock.mjs",
     "test:host-agent": "node --test \"apps/host-agent/tests/*.test.ts\"",
+    "test:no-ssh": "node scripts/check_no_ssh.mjs",
     "test:visual": "playwright test --config apps/frontend/playwright.config.ts",
     "test:integration": "playwright test --config apps/frontend/playwright.production.config.ts"
   },
