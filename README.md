@@ -39,7 +39,11 @@ Everything a project leg needs from its host is set up once, at startup, by
 - **The agent extension.** Staged once to every host that needs it: written
   to a temporary file, checked against its SHA-256, then moved into place. A
   host that cannot take it launches its legs without it; a changed extension
-  reaches hosts with the next restart.
+  reaches hosts with the next restart. This repository no longer ships a
+  project extension: project agents now reach the caller through the
+  `switchboard` Python skill module (`skills/switchboard/`), which talks to
+  the host agent (`docs/host-link.md`). Staging still reads the file named by
+  `SWITCHBOARD_AGENT_EXTENSION` until project legs move to the host agent.
 - **Prepare commands.** Each project's `prepare` runs once. Its output, exit
   status, or timeout becomes a timestamped report the incoming agent is shown;
   a failure is reported, not retried, and does not block the project.
@@ -63,8 +67,9 @@ two-minute stretch of tool calls is two minutes of silence, which on a phone
 call is indistinguishable from a dropped connection.
 
 So the agent decides what to say and when, mid-turn, and its written output
-stays written. `speak` POSTs to this service's `/speak`, which pushes audio
-straight to the browser without waiting for anything.
+stays written. `switchboard.speak` (the Python skill module) sends the line
+through the host agent to this service, which pushes audio straight to the
+browser without waiting for anything.
 
 The fallback matters too: if an agent finishes a turn having never called
 `speak`, the switchboard voices its written reply rather than leaving the caller
@@ -75,8 +80,9 @@ the switchboard to read out — so both paths produce a working call.
 
 `speak` is deliberately **not** MCP. Pi has no built-in MCP because tool
 definitions are expensive context; an adapter would add a config file, a
-process, and a per-host install. A tool already staged to every host the
-switchboard connects to has none of that.
+process, and a per-host install. A Python module in the agent's own kernel
+keeps tool definitions out of every request, and can combine `speak` and
+`display` in one cell.
 
 ## Showing rather than saying
 
@@ -196,11 +202,12 @@ name, and a page that says "default" is telling you nothing you can act on.
 
 Asking is not the same as getting. A model whose `thinkingLevelMap` has holes
 gets clamped to a level it does have, silently, inside the session — so the
-level on the command line can be a level nothing is running at. The agent
-extension therefore reports `pi.getThinkingLevel()` back to `POST /leg-state`
-when its session starts and whenever the level changes under it, and that
-reported value is what the page shows. Until a leg reports, the page marks the
-level as requested rather than stating it.
+level on the command line can be a level nothing is running at. The page
+therefore shows the level a leg reports to `POST /leg-state`; until a leg
+reports, it marks the level as requested rather than stating it. The removed
+pi extension sent that report. The host agent now reads the effective level
+from the daemon and sends it in session `info` and `state` events
+(`docs/host-link.md`).
 
 `POST /thinking` (the picker on the page) sets the level for the rest of the
 process and re-dials the live project leg onto it, keeping the session file. The
@@ -210,9 +217,9 @@ operator is never re-dialled for this; its level is a deployed setting.
 Project callbacks carry `SWITCHBOARD_SESSION_TOKEN`, an opaque token freshly
 created for each process and distinct from the persistent Pi session ID. It
 rejects stale speech, display, and thinking callbacks after a redial; it is a
-correlation value, not authentication. A failed `/speak` delivery is reported
-as an extension tool error, so the written reply remains eligible for fallback
-synthesis rather than being suppressed by a tool-start event.
+correlation value, not authentication. A failed speech delivery is returned to
+the agent as a `refused` or `failed` result, so the written reply remains
+eligible for fallback synthesis.
 
 ## Connecting without the operator
 
@@ -267,10 +274,11 @@ does not manage:
 2. the agent runtime the entry names (`pi`) installed and authenticated there
 3. the `cwd` to actually exist
 
-The switchboard stages its own tools (`speak`, `display`, `return_to_operator`,
-and the rest of `extensions/agent-switchboard.ts`) into
-`~/.cache/switchboard/extensions/` on the host at startup, so that part needs
-no setup.
+The project agent's tools (`speak`, `display`, `view`, `return_to_operator`,
+`transfer_to_project` and `set_model`) are the `switchboard` Python skill
+module in `skills/switchboard/`. It works only during a call, through the host
+agent's local skill socket (`docs/host-link.md`, "Skill socket"); every call
+returns a result and prints one line, and a refusal or failure never raises.
 
 If the agent binary is installed per-user (`~/.local/bin/pi` is the common
 case), give `runtime` the **absolute path**. A non-interactive ssh session does
@@ -297,10 +305,11 @@ test it manually and then fails with "command not found" for the switchboard.
 | `apps/frontend/src/` | V17.2 React presentation and its call runtime |
 | `apps/frontend/src/runtime/` | the browser's side of a call: backend WebSocket, push-to-talk, playback, hands-free wiring |
 | `apps/frontend/src/hands_free.ts` | hands-free controller, real wake adapter, and separate VAD endpointing |
-| `apps/frontend/tests/` | browser, display, and pi-extension tests |
+| `apps/frontend/tests/` | browser, display, and operator-extension tests |
 | `static/index.html`, `static/v17-assets/`, `static/vad-worklet.js` | committed deterministic browser build output |
 | `static/openwakeword/` | same-origin Hey Jarvis ONNX, wrapper, and ONNX Runtime WASM assets |
-| `extensions/*.ts` | the pi extensions: `operator-switchboard.ts` for the operator, `agent-switchboard.ts` for project legs |
+| `extensions/operator-switchboard.ts` | the operator's pi extension |
+| `skills/switchboard/` | the `switchboard` Python skill module project agents use to reach the caller, and its tests |
 | `docs/environment.md` | every environment variable the service reads, and what it passes to agents |
 | `docs/architecture.md` | ownership boundaries and the rules for where new behavior goes |
 | `docs/display-tool.md` | the `display` tool: payload, operations, layout, and composition |
@@ -325,14 +334,14 @@ WebM/Opus clients after the WebSocket hello handshake; unavailable or
 backpressured workers explicitly fall back to the complete-clip contract.
 
 `SWITCHBOARD_SPEECH_DEADLINE_MS` bounds one synthesized utterance, for `/speak`
-and for replies alike, and the project extension aborts at the same deadline;
-the service passes the value to every leg so the two cannot disagree.
+and for replies alike. The skill module waits for the speech deadline the host
+agent gives it with the call token, so the two cannot disagree.
 
 ## Building and testing
 
 ```bash
 npm ci
-npm test                     # builds static/, then browser, display, and extension tests
+npm test                     # builds static/, then skill module, browser, display, and extension tests
 git diff --exit-code -- static
 cargo fmt --all -- --check
 cargo test --locked
