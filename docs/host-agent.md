@@ -15,6 +15,30 @@ Everything below was measured on this machine with:
 - source references point at that 0.9.5 package's `dist/` (the 0.9.6 binary
   is minified; behaviour was confirmed by the probe, not by reading 0.9.6).
 
+## Decisions (reviewed with the user, 2026-09-27)
+
+These follow from the findings below and change the plan's details for step 2.
+
+- **Session names.** A name can be used once per agent dir, even after the
+  session is killed. The host agent names each new call session
+  `sb-<project>-<short id>`. The service recognises its sessions by the
+  `sb-<project>-` prefix, and resumes an old one by its saved session id.
+- **The voice brief rides on the first real message.** `config.appendSystemPrompt`
+  would replace the project's own `APPEND_SYSTEM.md`, so it is not used. The
+  host agent puts the brief at the start of the first prompt it sends for the
+  caller (the transfer request, or the first routed line after a takeover), so
+  it adds no extra message and no extra turn. After a compaction, the brief
+  rides on the next routed line again.
+- **The daemon runs in its own systemd user unit** on each project host, with
+  linger enabled. The host agent runs in a separate unit and only connects; it
+  never starts the daemon. Desk sessions on that host use the same daemon.
+  The installer sets this up.
+- **Reconnect.** The daemon does not replay missed events. The host agent keeps
+  its own buffer of recent events, so a dropped link to the switchboard resumes
+  by cursor. When the host agent itself restarts, it rebuilds each session
+  from the daemon's snapshot.
+- **Tool policy** keeps `ipython` (the `switchboard` module needs it).
+
 ## The probe
 
 `scripts/spikes/prime-daemon-probe.mjs` is a plain Node 22 script. It imports

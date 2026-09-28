@@ -199,6 +199,27 @@ numbers may be copied into this document or another committed document.
 The smoke check uses invented cases marked `synthetic: true`. It is not the
 real evaluation.
 
+## Decisions (reviewed with the user, 2026-09-27)
+
+- **The call summary is as rich as the budget allows.** Jev gets everything
+  that helps it decide: what the caller said before, what the agents said and
+  are doing (state, model, task, a pending request to speak), what is on the
+  caller's screen, and live desk sessions. Each part is a small named object.
+  The summary must stay under Jev's limit of 32,000 tokens for the state plus
+  the longest question; when it would not, the oldest conversation turns are
+  dropped first. The budget is a setting. The evaluation state above is a
+  subset of this: the old calls had one agent at a time and no saved screen
+  state.
+- **When Jev is unsure, the LLM decides** (the plan as written, "ask when
+  unsure" below). The test set cannot show calls with several agents at once,
+  so a policy that defaults to the current agent is not proven for them.
+- **Starting thresholds** (settings, not constants): the line is for the
+  current agent when `for_current_agent` is at least 0.7; the LLM decides when
+  it is between 0.3 and 0.7; otherwise Jev's action is used when its
+  confidence is at least 0.6, and the LLM decides below that. Stopping an agent
+  always asks the caller first, whatever the confidence.
+- Revisit the thresholds with real calls once several agents can run at once.
+
 ## Results
 
 Run on 2026-09-27 with `jev-latest`, on the real cases described above, with
@@ -243,7 +264,7 @@ passed to the current agent instead.
 
 | Policy | Thresholds | Decided by Jev | Right when decided | Sent to the LLM | Wrongly moved away | Left with agent |
 |---|---|---:|---:|---:|---:|---:|
-| Ask when unsure (plan as written) | yes/no band 0.3–0.7, act at 0.6 | 77% | 98.8% | 77 of 328 | 1 | 1 |
+| **Ask when unsure (chosen)** | yes/no band 0.3–0.7, act at 0.6 | 77% | 98.8% | 77 of 328 | 1 | 1 |
 | Ask when unsure | band 0.4–0.6, act at 0.6 | 88% | 97.6% | 38 | 3 | 3 |
 | Ask when unsure | band 0.3–0.7, act at 0.8 | 75% | 99.6% | 81 | 0 | 1 |
 | Stay unless sure | stay at 0.3, override at 0.8, act at 0.6 | 98% | 95.3% | 6 | 3 | 11 |
@@ -253,9 +274,9 @@ passed to the current agent instead.
 `for_current_agent` is at least the stay threshold, unless the action answer is
 something else with confidence at least the override threshold.
 
-With "ask when unsure" at the first setting, about one line in four goes to the
-LLM, which adds the LLM's delay to that turn. Which policy to use, and its
-thresholds, is for the user to decide before the router slice.
+With the chosen policy about one line in four goes to the LLM, which adds the
+LLM's delay to that turn. A richer production summary should lower that share;
+measure it on real calls.
 
 ### Limits
 
