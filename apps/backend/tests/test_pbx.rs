@@ -47,10 +47,7 @@ fn project(id: &str, description: &str) -> Project {
         aliases: vec![],
         host: Some(HOST.into()),
         cwd: format!("/srv/{id}"),
-        runtime: "pi".into(),
         model: Some("anthropic/current".into()),
-        stage_extension: false,
-        extra_args: vec![],
         prepare: String::new(),
     }
 }
@@ -191,10 +188,7 @@ fn status_exposes_project_ids() {
         aliases: vec!["a".into()],
         host: None,
         cwd: "/srv/alpha".into(),
-        runtime: "pi".into(),
         model: None,
-        stage_extension: true,
-        extra_args: vec![],
         prepare: String::new(),
     };
     let board = board_with(vec![project], true);
@@ -217,10 +211,7 @@ fn status_exposes_the_launch_catalog_for_the_current_project() {
         aliases: vec![],
         host: None,
         cwd: String::new(),
-        runtime: "pi".into(),
         model: None,
-        stage_extension: true,
-        extra_args: vec![],
         prepare: String::new(),
     };
     let board = board_with(vec![project.clone()], true);
@@ -256,10 +247,7 @@ fn transfer_model_requests_obey_the_swap_gate_and_pin_defaults() {
         aliases: vec![],
         host: None,
         cwd: String::new(),
-        runtime: "pi".into(),
         model: Some("anthropic/default".into()),
-        stage_extension: true,
-        extra_args: vec![],
         prepare: String::new(),
     };
     let unlisted = ModelCatalog::unavailable("listing failed");
@@ -305,10 +293,7 @@ async fn model_swap_refuses_unknown_catalog_model_without_replacing_live_spec() 
         aliases: vec![],
         host: None,
         cwd: String::new(),
-        runtime: "pi".into(),
         model: None,
-        stage_extension: false,
-        extra_args: Vec::new(),
         prepare: String::new(),
     };
     let board = board_with(vec![project.clone()], true);
@@ -335,10 +320,7 @@ fn transfer_model_selection_honors_thinking_without_model() {
         aliases: vec![],
         host: None,
         cwd: String::new(),
-        runtime: "pi".into(),
         model: Some("anthropic/current".into()),
-        stage_extension: true,
-        extra_args: vec![],
         prepare: String::new(),
     };
     let board = board_with(vec![project.clone()], true);
@@ -356,10 +338,7 @@ async fn transfer_ctx_ambiguous_project_returns_candidate_options() {
         aliases: vec!["shared".into()],
         host: None,
         cwd: String::new(),
-        runtime: "pi".into(),
         model: None,
-        stage_extension: false,
-        extra_args: vec![],
         prepare: String::new(),
     };
     let p2 = Project {
@@ -368,10 +347,7 @@ async fn transfer_ctx_ambiguous_project_returns_candidate_options() {
         aliases: vec!["shared".into()],
         host: None,
         cwd: String::new(),
-        runtime: "pi".into(),
         model: None,
-        stage_extension: false,
-        extra_args: vec![],
         prepare: String::new(),
     };
 
@@ -406,10 +382,7 @@ fn unicode_payload_preserved_in_transfer_context_and_intro_prompt() {
         aliases: vec![],
         host: None,
         cwd: "/srv/alpha".into(),
-        runtime: "pi".into(),
         model: None,
-        stage_extension: false,
-        extra_args: vec![],
         prepare: String::new(),
     };
     let intro = build_intro_prompt(&context, &project, None);
@@ -426,10 +399,7 @@ fn model_fallback_preserves_qualified_and_rejects_bare_when_catalog_unavailable(
         aliases: vec![],
         host: None,
         cwd: String::new(),
-        runtime: "pi".into(),
         model: None,
-        stage_extension: false,
-        extra_args: Vec::new(),
         prepare: String::new(),
     };
     let board = board_with(vec![project.clone()], true);

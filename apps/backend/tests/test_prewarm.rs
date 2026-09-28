@@ -16,10 +16,7 @@ fn project(host: Option<&str>, prepare: &str) -> Project {
         aliases: vec![],
         host: host.map(str::to_owned),
         cwd: "/srv/alpha".into(),
-        runtime: "pi".into(),
         model: None,
-        stage_extension: false,
-        extra_args: vec![],
         prepare: prepare.into(),
     }
 }

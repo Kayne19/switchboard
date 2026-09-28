@@ -15,14 +15,8 @@ pub struct Project {
     pub host: Option<String>,
     #[serde(default)]
     pub cwd: String,
-    #[serde(default = "default_runtime")]
-    pub runtime: String,
     #[serde(default)]
     pub model: Option<String>,
-    #[serde(default = "default_stage_extension")]
-    pub stage_extension: bool,
-    #[serde(default)]
-    pub extra_args: Vec<String>,
     #[serde(default)]
     pub prepare: String,
 }
@@ -30,36 +24,24 @@ pub struct Project {
 /// Every key a registry entry may carry. Kept beside the struct because serde
 /// silently drops anything else, and a dropped key is a project that quietly
 /// does the wrong thing.
-const PROJECT_FIELDS: [&str; 10] = [
+const PROJECT_FIELDS: [&str; 7] = [
     "id",
     "description",
     "aliases",
     "host",
     "cwd",
-    "runtime",
     "model",
-    "stage_extension",
-    "extra_args",
     "prepare",
 ];
 
-fn default_runtime() -> String {
-    "pi".to_owned()
-}
-fn default_stage_extension() -> bool {
-    true
-}
-
 impl Project {
+    /// The host agent the project runs on (`docs/host-link.md`). Every
+    /// project needs one; a project without is refused at transfer.
     pub fn canonical_host(&self) -> Option<&str> {
         self.host
             .as_deref()
             .map(str::trim)
             .filter(|host| !host.is_empty())
-    }
-
-    pub fn is_remote(&self) -> bool {
-        self.canonical_host().is_some()
     }
 }
 
@@ -94,9 +76,6 @@ fn normalize(text: &str) -> String {
 impl Registry {
     pub fn new(mut projects: Vec<Project>) -> Self {
         for project in &mut projects {
-            if project.runtime.trim().is_empty() {
-                project.runtime = default_runtime();
-            }
             if let Some(host) = &project.host {
                 let trimmed = host.trim();
                 if trimmed.is_empty() {
@@ -293,7 +272,7 @@ impl Registry {
             };
             let location = format!(
                 "{}:{}",
-                project.canonical_host().unwrap_or("damocles"),
+                project.canonical_host().unwrap_or("no host"),
                 project.cwd
             );
             let _ = writeln!(

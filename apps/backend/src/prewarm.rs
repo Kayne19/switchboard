@@ -176,13 +176,12 @@ impl Prewarm {
     /// launches with. Errors name the piece of setup that is not usable; a
     /// host that is not connected is one, with no other way to reach it.
     pub async fn launch_plan(&self, project: &Project) -> Result<LaunchPlan, String> {
-        if !project.is_remote() {
+        let Some(host) = project.canonical_host() else {
             return Err(format!(
                 "{} has no host in the project registry",
                 project.id
             ));
-        }
-        let host = project.canonical_host().unwrap_or_default();
+        };
         if self.inner.hosts.link_epoch(host).is_none() {
             return Err(format!("its host {host} is not connected"));
         }

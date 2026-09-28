@@ -1236,8 +1236,8 @@ impl LegSession {
 }
 
 /// Put a supervised command in its own process group where the platform
-/// supports it. Pi and SSH may launch helpers; cancellation must reap the whole
-/// local tree rather than only its top-level shell/client.
+/// supports it. Pi and the speech commands may launch helpers; cancellation
+/// must reap the whole local tree rather than only its top-level shell.
 pub(crate) fn isolate_process(command: &mut Command) {
     command.kill_on_drop(true);
     #[cfg(unix)]
