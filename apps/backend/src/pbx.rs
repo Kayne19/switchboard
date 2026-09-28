@@ -1,17 +1,20 @@
-//! Call routing and Pi session lifecycle.
+//! Call routing and leg lifecycle.
 //!
-//! The switchboard owns the processes: the operator's and the project leg's
-//! `PiSession`s, the session control rescues close, and launching. Which leg
+//! The switchboard owns the legs: the operator's local `PiSession`, the
+//! project leg's `ProjectSession` on its host, the session control rescues
+//! interrupt, and launching. Which leg
 //! is on the line -- route, project, model, session -- belongs to the
 //! coordinator (`lifecycle.rs`); the switchboard reads it there and changes it
 //! only through the coordinator's transitions. A model or thinking change is
 //! decided by `RedialPlanner`, which needs no PBX lock; the switchboard runs
 //! the ones that go ahead.
+use crate::hosts::Hosts;
 use crate::lifecycle::{CandidateLeg, Coordinator, LifecycleError, ProjectLeg, StatusConfig};
 use crate::models::{normalize_thinking, parse_spec, pin_thinking, ModelCatalog};
 use crate::pi_client::{
-    local_argv, ActivityCallback, PiSession, PiSessionError, Signal, Turn, RETURN_SENTINEL,
-    RETURN_TOOL, SET_MODEL_TOOL, TRANSFER_TOOL,
+    local_argv, ActivityCallback, LegSession, ModuleCallback, PiSession, PiSessionError,
+    ProjectLaunch, ProjectSession, SessionState, Signal, Turn, RETURN_TOOL, SET_MODEL_TOOL,
+    TRANSFER_TOOL,
 };
 use crate::prewarm::{LaunchPlan, Prewarm};
 use crate::registry::{Project, Registry};
@@ -33,10 +36,13 @@ const PROJECT_TURN_TIMEOUT: Duration = Duration::from_secs(600);
 /// coordinator.
 pub type RouteCallback = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
-const AGENT_BRIEF_HEADER: &str =
-    "You are on a voice call in the {project} project, in its own directory.\n\n";
-const SPEAK_BRIEF: &str = "Use the configured speak tool for spoken updates; written output is kept for the caller's screen and is not read aloud.";
-const FALLBACK_BRIEF: &str = "No speak extension is available on this host. Write a short spoken reply; the switchboard reads it aloud once your turn settles.";
+/// The voice brief's opening. The brief rides at the start of the first
+/// prompt a project session gets for the caller, and again on the first after
+/// a compaction; it is never a message of its own.
+const AGENT_BRIEF_HEADER: &str = "[SWITCHBOARD VOICE BRIEF]\nYou are on a voice call in the {project} project, in its own directory. The caller hears only what you pass to the `switchboard` module in your Python REPL (already imported); your written output goes to their screen and is not read aloud.\n";
+const AGENT_BRIEF_TOOLS: &str = "- switchboard.speak(text): say a sentence or two of plain speech. Use it to answer, and before and during long work. No code, paths or lists.\n- switchboard.display(...) shows things on their screen; switchboard.view() tells you what they see.\n- switchboard.return_to_operator(summary=...) when they ask for the operator or are done here; say a short goodbye and nothing else.\n- switchboard.transfer_to_project(project, intent=...) when they ask for another project, with their request as intent. Known projects:\n";
+const AGENT_BRIEF_SWAPS: &str = "- switchboard.set_model(model=..., thinking=..., keep_context=True) when they ask for another model or thinking level; keep_context=False only for a fresh start. Say nothing alongside it.\n";
+const AGENT_BRIEF_END: &str = "[END OF VOICE BRIEF]";
 #[derive(Clone, Debug, Serialize)]
 pub struct Utterance {
     pub text: String,
@@ -138,7 +144,7 @@ fn build_intro_prompt(
 }
 
 /// A model or thinking change on the project leg, decided before anything is
-/// torn down.
+/// touched.
 pub enum Redial {
     /// Answered without touching the live leg: a refusal, or, on the
     /// operator, a setting recorded for the next project call.
@@ -147,12 +153,13 @@ pub enum Redial {
     Planned(Box<RedialPlan>),
 }
 
-/// Everything a redial launches with, and the leg it replaces.
+/// A model or thinking change that will go ahead, and the leg it changes.
 pub struct RedialPlan {
     leg: ProjectLeg,
     project: Project,
     spec: String,
-    session_id: String,
+    /// How the new model is said aloud.
+    spoken: String,
     keep_context: bool,
     intent: String,
     launch: LaunchPlan,
@@ -162,6 +169,12 @@ impl RedialPlan {
     /// The leg this redial replaces.
     pub fn leg(&self) -> &ProjectLeg {
         &self.leg
+    }
+
+    /// True when the change is made on the live session, which the rescue
+    /// that makes way for it must therefore not end.
+    pub fn keeps_session(&self) -> bool {
+        self.keep_context
     }
 
     /// The same redial, for its leg as the rescue that makes way for it left
@@ -259,18 +272,6 @@ impl RedialPlanner {
         if !self.model_swaps {
             return self.answer(["Model swapping is turned off on this switchboard."], None);
         }
-        // The remote adapter can reap only the local ssh process. With no
-        // verified remote shutdown protocol, reusing a persistent session ID
-        // could attach to work that is still running on the far host. That is
-        // a refusal like any other here: the live leg keeps running.
-        if project.is_remote() && keep_context {
-            let name = &project.id;
-            tracing::warn!(project = %name, "refusing same-session remote redial; remote shutdown is unverified");
-            return self.answer(
-                [format!("I can't restart {name} on that and keep this conversation: I can't confirm the old session on its host has stopped. Ask for a fresh start to switch anyway.")],
-                Some("remote_shutdown_unverified".to_owned()),
-            );
-        }
         let requested_model = if model.is_empty() && !leg.model.is_empty() {
             leg.model.clone()
         } else {
@@ -289,9 +290,9 @@ impl RedialPlanner {
                 Err(e) => return self.answer([e.to_string()], Some(e.to_string())),
             }
         };
-        // Everything the new leg launches with, before anything is torn down:
-        // a host that is not ready is a refusal, and the live leg keeps
-        // running exactly as a refused model would leave it.
+        // The host's catalog, before anything is touched: a host that is not
+        // ready is a refusal, and the live leg keeps running exactly as a
+        // refused model would leave it.
         let launch = match self.prewarm.launch_plan(&project).await {
             Ok(launch) => launch,
             Err(error) => {
@@ -320,16 +321,11 @@ impl RedialPlanner {
         if keep_context && spec == leg.model {
             return self.answer([format!("Already on {}.", choice.spoken())], None);
         }
-        let session_id = if keep_context {
-            leg.persistent_session_id.clone()
-        } else {
-            uuid_like()
-        };
         Redial::Planned(Box::new(RedialPlan {
             leg,
             project,
             spec,
-            session_id,
+            spoken: choice.spoken(),
             keep_context,
             intent: intent.to_owned(),
             launch,
@@ -343,23 +339,23 @@ pub struct Switchboard {
     operator_model: Option<String>,
     operator_system_prompt: String,
     operator_extension: Option<String>,
-    speak_url: String,
-    state_url: String,
-    display_url: String,
     persona: String,
     env: HashMap<String, String>,
     speech_deadline_ms: u64,
     activity_callback: Option<ActivityCallback>,
     route_callback: Option<RouteCallback>,
-    active_session: Arc<Mutex<Option<PiSession>>>,
+    module_callback: Option<ModuleCallback>,
+    active_session: Arc<Mutex<Option<LegSession>>>,
     operator: Option<PiSession>,
-    agent: Option<PiSession>,
+    agent: Option<ProjectSession>,
     operator_note: Option<String>,
     /// The one owner of the leg on the line, and of the status the page is
     /// shown.
     coordinator: Coordinator,
-    /// The only owner of launch setup: transports, catalogs, staged
-    /// extensions, and prepare reports are all settled here at startup.
+    /// The project hosts' links; project legs run over them.
+    hosts: Hosts,
+    /// The only owner of launch setup: catalogs and prepare reports are
+    /// settled here at startup.
     prewarm: Arc<Prewarm>,
     /// Decides model and thinking changes, and which model a leg asks for.
     planner: RedialPlanner,
@@ -369,6 +365,7 @@ pub struct Switchboard {
 }
 impl Switchboard {
     pub fn new(config: &crate::Config, registry: Registry, prewarm: Arc<Prewarm>) -> Self {
+        let hosts = prewarm.hosts();
         let coordinator = Coordinator::new(
             StatusConfig {
                 operator_model: config.operator_model.clone().unwrap_or_default(),
@@ -391,23 +388,26 @@ impl Switchboard {
             operator_model: config.operator_model.clone(),
             operator_system_prompt: config.operator_prompt.to_string_lossy().into_owned(),
             operator_extension: config.operator_extension.clone(),
-            speak_url: config.speak_url.clone(),
-            state_url: config.state_url.clone(),
-            display_url: config.display_url.clone(),
             persona: config.persona.clone(),
             env: config.environment.clone(),
             speech_deadline_ms: config.speech_deadline_ms,
             activity_callback: None,
             route_callback: None,
+            module_callback: None,
             active_session: Arc::new(Mutex::new(None)),
             operator: None,
             agent: None,
             operator_note: None,
             coordinator,
+            hosts,
             prewarm,
             planner,
             project_turn_timeout: PROJECT_TURN_TIMEOUT,
         }
+    }
+    /// The project hosts' links; the application serves them on `/host`.
+    pub fn hosts(&self) -> Hosts {
+        self.hosts.clone()
     }
     /// The coordinator this switchboard reports to; the application shares it.
     pub fn coordinator(&self) -> Coordinator {
@@ -424,6 +424,11 @@ impl Switchboard {
 
     pub fn set_route_callback(&mut self, callback: Option<RouteCallback>) {
         self.route_callback = callback;
+    }
+
+    /// What answers a project session's `speak`, `display` and `view`.
+    pub fn set_module_callback(&mut self, callback: Option<ModuleCallback>) {
+        self.module_callback = callback;
     }
 
     pub async fn announce_route(&self) {
@@ -443,12 +448,20 @@ impl Switchboard {
         self.coordinator.rollback_startup(reason);
     }
 
-    pub fn session_control(&self) -> Arc<Mutex<Option<PiSession>>> {
+    pub fn session_control(&self) -> Arc<Mutex<Option<LegSession>>> {
         Arc::clone(&self.active_session)
     }
 
-    async fn set_active_session(&self, session: Option<PiSession>) {
+    async fn set_active_session(&self, session: Option<LegSession>) {
         *self.active_session.lock().await = session;
+    }
+
+    fn operator_leg(&self) -> Option<LegSession> {
+        self.operator.clone().map(LegSession::Operator)
+    }
+
+    fn agent_leg(&self) -> Option<LegSession> {
+        self.agent.clone().map(LegSession::Project)
     }
 
     pub fn route_label(&self) -> String {
@@ -456,14 +469,14 @@ impl Switchboard {
     }
     pub async fn shutdown(&mut self) {
         if let Some(session) = self.agent.take() {
-            session.close().await;
+            session.close();
         }
         if let Some(session) = self.operator.take() {
             session.close().await;
         }
         self.set_active_session(None).await;
         // Idempotent: the service's shutdown path may reach here twice.
-        self.prewarm.shutdown().await;
+        self.prewarm.shutdown();
     }
 
     pub async fn handle(&mut self, text: &str) -> Reply {
@@ -519,7 +532,7 @@ impl Switchboard {
             )
             .await?;
             self.operator = Some(session);
-            self.set_active_session(self.operator.clone()).await;
+            self.set_active_session(self.operator_leg()).await;
         }
         self.operator
             .as_ref()
@@ -607,14 +620,9 @@ impl Switchboard {
         let transfer = turn.signals.iter().find(|s| s.name == TRANSFER_TOOL);
         if turn.failed && turn.text.is_empty() && !returning && transfer.is_none() {
             let detail = if turn.error.is_empty() {
-                session.stderr_tail(5)
-            } else {
-                turn.error.clone()
-            };
-            let detail = if detail.is_empty() {
                 "agent turn failed".to_owned()
             } else {
-                detail
+                turn.error.clone()
             };
             let name = self.route_label();
             tracing::warn!(route = %name, %detail, "the project leg failed its turn; returning to the operator");
@@ -758,12 +766,12 @@ impl Switchboard {
         // The leg the caller is on now, which every failure below hands the
         // line back to: the project leg on an agent-to-agent transfer, else
         // the operator, as in `drop_agent`.
-        let live_session = self.agent.clone().or_else(|| self.operator.clone());
+        let live_session = self.agent_leg().or_else(|| self.operator_leg());
 
         let plan = match self.prewarm.launch_plan(&project).await {
             Ok(plan) => plan,
             Err(err) => {
-                tracing::warn!(project = %project.id, error = %err, "prewarm readiness failed");
+                tracing::warn!(project = %project.id, error = %err, "the project's host is not ready");
                 self.operator_note = Some(format!("Transfer to {} failed: {err}", project.id));
                 return self.reply_transfer_error(
                     format!("I couldn't get {} on the line: {err}", project.id),
@@ -809,15 +817,24 @@ impl Switchboard {
             );
         }
 
-        let session = match self
-            .start_agent(&project, &model, &session_id, &leg_token, &plan)
-            .await
+        // At most one session per project: one the caller is on is ended
+        // before another is made for the same project.
+        if self
+            .agent
+            .as_ref()
+            .is_some_and(|agent| agent.label() == project.id)
         {
+            if let Some(previous) = self.agent.take() {
+                previous.close();
+            }
+        }
+
+        let session = match self.start_agent(&project, &model, &leg_token, &plan).await {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!(
                     project = %project.id,
-                    host = project.canonical_host().unwrap_or("<local>"),
+                    host = %plan.host,
                     error = %e,
                     "could not connect to project"
                 );
@@ -831,7 +848,8 @@ impl Switchboard {
             }
         };
 
-        self.set_active_session(Some(session.clone())).await;
+        self.set_active_session(Some(LegSession::Project(session.clone())))
+            .await;
 
         let intro_prompt = build_intro_prompt(context, &project, plan.prepare_report.as_ref());
 
@@ -849,18 +867,13 @@ impl Switchboard {
         };
 
         if turn.failed && turn.text.is_empty() {
-            let detail = if !turn.error.trim().is_empty() {
-                turn.error
+            let detail = if turn.error.trim().is_empty() {
+                "the agent never answered".to_owned()
             } else {
-                let tail = session.stderr_tail(5);
-                if tail.is_empty() {
-                    "the agent never answered".to_owned()
-                } else {
-                    tail
-                }
+                turn.error
             };
             tracing::error!(project = %project.id, %detail, "project intro turn failed");
-            session.close().await;
+            session.close();
             self.set_active_session(live_session.clone()).await;
             self.rollback_startup(format!("intro failed: {detail}"));
             self.operator_note = Some(format!("Transfer to {} failed: {detail}", project.id));
@@ -873,10 +886,10 @@ impl Switchboard {
         // The leg may be adopted already: a candidate is promoted on its first
         // sign of life, which usually arrives during the intro turn. Either
         // way the coordinator names it from here on; the switchboard only
-        // swaps the process handles.
+        // swaps the session handles.
         if self.coordinator.is_candidate() {
             if let Err(error) = self.coordinator.adopt_candidate(&leg_token) {
-                session.close().await;
+                session.close();
                 self.set_active_session(live_session.clone()).await;
                 self.rollback_startup(format!("adoption failed: {error}"));
                 return self.reply_transfer_error(
@@ -888,148 +901,98 @@ impl Switchboard {
         self.coordinator.finish_intro();
 
         if let Some(previous) = self.agent.take() {
-            previous.close().await;
+            previous.close();
         }
         self.agent = Some(session);
-        self.set_active_session(self.agent.clone()).await;
+        self.set_active_session(self.agent_leg()).await;
         self.announce_route().await;
         self.reply_with_turn(turn)
     }
 
-    /// Starts a project leg from its launch plan. Nothing here reaches the
-    /// host except the launch itself: the transport, extension, and catalog
-    /// were all settled by prewarm.
+    /// Starts a project leg on its host from its launch plan and puts it on
+    /// the call with `leg_token`. Nothing here sets anything up: the host's
+    /// catalog and the prepare report were settled by prewarm.
     async fn start_agent(
         &self,
         project: &Project,
         model: &str,
-        session_id: &str,
         leg_token: &str,
         plan: &LaunchPlan,
-    ) -> Result<PiSession, PiSessionError> {
-        let mut env = self.env.clone();
-        let agent_env = self.agent_env(leg_token);
-        env.extend(agent_env.clone());
-        // Without an extension the leg is launched without -e, and the brief
-        // tells the runtime to use the return sentinel rather than lying about
-        // a tool that never loaded.
-        let brief = self.agent_brief(project, plan.extension.is_some());
-        let model = (!model.is_empty()).then_some(model);
-        let argv = match &plan.ssh {
-            Some(ssh) => ssh.remote_argv(
-                &project.cwd,
-                &project.runtime,
-                model,
-                plan.extension.as_deref(),
-                Some(&brief),
-                Some(session_id),
-                &project.extra_args,
-                &agent_env,
-            ),
-            None => {
-                let mut argv = vec![project.runtime.clone(), "--mode".into(), "rpc".into()];
-                if let Some(model) = model {
-                    argv.extend(["--model".into(), model.into()]);
-                }
-                argv.extend([
-                    "--session-id".into(),
-                    session_id.into(),
-                    "--append-system-prompt".into(),
-                    brief,
-                ]);
-                if let Some(extension) = &plan.extension {
-                    argv.extend(["-e".into(), extension.clone()]);
-                }
-                argv.extend(project.extra_args.clone());
-                argv
-            }
-        };
-        PiSession::start(
-            argv,
-            project.id.clone(),
-            leg_token,
-            (!project.is_remote())
-                .then(|| project.cwd.clone())
-                .filter(|p| !p.is_empty()),
-            Some(env),
-            self.project_turn_timeout,
-            self.activity_callback.clone(),
+    ) -> Result<ProjectSession, PiSessionError> {
+        let (session, state) = ProjectSession::create(
+            &self.hosts,
+            ProjectLaunch {
+                host: plan.host.clone(),
+                project: project.id.clone(),
+                cwd: project.cwd.clone(),
+                spec: model.to_owned(),
+                brief: self.agent_brief(project),
+                turn_timeout: self.project_turn_timeout,
+                on_activity: self.activity_callback.clone(),
+                on_module: self.module_callback.clone(),
+            },
         )
-        .await
-    }
-    fn agent_brief(&self, project: &Project, has_tool: bool) -> String {
-        let mut brief = AGENT_BRIEF_HEADER.replace("{project}", &project.id);
-        brief.push_str(if has_tool {
-            SPEAK_BRIEF
-        } else {
-            FALLBACK_BRIEF
-        });
-        if has_tool {
-            brief.push_str(" When the caller asks for the operator, call return_to_operator; if the extension cannot be used, end with ");
-            brief.push_str(RETURN_SENTINEL);
-            brief.push_str(". If they ask for another project, use transfer_to_project and pass their request as intent. Known direct transfer targets:\n");
-            let others = self
-                .registry
-                .projects
-                .iter()
-                .filter(|candidate| candidate.id != project.id)
-                .map(|candidate| {
-                    format!(
-                        "- {} — {}",
-                        candidate.id,
-                        if candidate.description.is_empty() {
-                            "no description"
-                        } else {
-                            candidate.description.as_str()
-                        }
-                    )
-                })
-                .collect::<Vec<_>>();
-            brief.push_str(
-                if others.is_empty() {
-                    "- none".to_owned()
-                } else {
-                    others.join("\n")
-                }
-                .as_str(),
-            );
-            brief.push_str(". If the requested project is not listed, return to the operator rather than guessing.");
-            if self.planner.model_swaps {
-                brief.push_str(" If the caller asks to change model or thinking level, use set_model; pass the provider/model when known and keep_context unless they ask to start over. Do not claim a swap happened beside that tool call.");
-            }
-        } else {
-            brief.push_str(" When the caller asks for the operator, end with ");
-            brief.push_str(RETURN_SENTINEL);
-            brief.push_str(". Do not claim that a switchboard tool is available.");
+        .await?;
+        if let Err(error) = session
+            .join_call(leg_token, &self.persona, self.speech_deadline_ms)
+            .await
+        {
+            session.close();
+            return Err(error);
         }
-        brief.push_str(" Keep spoken updates brief and plain; leave code, paths, and detail in written output.");
+        self.confirm_thinking(leg_token, &state);
+        Ok(session)
+    }
+
+    /// Records the thinking level the host reports for the leg `token` names,
+    /// as the leg's own report of it.
+    fn confirm_thinking(&self, token: &str, state: &SessionState) {
+        if state.thinking.is_empty() {
+            return;
+        }
+        if let Err(error) = self
+            .coordinator
+            .accept_thinking_callback(token, &state.thinking)
+        {
+            tracing::debug!(%error, thinking = %state.thinking, "the reported thinking level was not recorded");
+        }
+    }
+
+    /// The voice brief: how to reach the caller through the `switchboard`
+    /// module, and where they can be sent.
+    fn agent_brief(&self, project: &Project) -> String {
+        let mut brief = AGENT_BRIEF_HEADER.replace("{project}", &project.id);
+        brief.push_str(AGENT_BRIEF_TOOLS);
+        let others = self
+            .registry
+            .projects
+            .iter()
+            .filter(|candidate| candidate.id != project.id)
+            .map(|candidate| {
+                format!(
+                    "  - {}: {}\n",
+                    candidate.id,
+                    if candidate.description.is_empty() {
+                        "no description"
+                    } else {
+                        candidate.description.as_str()
+                    }
+                )
+            })
+            .collect::<String>();
+        if others.is_empty() {
+            brief.push_str("  - none\n");
+        } else {
+            brief.push_str(&others);
+        }
+        brief.push_str("  If the project they want is not listed, return to the operator rather than guessing.\n");
+        if self.planner.model_swaps {
+            brief.push_str(AGENT_BRIEF_SWAPS);
+        }
+        brief.push_str(AGENT_BRIEF_END);
         brief
     }
 
-    pub fn agent_env(&self, session_token: &str) -> HashMap<String, String> {
-        let mut e = HashMap::from([
-            (String::from("SWITCHBOARD_SESSION"), String::from("1")),
-            (
-                String::from("SWITCHBOARD_SESSION_TOKEN"),
-                session_token.to_owned(),
-            ),
-            (
-                String::from("SWITCHBOARD_SPEECH_DEADLINE_MS"),
-                self.speech_deadline_ms.to_string(),
-            ),
-        ]);
-        for (key, value) in [
-            ("SWITCHBOARD_SPEAK_URL", &self.speak_url),
-            ("SWITCHBOARD_STATE_URL", &self.state_url),
-            ("SWITCHBOARD_DISPLAY_URL", &self.display_url),
-            ("SWITCHBOARD_PERSONA", &self.persona),
-        ] {
-            if !value.is_empty() {
-                e.insert(key.into(), value.clone());
-            }
-        }
-        e
-    }
     fn select_transfer_model(
         &self,
         project: &Project,
@@ -1054,7 +1017,7 @@ impl Switchboard {
             .map_err(|error| error.to_string())
     }
 
-    /// Runs a redial `RedialPlanner::plan` decided on. The leg it replaces
+    /// Runs a redial `RedialPlanner::plan` decided on. The leg it changes
     /// must still be the leg on the line: a caller who has left it since (a
     /// transfer, a return, a rescue that did not make way for this redial) is
     /// not redialed back onto it, and nothing is touched.
@@ -1063,16 +1026,20 @@ impl Switchboard {
             tracing::info!(project = %plan.project.id, "not redialing: the caller has left the leg it was planned for");
             return Err(LifecycleError::StaleLeg);
         }
-        Ok(self.relaunch(plan).await)
+        Ok(self.swap(plan).await)
     }
 
-    /// Replaces the leg on the line with the one `plan` describes.
-    async fn relaunch(&mut self, plan: RedialPlan) -> Reply {
+    /// Changes the leg on the line to what `plan` describes. A change that
+    /// keeps the conversation is made on the live session (`set_model`,
+    /// `set_thinking`); a fresh start ends the session and creates a new one.
+    /// Either way the leg is staged and adopted like any new leg, under a new
+    /// call token.
+    async fn swap(&mut self, plan: RedialPlan) -> Reply {
         let RedialPlan {
             leg,
             project,
             spec,
-            session_id,
+            spoken,
             keep_context,
             intent,
             launch,
@@ -1082,108 +1049,116 @@ impl Switchboard {
             from = %leg.model,
             to = %spec,
             context = if keep_context { "kept" } else { "cleared" },
-            "swapping the model on the live leg"
+            "changing the model of the live leg"
         );
         let leg_token = uuid_like();
+        let session_id = if keep_context {
+            leg.persistent_session_id.clone()
+        } else {
+            uuid_like()
+        };
         let candidate = CandidateLeg::new(
             project.id.clone(),
             project.id.clone(),
-            session_id.clone(),
+            session_id,
             leg_token.clone(),
             spec.clone(),
             thinking_in_spec(&spec),
         )
         .with_catalog(launch.catalog.clone());
         if let Err(error) = self.coordinator.begin_candidate(candidate) {
-            tracing::warn!(project = %project.id, %error, "candidate startup for redial was refused");
+            tracing::warn!(project = %project.id, %error, "candidate startup for the model change was refused");
             return self.reply(
-                [format!("I couldn't restart {}: {error}", project.id)],
+                [format!("I couldn't switch {}: {error}", project.id)],
                 Some(error.to_string()),
             );
         }
 
-        let session = match self
-            .start_agent(&project, &spec, &session_id, &leg_token, &launch)
-            .await
-        {
+        let switched = if keep_context {
+            self.switch_live(&leg.model, &spec, &leg_token).await
+        } else {
+            // At most one live session per project: the old one ends first.
+            if let Some(previous) = self.agent.take() {
+                previous.close();
+            }
+            self.set_active_session(None).await;
+            self.start_agent(&project, &spec, &leg_token, &launch).await
+        };
+        let session = match switched {
             Ok(session) => session,
             Err(error) => {
-                tracing::error!(project = %project.id, %spec, %error, "could not restart the leg on the new model");
-                self.rollback_startup(format!("startup failed: {error}"));
+                tracing::error!(project = %project.id, %spec, %error, "could not change the leg's model");
+                self.rollback_startup(format!("model change failed: {error}"));
                 self.drop_agent().await;
-                let note = format!("{} could not be restarted on {}: {error}", project.id, spec);
-                self.operator_note = Some(note);
+                self.operator_note = Some(format!(
+                    "{} could not be switched to {spec}: {error}",
+                    project.id
+                ));
                 return self.reply(
                     [format!(
-                        "I couldn't bring {} back on {}: {error}",
-                        project.id, spec
+                        "I couldn't bring {} back on {spoken}: {error}",
+                        project.id
                     )],
                     Some(error.to_string()),
                 );
             }
         };
+        self.set_active_session(Some(LegSession::Project(session.clone())))
+            .await;
 
-        self.set_active_session(Some(session.clone())).await;
-        let prompt = if keep_context {
-            format!(
-                "You are now running on {spec}. Continue the conversation.{}",
-                if intent.trim().is_empty() {
-                    String::new()
-                } else {
-                    format!(" The caller also asked: {}.", intent.trim())
-                }
-            )
+        // A fresh session knows nothing, and a kept one may have been asked
+        // for more than the change: either way the caller's request goes on
+        // as a turn. With nothing to pass on, no turn is started; the voice
+        // brief of a fresh session rides on the caller's next line.
+        let turn = if intent.trim().is_empty() {
+            None
         } else {
-            format!(
-                "You are now running on {spec}. The earlier conversation was deliberately cleared; start fresh.{}",
-                if intent.trim().is_empty() {
-                    String::new()
+            let prompt = format!(
+                "[switchboard] You are now on {spec}.{} The caller asked: {}.",
+                if keep_context {
+                    ""
                 } else {
-                    format!(" The caller asked: {}.", intent.trim())
-                }
-            )
-        };
-
-        let turn = match session.prompt(&prompt).await {
-            Ok(turn) => turn,
-            Err(error) => Turn {
-                text: String::new(),
-                signals: vec![],
-                failed: true,
-                error: error.to_string(),
-            },
-        };
-        if turn.failed && turn.text.is_empty() {
-            let detail = if turn.error.is_empty() {
-                session.stderr_tail(5)
-            } else {
-                turn.error.clone()
-            };
-            let detail = if detail.is_empty() {
-                "the agent never answered".to_owned()
-            } else {
-                detail
-            };
-            tracing::error!(project = %project.id, %spec, %detail, "the swapped leg never answered");
-            session.close().await;
-            self.rollback_startup(format!("prompt failed: {detail}"));
-            self.drop_agent().await;
-            self.operator_note = Some(format!(
-                "{} could not be restarted on {spec}: {detail}",
-                project.id
-            ));
-            return self.reply(
-                [format!(
-                    "{} didn't come back on {spec}: {detail}",
-                    project.id
-                )],
-                Some(detail),
+                    " The earlier conversation was deliberately cleared."
+                },
+                intent.trim()
             );
-        }
+            let turn = match session.prompt(&prompt).await {
+                Ok(turn) => turn,
+                Err(error) => Turn {
+                    text: String::new(),
+                    signals: vec![],
+                    failed: true,
+                    error: error.to_string(),
+                },
+            };
+            if turn.failed && turn.text.is_empty() {
+                let detail = if turn.error.is_empty() {
+                    "the agent never answered".to_owned()
+                } else {
+                    turn.error.clone()
+                };
+                tracing::error!(project = %project.id, %spec, %detail, "the switched leg never answered");
+                session.close();
+                self.rollback_startup(format!("prompt failed: {detail}"));
+                self.drop_agent().await;
+                self.operator_note = Some(format!(
+                    "{} could not be switched to {spec}: {detail}",
+                    project.id
+                ));
+                return self.reply(
+                    [format!(
+                        "{} didn't come back on {spoken}: {detail}",
+                        project.id
+                    )],
+                    Some(detail),
+                );
+            }
+            Some(turn)
+        };
 
         if self.coordinator.is_candidate() {
             if let Err(error) = self.coordinator.adopt_candidate(&leg_token) {
-                session.close().await;
+                session.close();
                 self.rollback_startup(format!("adoption failed: {error}"));
                 self.drop_agent().await;
                 return self.reply(
@@ -1193,13 +1168,55 @@ impl Switchboard {
             }
         }
         self.coordinator.finish_intro();
-        if let Some(previous) = self.agent.take() {
-            previous.close().await;
-        }
         self.agent = Some(session);
-        self.set_active_session(self.agent.clone()).await;
+        self.set_active_session(self.agent_leg()).await;
         self.announce_route().await;
-        self.reply_with_turn(turn)
+        match turn {
+            Some(turn) => self.reply_with_turn(turn),
+            None => {
+                let mut reply = self.reply(
+                    [if keep_context {
+                        format!("Now on {spoken}.")
+                    } else {
+                        format!("Now on {spoken}, starting fresh.")
+                    }],
+                    None,
+                );
+                reply.delivery_generation = Some(self.coordinator.generation());
+                reply
+            }
+        }
+    }
+
+    /// Changes the live session's model and thinking level from `from` to
+    /// `to`, and puts it on the call under `leg_token`. The session keeps its
+    /// history.
+    async fn switch_live(
+        &self,
+        from: &str,
+        to: &str,
+        leg_token: &str,
+    ) -> Result<ProjectSession, PiSessionError> {
+        let Some(session) = self.agent.clone() else {
+            return Err(PiSessionError("the project session is gone".into()));
+        };
+        let (from_provider, from_model, from_thinking) = parse_spec(from);
+        let (provider, model, thinking) = parse_spec(to);
+        let mut state = SessionState::default();
+        let model_changed = (&provider, &model) != (&from_provider, &from_model);
+        if model_changed {
+            state = session.set_model(&provider, &model).await?;
+        }
+        // A new model may come up at its own level, so the level asked for is
+        // set again after it.
+        if !thinking.is_empty() && (model_changed || thinking != from_thinking) {
+            state = session.set_thinking(&thinking).await?;
+        }
+        session
+            .join_call(leg_token, &self.persona, self.speech_deadline_ms)
+            .await?;
+        self.confirm_thinking(leg_token, &state);
+        Ok(session)
     }
 
     async fn return_operator_ctx(&mut self, context: &TransferContext, note: &str) -> Reply {
@@ -1230,9 +1247,9 @@ impl Switchboard {
     async fn drop_agent(&mut self) {
         let was_on_a_project = self.coordinator.route() != OPERATOR;
         if let Some(s) = self.agent.take() {
-            s.close().await;
+            s.close();
         }
-        self.set_active_session(self.operator.clone()).await;
+        self.set_active_session(self.operator_leg()).await;
         self.coordinator.return_to_operator();
         if was_on_a_project {
             self.announce_route().await;

@@ -33,13 +33,22 @@ that does it should say so. That includes `SWITCHBOARD_GIT_SHA`, which crosses
 at build time instead: the homelab builder sets it so `build.rs` can stamp a
 binary built from `git archive` with its commit (see `README.md`).
 
-## `extensions/`
+## `extensions/` and `skills/switchboard/`
 
-`agent-switchboard.ts` and `operator-switchboard.ts` are plain TypeScript, and
-these files are what runs: homelab deploys them from the pinned commit, and the
-service stages the agent extension onto each project host at startup
-(`prewarm.rs`). The persona is not rendered into them; it arrives as
-`SWITCHBOARD_PERSONA`, which the service passes to every project leg.
+`operator-switchboard.ts` is plain TypeScript, and that file is what runs:
+homelab deploys it from the pinned commit for the operator leg.
+
+Project agents reach the caller through the `switchboard` Python skill module
+in `skills/switchboard/` (standard library only), not through a TypeScript
+extension. The host-agent installer (`apps/host-agent/install.mjs`) installs
+it as a global prime-agent skill (`~/.prime/agent/skills/switchboard`) on each
+project host, so every session has it. It talks only to the host agent on the host's local
+skill socket (`docs/host-link.md`, "Skill socket"), takes its session id from
+`RLM_SESSION_DIR` at `RLM_DEPTH` 0, and refuses subagents. The persona and the
+call token come from the host agent at call time. Its tests are
+`skills/switchboard/tests/` (`npm run test:skill`). A test asserts the module's
+exact public surface; a change to the surface updates that test in the same
+commit.
 
 ## Working here
 
@@ -59,8 +68,9 @@ service stages the agent extension onto each project host at startup
   end as a failure that GitHub blames on the workflow file; it is not (see
   #35). Approve it, or push the head yourself.
 - Rust tests live in `apps/backend/tests/`, each compiled as the `#[cfg(test)]`
-  module of the source file it covers; browser, display, and extension tests
-  live in `apps/frontend/tests/`. Keep them passing on every commit.
+  module of the source file it covers; browser, display, and operator
+  extension tests live in `apps/frontend/tests/`; skill module tests live in
+  `skills/switchboard/tests/`. Keep them passing on every commit.
 - Read `docs/concurrency-and-test-hazards.md` before touching turn dispatch, page
   rescue, or any test that writes a fake executable. It records why the turn
   epoch is stamped where it is, why fake executables must go through

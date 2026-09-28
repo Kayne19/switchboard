@@ -343,3 +343,166 @@ versions in its hello.
   30 s offline with a warm cache).
 - The only non-agent model calls seen were compaction summaries (3 for a
   threshold compaction, 2 for an overflow compaction).
+
+## Install and redeploy
+
+`apps/host-agent/install.mjs` installs the host agent on a project host, and
+reinstalls it on a redeploy. Project containers are not managed by Ansible,
+so you run it by hand, as the user who owns the projects, from a checkout of
+the commit homelab pins (`switchboard_version`). It is plain Node (22.18 or
+later) with no dependencies.
+
+```sh
+node apps/host-agent/install.mjs --host-id <id> --token-file <path> \
+    [--service-url wss://switchboard.home.arpa/host] [--ca-file <step-ca-root.crt>] \
+    [--prime-agent <bin>] [--prime-agent-package <dir>]
+```
+
+- `--host-id`: the host's id in the service's host registry (for example
+  `scriptorium`, `familiar`).
+- `--token-file`: a file that holds this host's token. The token must equal
+  this host's entry in the service's host tokens file
+  (`SWITCHBOARD_HOST_TOKENS_FILE` on damocles, rendered by homelab). The
+  installer never prints it.
+- `--service-url`: default `wss://switchboard.home.arpa/host`.
+- `--ca-file`: the lab's step-ca root certificate (see "TLS trust" below).
+- `--prime-agent`, `--prime-agent-package`: by default the `prime-agent` on
+  `PATH` and the npm package next to it
+  (`<prefix>/lib/node_modules/prime-agent`, the one that exports
+  `DaemonClient`). Give them when the host lays prime-agent out another way.
+
+### What it does
+
+1. Checks, before it changes anything (see "Stops" below): Node version,
+   inputs, a git checkout, no daemon running outside the unit, linger.
+2. Copies `apps/host-agent/src/*.ts` to
+   `~/.local/share/switchboard/host-agent/<git sha>/src/`, with a
+   `package.json` of `{"type": "module"}`. The host agent runs from there, so
+   the checkout can move or change afterwards. The unit names this versioned
+   path directly: a `current` symlink would not work, because Node resolves
+   the symlink for the entry module, and `main.ts` then does not see itself as
+   the entry point.
+3. Copies `skills/switchboard/` (without `tests/` and caches) to
+   `~/.prime/agent/skills/switchboard`, so every prime-agent session on the
+   host has the `switchboard` module. Extra files there are removed.
+4. Writes `~/.config/switchboard/` (directory 0700): `host-token` (0600),
+   `ca.crt` when a CA file is given, and `host-agent.json` (0600), the config
+   in `docs/host-link.md` with every path explicit. `git_sha` is the
+   checkout's `git rev-parse HEAD`. `daemon_socket` is
+   `$TMPDIR/prime-agent-<uid>/daemon.sock` as seen by the installer, the same
+   path a desk `prime-agent` in that shell uses.
+5. Writes two systemd user units to `~/.config/systemd/user/` (layout below).
+6. Runs `systemctl --user daemon-reload`, enables both units, starts
+   `prime-agent-daemon.service` only if it is not active, and restarts
+   `switchboard-host-agent.service`.
+7. Removes other versions under `~/.local/share/switchboard/host-agent/`.
+
+It prints each file it wrote, updated or removed, and each unit it started.
+
+### Units
+
+| Unit | `ExecStart` | Notes |
+|---|---|---|
+| `prime-agent-daemon.service` | `<prime-agent> --mode daemon --daemon-socket <socket>` | The shared daemon for every session on the host, desk sessions included. `Restart=always`. |
+| `switchboard-host-agent.service` | `<node> ~/.local/share/switchboard/host-agent/<sha>/src/main.ts --config ~/.config/switchboard/host-agent.json` | `Restart=always`. `After=prime-agent-daemon.service`, and no `Requires=`, `BindsTo=` or `Wants=`: it only connects to the daemon and never starts it (see "systemd layout" above). |
+
+Both are `WantedBy=default.target`. The installer enables linger
+(`loginctl enable-linger <user>`), so the user's systemd manager, and both
+units, run from boot and keep running after the last login ends.
+
+systemd user units do not get the login shell's environment. Both units set
+`PATH` to the installer's own `PATH`, and `TMPDIR` to the installer's temp
+directory (the daemon puts its worker sockets in `$TMPDIR/prime-agent-<uid>/`,
+so the unit and a desk CLI must agree). Run the installer from the shell you
+use prime-agent from. If `PATH` changes later (a new tool the agents need),
+rerun the installer.
+
+### TLS trust
+
+`wss://switchboard.home.arpa` is served by caddy with a certificate from the
+lab's private step-ca (`warden`). A host that does not trust that root fails
+the TLS handshake (`UNABLE_TO_GET_ISSUER_CERT_LOCALLY`; `--use-system-ca`
+does not help on such a host). Give the root with `--ca-file`: the installer
+copies it to `~/.config/switchboard/ca.crt` and sets
+`NODE_EXTRA_CA_CERTS` to it in the host-agent unit only. The root is
+`step-ca-root.crt`, which the homelab step-ca role writes out; copy it from
+there. It is a public certificate, not a secret.
+
+### Stops
+
+The installer exits non-zero with one message, and changes nothing more, when:
+
+- **A daemon runs outside the unit.** The daemon socket exists but
+  `prime-agent-daemon.service` is not active: a daemon started by a desk
+  client is running. Starting the unit would replace it and end every agent
+  session in it, so the installer never stops it. End it yourself at a quiet
+  moment, when no agent work is running (for example `prime-agent shutdown`),
+  then rerun. If no daemon runs, the socket is stale: remove it and rerun.
+  On `scriptorium` this is expected on the first install.
+- **Linger is refused.** `loginctl enable-linger <user>` needs polkit
+  permission. If it is refused, run `sudo loginctl enable-linger <user>`
+  once, then rerun.
+- **A first install lacks `--host-id` or `--token-file`**, the token file is
+  empty, or prime-agent, its package, or the git checkout cannot be found.
+
+### Adding a container
+
+1. In homelab, add the host to the host registry and give it a token in the
+   host tokens file (a homelab PR; damocles picks both up on deploy).
+2. On the container, as the project user: have Node 22.18 or later and
+   prime-agent installed and authenticated; clone this repository and check
+   out the commit homelab pins.
+3. Put the host's token in a file (for example `~/host-token.tmp`, mode
+   0600), and fetch `step-ca-root.crt` if the host does not trust the lab CA.
+4. Run `node apps/host-agent/install.mjs --host-id <id> --token-file ~/host-token.tmp --ca-file step-ca-root.crt`,
+   then delete the temporary token file.
+5. Run the post-deploy checklist.
+
+### Redeploying
+
+After a homelab pin bump, on each container:
+
+```sh
+git fetch && git checkout <pinned commit>
+node apps/host-agent/install.mjs
+```
+
+A rerun reads the host id, service URL and token from the installed config
+and keeps the installed CA file. Flags given on a rerun replace them. It
+rewrites only what changed, restarts the host agent, and never restarts the
+daemon: resident agents keep running, and the new host agent reattaches to
+them. Whether a running session picks up a changed `switchboard` skill before
+its kernel restarts is not measured.
+
+### Post-deploy checklist
+
+Run this after each foundation pin bump (`acc:host-deploy`), outside CI.
+
+1. On each container:
+   `systemctl --user is-active prime-agent-daemon switchboard-host-agent`
+   prints `active` twice.
+2. Kill the host agent process:
+   `systemctl --user kill --signal=SIGKILL switchboard-host-agent`.
+   Within a few seconds `systemctl --user is-active switchboard-host-agent`
+   is `active` again with a new main PID. The daemon's main PID and its
+   worker processes (`systemctl --user status prime-agent-daemon`) are the
+   same as before: resident agents survived.
+3. From a machine that trusts the lab CA (or with
+   `--cacert step-ca-root.crt`):
+   `curl -s https://switchboard.home.arpa/healthz | jq .hosts`.
+   Every registry host is listed with `connected: true`, `synced: true`,
+   `protocol_status: "compatible"` and the pinned `git_sha`. `outdated`
+   means the host still runs an older host agent: redeploy it.
+4. Make one call that reaches a project on each host.
+
+If the host agent is not active, `journalctl --user -u switchboard-host-agent`
+shows why (a refused token, TLS trust, no daemon socket).
+
+### Open risk
+
+A desk `prime-agent` CLI of another version than the daemon treats an idle
+daemon as stale and replaces it (`cli/daemon-launch.js:251-284`, see
+"systemd layout" above). What happens to a daemon under the unit in that
+case is not measured: the replacement would run in the CLI's login session,
+not in the unit. The unit runs the `prime-agent` found on `PATH` at install
+time, so a desk CLI from the same `PATH` is the same binary; keep it that way.

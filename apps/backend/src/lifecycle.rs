@@ -14,7 +14,6 @@ use crate::protocol::{CandidateEnd, ModelEntry, Status};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Instant;
 
 const OPERATOR: &str = "operator";
 
@@ -33,8 +32,8 @@ impl LegIdentity {
     }
 }
 
-/// The project leg on the line, read in one piece. Every adoption, rescue,
-/// and idle return gives the leg a new identity, and a return to the operator
+/// The project leg on the line, read in one piece. Every adoption and rescue
+/// gives the leg a new identity, and a return to the operator
 /// ends it, so an equal value read later means nothing has replaced the leg
 /// in between.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -212,7 +211,6 @@ pub struct CallLifecycle {
     /// The level the next project call is asked for when the caller names
     /// none. `/thinking` changes it.
     thinking_default: String,
-    last_activity: Instant,
     operation: Option<OperationIdentity>,
     terminal_reason: Option<String>,
     candidate: Option<CandidateLeg>,
@@ -236,7 +234,6 @@ impl CallLifecycle {
             thinking_requested: String::new(),
             thinking_effective: String::new(),
             thinking_default,
-            last_activity: Instant::now(),
             operation: None,
             terminal_reason: None,
             candidate: None,
@@ -481,7 +478,6 @@ impl Coordinator {
             };
             state.operation = Some(operation.clone());
             state.phase = Phase::TurnRunning;
-            state.last_activity = Instant::now();
             self.refresh_locked(state);
             Ok(operation)
         })
@@ -495,7 +491,6 @@ impl Coordinator {
             if !matches!(state.phase, Phase::TurnRunning | Phase::Active) {
                 return Err(LifecycleError::WrongPhase);
             }
-            state.last_activity = Instant::now();
             state
                 .operation
                 .clone()
@@ -509,7 +504,6 @@ impl Coordinator {
                 return false;
             }
             state.operation = None;
-            state.last_activity = Instant::now();
             if state.phase == Phase::TurnRunning {
                 state.phase = state.resting_phase();
             }
@@ -581,13 +575,6 @@ impl Coordinator {
         );
     }
 
-    /// Caller or agent activity outside a turn boundary: a clip arriving, a
-    /// reply being spoken. Starting, steering, and ending a turn count on
-    /// their own; the idle timeout measures silence from the latest of these.
-    pub fn touch_activity(&self) {
-        self.linearize(|state| state.last_activity = Instant::now());
-    }
-
     /// Ends the quiet a rescue left: a `Quiescing` call comes to rest on the
     /// route it is on, and callbacks and steers are admitted again. Every
     /// page control settles on its way out, and so does every delivered turn,
@@ -609,9 +596,8 @@ impl Coordinator {
     ///
     /// The project leg's token is retired with it. The leg takes the
     /// operator's identity at the same generation, so a callback still
-    /// carrying the project's token (a remote process that outlived its ssh
-    /// client, a request already in flight) is refused rather than taken as
-    /// the operator's.
+    /// carrying the project's token (a module call already in flight) is
+    /// refused rather than taken as the operator's.
     pub fn return_to_operator(&self) {
         self.linearize(|state| {
             if !state.on_operator() {
@@ -729,7 +715,7 @@ impl Coordinator {
 
     /// The generation, read together with the route of the leg on the line
     /// if an adoption put it there at that generation and nothing has
-    /// replaced it since: no rescue, idle return, or return to the operator,
+    /// replaced it since: no rescue or return to the operator,
     /// each of which gives the line a new identity. A reconnecting browser is
     /// told of the adoption, because it may hold speech recorded while that
     /// leg was connecting (see `CandidateNotice`).
@@ -832,7 +818,6 @@ impl Coordinator {
             state.operation = None;
             state.phase = Phase::Active;
             state.startup_rollback = None;
-            state.last_activity = Instant::now();
             self.refresh_locked(state);
             true
         })
@@ -874,25 +859,6 @@ impl Coordinator {
             });
             self.refresh_locked(state);
             true
-        })
-    }
-
-    pub fn return_if_idle(&self, timeout: std::time::Duration) -> Option<LegIdentity> {
-        self.linearize(|state| {
-            if state.on_operator()
-                || state.operation.is_some()
-                || state.candidate.is_some()
-                || state.last_activity.elapsed() < timeout
-                || matches!(state.phase, Phase::Quiescing | Phase::Shutdown)
-            {
-                return None;
-            }
-            state.phase = Phase::Quiescing;
-            state.operation = None;
-            let next_token = format!("{}-idle-{}", state.leg.token, state.leg.generation + 1);
-            state.leg = LegIdentity::new(next_token, state.leg.generation + 1);
-            self.refresh_locked(state);
-            Some(state.leg.clone())
         })
     }
 

@@ -47,13 +47,17 @@ browser mic / page controls
           +--> lifecycle.rs: the coordinator -- call identity, the current
           |       route and leg, phases, freshness, the status
           |
-          +--> pbx.rs: leg lifecycle and the processes behind it
+          +--> pbx.rs: leg lifecycle and what is behind each leg
           |       |
-          |       +--> operator Pi process
-          |       +--> project Pi process, launched from a prewarm plan
+          |       +--> operator Pi process (local)
+          |       +--> project session on a host's prime-agent daemon,
+          |            started from a prewarm plan
           |
-          +--> prewarm.rs: startup setup per host and project
-          |       (SSH masters, model catalogs, staged extensions, prepare)
+          +--> hosts.rs: the host link -- host agents dial in on /host
+          |       (commands, session events, module calls)
+          |
+          +--> prewarm.rs: setup per host and project as each host links
+          |       (model catalogs, prepare)
           |
           +--> audio.rs: STT/TTS ports and adapters
           |       |
@@ -71,7 +75,9 @@ browser mic / page controls
 apps/backend/ ------- the Rust service (src/) and its tests (tests/)
 apps/frontend/ ------ browser: call runtime (socket, capture, playback) and rendering
 static/ ------------- committed browser build output
-extensions/ --------- Pi-side tool and callback adapters
+apps/host-agent/ ---- the host agent on each project host, and its installer
+extensions/ --------- the operator's Pi-side tool adapter
+skills/switchboard/ - the Python skill module project agents reach the caller with
 homelab ------------- deployment, secrets, registry, persona, systemd
 ```
 
@@ -112,13 +118,14 @@ caller.
 
 ### 2. Pi owns agent reasoning, not the call
 
-`apps/backend/src/pi_client.rs` owns the process/RPC transport and session continuity. The
-Pi process owns prompts, model responses, tool calls, and project work. It does
-not own:
+`apps/backend/src/pi_client.rs` owns the operator's process/RPC transport and
+the service's side of a project session over the host link. The agent (the
+operator's Pi process, or a project's prime-agent session) owns prompts, model
+responses, tool calls, and project work. It does not own:
 
 - which leg is active
 - the project registry
-- SSH lifecycle
+- the host link
 - browser delivery
 - call rescue
 - final routing decisions
@@ -220,8 +227,10 @@ merely ignoring a late result is not sufficient.
 
 ### 8. Signals are separate from actions
 
-Pi extensions such as `transfer_to_project`, `return_to_operator`, `speak`,
-and `display` emit signals through the established callback/session contract.
+Agent tools such as `transfer_to_project`, `return_to_operator`, `speak`, and
+`display` (the operator's Pi extension, and a project agent's `switchboard`
+skill module) emit signals through the established session contract: the
+operator's RPC events, or module calls over the host link.
 The service decides what action those signals cause.
 
 This separation keeps tools small, makes failures recoverable, and prevents an
@@ -234,7 +243,7 @@ lifecycle kept for "when the real one is absent". pbx.rs once carried a full
 transfer-time setup path for a switchboard without prewarm. Production always
 had prewarm, nothing ran that path on purpose, and two holes led back into it
 anyway: an extension prewarm could not stage was uploaded live, and a redial
-that could not reach prewarm opened its own SSH connection. A second
+that could not reach prewarm opened its own connection to the host. A second
 implementation is untested in the configuration that matters and silently
 reachable in the one that does not.
 
@@ -248,39 +257,43 @@ deployment in homelab.
 
 Homelab owns:
 
-- systemd and runtime installation
-- SSH configuration
+- systemd and runtime installation on damocles
+- the host tokens (`SWITCHBOARD_HOST_TOKENS_FILE`)
 - project registry
 - persona and operator prompt
 - secrets
 - `SWITCHBOARD_*` environment files
 
-This repository owns application behavior and extension source. A deployment
+This repository owns application behavior, extension and skill source, and
+the host-agent installer, which is run from the pinned commit. A deployment
 change requires a separate homelab change (e.g. pinning binary release tags/checksums).
 Never place secrets or deployment workarounds here to make a local feature appear complete.
 
 ### 11. Prewarm owns launch setup
 
-`apps/backend/src/prewarm.rs` does all of the setup a project leg needs, once,
-at startup: the SSH master connection per host, the model catalog per host and
-runtime, the staged extension per host, and each project's prepare command.
+`apps/backend/src/prewarm.rs` does all of the setup a project leg needs, as
+each host links: the model catalog per host (the host agent's `list_models`)
+and each project's prepare command (`run_prepare`). Nothing is copied to a
+host; the host-agent installer ships the skill module.
 
-- **No resident project Pi at startup.** Project processes launch on transfer.
+- **No resident project session at startup.** Project sessions start on
+  transfer.
 - **Launch plans, not setup.** A transfer or redial asks prewarm for a
-  `LaunchPlan` (prepare report, catalog, extension or none, SSH options) and
-  starts the process from it. Nothing else reaches the host at transfer time:
-  no SSH setup, no upload, no prepare, no model listing.
-- **Refusal, not fallback.** A host prewarm cannot vouch for is a refused
-  transfer or redial, and a live leg keeps running. An extension that could
-  not be staged means the leg launches without one and its brief tells it to
-  use the return sentinel.
+  `LaunchPlan` (prepare report, catalog, host) and starts the session from it.
+  Nothing else reaches the host at transfer time: no prepare, no model
+  listing.
+- **Refusal, not fallback.** A project with no host, or a host that is not
+  connected, is a refused transfer or redial, and a live leg keeps running.
 - **Settled once.** Prepare results (success, nonzero, or timeout) are
-  timestamped reports that are launchable and never retried.
+  timestamped reports that are launchable and never retried; only a prepare a
+  lost link cut off runs again on the next link.
 
-### 12. Persistent SSH ownership and model fallback
+### 12. Model fallback is model policy
 
-- **SSH master ownership.** Master connections (`ControlMaster=yes`, `ControlPersist=no`) use deterministic lock (`<state_dir>/ssh/locks/<host hash>.lock`) and socket (`<state_dir>/ssh/control/<host hash>.sock`) paths under `SWITCHBOARD_STATE_DIR`, protected by kernel `flock`. Only the process that created a master terminates it (`-O exit`) or its children on shutdown; an adopting process releases its lock without signaling a sibling's control socket. Client commands set `ControlMaster=no` with an explicit `ControlPath`.
-- **Model fallback is model policy.** Prewarm reports a catalog that could not be listed as unavailable, with its reason; it does not decide what that admits. `ModelCatalog::resolve` in `models.rs` does: a provider-qualified spec passes through, a bare name is refused.
+Prewarm reports a catalog that could not be listed as unavailable, with its
+reason; it does not decide what that admits. `ModelCatalog::resolve` in
+`models.rs` does: a provider-qualified spec passes through, a bare name is
+refused.
 
 ## Ports and adapters
 
@@ -288,8 +301,10 @@ runtime, the staged extension per host, and each project's prepare command.
 
 - browser WebSocket audio/control frames
 - browser HTTP controls: connect, hangup, thinking, and model
-- agent callbacks: speak, leg-state, display, and view
-- Pi RPC events and tool signals
+- host-link frames: command replies, session events and snapshots, and module
+  calls (speak, display, view, return_to_operator, transfer_to_project,
+  set_model)
+- Pi RPC events and tool signals from the operator
 - process/stdin/stdout lifecycle events
 - startup configuration and environment values
 
@@ -311,7 +326,8 @@ removes the real coupling; do not create interfaces for ceremony.
 
 ### Outbound adapters
 
-- `PiSession` and SSH-launched project agents
+- `PiSession` (the operator) and `ProjectSession` (a project session over the
+  host link)
 - `SttAdapter` and `SttStreamAdapter`
 - `TtsTransport` and ElevenLabs HTTP streaming
 - WebSocket delivery and browser binary/text frames
@@ -324,10 +340,11 @@ removes the real coupling; do not create interfaces for ceremony.
 |---|---|---|
 | `apps/backend/src/main.rs` | composition root; `Config`, the only reader of the environment | turn policy |
 | `api.rs` | HTTP/WebSocket coordination, turn dispatch, workers, generation checks | provider wire formats, PBX policy, the display projection, the audio queue |
-| `lifecycle.rs` | call identity, the current route and the leg on it, phases, candidate legs, operations, the idle clock, the status | async work or I/O |
-| `pbx.rs` | leg lifecycle: transfer, return, rescue, redial and its decision; the operator and project processes | host setup, browser rendering, TTS encoding, a copy of the route |
-| `prewarm.rs` | startup setup and launch plans: SSH masters, catalogs, staged extensions, prepare | routing decisions, model policy |
-| `pi_client.rs` | Pi process/RPC transport, SSH command construction, process-tree cleanup | route authority or deployment registry |
+| `lifecycle.rs` | call identity, the current route and the leg on it, phases, candidate legs, operations, the status | async work or I/O |
+| `pbx.rs` | leg lifecycle: transfer, return, rescue, redial and its decision; the operator process and project sessions | host setup, browser rendering, TTS encoding, a copy of the route |
+| `hosts.rs` | the host link: admission by token, heartbeats, commands and replies, session subscriptions, module calls | routing decisions, leg lifecycle |
+| `prewarm.rs` | per-host setup and launch plans: catalogs, prepare | routing decisions, model policy |
+| `pi_client.rs` | the operator's Pi process/RPC transport, project sessions over the host link, process-tree cleanup | route authority or deployment registry |
 | `audio.rs` | STT/TTS transports, workers, bounds, deadlines | project selection or persistence policy |
 | `display.rs` | the stage projection (`DisplayProjection`), the display gate state, and the display-precedence rule for `/view` and the snapshot | generation checks, HTTP/WebSocket handling |
 | `delivery.rs` | the event envelope, per-connection framing (`DeliveryState`), and the ordered audio queue | route authority, generation checks |
@@ -337,7 +354,7 @@ removes the real coupling; do not create interfaces for ceremony.
 | `visual_protocol.rs` | display action validation and normalization | layout |
 | `protocol.rs` | the shape of every message sent to the browser (`ServerMessage`) | when or to whom a message is sent |
 | `apps/frontend/` | capture, protocol client, playback, UI | server authority or durable state |
-| `extensions/` | Pi-side tool/callback signals | direct route mutation |
+| `extensions/` | the operator's Pi-side tool signal | direct route mutation |
 | homelab | deployment and secrets | application implementation |
 
 ## Turn lifecycle
@@ -394,14 +411,14 @@ Every important boundary should have a useful trace or event:
 - cancellation, rescue, timeout, and fallback
 
 In the journal, a line names the browser connection, request, or turn it
-belongs to through a span (`ws`, `http`, `turn`, `stt`); `README.md` lists
+belongs to through a span (`ws`, `http`, `module_call`, `turn`, `stt`); `README.md` lists
 them under "Operating it".
 
 Failure ownership should be obvious:
 
 - browser capture failure: browser reports it and releases the mic
 - STT worker failure: audio adapter reports it; application decides fallback
-- Pi/SSH failure: PBX returns the caller to the operator
+- Pi or host-link failure: PBX returns the caller to the operator
 - TTS failure: application reports it and preserves written-reply fallback
 - stale result: generation gate discards it without side effects
 - deployment mismatch: configuration/health surface names the missing contract

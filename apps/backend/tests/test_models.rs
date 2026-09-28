@@ -1,6 +1,15 @@
 use super::*;
+use serde_json::json;
 
-const TABLE: &str = "provider model context max-out thinking images\nanthropic claude-opus-5 1M 128K yes yes\nanthropic claude-sonnet-5 1M 128K yes yes\nopenai claude-sonnet-5 1M 128K yes yes\ngroq llama-4-fast 128K 8K no no\n";
+/// A host's `list_models` reply: the same models the old table listed.
+fn listing() -> ModelCatalog {
+    ModelCatalog::from_host_models(&json!({"models": [
+        {"provider": "anthropic", "id": "claude-opus-5", "name": "Claude Opus 5", "reasoning": true},
+        {"provider": "anthropic", "id": "claude-sonnet-5", "name": "Claude Sonnet 5", "reasoning": true},
+        {"provider": "openai", "id": "claude-sonnet-5", "name": "Sonnet via OpenAI", "reasoning": true},
+        {"provider": "groq", "id": "llama-4-fast", "name": "Llama 4 Fast", "reasoning": false},
+    ]}))
+}
 
 #[test]
 fn parses_and_normalizes_specs() {
@@ -12,47 +21,12 @@ fn parses_and_normalizes_specs() {
 }
 
 #[test]
-fn catalog_key_identity_ignores_launch_only_args() {
-    use crate::registry::Project;
-    let mut proj1 = Project {
-        id: "proj1".into(),
-        description: String::new(),
-        aliases: Vec::new(),
-        host: Some(" host.example.com ".into()),
-        cwd: "/tmp/dir1".into(),
-        runtime: "pi".into(),
-        model: None,
-        stage_extension: true,
-        extra_args: vec!["--arg1".into()],
-        prepare: String::new(),
-    };
-    let proj2 = Project {
-        id: "proj2".into(),
-        description: String::new(),
-        aliases: Vec::new(),
-        host: Some("host.example.com".into()),
-        cwd: "/tmp/dir2".into(),
-        runtime: "pi".into(),
-        model: None,
-        stage_extension: true,
-        extra_args: vec!["--arg2".into()],
-        prepare: String::new(),
-    };
-
-    let key1 = CatalogKey::for_project(&proj1);
-    let key2 = CatalogKey::for_project(&proj2);
-    assert_eq!(key1, key2);
-
-    proj1.runtime = "custom-pi".into();
-    let key3 = CatalogKey::for_project(&proj1);
-    assert_ne!(key1, key3);
-}
-
-#[test]
 fn catalog_exposes_provider_models_with_decimal_and_short_names() {
-    let catalog = ModelCatalog::parse(
-        "provider model context max-out thinking images\nopenai gpt-5.6 1M 128K yes yes\nmoonshot luna 1M 128K yes yes\nopenai sol 1M 128K no no\n",
-    );
+    let catalog = ModelCatalog::from_host_models(&json!({"models": [
+        {"provider": "openai", "id": "gpt-5.6", "name": "GPT 5.6", "reasoning": true},
+        {"provider": "moonshot", "id": "luna", "name": "Luna", "reasoning": true},
+        {"provider": "openai", "id": "sol", "name": "Sol", "reasoning": false},
+    ]}));
     assert_eq!(catalog.entries.len(), 3);
     assert_eq!(
         catalog.resolve("GPT 5.6", "").unwrap().spec(),
@@ -71,7 +45,7 @@ fn catalog_exposes_provider_models_with_decimal_and_short_names() {
 
 #[test]
 fn resolves_digits_and_rejects_ambiguity() {
-    let catalog = ModelCatalog::parse(TABLE);
+    let catalog = listing();
     assert_eq!(
         catalog.resolve("opus five", "").unwrap().spec(),
         "anthropic/claude-opus-5"
@@ -123,17 +97,24 @@ fn valid_empty_catalog_rejects_unlisted_models() {
 }
 
 #[test]
-fn malformed_catalog_is_unavailable() {
-    let catalog = ModelCatalog::parse("provider model\nanthropic");
-    assert!(!catalog.available);
-    assert!(catalog.diagnostic.is_some());
+fn malformed_or_empty_listings_are_unavailable() {
+    for listing in [
+        json!({}),
+        json!({"models": []}),
+        json!({"models": [{"provider": "anthropic"}]}),
+        json!({"models": [{"provider": " ", "id": "opus"}]}),
+    ] {
+        let catalog = ModelCatalog::from_host_models(&listing);
+        assert!(!catalog.available, "{listing}");
+        assert!(catalog.diagnostic.is_some(), "{listing}");
+    }
 }
 
 #[test]
 fn unavailable_catalog_passes_through_qualified_models_and_suffixes() {
-    let catalog = ModelCatalog::unavailable("ssh failed");
+    let catalog = ModelCatalog::unavailable("host not connected");
     assert!(!catalog.available);
-    assert_eq!(catalog.diagnostic.as_deref(), Some("ssh failed"));
+    assert_eq!(catalog.diagnostic.as_deref(), Some("host not connected"));
     assert_eq!(
         catalog
             .resolve("anthropic/opus:thinking level x high", "")
@@ -149,5 +130,5 @@ fn unavailable_catalog_passes_through_qualified_models_and_suffixes() {
         .resolve("opus", "")
         .unwrap_err()
         .to_string()
-        .contains("ssh failed"));
+        .contains("host not connected"));
 }
