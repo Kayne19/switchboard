@@ -1,0 +1,15 @@
+# The switchboard skill: installed into every prime-agent session's kernel on a
+# project host. Standard library only.
+[project]
+name = "switchboard"
+version = "0.1.0"
+description = "Reach the caller of a switchboard call from a prime-agent session"
+requires-python = ">=3.11"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/switchboard"]
