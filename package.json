@@ -5,15 +5,16 @@
   "scripts": {
     "check": "npm run check:worklet && npm run typecheck",
     "check:worklet": "tsc --noEmit --project tsconfig.worklet.json",
-    "typecheck": "tsc --noEmit --project apps/frontend/tsconfig.app.json --pretty false && tsc --noEmit --project apps/frontend/tsconfig.node.json --pretty false",
+    "typecheck": "tsc --noEmit --project apps/frontend/tsconfig.app.json --pretty false && tsc --noEmit --project apps/frontend/tsconfig.node.json --pretty false && tsc --noEmit --project apps/host-agent/tsconfig.json --pretty false",
     "build": "npm run build:static && npm run build:v17",
     "build:static": "node scripts/clean_v17_assets.mjs && tsc --project tsconfig.worklet.json && node scripts/copy_wake_assets.mjs",
     "build:v17": "npm run typecheck && node scripts/clean_v17_assets.mjs && vite build --config apps/frontend/vite.config.ts",
     "dev": "vite --config apps/frontend/vite.config.ts",
     "preview": "vite preview --config apps/frontend/vite.config.ts",
-    "test": "npm run build && npm run test:node && npm run test:v17",
+    "test": "npm run build && npm run test:node && npm run test:v17 && npm run test:host-agent",
     "test:node": "node apps/frontend/tests/test_protocol.mjs && node apps/frontend/tests/test_extensions.mjs && node apps/frontend/tests/test_hands_free.mjs",
     "test:v17": "node apps/frontend/scripts/verify-syntax.mjs && vitest run --root apps/frontend tests/unit && node apps/frontend/scripts/verify-design-lock.mjs",
+    "test:host-agent": "node --test \"apps/host-agent/tests/*.test.ts\"",
     "test:visual": "playwright test --config apps/frontend/playwright.config.ts",
     "test:integration": "playwright test --config apps/frontend/playwright.production.config.ts"
   },
@@ -35,6 +36,6 @@
     "react-dom": "19.1.1"
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.18.0"
   }
 }
