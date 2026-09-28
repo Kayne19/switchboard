@@ -40,9 +40,9 @@ homelab deploys it from the pinned commit for the operator leg.
 
 Project agents reach the caller through the `switchboard` Python skill module
 in `skills/switchboard/` (standard library only), not through a TypeScript
-extension. It is meant to be installed as a global prime-agent skill
-(`~/.prime/agent/skills/switchboard`) on each project host, so every session
-has it; no installer does that yet. It talks only to the host agent on the host's local
+extension. The host-agent installer (`apps/host-agent/install.mjs`) installs
+it as a global prime-agent skill (`~/.prime/agent/skills/switchboard`) on each
+project host, so every session has it. It talks only to the host agent on the host's local
 skill socket (`docs/host-link.md`, "Skill socket"), takes its session id from
 `RLM_SESSION_DIR` at `RLM_DEPTH` 0, and refuses subagents. The persona and the
 call token come from the host agent at call time. Its tests are

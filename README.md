@@ -280,6 +280,13 @@ module in `skills/switchboard/`. It works only during a call, through the host
 agent's local skill socket (`docs/host-link.md`, "Skill socket"); every call
 returns a result and prints one line, and a refusal or failure never raises.
 
+Each project host also runs the host agent, and the shared prime-agent
+daemon, under systemd user units. One command installs or redeploys both,
+with the skill, from a checkout of the pinned commit:
+`node apps/host-agent/install.mjs --host-id <id> --token-file <path>`.
+`docs/host-agent.md` ("Install and redeploy") has the flags, how to add a
+container, and the post-deploy checklist.
+
 If the agent binary is installed per-user (`~/.local/bin/pi` is the common
 case), give `runtime` the **absolute path**. A non-interactive ssh session does
 not get the PATH you see when you log in by hand, so a bare `pi` works when you
@@ -310,6 +317,7 @@ test it manually and then fails with "command not found" for the switchboard.
 | `static/openwakeword/` | same-origin Hey Jarvis ONNX, wrapper, and ONNX Runtime WASM assets |
 | `extensions/operator-switchboard.ts` | the operator's pi extension |
 | `skills/switchboard/` | the `switchboard` Python skill module project agents use to reach the caller, and its tests |
+| `apps/host-agent/install.mjs` | installs or redeploys the host agent, the skill and the two systemd user units on a project host |
 | `docs/environment.md` | every environment variable the service reads, and what it passes to agents |
 | `docs/architecture.md` | ownership boundaries and the rules for where new behavior goes |
 | `docs/display-tool.md` | the `display` tool: payload, operations, layout, and composition |
