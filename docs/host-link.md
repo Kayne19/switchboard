@@ -1,0 +1,396 @@
+# Host link and skill socket
+
+This is the contract between the host agent (`apps/host-agent/`, the client)
+and the switchboard service (the server), and between the host agent and the
+`switchboard` Python skill module on the same host. The daemon findings the
+host agent follows are in `docs/host-agent.md`.
+
+The host agent runs on each project host as the user. It dials out to the
+service over one WebSocket, drives the user's shared prime-agent daemon
+through a `DaemonPort` (`apps/host-agent/src/daemon_port.ts`), and serves the
+skill module on a local Unix socket.
+
+## Running it
+
+```sh
+node apps/host-agent/src/main.ts [--config <file>]
+```
+
+- Node 22.18 or later: the sources are TypeScript run directly by Node's type
+  stripping (erasable syntax only, no build step).
+- `--config` defaults to `~/.config/switchboard/host-agent.json`.
+- The host agent connects to the daemon's socket and never starts a daemon.
+  While the socket is absent it retries with capped backoff (1 s doubling to
+  30 s). The daemon runs in its own systemd user unit.
+
+### Config file
+
+One JSON file; `main.ts` is its only reader. `~/` is expanded.
+
+```json
+{
+  "host_id": "scriptorium",
+  "service_url": "wss://switchboard.home.arpa/host",
+  "token_file": "~/.config/switchboard/host-token",
+  "git_sha": "d95f029...",
+  "prime_agent_package": "~/.local/npm-global/lib/node_modules/prime-agent",
+  "daemon_socket": "/tmp/prime-agent-1000/daemon.sock",
+  "state_dir": "~/.local/state/switchboard/host-agent",
+  "skill_socket": "~/.cache/switchboard/host-agent.sock"
+}
+```
+
+| Key | Required | Meaning |
+|---|---|---|
+| `host_id` | yes | The host's id, as the service's host registry knows it. |
+| `service_url` | yes | `ws://` or `wss://` URL of the service's `/host` endpoint. |
+| `token_file` | yes | File holding the per-host bearer token (surrounding whitespace is trimmed). The token is never logged. |
+| `prime_agent_package` | yes | Directory of the installed `prime-agent` npm package; `dist/index.js` is loaded at runtime. |
+| `git_sha` | no (`unknown`) | Commit the host agent was installed from; reported in the hello. |
+| `daemon_socket` | no | Default `$TMPDIR/prime-agent-<uid>/daemon.sock` (the daemon's default). |
+| `state_dir` | no | Default `~/.local/state/switchboard/host-agent`. Holds `sessions.json`. |
+| `skill_socket` | no | Default `~/.cache/switchboard/host-agent.sock`. |
+
+### State file
+
+`<state_dir>/sessions.json` (0600, written atomically) keeps provenance and
+every session name the host agent ever minted, so a restart keeps both:
+
+```json
+{
+  "version": 1,
+  "sessions": [
+    { "handle": "a1b2", "session_id": "0199...", "name": "sb-homelab-3f9c01aa", "project": "homelab", "cwd": "/srv/homelab", "provenance": "created" }
+  ],
+  "used_names": ["sb-homelab-3f9c01aa"]
+}
+```
+
+## Host link
+
+A WebSocket at the service's `/host`. Every frame is one JSON text message
+with a `type`.
+
+### Identifiers
+
+- `session` is the daemon's live handle (`activeSessionId`). Every command
+  and event about a live session uses it.
+- `session_id` is the persisted session id. It survives a kill, is what
+  `open_session` takes, and is the basename of the kernel's `RLM_SESSION_DIR`
+  (the skill socket's key).
+- A `cursor` is `"<boot_id>:<sequence>"`. `boot_id` is new on every
+  host-agent start; `sequence` increases across all sessions of one boot.
+
+### Hello, welcome, refusal
+
+The host agent sends `hello` as its first frame:
+
+```json
+{
+  "type": "hello",
+  "host_id": "scriptorium",
+  "token": "<per-host bearer token>",
+  "protocol": 1,
+  "git_sha": "d95f029...",
+  "boot_id": "5c2e9a0b41d7",
+  "prime_agent": { "client_version": "0.9.5", "daemon_version": "0.9.6", "daemon_protocol": 7 }
+}
+```
+
+`protocol` is the host-link protocol version (currently `1`). The service
+refuses a bad token or an incompatible protocol and closes the socket:
+
+```json
+{ "type": "refused", "reason": "bad_token", "message": "unknown host or token" }
+{ "type": "refused", "reason": "incompatible_protocol", "message": "host-link protocol 1 is not supported" }
+```
+
+After a refusal the host agent redials with capped backoff (1 s doubling to
+30 s), so a fixed token or a redeployed service is picked up without a
+restart.
+
+On success the service answers `welcome`:
+
+```json
+{ "type": "welcome", "epoch": 7, "protocol": 1, "cursors": { "a1b2": "5c2e9a0b41d7:42" } }
+```
+
+- `epoch` is the link epoch. The service gives each accepted link of a host a
+  larger epoch; a newer link fences older ones.
+- `cursors` holds, per session, the last event cursor the service received
+  from this host. A session the service never heard of is absent.
+
+After the welcome the host agent brings the service up to date, per tracked
+session:
+
+- if the cursor carries this boot's id and the host agent's buffer still
+  holds every later event, it replays them (`"replayed": true`);
+- otherwise (no cursor, another boot id after a host-agent restart, or the
+  buffer no longer reaches back that far) it sends a fresh `snapshot`;
+- for a session in `cursors` that the host agent no longer tracks, it replays
+  the buffered events (ending with `session_closed`) when it can, or else
+  sends a new `session_closed` event with reason `gone`.
+
+Then it sends `{ "type": "synced", "epoch": 7 }`. The buffer keeps the last
+1000 events per session.
+
+### Heartbeat
+
+Both sides send `{ "type": "ping" }` every 10 s and answer each ping with
+`{ "type": "pong" }`. A side that sent 3 pings without a pong since drops the
+link. The host agent then redials.
+
+### Commands and replies
+
+The service sends commands; every command carries the current `epoch`:
+
+```json
+{ "type": "command", "id": "c17", "epoch": 7, "name": "prompt", "args": { "session": "a1b2", "message": "..." } }
+```
+
+The host agent answers on the same link:
+
+```json
+{ "type": "reply", "id": "c17", "epoch": 7, "ok": true, "result": { "sent_as": "prompt" } }
+{ "type": "reply", "id": "c18", "epoch": 7, "ok": false, "error": { "code": "refused", "message": "session a1b2 was taken over; it can only be detached" } }
+```
+
+A command whose `epoch` is not the current link's epoch is not run:
+
+```json
+{ "type": "reply", "id": "c19", "epoch": 7, "ok": false, "error": { "code": "stale_epoch", "message": "epoch 6 is not the current link epoch" } }
+```
+
+A reply is sent only on the link the command came from; if that link is gone,
+the reply is dropped.
+
+Error codes:
+
+| Code | Meaning |
+|---|---|
+| `stale_epoch` | The command's epoch is not the current link epoch. |
+| `bad_request` | A missing or invalid argument. |
+| `unknown_command` | No such command. |
+| `not_found` | The session is not tracked by this host agent. |
+| `refused` | Not allowed (kill of a session the service did not create, `open_session` of a non-`sb-` session, `set_mode` off a call). |
+| `unsupported` | The daemon does not support the command (per-command compatibility); other commands keep working. |
+| `daemon_error` | The daemon ran the command and it failed; `message` has the daemon's text. |
+| `failed` | Anything else. |
+
+### Commands
+
+A session description (`info`) as returned by `create_session`,
+`open_session` and in snapshots:
+
+```json
+{
+  "session": "a1b2",
+  "session_id": "0199...",
+  "name": "sb-homelab-3f9c01aa",
+  "project": "homelab",
+  "cwd": "/srv/homelab",
+  "provenance": "created",
+  "busy": false,
+  "turn_open": false,
+  "model": "anthropic/claude-sonnet-5",
+  "thinking": "high",
+  "call_mode": null,
+  "last_text": "Done. The tests pass."
+}
+```
+
+`thinking` is the effective level the daemon reports (it clamps levels the
+model does not have). `call_mode` is `null` when the session is not on a call.
+
+| Command | Args | Result |
+|---|---|---|
+| `create_session` | `project`, `config: {cwd, provider?, model?, thinking?}` | `info` |
+| `open_session` | `session_id`, `project?` | `info` |
+| `list_sessions` | — | `{sessions: [...]}` |
+| `list_saved_sessions` | `cwd`, `project?` | `{sessions: [...]}` |
+| `prompt` | `session`, `message` | `{sent_as: "prompt" \| "follow_up"}` |
+| `steer` | `session`, `message` | `{sent_as: "steer"}` |
+| `follow_up` | `session`, `message` | `{sent_as: "follow_up"}` |
+| `abort` | `session` | `{aborted: true}` |
+| `kill` | `session` | `{killed: true}` |
+| `detach` | `session` | `{detached: true}` |
+| `join_call` | `session`, `token`, `persona`, `speech_deadline_ms`, `mode?` | `{on_call: true, mode}` |
+| `leave_call` | `session` | `{on_call: false}` |
+| `set_mode` | `session`, `mode` | `{mode}` |
+| `set_model` | `session`, `provider`, `model` | `{model, thinking}` |
+| `set_thinking` | `session`, `level` | `{model, thinking}` |
+| `list_models` | — | `{models: [{provider, id, name, reasoning}]}` |
+| `run_prepare` | `cwd`, `command`, `timeout_ms?` | prepare result |
+
+- **`create_session`** always creates a resident session
+  (`lifecycle: "resident"`) named `sb-<project>-<8 hex>`. A name is never
+  reused: the daemon never frees one, even after a kill, so the host agent
+  keeps every minted name and mints a new one if the daemon reports a name
+  taken. The config passes only `cwd`, `provider`, `model` and `thinking`:
+  no `appendSystemPrompt` (it would replace the project's
+  `APPEND_SYSTEM.md`) and no tool list, so `ipython` stays. The host agent
+  attaches to the session for its events. `project` must match
+  `[A-Za-z0-9][A-Za-z0-9_-]*`.
+- **`open_session`** reopens a saved session by id (or `.jsonl` path) as a
+  resident session and attaches. Only names starting `sb-` (or
+  `sb-<project>-` when `project` is given) are accepted; others are refused.
+  Reopening a live session returns it.
+- **`list_sessions`** lists live top-level daemon sessions (subagents are
+  left out): `{session, session_id, name, cwd, busy, provenance, project,
+  model, thinking}`. `provenance` is `"created"`, `"taken_over"`, or `null`
+  for a session the service has nothing to do with.
+- **`list_saved_sessions`** lists saved sessions in `cwd`, filtered to names
+  starting `sb-<project>-` when `project` is given: `{session_id, path, name,
+  cwd, modified, message_count, first_message}`.
+- **`prompt`** on a session with an open turn is sent as `follow_up`, and a
+  prompt the daemon refuses as busy is resent as `follow_up`; the daemon
+  refuses plain prompts on a busy session.
+- **`abort`** is always followed by `resume_queue` (the daemon suspends
+  queued input after an abort; `resume_queue`'s "No queued work" error is
+  ignored), then by `wait_for_idle`.
+- **`kill`** is only for sessions with provenance `created`. It is refused
+  for `taken_over` sessions and for sessions the host agent does not track.
+  The transcript stays and can be reopened with `open_session`.
+- **`detach`** ends the call, detaches from the daemon session and stops
+  tracking it. The session keeps running. After it the module answers "not on
+  a call".
+- **`join_call`** puts a tracked session on a call: the skill module's hello
+  then returns the token, persona and speech deadline given here. `mode`
+  defaults to `foreground`. `leave_call` takes it off; `detach` and `kill` do
+  too. The service sends a new token for every call.
+- **`set_mode`** changes the mode of a session on a call: `foreground`,
+  `background` or `active`. See "Delivery" below.
+- **`set_model`** and **`set_thinking`** read the state back and return the
+  model and the effective thinking level; they also emit a `state` event.
+- **`list_models`** returns the models this host's prime-agent can use (the
+  installed package's model registry, the same models and auth files the
+  daemon reads).
+- **`run_prepare`** runs `sh -c <command>` in `cwd`. Output is bounded: the
+  last 16 KiB of each stream is kept. The default timeout is 10 minutes; on
+  timeout the process group is killed.
+
+  ```json
+  { "outcome": "timed_out", "exit_code": null, "signal": "SIGKILL", "stdout": "...", "stderr": "", "truncated": false, "duration_ms": 600004 }
+  ```
+
+  `outcome` is `succeeded`, `failed` or `timed_out`.
+
+Reserved, not implemented yet: `attach` (desk takeover, provenance
+`taken_over`).
+
+### Session events
+
+The host agent sends every session event with its cursor:
+
+```json
+{ "type": "event", "session": "a1b2", "cursor": "5c2e9a0b41d7:43", "event": { "kind": "turn_start", "cause": "input" } }
+```
+
+| `event.kind` | Fields | Meaning |
+|---|---|---|
+| `turn_start` | `cause`: `input` \| `autonomous` | A turn opened: after an input, or an `agent_start` nobody caused (a subagent finished, a schedule, a heartbeat). |
+| `turn_end` | `error?` | The turn settled: `wait_for_idle`, sent after the last input, resolved. `error` is set when that wait failed. |
+| `tool_start` | `tool`, `call_id` | A tool call started. |
+| `tool_end` | `tool`, `call_id`, `error` | A tool call ended. |
+| `text` | `text` | An assistant message ended with this text. |
+| `error` | `message` | A model error, or retries exhausted. |
+| `compaction` | `phase`: `start` \| `end`, `reason` | The daemon compacted the context. The service resends the voice brief on the next routed line after `end`. |
+| `state` | `model`, `thinking` | Model and effective thinking level after `set_model` or `set_thinking`. |
+| `session_closed` | `reason`: `killed` \| `detached` \| `gone` | The host agent stopped tracking the session (`gone`: the daemon no longer has it). |
+
+A turn is not ended by `agent_end`: the daemon repeats it within one turn.
+Only `turn_end` means settled.
+
+### Snapshots
+
+A snapshot replaces what the service knows about a session:
+
+```json
+{ "type": "snapshot", "session": "a1b2", "cursor": "5c2e9a0b41d7:43", "info": { "session": "a1b2", "...": "see info above" } }
+```
+
+The host agent sends one after the welcome when it cannot replay (see
+above), and after it reconnects to a replaced daemon. After a host-agent
+restart it rebuilds each tracked session from the daemon: sessions the
+daemon still has are reattached (a busy one gets an open turn, settled by
+`wait_for_idle`); sessions it no longer has get `session_closed`. The
+snapshot carries the state, not the transcript.
+
+### Module calls
+
+When the skill module makes a call that needs the service (see "Delivery"),
+the host agent relays it:
+
+```json
+{ "type": "module_call", "id": "m5", "session": "a1b2", "token": "<call token>", "call": "speak", "args": { "text": "Done, the tests pass." } }
+```
+
+The service answers:
+
+```json
+{ "type": "module_reply", "id": "m5", "status": "delivered", "reason": null }
+{ "type": "module_reply", "id": "m6", "status": "delivered", "reason": null, "result": { "visible": ["..."] } }
+```
+
+`status` is `delivered`, `accepted`, `refused` or `failed`. The service
+checks the token against the session's current call and discards a stale
+one. If no reply arrives in time (the speech deadline for `speak`, 30 s
+otherwise), or the link is down, the module gets `failed`.
+
+## Skill socket
+
+A Unix socket at `~/.cache/switchboard/host-agent.sock` (directory 0700,
+socket 0600). JSON lines: the module writes one request per line and reads
+one reply line; the host agent never pushes. A connection may carry several
+requests; they are answered in order.
+
+### Hello
+
+```json
+{ "op": "hello", "session_id": "0199...", "depth": 0 }
+```
+
+`session_id` is the basename of `RLM_SESSION_DIR`; `depth` is `RLM_DEPTH` as
+a number. Replies:
+
+```json
+{ "on_call": false }
+{ "on_call": true, "token": "<call token>", "persona": "...", "speech_deadline_ms": 25000 }
+{ "on_call": false, "reason": "subagent" }
+```
+
+The last is the reply for any `depth` other than 0.
+
+### Calls
+
+```json
+{ "op": "call", "session_id": "0199...", "depth": 0, "token": "<call token>", "call": "speak", "args": { "text": "..." } }
+```
+
+Calls: `speak {text}`, `request_to_speak {message, reason}` (`reason` is
+`finished`, `needs_decision` or `problem`), `display {action}`,
+`view {target?}`, and the routing signals `return_to_operator {summary?}`,
+`transfer_to_project {project, intent?, model?, thinking?}` and
+`set_model {model?, thinking?, keep_context?, intent?}`.
+
+Reply: `{status, reason, result?}`, `status` one of `delivered`, `accepted`,
+`refused`, `failed`. Checks, in order:
+
+1. `depth` other than 0: `refused`, `subagent`.
+2. Unknown `call`: `refused`, `unknown_call`.
+3. The session is not tracked, not on a call, or the token is not the
+   current call's token: `refused`, `not_on_call`.
+4. Delivery by mode (below); a relayed call returns the service's reply.
+
+A request that is not JSON gets `refused`, `bad_request`.
+
+### Delivery
+
+| Call | `foreground`, `active` | `background` |
+|---|---|---|
+| `speak` | relayed | `refused`, `caller_away` |
+| `request_to_speak` | `refused`, `caller_listening` | relayed |
+| `display`, `view` | relayed | relayed |
+| routing signals | relayed | `refused`, `caller_away` |
+
+`active` currently delivers like `foreground`.
