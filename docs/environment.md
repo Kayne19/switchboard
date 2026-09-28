@@ -29,8 +29,6 @@ means unset.
 | `SWITCHBOARD_AGENT_THINKING` | `medium` | Thinking level a project leg starts at unless the caller names one. |
 | `SWITCHBOARD_MODEL_SWAPS` | `1` | `0`, `false`, or `no` turns off mid-call model and thinking changes. |
 | `SWITCHBOARD_PERSONA` | empty | Given to each project session when it joins the call (`join_call`, see `docs/host-link.md`). |
-| `SWITCHBOARD_IDLE_TIMEOUT` | `3600` | Seconds of silence before a project leg is dropped back to the operator; `0` or less disables it. |
-| `SWITCHBOARD_IDLE_POLL` | `30` | Seconds between idle checks (at least 1). |
 | `SWITCHBOARD_MAX_SPOKEN_CHARS` | `700` | Longest reply the switchboard voices; longer text is clipped, at a sentence end when one is near. |
 | `SWITCHBOARD_SPEECH_DEADLINE_MS` | `25000` | Deadline for one synthesized utterance, 1–120000. Also given to each project session when it joins the call; its host agent enforces the same deadline. |
 | `SWITCHBOARD_HISTORY_LIMIT` | `200` | Transcript entries kept for page reloads; `0` keeps none. |
@@ -79,6 +77,30 @@ Project legs are sessions on their host's prime-agent daemon, reached through
 the host link; they get no environment from this service. What a session needs
 for the call comes with `join_call` (`docs/host-link.md`): a fresh call token
 per leg, and the persona and speech deadline above.
+
+## Removed in this step
+
+The service no longer reads these. The paired homelab pull request removes
+them from the env file and the role; a deployed file that still sets them does
+no harm, because the service ignores names it does not read.
+
+Each name below is written without its `SWITCHBOARD_` prefix, so a search of
+this tree for a retired name finds no live reference
+(`scripts/check_no_ssh.mjs` enforces that for the SSH ones).
+
+| Name | Why it went |
+|---|---|
+| `SSH_PROGRAM` | Project legs run over the host link; the service starts no `ssh`. |
+| `REMOTE_CACHE_DIR` | Nothing is staged on project hosts; the host-agent installer ships the skill. |
+| `STATE_DIR` | Held only the SSH locks and control sockets. |
+| `AGENT_EXTENSION` | The project extension is gone; agents use the `switchboard` skill module. |
+| `SELF_URL`, `SPEAK_URL`, `STATE_URL`, `DISPLAY_URL` | The agent callback routes are gone; module calls come over the host link. |
+| `IDLE_TIMEOUT`, `IDLE_POLL` | The idle drop is gone; prime-agent's own idle eviction ends sessions nobody uses. |
+
+The registry (`projects.json`) also lost `runtime`, `stage_extension` and
+`extra_args`. An entry that still carries them loads; the keys have no effect
+and the startup log names them as keys the switchboard does not understand.
+Every project needs a `host`: the id of a host agent in the host tokens file.
 
 ## Build time
 

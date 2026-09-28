@@ -68,7 +68,7 @@ A new leg bumps the epoch at *adoption*, not at startup, whether an agent's
 for `/model` or `/thinking`, which also bump it once at the start with their
 rescue): the generation stays put while the new leg is starting, and the new
 epoch is announced (with the status) the moment the leg is live.
-That leaves a window — ssh, process start, intro turn — in which the browser
+That leaves a window — session start, intro turn — in which the browser
 still holds the old epoch. The server closes it by emitting a
 `{"type":"candidate"}` event when a candidate leg begins and
 `{"type":"candidate_cleared"}` when adoption, rollback, or rescue ends it. The
@@ -90,8 +90,8 @@ the stamp it was recorded under. Any other ending strips the mark. A tab that
 was disconnected through the whole change sees no notice, only the snapshot's
 epoch, so the snapshot sends an `adopted` notice ahead of its epoch while the
 adopted leg is still the one on the line (`Coordinator::generation_and_adoption`).
-A rescue, an idle return, and a return to the operator each give the line a
-new identity, and end that.
+A rescue and a return to the operator each give the line a new identity, and
+end that.
 
 ### A clip on the wire when the leg is adopted
 
@@ -181,16 +181,16 @@ reset once per leg, keyed by route and generation, by whichever announcement
 gets there first; the later one only restates the status. Route is part of the
 key because a return to the operator keeps the generation and must still clear
 the project's scene. It does not keep the project leg's token: the line takes
-the operator's own identity at that generation, so a callback still carrying
-the project's token (a remote process that outlived its ssh client, a request
-already in flight) is refused rather than taken as the operator's (#77). Promotion holds the display gate from adoption until the
+the operator's own identity at that generation, so a module call still carrying
+the project's token (one already in flight) is refused rather than taken as the
+operator's (#77). Promotion holds the display gate from adoption until the
 `epoch` is published, so a display from the new leg cannot be applied, and then
 wiped, ahead of its own reset.
 
-Promotion only ever adopts the leg that asked for it. HTTP callbacks name
-their leg by its session token. RPC activity names it too: every pi process is
-started with the token of the leg it serves (`operator` for the operator), and
-each `Activity` carries it. `Coordinator::classify_activity` promotes only on
+Promotion only ever adopts the leg that asked for it. Module calls name their
+leg by its call token. Activity names it too: the operator's pi process is
+started with the token `operator`, a project session is put on the call with
+its leg's token, and each `Activity` carries it. `Coordinator::classify_activity` promotes only on
 the candidate's own token, publishes only the current leg's activity, and
 drops the rest (a rescued leg, the operator after a transfer, a process that
 is neither). Adoption checks the token again under the coordinator's lock, so
@@ -236,11 +236,12 @@ rewriting a newer leg selection.
 
 ### A swap is decided before its rescue
 
-A rescue closes the live process. `/model` and `/thinking` used to rescue first
-and let the PBX decide afterwards, so a swap the PBX then refused (a remote
-project asked to keep its conversation, a model the catalog does not resolve,
-the model already running) left the caller on a closed leg, and their next turn
-dropped them to the operator (#63).
+A rescue ends the live leg. `/model` and `/thinking` used to rescue first
+and let the PBX decide afterwards, so a swap the PBX then refused (a model the
+catalog does not resolve, the model already running) left the caller on a
+closed leg, and their next turn dropped them to the operator (#63). A swap
+that keeps the conversation now only aborts the turn in flight, and the
+session stays up.
 
 They now decide first. `RedialPlanner` in `apps/backend/src/pbx.rs` makes every
 refusal from the leg the coordinator names (`project_leg`, read once) and the
@@ -268,7 +269,7 @@ was made for, and each is closed where its side effect happens:
 
 ## `ETXTBSY` when tests write their own executables
 
-Several tests need a fake `ssh` or a fake `pi`. They write a small shell script,
+Several tests need a fake `pi` or a fake sidecar. They write a small shell script,
 mark it executable, and hand the path to the code under test.
 
 Linux refuses to execute a file that any process holds open for writing. Tests
@@ -332,18 +333,10 @@ which guarantees the broken pipe rather than leaving it to chance.
 The general rule: when a downstream write fails because an upstream process
 already failed, report the upstream failure. The write error is a symptom.
 
-Extension staging follows the same rule. It lives in prewarm now
-(`run_artifact_job` in `apps/backend/src/prewarm.rs`): the write of the
-extension to the remote's stdin is not what decides, the exit status and stderr
-are. That matters beyond log quality. A remote that stops reading early but
-*succeeds* used to be reported as a staging failure and fell back to the
-sentinel. `staging_survives_a_remote_that_stops_reading_before_the_extension_ends`
-in `apps/backend/tests/test_prewarm.rs` covers exactly that, by sending a
-megabyte to a remote that reads sixteen bytes and exits zero.
-
-An agent leg follows it too, with a second half: the stderr worth reporting
-is read by a separate drain task, so reading the tail at the moment of failure
-races that task. A remote launch into a missing `cwd` showed both halves. The
+The operator's pi process follows it too, with a second half: the stderr worth
+reporting is read by a separate drain task, so reading the tail at the moment
+of failure races that task. An agent launched into a missing `cwd` (when
+project legs were still pi processes) showed both halves. The
 shell prints why and exits while the switchboard writes the intro prompt, and
 the caller was told the broken pipe, "the agent never answered", or "agent
 process is not running ()", depending on timing, about one run in eight under
@@ -365,12 +358,10 @@ just passed locally.
 the same verdict, and an upgrade is a deliberate, reviewable change to that file
 rather than a surprise on an unrelated pull request.
 
-## Prewarm SSH transport, flock, and deterministic control paths
+## Prepare reports are final
 
-Prewarm relies on cross-process `flock` locking and OpenSSH control sockets under `SWITCHBOARD_STATE_DIR`:
-
-- Lock files (`<state_dir>/ssh/locks/<host hash>.lock`) and socket files (`<state_dir>/ssh/control/<host hash>.sock`) are deterministic per canonical host (`canonical_host()`). The host hash is the first 16 hex digits of the host's SHA-256: a full digest overflowed the 108-byte `sun_path` once ssh appended its suffix (see `host_hash`).
-- Stale control socket removal occurs ONLY AFTER acquiring the kernel `flock` on the lock file.
-- Only the process that created the master connection initiates master exit (`-O exit`) or child termination on shutdown; an adopting process releases its `flock` lock without signaling or deleting a sibling's live control socket.
-- Prepare exit status (zero, nonzero, or timeout) is a terminal report snapshot; nonzero or timed-out prepare outputs remain launchable and are never retried.
-- Injected SSH program options (`SshClientOptions`) carry `ControlMaster=no` and explicit `ControlPath` parameters to prevent client processes from becoming masters.
+A project's prepare runs once, through its host agent, as soon as the host
+links. Its exit status (zero, nonzero, or timeout) is a terminal report
+snapshot; nonzero or timed-out prepare outputs remain launchable and are never
+retried. Only a prepare cut off by a lost link runs again, on the next link
+(`run_prepare_job` in `apps/backend/src/prewarm.rs`).

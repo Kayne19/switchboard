@@ -16,43 +16,40 @@ browser mic --webm/opus--> /ws --speech-to-text sidecar--> transcript
     --> reply text --ElevenLabs--> mp3 --> /ws --> playback
 ```
 
-Two kinds of leg, both a `pi --mode rpc` process driven over stdin/stdout:
+Two kinds of leg:
 
 | leg | runs | tools | lifetime |
 | --- | --- | --- | --- |
-| operator | on damocles | `transfer_to_project` only (`--no-builtin-tools`); project catalog is in its system prompt | persistent — it is the home base |
-| project | on the host in the registry entry, `cd`'d into that project's directory | its normal coding tools | created on transfer, destroyed on return (never resident at startup) |
+| operator | a local `pi --mode rpc` process on damocles, driven over stdin/stdout | `transfer_to_project` only (`--no-builtin-tools`); project catalog is in its system prompt | persistent — it is the home base |
+| project | a session on the prime-agent daemon of the host in the registry entry, in that project's directory, reached through that host's host agent over the host link (`/host`, `docs/host-link.md`) | its normal coding tools, plus the `switchboard` skill module | created on transfer, ended on return (never resident at startup) |
+
+The service opens no connection to a project host. Each host agent dials in to
+`/host` with its own token, and every command for a project leg (create,
+prompt, steer, abort, kill, model and thinking changes) goes over that link.
 
 ## Startup prewarm
 
-Everything a project leg needs from its host is set up once, at startup, by
-`apps/backend/src/prewarm.rs`, before the listener opens:
+Everything a project leg needs from its host is set up ahead of any call by
+`apps/backend/src/prewarm.rs`:
 
-- **SSH masters.** One persistent master connection per host
-  (`ControlMaster=yes`, `ControlPersist=no`), with a lock file and control
-  socket under `SWITCHBOARD_STATE_DIR/ssh/`. A master another switchboard
-  process already holds is adopted rather than duplicated; only the process
-  that created a master tears it down. A master that dies is reconnected under
-  a new generation.
-- **Model catalogs.** `pi --list-models` per host and runtime, at startup and
-  then every five minutes; a failed refresh keeps the last good listing.
-- **The agent extension.** Staged once to every host that needs it: written
-  to a temporary file, checked against its SHA-256, then moved into place. A
-  host that cannot take it launches its legs without it; a changed extension
-  reaches hosts with the next restart. This repository no longer ships a
-  project extension: project agents now reach the caller through the
-  `switchboard` Python skill module (`skills/switchboard/`), which talks to
-  the host agent (`docs/host-link.md`). Staging still reads the file named by
-  `SWITCHBOARD_AGENT_EXTENSION` until project legs move to the host agent.
-- **Prepare commands.** Each project's `prepare` runs once. Its output, exit
-  status, or timeout becomes a timestamped report the incoming agent is shown;
-  a failure is reported, not retried, and does not block the project.
+- **Model catalogs.** The host agent's `list_models`, each time a host links
+  and then every five minutes; a failed refresh keeps the last good listing.
+- **Prepare commands.** Each project's `prepare` runs once, through the host
+  agent's `run_prepare`, as soon as its host links. Its output, exit status, or
+  timeout becomes a timestamped report the incoming agent is shown; a failure
+  is reported, not retried, and does not block the project. A prepare cut off
+  by a lost link runs again on the next link.
 
-Project processes are **not** resident at startup; they launch on transfer. A
-transfer or redial asks prewarm for a launch plan and starts the process from
-it, doing no setup of its own: no SSH handshake, no upload, no prepare, no
-model listing. A host prewarm cannot vouch for is a refused transfer, and on a
-redial the live leg keeps running.
+Prewarm runs this as each host links, not before the listener opens: the host
+agents dial in to the listener. Nothing is copied to a host. The `switchboard`
+skill module reaches each host with the host-agent installer
+(`docs/host-agent.md`).
+
+Project sessions are **not** resident at startup; they start on transfer. A
+transfer or redial asks prewarm for a launch plan and starts the session from
+it, doing no setup of its own: no prepare, no model listing. A project with no
+`host`, or whose host is not connected, is a refused transfer, and on a redial
+the live leg keeps running.
 
 ## Who does the talking
 
@@ -68,15 +65,14 @@ call is indistinguishable from a dropped connection.
 
 So the agent decides what to say and when, mid-turn, and its written output
 stays written. `switchboard.speak` (the Python skill module) sends the line
-through the host agent to this service, which pushes audio straight to the
-browser without waiting for anything.
+through the host agent to this service as a `module_call` on the host link,
+and the service pushes audio straight to the browser without waiting for
+anything.
 
 The fallback matters too: if an agent finishes a turn having never called
 `speak`, the switchboard voices its written reply rather than leaving the caller
-in silence. It knows which happened because `speak` shows up in the same RPC
-event stream it already watches. An agent on a host where the tool extension
-could not be staged is told the opposite thing in its system prompt — write for
-the switchboard to read out — so both paths produce a working call.
+in silence. It knows which happened because every `speak` reaches it as a
+module call during the turn.
 
 `speak` is deliberately **not** MCP. Pi has no built-in MCP because tool
 definitions are expensive context; an adapter would add a config file, a
@@ -89,9 +85,9 @@ keeps tool definitions out of every request, and can combine `speak` and
 Some answers are a shape, not a sentence. Project agents push structured
 display actions (`show`, `hide`, `say`, `focus`, `clear`) across seven content
 types (`chart`, `metric`, `progress`, `diagram`, `document`, `code`, `note`)
-to the caller's page mid-turn. These use `POST /display` and the browser's
-existing WebSocket, just as `speak` uses `POST /speak`; display output does not
-change routing or speech synthesis.
+to the caller's page mid-turn. They arrive as module calls over the host link,
+just as `speak` does, and reach the page over the browser's existing
+WebSocket; display output does not change routing or speech synthesis.
 
 The visual stage is not a permanent empty dashboard panel. It appears when an
 artifact exists and collapses completely when it does not. The caller can focus
@@ -114,11 +110,13 @@ are in `docs/display-tool.md` and `docs/visual-channel.md`.
 
 The switchboard does — not the agents. An agent calling `transfer_to_project` or
 `return_to_operator` only raises a *signal*: the tool itself does nothing but
-acknowledge, and `pbx.rs` picks the call out of pi's `tool_execution_start`
-event stream and swings the line over. That means a confused or wedged agent
-cannot strand the caller, and every failure path (bad ssh key, wrong `cwd`,
-missing agent binary, a leg that dies mid-call) ends with the caller back on the
-operator being told what happened, rather than talking into a dead pipe.
+acknowledge, and `pbx.rs` swings the line over. The operator's call is picked
+out of pi's `tool_execution_start` event stream; a project agent's arrives as a
+module call over the host link. That means a confused or wedged agent cannot
+strand the caller, and every failure path (a host that is not connected, wrong
+`cwd`, a session that fails to start, a leg that dies mid-call) ends with the
+caller back on the operator being told what happened, rather than talking into
+a dead pipe.
 
 For runtimes that cannot load a pi extension, the agent's system prompt tells it
 to emit `[[SWITCHBOARD:RETURN]]` instead; `pi_client.rs` treats that line as the
@@ -127,13 +125,13 @@ same signal and strips it before anything is spoken.
 Project agents get `transfer_to_project` too, so "send me to the other project"
 is one hop instead of a round trip through the operator. They cannot read the
 registry from a project host, so the projects they may hand the caller to are
-named in their system prompt; anything else, they send the caller back and let
-the operator resolve it.
+named in the voice brief at the start of their first prompt; anything else,
+they send the caller back and let the operator resolve it.
 
 Successful transfers are silent: handoff text and model notes are omitted on successful routing paths, and the target project addresses the request immediately without spoken handoff text or greetings. The intro prompt carries the exact original caller transcript, derived intent, project metadata, and any timestamped prepare report snapshot.
 
 The page is relabelled the moment the line swings rather than when the turn
-ends, because bringing a leg up means ssh, an agent start and an intro prompt,
+ends, because bringing a leg up means a session start and an intro prompt,
 and the caller should not spend that looking at the name of whoever they just
 left.
 
@@ -142,27 +140,17 @@ left.
 A caller can ask the agent they are talking to for a different model or thinking
 level, and the operator can name one on the way in (`transfer_to_project` takes
 `model` and `thinking`). Both go through the same signal mechanism as a
-transfer, for a blunter reason than usual: an agent cannot restart itself onto
-another model, because the process it would have to replace is the one making
-the call. `set_model` acknowledges, `pbx.rs` tears the leg down and brings it
-back up.
+transfer: `set_model` acknowledges, and `pbx.rs` decides and makes the change.
 
-The conversation survives that restart. Every project leg is started with
-`--session-id`, so the replacement process reopens the session file the old one
-was writing and picks the call up mid-sentence. Preserving is the default;
-`keep_context: false` mints a new id instead, and the agent is told the history
-was cleared on purpose so it does not try to recall it.
-
-On a project that runs on another host, keeping the conversation is refused
-for now. The switchboard can stop its own `ssh`, but it cannot confirm the pi on
-the far side has exited, and two processes writing one session file is worse
-than no swap. The live leg keeps running and the caller is told to ask for a
-fresh start, which switches without the history. The thinking picker keeps
-context, so on such a project it is refused the same way.
+The conversation survives the change. A change that keeps the context is made
+on the live session: `set_model` and `set_thinking` over the host link, and
+the session keeps its history. Keeping is the default; `keep_context: false`
+ends the session and creates a new one, and the agent is told the history was
+cleared on purpose so it does not try to recall it.
 
 What the caller says goes through speech-to-text and then through a model's
 guess, so `models.rs` refuses rather than guesses. A name is resolved against
-the catalog prewarm listed with `pi --list-models` **on the host the leg runs
+the catalog prewarm listed through the host agent **on the host the leg runs
 on** — providers are configured per box, so asking damocles would answer for the
 wrong machine — and a phrase matching two entries comes back as an error naming
 both. That is the case worth spending code on: one model id served by two
@@ -178,8 +166,7 @@ picker contains only the provider-qualified entries from that host's catalog;
 the current entry is retained even if a refreshed catalog no longer lists it.
 
 A swap is decided before anything is torn down. Every refusal (no project on
-the line, swaps turned off, a remote project asked to keep its conversation, a
-host prewarm cannot vouch for, a model the catalog does not resolve, the model
+the line, swaps turned off, a host that is not connected, a model the catalog does not resolve, the model
 already running) is made from the leg the coordinator names and the launch
 plan prewarm holds, without the PBX lock, and the live leg keeps running: the
 caller hears why, and their next turn reaches the same agent. That holds for the
@@ -202,22 +189,22 @@ name, and a page that says "default" is telling you nothing you can act on.
 
 Asking is not the same as getting. A model whose `thinkingLevelMap` has holes
 gets clamped to a level it does have, silently, inside the session — so the
-level on the command line can be a level nothing is running at. The page
-therefore shows the level a leg reports to `POST /leg-state`; until a leg
-reports, it marks the level as requested rather than stating it. The removed
-pi extension sent that report. The host agent now reads the effective level
-from the daemon and sends it in session `info` and `state` events
-(`docs/host-link.md`).
+level asked for can be a level nothing is running at. The page therefore shows
+the level the host reports for the session: the host agent reads the
+effective level from the daemon and sends it with the reply to
+`set_thinking` and in session `state` events (`docs/host-link.md`). Until the
+host reports, the page marks the level as requested rather than stating it.
 
 `POST /thinking` (the picker on the page) sets the level for the rest of the
-process and re-dials the live project leg onto it, keeping the session file. The
-level is kept for the next project call even when that re-dial is refused. The
+process and switches the live project session onto it, keeping its history.
+The level is kept for the next project call even when that switch is refused. The
 operator is never re-dialled for this; its level is a deployed setting.
 
-Project callbacks carry `SWITCHBOARD_SESSION_TOKEN`, an opaque token freshly
-created for each process and distinct from the persistent Pi session ID. It
-rejects stale speech, display, and thinking callbacks after a redial; it is a
-correlation value, not authentication. A failed speech delivery is returned to
+Each project leg joins the call with a fresh call token (`join_call`),
+distinct from the session's id. Module calls carry it, and a stale one is
+refused, so speech or a display from a leg the caller has left since is not
+taken as the current leg's; it is a correlation value, not authentication (the
+host link's token is). A failed speech delivery is returned to
 the agent as a `refused` or `failed` result, so the written reply remains
 eligible for fallback synthesis.
 
@@ -249,15 +236,9 @@ picked up, or the operator's turn.
 
 ## When nobody says anything
 
-`SWITCHBOARD_IDLE_TIMEOUT` (an hour by default, `switchboard_idle_timeout` in
-the role) drops a project leg the caller has gone silent on and puts them back
-on the operator. A call that is never ended otherwise holds an agent process and
-an ssh connection open on someone else's box for as long as this service runs.
-Silence is measured from the last sign of life on the line: a clip arriving, a
-turn starting or ending, a steer, or a spoken reply, so a long-running turn
-never counts against the caller. Nothing is synthesized when it fires — by
-definition nobody is listening — the note only appears in the transcript, and
-the operator is told why the line is free when they come back.
+The switchboard does not drop a silent call. A project session nobody uses is
+ended by prime-agent's own idle eviction on its host, and the caller stays on
+the line until they hang up or are handed back.
 
 ## Adding a project
 
@@ -265,13 +246,16 @@ Edit `switchboard_projects` in `ansible/roles/damocles/defaults/main.yml` and
 open a PR. The deploy re-renders `/etc/switchboard/projects.json`, which the
 service loads into the operator's system-prompt catalog and uses for routing,
 so the operator and switchboard cannot disagree. Aliases are matched against
-a speech-to-text transcript, so be generous with them.
+a speech-to-text transcript, so be generous with them. An entry carries `id`,
+`description`, `aliases`, `host`, `cwd`, `model` and `prepare`; `host` is the
+id of a host agent and is required.
 
 A project host needs three things, none of which this repo can do for hosts it
 does not manage:
 
-1. damocles's pubkey in the ssh user's `authorized_keys`
-2. the agent runtime the entry names (`pi`) installed and authenticated there
+1. the host agent and the prime-agent daemon installed (below), with the
+   host's token in the service's host tokens file (`docs/environment.md`)
+2. prime-agent authenticated there for the models the project uses
 3. the `cwd` to actually exist
 
 The project agent's tools (`speak`, `display`, `view`, `return_to_operator`,
@@ -287,21 +271,17 @@ with the skill, from a checkout of the pinned commit:
 `docs/host-agent.md` ("Install and redeploy") has the flags, how to add a
 container, and the post-deploy checklist.
 
-If the agent binary is installed per-user (`~/.local/bin/pi` is the common
-case), give `runtime` the **absolute path**. A non-interactive ssh session does
-not get the PATH you see when you log in by hand, so a bare `pi` works when you
-test it manually and then fails with "command not found" for the switchboard.
-
 ## Files
 
 | path | what it is |
 | --- | --- |
 | `apps/backend/src/main.rs` | composition root, and `Config`: the one reader of the environment |
 | `apps/backend/src/api.rs` | HTTP and WebSocket endpoints, turn and speech workers, delivery to the browser |
-| `apps/backend/src/lifecycle.rs` | the coordinator: call identity, the current route and leg, phases, candidate legs, idle clock, status |
-| `apps/backend/src/pbx.rs` | routing: transfers, returns, redials, rescue, and the agent processes |
-| `apps/backend/src/prewarm.rs` | startup setup per host and project, and launch plans |
-| `apps/backend/src/pi_client.rs` | the pi RPC protocol — one turn in, text and signals out — and SSH commands |
+| `apps/backend/src/lifecycle.rs` | the coordinator: call identity, the current route and leg, phases, candidate legs, status |
+| `apps/backend/src/pbx.rs` | routing: transfers, returns, redials, rescue, and the legs |
+| `apps/backend/src/hosts.rs` | the host link: host agents dialling in on `/host`, their commands, events and module calls |
+| `apps/backend/src/prewarm.rs` | setup per host and project as each host links, and launch plans |
+| `apps/backend/src/pi_client.rs` | the operator's pi RPC process, and project sessions over the host link — one turn in, text and signals out |
 | `apps/backend/src/models.rs` | model catalogs and spoken model/thinking resolution |
 | `apps/backend/src/registry.rs` | the project registry and spoken-name resolution |
 | `apps/backend/src/audio.rs` | speech-to-text sidecar, ElevenLabs, and reply-length shaping |
@@ -318,15 +298,16 @@ test it manually and then fails with "command not found" for the switchboard.
 | `extensions/operator-switchboard.ts` | the operator's pi extension |
 | `skills/switchboard/` | the `switchboard` Python skill module project agents use to reach the caller, and its tests |
 | `apps/host-agent/install.mjs` | installs or redeploys the host agent, the skill and the two systemd user units on a project host |
-| `docs/environment.md` | every environment variable the service reads, and what it passes to agents |
+| `docs/environment.md` | every environment variable the service reads, and what project sessions are given |
 | `docs/architecture.md` | ownership boundaries and the rules for where new behavior goes |
 | `docs/display-tool.md` | the `display` tool: payload, operations, layout, and composition |
 | `docs/hands-free.md` | hands-free lifecycle, asset provenance, and license obligations |
 
 ## The environment contract
 
-`docs/environment.md` lists every variable the service reads and everything it
-passes to project legs; it is the interface with the homelab deployment.
+`docs/environment.md` lists every variable the service reads and what project
+sessions are given when they join a call; it is the interface with the homelab
+deployment.
 
 Two contracts there need more than a line. Speech-to-text is a sidecar:
 `SWITCHBOARD_STT_COMMAND` receives complete WebM bytes on stdin and writes the
@@ -341,15 +322,15 @@ so concurrent clips remain attributable. Streaming is selected only for
 WebM/Opus clients after the WebSocket hello handshake; unavailable or
 backpressured workers explicitly fall back to the complete-clip contract.
 
-`SWITCHBOARD_SPEECH_DEADLINE_MS` bounds one synthesized utterance, for `/speak`
-and for replies alike. The skill module waits for the speech deadline the host
+`SWITCHBOARD_SPEECH_DEADLINE_MS` bounds one synthesized utterance, for an
+agent's `speak` and for replies alike. The skill module waits for the speech deadline the host
 agent gives it with the call token, so the two cannot disagree.
 
 ## Building and testing
 
 ```bash
 npm ci
-npm test                     # builds static/, then skill module, browser, display, and extension tests
+npm test                     # builds static/, then skill module, host agent, browser, display, and extension tests, and the no-SSH check
 git diff --exit-code -- static
 cargo fmt --all -- --check
 cargo test --locked
@@ -369,28 +350,29 @@ the pinned commit in that variable. It is a build-time input, not part of the
 env file, but under `AGENTS.md` it is interface all the same: renaming it or
 changing what it accepts needs a homelab PR.
 
-PBX mutation is serialized, while live status, agent callbacks, steering,
+PBX mutation is serialized, while live status, module calls, steering,
 forced page rescue, and the pickers' swap decisions bypass that lock through
 bounded shared controls. The forced-rescue path, and a picker refusal that
 leaves the leg alone, are covered under a deliberately wedged turn in the Rust
-tests. Fake pi, SSH, TTS, and STT paths are exercised without network access.
-Unit tests cannot establish microphone, model, or remote-host behavior; check
+tests. A fake pi for the operator, an in-process fake host agent for project
+legs, and fake TTS and STT paths are exercised without network access.
+Unit tests cannot establish microphone, model, or host behavior; check
 those on the deployment host after a pin bump.
 
 ## Operating it
 
 ```bash
 systemctl status switchboard
-journalctl -u switchboard -f          # transcriptions, turns, route changes, controls, callbacks, speech
-curl -s localhost:8765/healthz | jq   # commit, which of STT, streaming STT and TTS are configured, route, model
+journalctl -u switchboard -f          # transcriptions, turns, route changes, controls, module calls, speech
+curl -s localhost:8765/healthz | jq   # commit, which of STT, streaming STT and TTS are configured, route, model, projects, hosts
 ```
 
 A log line carries the context it happened in as a span.
 `ws{connection=3 joined_generation=5}` marks what one browser tab sent and the
-work it started, so two tabs can be told apart. `http{endpoint="/speak"}` marks
-a page control or agent callback from arrival to outcome, which is either done
-or the refusal and its reason; `/display` adds the action's `op`, `kind` and
-`id`. `turn{clip=...}` follows a turn through the PBX, the agent and the
+work it started, so two tabs can be told apart. `http{endpoint="/hangup"}`
+marks a page control, and `module_call{call="speak"}` an agent's module call,
+from arrival to outcome, which is either done or the refusal and its reason;
+`display` adds the action's `op`, `kind` and `id`. `turn{clip=...}` follows a turn through the PBX, the agent and the
 synthesis of its reply, and `stt{clip=...}` the speech-to-text sidecar run.
 
 A sidecar that exits unsuccessfully is logged with the end of its stderr. The
