@@ -17,8 +17,9 @@ means unset.
 | Variable | Default | What it controls |
 |---|---|---|
 | `SWITCHBOARD_ENV_FILE` | `/etc/switchboard/switchboard.env` | Where the env file is. Process environment only. |
-| `SWITCHBOARD_CONFIG_DIR` | `/etc/switchboard` | Base for the two paths below. |
+| `SWITCHBOARD_CONFIG_DIR` | `/etc/switchboard` | Base for the three paths below. |
 | `SWITCHBOARD_PROJECTS_FILE` | `<config dir>/projects.json` | The project registry. |
+| `SWITCHBOARD_HOST_TOKENS_FILE` | `<config dir>/host-tokens.json` | Secret. The per-host bearer tokens of the host link (`/host`, see `docs/host-link.md`). Read once at startup; format below. |
 | `SWITCHBOARD_OPERATOR_PROMPT` | `<config dir>/operator.system.md` | The operator's system prompt; skipped if the file is missing. |
 | `SWITCHBOARD_STATE_DIR` | `/var/lib/switchboard` | SSH lock files and control sockets (`ssh/locks/`, `ssh/control/`). |
 | `SWITCHBOARD_BIND` | `0.0.0.0:8765` | Listen address. |
@@ -58,6 +59,27 @@ because the symptom of a silently wrong duration looks nothing like its cause.
 `SWITCHBOARD_SPEECH_DEADLINE_MS` is the exception: the extension enforces the
 same deadline, so a value the service would replace with its default would leave
 the two sides disagreeing, and startup stops instead.
+
+### Host tokens file
+
+`SWITCHBOARD_HOST_TOKENS_FILE` names one JSON object from host id to that
+host's token. The homelab role renders it (mode 0600, readable only by the
+service); each host agent holds its own token in its `token_file`.
+
+```json
+{
+  "scriptorium": "<token>",
+  "forge": "<token>"
+}
+```
+
+Every host in the file is a host the service expects: `/healthz` lists each
+under `hosts`, connected or not. A hello whose host id is not in the file, or
+whose token does not match, is refused as `bad_token`. An entry whose token is
+not a non-empty string is skipped (surrounding whitespace is trimmed). A
+missing or unparsable file is logged and leaves no host able to link; the
+service still starts. Tokens are never logged or reported; the startup log
+names the host ids and their count.
 
 ## Passed to every project leg
 

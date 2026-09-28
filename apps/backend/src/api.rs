@@ -6,6 +6,7 @@ use crate::display::{
     SceneLeg, DISPLAY_CONFIRM_DEADLINE_MS,
 };
 use crate::history::{TranscriptLog, AGENT, CALLER};
+use crate::hosts::Hosts;
 use crate::lifecycle::{ActivityDisposition, Coordinator};
 use crate::pbx::{Redial, RedialPlan, RedialPlanner, RouteCallback, Switchboard};
 use crate::pi_client::{Activity, ActivityCallback, PiSession};
@@ -156,6 +157,8 @@ impl LegAnnouncer {
 pub struct AppState(pub Arc<AppInner>);
 pub struct AppInner {
     pub switchboard: Mutex<Switchboard>,
+    /// The project hosts' links (`/host`).
+    hosts: Hosts,
     delivery: DeliveryState,
     pub transcript_log: Mutex<TranscriptLog>,
     pub speaker: Speaker,
@@ -298,6 +301,7 @@ impl AppState {
 
     pub fn new(
         switchboard: Switchboard,
+        hosts: Hosts,
         transcript_log: TranscriptLog,
         speaker: Speaker,
         stt: SttAdapter,
@@ -382,6 +386,7 @@ impl AppState {
         switchboard.set_route_callback(Some(route_callback));
         Self(Arc::new(AppInner {
             switchboard: Mutex::new(switchboard),
+            hosts,
             delivery,
             transcript_log: Mutex::new(transcript_log),
             speaker,
@@ -439,6 +444,7 @@ impl AppState {
             )
             .route("/view", post(view).layer(DefaultBodyLimit::max(16 * 1024)))
             .route("/ws", get(ws))
+            .route("/host", get(host_link))
             .with_state(self);
         if let Some(service) = static_dir {
             router.fallback_service(service)
@@ -1228,7 +1234,7 @@ async fn process_turns(state: AppState) {
 async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
     let status = current_status(&state);
     Json(
-        json!({"status":"ok", "git":crate::GIT_SHA, "stt_configured":state.0.stt.command.is_some(), "stt_stream_configured":state.0.stt_stream.configured(), "elevenlabs_configured":state.0.speaker.configured(), "route":status.route, "model":status.model, "thinking":status.thinking, "model_swaps":status.model_swaps, "projects":status.projects}),
+        json!({"status":"ok", "git":crate::GIT_SHA, "stt_configured":state.0.stt.command.is_some(), "stt_stream_configured":state.0.stt_stream.configured(), "elevenlabs_configured":state.0.speaker.configured(), "route":status.route, "model":status.model, "thinking":status.thinking, "model_swaps":status.model_swaps, "projects":status.projects, "hosts":state.0.hosts.status()}),
     )
 }
 /// The status message the page is sent, `type` included.
@@ -2290,6 +2296,10 @@ async fn synthesize_reply_if_current(
     success && generation == state.0.coordinator.generation()
 }
 
+/// A project host's link; `hosts.rs` owns it.
+async fn host_link(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> Response {
+    state.0.hosts.accept(upgrade, state.0.shutdown.subscribe())
+}
 async fn ws(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> impl IntoResponse {
     upgrade
         .max_message_size(MAX_WEBSOCKET_MESSAGE_BYTES)

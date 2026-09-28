@@ -41,6 +41,7 @@ fn state_on_with_stream(
 ) -> AppState {
     AppState::new(
         board,
+        crate::hosts::Hosts::new(HashMap::new(), crate::hosts::Heartbeat::default()),
         TranscriptLog::new(10),
         Speaker::offline(100, std::time::Duration::from_millis(25_000)),
         SttAdapter::from_command(stt),
@@ -132,6 +133,7 @@ async fn healthz_reports_only_what_the_service_knows() {
             "thinking",
             "model_swaps",
             "projects",
+            "hosts",
         ])
     );
     assert_eq!(health["stt_configured"], false);
@@ -1422,6 +1424,7 @@ done
     // No speech key: the reply is not synthesized, so nothing leaves the box.
     let state = AppState::new(
         Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
+        crate::hosts::Hosts::new(HashMap::new(), crate::hosts::Heartbeat::default()),
         TranscriptLog::new(10),
         Speaker::from_values(
             100,

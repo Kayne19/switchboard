@@ -3,6 +3,7 @@ mod audio;
 mod delivery;
 mod display;
 mod history;
+mod hosts;
 mod lifecycle;
 mod models;
 mod pbx;
@@ -33,6 +34,9 @@ pub struct Config {
     pub env_file: PathBuf,
     pub state_dir: PathBuf,
     pub projects_file: PathBuf,
+    /// The per-host tokens of the host link: a JSON object from host id to
+    /// token (`SWITCHBOARD_HOST_TOKENS_FILE`). Read once at startup.
+    pub host_tokens_file: PathBuf,
     pub operator_prompt: PathBuf,
     pub operator_extension: Option<String>,
     pub agent_extension: Option<String>,
@@ -99,6 +103,11 @@ impl Config {
             "SWITCHBOARD_PROJECTS_FILE",
             &config_dir.join("projects.json").to_string_lossy(),
         ));
+        let host_tokens_file = PathBuf::from(get(
+            values,
+            "SWITCHBOARD_HOST_TOKENS_FILE",
+            &config_dir.join("host-tokens.json").to_string_lossy(),
+        ));
         let operator_prompt = PathBuf::from(get(
             values,
             "SWITCHBOARD_OPERATOR_PROMPT",
@@ -119,6 +128,7 @@ impl Config {
             env_file,
             state_dir,
             projects_file,
+            host_tokens_file,
             operator_prompt,
             operator_extension: optional(values, "SWITCHBOARD_OPERATOR_EXTENSION"),
             agent_extension: optional(values, "SWITCHBOARD_AGENT_EXTENSION"),
@@ -384,6 +394,7 @@ async fn main() {
         git = GIT_SHA,
         env_file = %config.env_file.display(),
         projects_file = %config.projects_file.display(),
+        host_tokens_file = %config.host_tokens_file.display(),
         operator_prompt = %config.operator_prompt.display(),
         pi_binary = %config.pi_binary,
         operator_model = config.operator_model.as_deref().unwrap_or("<runtime default>"),
@@ -413,8 +424,10 @@ async fn main() {
     // a transfer waits on it rather than doing any of it itself.
     let prewarm = std::sync::Arc::new(prewarm::Prewarm::start(&config, &registry));
     let board = pbx::Switchboard::new(&config, registry, prewarm);
+    let hosts = hosts::Hosts::load(&config.host_tokens_file, hosts::Heartbeat::default());
     let state = api::AppState::new(
         board,
+        hosts,
         history::TranscriptLog::new(config.history_limit),
         audio::Speaker::from_values(
             config.max_spoken_chars,
