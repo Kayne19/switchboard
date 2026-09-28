@@ -495,49 +495,6 @@ pub async fn shutdown(state: &AppState) {
     state.0.shutdown.send_replace(true);
     state.0.coordinator.finish_shutdown();
 }
-pub fn spawn_idle_worker(state: AppState, idle_timeout: f64, poll_seconds: f64) {
-    if idle_timeout <= 0.0 {
-        return;
-    }
-    tokio::spawn(async move {
-        let poll = tokio::time::Duration::from_secs_f64(poll_seconds.max(1.0));
-        let mut shutdown = state.0.shutdown.subscribe();
-        loop {
-            tokio::select! {
-                _ = tokio::time::sleep(poll) => {}
-                changed = shutdown.changed() => {
-                    if changed.is_err() || *shutdown.borrow() {
-                        return;
-                    }
-                    continue;
-                }
-            }
-            if state
-                .0
-                .coordinator
-                .return_if_idle(std::time::Duration::from_secs_f64(idle_timeout))
-                .is_some()
-            {
-                let left = state.0.switchboard.lock().await.force_hangup().await;
-                let Some(left) = left else {
-                    publish_status(&state);
-                    continue;
-                };
-                let minutes = (idle_timeout / 60.0).floor() as u64;
-                emit_message(
-                    &state,
-                    ServerMessage::Epoch {
-                        generation: state.0.coordinator.generation(),
-                    },
-                );
-                if let Some(entry) = state.0.transcript_log.lock().await.add(AGENT, &format!("Nothing was said for {minutes} minutes, so the line to {left} was dropped. You're back with the operator."), state.0.coordinator.route()) {
-                    emit_message(&state, ServerMessage::Spoken { entry });
-                }
-                publish_status(&state);
-            }
-        }
-    });
-}
 fn emit(state: &AppState, event: Event) -> bool {
     let browser_delivered = state.0.delivery.publish(event.clone());
     let _ = state.0.events.send(event);
@@ -726,7 +683,6 @@ async fn process_speech(state: AppState) {
             result,
             span,
         } = request;
-        state.0.coordinator.touch_activity();
         let started = std::time::Instant::now();
         let operation_state = state.clone();
         let operation_text = text.clone();
@@ -970,7 +926,6 @@ async fn process_clips(state: AppState) {
         // frame quotes it. Logging it at each stage is what makes a caller's
         // "it broke when I said X" answerable from the journal.
         let started = std::time::Instant::now();
-        state.0.coordinator.touch_activity();
         tracing::info!(parent: &clip.connection, clip = %clip.id, bytes = clip.audio.len(), "transcribing clip");
         let stt = tracing::info_span!(parent: &clip.connection, "stt", clip = %clip.id);
         let transcript = match state.0.stt.transcribe(&clip.audio).instrument(stt).await {

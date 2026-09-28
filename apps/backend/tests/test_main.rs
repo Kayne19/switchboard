@@ -19,14 +19,10 @@ fn reads_switchboard_names_and_defaults() {
 #[test]
 fn non_finite_numeric_configuration_falls_back_safely() {
     let values = HashMap::from([
-        ("SWITCHBOARD_IDLE_TIMEOUT".into(), "NaN".into()),
-        ("SWITCHBOARD_IDLE_POLL".into(), "inf".into()),
         ("SWITCHBOARD_MAX_SPOKEN_CHARS".into(), "-inf".into()),
         ("SWITCHBOARD_HISTORY_LIMIT".into(), "12.5".into()),
     ]);
     let config = Config::from_values(&values, PathBuf::from("/tmp/env"));
-    assert_eq!(config.idle_timeout, 3600.0);
-    assert_eq!(config.idle_poll, 30.0);
     assert_eq!(config.max_spoken_chars, 700);
     assert_eq!(config.history_limit, 200);
 }

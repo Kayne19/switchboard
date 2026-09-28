@@ -47,8 +47,6 @@ pub struct Config {
     pub agent_model: Option<String>,
     pub agent_thinking: String,
     pub model_swaps: bool,
-    pub idle_timeout: f64,
-    pub idle_poll: f64,
     pub max_spoken_chars: usize,
     pub speech_deadline_ms: u64,
     pub history_limit: usize,
@@ -117,8 +115,6 @@ impl Config {
                     .as_str(),
                 "0" | "false" | "no"
             ),
-            idle_timeout: number(values, "SWITCHBOARD_IDLE_TIMEOUT", 3600.0),
-            idle_poll: number(values, "SWITCHBOARD_IDLE_POLL", 30.0),
             max_spoken_chars: usize_value(values, "SWITCHBOARD_MAX_SPOKEN_CHARS", 700, false),
             speech_deadline_ms: bounded_ms(values, "SWITCHBOARD_SPEECH_DEADLINE_MS", 25_000),
             history_limit: usize_value(values, "SWITCHBOARD_HISTORY_LIMIT", 200, true),
@@ -151,24 +147,6 @@ fn get(values: &HashMap<String, String>, name: &str, default: &str) -> String {
 fn optional(values: &HashMap<String, String>, name: &str) -> Option<String> {
     let value = get(values, name, "");
     (!value.is_empty()).then_some(value)
-}
-fn number(values: &HashMap<String, String>, name: &str, default: f64) -> f64 {
-    let Some(raw) = values.get(name).map(|value| value.trim()) else {
-        return default;
-    };
-    if raw.is_empty() {
-        return default;
-    }
-    match raw.parse::<f64>() {
-        Ok(parsed) if parsed.is_finite() => parsed,
-        // A deployment that misspells a duration gets the default silently
-        // otherwise, and the symptom (a leg that never times out, or one that
-        // drops instantly) looks nothing like its cause.
-        _ => {
-            tracing::warn!(setting = name, value = raw, %default, "setting is not a number; using the default");
-            default
-        }
-    }
 }
 /// A deadline the extensions also enforce, so a value the service would
 /// silently replace with its default would leave the two sides disagreeing.
@@ -291,9 +269,9 @@ fn value(name: &str, default: &str) -> String {
 /// builds its filter with `EnvFilter::from_default_env()`, whose default
 /// directive is `error` — and this service has almost no `error!` sites, so an
 /// unset `RUST_LOG` produced a process that ran an entire call, dropped legs,
-/// failed to stage extensions, and said nothing at all. The deployment env file
-/// is owned by homelab and cannot be assumed to set anything, so the useful
-/// level has to be the one you get for free.
+/// and said nothing at all. The deployment env file is owned by homelab and
+/// cannot be assumed to set anything, so the useful level has to be the one
+/// you get for free.
 const DEFAULT_LOG_FILTER: &str = "switchboard=info,warn";
 
 /// Install the log subscriber, reading its filter from the deployment env file
@@ -370,8 +348,6 @@ async fn main() {
         stt_stream_configured = config.stt_stream_command.is_some(),
         persona_configured = !config.persona.is_empty(),
         operator_extension = config.operator_extension.as_deref().unwrap_or("<none>"),
-        idle_timeout = config.idle_timeout,
-        idle_poll = config.idle_poll,
         max_spoken_chars = config.max_spoken_chars,
         speech_deadline_ms = config.speech_deadline_ms,
         history_limit = config.history_limit,
@@ -397,7 +373,6 @@ async fn main() {
         audio::SttStreamAdapter::from_command(config.stt_stream_command.clone()),
     );
     api::spawn_workers(state.clone());
-    api::spawn_idle_worker(state.clone(), config.idle_timeout, config.idle_poll);
     let bind = config.bind.clone();
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
