@@ -9,12 +9,12 @@ use crate::history::{TranscriptLog, AGENT, CALLER};
 use crate::hosts::Hosts;
 use crate::lifecycle::{ActivityDisposition, Coordinator};
 use crate::pbx::{Redial, RedialPlan, RedialPlanner, RouteCallback, Switchboard};
-use crate::pi_client::{Activity, ActivityCallback, PiSession};
+use crate::pi_client::{Activity, ActivityCallback, AgentCall, LegSession, ModuleCallback};
 use crate::protocol::{CandidateEnd, ErrorCode, ServerMessage, Status};
 use axum::extract::ws::{Message, WebSocket};
 use axum::{
-    extract::rejection::{BytesRejection, JsonRejection},
-    extract::{DefaultBodyLimit, State, WebSocketUpgrade},
+    extract::rejection::JsonRejection,
+    extract::{State, WebSocketUpgrade},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -182,7 +182,7 @@ pub struct AppInner {
     pub screen_state: Mutex<Value>,
     pub display_gate: Arc<Mutex<DisplayGateState>>,
     pub display_confirm: watch::Sender<ConfirmState>,
-    pub active_session: Arc<Mutex<Option<PiSession>>>,
+    pub active_session: Arc<Mutex<Option<LegSession>>>,
     leg_announcer: LegAnnouncer,
     operation_transition: Mutex<()>,
     active_operations: Mutex<HashMap<TaskId, AbortHandle>>,
@@ -301,7 +301,6 @@ impl AppState {
 
     pub fn new(
         switchboard: Switchboard,
-        hosts: Hosts,
         transcript_log: TranscriptLog,
         speaker: Speaker,
         stt: SttAdapter,
@@ -381,51 +380,67 @@ impl AppState {
         });
         let active_session = switchboard.session_control();
         let redials = switchboard.redial_planner();
+        let hosts = switchboard.hosts();
         let mut switchboard = switchboard;
         switchboard.set_activity_callback(Some(activity_callback));
         switchboard.set_route_callback(Some(route_callback));
-        Self(Arc::new(AppInner {
-            switchboard: Mutex::new(switchboard),
-            hosts,
-            delivery,
-            transcript_log: Mutex::new(transcript_log),
-            speaker,
-            stt,
-            stt_stream,
-            events,
-            coordinator,
-            redials,
-            speech,
-            speech_rx: Mutex::new(Some(speech_rx)),
-            clips,
-            clip_rx: Mutex::new(Some(clip_rx)),
-            turns,
-            turn_rx: Mutex::new(Some(turn_rx)),
-            accepted_clips: Mutex::new((HashSet::new(), VecDeque::new())),
-            clip_verdicts: std::sync::Mutex::new(ClipVerdicts::default()),
-            stream_clips: Mutex::new(HashMap::new()),
-            last_display,
-            screen_state: Mutex::new(json!({
-                "view": "auto",
-                "pinned": false,
-                "has_visual": false,
-                "visual_kind": Value::Null,
-                "object_ids": [],
-                "title": "",
-                "stale": false,
-                "generation": 0,
-            })),
-            display_gate,
-            display_confirm: display_confirm_tx,
-            active_session,
-            leg_announcer,
-            operation_transition: Mutex::new(()),
-            active_operations: Mutex::new(HashMap::new()),
-            queued_turns: AtomicU64::new(0),
-            turn_in_flight: AtomicBool::new(false),
-            shutdown,
-            audio: Mutex::new(AudioQueue::new()),
-            speech_deadline,
+        Self(Arc::new_cyclic(|app: &std::sync::Weak<AppInner>| {
+            // A project session's `speak`, `display` and `view` are answered
+            // here, by the same code for every one of them.
+            let app = app.clone();
+            let module_callback: ModuleCallback = Arc::new(move |call: AgentCall| {
+                let app = app.upgrade();
+                Box::pin(async move {
+                    match app {
+                        Some(app) => module_call(&AppState(app), call).await,
+                        None => json!({"status": "failed", "reason": "failed"}),
+                    }
+                })
+            });
+            switchboard.set_module_callback(Some(module_callback));
+            AppInner {
+                switchboard: Mutex::new(switchboard),
+                hosts,
+                delivery,
+                transcript_log: Mutex::new(transcript_log),
+                speaker,
+                stt,
+                stt_stream,
+                events,
+                coordinator,
+                redials,
+                speech,
+                speech_rx: Mutex::new(Some(speech_rx)),
+                clips,
+                clip_rx: Mutex::new(Some(clip_rx)),
+                turns,
+                turn_rx: Mutex::new(Some(turn_rx)),
+                accepted_clips: Mutex::new((HashSet::new(), VecDeque::new())),
+                clip_verdicts: std::sync::Mutex::new(ClipVerdicts::default()),
+                stream_clips: Mutex::new(HashMap::new()),
+                last_display,
+                screen_state: Mutex::new(json!({
+                    "view": "auto",
+                    "pinned": false,
+                    "has_visual": false,
+                    "visual_kind": Value::Null,
+                    "object_ids": [],
+                    "title": "",
+                    "stale": false,
+                    "generation": 0,
+                })),
+                display_gate,
+                display_confirm: display_confirm_tx,
+                active_session,
+                leg_announcer,
+                operation_transition: Mutex::new(()),
+                active_operations: Mutex::new(HashMap::new()),
+                queued_turns: AtomicU64::new(0),
+                turn_in_flight: AtomicBool::new(false),
+                shutdown,
+                audio: Mutex::new(AudioQueue::new()),
+                speech_deadline,
+            }
         }))
     }
     pub fn router(self, static_dir: Option<ServeDir>) -> Router {
@@ -436,13 +451,6 @@ impl AppState {
             .route("/connect", post(connect))
             .route("/thinking", post(thinking))
             .route("/model", post(model))
-            .route("/leg-state", post(leg_state))
-            .route("/speak", post(speak))
-            .route(
-                "/display",
-                post(display).layer(DefaultBodyLimit::max(64 * 1024)),
-            )
-            .route("/view", post(view).layer(DefaultBodyLimit::max(16 * 1024)))
             .route("/ws", get(ws))
             .route("/host", get(host_link))
             .with_state(self);
@@ -477,12 +485,14 @@ pub async fn shutdown(state: &AppState) {
     if !state.0.coordinator.begin_shutdown() {
         return;
     }
+    interrupt_active_turn(state).await;
+    // Ends the legs first: a project session is ended by a command on its
+    // host's link, which has to be queued before the links close.
+    state.0.switchboard.lock().await.shutdown().await;
     // Close upgraded WebSockets as well as the PBX children. Axum's graceful
     // shutdown waits for upgraded connections, so merely stopping the listener
     // can otherwise leave systemd waiting on a browser tab indefinitely.
     state.0.shutdown.send_replace(true);
-    interrupt_active_turn(state).await;
-    state.0.switchboard.lock().await.shutdown().await;
     state.0.coordinator.finish_shutdown();
 }
 pub fn spawn_idle_worker(state: AppState, idle_timeout: f64, poll_seconds: f64) {
@@ -1250,7 +1260,7 @@ async fn cancel_active_operations(state: &AppState) -> Option<String> {
         .coordinator
         .begin_rescue("operation interrupted")
         .generation;
-    release_rescued_work(state, generation).await
+    release_rescued_work(state, generation, false).await
 }
 /// Cancels running work to make way for `plan`, but only while its leg is
 /// still the one on the line: a caller who has moved since the redial was
@@ -1258,13 +1268,18 @@ async fn cancel_active_operations(state: &AppState) -> Option<String> {
 /// leg as the rescue left it.
 async fn cancel_active_operations_for(state: &AppState, plan: RedialPlan) -> Option<RedialPlan> {
     let rescued = state.0.coordinator.begin_rescue_of(plan.leg(), "redial")?;
-    release_rescued_work(state, rescued.identity.generation).await;
+    release_rescued_work(state, rescued.identity.generation, plan.keeps_session()).await;
     Some(plan.rescued(rescued))
 }
 /// What a rescue does once the coordinator has retired the leg: drop queued
 /// audio, announce the new epoch, abort registered work, and close the live
-/// session. Returns the label of the session it closed.
-async fn release_rescued_work(state: &AppState, generation: u64) -> Option<String> {
+/// leg, or, for a model change that keeps the session (`keep_session`), only
+/// stop its running turn. Returns the label of the leg it closed.
+async fn release_rescued_work(
+    state: &AppState,
+    generation: u64,
+    keep_session: bool,
+) -> Option<String> {
     state.0.audio.lock().await.clear();
     // Tell the browser at once, so speech it starts recording after this point
     // is stamped with the new epoch rather than the one being retired.
@@ -1279,7 +1294,11 @@ async fn release_rescued_work(state: &AppState, generation: u64) -> Option<Strin
     let active = state.0.active_session.lock().await.take();
     let label = active.as_ref().map(|session| session.label().to_owned());
     if let Some(session) = active {
-        session.close().await;
+        if keep_session {
+            session.interrupt().await;
+        } else {
+            session.close().await;
+        }
     }
     label
 }
@@ -1626,61 +1645,13 @@ async fn model(
         Err(refused) => refused,
     }
 }
-#[derive(Deserialize)]
-struct LegState {
-    #[serde(default)]
-    thinking: String,
-    #[serde(default)]
-    token: String,
-}
-#[tracing::instrument(name = "http", skip_all, fields(endpoint = "/leg-state"))]
-async fn leg_state(
-    State(state): State<AppState>,
-    body: Result<Json<LegState>, JsonRejection>,
-) -> Response {
-    let req = match body {
-        Ok(Json(req)) => req,
-        Err(rejection) => return refuse_body(rejection),
-    };
-    tracing::info!(thinking = %req.thinking, "a leg reported its thinking level");
-    let accepted = match state
-        .0
-        .coordinator
-        .accept_thinking_callback(&req.token, &req.thinking)
-    {
-        Ok(public) => {
-            if public {
-                tracing::info!("accepted; the page shows the reported level");
-                publish_status(&state);
-            } else {
-                tracing::info!(
-                    "accepted from the starting leg; it applies once the leg is adopted"
-                );
-            }
-            true
-        }
-        Err(error) => {
-            tracing::info!(reason = %error, "refused");
-            false
-        }
-    };
-    Json(json!({"accepted":accepted})).into_response()
-}
-#[derive(Deserialize)]
+/// A project session's `speak`: its words, and the call token it carried.
 struct Speak {
     text: String,
-    #[serde(default)]
     token: String,
 }
-#[tracing::instrument(name = "http", skip_all, fields(endpoint = "/speak"))]
-async fn speak(
-    State(state): State<AppState>,
-    body: Result<Json<Speak>, JsonRejection>,
-) -> Response {
-    let req = match body {
-        Ok(Json(req)) => req,
-        Err(rejection) => return refuse_body(rejection),
-    };
+#[tracing::instrument(name = "module_call", skip_all, fields(call = "speak"))]
+async fn speak(state: AppState, req: Speak) -> Response {
     let started = std::time::Instant::now();
     // The words are the caller's to hear, not the journal's to keep.
     tracing::info!(chars = req.text.chars().count(), "an agent asked to speak");
@@ -1794,40 +1765,25 @@ async fn speak(
     Json(json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})).into_response()
 }
 #[tracing::instrument(
-    name = "http",
+    name = "module_call",
     skip_all,
     fields(
-        endpoint = "/display",
+        call = "display",
         op = tracing::field::Empty,
         kind = tracing::field::Empty,
         id = tracing::field::Empty,
     )
 )]
-async fn display(
-    State(state): State<AppState>,
-    body: Result<axum::body::Bytes, BytesRejection>,
-) -> Response {
-    let body = match body {
-        Ok(body) => body,
-        Err(rejection) => return refuse_body(rejection),
-    };
+async fn display(state: AppState, token: &str, raw: Value) -> Response {
     let started = std::time::Instant::now();
     // Logged by size and, once it validates, by what it does and to which
     // object; the content is the caller's screen, not the journal's.
-    tracing::info!(bytes = body.len(), "an agent sent a display action");
-    let raw: Value = match serde_json::from_slice(&body) {
-        Ok(v) => v,
-        Err(error) => {
-            tracing::info!(%error, "refused: the body is not JSON");
-            return (
-                axum::http::StatusCode::BAD_REQUEST,
-                Json(json!({"delivered":false, "detail":"invalid JSON payload"})),
-            )
-                .into_response();
-        }
-    };
+    tracing::info!(
+        bytes = raw.to_string().len(),
+        "an agent sent a display action"
+    );
     let Some(map) = raw.as_object() else {
-        tracing::info!("refused: the body is not an object");
+        tracing::info!("refused: the arguments are not an object");
         return (
             axum::http::StatusCode::BAD_REQUEST,
             Json(json!({"delivered":false, "detail":"request must be an object"})),
@@ -1836,7 +1792,7 @@ async fn display(
     };
 
     for k in map.keys() {
-        if k != "token" && k != "action" {
+        if k != "action" {
             tracing::info!(field = %k, "refused: unknown field in the envelope");
             return (
                 axum::http::StatusCode::BAD_REQUEST,
@@ -1856,8 +1812,6 @@ async fn display(
         )
             .into_response();
     };
-
-    let token = map.get("token").and_then(Value::as_str).unwrap_or("");
 
     let normalized_action = match crate::visual_protocol::validate_action(action_val) {
         Ok(act) => act,
@@ -2010,18 +1964,20 @@ struct ViewRequest {
     target: String,
     #[serde(default)]
     reason: String,
-    #[serde(default)]
-    token: String,
 }
 
-#[tracing::instrument(name = "http", skip_all, fields(endpoint = "/view"))]
-async fn view(
-    State(state): State<AppState>,
-    body: Result<Json<ViewRequest>, JsonRejection>,
-) -> Response {
-    let req = match body {
-        Ok(Json(req)) => req,
-        Err(rejection) => return refuse_body(rejection),
+#[tracing::instrument(name = "module_call", skip_all, fields(call = "view"))]
+async fn view(state: AppState, token: &str, args: Value) -> Response {
+    let req = match serde_json::from_value::<ViewRequest>(args) {
+        Ok(req) => req,
+        Err(error) => {
+            tracing::info!(%error, "refused: the arguments are not a view request");
+            return (
+                axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"delivered":false, "detail":error.to_string()})),
+            )
+                .into_response();
+        }
     };
     // An empty target asks what the caller can see; anything else asks the
     // page to change it. The agent's stated reason is not logged.
@@ -2029,8 +1985,8 @@ async fn view(
         requested = %req.target.chars().take(64).collect::<String>(),
         "an agent asked about the caller's view"
     );
-    promote_candidate_for_token(&state, &req.token).await;
-    if let Err(error) = state.0.coordinator.accept_side_effect(&req.token) {
+    promote_candidate_for_token(&state, token).await;
+    if let Err(error) = state.0.coordinator.accept_side_effect(token) {
         tracing::info!(reason = %error, "refused: the leg is not live on the call");
         let detail = match error {
             crate::lifecycle::LifecycleError::CandidateSideEffect => {
@@ -2049,7 +2005,7 @@ async fn view(
 
     let gate = state.0.display_gate.lock().await;
     if state.0.coordinator.generation() != permit_generation
-        || state.0.coordinator.accept_side_effect(&req.token).is_err()
+        || state.0.coordinator.accept_side_effect(token).is_err()
     {
         tracing::info!(
             generation = permit_generation,
@@ -2157,6 +2113,85 @@ fn delivery_response(delivered: bool) -> Value {
     } else {
         json!({"delivered":false, "reason":"no browser connected"})
     }
+}
+
+/// Answers a project session's `speak`, `display` or `view` module call
+/// (`docs/host-link.md`, "Module calls") with the same checks and effects
+/// for every session: the call token must name the leg on the line.
+async fn module_call(state: &AppState, call: AgentCall) -> Value {
+    let response = agent_call(state, &call).await;
+    module_reply(&call.call, response).await
+}
+
+/// Runs a module call and answers it as a response: its status code says
+/// how it went, and its JSON body is the result.
+async fn agent_call(state: &AppState, call: &AgentCall) -> Response {
+    match call.call.as_str() {
+        "speak" => {
+            let Some(text) = call.args.get("text").and_then(Value::as_str) else {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    Json(json!({"detail":"text is required"})),
+                )
+                    .into_response();
+            };
+            speak(
+                state.clone(),
+                Speak {
+                    text: text.to_owned(),
+                    token: call.token.clone(),
+                },
+            )
+            .await
+        }
+        "display" => display(state.clone(), &call.token, call.args.clone()).await,
+        "view" => {
+            let args = if call.args.is_null() {
+                json!({})
+            } else {
+                call.args.clone()
+            };
+            view(state.clone(), &call.token, args).await
+        }
+        _ => (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({"detail":"unknown call"})),
+        )
+            .into_response(),
+    }
+}
+
+/// A module reply from a call's response. Delivered when the body says
+/// `delivered: true`; a display the scene took with no browser to show it is
+/// accepted; a call answered `delivered: false`, or refused as invalid (4xx),
+/// is refused with the detail as its reason; anything else failed. The body
+/// goes back as the `result`.
+async fn module_reply(call: &str, response: Response) -> Value {
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), MAX_WEBSOCKET_MESSAGE_BYTES)
+        .await
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .unwrap_or_else(|| json!({}));
+    let detail = body
+        .get("detail")
+        .or_else(|| body.get("reason"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let (outcome, reason) = if status.is_success() && body["delivered"] == true {
+        ("delivered", None)
+    } else if status.is_success() && call == "display" {
+        ("accepted", detail)
+    } else if body["delivered"] == false || status.is_success() || status.is_client_error() {
+        ("refused", detail)
+    } else {
+        ("failed", detail)
+    };
+    let mut result = body;
+    if outcome == "failed" {
+        result["error"] = json!(reason.clone().unwrap_or_else(|| "failed".into()));
+    }
+    json!({"status": outcome, "reason": reason, "result": result})
 }
 
 /// Axum's rejection of a control's or callback's request body, answered

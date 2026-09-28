@@ -1,6 +1,8 @@
 use super::*;
 use crate::delivery::DELIVERY_QUEUE;
+use crate::hosts::{FakeHostAgent, FakeLog, Step};
 use crate::pbx::OPERATOR;
+use crate::pi_client::PiSession;
 use crate::registry::Registry;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
@@ -41,7 +43,6 @@ fn state_on_with_stream(
 ) -> AppState {
     AppState::new(
         board,
-        crate::hosts::Hosts::new(HashMap::new(), crate::hosts::Heartbeat::default()),
         TranscriptLog::new(10),
         Speaker::offline(100, std::time::Duration::from_millis(25_000)),
         SttAdapter::from_command(stt),
@@ -82,12 +83,33 @@ async fn request_json(
     (status, value)
 }
 
+/// A project session's module call, as the host link delivers it and the
+/// application answers it: `path` names the call the way the agent callback
+/// routes once did, and a `token` in `body` is the call token it carries.
+async fn agent_call_json(state: &AppState, path: &str, body: Value) -> (StatusCode, Value) {
+    let mut args = body;
+    let token = args
+        .as_object_mut()
+        .and_then(|args| args.remove("token"))
+        .and_then(|token| token.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    let call = AgentCall {
+        call: path.trim_start_matches('/').to_owned(),
+        token,
+        args,
+    };
+    let response = agent_call(state, &call).await;
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
 async fn post_display_in_task(
     state: &AppState,
     body: Value,
 ) -> tokio::task::JoinHandle<(StatusCode, Value)> {
     let state = state.clone();
-    tokio::spawn(async move { request_json(&state, Method::POST, "/display", Some(body)).await })
+    tokio::spawn(async move { agent_call_json(&state, "/display", body).await })
 }
 
 fn diagram_show() -> Value {
@@ -194,16 +216,6 @@ async fn http_contract_exposes_status_health_and_page_controls() {
     assert_eq!(code, StatusCode::OK);
     assert_eq!(model["model"], "");
     assert!(model["error"].as_str().unwrap().contains("project leg"));
-
-    let (code, leg) = request_json(
-        &state,
-        Method::POST,
-        "/leg-state",
-        Some(json!({"thinking":"high"})),
-    )
-    .await;
-    assert_eq!(code, StatusCode::OK);
-    assert_eq!(leg, json!({"accepted":false}));
 }
 
 #[tokio::test]
@@ -230,8 +242,7 @@ async fn browser_screen_state_is_available_to_the_agent_view_tool() {
     .await
     .unwrap();
 
-    let (code, response) =
-        request_json(&state, Method::POST, "/view", Some(json!({"target":""}))).await;
+    let (code, response) = agent_call_json(&state, "/view", json!({"target":""})).await;
     assert_eq!(code, StatusCode::OK);
     assert_eq!(response["screen"]["view"], "comms");
     assert_eq!(response["screen"]["has_visual"], false);
@@ -251,8 +262,7 @@ async fn view_reports_requested_diagram_as_unconfirmed_until_the_browser_acks() 
     };
 
     // Before the ack, view says diagram-but-not-confirmed.
-    let (_c, before) =
-        request_json(&state, Method::POST, "/view", Some(json!({"target":""}))).await;
+    let (_c, before) = agent_call_json(&state, "/view", json!({"target":""})).await;
     let screen = before.get("screen").unwrap();
     assert_eq!(
         screen.get("visual_kind").and_then(Value::as_str),
@@ -280,7 +290,7 @@ async fn view_reports_requested_diagram_as_unconfirmed_until_the_browser_acks() 
         .unwrap()
         .unwrap();
 
-    let (_c, after) = request_json(&state, Method::POST, "/view", Some(json!({"target":""}))).await;
+    let (_c, after) = agent_call_json(&state, "/view", json!({"target":""})).await;
     assert_eq!(
         after
             .get("screen")
@@ -300,11 +310,10 @@ async fn view_reports_first_non_ambient_object_when_nothing_is_focused_or_primar
     // would report "document" (the second object) instead of "diagram"
     // (the first).
     let state = state();
-    let (code, _) = request_json(
+    let (code, _) = agent_call_json(
         &state,
-        Method::POST,
         "/display",
-        Some(json!({
+        json!({
             "token": "operator",
             "action": {
                 "op": "show",
@@ -317,16 +326,15 @@ async fn view_reports_first_non_ambient_object_when_nothing_is_focused_or_primar
                     "edges": []
                 }
             }
-        })),
+        }),
     )
     .await;
     assert_eq!(code, StatusCode::OK);
 
-    let (code, _) = request_json(
+    let (code, _) = agent_call_json(
         &state,
-        Method::POST,
         "/display",
-        Some(json!({
+        json!({
             "token": "operator",
             "action": {
                 "op": "show",
@@ -334,13 +342,12 @@ async fn view_reports_first_non_ambient_object_when_nothing_is_focused_or_primar
                 "type": "document",
                 "data": {"subject": "document-title", "paragraphs": ["p1"]}
             }
-        })),
+        }),
     )
     .await;
     assert_eq!(code, StatusCode::OK);
 
-    let (code, response) =
-        request_json(&state, Method::POST, "/view", Some(json!({"target":""}))).await;
+    let (code, response) = agent_call_json(&state, "/view", json!({"target":""})).await;
     assert_eq!(code, StatusCode::OK);
     assert_eq!(response["screen"]["visual_kind"], "diagram");
     assert_eq!(response["screen"]["title"], "diagram-title");
@@ -354,11 +361,10 @@ async fn view_reports_the_object_with_role_primary_even_when_shown_first() {
     // order.last() logic: the primary object is shown FIRST here, so a
     // last-wins rule would (wrongly) report the second, non-primary object.
     let state = state();
-    let (code, _) = request_json(
+    let (code, _) = agent_call_json(
         &state,
-        Method::POST,
         "/display",
-        Some(json!({
+        json!({
             "token": "operator",
             "action": {
                 "op": "show",
@@ -367,16 +373,15 @@ async fn view_reports_the_object_with_role_primary_even_when_shown_first() {
                 "role": "primary",
                 "data": {"subject": "document-title", "paragraphs": ["p1"]}
             }
-        })),
+        }),
     )
     .await;
     assert_eq!(code, StatusCode::OK);
 
-    let (code, _) = request_json(
+    let (code, _) = agent_call_json(
         &state,
-        Method::POST,
         "/display",
-        Some(json!({
+        json!({
             "token": "operator",
             "action": {
                 "op": "show",
@@ -389,13 +394,12 @@ async fn view_reports_the_object_with_role_primary_even_when_shown_first() {
                     "edges": []
                 }
             }
-        })),
+        }),
     )
     .await;
     assert_eq!(code, StatusCode::OK);
 
-    let (code, response) =
-        request_json(&state, Method::POST, "/view", Some(json!({"target":""}))).await;
+    let (code, response) = agent_call_json(&state, "/view", json!({"target":""})).await;
     assert_eq!(code, StatusCode::OK);
     assert_eq!(response["screen"]["visual_kind"], "document");
     assert_eq!(response["screen"]["title"], "document-title");
@@ -561,25 +565,62 @@ async fn a_body_the_handler_cannot_read_gets_axums_own_answer() {
     }
     let json = Some("application/json");
 
-    let (code, body) = send("/view", json, br#"{"target":"","colour":"red"}"#.to_vec()).await;
-    assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
-    assert!(body.contains("colour"), "{body}");
-
     let (code, _) = send("/connect", json, b"{not json".to_vec()).await;
     assert_eq!(code, StatusCode::BAD_REQUEST);
 
-    let (code, _) = send("/speak", None, br#"{"text":"hello"}"#.to_vec()).await;
+    let (code, _) = send("/connect", None, br#"{"project":"alpha"}"#.to_vec()).await;
     assert_eq!(code, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+}
 
-    let (code, _) = send("/display", json, vec![b' '; 65 * 1024]).await;
-    assert_eq!(code, StatusCode::PAYLOAD_TOO_LARGE);
+#[tokio::test]
+async fn no_agent_callback_is_served_over_http() {
+    // Project agents reach the service only through their host agent's link.
+    for path in ["/speak", "/display", "/view", "/leg-state"] {
+        let response = state()
+            .router(None)
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+    }
+}
+
+#[tokio::test]
+async fn a_view_call_with_an_unknown_field_is_refused_with_the_reason() {
+    let (code, body) =
+        agent_call_json(&state(), "/view", json!({"target":"","colour":"red"})).await;
+    assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body["detail"].as_str().unwrap().contains("colour"),
+        "{body}"
+    );
+    let reply = module_call(
+        &state(),
+        AgentCall {
+            call: "view".into(),
+            token: String::new(),
+            args: json!({"colour":"red"}),
+        },
+    )
+    .await;
+    assert_eq!(reply["status"], "refused");
+    assert!(
+        reply["reason"].as_str().unwrap().contains("colour"),
+        "{reply}"
+    );
 }
 
 #[tokio::test]
 async fn speak_rejects_blank_text_without_logging_it() {
     let state = state();
-    let (code, body) =
-        request_json(&state, Method::POST, "/speak", Some(json!({"text":"   "}))).await;
+    let (code, body) = agent_call_json(&state, "/speak", json!({"text":"   "})).await;
     assert_eq!(code, StatusCode::BAD_REQUEST);
     assert_eq!(body, json!({"detail":"text must not be empty"}));
     assert!(state.0.transcript_log.lock().await.entries().is_empty());
@@ -610,12 +651,7 @@ async fn agent_callbacks_do_not_wait_for_the_turn_lock() {
 
     let (code, spoken) = timeout(
         Duration::from_secs(1),
-        request_json(
-            &state,
-            Method::POST,
-            "/speak",
-            Some(json!({"text":"Still working."})),
-        ),
+        agent_call_json(&state, "/speak", json!({"text":"Still working."})),
     )
     .await
     .expect("speak must stay live during an agent turn");
@@ -624,20 +660,6 @@ async fn agent_callbacks_do_not_wait_for_the_turn_lock() {
         spoken,
         json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})
     );
-
-    let (code, leg) = timeout(
-        Duration::from_secs(1),
-        request_json(
-            &state,
-            Method::POST,
-            "/leg-state",
-            Some(json!({"thinking":"high"})),
-        ),
-    )
-    .await
-    .expect("leg-state must stay live during session startup");
-    assert_eq!(code, StatusCode::OK);
-    assert_eq!(leg, json!({"accepted":false}));
 
     let (code, status) = timeout(
         Duration::from_secs(1),
@@ -675,7 +697,7 @@ async fn page_rescue_aborts_work_before_waiting_for_the_pbx_lock() {
     )
     .await
     .unwrap();
-    *state.0.active_session.lock().await = Some(session.clone());
+    *state.0.active_session.lock().await = Some(LegSession::Operator(session.clone()));
 
     let (locked_tx, locked_rx) = oneshot::channel();
     let turn_state = state.clone();
@@ -705,13 +727,7 @@ async fn page_rescue_aborts_work_before_waiting_for_the_pbx_lock() {
 #[tokio::test]
 async fn speak_reports_failure_and_does_not_log_transcript_when_delivery_fails() {
     let state = state();
-    let (code, spoken) = request_json(
-        &state,
-        Method::POST,
-        "/speak",
-        Some(json!({"text":"Hello world."})),
-    )
-    .await;
+    let (code, spoken) = agent_call_json(&state, "/speak", json!({"text":"Hello world."})).await;
     assert_eq!(code, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(spoken["delivered"], false);
     assert_eq!(spoken["reason"], "no browser connected");
@@ -1063,7 +1079,7 @@ async fn leg_busy_with_its_intro(
     )
     .await
     .unwrap();
-    *state.0.active_session.lock().await = Some(session.clone());
+    *state.0.active_session.lock().await = Some(LegSession::Operator(session.clone()));
     let prompting = session.clone();
     let intro = tokio::spawn(async move { prompting.prompt("intro").await });
     timeout(Duration::from_secs(10), async {
@@ -1424,7 +1440,6 @@ done
     // No speech key: the reply is not synthesized, so nothing leaves the box.
     let state = AppState::new(
         Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
-        crate::hosts::Hosts::new(HashMap::new(), crate::hosts::Heartbeat::default()),
         TranscriptLog::new(10),
         Speaker::from_values(
             100,
@@ -1547,7 +1562,7 @@ async fn display_protocol_validation_and_composition() {
             }
         }
     });
-    let (code, _) = request_json(&state, Method::POST, "/display", Some(show)).await;
+    let (code, _) = agent_call_json(&state, "/display", show).await;
     assert_eq!(code, StatusCode::OK);
     let Event::Json(event) = events.recv().await.unwrap() else {
         panic!("expected event")
@@ -1556,11 +1571,10 @@ async fn display_protocol_validation_and_composition() {
     assert_eq!(event["action"]["id"], "main");
     assert_eq!(*state.0.last_display.lock().await, Some(event));
     for (id, role) in [("compare", "compare"), ("secondary", "secondary")] {
-        let (code, _) = request_json(
+        let (code, _) = agent_call_json(
             &state,
-            Method::POST,
             "/display",
-            Some(json!({
+            json!({
                 "token": "operator",
                 "action": {
                     "op": "show",
@@ -1569,17 +1583,16 @@ async fn display_protocol_validation_and_composition() {
                     "role": role,
                     "data": {"label": id, "value": "1"}
                 }
-            })),
+            }),
         )
         .await;
         assert_eq!(code, StatusCode::OK);
         assert!(matches!(events.recv().await.unwrap(), Event::Json(_)));
     }
-    let (code, _) = request_json(
+    let (code, _) = agent_call_json(
         &state,
-        Method::POST,
         "/display",
-        Some(json!({
+        json!({
             "token": "operator",
             "action": {
                 "op": "say",
@@ -1587,7 +1600,7 @@ async fn display_protocol_validation_and_composition() {
                 "target": "main",
                 "at": {"x": 2.0, "series": "a"}
             }
-        })),
+        }),
     )
     .await;
     assert_eq!(code, StatusCode::OK);
@@ -1611,11 +1624,10 @@ async fn display_protocol_rejects_invalid_actions() {
             "invalid case '{name}' should have been rejected by validate_action"
         );
 
-        let (code, _) = request_json(
+        let (code, _) = agent_call_json(
             &state,
-            Method::POST,
             "/display",
-            Some(json!({"token": "operator", "action": action.clone()})),
+            json!({"token": "operator", "action": action.clone()}),
         )
         .await;
         assert_eq!(
@@ -1628,9 +1640,7 @@ async fn display_protocol_rejects_invalid_actions() {
     let oversized =
         json!({"token": "operator", "action": {"op": "say", "text": "x".repeat(50_001)}});
     assert_eq!(
-        request_json(&state, Method::POST, "/display", Some(oversized))
-            .await
-            .0,
+        agent_call_json(&state, "/display", oversized).await.0,
         StatusCode::BAD_REQUEST
     );
 }
@@ -1654,7 +1664,7 @@ async fn display_projection_hide_clears_focus() {
             }
         }
     });
-    let (code, _) = request_json(&state, Method::POST, "/display", Some(show_chart)).await;
+    let (code, _) = agent_call_json(&state, "/display", show_chart).await;
     assert_eq!(code, StatusCode::OK);
     let _ = events.recv().await.unwrap();
 
@@ -1672,7 +1682,7 @@ async fn display_projection_hide_clears_focus() {
             }
         }
     });
-    let (code, _) = request_json(&state, Method::POST, "/display", Some(show_doc)).await;
+    let (code, _) = agent_call_json(&state, "/display", show_doc).await;
     assert_eq!(code, StatusCode::OK);
     let _ = events.recv().await.unwrap();
 
@@ -1684,7 +1694,7 @@ async fn display_projection_hide_clears_focus() {
             "id": "chart-1"
         }
     });
-    let (code, _) = request_json(&state, Method::POST, "/display", Some(focus_chart)).await;
+    let (code, _) = agent_call_json(&state, "/display", focus_chart).await;
     assert_eq!(code, StatusCode::OK);
     let _ = events.recv().await.unwrap();
 
@@ -1698,7 +1708,7 @@ async fn display_projection_hide_clears_focus() {
             "at": {"x": 20.0}
         }
     });
-    let (code, _) = request_json(&state, Method::POST, "/display", Some(say_chart)).await;
+    let (code, _) = agent_call_json(&state, "/display", say_chart).await;
     assert_eq!(code, StatusCode::OK);
     let _ = events.recv().await.unwrap();
 
@@ -1722,7 +1732,7 @@ async fn display_projection_hide_clears_focus() {
             "id": "chart-1"
         }
     });
-    let (code, _) = request_json(&state, Method::POST, "/display", Some(hide_chart)).await;
+    let (code, _) = agent_call_json(&state, "/display", hide_chart).await;
     assert_eq!(code, StatusCode::OK);
     let _ = events.recv().await.unwrap();
 
@@ -1753,7 +1763,7 @@ async fn display_projection_hide_clears_focus() {
             "id": "chart-1"
         }
     });
-    let (code, _) = request_json(&state, Method::POST, "/display", Some(hide_again)).await;
+    let (code, _) = agent_call_json(&state, "/display", hide_again).await;
     assert_eq!(code, StatusCode::OK);
     {
         let gate = state.0.display_gate.lock().await;
@@ -1770,7 +1780,7 @@ async fn display_projection_hide_clears_focus() {
             "at": null
         }
     });
-    let (code, _) = request_json(&state, Method::POST, "/display", Some(general_say)).await;
+    let (code, _) = agent_call_json(&state, "/display", general_say).await;
     assert_eq!(code, StatusCode::OK);
 
     let hide_doc = json!({
@@ -1780,7 +1790,7 @@ async fn display_projection_hide_clears_focus() {
             "id": "doc-1"
         }
     });
-    let (code, _) = request_json(&state, Method::POST, "/display", Some(hide_doc)).await;
+    let (code, _) = agent_call_json(&state, "/display", hide_doc).await;
     assert_eq!(code, StatusCode::OK);
 
     {
@@ -1812,7 +1822,7 @@ async fn display_projection_generation_race() {
             "data": {"label": "cpu", "value": "10%"}
         }
     });
-    let (code, _) = request_json(&state, Method::POST, "/display", Some(valid_display)).await;
+    let (code, _) = agent_call_json(&state, "/display", valid_display).await;
     assert_eq!(code, StatusCode::OK);
 
     let valid_view = json!({
@@ -1820,7 +1830,7 @@ async fn display_projection_generation_race() {
         "target": "visual",
         "reason": "inspect"
     });
-    let (code, _) = request_json(&state, Method::POST, "/view", Some(valid_view)).await;
+    let (code, _) = agent_call_json(&state, "/view", valid_view).await;
     assert_eq!(code, StatusCode::OK);
 
     // Now rescue occurs: bumps generation and rotates leg token!
@@ -1839,7 +1849,7 @@ async fn display_projection_generation_race() {
             "data": {"label": "cpu", "value": "99%"}
         }
     });
-    let (code, resp) = request_json(&state, Method::POST, "/display", Some(stale_display)).await;
+    let (code, resp) = agent_call_json(&state, "/display", stale_display).await;
     assert_eq!(code, StatusCode::CONFLICT);
     assert_eq!(resp["code"], "invalid_leg");
 
@@ -1855,7 +1865,7 @@ async fn display_projection_generation_race() {
         "target": "theater",
         "reason": "late"
     });
-    let (code, resp) = request_json(&state, Method::POST, "/view", Some(stale_view)).await;
+    let (code, resp) = agent_call_json(&state, "/view", stale_view).await;
     assert_eq!(code, StatusCode::CONFLICT);
     assert_eq!(resp["code"], "invalid_leg");
 
@@ -1874,7 +1884,7 @@ async fn display_projection_generation_race() {
             "data": {"label": "cpu", "value": "25%"}
         }
     });
-    let (code, _) = request_json(&state, Method::POST, "/display", Some(fresh_display)).await;
+    let (code, _) = agent_call_json(&state, "/display", fresh_display).await;
     assert_eq!(code, StatusCode::OK);
 }
 
@@ -1917,7 +1927,7 @@ async fn display_reports_unconfirmed_when_the_browser_stays_silent() {
     let state = state();
     let (connection, _s, _w) = state.register_connection().await;
     let _ = connection.receiver; // keep the connection alive, never ack
-    let (code, body) = request_json(&state, Method::POST, "/display", Some(diagram_show())).await;
+    let (code, body) = agent_call_json(&state, "/display", diagram_show()).await;
     assert_eq!(code, StatusCode::OK);
     assert_eq!(body.get("delivered").and_then(Value::as_bool), Some(true));
     assert_eq!(body.get("rendered").and_then(Value::as_bool), Some(false));
@@ -1960,11 +1970,10 @@ async fn display_projection_snapshot_watermark() {
 
     // 1. Post two display actions to set up projection state
     for id in ["obj-1", "obj-2"] {
-        let (code, _) = request_json(
+        let (code, _) = agent_call_json(
             &state,
-            Method::POST,
             "/display",
-            Some(json!({
+            json!({
                 "token": "operator",
                 "action": {
                     "op": "show",
@@ -1973,7 +1982,7 @@ async fn display_projection_snapshot_watermark() {
                     "role": "primary",
                     "data": {"label": id, "value": "100"}
                 }
-            })),
+            }),
         )
         .await;
         assert_eq!(code, StatusCode::OK);
@@ -2056,14 +2065,14 @@ async fn display_projection_route_reset() {
             "data": {"label": "v", "value": "1"}
         }
     });
-    let (code, _) = request_json(&state, Method::POST, "/display", Some(show)).await;
+    let (code, _) = agent_call_json(&state, "/display", show).await;
     assert_eq!(code, StatusCode::OK);
 
     let focus = json!({
         "token": "operator",
         "action": {"op": "focus", "id": "scene-obj"}
     });
-    let (code, _) = request_json(&state, Method::POST, "/display", Some(focus)).await;
+    let (code, _) = agent_call_json(&state, "/display", focus).await;
     assert_eq!(code, StatusCode::OK);
 
     // Check that projection is populated
@@ -2222,13 +2231,7 @@ async fn a_first_display_from_the_incoming_leg_survives_the_transfer_settling() 
         .projection
         .objects
         .contains_key("d1"));
-    let (_code, view) = request_json(
-        &state,
-        Method::POST,
-        "/view",
-        Some(json!({"token":"alpha-leg"})),
-    )
-    .await;
+    let (_code, view) = agent_call_json(&state, "/view", json!({"token":"alpha-leg"})).await;
     assert_eq!(view["screen"]["has_visual"], true);
     assert_eq!(view["screen"]["confirmed"], true);
 }
@@ -2321,13 +2324,8 @@ async fn display_projection_screen_state_retirement() {
     .unwrap();
 
     // Verify view tool sees the active report
-    let (code, resp) = request_json(
-        &state,
-        Method::POST,
-        "/view",
-        Some(json!({"token": "operator", "target": ""})),
-    )
-    .await;
+    let (code, resp) =
+        agent_call_json(&state, "/view", json!({"token": "operator", "target": ""})).await;
     assert_eq!(code, StatusCode::OK);
     assert_eq!(resp["screen"]["view"], "visual");
     assert_eq!(resp["screen"]["visual_kind"], Value::Null);
@@ -2335,13 +2333,8 @@ async fn display_projection_screen_state_retirement() {
 
     // 2. Connection 1 is retired (browser disconnects)
     state.retire_connection(epoch1).await;
-    let (code, resp) = request_json(
-        &state,
-        Method::POST,
-        "/view",
-        Some(json!({"token": "operator", "target": ""})),
-    )
-    .await;
+    let (code, resp) =
+        agent_call_json(&state, "/view", json!({"token": "operator", "target": ""})).await;
     assert_eq!(code, StatusCode::OK);
     assert_eq!(
         resp["screen"]["connected"], false,
@@ -2375,13 +2368,8 @@ async fn display_projection_screen_state_retirement() {
     .unwrap();
 
     // Verify late report was ignored
-    let (_, resp) = request_json(
-        &state,
-        Method::POST,
-        "/view",
-        Some(json!({"token": "operator", "target": ""})),
-    )
-    .await;
+    let (_, resp) =
+        agent_call_json(&state, "/view", json!({"token": "operator", "target": ""})).await;
     assert_eq!(
         resp["screen"]["view"], "visual",
         "report from retired epoch must be ignored"
@@ -2414,13 +2402,8 @@ async fn display_projection_screen_state_retirement() {
     .await
     .unwrap();
 
-    let (_, resp) = request_json(
-        &state,
-        Method::POST,
-        "/view",
-        Some(json!({"token": "operator", "target": ""})),
-    )
-    .await;
+    let (_, resp) =
+        agent_call_json(&state, "/view", json!({"token": "operator", "target": ""})).await;
     assert_eq!(
         resp["screen"]["view"], "visual",
         "report with stale generation must be ignored"
@@ -2448,13 +2431,8 @@ async fn display_projection_screen_state_retirement() {
     .await
     .unwrap();
 
-    let (_, resp) = request_json(
-        &state,
-        Method::POST,
-        "/view",
-        Some(json!({"token": "operator", "target": ""})),
-    )
-    .await;
+    let (_, resp) =
+        agent_call_json(&state, "/view", json!({"token": "operator", "target": ""})).await;
     assert_eq!(resp["screen"]["view"], "theater");
     // Title is projection-derived, not echoed from the browser's report: no
     // display action was posted, so there is nothing to title.
@@ -2674,31 +2652,30 @@ fn a_hangup_names_what_the_caller_hung_up_on() {
     assert_eq!(hangup_outcome(None, None), None);
 }
 
-/// A pi stand-in: the operator puts every caller through to alpha, and
-/// alpha's intro turn shows life, then waits for a steer before it ends. The
-/// steer is the test's gate on the intro.
+/// An operator stand-in that puts every caller through to alpha.
 #[cfg(unix)]
 fn runtime_with_a_gated_intro(root: &std::path::Path) -> std::path::PathBuf {
     let runtime = root.join("fake-pi");
     crate::pi_client::write_executable_script(
         &runtime,
-        r##"operator=0
-for arg in "$@"; do
-if [ "$arg" = "--no-builtin-tools" ]; then operator=1; fi
-done
-while IFS= read -r line; do
-if [ "$operator" -eq 1 ]; then
-    printf '%s\n' '{"type":"tool_execution_start","toolName":"transfer_to_project","args":{"project":"alpha","intent":"look"}}'
-else
-    printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Alpha here."}}'
-    IFS= read -r release
-    printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Alpha here."}}'
-fi
+        r##"while IFS= read -r line; do
+printf '%s\n' '{"type":"tool_execution_start","toolName":"transfer_to_project","args":{"project":"alpha","intent":"look"}}'
 printf '%s\n' '{"type":"agent_settled"}'
 done
 "##,
     );
     runtime
+}
+
+/// Waits until the fake host agent has been sent a `name` command.
+async fn until_named(log: &FakeLog, name: &str) {
+    for _ in 0..500 {
+        if !log.named(name).is_empty() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("the host agent was never sent {name}: {:?}", log.names());
 }
 
 #[cfg(unix)]
@@ -2712,10 +2689,9 @@ async fn a_hangup_mid_intro_after_adoption_drops_the_incoming_leg_by_name() {
     let runtime = runtime_with_a_gated_intro(&root);
     let alpha: crate::registry::Project = serde_json::from_value(json!({
         "id": "alpha",
+        "host": "scriptorium",
         "cwd": root.to_string_lossy(),
-        "runtime": runtime.to_string_lossy(),
         "model": "anthropic/current",
-        "stage_extension": false,
     }))
     .unwrap();
     let config = crate::Config::for_tests(&[("SWITCHBOARD_PI_BINARY", &runtime.to_string_lossy())]);
@@ -2725,6 +2701,14 @@ async fn a_hangup_mid_intro_after_adoption_drops_the_incoming_leg_by_name() {
         &registry,
         crate::models::ModelCatalog::unavailable("no catalog in this test"),
     );
+    // alpha's intro shows life and never settles.
+    let host = FakeHostAgent::new(Box::new(|_, _| {
+        vec![
+            Step::Event(json!({"kind":"text","text":"Alpha here."})),
+            Step::Hold,
+        ]
+    }))
+    .serve(prewarm.hosts().connect_fake("scriptorium"));
     let state = state_on(Switchboard::new(
         &config,
         registry,
@@ -2758,6 +2742,7 @@ async fn a_hangup_mid_intro_after_adoption_drops_the_incoming_leg_by_name() {
     assert_eq!(body, json!({"hungup":true, "left":"alpha"}));
     assert!(turn.await.unwrap_err().is_cancelled());
     assert!(!incoming.alive().await);
+    until_named(&host, "kill").await;
     // The operator was never the one hung up on: its process is the live
     // session again, still running.
     let operator = state
@@ -2902,7 +2887,7 @@ async fn a_connection_gets_epoch_status_history_and_scene_before_any_live_event(
         .add(CALLER, "put me through", OPERATOR);
     let mut show = diagram_show();
     show["token"] = json!(state.0.coordinator.current_identity().token);
-    let (code, _) = request_json(&state, Method::POST, "/display", Some(show)).await;
+    let (code, _) = agent_call_json(&state, "/display", show).await;
     assert_eq!(code, StatusCode::OK);
     let watermark = state.0.display_gate.lock().await.watermark;
 
@@ -3150,26 +3135,21 @@ done
     path
 }
 
-/// An app whose operator and one local project, alpha, are pi stand-ins
-/// under `root`.
+/// An app whose operator is a pi stand-in under `root`, and whose one
+/// project, alpha, runs on host scriptorium, where a fake host agent answers
+/// every prompt "Alpha here.".
 #[cfg(unix)]
 fn state_with_agents(root: &std::path::Path) -> AppState {
     let operator = answering_agent(root, "fake-operator", "Operator here.");
-    let runtime = answering_agent(root, "fake-project-pi", "Alpha here.");
     let config =
         crate::Config::for_tests(&[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())]);
-    let registry = Registry::new(vec![crate::registry::Project {
-        id: "alpha".into(),
-        description: String::new(),
-        aliases: vec![],
-        host: None,
-        cwd: root.to_string_lossy().into_owned(),
-        runtime: runtime.to_string_lossy().into_owned(),
-        model: Some("anthropic/current".into()),
-        stage_extension: false,
-        extra_args: vec![],
-        prepare: String::new(),
-    }]);
+    let registry = Registry::new(vec![serde_json::from_value(json!({
+        "id": "alpha",
+        "host": "scriptorium",
+        "cwd": root.to_string_lossy(),
+        "model": "anthropic/current",
+    }))
+    .unwrap()]);
     let catalog = crate::models::ModelCatalog {
         entries: vec![crate::models::CatalogEntry {
             provider: "anthropic".into(),
@@ -3180,6 +3160,10 @@ fn state_with_agents(root: &std::path::Path) -> AppState {
         diagnostic: None,
     };
     let prewarm = crate::prewarm::Prewarm::settled(&config, &registry, catalog);
+    FakeHostAgent::new(Box::new(|_, _| {
+        vec![Step::Event(json!({"kind":"text","text":"Alpha here."}))]
+    }))
+    .serve(prewarm.hosts().connect_fake("scriptorium"));
     state_on(Switchboard::new(
         &config,
         registry,
@@ -3305,7 +3289,7 @@ async fn hanging_up_a_project_leg_from_the_page_does_not_wait_for_its_turn() {
     assert_eq!(state.0.coordinator.route(), OPERATOR);
     assert_eq!(current_status(&state).route, OPERATOR);
     let active = state.0.active_session.lock().await.clone();
-    assert_eq!(active.as_ref().map(PiSession::label), Some(OPERATOR));
+    assert_eq!(active.as_ref().map(LegSession::label), Some(OPERATOR));
     assert!(active.unwrap().alive().await, "the operator keeps running");
 
     let frames = queued_frames(&mut connection);
@@ -3336,52 +3320,6 @@ async fn hanging_up_a_project_leg_from_the_page_does_not_wait_for_its_turn() {
 // leg (#63). A refusal leaves the leg running and the caller's next turn
 // reaches it; only a redial that goes ahead cancels running work.
 
-/// A project runtime that answers every prompt "On it.", and records each
-/// start in `launches.log` so a test can tell whether a leg was relaunched.
-#[cfg(unix)]
-fn answering_runtime(root: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
-    let runtime = root.join("fake-pi");
-    let launches = root.join("launches.log");
-    crate::pi_client::write_executable_script(
-        &runtime,
-        &format!(
-            r#"printf 'launch\n' >> '{log}'
-while IFS= read -r line; do
-  printf '%s\n' '{{"type":"message_update","assistantMessageEvent":{{"type":"text_end","content":"On it."}}}}'
-  printf '%s\n' '{{"type":"agent_settled"}}'
-done
-"#,
-            log = launches.display()
-        ),
-    );
-    (runtime, launches)
-}
-
-/// An ssh stand-in that runs the agent launch it is given on this machine,
-/// and refuses anything else.
-#[cfg(unix)]
-fn local_ssh(root: &std::path::Path) -> std::path::PathBuf {
-    let ssh = root.join("fake-ssh");
-    crate::pi_client::write_executable_script(
-        &ssh,
-        r#"for last; do :; done
-case "$last" in
-  *"exec "*) exec sh -c "$last" ;;
-  *) exit 1 ;;
-esac
-"#,
-    );
-    ssh
-}
-
-fn read_lines(path: &std::path::Path) -> Vec<String> {
-    std::fs::read_to_string(path)
-        .unwrap_or_default()
-        .lines()
-        .map(str::to_owned)
-        .collect()
-}
-
 fn catalog_of(models: &[&str]) -> crate::models::ModelCatalog {
     crate::models::ModelCatalog {
         entries: models
@@ -3397,37 +3335,27 @@ fn catalog_of(models: &[&str]) -> crate::models::ModelCatalog {
     }
 }
 
-/// A call the page has put through to alpha. alpha's agent runs locally, or
-/// on `fake-host` through an ssh stand-in that runs it here.
+/// A call the page has put through to alpha, whose session runs on host
+/// scriptorium behind a fake host agent that answers every prompt "On it.".
 #[cfg(unix)]
 struct AlphaCall {
     state: AppState,
     prewarm: Arc<crate::prewarm::Prewarm>,
     project: crate::registry::Project,
-    /// alpha's process, as the page put the caller through to it.
-    live: PiSession,
-    launches: std::path::PathBuf,
-    root: std::path::PathBuf,
+    /// alpha's session, as the page put the caller through to it.
+    live: LegSession,
+    /// What alpha's host agent was sent.
+    host: FakeLog,
 }
 
 #[cfg(unix)]
-async fn call_on_alpha(host: Option<&str>, settings: &[(&str, &str)]) -> AlphaCall {
-    let root = std::env::temp_dir().join(format!("switchboard-picker-{}", crate::pbx::uuid_like()));
-    std::fs::create_dir_all(&root).unwrap();
-    let (runtime, launches) = answering_runtime(&root);
-    let ssh = local_ssh(&root).to_string_lossy().into_owned();
-    let state_dir = root.join("state").to_string_lossy().into_owned();
-    let mut settings = settings.to_vec();
-    settings.push(("SWITCHBOARD_SSH_PROGRAM", &ssh));
-    settings.push(("SWITCHBOARD_STATE_DIR", &state_dir));
-    let config = crate::Config::for_tests(&settings);
+async fn call_on_alpha(settings: &[(&str, &str)]) -> AlphaCall {
+    let config = crate::Config::for_tests(settings);
     let project: crate::registry::Project = serde_json::from_value(json!({
         "id": "alpha",
-        "host": host,
-        "cwd": root.to_string_lossy(),
-        "runtime": runtime.to_string_lossy(),
+        "host": "scriptorium",
+        "cwd": "/srv/alpha",
         "model": "anthropic/current",
-        "stage_extension": false,
     }))
     .unwrap();
     let registry = Registry::new(vec![project.clone()]);
@@ -3436,6 +3364,10 @@ async fn call_on_alpha(host: Option<&str>, settings: &[(&str, &str)]) -> AlphaCa
         &registry,
         catalog_of(&["current", "next"]),
     ));
+    let host = FakeHostAgent::new(Box::new(|_, _| {
+        vec![Step::Event(json!({"kind":"text","text":"On it."}))]
+    }))
+    .serve(prewarm.hosts().connect_fake("scriptorium"));
     let state = state_on(Switchboard::new(&config, registry, Arc::clone(&prewarm)));
     let (code, connected) = request_json(
         &state,
@@ -3465,8 +3397,7 @@ async fn call_on_alpha(host: Option<&str>, settings: &[(&str, &str)]) -> AlphaCa
         prewarm,
         project,
         live,
-        launches,
-        root,
+        host,
     }
 }
 
@@ -3474,7 +3405,7 @@ async fn call_on_alpha(host: Option<&str>, settings: &[(&str, &str)]) -> AlphaCa
 impl AlphaCall {
     /// Posts a picker request the switchboard refuses and checks that it left
     /// the live leg alone: nothing rescued (the generation stays put and no
-    /// epoch is sent), alpha's process still running, and the refusal told to
+    /// epoch is sent), alpha's session still running, and the refusal told to
     /// the caller the way any page reply is. Returns the answer's `error`.
     async fn refused(&self, path: &str, body: Value, told: &str) -> Value {
         let state = &self.state;
@@ -3513,8 +3444,8 @@ impl AlphaCall {
         answer["error"].clone()
     }
 
-    /// The caller's next turn reaches alpha's live process, which was never
-    /// relaunched.
+    /// The caller's next turn reaches alpha's live session, which was never
+    /// replaced or changed.
     async fn assert_next_turn_reaches_alpha(&self) {
         let reply = self
             .state
@@ -3533,37 +3464,24 @@ impl AlphaCall {
             ("alpha", "On it.", None)
         );
         assert!(self.live.alive().await);
-        assert_eq!(read_lines(&self.launches).len(), 1, "alpha was relaunched");
+        assert_eq!(
+            self.host.named("create_session").len(),
+            1,
+            "alpha was replaced"
+        );
+        assert!(self.host.named("set_model").is_empty());
+        assert!(self.host.named("set_thinking").is_empty());
     }
 
     async fn hang_up(self) {
         self.state.0.switchboard.lock().await.shutdown().await;
-        let _ = std::fs::remove_dir_all(&self.root);
     }
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn a_picker_that_would_keep_context_on_a_remote_project_leaves_its_leg_running() {
-    let call = call_on_alpha(Some("fake-host"), &[]).await;
-
-    // Both pickers keep context, which a remote project refuses.
-    for (path, body) in [
-        ("/model", json!({"model":"anthropic/next"})),
-        ("/thinking", json!({"level":"high"})),
-    ] {
-        let error = call.refused(path, body, "fresh start").await;
-        assert_eq!(error, "remote_shutdown_unverified");
-    }
-
-    call.assert_next_turn_reaches_alpha().await;
-    call.hang_up().await;
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn a_picker_asking_for_what_is_running_leaves_its_leg_running() {
-    let call = call_on_alpha(None, &[]).await;
+    let call = call_on_alpha(&[]).await;
 
     for (path, body) in [
         ("/model", json!({"model":"anthropic/current"})),
@@ -3586,7 +3504,7 @@ async fn a_picker_asking_for_what_is_running_leaves_its_leg_running() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_picker_the_catalog_does_not_resolve_leaves_its_leg_running() {
-    let call = call_on_alpha(None, &[]).await;
+    let call = call_on_alpha(&[]).await;
 
     let error = call
         .refused(
@@ -3599,7 +3517,7 @@ async fn a_picker_the_catalog_does_not_resolve_leaves_its_leg_running() {
     // A refreshed catalog that no longer lists alpha's model: the thinking
     // picker keeps the model, and it no longer resolves.
     call.prewarm.settle_catalog(
-        &call.project,
+        "scriptorium",
         crate::prewarm::CatalogState::Ready {
             snapshot: catalog_of(&["next"]),
             degraded_reason: None,
@@ -3617,7 +3535,7 @@ async fn a_picker_the_catalog_does_not_resolve_leaves_its_leg_running() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_picker_on_a_host_prewarm_cannot_vouch_for_leaves_its_leg_running() {
-    let call = call_on_alpha(None, &[]).await;
+    let call = call_on_alpha(&[]).await;
     call.prewarm.settle_prepare(
         &call.project,
         crate::prewarm::PrepareState::InfrastructureFailed {
@@ -3645,7 +3563,7 @@ async fn a_picker_on_a_host_prewarm_cannot_vouch_for_leaves_its_leg_running() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_picker_with_swaps_turned_off_leaves_its_leg_running() {
-    let call = call_on_alpha(None, &[("SWITCHBOARD_MODEL_SWAPS", "0")]).await;
+    let call = call_on_alpha(&[("SWITCHBOARD_MODEL_SWAPS", "0")]).await;
 
     for (path, body) in [
         ("/model", json!({"model":"anthropic/next"})),
@@ -3682,7 +3600,7 @@ async fn a_picker_on_the_operator_answers_without_touching_its_turn() {
     )
     .await
     .unwrap();
-    *state.0.active_session.lock().await = Some(operator.clone());
+    *state.0.active_session.lock().await = Some(LegSession::Operator(operator.clone()));
     // The operator's turn holds the PBX lock and does not let go.
     let (locked_tx, locked_rx) = oneshot::channel();
     let turn_state = state.clone();
@@ -3735,12 +3653,10 @@ async fn a_picker_on_the_operator_answers_without_touching_its_turn() {
     operator.close().await;
 }
 
+/// Holds the PBX lock the way a wedged turn on alpha would, registered so a
+/// rescue can cancel it.
 #[cfg(unix)]
-#[tokio::test]
-async fn a_picker_redial_that_goes_ahead_cancels_a_wedged_turn_and_swaps_the_leg() {
-    let call = call_on_alpha(None, &[]).await;
-    let state = &call.state;
-    // alpha's turn holds the PBX lock and does not let go.
+async fn wedge_a_turn(state: &AppState) -> JoinHandle<()> {
     let (locked_tx, locked_rx) = oneshot::channel();
     let turn_state = state.clone();
     let turn = tokio::spawn(async move {
@@ -3754,6 +3670,15 @@ async fn a_picker_redial_that_goes_ahead_cancels_a_wedged_turn_and_swaps_the_leg
         .await
         .insert(abort.id(), abort);
     locked_rx.await.unwrap();
+    turn
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_picker_model_change_cancels_a_wedged_turn_and_keeps_the_session() {
+    let call = call_on_alpha(&[]).await;
+    let state = &call.state;
+    let turn = wedge_a_turn(state).await;
     let generation = state.0.coordinator.generation();
 
     let (code, answer) = timeout(
@@ -3766,7 +3691,7 @@ async fn a_picker_redial_that_goes_ahead_cancels_a_wedged_turn_and_swaps_the_leg
         ),
     )
     .await
-    .expect("a redial must not wait for the turn it replaces");
+    .expect("a model change must not wait for the turn it interrupts");
 
     assert_eq!(
         (code, answer),
@@ -3776,19 +3701,33 @@ async fn a_picker_redial_that_goes_ahead_cancels_a_wedged_turn_and_swaps_the_leg
         )
     );
     assert!(turn.await.unwrap_err().is_cancelled());
-    assert!(!call.live.alive().await, "the old leg was not replaced");
+    // The same session, changed in place: its turn was aborted, not ended.
     let swapped = state
         .0
         .active_session
         .lock()
         .await
         .clone()
-        .expect("the new leg is live");
-    assert!(!swapped.same_session(&call.live));
-    assert!(swapped.alive().await);
+        .expect("alpha is live");
+    assert!(swapped.same_session(&call.live));
+    assert!(call.live.alive().await);
+    until_named(&call.host, "abort").await;
+    assert_eq!(
+        call.host.named("set_model"),
+        [json!({"session":"s1", "provider":"anthropic", "model":"next"})]
+    );
+    assert_eq!(
+        call.host.named("set_thinking"),
+        [json!({"session":"s1", "level":"medium"})]
+    );
+    assert!(call.host.named("kill").is_empty());
+    assert_eq!(call.host.named("create_session").len(), 1);
+    // A new call token for the changed leg.
+    let joins = call.host.named("join_call");
+    assert_eq!(joins.len(), 2);
+    assert_ne!(joins[0]["token"], joins[1]["token"]);
     assert_eq!(state.0.coordinator.status().model, "anthropic/next:medium");
     assert!(state.0.coordinator.generation() > generation);
-    assert_eq!(read_lines(&call.launches).len(), 2);
     let reply = state.0.switchboard.lock().await.handle("go on").await;
     assert_eq!(
         (reply.route.as_str(), reply.text.as_str()),
@@ -3800,11 +3739,11 @@ async fn a_picker_redial_that_goes_ahead_cancels_a_wedged_turn_and_swaps_the_leg
 #[cfg(unix)]
 #[tokio::test]
 async fn a_picker_redial_decided_for_a_leg_the_caller_has_left_cancels_nothing() {
-    let call = call_on_alpha(None, &[]).await;
+    let call = call_on_alpha(&[]).await;
     let state = &call.state;
     // Prewarm is refreshing alpha's catalog, so the decision waits on it.
     call.prewarm
-        .settle_catalog(&call.project, crate::prewarm::CatalogState::Pending);
+        .settle_catalog("scriptorium", crate::prewarm::CatalogState::Pending);
     let request_state = state.clone();
     let request = tokio::spawn(async move {
         request_json(
@@ -3817,7 +3756,7 @@ async fn a_picker_redial_decided_for_a_leg_the_caller_has_left_cancels_nothing()
     });
     // The decision has read alpha's leg and waits for the catalog.
     let mut polls = 0;
-    while call.prewarm.catalog_waiters(&call.project) == 0 {
+    while call.prewarm.catalog_waiters("scriptorium") == 0 {
         polls += 1;
         assert!(polls < 10_000, "the decision never asked for a launch plan");
         tokio::task::yield_now().await;
@@ -3829,7 +3768,7 @@ async fn a_picker_redial_decided_for_a_leg_the_caller_has_left_cancels_nothing()
     let generation = state.0.coordinator.generation();
     let (mut connection, _snapshot, _watermark) = state.register_connection().await;
     call.prewarm.settle_catalog(
-        &call.project,
+        "scriptorium",
         crate::prewarm::CatalogState::Ready {
             snapshot: catalog_of(&["current", "next"]),
             degraded_reason: None,
@@ -3848,30 +3787,19 @@ async fn a_picker_redial_decided_for_a_leg_the_caller_has_left_cancels_nothing()
     assert_eq!(state.0.coordinator.generation(), generation);
     assert!(queued_frames(&mut connection).is_empty());
     assert_eq!(state.0.coordinator.route(), OPERATOR);
-    assert_eq!(read_lines(&call.launches).len(), 1, "alpha was relaunched");
+    assert_eq!(call.host.named("create_session").len(), 1);
+    assert!(call.host.named("set_model").is_empty());
     call.hang_up().await;
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn a_picker_redial_whose_leg_is_left_after_its_rescue_is_refused() {
-    let call = call_on_alpha(None, &[]).await;
+    let call = call_on_alpha(&[]).await;
     let state = &call.state;
     // alpha's turn holds the PBX lock and does not let go; the redial's
     // rescue cancels it.
-    let (locked_tx, locked_rx) = oneshot::channel();
-    let turn_state = state.clone();
-    let turn = tokio::spawn(async move {
-        hold_turn_lock(&turn_state, Some(locked_tx)).await;
-    });
-    let abort = turn.abort_handle();
-    state
-        .0
-        .active_operations
-        .lock()
-        .await
-        .insert(abort.id(), abort);
-    locked_rx.await.unwrap();
+    let turn = wedge_a_turn(state).await;
     // Queued behind that turn for the PBX lock, and not an operation a rescue
     // cancels: something that moves the caller before the redial gets the
     // lock. Here it hangs up. Its lock request is queued by the time the
@@ -3907,7 +3835,8 @@ async fn a_picker_redial_whose_leg_is_left_after_its_rescue_is_refused() {
     assert!(turn.await.unwrap_err().is_cancelled());
     assert_eq!(mover.await.unwrap().as_deref(), Some("alpha"));
     assert_eq!(state.0.coordinator.route(), OPERATOR);
-    assert_eq!(read_lines(&call.launches).len(), 1, "alpha was relaunched");
+    assert!(call.host.named("set_model").is_empty());
+    until_named(&call.host, "kill").await;
     // The redial's rescue is settled on its way out.
     let coordinator = &state.0.coordinator;
     assert!(coordinator
@@ -4108,4 +4037,90 @@ async fn a_snapshot_names_the_adoption_only_while_the_adopted_leg_is_on_the_line
         snapshot_types(&snapshot_messages(&state).await),
         ["epoch", "status", "history"]
     );
+}
+
+#[tokio::test]
+async fn module_calls_are_answered_by_the_callback_logic_with_a_reply_status() {
+    let state = state();
+    // Nothing is connected to hear it.
+    let speak = module_call(
+        &state,
+        AgentCall {
+            call: "speak".into(),
+            token: String::new(),
+            args: json!({"text": "Hello."}),
+        },
+    )
+    .await;
+    assert_eq!(
+        (speak["status"].clone(), speak["reason"].clone()),
+        (json!("refused"), json!("no browser connected"))
+    );
+    // A display the scene takes with no browser to show it is accepted.
+    let display = module_call(
+        &state,
+        AgentCall {
+            call: "display".into(),
+            token: String::new(),
+            args: diagram_show(),
+        },
+    )
+    .await;
+    assert_eq!(display["status"], "accepted", "{display}");
+    // An invalid action is refused with the validator's reason.
+    let invalid = module_call(
+        &state,
+        AgentCall {
+            call: "display".into(),
+            token: String::new(),
+            args: json!({"action": {"op": "show", "id": "x", "type": "bogus", "data": {}}}),
+        },
+    )
+    .await;
+    assert_eq!(invalid["status"], "refused");
+    assert!(invalid["reason"]
+        .as_str()
+        .is_some_and(|reason| !reason.is_empty()));
+    // The view reports the screen state as the module reads it.
+    let view = module_call(
+        &state,
+        AgentCall {
+            call: "view".into(),
+            token: String::new(),
+            args: json!({}),
+        },
+    )
+    .await;
+    assert_eq!(view["status"], "delivered");
+    assert_eq!(view["result"]["screen"]["has_visual"], true);
+    assert_eq!(view["result"]["screen"]["connected"], false);
+}
+
+#[tokio::test]
+async fn a_module_call_carrying_a_retired_token_is_refused() {
+    let state = state();
+    begin_alpha_candidate(&state, "alpha-leg");
+    assert!(state.0.leg_announcer.promote_candidate("alpha-leg").await);
+    let stale = module_call(
+        &state,
+        AgentCall {
+            call: "display".into(),
+            token: "an-earlier-leg".into(),
+            args: diagram_show(),
+        },
+    )
+    .await;
+    assert_eq!(stale["status"], "refused", "{stale}");
+    assert!(stale["reason"]
+        .as_str()
+        .unwrap()
+        .contains("no longer on the call"));
+    assert!(state
+        .0
+        .display_gate
+        .lock()
+        .await
+        .projection
+        .snapshot_actions()
+        .is_empty());
 }

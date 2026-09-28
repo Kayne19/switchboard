@@ -43,34 +43,6 @@ impl ModelChoice {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub struct CatalogKey {
-    pub host: Option<String>,
-    pub runtime: String,
-    pub list_argv: Vec<String>,
-}
-
-impl CatalogKey {
-    pub fn for_project(project: &crate::registry::Project) -> Self {
-        let host = project.canonical_host().map(String::from);
-        let runtime = if project.runtime.trim().is_empty() {
-            "pi".to_string()
-        } else {
-            project.runtime.trim().to_string()
-        };
-        let list_argv = vec![runtime.clone(), "--list-models".to_string()];
-        Self {
-            host,
-            runtime,
-            list_argv,
-        }
-    }
-
-    pub fn to_key_string(&self) -> String {
-        format!("{}:{}", self.host.as_deref().unwrap_or(""), self.runtime)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogEntry {
     pub provider: String,
@@ -213,26 +185,32 @@ pub fn pin_thinking(spec: &str, level: &str) -> String {
 }
 
 impl ModelCatalog {
-    pub fn parse(table: &str) -> Self {
-        let mut lines = table.lines().filter(|line| !line.trim().is_empty());
-        let Some(header) = lines.next() else {
-            return Self::unavailable("model listing was empty");
+    /// The catalog a host agent's `list_models` reply describes:
+    /// `{models: [{provider, id, name, reasoning}]}`.
+    pub fn from_host_models(listing: &serde_json::Value) -> Self {
+        let Some(models) = listing.get("models").and_then(serde_json::Value::as_array) else {
+            return Self::unavailable("the host's model listing had no models list");
         };
-        let header = header.split_whitespace().collect::<Vec<_>>();
-        if header.len() < 5 || header[0] != "provider" || header[1] != "model" {
-            return Self::unavailable("model listing had an invalid header");
-        }
         let mut entries = Vec::new();
-        for line in lines {
-            let fields = line.split_whitespace().collect::<Vec<_>>();
-            if fields.len() < 5 {
-                return Self::unavailable("model listing had a malformed row");
-            }
+        for model in models {
+            let field = |key: &str| {
+                model
+                    .get(key)
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+            };
+            let (Some(provider), Some(id)) = (field("provider"), field("id")) else {
+                return Self::unavailable("the host's model listing had a malformed entry");
+            };
             entries.push(CatalogEntry {
-                provider: fields[0].into(),
-                model: fields[1].into(),
-                thinks: fields[4] == "yes",
+                provider: provider.to_owned(),
+                model: id.to_owned(),
+                thinks: model.get("reasoning") == Some(&serde_json::Value::Bool(true)),
             });
+        }
+        if entries.is_empty() {
+            return Self::unavailable("the host listed no models");
         }
         Self {
             entries,
@@ -254,7 +232,7 @@ impl ModelCatalog {
         if !self.available {
             // A provider-qualified spec is unambiguous even when discovery is
             // unavailable. Keep the deployment contract useful during a
-            // transient SSH/listing failure, while refusing a bare name that
+            // transient host or listing failure, while refusing a bare name that
             // would require guessing the provider.
             if wanted_provider.is_empty() {
                 return Err(ModelError(format!(

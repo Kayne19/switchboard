@@ -583,6 +583,658 @@ impl PiSession {
     }
 }
 
+/// A module call from a project session that only the application can
+/// answer (`speak`, `display`, `view`): the call, its arguments, and the call
+/// token it carried. The answer is a module reply body: `status`, `reason`,
+/// and optionally `result`.
+#[derive(Clone, Debug)]
+pub struct AgentCall {
+    pub call: String,
+    pub token: String,
+    pub args: Value,
+}
+pub type ModuleCallback =
+    Arc<dyn Fn(AgentCall) -> Pin<Box<dyn Future<Output = Value> + Send>> + Send + Sync>;
+
+/// How long a host agent has to answer a session command.
+const SESSION_COMMAND_WAIT: Duration = Duration::from_secs(30);
+
+/// What starts a project session: where it runs and what it is told.
+pub struct ProjectLaunch {
+    pub host: String,
+    pub project: String,
+    pub cwd: String,
+    /// Model spec, `provider/model:thinking`; any part may be empty.
+    pub spec: String,
+    /// The voice brief, put at the start of the first prompt and again on
+    /// the first prompt after a compaction.
+    pub brief: String,
+    pub turn_timeout: Duration,
+    pub on_activity: Option<ActivityCallback>,
+    pub on_module: Option<ModuleCallback>,
+}
+
+/// The model and effective thinking level a host agent reports for a
+/// session.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionState {
+    pub model: String,
+    pub thinking: String,
+}
+
+impl SessionState {
+    fn from_info(info: &Value) -> Self {
+        Self {
+            model: info["model"].as_str().unwrap_or_default().to_owned(),
+            thinking: info["thinking"].as_str().unwrap_or_default().to_owned(),
+        }
+    }
+}
+
+/// What reaches a turn while it is being collected.
+enum TurnFrame {
+    Event { seq: u64, event: Value },
+    Snapshot { seq: u64, info: Value },
+    Signal(Signal),
+}
+
+struct ProjectInner {
+    hosts: crate::hosts::Hosts,
+    host: String,
+    /// The daemon's live handle for the session.
+    session: String,
+    label: String,
+    /// The call token the session was last joined with; module calls must
+    /// carry it.
+    token: StdMutex<String>,
+    turn_timeout: Duration,
+    on_activity: Option<ActivityCallback>,
+    on_module: Option<ModuleCallback>,
+    turn_lock: Mutex<()>,
+    busy: AtomicBool,
+    closed: AtomicBool,
+    brief: String,
+    brief_due: AtomicBool,
+    /// Where the events of the turn being collected go.
+    turn: StdMutex<Option<tokio::sync::mpsc::UnboundedSender<TurnFrame>>>,
+}
+
+impl ProjectInner {
+    fn token(&self) -> String {
+        self.token
+            .lock()
+            .map(|token| token.clone())
+            .unwrap_or_default()
+    }
+
+    /// Hands `frame` to the turn being collected; false when there is none.
+    fn to_turn(&self, frame: TurnFrame) -> bool {
+        self.turn
+            .lock()
+            .ok()
+            .and_then(|turn| turn.as_ref().map(|turn| turn.send(frame).is_ok()))
+            .unwrap_or(false)
+    }
+
+    /// Queues `kill` for the session now, so any command sent after it (a
+    /// new session for the same project, say) reaches the host after it;
+    /// nothing waits for the answer.
+    fn kill_in_background(&self) {
+        self.hosts.unsubscribe(&self.host, &self.session);
+        let sent = self
+            .hosts
+            .send_command(&self.host, "kill", json!({"session": self.session}));
+        let label = self.label.clone();
+        let host = self.host.clone();
+        let sent = match sent {
+            Ok(sent) => sent,
+            Err(error) => {
+                tracing::warn!(%label, %host, %error, "could not end the project session");
+                return;
+            }
+        };
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        runtime.spawn(async move {
+            match sent.reply(SESSION_COMMAND_WAIT).await {
+                Ok(_) => tracing::info!(%label, %host, "project session ended"),
+                Err(error) => {
+                    tracing::warn!(%label, %host, %error, "could not end the project session")
+                }
+            }
+        });
+    }
+
+    async fn report_activity(&self, state: &str, tool: &str) {
+        if let Some(callback) = &self.on_activity {
+            let activity = Activity {
+                state: state.into(),
+                tool: tool.into(),
+                detail: String::new(),
+                label: self.label.clone(),
+                leg: self.token(),
+            };
+            if let Err(panic) = AssertUnwindSafe(callback(activity)).catch_unwind().await {
+                tracing::error!(label = %self.label, tool, panic = %panic_message(&panic), "activity callback panicked");
+            }
+        }
+    }
+}
+
+impl Drop for ProjectInner {
+    /// A session the service created dies with its last handle, so one whose
+    /// transfer was cancelled half way is not left running on its host.
+    fn drop(&mut self) {
+        if !self.closed.swap(true, Ordering::AcqRel) {
+            self.kill_in_background();
+        }
+    }
+}
+
+/// A project leg: a resident prime-agent session on a project host, reached
+/// through its host agent. Turns end on the host link's settled `turn_end`;
+/// the session's module calls arrive as frames and are answered here.
+#[derive(Clone)]
+pub struct ProjectSession {
+    inner: Arc<ProjectInner>,
+}
+
+/// Marks a turn as being collected, and clears the mark however the turn
+/// ends, cancellation included.
+struct Collecting<'a>(&'a ProjectInner);
+
+impl Drop for Collecting<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut turn) = self.0.turn.lock() {
+            turn.take();
+        }
+        self.0.busy.store(false, Ordering::Release);
+    }
+}
+
+impl ProjectSession {
+    /// Creates a resident session for `launch` on its host and starts
+    /// listening to it. The session is not on the call until `join_call`.
+    pub async fn create(
+        hosts: &crate::hosts::Hosts,
+        launch: ProjectLaunch,
+    ) -> Result<(Self, SessionState), PiSessionError> {
+        let (provider, model, thinking) = crate::models::parse_spec(&launch.spec);
+        let mut config = json!({"cwd": launch.cwd});
+        for (key, value) in [
+            ("provider", provider),
+            ("model", model),
+            ("thinking", thinking),
+        ] {
+            if !value.is_empty() {
+                config[key] = Value::String(value);
+            }
+        }
+        tracing::info!(project = %launch.project, host = %launch.host, "creating a project session");
+        let reply = hosts
+            .command(
+                &launch.host,
+                "create_session",
+                json!({"project": launch.project, "config": config}),
+                SESSION_COMMAND_WAIT,
+            )
+            .await
+            .map_err(|error| PiSessionError(format!("could not start a session: {error}")))?;
+        let Some(session) = reply.result["session"].as_str().map(str::to_owned) else {
+            return Err(PiSessionError(
+                "the host agent did not name the new session".into(),
+            ));
+        };
+        let frames = hosts.subscribe(&launch.host, &session);
+        let inner = Arc::new(ProjectInner {
+            hosts: hosts.clone(),
+            host: launch.host,
+            session,
+            label: launch.project,
+            token: StdMutex::new(String::new()),
+            turn_timeout: launch.turn_timeout,
+            on_activity: launch.on_activity,
+            on_module: launch.on_module,
+            turn_lock: Mutex::new(()),
+            busy: AtomicBool::new(false),
+            closed: AtomicBool::new(false),
+            brief: launch.brief,
+            brief_due: AtomicBool::new(true),
+            turn: StdMutex::new(None),
+        });
+        tokio::spawn(pump(Arc::downgrade(&inner), frames));
+        tracing::info!(label = %inner.label, host = %inner.host, name = reply.result["name"].as_str().unwrap_or_default(), "project session created");
+        Ok((Self { inner }, SessionState::from_info(&reply.result)))
+    }
+
+    pub fn label(&self) -> &str {
+        &self.inner.label
+    }
+    pub fn busy(&self) -> bool {
+        self.inner.busy.load(Ordering::Acquire)
+    }
+    pub fn alive(&self) -> bool {
+        !self.inner.closed.load(Ordering::Acquire)
+    }
+    pub fn same_session(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
+    async fn command(
+        &self,
+        name: &str,
+        mut args: Value,
+    ) -> Result<crate::hosts::CommandReply, PiSessionError> {
+        if !self.alive() {
+            return Err(PiSessionError("the project session has ended".into()));
+        }
+        args["session"] = Value::String(self.inner.session.clone());
+        self.inner
+            .hosts
+            .command(&self.inner.host, name, args, SESSION_COMMAND_WAIT)
+            .await
+            .map_err(|error| PiSessionError(error.to_string()))
+    }
+
+    /// Puts the session on the call with `token`: module calls must carry it
+    /// from now on, and any carrying an earlier one are refused.
+    pub async fn join_call(
+        &self,
+        token: &str,
+        persona: &str,
+        speech_deadline_ms: u64,
+    ) -> Result<(), PiSessionError> {
+        if let Ok(mut current) = self.inner.token.lock() {
+            *current = token.to_owned();
+        }
+        self.command(
+            "join_call",
+            json!({"token": token, "persona": persona, "speech_deadline_ms": speech_deadline_ms}),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Switches the live session to `provider/model`; it keeps its history.
+    pub async fn set_model(
+        &self,
+        provider: &str,
+        model: &str,
+    ) -> Result<SessionState, PiSessionError> {
+        let reply = self
+            .command("set_model", json!({"provider": provider, "model": model}))
+            .await?;
+        Ok(SessionState::from_info(&reply.result))
+    }
+
+    /// Sets the live session's thinking level; the reply has the level the
+    /// model actually runs at.
+    pub async fn set_thinking(&self, level: &str) -> Result<SessionState, PiSessionError> {
+        let reply = self
+            .command("set_thinking", json!({"level": level}))
+            .await?;
+        Ok(SessionState::from_info(&reply.result))
+    }
+
+    /// Ends the session on its host. Idempotent; nothing waits for the host.
+    pub fn close(&self) {
+        if !self.inner.closed.swap(true, Ordering::AcqRel) {
+            tracing::info!(label = %self.inner.label, "closing the project session");
+            self.inner.kill_in_background();
+        }
+    }
+
+    /// Aborts the running turn, if any; the session stays. The abort is
+    /// queued now, ahead of anything sent after it; nothing waits for the
+    /// host.
+    pub fn interrupt(&self) {
+        if !self.alive() {
+            return;
+        }
+        let inner = &self.inner;
+        let sent =
+            inner
+                .hosts
+                .send_command(&inner.host, "abort", json!({"session": inner.session}));
+        let label = inner.label.clone();
+        match sent {
+            Ok(sent) => {
+                tokio::spawn(async move {
+                    if let Err(error) = sent.reply(SESSION_COMMAND_WAIT).await {
+                        tracing::info!(%label, %error, "could not abort the project turn");
+                    }
+                });
+            }
+            Err(error) => tracing::info!(%label, %error, "could not abort the project turn"),
+        }
+    }
+
+    pub async fn steer(&self, message: &str) -> Result<(), PiSessionError> {
+        if !self.busy() {
+            return Err(PiSessionError("agent turn is no longer running".into()));
+        }
+        let result = self
+            .command("steer", json!({"message": message}))
+            .await
+            .map(|_| ());
+        match &result {
+            Ok(()) => {
+                tracing::info!(label = %self.inner.label, chars = message.chars().count(), "steered the running turn")
+            }
+            Err(error) => {
+                tracing::info!(label = %self.inner.label, %error, "could not steer the running turn")
+            }
+        }
+        result
+    }
+
+    /// Sends `message` and collects the turn until the host link says it has
+    /// settled. The voice brief goes first when it is due: on the first
+    /// prompt, and on the first after a compaction.
+    pub async fn prompt(&self, message: &str) -> Result<Turn, PiSessionError> {
+        let _turn = self.inner.turn_lock.lock().await;
+        if !self.alive() {
+            return Err(PiSessionError("the project session has ended".into()));
+        }
+        let (sender, mut frames) = tokio::sync::mpsc::unbounded_channel();
+        if let Ok(mut turn) = self.inner.turn.lock() {
+            *turn = Some(sender);
+        }
+        self.inner.busy.store(true, Ordering::Release);
+        let _collecting = Collecting(&self.inner);
+        let briefed = self.inner.brief_due.swap(false, Ordering::AcqRel);
+        let message = if briefed {
+            format!("{}\n\n{message}", self.inner.brief)
+        } else {
+            message.to_owned()
+        };
+        let sent = match self.command("prompt", json!({"message": message})).await {
+            Ok(reply) => reply,
+            Err(error) => {
+                if briefed {
+                    self.inner.brief_due.store(true, Ordering::Release);
+                }
+                return Err(error);
+            }
+        };
+        Ok(self.collect(&mut frames, sent.seq).await)
+    }
+
+    /// Collects the turn's text and signals until `turn_end`. Frames the
+    /// host sent before the prompt's reply (`from`) belong to an earlier
+    /// turn, such as the tail of one that was aborted, and are skipped.
+    async fn collect(
+        &self,
+        frames: &mut tokio::sync::mpsc::UnboundedReceiver<TurnFrame>,
+        from: u64,
+    ) -> Turn {
+        let label = &self.inner.label;
+        let mut texts: Vec<String> = Vec::new();
+        let mut signals = Vec::new();
+        let mut error = String::new();
+        loop {
+            let frame = match timeout(self.inner.turn_timeout, frames.recv()).await {
+                Ok(Some(frame)) => frame,
+                Ok(None) | Err(_) => {
+                    tracing::warn!(%label, timeout = ?self.inner.turn_timeout, "the project agent went silent past the turn deadline");
+                    self.interrupt();
+                    return Turn {
+                        text: String::new(),
+                        signals,
+                        failed: true,
+                        error: "the agent stopped responding".into(),
+                    };
+                }
+            };
+            let (seq, event) = match frame {
+                TurnFrame::Signal(signal) => {
+                    signals.push(signal);
+                    continue;
+                }
+                TurnFrame::Snapshot { seq, info } => {
+                    // A host that lost track of the turn settles it here: a
+                    // snapshot of an idle session is a turn that has ended.
+                    if seq < from || info["turn_open"] != false || info["busy"] == true {
+                        continue;
+                    }
+                    if texts.is_empty() {
+                        if let Some(last) = info["last_text"]
+                            .as_str()
+                            .filter(|text| !text.trim().is_empty())
+                        {
+                            texts.push(last.trim().to_owned());
+                        }
+                    }
+                    break;
+                }
+                TurnFrame::Event { seq, event } => (seq, event),
+            };
+            if seq < from {
+                continue;
+            }
+            match event["kind"].as_str() {
+                Some("text") => {
+                    let Some(text) = event["text"]
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                    else {
+                        continue;
+                    };
+                    let collected = texts.iter().map(String::len).sum::<usize>();
+                    if collected.saturating_add(text.len()) > STREAM_LIMIT {
+                        tracing::error!(%label, collected, limit = STREAM_LIMIT, "agent produced too much text in one turn");
+                        self.interrupt();
+                        return Turn {
+                            text: String::new(),
+                            signals,
+                            failed: true,
+                            error: "the agent produced too much text in one turn".into(),
+                        };
+                    }
+                    texts.push(text.to_owned());
+                }
+                Some("error") => {
+                    error = spoken_error(event.get("message"));
+                    tracing::error!(%label, error = %error, "the agent's model call failed");
+                }
+                Some("turn_end") => {
+                    if let Some(failure) = event.get("error").filter(|value| !value.is_null()) {
+                        if error.is_empty() {
+                            error = spoken_error(Some(failure));
+                        }
+                    }
+                    break;
+                }
+                Some("session_closed") => {
+                    tracing::warn!(%label, reason = event["reason"].as_str().unwrap_or_default(), "the project session closed mid-turn");
+                    return Turn {
+                        text: texts.join("\n"),
+                        signals,
+                        failed: true,
+                        error: "the project session ended".into(),
+                    };
+                }
+                _ => {}
+            }
+        }
+        Turn {
+            text: texts.join("\n").trim().to_owned(),
+            signals,
+            failed: !error.is_empty(),
+            error,
+        }
+    }
+}
+
+/// Reads a project session's frames for as long as its handle lives: turn
+/// events go to the turn being collected, activity to the page, and module
+/// calls are answered.
+async fn pump(
+    inner: std::sync::Weak<ProjectInner>,
+    mut frames: tokio::sync::mpsc::UnboundedReceiver<crate::hosts::SessionFrame>,
+) {
+    use crate::hosts::SessionFrame;
+    while let Some(frame) = frames.recv().await {
+        let Some(inner) = inner.upgrade() else {
+            return;
+        };
+        match frame {
+            SessionFrame::Event { seq, event } => {
+                match event["kind"].as_str() {
+                    Some("compaction") if event["phase"] == "end" => {
+                        tracing::info!(label = %inner.label, "the project session compacted; the brief goes out again");
+                        inner.brief_due.store(true, Ordering::Release);
+                    }
+                    Some("session_closed") => {
+                        inner.closed.store(true, Ordering::Release);
+                    }
+                    Some("tool_start") => {
+                        inner.report_activity("life", "").await;
+                        inner
+                            .report_activity("start", event["tool"].as_str().unwrap_or_default())
+                            .await;
+                    }
+                    Some("tool_end") => {
+                        inner
+                            .report_activity("end", event["tool"].as_str().unwrap_or_default())
+                            .await;
+                    }
+                    Some("text") => inner.report_activity("life", "").await,
+                    _ => {}
+                }
+                inner.to_turn(TurnFrame::Event { seq, event });
+            }
+            SessionFrame::Snapshot { seq, info } => {
+                inner.to_turn(TurnFrame::Snapshot { seq, info });
+            }
+            SessionFrame::ModuleCall(call) => {
+                tokio::spawn(answer_module_call(inner, call));
+            }
+        }
+    }
+}
+
+/// Answers one module call. A call must carry the session's current call
+/// token; routing signals become signals of the turn being collected, and
+/// the rest go to the application.
+async fn answer_module_call(inner: Arc<ProjectInner>, call: crate::hosts::ModuleCall) {
+    let label = inner.label.clone();
+    if call.token.is_empty() || call.token != inner.token() {
+        tracing::info!(%label, call = %call.call, "module call with a stale call token refused");
+        call.answer(json!({"status": "refused", "reason": "not_on_call"}));
+        return;
+    }
+    match call.call.as_str() {
+        TRANSFER_TOOL | RETURN_TOOL | SET_MODEL_TOOL => {
+            let args = call.args.as_object().cloned().unwrap_or_default();
+            // The signal name and argument count are enough to trace routing
+            // without writing speech or model content.
+            tracing::info!(%label, signal = %call.call, arg_count = args.len(), "agent raised a routing signal");
+            let signal = Signal {
+                name: call.call.clone(),
+                args,
+                tool_call_id: None,
+                successful_end: true,
+            };
+            if inner.to_turn(TurnFrame::Signal(signal)) {
+                call.answer(json!({"status": "accepted", "reason": null}));
+            } else {
+                tracing::info!(%label, signal = %call.call, "routing signal outside a turn refused");
+                call.answer(json!({"status": "refused", "reason": "not_in_turn"}));
+            }
+        }
+        SPEAK_TOOL | "display" | "view" => {
+            let Some(callback) = inner.on_module.clone() else {
+                call.answer(json!({"status": "failed", "reason": "failed"}));
+                return;
+            };
+            let request = AgentCall {
+                call: call.call.clone(),
+                token: call.token.clone(),
+                args: call.args.clone(),
+            };
+            let reply = match AssertUnwindSafe(callback(request)).catch_unwind().await {
+                Ok(reply) => reply,
+                Err(panic) => {
+                    tracing::error!(%label, call = %call.call, panic = %panic_message(&panic), "module call handler panicked");
+                    json!({"status": "failed", "reason": "failed"})
+                }
+            };
+            if call.call == SPEAK_TOOL && reply["status"] == "delivered" {
+                inner.to_turn(TurnFrame::Signal(Signal {
+                    name: SPEAK_TOOL.into(),
+                    args: Map::new(),
+                    tool_call_id: None,
+                    successful_end: true,
+                }));
+            }
+            call.answer(reply);
+        }
+        _ => call.answer(json!({"status": "refused", "reason": "unknown_call"})),
+    }
+}
+
+/// The leg on the line, as the application's controls see it: the local
+/// operator's process, or a project session.
+#[derive(Clone)]
+pub enum LegSession {
+    Operator(PiSession),
+    Project(ProjectSession),
+}
+
+impl LegSession {
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Operator(session) => session.label(),
+            Self::Project(session) => session.label(),
+        }
+    }
+    pub fn busy(&self) -> bool {
+        match self {
+            Self::Operator(session) => session.busy(),
+            Self::Project(session) => session.busy(),
+        }
+    }
+    pub async fn alive(&self) -> bool {
+        match self {
+            Self::Operator(session) => session.alive().await,
+            Self::Project(session) => session.alive(),
+        }
+    }
+    pub async fn steer(&self, message: &str) -> Result<(), PiSessionError> {
+        match self {
+            Self::Operator(session) => session.steer(message).await,
+            Self::Project(session) => session.steer(message).await,
+        }
+    }
+    pub fn same_session(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Operator(left), Self::Operator(right)) => left.same_session(right),
+            (Self::Project(left), Self::Project(right)) => left.same_session(right),
+            _ => false,
+        }
+    }
+    /// Ends the leg: the operator's process, or the project session on its
+    /// host.
+    pub async fn close(&self) {
+        match self {
+            Self::Operator(session) => session.close().await,
+            Self::Project(session) => session.close(),
+        }
+    }
+    /// Stops the leg's running work and keeps the leg: a project turn is
+    /// aborted, for a model change that keeps the session. The operator has
+    /// nothing to keep, so its process is closed.
+    pub async fn interrupt(&self) {
+        match self {
+            Self::Operator(session) => session.close().await,
+            Self::Project(session) => session.interrupt(),
+        }
+    }
+}
+
 /// Put a supervised command in its own process group where the platform
 /// supports it. Pi and SSH may launch helpers; cancellation must reap the whole
 /// local tree rather than only its top-level shell/client.
@@ -847,186 +1499,6 @@ fn spoken_error(detail: Option<&Value>) -> String {
         "the model call failed".into()
     } else {
         first
-    }
-}
-
-pub fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
-
-/// An SSH destination that has passed the one-argument boundary. Keeping this
-/// validation here means every SSH caller applies the same fail-closed rules.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ValidatedSshTarget(String);
-
-impl ValidatedSshTarget {
-    pub fn new(raw: &str) -> Result<Self, PiSessionError> {
-        let value = raw.trim();
-        if value.is_empty() {
-            return Err(PiSessionError("SSH target is empty".into()));
-        }
-        if value.len() > 255 || value.starts_with('-') {
-            return Err(PiSessionError("SSH target is invalid".into()));
-        }
-        if value.chars().any(|character| {
-            character.is_control()
-                || character.is_whitespace()
-                || matches!(
-                    character,
-                    ';' | '|' | '&' | '$' | '`' | '<' | '>' | '\'' | '"'
-                )
-        }) {
-            return Err(PiSessionError(
-                "SSH target contains invalid characters".into(),
-            ));
-        }
-        Ok(Self(value.to_owned()))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SshClientOptions {
-    pub ssh_program: String,
-    pub target: ValidatedSshTarget,
-    pub control_path: Option<std::path::PathBuf>,
-}
-
-impl SshClientOptions {
-    pub fn new(ssh_program: impl Into<String>, target: ValidatedSshTarget) -> Self {
-        Self {
-            ssh_program: ssh_program.into(),
-            target,
-            control_path: None,
-        }
-    }
-
-    pub fn with_control_path(mut self, control_path: impl Into<std::path::PathBuf>) -> Self {
-        self.control_path = Some(control_path.into());
-        self
-    }
-
-    pub fn base_args(&self) -> Vec<String> {
-        let mut args = vec![
-            "-T".into(),
-            "-o".into(),
-            "BatchMode=yes".into(),
-            "-o".into(),
-            "ConnectTimeout=10".into(),
-            "-o".into(),
-            "ControlMaster=no".into(),
-        ];
-        if let Some(control_path) = &self.control_path {
-            args.extend([
-                "-o".into(),
-                format!("ControlPath={}", control_path.display()),
-            ]);
-        }
-        args.push(self.target.as_str().into());
-        args
-    }
-
-    pub fn remote_command(&self, remote_cmd: &str) -> Command {
-        let mut command = Command::new(&self.ssh_program);
-        command.args(self.base_args());
-        command.arg(remote_cmd);
-        command
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn remote_argv(
-        &self,
-        cwd: &str,
-        binary: &str,
-        model: Option<&str>,
-        extension: Option<&str>,
-        append_system_prompt: Option<&str>,
-        session_id: Option<&str>,
-        extra_args: &[String],
-        env: &HashMap<String, String>,
-    ) -> Vec<String> {
-        let mut remote = vec![binary.into(), "--mode".into(), "rpc".into()];
-        if let Some(model) = model {
-            remote.extend(["--model".into(), model.into()]);
-        }
-        if let Some(session_id) = session_id {
-            remote.extend(["--session-id".into(), session_id.into()]);
-        }
-        if let Some(extension) = extension {
-            remote.extend(["-e".into(), extension.into()]);
-        }
-        if let Some(prompt) = append_system_prompt {
-            remote.extend(["--append-system-prompt".into(), prompt.into()]);
-        }
-        remote.extend(extra_args.iter().cloned());
-        let mut environment = env.iter().collect::<Vec<_>>();
-        environment.sort_unstable_by_key(|(left, _)| *left);
-        let exports = environment
-            .into_iter()
-            .map(|(name, value)| format!("export {name}={}; ", shell_quote(value)))
-            .collect::<Vec<_>>()
-            .join("");
-        let command = format!(
-            "set -e; cd {}; {}exec {}",
-            shell_quote(cwd),
-            exports,
-            remote
-                .iter()
-                .map(|arg| shell_quote(arg))
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
-
-        let mut argv = vec![self.ssh_program.clone()];
-        argv.extend(self.base_args());
-        argv.push(command);
-        argv
-    }
-
-    pub fn master_command(&self, control_path: &Path) -> Command {
-        let mut command = Command::new(&self.ssh_program);
-        command.args([
-            "-N",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=10",
-            "-o",
-            "ControlMaster=yes",
-            "-o",
-            "ControlPersist=no",
-            "-o",
-            &format!("ControlPath={}", control_path.display()),
-            self.target.as_str(),
-        ]);
-        command
-    }
-
-    pub fn check_command(&self, control_path: &Path) -> Command {
-        let mut command = Command::new(&self.ssh_program);
-        command.args([
-            "-o",
-            &format!("ControlPath={}", control_path.display()),
-            "-O",
-            "check",
-            self.target.as_str(),
-        ]);
-        command
-    }
-
-    pub fn exit_command(&self, control_path: &Path) -> Command {
-        let mut command = Command::new(&self.ssh_program);
-        command.args([
-            "-o",
-            &format!("ControlPath={}", control_path.display()),
-            "-O",
-            "exit",
-            self.target.as_str(),
-        ]);
-        command
     }
 }
 

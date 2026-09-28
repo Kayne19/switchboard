@@ -21,32 +21,24 @@ means unset.
 | `SWITCHBOARD_PROJECTS_FILE` | `<config dir>/projects.json` | The project registry. |
 | `SWITCHBOARD_HOST_TOKENS_FILE` | `<config dir>/host-tokens.json` | Secret. The per-host bearer tokens of the host link (`/host`, see `docs/host-link.md`). Read once at startup; format below. |
 | `SWITCHBOARD_OPERATOR_PROMPT` | `<config dir>/operator.system.md` | The operator's system prompt; skipped if the file is missing. |
-| `SWITCHBOARD_STATE_DIR` | `/var/lib/switchboard` | SSH lock files and control sockets (`ssh/locks/`, `ssh/control/`). |
 | `SWITCHBOARD_BIND` | `0.0.0.0:8765` | Listen address. |
-| `SWITCHBOARD_SELF_URL` | none | How a project agent on another host reaches this service. The three callback URLs below default to paths under it. |
-| `SWITCHBOARD_SPEAK_URL` | `<self url>/speak` | Where the `speak` tool posts. |
-| `SWITCHBOARD_STATE_URL` | `<self url>/leg-state` | Where the extension reports the thinking level a leg actually runs at. |
-| `SWITCHBOARD_DISPLAY_URL` | `<self url>/display` | Where the `display` tool posts. The `view` tool calls `/view` on the same origin. |
 | `SWITCHBOARD_PI_BINARY` | `pi` | The operator's runtime, run locally. |
-| `SWITCHBOARD_SSH_PROGRAM` | `ssh` | The SSH client for project hosts. |
 | `SWITCHBOARD_OPERATOR_MODEL` | runtime default | The operator's model. Never swappable. |
 | `SWITCHBOARD_OPERATOR_EXTENSION` | none | Pi extension loaded into the operator. |
-| `SWITCHBOARD_AGENT_EXTENSION` | none | Pi extension for project legs: staged to each remote host at startup, loaded directly for local projects. Without it, agents are briefed to use the `[[SWITCHBOARD:RETURN]]` sentinel. |
 | `SWITCHBOARD_AGENT_MODEL` | none | Model for a project leg whose registry entry names none. |
 | `SWITCHBOARD_AGENT_THINKING` | `medium` | Thinking level a project leg starts at unless the caller names one. |
 | `SWITCHBOARD_MODEL_SWAPS` | `1` | `0`, `false`, or `no` turns off mid-call model and thinking changes. |
-| `SWITCHBOARD_REMOTE_CACHE_DIR` | `.cache/switchboard` | Where extensions are staged on project hosts; relative paths are under the remote `$HOME`. |
-| `SWITCHBOARD_PERSONA` | empty | Passed through to every project leg for the `speak` tool description. |
+| `SWITCHBOARD_PERSONA` | empty | Given to each project session when it joins the call (`join_call`, see `docs/host-link.md`). |
 | `SWITCHBOARD_IDLE_TIMEOUT` | `3600` | Seconds of silence before a project leg is dropped back to the operator; `0` or less disables it. |
 | `SWITCHBOARD_IDLE_POLL` | `30` | Seconds between idle checks (at least 1). |
 | `SWITCHBOARD_MAX_SPOKEN_CHARS` | `700` | Longest reply the switchboard voices; longer text is clipped, at a sentence end when one is near. |
-| `SWITCHBOARD_SPEECH_DEADLINE_MS` | `25000` | Deadline for one synthesized utterance, 1–120000. Also passed to project legs, whose extension enforces the same deadline. |
+| `SWITCHBOARD_SPEECH_DEADLINE_MS` | `25000` | Deadline for one synthesized utterance, 1–120000. Also given to each project session when it joins the call; its host agent enforces the same deadline. |
 | `SWITCHBOARD_HISTORY_LIMIT` | `200` | Transcript entries kept for page reloads; `0` keeps none. |
 | `SWITCHBOARD_STT_COMMAND` | none | Complete-clip speech-to-text: WebM on stdin, text on stdout. |
 | `SWITCHBOARD_STT_STREAM_COMMAND` | none | Optional long-lived streaming worker; framing is described in `README.md`. |
 | `SWITCHBOARD_LOG` | `switchboard=info,warn` | Log filter; falls back to `RUST_LOG`. A filter that does not parse is reported and replaced by the default. |
 | `SWITCHBOARD_LOG_FORMAT` | `text` | `json` for one JSON object per line. |
-| `ELEVENLABS_API_KEY` | none | Secret. Without it `/speak` answers 502 and replies are written only. |
+| `ELEVENLABS_API_KEY` | none | Secret. Without it an agent's `speak` fails and replies are written only. |
 | `ELEVENLABS_VOICE_ID` | `21m00Tcm4TlvDq8ikWAM` | |
 | `ELEVENLABS_MODEL_ID` | `eleven_multilingual_v2` | |
 | `ELEVENLABS_STABILITY` | `0.5` | |
@@ -56,7 +48,7 @@ means unset.
 
 A numeric setting that does not parse is logged and replaced by its default,
 because the symptom of a silently wrong duration looks nothing like its cause.
-`SWITCHBOARD_SPEECH_DEADLINE_MS` is the exception: the extension enforces the
+`SWITCHBOARD_SPEECH_DEADLINE_MS` is the exception: the host agent enforces the
 same deadline, so a value the service would replace with its default would leave
 the two sides disagreeing, and startup stops instead.
 
@@ -81,18 +73,12 @@ missing or unparsable file is logged and leaves no host able to link; the
 service still starts. Tokens are never logged or reported; the startup log
 names the host ids and their count.
 
-## Passed to every project leg
+## Given to every project session
 
-The service adds these to the environment of each project agent, on top of the
-env file. `extensions/agent-switchboard.ts` reads them.
-
-| Variable | Value |
-|---|---|
-| `SWITCHBOARD_SESSION` | `1`. Marks the process as switchboard-driven, so a `speak` extension installed globally on the host can stand down instead of registering the tool twice. |
-| `SWITCHBOARD_SESSION_TOKEN` | A fresh token per process. Callbacks carry it so the service can reject speech, display, and thinking reports from a leg that has since been replaced. A correlation value, not authentication. |
-| `SWITCHBOARD_SPEAK_URL`, `SWITCHBOARD_STATE_URL`, `SWITCHBOARD_DISPLAY_URL` | The resolved callback URLs above; omitted when empty. |
-| `SWITCHBOARD_PERSONA` | As configured; omitted when empty. |
-| `SWITCHBOARD_SPEECH_DEADLINE_MS` | The parsed deadline. |
+Project legs are sessions on their host's prime-agent daemon, reached through
+the host link; they get no environment from this service. What a session needs
+for the call comes with `join_call` (`docs/host-link.md`): a fresh call token
+per leg, and the persona and speech deadline above.
 
 ## Build time
 

@@ -5,10 +5,6 @@ fn reads_switchboard_names_and_defaults() {
     let values = HashMap::from([
         ("SWITCHBOARD_CONFIG_DIR".into(), "/tmp/switchboard".into()),
         ("SWITCHBOARD_MODEL_SWAPS".into(), "false".into()),
-        (
-            "SWITCHBOARD_SELF_URL".into(),
-            "http://localhost:8765/".into(),
-        ),
         ("SWITCHBOARD_HISTORY_LIMIT".into(), "12".into()),
     ]);
     let config = Config::from_values(&values, PathBuf::from("/tmp/env"));
@@ -17,7 +13,6 @@ fn reads_switchboard_names_and_defaults() {
         PathBuf::from("/tmp/switchboard/projects.json")
     );
     assert!(!config.model_swaps);
-    assert_eq!(config.self_url, "http://localhost:8765");
     assert_eq!(config.history_limit, 12);
 }
 
@@ -57,21 +52,6 @@ fn env_file_parser_keeps_audio_secrets_available() {
     assert_eq!(values.get("QUOTED"), Some(&"line\nvalue".to_owned()));
     assert_eq!(values.get("UNCHANGED"), Some(&"a#b".to_owned()));
     assert!(!values.contains_key("9INVALID"));
-}
-
-#[test]
-fn callback_urls_derive_from_self_url_unless_configured() {
-    let config = Config::for_tests(&[
-        ("SWITCHBOARD_SELF_URL", "http://damocles:8765/"),
-        ("SWITCHBOARD_STATE_URL", "http://elsewhere/state"),
-    ]);
-    assert_eq!(config.speak_url, "http://damocles:8765/speak");
-    assert_eq!(config.state_url, "http://elsewhere/state");
-    assert_eq!(config.display_url, "http://damocles:8765/display");
-
-    let unset = Config::for_tests(&[]);
-    assert_eq!(unset.speak_url, "");
-    assert_eq!(unset.display_url, "");
 }
 
 #[test]

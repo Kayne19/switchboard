@@ -41,14 +41,10 @@ fn tokens() -> HashMap<String, String> {
 fn state(hosts: Hosts) -> AppState {
     let config = crate::Config::for_tests(&[]);
     let registry = Registry::new(vec![]);
-    let prewarm = crate::prewarm::Prewarm::settled(
-        &config,
-        &registry,
-        crate::models::ModelCatalog::unavailable("no projects are registered"),
-    );
+    // No projects, so no startup work: the prewarm only carries the hosts.
+    let prewarm = crate::prewarm::Prewarm::start(&registry, hosts);
     AppState::new(
         crate::pbx::Switchboard::new(&config, registry, Arc::new(prewarm)),
-        hosts,
         crate::history::TranscriptLog::new(10),
         crate::audio::Speaker::offline(100, Duration::from_millis(25_000)),
         crate::audio::SttAdapter::from_command(None),
@@ -520,6 +516,177 @@ async fn hosts_close_links_on_shutdown() {
     let (mut agent, _) = served.hello("scriptorium", TOKEN, json!(1)).await;
     crate::api::shutdown(&served.state).await;
     assert_eq!(close_code(&mut agent).await, Some(CLOSE_GOING_AWAY));
+}
+
+#[tokio::test]
+async fn hosts_send_commands_on_the_current_link_and_match_their_replies() {
+    let served = Served::start(slow()).await;
+    let hosts = served.state.0.switchboard.lock().await.hosts();
+    let not_connected = hosts
+        .command(
+            "scriptorium",
+            "list_models",
+            json!({}),
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(not_connected.code, "not_connected");
+
+    let (mut agent, _) = served.hello("scriptorium", TOKEN, json!(1)).await;
+    served
+        .until_host("scriptorium", |host| host["connected"] == true)
+        .await;
+    let asking = {
+        let hosts = hosts.clone();
+        tokio::spawn(async move {
+            hosts
+                .command(
+                    "scriptorium",
+                    "list_models",
+                    json!({}),
+                    Duration::from_secs(5),
+                )
+                .await
+        })
+    };
+    let command = until_frame(&mut agent, |frame| frame["type"] == "command").await;
+    assert_eq!(
+        (
+            command["name"].clone(),
+            command["epoch"].clone(),
+            command["args"].clone()
+        ),
+        (json!("list_models"), json!(1), json!({}))
+    );
+    // A reply for another epoch is not this command's.
+    send(
+        &mut agent,
+        json!({"type":"reply","id":command["id"],"epoch":9,"ok":true,"result":{}}),
+    )
+    .await;
+    send(
+        &mut agent,
+        json!({"type":"reply","id":command["id"],"epoch":1,"ok":true,"result":{"models":[]}}),
+    )
+    .await;
+    let reply = timeout(Duration::from_secs(5), asking)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(reply.result, json!({"models":[]}));
+
+    // An error reply carries the host agent's code and message.
+    let failing = {
+        let hosts = hosts.clone();
+        tokio::spawn(async move {
+            hosts
+                .command(
+                    "scriptorium",
+                    "kill",
+                    json!({"session":"x"}),
+                    Duration::from_secs(5),
+                )
+                .await
+        })
+    };
+    let command = until_frame(&mut agent, |frame| frame["type"] == "command").await;
+    send(
+        &mut agent,
+        json!({"type":"reply","id":command["id"],"epoch":1,"ok":false,
+               "error":{"code":"refused","message":"session x was taken over"}}),
+    )
+    .await;
+    let error = timeout(Duration::from_secs(5), failing)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(
+        (error.code.as_str(), error.message.as_str()),
+        ("refused", "session x was taken over")
+    );
+
+    // A command whose link goes away is told so.
+    let lost = {
+        let hosts = hosts.clone();
+        tokio::spawn(async move {
+            hosts
+                .command(
+                    "scriptorium",
+                    "list_models",
+                    json!({}),
+                    Duration::from_secs(5),
+                )
+                .await
+        })
+    };
+    until_frame(&mut agent, |frame| frame["type"] == "command").await;
+    drop(agent);
+    let error = timeout(Duration::from_secs(5), lost)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.code, "link_lost");
+}
+
+#[tokio::test]
+async fn hosts_route_session_frames_and_refuse_module_calls_nobody_waits_for() {
+    let served = Served::start(slow()).await;
+    let hosts = served.state.0.switchboard.lock().await.hosts();
+    let (mut agent, _) = served.hello("scriptorium", TOKEN, json!(1)).await;
+    served
+        .until_host("scriptorium", |host| host["connected"] == true)
+        .await;
+
+    // No one listens to session a1: its module call is refused at once.
+    send(
+        &mut agent,
+        json!({"type":"module_call","id":"m1","session":"a1","token":"t","call":"speak","args":{"text":"hi"}}),
+    )
+    .await;
+    let reply = until_frame(&mut agent, |frame| frame["type"] == "module_reply").await;
+    assert_eq!(
+        reply,
+        json!({"type":"module_reply","id":"m1","status":"refused","reason":"not_on_call"})
+    );
+
+    let mut frames = hosts.subscribe("scriptorium", "a1");
+    send(
+        &mut agent,
+        json!({"type":"event","session":"a1","cursor":"b:1","event":{"kind":"text","text":"hello"}}),
+    )
+    .await;
+    send(
+        &mut agent,
+        json!({"type":"module_call","id":"m2","session":"a1","token":"t","call":"view","args":{}}),
+    )
+    .await;
+    let Some(SessionFrame::Event { event, .. }) = timeout(Duration::from_secs(5), frames.recv())
+        .await
+        .unwrap()
+    else {
+        panic!("the event comes first");
+    };
+    assert_eq!(event, json!({"kind":"text","text":"hello"}));
+    let Some(SessionFrame::ModuleCall(call)) = timeout(Duration::from_secs(5), frames.recv())
+        .await
+        .unwrap()
+    else {
+        panic!("then the module call");
+    };
+    assert_eq!((call.token.as_str(), call.call.as_str()), ("t", "view"));
+    call.answer(
+        json!({"status":"delivered","reason":null,"result":{"screen":{"has_visual":false}}}),
+    );
+    let reply = until_frame(&mut agent, |frame| frame["type"] == "module_reply").await;
+    assert_eq!(
+        reply,
+        json!({"type":"module_reply","id":"m2","status":"delivered","reason":null,
+               "result":{"screen":{"has_visual":false}}})
+    );
 }
 
 #[test]

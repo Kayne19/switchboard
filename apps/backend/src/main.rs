@@ -32,43 +32,28 @@ pub const GIT_SHA: &str = env!("SWITCHBOARD_GIT_SHA");
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
     pub env_file: PathBuf,
-    pub state_dir: PathBuf,
     pub projects_file: PathBuf,
     /// The per-host tokens of the host link: a JSON object from host id to
     /// token (`SWITCHBOARD_HOST_TOKENS_FILE`). Read once at startup.
     pub host_tokens_file: PathBuf,
     pub operator_prompt: PathBuf,
     pub operator_extension: Option<String>,
-    pub agent_extension: Option<String>,
     pub persona: String,
     pub stt_command: Option<String>,
     pub stt_stream_command: Option<String>,
     pub bind: String,
     pub pi_binary: String,
-    pub ssh_program: String,
     pub operator_model: Option<String>,
     pub agent_model: Option<String>,
     pub agent_thinking: String,
-    pub remote_cache_dir: String,
     pub model_swaps: bool,
-    pub self_url: String,
     pub idle_timeout: f64,
     pub idle_poll: f64,
     pub max_spoken_chars: usize,
     pub speech_deadline_ms: u64,
     pub history_limit: usize,
-    /// Where a project agent's `speak` tool posts: `SWITCHBOARD_SPEAK_URL`,
-    /// else `<SWITCHBOARD_SELF_URL>/speak`, else empty (no callback).
-    pub speak_url: String,
-    /// Where a project agent reports its thinking level: `SWITCHBOARD_STATE_URL`,
-    /// else `<SWITCHBOARD_SELF_URL>/leg-state`.
-    pub state_url: String,
-    /// Where a project agent's `display` tool posts: `SWITCHBOARD_DISPLAY_URL`,
-    /// else `<SWITCHBOARD_SELF_URL>/display`. The `view` tool derives `/view`
-    /// from its origin.
-    pub display_url: String,
     /// Environment values loaded from the deployment env file and inherited
-    /// process environment. Project legs receive this plus their callback vars.
+    /// process environment. The operator's process receives them.
     pub environment: HashMap<String, String>,
 }
 
@@ -97,7 +82,6 @@ impl Config {
 
     pub fn from_values(values: &HashMap<String, String>, env_file: PathBuf) -> Self {
         let config_dir = PathBuf::from(get(values, "SWITCHBOARD_CONFIG_DIR", "/etc/switchboard"));
-        let state_dir = PathBuf::from(get(values, "SWITCHBOARD_STATE_DIR", "/var/lib/switchboard"));
         let projects_file = PathBuf::from(get(
             values,
             "SWITCHBOARD_PROJECTS_FILE",
@@ -113,35 +97,20 @@ impl Config {
             "SWITCHBOARD_OPERATOR_PROMPT",
             &config_dir.join("operator.system.md").to_string_lossy(),
         ));
-        let self_url = get(values, "SWITCHBOARD_SELF_URL", "")
-            .trim_end_matches('/')
-            .to_owned();
-        let callback_url = |name: &str, path: &str| {
-            let configured = get(values, name, "");
-            if configured.is_empty() && !self_url.is_empty() {
-                format!("{self_url}/{path}")
-            } else {
-                configured
-            }
-        };
         Self {
             env_file,
-            state_dir,
             projects_file,
             host_tokens_file,
             operator_prompt,
             operator_extension: optional(values, "SWITCHBOARD_OPERATOR_EXTENSION"),
-            agent_extension: optional(values, "SWITCHBOARD_AGENT_EXTENSION"),
             persona: get(values, "SWITCHBOARD_PERSONA", ""),
             stt_command: optional(values, "SWITCHBOARD_STT_COMMAND"),
             stt_stream_command: optional(values, "SWITCHBOARD_STT_STREAM_COMMAND"),
             bind: get(values, "SWITCHBOARD_BIND", "0.0.0.0:8765"),
             pi_binary: get(values, "SWITCHBOARD_PI_BINARY", "pi"),
-            ssh_program: get(values, "SWITCHBOARD_SSH_PROGRAM", "ssh"),
             operator_model: optional(values, "SWITCHBOARD_OPERATOR_MODEL"),
             agent_model: optional(values, "SWITCHBOARD_AGENT_MODEL"),
             agent_thinking: get(values, "SWITCHBOARD_AGENT_THINKING", "medium"),
-            remote_cache_dir: get(values, "SWITCHBOARD_REMOTE_CACHE_DIR", ".cache/switchboard"),
             model_swaps: !matches!(
                 get(values, "SWITCHBOARD_MODEL_SWAPS", "1")
                     .to_ascii_lowercase()
@@ -153,10 +122,6 @@ impl Config {
             max_spoken_chars: usize_value(values, "SWITCHBOARD_MAX_SPOKEN_CHARS", 700, false),
             speech_deadline_ms: bounded_ms(values, "SWITCHBOARD_SPEECH_DEADLINE_MS", 25_000),
             history_limit: usize_value(values, "SWITCHBOARD_HISTORY_LIMIT", 200, true),
-            speak_url: callback_url("SWITCHBOARD_SPEAK_URL", "speak"),
-            state_url: callback_url("SWITCHBOARD_STATE_URL", "leg-state"),
-            display_url: callback_url("SWITCHBOARD_DISPLAY_URL", "display"),
-            self_url,
             environment: values.clone(),
         }
     }
@@ -405,11 +370,6 @@ async fn main() {
         stt_stream_configured = config.stt_stream_command.is_some(),
         persona_configured = !config.persona.is_empty(),
         operator_extension = config.operator_extension.as_deref().unwrap_or("<none>"),
-        agent_extension = config.agent_extension.as_deref().unwrap_or("<none>"),
-        self_url = %config.self_url,
-        speak_url = %config.speak_url,
-        state_url = %config.state_url,
-        display_url = %config.display_url,
         idle_timeout = config.idle_timeout,
         idle_poll = config.idle_poll,
         max_spoken_chars = config.max_spoken_chars,
@@ -419,15 +379,14 @@ async fn main() {
         "switchboard configuration"
     );
     let registry = registry::Registry::load(&config.projects_file);
-    // Startup work for every project -- transports, catalogs, staged
-    // extensions, prepare commands -- begins now, before the listener opens;
-    // a transfer waits on it rather than doing any of it itself.
-    let prewarm = std::sync::Arc::new(prewarm::Prewarm::start(&config, &registry));
-    let board = pbx::Switchboard::new(&config, registry, prewarm);
     let hosts = hosts::Hosts::load(&config.host_tokens_file, hosts::Heartbeat::default());
+    // Startup work for every project -- catalogs and prepare commands, run
+    // by each host agent as soon as it links -- begins now; a transfer waits
+    // on it rather than doing any of it itself.
+    let prewarm = std::sync::Arc::new(prewarm::Prewarm::start(&registry, hosts));
+    let board = pbx::Switchboard::new(&config, registry, prewarm);
     let state = api::AppState::new(
         board,
-        hosts,
         history::TranscriptLog::new(config.history_limit),
         audio::Speaker::from_values(
             config.max_spoken_chars,

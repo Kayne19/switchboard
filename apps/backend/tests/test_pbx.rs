@@ -1,48 +1,10 @@
 use super::*;
+use crate::hosts::{FakeHostAgent, FakeLog, OnPrompt, Step};
+use serde_json::{json, Value};
 use std::sync::Mutex as StdMutex;
 
-#[cfg(unix)]
-fn fake_runtime() -> (std::path::PathBuf, std::path::PathBuf) {
-    let root = std::env::temp_dir().join(format!(
-        "switchboard-fake-pi-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&root).unwrap();
-    let runtime = root.join("fake-pi");
-    crate::pi_client::write_executable_script(
-        &runtime,
-        r##"operator=0
-for arg in "$@"; do
-if [ "$arg" = "--no-builtin-tools" ]; then operator=1; fi
-done
-count=0
-while IFS= read -r line; do
-count=$((count + 1))
-if [ "$operator" -eq 1 ]; then
-    if [ "$count" -eq 1 ]; then
-        printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Connecting now."}}'
-        printf '%s\n' '{"type":"tool_execution_start","toolName":"transfer_to_project","args":{"project":"alpha","intent":"inspect it"}}'
-    else
-        printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Operator has you again."}}'
-    fi
-else
-    if [ "$count" -eq 1 ]; then
-        printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Alpha is ready."}}'
-    else
-        printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Alpha finished."}}'
-        printf '%s\n' '{"type":"tool_execution_start","toolName":"return_to_operator","args":{"summary":"work complete"}}'
-    fi
-fi
-printf '%s\n' '{"type":"agent_settled"}'
-done
-"##,
-    );
-    (root, runtime)
-}
+/// The host every project in these tests runs on.
+const HOST: &str = "scriptorium";
 
 fn board_with(projects: Vec<Project>, model_swaps: bool) -> Switchboard {
     let swaps = if model_swaps { "1" } else { "0" };
@@ -53,7 +15,7 @@ fn board_with(projects: Vec<Project>, model_swaps: bool) -> Switchboard {
     )
 }
 
-/// A switchboard over a prewarm that has already settled, every project's
+/// A switchboard over a prewarm that has already settled, every host's
 /// catalog being `catalog`.
 fn board_on(
     projects: Vec<Project>,
@@ -64,6 +26,87 @@ fn board_on(
     let registry = Registry::new(projects);
     let prewarm = crate::prewarm::Prewarm::settled(&config, &registry, catalog);
     Switchboard::new(&config, registry, Arc::new(prewarm))
+}
+
+/// Links `HOST` to `board` with a fake host agent that runs `on_prompt` for
+/// every prompt.
+fn serve(board: &Switchboard, on_prompt: OnPrompt) -> FakeLog {
+    FakeHostAgent::new(on_prompt).serve(board.hosts().connect_fake(HOST))
+}
+
+/// A turn that says `text` and settles.
+fn says(text: &str) -> Vec<Step> {
+    vec![Step::Event(json!({"kind": "text", "text": text}))]
+}
+
+/// A project on `HOST`.
+fn project(id: &str, description: &str) -> Project {
+    Project {
+        id: id.into(),
+        description: description.into(),
+        aliases: vec![],
+        host: Some(HOST.into()),
+        cwd: format!("/srv/{id}"),
+        runtime: "pi".into(),
+        model: Some("anthropic/current".into()),
+        stage_extension: false,
+        extra_args: vec![],
+        prepare: String::new(),
+    }
+}
+
+/// The messages `log`'s host agent was prompted with, oldest first.
+fn prompts(log: &FakeLog) -> Vec<String> {
+    log.named("prompt")
+        .iter()
+        .map(|args| args["message"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// Waits until `log`'s host agent was sent a `name` command.
+async fn until_named(log: &FakeLog, name: &str) -> Vec<Value> {
+    for _ in 0..500 {
+        let named = log.named(name);
+        if !named.is_empty() {
+            return named;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("the host agent was never sent {name}: {:?}", log.names());
+}
+
+#[cfg(unix)]
+fn scratch_dir(label: &str) -> std::path::PathBuf {
+    let root = std::env::temp_dir().join(format!("switchboard-{label}-{}", uuid_like()));
+    std::fs::create_dir_all(&root).unwrap();
+    root
+}
+
+/// An operator stand-in: its first prompt puts the caller through to alpha
+/// (with `intent` "inspect it"), later ones answer "Operator has you again.",
+/// or "NOTE_DELIVERED" when the prompt carries "work complete".
+#[cfg(unix)]
+fn fake_operator(root: &std::path::Path) -> std::path::PathBuf {
+    let operator = root.join("fake-operator");
+    crate::pi_client::write_executable_script(
+        &operator,
+        r##"count=0
+while IFS= read -r line; do
+count=$((count + 1))
+if [ "$count" -eq 1 ]; then
+    printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Connecting now."}}'
+    printf '%s\n' '{"type":"tool_execution_start","toolName":"transfer_to_project","args":{"project":"alpha","intent":"inspect it"}}'
+else
+    case "$line" in
+        *"work complete"*) printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"NOTE_DELIVERED"}}' ;;
+        *) printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Operator has you again."}}' ;;
+    esac
+fi
+printf '%s\n' '{"type":"agent_settled"}'
+done
+"##,
+    );
+    operator
 }
 
 /// Puts the call on `project` the way a transfer leaves it, without launching
@@ -97,6 +140,47 @@ async fn redialed(board: &mut Switchboard, decided: Redial) -> Reply {
             .await
             .expect("the leg the redial was planned for is still on the line"),
     }
+}
+
+fn two_model_catalog() -> ModelCatalog {
+    ModelCatalog {
+        entries: ["current", "next"]
+            .into_iter()
+            .map(|model| crate::models::CatalogEntry {
+                provider: "anthropic".into(),
+                model: model.into(),
+                thinks: true,
+            })
+            .collect(),
+        available: true,
+        diagnostic: None,
+    }
+}
+
+fn transcript(text: &str) -> TransferContext {
+    TransferContext {
+        exact_caller_transcript: text.into(),
+        ..TransferContext::default()
+    }
+}
+
+fn read_lines(path: &std::path::Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// A switchboard with the caller on alpha, whose host agent runs `on_prompt`.
+async fn on_alpha(settings: &[(&str, &str)], on_prompt: OnPrompt) -> (Switchboard, FakeLog) {
+    let mut board = board_on(vec![project("alpha", "")], settings, two_model_catalog());
+    let log = serve(&board, on_prompt);
+    let reply = board
+        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+        .await;
+    assert_eq!(reply.route, "alpha", "{reply:?}");
+    (board, log)
 }
 
 #[test]
@@ -243,39 +327,6 @@ async fn model_swap_refuses_unknown_catalog_model_without_replacing_live_spec() 
     assert_eq!(board.coordinator.status().model, "anthropic/current:high");
 }
 
-#[cfg(unix)]
-#[tokio::test]
-async fn page_model_swap_preserves_requested_thinking() {
-    let (root, runtime) = fake_runtime();
-    let project = Project {
-        id: "alpha".into(),
-        description: String::new(),
-        aliases: vec![],
-        host: None,
-        cwd: root.to_string_lossy().into_owned(),
-        runtime: runtime.to_string_lossy().into_owned(),
-        model: None,
-        stage_extension: false,
-        extra_args: Vec::new(),
-        prepare: String::new(),
-    };
-    let mut board = board_with(vec![project.clone()], true);
-    put_on(
-        &board,
-        &project.id,
-        "anthropic/current:high",
-        two_model_catalog(),
-    );
-
-    let decided = board.planner.model_change("anthropic/next").await;
-    let reply = redialed(&mut board, decided).await;
-
-    assert!(reply.error.is_none());
-    assert_eq!(board.coordinator.status().model, "anthropic/next:high");
-    board.shutdown().await;
-    std::fs::remove_dir_all(root).unwrap();
-}
-
 #[test]
 fn transfer_model_selection_honors_thinking_without_model() {
     let project = Project {
@@ -342,72 +393,6 @@ async fn transfer_ctx_ambiguous_project_returns_candidate_options() {
         .contains("was ambiguous"));
 }
 
-#[cfg(unix)]
-#[tokio::test]
-async fn fake_pi_process_completes_transfer_and_return_lifecycle() {
-    let (root, runtime) = fake_runtime();
-    let project = Project {
-        id: "alpha".into(),
-        description: "test project".into(),
-        aliases: vec!["alpha project".into()],
-        host: None,
-        cwd: root.to_string_lossy().into_owned(),
-        runtime: runtime.to_string_lossy().into_owned(),
-        model: Some("anthropic/current".into()),
-        stage_extension: false,
-        extra_args: Vec::new(),
-        prepare: String::new(),
-    };
-    let mut board = board_on(
-        vec![project],
-        &[("SWITCHBOARD_PI_BINARY", &runtime.to_string_lossy())],
-        two_model_catalog(),
-    );
-    // What the route callback finds when it is told the line has settled.
-    let statuses = Arc::new(StdMutex::new(Vec::new()));
-    let statuses_for_callback = Arc::clone(&statuses);
-    let coordinator = board.coordinator();
-    board.set_route_callback(Some(Arc::new(move || {
-        let statuses = Arc::clone(&statuses_for_callback);
-        let status = coordinator.status();
-        Box::pin(async move {
-            statuses.lock().unwrap().push(status);
-        })
-    })));
-
-    let connected = board.handle("put me through").await;
-    assert_eq!(connected.route, "alpha");
-    assert_eq!(connected.text, "Alpha is ready.");
-    assert_eq!(board.coordinator.route(), "alpha");
-    let first_project_status = statuses
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|status| status.route == "alpha")
-        .cloned()
-        .expect("project status should be announced");
-    assert_eq!(first_project_status.models_diagnostic, None);
-    assert_eq!(first_project_status.models.len(), 2);
-
-    let returned = board.handle("we are done").await;
-    assert_eq!(returned.route, OPERATOR);
-    assert!(returned.text.contains("Alpha finished."));
-    assert!(returned.text.contains("Operator has you again."));
-    assert_eq!(board.coordinator.route(), OPERATOR);
-    assert_eq!(
-        statuses
-            .lock()
-            .unwrap()
-            .last()
-            .map(|status| status.route.clone()),
-        Some(OPERATOR.to_owned()),
-        "the return is announced too"
-    );
-
-    board.shutdown().await;
-    std::fs::remove_dir_all(root).unwrap();
-}
-
 #[test]
 fn unicode_payload_preserved_in_transfer_context_and_intro_prompt() {
     let unicode_text = "Caller voice text with Unicode: 🌐 🚀 日本語, emoji, and quote \"hello\".";
@@ -460,537 +445,665 @@ fn model_fallback_preserves_qualified_and_rejects_bare_when_catalog_unavailable(
 
 #[cfg(unix)]
 #[tokio::test]
-async fn direct_agent_to_agent_transfer_context_and_no_prepended_text() {
-    let root = std::env::temp_dir().join(format!(
-        "switchboard-direct-transfer-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&root).unwrap();
-    let runtime = root.join("fake-pi");
-    crate::pi_client::write_executable_script(
-        &runtime,
-        r##"mode=""
-for arg in "$@"; do
-if [ "$arg" = "--no-builtin-tools" ]; then mode="operator"; fi
-done
-count=0
-while IFS= read -r line; do
-count=$((count + 1))
-if [ "$mode" = "operator" ]; then
-    printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Handoff to alpha."}}'
-    printf '%s\n' '{"type":"tool_execution_start","toolName":"transfer_to_project","args":{"project":"alpha","intent":"start work"}}'
-else
-    if [ "$count" -eq 1 ]; then
-        if echo "$line" | grep -q "ID: beta"; then
-            printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Beta response."}}'
-        else
-            printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Alpha response."}}'
-        fi
-    else
-        if echo "$line" | grep -q "ID: beta"; then
-            printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Beta done."}}'
-        else
-            printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Alpha transferring to Beta."}}'
-            printf '%s\n' '{"type":"tool_execution_start","toolName":"transfer_to_project","args":{"project":"beta","intent":"continue work"}}'
-        fi
-    fi
-fi
-printf '%s\n' '{"type":"agent_settled"}'
-done
-"##,
-    );
-
-    let alpha = Project {
-        id: "alpha".into(),
-        description: "Alpha project".into(),
-        aliases: vec![],
-        host: None,
-        cwd: root.to_string_lossy().into_owned(),
-        runtime: runtime.to_string_lossy().into_owned(),
-        model: None,
-        stage_extension: false,
-        extra_args: Vec::new(),
-        prepare: String::new(),
-    };
-    let beta = Project {
-        id: "beta".into(),
-        description: "Beta project".into(),
-        aliases: vec![],
-        host: None,
-        cwd: root.to_string_lossy().into_owned(),
-        runtime: runtime.to_string_lossy().into_owned(),
-        model: None,
-        stage_extension: false,
-        extra_args: Vec::new(),
-        prepare: String::new(),
-    };
-
+async fn a_transfer_and_a_return_act_on_a_session_over_the_host_link() {
+    let root = scratch_dir("transfer-return");
+    let operator = fake_operator(&root);
     let mut board = board_on(
-        vec![alpha, beta],
-        &[
-            ("SWITCHBOARD_PI_BINARY", &runtime.to_string_lossy()),
-            ("SWITCHBOARD_AGENT_MODEL", "anthropic/current"),
-        ],
+        vec![project("alpha", "test project")],
+        &[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())],
         two_model_catalog(),
+    );
+    let log = serve(
+        &board,
+        Box::new(|_, message| {
+            if message.contains("we are done") {
+                vec![
+                    Step::Event(json!({"kind": "text", "text": "Alpha finished."})),
+                    Step::Call("return_to_operator", json!({"summary": "work complete"})),
+                ]
+            } else {
+                says("Alpha is ready.")
+            }
+        }),
+    );
+    // What the route callback finds when it is told the line has settled.
+    let statuses = Arc::new(StdMutex::new(Vec::new()));
+    let statuses_for_callback = Arc::clone(&statuses);
+    let coordinator = board.coordinator();
+    board.set_route_callback(Some(Arc::new(move || {
+        let statuses = Arc::clone(&statuses_for_callback);
+        let status = coordinator.status();
+        Box::pin(async move {
+            statuses.lock().unwrap().push(status);
+        })
+    })));
+
+    let connected = board.handle("put me through").await;
+    assert_eq!(connected.route, "alpha");
+    assert_eq!(connected.text, "Alpha is ready.");
+    assert_eq!(board.coordinator.route(), "alpha");
+    // A resident session in the project's folder, on the call under a token
+    // of its own.
+    assert_eq!(
+        log.named("create_session"),
+        [json!({"project": "alpha", "config": {
+            "cwd": "/srv/alpha", "provider": "anthropic", "model": "current", "thinking": "medium",
+        }})]
+    );
+    let join = &log.named("join_call")[0];
+    assert_eq!(join["session"], "s1");
+    assert_eq!(join["speech_deadline_ms"], 25_000);
+    assert_eq!(
+        join["token"].as_str(),
+        Some(board.coordinator.current_identity().token.as_str())
+    );
+    let announced = statuses.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(announced.route, "alpha");
+    assert_eq!(announced.models.len(), 2);
+
+    let returned = board.handle("we are done").await;
+    assert_eq!(returned.route, OPERATOR);
+    assert!(returned.text.contains("Alpha finished."), "{returned:?}");
+    // The operator heard why the caller came back.
+    assert!(returned.text.contains("NOTE_DELIVERED"), "{returned:?}");
+    assert_eq!(board.coordinator.route(), OPERATOR);
+    assert!(board.agent.is_none());
+    assert_eq!(until_named(&log, "kill").await, [json!({"session": "s1"})]);
+    assert_eq!(
+        log.module_replies()
+            .iter()
+            .map(|reply| reply["status"].clone())
+            .collect::<Vec<_>>(),
+        [json!("accepted")]
+    );
+    assert_eq!(
+        statuses
+            .lock()
+            .unwrap()
+            .last()
+            .map(|status| status.route.clone()),
+        Some(OPERATOR.to_owned()),
+        "the return is announced too"
+    );
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_agent_to_agent_transfer_ends_the_old_session_after_the_new_one_is_up() {
+    let root = scratch_dir("agent-to-agent");
+    let operator = fake_operator(&root);
+    let mut board = board_on(
+        vec![
+            project("alpha", "Alpha project"),
+            project("beta", "Beta project"),
+        ],
+        &[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())],
+        two_model_catalog(),
+    );
+    let log = serve(
+        &board,
+        Box::new(|session, message| match (session, message) {
+            ("s1", message) if message.contains("hand off") => vec![
+                Step::Event(json!({"kind": "text", "text": "Alpha transferring to Beta."})),
+                Step::Call(
+                    "transfer_to_project",
+                    json!({"project": "beta", "intent": "continue work"}),
+                ),
+            ],
+            ("s1", _) => says("Alpha response."),
+            _ => says("Beta response."),
+        }),
     );
 
     let r1 = board.handle("connect me to alpha").await;
-    assert_eq!(r1.route, "alpha");
-    assert_eq!(r1.text, "Alpha response.");
+    assert_eq!(
+        (r1.route.as_str(), r1.text.as_str()),
+        ("alpha", "Alpha response.")
+    );
 
-    // Direct agent-to-agent transfer: Alpha transfers to Beta
     let r2 = board.handle("please hand off to beta").await;
     assert_eq!(r2.route, "beta");
     assert_eq!(r2.text, "Beta response.");
     assert_eq!(r2.to_speak, vec!["Beta response."]);
-    assert!(!r2.text.contains("Alpha transferring to Beta."));
-
-    board.shutdown().await;
-    std::fs::remove_dir_all(root).unwrap();
-}
-
-#[tokio::test]
-async fn display_pbx_env_and_token_rotation() {
-    let board = board_on(
-        vec![],
-        &[("SWITCHBOARD_DISPLAY_URL", "http://127.0.0.1:8765/display")],
-        two_model_catalog(),
-    );
-
-    assert_eq!(board.display_url, "http://127.0.0.1:8765/display");
-
-    // Verify agent_env passes SWITCHBOARD_DISPLAY_URL
-    let env = board.agent_env("test-leg-token-123");
-    assert_eq!(
-        env.get("SWITCHBOARD_DISPLAY_URL").map(String::as_str),
-        Some("http://127.0.0.1:8765/display")
-    );
-    assert_eq!(
-        env.get("SWITCHBOARD_SESSION_TOKEN").map(String::as_str),
-        Some("test-leg-token-123")
-    );
-
-    // Verify token rotation
-    let rotated_env = board.agent_env("test-rotated-token-456");
-    assert_eq!(
-        rotated_env
-            .get("SWITCHBOARD_SESSION_TOKEN")
-            .map(String::as_str),
-        Some("test-rotated-token-456")
-    );
-    assert_eq!(
-        rotated_env
-            .get("SWITCHBOARD_DISPLAY_URL")
-            .map(String::as_str),
-        Some("http://127.0.0.1:8765/display")
-    );
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn return_to_operator_carries_handback_note() {
-    let root = std::env::temp_dir().join(format!(
-        "switchboard-handback-note-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&root).unwrap();
-    let runtime = root.join("fake-pi");
-    crate::pi_client::write_executable_script(
-        &runtime,
-        r##"operator=0
-for arg in "$@"; do
-if [ "$arg" = "--no-builtin-tools" ]; then operator=1; fi
-done
-count=0
-while IFS= read -r line; do
-count=$((count + 1))
-if [ "$operator" -eq 1 ]; then
-    if [ "$count" -eq 1 ]; then
-        printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Connecting now."}}'
-        printf '%s\n' '{"type":"tool_execution_start","toolName":"transfer_to_project","args":{"project":"alpha","intent":"test","model":"anthropic/current"}}'
-    else
-        case "$line" in
-            *"work complete"*) marker="NOTE_DELIVERED" ;;
-            *) marker="NOTE_MISSING" ;;
-        esac
-        printf '%s\n' "{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_end\",\"content\":\"$marker\"}}"
-    fi
-else
-    if [ "$count" -eq 1 ]; then
-        printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Agent ready."}}'
-    else
-        printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Agent done."}}'
-        printf '%s\n' '{"type":"tool_execution_start","toolName":"return_to_operator","args":{"summary":"work complete"}}'
-    fi
-fi
-printf '%s\n' '{"type":"agent_settled"}'
-done
-"##,
-    );
-
-    let project = Project {
-        id: "alpha".into(),
-        description: "test project".into(),
-        aliases: vec!["alpha project".into()],
-        host: None,
-        cwd: root.to_string_lossy().into_owned(),
-        runtime: runtime.to_string_lossy().into_owned(),
-        model: None,
-        stage_extension: false,
-        extra_args: vec![],
-        prepare: String::new(),
-    };
-    // The operator runs the same fake runtime as the project leg.
-    let mut board = board_on(
-        vec![project.clone()],
-        &[("SWITCHBOARD_PI_BINARY", &runtime.to_string_lossy())],
-        two_model_catalog(),
-    );
-
-    // Operator transfers to alpha.
-    let transfer_reply = board.handle("put me through").await;
-    assert_eq!(
-        board.coordinator.route(),
-        "alpha",
-        "transfer failed; reply text: {:?}, error: {:?}",
-        transfer_reply.text,
-        transfer_reply.error
-    );
-
-    // Agent returns to operator with summary "work complete".
-    let return_reply = board.handle("we are done").await;
-    assert_eq!(board.coordinator.route(), OPERATOR);
-    // The operator's second prompt must contain the handback note; the fake-pi
-    // emits NOTE_DELIVERED only if it saw "work complete" in that prompt line.
-    assert!(
-        return_reply.text.contains("NOTE_DELIVERED"),
-        "operator did not receive handback note; got: {:?}",
-        return_reply.text
-    );
-
-    board.shutdown().await;
-    std::fs::remove_dir_all(root).unwrap();
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn a_transfer_resolves_a_bare_model_against_the_launch_catalog() {
-    let (root, runtime) = fake_runtime();
-    let project = Project {
-        id: "alpha".into(),
-        description: "test project".into(),
-        aliases: vec![],
-        host: None,
-        cwd: root.to_string_lossy().into_owned(),
-        runtime: runtime.to_string_lossy().into_owned(),
-        model: None,
-        stage_extension: false,
-        extra_args: vec![],
-        prepare: String::new(),
-    };
-    let mut board = board_with(vec![project.clone()], true);
-
-    let ctx = TransferContext {
-        exact_caller_transcript: "connect me".into(),
-        derived_intent: String::new(),
-    };
-
-    let reply = board.transfer_ctx(&ctx, "alpha", "current", "").await;
-    assert!(reply.error.is_none(), "transfer failed: {:?}", reply.error);
-    assert_eq!(board.coordinator.route(), "alpha");
-    assert!(
-        board
-            .coordinator
-            .status()
-            .model
-            .contains("anthropic/current"),
-        "the model did not resolve the bare name; got: {:?}",
-        board.coordinator.status().model
-    );
-
-    board.shutdown().await;
-    std::fs::remove_dir_all(root).unwrap();
-}
-
-// ---------------------------------------------------------------------------
-// Prewarm is the only owner of launch setup. These drive the PBX through a
-// prewarm whose startup work has already settled (`Prewarm::settled`) and
-// check that a transfer or redial does no setup of its own.
-
-#[cfg(unix)]
-fn scratch_dir(label: &str) -> std::path::PathBuf {
-    let root = std::env::temp_dir().join(format!("switchboard-{label}-{}", uuid_like()));
-    std::fs::create_dir_all(&root).unwrap();
-    root
-}
-
-/// An ssh stand-in that records every remote command it is given, one line
-/// each, and runs only agent launches (`... exec <runtime> ...`), locally.
-/// Anything else -- extension staging, a catalog listing -- is recorded and
-/// refused, so a test can see that it was attempted without it touching this
-/// machine.
-#[cfg(unix)]
-fn recording_ssh(root: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
-    let ssh = root.join("fake-ssh");
-    let log = root.join("ssh.log");
-    crate::pi_client::write_executable_script(
-        &ssh,
-        &format!(
-            r#"for last; do :; done
-printf '%s\n' "$(printf '%s' "$last" | tr '\n' ' ')" >> '{log}'
-case "$last" in
-  *"exec "*) exec sh -c "$last" ;;
-  *) exit 1 ;;
-esac
-"#,
-            log = log.display()
-        ),
-    );
-    (ssh, log)
-}
-
-/// A project runtime that answers every prompt and records any
-/// `--list-models` call, so a test can tell whether the catalog was listed
-/// live rather than taken from prewarm.
-#[cfg(unix)]
-fn recording_runtime(root: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
-    let runtime = root.join("fake-project-pi");
-    let log = root.join("listings.log");
-    crate::pi_client::write_executable_script(
-        &runtime,
-        &format!(
-            r#"if [ "$1" = "--list-models" ]; then
-  printf 'listed\n' >> '{log}'
-  printf 'provider model alias default thinks\nanthropic current current yes yes\nanthropic next next no yes\n'
-  exit 0
-fi
-while IFS= read -r line; do
-  printf '%s\n' '{{"type":"message_update","assistantMessageEvent":{{"type":"text_end","content":"On it."}}}}'
-  printf '%s\n' '{{"type":"agent_settled"}}'
-done
-"#,
-            log = log.display()
-        ),
-    );
-    (runtime, log)
-}
-
-fn two_model_catalog() -> ModelCatalog {
-    ModelCatalog {
-        entries: ["current", "next"]
-            .into_iter()
-            .map(|model| crate::models::CatalogEntry {
-                provider: "anthropic".into(),
-                model: model.into(),
-                thinks: true,
-            })
-            .collect(),
-        available: true,
-        diagnostic: None,
-    }
-}
-
-fn project_on(host: Option<&str>, cwd: &std::path::Path, runtime: &std::path::Path) -> Project {
-    Project {
-        id: "alpha".into(),
-        description: String::new(),
-        aliases: vec![],
-        host: host.map(str::to_owned),
-        cwd: cwd.to_string_lossy().into_owned(),
-        runtime: runtime.to_string_lossy().into_owned(),
-        model: Some("anthropic/current".into()),
-        stage_extension: true,
-        extra_args: vec![],
-        prepare: String::new(),
-    }
-}
-
-fn transcript(text: &str) -> TransferContext {
-    TransferContext {
-        exact_caller_transcript: text.into(),
-        ..TransferContext::default()
-    }
-}
-
-fn read_lines(path: &std::path::Path) -> Vec<String> {
-    std::fs::read_to_string(path)
-        .unwrap_or_default()
-        .lines()
-        .map(str::to_owned)
-        .collect()
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn a_sentinel_extension_launches_the_remote_leg_without_staging_anything() {
-    let root = scratch_dir("sentinel");
-    let (ssh, ssh_log) = recording_ssh(&root);
-    let (runtime, _) = recording_runtime(&root);
-    let extension = root.join("agent-switchboard.ts");
-    std::fs::write(&extension, "export default () => {};").unwrap();
-    let config = crate::Config::for_tests(&[
-        ("SWITCHBOARD_SSH_PROGRAM", &ssh.to_string_lossy()),
-        ("SWITCHBOARD_AGENT_EXTENSION", &extension.to_string_lossy()),
-        (
-            "SWITCHBOARD_STATE_DIR",
-            &root.join("state").to_string_lossy(),
-        ),
-    ]);
-    let project = project_on(Some("fake-host"), &root, &runtime);
-    let registry = Registry::new(vec![project.clone()]);
-    // Startup could not stage the extension on this host.
-    let prewarm = crate::prewarm::Prewarm::settled(&config, &registry, two_model_catalog());
-    let mut board = Switchboard::new(&config, registry, Arc::new(prewarm));
-
-    let reply = board
-        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
-        .await;
-
-    assert_eq!(reply.route, "alpha", "{reply:?}");
-    assert_eq!(reply.error, None);
-    let commands = read_lines(&ssh_log);
-    assert_eq!(
-        commands.len(),
-        1,
-        "the transfer should run the agent and nothing else: {commands:#?}"
-    );
-    assert!(commands[0].contains("exec "));
-    assert!(
-        !commands[0].contains("'-e'"),
-        "no extension was staged, so none may be loaded: {}",
-        commands[0]
-    );
+    let intro = &prompts(&log)[2];
+    assert!(intro.contains("ID: beta"), "{intro}");
+    assert!(intro.contains("continue work"), "{intro}");
+    // alpha ends once beta is on the line, and not before.
+    until_named(&log, "kill").await;
+    let names = log.names();
+    let created = names
+        .iter()
+        .rposition(|name| name == "create_session")
+        .unwrap();
+    let killed = names.iter().position(|name| name == "kill").unwrap();
+    assert!(created < killed, "{names:?}");
+    assert_eq!(log.named("kill"), [json!({"session": "s1"})]);
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }
 
-#[cfg(unix)]
 #[tokio::test]
-async fn a_redial_resolves_against_the_launch_catalog_without_listing_models() {
-    let root = scratch_dir("redial-catalog");
-    let (runtime, listings) = recording_runtime(&root);
-    let config = crate::Config::for_tests(&[(
-        "SWITCHBOARD_STATE_DIR",
-        &root.join("state").to_string_lossy(),
-    )]);
-    let project = project_on(None, &root, &runtime);
-    let registry = Registry::new(vec![project.clone()]);
-    let prewarm = crate::prewarm::Prewarm::settled(&config, &registry, two_model_catalog());
-    let mut board = Switchboard::new(&config, registry, Arc::new(prewarm));
+async fn a_transfer_to_a_host_that_is_not_connected_is_refused_with_the_reason() {
+    let mut board = board_with(vec![project("alpha", "")], true);
 
     let reply = board
         .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
         .await;
-    assert_eq!(reply.route, "alpha", "{reply:?}");
-    let decided = board.planner.model_change("next").await;
+
+    assert_eq!(reply.route, OPERATOR);
+    assert_eq!(
+        reply.to_speak,
+        ["I couldn't get alpha on the line: its host scriptorium is not connected"]
+    );
+    assert!(!board.coordinator.is_candidate());
+    assert!(board
+        .operator_note
+        .as_deref()
+        .unwrap()
+        .starts_with("Transfer to alpha failed"));
+}
+
+#[tokio::test]
+async fn a_transfer_resolves_a_bare_model_against_the_launch_catalog() {
+    let mut board = board_with(vec![project("alpha", "")], true);
+    let log = serve(&board, Box::new(|_, _| says("Ready.")));
+
+    let reply = board
+        .transfer_ctx(&transcript("connect me"), "alpha", "current", "high")
+        .await;
+
+    assert!(reply.error.is_none(), "transfer failed: {:?}", reply.error);
+    assert_eq!(board.coordinator.status().model, "anthropic/current:high");
+    assert_eq!(
+        log.named("create_session")[0]["config"],
+        json!({"cwd": "/srv/alpha", "provider": "anthropic", "model": "current", "thinking": "high"})
+    );
+    assert!(
+        log.named("list_models").is_empty(),
+        "the catalog came from prewarm"
+    );
+    board.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_voice_brief_rides_on_the_first_prompt_and_again_after_a_compaction() {
+    let (mut board, log) = on_alpha(
+        &[],
+        Box::new(|_, message| {
+            if message.contains("compact now") {
+                vec![
+                    Step::Event(
+                        json!({"kind": "compaction", "phase": "start", "reason": "threshold"}),
+                    ),
+                    Step::Event(
+                        json!({"kind": "compaction", "phase": "end", "reason": "threshold"}),
+                    ),
+                    Step::Event(json!({"kind": "text", "text": "Compacted."})),
+                ]
+            } else {
+                says("On it.")
+            }
+        }),
+    )
+    .await;
+    board.handle("compact now").await;
+    board.handle("next line").await;
+    board.handle("and another").await;
+
+    let prompts = prompts(&log);
+    // One prompt per line and nothing else: the brief is never a message of
+    // its own.
+    assert_eq!(prompts.len(), 4, "{prompts:#?}");
+    let briefed: Vec<bool> = prompts
+        .iter()
+        .map(|prompt| prompt.starts_with("[SWITCHBOARD VOICE BRIEF]"))
+        .collect();
+    assert_eq!(briefed, [true, false, true, false], "{prompts:#?}");
+    assert!(prompts[0].contains("[PROJECT METADATA]"));
+    assert!(
+        prompts[2].ends_with("[END OF VOICE BRIEF]\n\nnext line"),
+        "{}",
+        prompts[2]
+    );
+    assert_eq!(prompts[3], "and another");
+    // No brief through the configuration: the project's own system prompt
+    // stays.
+    assert!(log.named("create_session")[0]["config"]
+        .get("appendSystemPrompt")
+        .is_none());
+    board.shutdown().await;
+}
+
+#[test]
+fn the_voice_brief_teaches_the_switchboard_module_and_names_the_targets() {
+    let board = board_with(
+        vec![project("alpha", "Alpha project"), project("beta", "")],
+        true,
+    );
+    let brief = board.agent_brief(&project("alpha", ""));
+    for taught in [
+        "switchboard.speak(text)",
+        "switchboard.display(",
+        "switchboard.view()",
+        "switchboard.return_to_operator(",
+        "switchboard.transfer_to_project(",
+        "switchboard.set_model(",
+        "  - beta: no description",
+    ] {
+        assert!(brief.contains(taught), "{taught} missing from {brief}");
+    }
+    assert!(!brief.contains("  - alpha"), "{brief}");
+    let fixed = board_with(vec![project("alpha", "")], false);
+    assert!(!fixed
+        .agent_brief(&project("alpha", ""))
+        .contains("set_model"));
+}
+
+#[tokio::test]
+async fn a_turn_ends_only_on_the_settled_turn_end() {
+    let hosts = crate::hosts::Hosts::new(Default::default(), Default::default());
+    let mut link = hosts.connect_fake(HOST);
+    let creating = tokio::spawn({
+        let hosts = hosts.clone();
+        async move {
+            ProjectSession::create(
+                &hosts,
+                ProjectLaunch {
+                    host: HOST.into(),
+                    project: "alpha".into(),
+                    cwd: "/srv/alpha".into(),
+                    spec: String::new(),
+                    brief: "BRIEF".into(),
+                    turn_timeout: Duration::from_secs(10),
+                    on_activity: None,
+                    on_module: None,
+                },
+            )
+            .await
+        }
+    });
+    let reply = |link: &crate::hosts::FakeLink, command: &Value, result: Value| {
+        link.send(json!({"type": "reply", "id": command["id"], "epoch": link.epoch, "ok": true, "result": result}));
+    };
+    let event = |link: &crate::hosts::FakeLink, cursor: u64, body: Value| {
+        link.send(json!({"type": "event", "session": "s1", "cursor": format!("b:{cursor}"), "event": body}));
+    };
+    let create = link.recv().await.unwrap();
+    assert_eq!(create["name"], "create_session");
+    reply(
+        &link,
+        &create,
+        json!({"session": "s1", "thinking": "medium"}),
+    );
+    let (session, _) = creating.await.unwrap().unwrap();
+
+    let prompting = tokio::spawn({
+        let session = session.clone();
+        async move { session.prompt("hello").await }
+    });
+    let prompt = link.recv().await.unwrap();
+    assert_eq!(prompt["args"]["message"], "BRIEF\n\nhello");
+    // The tail of an earlier, aborted turn arrives before the prompt is
+    // answered; it is not this turn's.
+    event(&link, 1, json!({"kind": "text", "text": "cut off"}));
+    event(&link, 2, json!({"kind": "turn_end"}));
+    reply(&link, &prompt, json!({"sent_as": "prompt"}));
+    event(&link, 3, json!({"kind": "turn_start", "cause": "input"}));
+    event(&link, 4, json!({"kind": "text", "text": "Done."}));
+    event(
+        &link,
+        5,
+        json!({"kind": "tool_end", "tool": "ipython", "call_id": "t1", "error": false}),
+    );
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!prompting.is_finished(), "the turn ended before it settled");
+    assert!(session.busy());
+    event(&link, 6, json!({"kind": "turn_end"}));
+    let turn = prompting.await.unwrap().unwrap();
+    assert_eq!(turn.text, "Done.");
+    assert!(!turn.failed);
+    assert!(!session.busy());
+    session.close();
+    let kill = link.recv().await.unwrap();
+    assert_eq!(
+        (kill["name"].clone(), kill["args"].clone()),
+        (json!("kill"), json!({"session": "s1"}))
+    );
+}
+
+#[tokio::test]
+async fn a_module_call_with_a_stale_call_token_is_refused() {
+    let (mut board, log) = on_alpha(
+        &[],
+        Box::new(|_, message| {
+            if message.contains("go back") {
+                vec![
+                    Step::CallWithToken("old-token".into(), "return_to_operator", json!({})),
+                    Step::CallWithToken(String::new(), "speak", json!({"text": "hi"})),
+                    Step::Event(json!({"kind": "text", "text": "Still here."})),
+                ]
+            } else {
+                says("On it.")
+            }
+        }),
+    )
+    .await;
+
+    let reply = board.handle("go back").await;
+
+    assert_eq!(reply.route, "alpha", "a stale signal moved the caller");
+    assert_eq!(reply.text, "Still here.");
+    let replies = log.module_replies();
+    assert_eq!(replies.len(), 2);
+    for reply in replies {
+        assert_eq!(
+            (reply["status"].clone(), reply["reason"].clone()),
+            (json!("refused"), json!("not_on_call"))
+        );
+    }
+    board.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_delivered_speak_counts_as_the_agent_having_spoken() {
+    let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
+    let calls = Arc::new(StdMutex::new(Vec::new()));
+    let seen = Arc::clone(&calls);
+    board.set_module_callback(Some(Arc::new(move |call: crate::pi_client::AgentCall| {
+        seen.lock()
+            .unwrap()
+            .push((call.call.clone(), call.token.clone(), call.args.clone()));
+        Box::pin(async { json!({"status": "delivered", "reason": null}) })
+    })));
+    let log = serve(
+        &board,
+        Box::new(|_, _| {
+            vec![
+                Step::Call("speak", json!({"text": "Looking now."})),
+                Step::Event(json!({"kind": "text", "text": "Written detail."})),
+            ]
+        }),
+    );
+
+    let reply = board
+        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+        .await;
+
+    assert_eq!(reply.route, "alpha");
+    assert_eq!(reply.text, "Written detail.");
+    assert!(reply.to_speak.is_empty(), "spoken twice: {reply:?}");
+    let calls = calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, "speak");
+    assert_eq!(
+        calls[0].1,
+        log.named("join_call")[0]["token"].as_str().unwrap()
+    );
+    assert_eq!(log.module_replies()[0]["status"], "delivered");
+    board.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_model_change_keeps_the_session_and_switches_it_live() {
+    let (mut board, log) = on_alpha(&[], Box::new(|_, _| says("On it."))).await;
+    let live = board.agent.clone().expect("alpha is on the line");
+    let before = board.coordinator.current_identity();
+
+    let decided = board.planner.model_change("anthropic/next").await;
     let reply = redialed(&mut board, decided).await;
 
     assert_eq!(reply.error, None, "{reply:?}");
+    assert_eq!(reply.text, "Now on next on anthropic, thinking medium.");
     assert_eq!(board.coordinator.status().model, "anthropic/next:medium");
+    assert!(board
+        .agent
+        .as_ref()
+        .is_some_and(|agent| agent.same_session(&live)));
+    assert!(live.alive());
     assert_eq!(
-        read_lines(&listings),
-        Vec::<String>::new(),
-        "the model catalog was listed at redial time instead of taken from prewarm"
+        log.named("create_session").len(),
+        1,
+        "a new session was made"
     );
+    assert!(log.named("kill").is_empty(), "the session was ended");
+    assert_eq!(
+        log.named("set_model"),
+        [json!({"session": "s1", "provider": "anthropic", "model": "next"})]
+    );
+    assert_eq!(
+        log.named("set_thinking"),
+        [json!({"session": "s1", "level": "medium"})]
+    );
+    // The changed leg is a new leg: a new identity, and the session is on
+    // the call under its token.
+    let after = board.coordinator.current_identity();
+    assert!(after.generation > before.generation);
+    let joins = log.named("join_call");
+    assert_eq!(joins.len(), 2);
+    assert_eq!(joins[1]["token"].as_str(), Some(after.token.as_str()));
+    assert_eq!(reply.delivery_generation, Some(after.generation));
+    // No turn was started for the change, and the brief is not sent again.
+    assert_eq!(prompts(&log).len(), 1);
+    let next = board.handle("carry on").await;
+    assert_eq!(
+        (next.route.as_str(), next.text.as_str()),
+        ("alpha", "On it.")
+    );
+    assert_eq!(prompts(&log)[1], "carry on");
     board.shutdown().await;
-    let _ = std::fs::remove_dir_all(root);
 }
 
-#[cfg(unix)]
 #[tokio::test]
-async fn a_redial_that_cannot_reach_the_host_refuses_and_keeps_the_live_leg() {
-    let root = scratch_dir("redial-degraded");
-    let (ssh, ssh_log) = recording_ssh(&root);
-    let (runtime, _) = recording_runtime(&root);
-    let config = crate::Config::for_tests(&[
-        ("SWITCHBOARD_SSH_PROGRAM", &ssh.to_string_lossy()),
-        (
-            "SWITCHBOARD_STATE_DIR",
-            &root.join("state").to_string_lossy(),
-        ),
-    ]);
-    let mut project = project_on(Some("fake-host"), &root, &runtime);
-    project.stage_extension = false;
-    let registry = Registry::new(vec![project.clone()]);
-    let prewarm = Arc::new(crate::prewarm::Prewarm::settled(
-        &config,
-        &registry,
-        two_model_catalog(),
-    ));
-    let mut board = Switchboard::new(&config, registry, Arc::clone(&prewarm));
+async fn a_thinking_change_keeps_the_session_and_takes_the_level_the_host_reports() {
+    let (mut board, log) = on_alpha(&[], Box::new(|_, _| says("On it."))).await;
+    let live = board.agent.clone().unwrap();
+
+    let decided = board.planner.thinking_change("high").await;
+    let reply = redialed(&mut board, decided).await;
+
+    assert_eq!(reply.error, None, "{reply:?}");
+    assert!(board
+        .agent
+        .as_ref()
+        .is_some_and(|agent| agent.same_session(&live)));
+    assert!(log.named("set_model").is_empty());
+    assert_eq!(
+        log.named("set_thinking"),
+        [json!({"session": "s1", "level": "high"})]
+    );
+    let status = board.coordinator.status();
+    assert_eq!(status.model, "anthropic/current:high");
+    assert_eq!(
+        (status.thinking.as_str(), status.thinking_confirmed),
+        ("high", true)
+    );
+    board.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_fresh_start_ends_the_session_and_makes_a_new_one() {
+    let (mut board, log) = on_alpha(&[], Box::new(|_, _| says("Fresh here."))).await;
+    let old = board.agent.clone().unwrap();
+
+    let decided = board
+        .planner
+        .plan("anthropic/next", "", "look at the parser", false)
+        .await;
+    let reply = redialed(&mut board, decided).await;
+
+    assert_eq!(reply.error, None, "{reply:?}");
+    assert_eq!(reply.text, "Fresh here.");
+    assert!(!old.alive());
+    let new = board.agent.clone().unwrap();
+    assert!(!new.same_session(&old));
+    assert_eq!(log.named("create_session").len(), 2);
+    assert!(log.named("set_model").is_empty());
+    // The old session ends before the new one is made: one per project.
+    until_named(&log, "kill").await;
+    let names = log.names();
+    let killed = names.iter().position(|name| name == "kill").unwrap();
+    let created = names
+        .iter()
+        .rposition(|name| name == "create_session")
+        .unwrap();
+    assert!(killed < created, "{names:?}");
+    assert_eq!(log.named("kill"), [json!({"session": "s1"})]);
+    assert_eq!(board.coordinator.status().model, "anthropic/next:medium");
+    // The request goes on as the new session's first prompt, brief first.
+    let prompts = prompts(&log);
+    assert_eq!(prompts.len(), 2);
+    assert!(prompts[1].starts_with("[SWITCHBOARD VOICE BRIEF]"));
+    assert!(prompts[1].contains("The caller asked: look at the parser."));
+    board.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_agents_own_set_model_is_decided_by_the_pickers_checks() {
+    for swaps in ["0", "1"] {
+        let (mut board, log) = on_alpha(
+            &[("SWITCHBOARD_MODEL_SWAPS", swaps)],
+            Box::new(|_, message| {
+                if message.contains("use next") {
+                    vec![
+                        Step::Event(json!({"kind": "text", "text": "Switching."})),
+                        Step::Call(
+                            "set_model",
+                            json!({"model": "anthropic/next", "keep_context": true}),
+                        ),
+                    ]
+                } else {
+                    says("On it.")
+                }
+            }),
+        )
+        .await;
+        let live = board.agent.clone().expect("alpha is on the line");
+
+        let reply = board.handle("use next").await;
+
+        assert_eq!(reply.route, "alpha", "{reply:?}");
+        assert!(board
+            .agent
+            .as_ref()
+            .is_some_and(|agent| agent.same_session(&live)));
+        assert!(live.alive());
+        if swaps == "0" {
+            assert_eq!(
+                reply.text,
+                "Switching.\n\nModel swapping is turned off on this switchboard."
+            );
+            assert!(log.named("set_model").is_empty());
+            assert_eq!(board.coordinator.status().model, "anthropic/current:medium");
+        } else {
+            assert_eq!(
+                reply.text,
+                "Switching.\n\nNow on next on anthropic, thinking medium."
+            );
+            assert_eq!(log.named("set_model").len(), 1);
+            assert_eq!(board.coordinator.status().model, "anthropic/next:medium");
+        }
+        board.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn a_redial_whose_leg_has_moved_since_it_was_planned_is_refused() {
+    let (mut board, log) = on_alpha(&[], Box::new(|_, _| says("On it."))).await;
+    let live = board.agent.clone().expect("alpha is on the line");
+
+    // A rescue that was not made for this redial retires the leg it was
+    // planned for.
+    let Redial::Planned(plan) = board.planner.model_change("anthropic/next").await else {
+        panic!("a swap to a listed model goes ahead");
+    };
+    let rescued = board.coordinator.begin_rescue("hangup");
+    assert_eq!(
+        board.redial(*plan).await.unwrap_err(),
+        LifecycleError::StaleLeg
+    );
+    assert_eq!(board.coordinator.current_identity(), rescued);
+    assert!(!board.coordinator.is_candidate());
+    assert_eq!(board.coordinator.status().model, "anthropic/current:medium");
+    assert!(board
+        .agent
+        .as_ref()
+        .is_some_and(|agent| agent.same_session(&live)));
+    assert!(live.alive());
+    board.coordinator.settle();
+
+    // The caller went back to the operator, which keeps the generation.
+    let Redial::Planned(plan) = board.planner.model_change("anthropic/next").await else {
+        panic!("a swap to a listed model goes ahead");
+    };
+    board.force_hangup().await;
+    let generation = board.coordinator.generation();
+    assert_eq!(
+        board.redial(*plan).await.unwrap_err(),
+        LifecycleError::StaleLeg
+    );
+    assert_eq!(board.coordinator.route(), OPERATOR);
+    assert_eq!(board.coordinator.generation(), generation);
+    assert!(board.agent.is_none(), "a leg was launched for nobody");
+    assert!(log.named("set_model").is_empty());
+
+    // The rescue made for it hands the plan on to the leg that rescue left.
     let reply = board
         .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
         .await;
     assert_eq!(reply.route, "alpha", "{reply:?}");
-    let live_session = board
-        .coordinator
-        .project_leg()
-        .unwrap()
-        .persistent_session_id;
-
-    prewarm.settle_transport(
-        "fake-host",
-        crate::prewarm::TransportState::Degraded {
-            generation: 1,
-            reason: "master connection lost".into(),
-        },
-    );
-    let Redial::Answered(reply) = board.planner.plan("anthropic/next", "", "", false).await else {
-        panic!("a host prewarm cannot vouch for is refused before anything is torn down");
+    let Redial::Planned(plan) = board.planner.model_change("anthropic/next").await else {
+        panic!("a swap to a listed model goes ahead");
     };
-
-    assert!(reply.error.is_some(), "{reply:?}");
-    assert_eq!(board.coordinator.route(), "alpha");
-    assert_eq!(
-        board
-            .coordinator
-            .project_leg()
-            .unwrap()
-            .persistent_session_id,
-        live_session
-    );
-    assert_eq!(board.coordinator.status().model, "anthropic/current:medium");
-    assert_eq!(
-        read_lines(&ssh_log).len(),
-        1,
-        "the redial opened a connection of its own instead of refusing"
-    );
+    let rescued = board
+        .coordinator
+        .begin_rescue_of(plan.leg(), "redial")
+        .expect("the leg is still on the line");
+    let reply = board.redial(plan.rescued(rescued)).await.unwrap();
+    assert_eq!(reply.error, None, "{reply:?}");
+    assert_eq!(board.coordinator.status().model, "anthropic/next:medium");
     board.shutdown().await;
-    let _ = std::fs::remove_dir_all(root);
 }
 
-#[cfg(unix)]
+#[tokio::test]
+async fn a_redial_that_cannot_reach_the_host_refuses_and_keeps_the_live_leg() {
+    let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
+    let log = serve(&board, Box::new(|_, _| says("On it.")));
+    let reply = board
+        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+        .await;
+    assert_eq!(reply.route, "alpha", "{reply:?}");
+    let leg = board.coordinator.project_leg().unwrap();
+
+    board.hosts().disconnect_fake(HOST);
+    let Redial::Answered(reply) = board.planner.plan("anthropic/next", "", "", true).await else {
+        panic!("a host that is not connected is refused before anything is touched");
+    };
+
+    assert!(reply.error.unwrap().contains("not connected"));
+    assert_eq!(board.coordinator.project_leg(), Some(leg));
+    assert!(board.agent.as_ref().is_some_and(ProjectSession::alive));
+    assert!(log.named("set_model").is_empty());
+    board.shutdown().await;
+}
+
 #[tokio::test]
 async fn an_unavailable_catalog_admits_a_qualified_model_and_refuses_a_bare_one() {
     for (agent_model, admitted) in [("anthropic/current", true), ("current", false)] {
-        let root = scratch_dir("catalog-unavailable");
-        let (runtime, _) = recording_runtime(&root);
-        let config = crate::Config::for_tests(&[
-            ("SWITCHBOARD_AGENT_MODEL", agent_model),
-            (
-                "SWITCHBOARD_STATE_DIR",
-                &root.join("state").to_string_lossy(),
-            ),
-        ]);
-        let mut project = project_on(None, &root, &runtime);
-        project.model = None;
-        let registry = Registry::new(vec![project.clone()]);
+        let mut alpha = project("alpha", "");
+        alpha.model = None;
+        let config = crate::Config::for_tests(&[("SWITCHBOARD_AGENT_MODEL", agent_model)]);
+        let registry = Registry::new(vec![alpha]);
         let prewarm = crate::prewarm::Prewarm::settled(&config, &registry, two_model_catalog());
         prewarm.settle_catalog(
-            &project,
+            HOST,
             crate::prewarm::CatalogState::Unavailable {
                 reason: "listing timed out".into(),
             },
         );
         let mut board = Switchboard::new(&config, registry, Arc::new(prewarm));
+        serve(&board, Box::new(|_, _| says("On it.")));
 
         let reply = board
             .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
@@ -1005,100 +1118,24 @@ async fn an_unavailable_catalog_admits_a_qualified_model_and_refuses_a_bare_one(
             assert!(error.contains("bare model"), "{error}");
         }
         board.shutdown().await;
-        let _ = std::fs::remove_dir_all(root);
     }
 }
 
-#[cfg(unix)]
-#[tokio::test]
-async fn a_remote_redial_that_keeps_context_is_refused_without_dropping_the_leg() {
-    let root = scratch_dir("remote-same-session");
-    let (ssh, ssh_log) = recording_ssh(&root);
-    let (runtime, _) = recording_runtime(&root);
-    let config = crate::Config::for_tests(&[
-        ("SWITCHBOARD_SSH_PROGRAM", &ssh.to_string_lossy()),
-        (
-            "SWITCHBOARD_STATE_DIR",
-            &root.join("state").to_string_lossy(),
-        ),
-    ]);
-    let mut project = project_on(Some("fake-host"), &root, &runtime);
-    project.stage_extension = false;
-    let registry = Registry::new(vec![project.clone()]);
-    let prewarm = crate::prewarm::Prewarm::settled(&config, &registry, two_model_catalog());
-    let mut board = Switchboard::new(&config, registry, Arc::new(prewarm));
-    let reply = board
-        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
-        .await;
-    assert_eq!(reply.route, "alpha", "{reply:?}");
-    let live_session = board
-        .coordinator
-        .project_leg()
-        .unwrap()
-        .persistent_session_id;
-
-    // The thinking picker and set_model both keep context by default.
-    let Redial::Answered(reply) = board.planner.thinking_change("high").await else {
-        panic!("a remote redial that keeps context is refused before anything is torn down");
-    };
-
-    assert_eq!(reply.error.as_deref(), Some("remote_shutdown_unverified"));
-    assert!(reply.text.contains("fresh start"), "{}", reply.text);
-    assert_eq!(reply.route, "alpha");
-    assert_eq!(board.coordinator.route(), "alpha");
-    assert_eq!(
-        board
-            .coordinator
-            .project_leg()
-            .unwrap()
-            .persistent_session_id,
-        live_session
-    );
-    assert!(board.agent.is_some(), "the live leg must keep running");
-    assert_eq!(read_lines(&ssh_log).len(), 1);
-    board.shutdown().await;
-    let _ = std::fs::remove_dir_all(root);
-}
-
-/// A pi stand-in whose operator puts the caller through to alpha, and whose
-/// project leg shows life on its intro, then waits for a steer before ending
-/// it. The steer is the test's gate on the intro turn.
-#[cfg(unix)]
-fn runtime_with_a_gated_intro(root: &std::path::Path) -> std::path::PathBuf {
-    let runtime = root.join("fake-pi");
-    crate::pi_client::write_executable_script(
-        &runtime,
-        r##"operator=0
-for arg in "$@"; do
-if [ "$arg" = "--no-builtin-tools" ]; then operator=1; fi
-done
-while IFS= read -r line; do
-if [ "$operator" -eq 1 ]; then
-    printf '%s\n' '{"type":"tool_execution_start","toolName":"transfer_to_project","args":{"project":"alpha","intent":"look"}}'
-else
-    printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Alpha here."}}'
-    IFS= read -r release
-    printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Alpha here."}}'
-fi
-printf '%s\n' '{"type":"agent_settled"}'
-done
-"##,
-    );
-    runtime
-}
-
-#[cfg(unix)]
 #[tokio::test]
 async fn the_route_follows_adoption_while_the_intro_turn_is_still_running() {
     use crate::lifecycle::ActivityDisposition;
     use crate::pi_client::Activity;
 
-    let root = scratch_dir("mid-intro");
-    let runtime = runtime_with_a_gated_intro(&root);
-    let mut board = board_on(
-        vec![project_on(None, &root, &runtime)],
-        &[("SWITCHBOARD_PI_BINARY", &runtime.to_string_lossy())],
-        two_model_catalog(),
+    let mut board = board_with(vec![project("alpha", "")], true);
+    serve(
+        &board,
+        Box::new(|_, _| {
+            vec![
+                Step::Event(json!({"kind": "tool_start", "tool": "ipython", "call_id": "t1"})),
+                Step::WaitFor("steer"),
+                Step::Event(json!({"kind": "text", "text": "Alpha here."})),
+            ]
+        }),
     );
     // Promotion as the application does it: the candidate's own sign of life
     // adopts it. Each adoption is reported on a channel.
@@ -1117,7 +1154,13 @@ async fn the_route_follows_adoption_while_the_intro_turn_is_still_running() {
     let control = board.session_control();
     let board = Arc::new(Mutex::new(board));
     let turn_board = Arc::clone(&board);
-    let turn = tokio::spawn(async move { turn_board.lock().await.handle("put me through").await });
+    let turn = tokio::spawn(async move {
+        turn_board
+            .lock()
+            .await
+            .transfer_ctx(&transcript("put me through"), "alpha", "", "")
+            .await
+    });
 
     adopted
         .recv()
@@ -1127,10 +1170,6 @@ async fn the_route_follows_adoption_while_the_intro_turn_is_still_running() {
     // The intro turn has not ended, yet the line already names alpha: what
     // the PBX reads, replies with, or hangs up from here on is alpha.
     assert_eq!(coordinator.route(), "alpha");
-    assert_eq!(
-        coordinator.project_leg().map(|leg| leg.project).as_deref(),
-        Some("alpha")
-    );
     let status = coordinator.status();
     assert_eq!(
         (status.route.as_str(), status.label.as_str()),
@@ -1153,7 +1192,6 @@ async fn the_route_follows_adoption_while_the_intro_turn_is_still_running() {
     assert_eq!(reply.text, "Alpha here.");
     assert_eq!(coordinator.route(), "alpha");
     board.lock().await.shutdown().await;
-    let _ = std::fs::remove_dir_all(root);
 }
 
 // ---------------------------------------------------------------------------
@@ -1229,13 +1267,14 @@ async fn assert_back_on_the_operator(
     assert!(board.agent.is_none() && coordinator.project_leg().is_none());
     let operator = board.operator.as_ref().expect("the operator keeps running");
     assert!(operator.alive().await);
+    let operator = LegSession::Operator(operator.clone());
     assert!(
         board
             .active_session
             .lock()
             .await
             .as_ref()
-            .is_some_and(|active| active.same_session(operator)),
+            .is_some_and(|active| active.same_session(&operator)),
         "the operator must be the live session again, so a steer or a rescue reaches it"
     );
 
@@ -1263,14 +1302,23 @@ async fn assert_back_on_the_operator(
 
 #[cfg(unix)]
 #[tokio::test]
-async fn a_transfer_whose_agent_cannot_start_leaves_the_caller_on_the_operator_with_the_reason() {
-    let root = scratch_dir("transfer-no-agent");
+async fn a_transfer_whose_session_cannot_start_leaves_the_caller_on_the_operator_with_the_reason() {
+    let root = scratch_dir("transfer-no-session");
     let (operator, operator_log) = logging_operator(&root);
-    let missing = root.join("no-such-pi");
     let (mut board, coordinator, notices) = coordinated_board(
-        project_on(None, &root, &missing),
+        project("alpha", ""),
         &[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())],
     );
+    let mut host = FakeHostAgent::new(Box::new(|_, _| says("never")));
+    host.on_command = Some(Box::new(|name, _| {
+        (name == "create_session").then(|| {
+            Some(Err((
+                "daemon_error".to_owned(),
+                "cwd /srv/alpha does not exist".to_owned(),
+            )))
+        })
+    }));
+    host.serve(board.hosts().connect_fake(HOST));
     board.handle("hello").await;
     let generation = coordinator.generation();
 
@@ -1279,9 +1327,9 @@ async fn a_transfer_whose_agent_cannot_start_leaves_the_caller_on_the_operator_w
         .await;
 
     let error = reply.error.clone().expect("the transfer failed");
-    assert!(
-        error.starts_with(&format!("could not start {}", missing.display())),
-        "{error}"
+    assert_eq!(
+        error,
+        "could not start a session: cwd /srv/alpha does not exist"
     );
     assert_eq!(reply.route, OPERATOR);
     assert_eq!(
@@ -1309,84 +1357,17 @@ async fn a_transfer_whose_agent_cannot_start_leaves_the_caller_on_the_operator_w
 
 #[cfg(unix)]
 #[tokio::test]
-async fn a_remote_agent_whose_directory_is_missing_is_reported_by_the_shell_error() {
-    // The ssh session comes up, but `cd` fails and `set -e` stops the remote
-    // shell before pi is launched. The leg's process exits without a word on
-    // its output, and what the caller and the operator are told is the
-    // shell's error, however the exit lines up with the intro being written.
-    let root = scratch_dir("transfer-bad-cwd");
-    let (operator, operator_log) = logging_operator(&root);
-    let (ssh, ssh_log) = recording_ssh(&root);
-    let (runtime, _) = recording_runtime(&root);
-    let missing = root.join("no-such-project");
-    let mut project = project_on(Some("fake-host"), &missing, &runtime);
-    project.stage_extension = false;
-    let state_dir = root.join("state");
-    let (mut board, coordinator, notices) = coordinated_board(
-        project,
-        &[
-            ("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy()),
-            ("SWITCHBOARD_SSH_PROGRAM", &ssh.to_string_lossy()),
-            ("SWITCHBOARD_STATE_DIR", &state_dir.to_string_lossy()),
-        ],
-    );
-    board.handle("hello").await;
-    let generation = coordinator.generation();
-
-    let reply = board
-        .transfer_ctx(&transcript("put me through to alpha"), "alpha", "", "")
-        .await;
-
-    assert_eq!(read_lines(&ssh_log).len(), 1, "the launch reached the host");
-    let error = reply.error.clone().expect("the transfer failed");
-    assert!(
-        error.contains(&*missing.to_string_lossy()),
-        "the caller should hear the shell's error, which names the directory: {error}"
-    );
-    assert_eq!(reply.route, OPERATOR);
-    assert_eq!(reply.to_speak, [format!("alpha didn't pick up: {error}")]);
-    assert_back_on_the_operator(
-        &board,
-        &coordinator,
-        &notices,
-        generation,
-        &format!("Transfer to alpha failed: {error}"),
-    )
-    .await;
-
-    board.handle("what happened?").await;
-    assert!(operator_prompts(&operator_log)
-        .last()
-        .unwrap()
-        .starts_with(&format!("[switchboard] Transfer to alpha failed: {error}")));
-    board.shutdown().await;
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn an_intro_that_is_never_answered_is_dropped_at_the_turn_deadline() {
+async fn an_intro_that_never_settles_is_dropped_at_the_turn_deadline() {
     let root = scratch_dir("transfer-silent");
     let (operator, operator_log) = logging_operator(&root);
-    let pid_file = root.join("agent.pid");
-    let silent = root.join("silent-pi");
-    // Reads every prompt and writes nothing, with its output still open: a
-    // closed output would be an agent that exited, which is a different
-    // failure.
-    crate::pi_client::write_executable_script(
-        &silent,
-        &format!(
-            "printf '%s\\n' \"$$\" > '{}'\nwhile IFS= read -r line; do :; done\n",
-            pid_file.display()
-        ),
-    );
     let (mut board, coordinator, notices) = coordinated_board(
-        project_on(None, &root, &silent),
+        project("alpha", ""),
         &[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())],
     );
-    // The agent reads its intro and never answers, so the only thing that
-    // ends the transfer is the deadline. Reaching it is the outcome under
-    // test, not a wait for something else, so it can be short.
+    let log = serve(&board, Box::new(|_, _| vec![Step::Hold]));
+    // The intro never settles, so the only thing that ends the transfer is
+    // the deadline. Reaching it is the outcome under test, not a wait for
+    // something else, so it can be short.
     board.project_turn_timeout = Duration::from_millis(200);
     board.handle("hello").await;
     let generation = coordinator.generation();
@@ -1409,16 +1390,9 @@ async fn an_intro_that_is_never_answered_is_dropped_at_the_turn_deadline() {
         "Transfer to alpha failed: the agent stopped responding",
     )
     .await;
-    let pid: i32 = std::fs::read_to_string(&pid_file)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    assert_eq!(
-        unsafe { libc::kill(pid, 0) },
-        -1,
-        "the silent agent was left running"
-    );
+    // The silent session is not left running on its host.
+    until_named(&log, "kill").await;
+    until_named(&log, "abort").await;
 
     board.handle("what happened?").await;
     assert_eq!(
@@ -1472,12 +1446,12 @@ async fn hanging_up_the_operator_discards_its_process_and_the_next_turn_starts_a
 async fn hanging_up_a_project_leg_returns_the_caller_to_the_operator_and_tells_it_why() {
     let root = scratch_dir("hangup-project");
     let (operator, operator_log) = logging_operator(&root);
-    let (runtime, _) = recording_runtime(&root);
     let mut board = board_on(
-        vec![project_on(None, &root, &runtime)],
+        vec![project("alpha", "")],
         &[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())],
         two_model_catalog(),
     );
+    let log = serve(&board, Box::new(|_, _| says("On it.")));
     // The route the coordinator names each time the line is announced.
     let routes = Arc::new(StdMutex::new(Vec::new()));
     let announced = Arc::clone(&routes);
@@ -1495,16 +1469,18 @@ async fn hanging_up_a_project_leg_returns_the_caller_to_the_operator_and_tells_i
 
     assert_eq!(board.force_hangup().await.as_deref(), Some("alpha"));
 
-    assert!(!agent.alive().await, "the project leg was left running");
+    assert!(!agent.alive(), "the project leg was left running");
+    assert_eq!(until_named(&log, "kill").await, [json!({"session": "s1"})]);
     assert_eq!(board.coordinator.route(), OPERATOR);
     assert!(board.agent.is_none() && board.coordinator.project_leg().is_none());
-    let operator_session = board.operator.as_ref().expect("the operator keeps running");
+    let operator_session =
+        LegSession::Operator(board.operator.clone().expect("the operator keeps running"));
     assert!(board
         .active_session
         .lock()
         .await
         .as_ref()
-        .is_some_and(|active| active.same_session(operator_session)));
+        .is_some_and(|active| active.same_session(&operator_session)));
     assert_eq!(*routes.lock().unwrap(), ["alpha", OPERATOR]);
 
     board.handle("I'm back").await;
@@ -1516,142 +1492,36 @@ async fn hanging_up_a_project_leg_returns_the_caller_to_the_operator_and_tells_i
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// A switchboard with the caller on alpha, which runs `runtime` locally.
-#[cfg(unix)]
-async fn on_alpha_with(
-    root: &std::path::Path,
-    runtime: &std::path::Path,
-    settings: &[(&str, &str)],
-) -> Switchboard {
-    let state_dir = root.join("state").to_string_lossy().into_owned();
-    let mut settings = settings.to_vec();
-    settings.push(("SWITCHBOARD_STATE_DIR", &state_dir));
-    let mut board = board_on(
-        vec![project_on(None, root, runtime)],
-        &settings,
-        two_model_catalog(),
-    );
-    let reply = board
-        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
-        .await;
-    assert_eq!(reply.route, "alpha", "{reply:?}");
-    board
-}
-
-#[cfg(unix)]
 #[tokio::test]
-async fn a_redial_whose_leg_has_moved_since_it_was_planned_is_refused() {
-    let root = scratch_dir("redial-moved");
-    let (runtime, _) = recording_runtime(&root);
-    let mut board = on_alpha_with(&root, &runtime, &[]).await;
-    let live = board.agent.clone().expect("alpha is on the line");
-
-    // A rescue that was not made for this redial retires the leg it was
-    // planned for.
-    let Redial::Planned(plan) = board.planner.model_change("anthropic/next").await else {
-        panic!("a swap to a listed model goes ahead");
-    };
-    let rescued = board.coordinator.begin_rescue("hangup");
-    assert_eq!(
-        board.redial(*plan).await.unwrap_err(),
-        LifecycleError::StaleLeg
-    );
-    assert_eq!(board.coordinator.current_identity(), rescued);
-    assert!(!board.coordinator.is_candidate());
-    assert_eq!(board.coordinator.status().model, "anthropic/current:medium");
-    assert!(board
-        .agent
-        .as_ref()
-        .is_some_and(|agent| agent.same_session(&live)));
-    assert!(live.alive().await);
-    board.coordinator.settle();
-
-    // The caller went back to the operator, which keeps the generation.
-    let Redial::Planned(plan) = board.planner.model_change("anthropic/next").await else {
-        panic!("a swap to a listed model goes ahead");
-    };
-    board.force_hangup().await;
-    let generation = board.coordinator.generation();
-    assert_eq!(
-        board.redial(*plan).await.unwrap_err(),
-        LifecycleError::StaleLeg
-    );
-    assert_eq!(board.coordinator.route(), OPERATOR);
-    assert_eq!(board.coordinator.generation(), generation);
-    assert!(board.agent.is_none(), "a leg was launched for nobody");
-
-    // The rescue made for it hands the plan on to the leg that rescue left.
+async fn at_most_one_session_per_project_stays_up() {
+    let (mut board, log) = on_alpha(&[], Box::new(|_, _| says("On it."))).await;
+    // Put through to alpha again from alpha: the old session ends.
     let reply = board
-        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+        .transfer_ctx(&transcript("again"), "alpha", "", "")
         .await;
-    assert_eq!(reply.route, "alpha", "{reply:?}");
-    let Redial::Planned(plan) = board.planner.model_change("anthropic/next").await else {
-        panic!("a swap to a listed model goes ahead");
-    };
-    let rescued = board
-        .coordinator
-        .begin_rescue_of(plan.leg(), "redial")
-        .expect("the leg is still on the line");
-    let reply = board.redial(plan.rescued(rescued)).await.unwrap();
-    assert_eq!(reply.error, None, "{reply:?}");
-    assert_eq!(board.coordinator.status().model, "anthropic/next:medium");
+    assert_eq!(reply.route, "alpha");
+    assert_eq!(log.named("create_session").len(), 2);
+    assert_eq!(until_named(&log, "kill").await, [json!({"session": "s1"})]);
+    let names = log.names();
+    let killed = names.iter().position(|name| name == "kill").unwrap();
+    let created = names
+        .iter()
+        .rposition(|name| name == "create_session")
+        .unwrap();
+    assert!(
+        killed < created,
+        "two alpha sessions were up at once: {names:?}"
+    );
+    // Service shutdown ends the one left.
     board.shutdown().await;
-    let _ = std::fs::remove_dir_all(root);
-}
-
-/// A project runtime whose agent calls `set_model` for anthropic/next when
-/// the caller says "use next", and otherwise answers "On it.".
-#[cfg(unix)]
-fn runtime_that_changes_model(root: &std::path::Path) -> std::path::PathBuf {
-    let runtime = root.join("fake-pi");
-    crate::pi_client::write_executable_script(
-        &runtime,
-        r##"while IFS= read -r line; do
-case "$line" in
-  *"use next"*)
-    printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Switching."}}'
-    printf '%s\n' '{"type":"tool_execution_start","toolName":"set_model","args":{"model":"anthropic/next"}}'
-    ;;
-  *)
-    printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"On it."}}'
-    ;;
-esac
-printf '%s\n' '{"type":"agent_settled"}'
-done
-"##,
-    );
-    runtime
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn the_agents_own_set_model_is_decided_by_the_pickers_checks() {
-    for swaps in ["0", "1"] {
-        let root = scratch_dir("agent-set-model");
-        let runtime = runtime_that_changes_model(&root);
-        let mut board = on_alpha_with(&root, &runtime, &[("SWITCHBOARD_MODEL_SWAPS", swaps)]).await;
-        let live = board.agent.clone().expect("alpha is on the line");
-
-        let reply = board.handle("use next").await;
-
-        assert_eq!(reply.route, "alpha", "{reply:?}");
-        if swaps == "0" {
-            assert_eq!(
-                reply.text,
-                "Switching.\n\nModel swapping is turned off on this switchboard."
-            );
-            assert!(board
-                .agent
-                .as_ref()
-                .is_some_and(|agent| agent.same_session(&live)));
-            assert!(live.alive().await);
-            assert_eq!(board.coordinator.status().model, "anthropic/current:medium");
-        } else {
-            assert_eq!(reply.text, "Switching.\n\nOn it.");
-            assert!(!live.alive().await);
-            assert_eq!(board.coordinator.status().model, "anthropic/next:medium");
+    for _ in 0..500 {
+        if log.named("kill").len() == 2 {
+            break;
         }
-        board.shutdown().await;
-        let _ = std::fs::remove_dir_all(root);
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
+    assert_eq!(
+        log.named("kill"),
+        [json!({"session": "s1"}), json!({"session": "s2"})]
+    );
 }
