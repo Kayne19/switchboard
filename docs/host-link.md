@@ -205,7 +205,7 @@ model does not have). `call_mode` is `null` when the session is not on a call.
 | Command | Args | Result |
 |---|---|---|
 | `create_session` | `project`, `config: {cwd, provider?, model?, thinking?}` | `info` |
-| `open_session` | `session_id`, `project?` | `info` |
+| `open_session` | `session_id`, `cwd`, `project?` | `info` |
 | `list_sessions` | — | `{sessions: [...]}` |
 | `list_saved_sessions` | `cwd`, `project?` | `{sessions: [...]}` |
 | `prompt` | `session`, `message` | `{sent_as: "prompt" \| "follow_up"}` |
@@ -232,7 +232,9 @@ model does not have). `call_mode` is `null` when the session is not on a call.
   attaches to the session for its events. `project` must match
   `[A-Za-z0-9][A-Za-z0-9_-]*`.
 - **`open_session`** reopens a saved session by id (or `.jsonl` path) as a
-  resident session and attaches. Only names starting `sb-` (or
+  resident session in `cwd` and attaches. `cwd` is required: without it the
+  daemon runs the reopened session in its own working directory, not the
+  project folder (measured against a real daemon). Only names starting `sb-` (or
   `sb-<project>-` when `project` is given) are accepted; others are refused.
   Reopening a live session returns it.
 - **`list_sessions`** lists live top-level daemon sessions (subagents are

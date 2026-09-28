@@ -111,12 +111,13 @@ export class FakeDaemon implements DaemonPort {
 		return { ...s };
 	}
 
-	async open(sessionIdOrPath: string): Promise<DaemonSession> {
-		this.#record("open", sessionIdOrPath);
+	async open(sessionIdOrPath: string, cwd: string): Promise<DaemonSession> {
+		this.#record("open", sessionIdOrPath, cwd);
 		for (const s of this.live.values()) if (s.sessionId === sessionIdOrPath) return { ...s };
 		const saved = this.saved.get(sessionIdOrPath);
 		if (!saved) throw new DaemonCommandError("create", `session ${sessionIdOrPath} not found`);
-		const s = { ...saved, handle: `a${this.#next++}` };
+		// Like the daemon: the reopened session runs in the cwd it is given.
+		const s = { ...saved, handle: `a${this.#next++}`, cwd };
 		this.live.set(s.handle, s);
 		return { ...s };
 	}

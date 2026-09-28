@@ -82,8 +82,11 @@ export interface DaemonPort {
 	onEvent(listener: (event: DaemonEvent) => void): () => void;
 	onClose(listener: (error: Error) => void): () => void;
 	create(request: CreateRequest): Promise<DaemonSession>;
-	/** Reopen a saved session by id or path (`create {sessionPath}`), resident. */
-	open(sessionIdOrPath: string): Promise<DaemonSession>;
+	/**
+	 * Reopen a saved session by id or path (`create {sessionPath}`), resident,
+	 * in `cwd`: without `config.cwd` the daemon runs it in its own directory.
+	 */
+	open(sessionIdOrPath: string, cwd: string): Promise<DaemonSession>;
 	/** Attach for events; returns the daemon's snapshot of the session. */
 	attach(handle: string): Promise<DaemonSession>;
 	list(): Promise<DaemonSession[]>;
@@ -287,8 +290,8 @@ export class PrimeDaemonPort implements DaemonPort {
 		return toDaemonSession(data);
 	}
 
-	async open(sessionIdOrPath: string): Promise<DaemonSession> {
-		const data = (await this.#request({ type: "create", lifecycle: "resident", sessionPath: sessionIdOrPath }, 180_000)) as Json;
+	async open(sessionIdOrPath: string, cwd: string): Promise<DaemonSession> {
+		const data = (await this.#request({ type: "create", lifecycle: "resident", sessionPath: sessionIdOrPath, config: { cwd } }, 180_000)) as Json;
 		return toDaemonSession(data);
 	}
 

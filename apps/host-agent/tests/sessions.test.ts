@@ -112,11 +112,15 @@ test("resume: open_session reopens a saved sb- session; a desk session is refuse
 		saved.sessions.map((s) => s.session_id),
 		["old1"],
 	);
-	const info = (await manager.handle("open_session", { session_id: "old1", project: "homelab" })) as Message;
+	await assert.rejects(manager.handle("open_session", { session_id: "old1", project: "homelab" }), (e: Error & { code?: string }) => e.code === "bad_request");
+	const info = (await manager.handle("open_session", { session_id: "old1", cwd: "/srv/homelab", project: "homelab" })) as Message;
 	assert.equal(info.session_id, "old1");
 	assert.equal(info.provenance, "created");
 	assert.equal(info.project, "homelab");
-	await assert.rejects(manager.handle("open_session", { session_id: "desk" }), (e: Error & { code?: string }) => e.code === "refused");
+	// The project folder reaches the daemon: a reopen without it runs in the daemon's own directory.
+	assert.deepEqual(daemon.calls.find((c) => c.op === "open")?.args, ["old1", "/srv/homelab"]);
+	assert.equal(info.cwd, "/srv/homelab");
+	await assert.rejects(manager.handle("open_session", { session_id: "desk", cwd: "/srv/homelab" }), (e: Error & { code?: string }) => e.code === "refused");
 	assert.deepEqual(manager.handles(), [info.session]);
 });
 

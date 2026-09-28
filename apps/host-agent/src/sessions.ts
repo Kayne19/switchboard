@@ -214,7 +214,7 @@ export class SessionManager {
 			case "create_session":
 				return this.createSession(requireString(args, "project"), (args.config ?? {}) as Record<string, unknown>);
 			case "open_session":
-				return this.openSession(requireString(args, "session_id"), optionalString(args, "project"));
+				return this.openSession(requireString(args, "session_id"), requireString(args, "cwd"), optionalString(args, "project"));
 			case "list_sessions":
 				return this.listSessions();
 			case "list_saved_sessions":
@@ -294,16 +294,18 @@ export class SessionManager {
 		throw lastError;
 	}
 
-	async openSession(sessionId: string, project: string | undefined): Promise<Record<string, unknown>> {
+	async openSession(sessionId: string, cwd: string, project: string | undefined): Promise<Record<string, unknown>> {
 		for (const t of this.#tracked.values()) if (t.sessionId === sessionId) return this.#info(t);
-		const opened = await this.#port.open(sessionId);
+		// The daemon runs a reopened session in its own directory unless told
+		// otherwise, so the project folder is passed again.
+		const opened = await this.#port.open(sessionId, cwd);
 		const name = opened.name ?? "";
 		const expected = project ? `${SESSION_NAME_PREFIX}${project}-` : SESSION_NAME_PREFIX;
 		if (!name.startsWith(expected)) {
 			throw new CommandError("refused", `session ${sessionId} (${name || "unnamed"}) was not created by the switchboard`);
 		}
 		const projectId = project ?? name.slice(SESSION_NAME_PREFIX.length).replace(/-[^-]+$/, "");
-		return this.#adopt(opened, projectId, opened.cwd, "created");
+		return this.#adopt(opened, projectId, cwd, "created");
 	}
 
 	async #adopt(session: DaemonSession, project: string, cwd: string, provenance: Provenance): Promise<Record<string, unknown>> {
