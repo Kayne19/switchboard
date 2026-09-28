@@ -51,11 +51,12 @@ target or thinking level, or a value JSON cannot carry). Values with
   `intent`. If you are not sure the project exists, use
   `return_to_operator` instead.
 - `set_model(model=None, thinking=None, keep_context=True, intent=None)`:
-  re-dial this project on another model (provider first when known, e.g.
+  switch this session to another model (provider first when known, e.g.
   `"anthropic/claude-opus-5"`) or thinking level (`off`, `minimal`, `low`,
-  `medium`, `high`, `xhigh`, `max`), because the caller asked. Say nothing
-  alongside it. Pass `keep_context=False` only when the caller wants a clean
-  slate. On a project on another host only a clean slate switches.
+  `medium`, `high`, `xhigh`, `max`), because the caller asked. The session
+  and its context stay. Say nothing alongside it. Pass `keep_context=False`
+  only when the caller wants a clean slate: that ends this session and starts
+  a new one.
 
 ## Display
 

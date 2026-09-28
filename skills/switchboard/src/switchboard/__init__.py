@@ -313,7 +313,9 @@ def transfer_to_project(project, intent=None, model=None, thinking=None):
 
 
 def set_model(model=None, thinking=None, keep_context=True, intent=None):
-    """Re-dial this project on another model or thinking level because the caller asked."""
+    """Switch this session to another model or thinking level because the caller asked.
+
+    keep_context=False ends this session and starts a new one instead."""
     _require_str("model", model, optional=True)
     _check_thinking(thinking)
     _require_str("intent", intent, optional=True)
@@ -325,7 +327,10 @@ def set_model(model=None, thinking=None, keep_context=True, intent=None):
     def describe(result):
         if result.ok:
             level = f" at thinking {thinking}" if thinking else ""
-            return f"Re-dialling on {model or 'the same model'}{level}. Say nothing further; this session is being restarted."
+            target = f"{model or 'the same model'}{level}"
+            if keep_context:
+                return f"Switching to {target}. Say nothing further."
+            return f"Starting a new session on {target}. Say nothing further; this session is ending."
         return _common(result) or _refused(result, "model change")
 
     args = _optional_args(model=model, thinking=thinking, keep_context=keep_context, intent=intent)
