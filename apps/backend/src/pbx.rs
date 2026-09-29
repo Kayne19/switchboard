@@ -21,7 +21,7 @@ use crate::registry::{Project, Registry};
 use crate::router::{utility_decision, CallSummary, Decision, Router, UtilityDecision};
 use futures_util::FutureExt;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
@@ -1346,20 +1346,52 @@ impl Switchboard {
         plan: &LaunchPlan,
         mode: &str,
     ) -> Result<ProjectSession, PiSessionError> {
-        let (session, state) = ProjectSession::create(
-            &self.hosts,
-            ProjectLaunch {
-                host: plan.host.clone(),
-                project: project.id.clone(),
-                cwd: project.cwd.clone(),
-                spec: model.to_owned(),
-                brief: self.agent_brief(project),
-                turn_timeout: self.project_turn_timeout,
-                on_activity: self.activity_callback.clone(),
-                on_module: self.module_callback.clone(),
-            },
-        )
-        .await?;
+        let launch = ProjectLaunch {
+            host: plan.host.clone(),
+            project: project.id.clone(),
+            cwd: project.cwd.clone(),
+            spec: model.to_owned(),
+            brief: self.agent_brief(project),
+            turn_timeout: self.project_turn_timeout,
+            on_activity: self.activity_callback.clone(),
+            on_module: self.module_callback.clone(),
+        };
+        // A host-agent restart keeps resident sessions alive. Prefer the
+        // matching service-created session rather than creating a duplicate.
+        let resumed_id = if self.hosts.link_epoch(&plan.host).is_some() {
+            self.hosts
+                .command(
+                    &plan.host,
+                    "list_sessions",
+                    json!({}),
+                    std::time::Duration::from_secs(5),
+                )
+                .await
+                .ok()
+                .and_then(|reply| {
+                    reply.result["sessions"].as_array().and_then(|sessions| {
+                        sessions.iter().find_map(|session| {
+                            (session["project"].as_str() == Some(project.id.as_str())
+                                && session["cwd"].as_str() == Some(project.cwd.as_str())
+                                && session["provenance"].as_str().unwrap_or("created") == "created")
+                                .then(|| {
+                                    session["session_id"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .to_owned()
+                                })
+                                .filter(|id| !id.is_empty())
+                        })
+                    })
+                })
+        } else {
+            None
+        };
+        let (session, state) = if let Some(session_id) = resumed_id {
+            ProjectSession::open(&self.hosts, launch.clone(), &session_id).await?
+        } else {
+            ProjectSession::create(&self.hosts, launch).await?
+        };
         if let Err(error) = session
             .join_call_mode(leg_token, &self.persona, self.speech_deadline_ms, mode)
             .await

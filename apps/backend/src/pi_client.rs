@@ -596,6 +596,7 @@ pub type ModuleCallback =
 const SESSION_COMMAND_WAIT: Duration = Duration::from_secs(30);
 
 /// What starts a project session: where it runs and what it is told.
+#[derive(Clone)]
 pub struct ProjectLaunch {
     pub host: String,
     pub project: String,
