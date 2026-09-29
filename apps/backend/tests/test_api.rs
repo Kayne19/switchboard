@@ -4414,6 +4414,46 @@ async fn background_speak_is_refused_and_latest_display_is_released_on_promotion
 }
 
 #[tokio::test]
+async fn stopping_a_background_agent_discards_its_held_display() {
+    let state = state();
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "background-token");
+    let held = module_call(
+        &state,
+        AgentCall {
+            call: "display".into(),
+            token: "background-token".into(),
+            args: diagram_show(),
+        },
+    )
+    .await;
+    assert_eq!(held["status"], "accepted");
+    assert!(state
+        .0
+        .background_displays
+        .lock()
+        .await
+        .contains_key("alpha"));
+
+    update_agent_state(
+        &state,
+        AgentStateNotice {
+            project: "alpha".into(),
+            state: "finished".into(),
+        },
+    )
+    .await;
+    assert!(!state
+        .0
+        .background_displays
+        .lock()
+        .await
+        .contains_key("alpha"));
+}
+
+#[tokio::test]
 async fn an_idle_notice_does_not_clear_a_background_speak_request() {
     let state = state();
     state

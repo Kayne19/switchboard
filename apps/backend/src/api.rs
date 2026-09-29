@@ -1677,6 +1677,14 @@ async fn model(
 /// Updates the page projection for a resident project session. The PBX sends
 /// lifecycle notices; waiting requests are kept until promotion or stop.
 async fn update_agent_state(state: &AppState, notice: AgentStateNotice) {
+    if notice.state == "finished" {
+        state
+            .0
+            .background_displays
+            .lock()
+            .await
+            .remove(&notice.project);
+    }
     let mut agents = state.0.agent_states.lock().await;
     if let Some(agent) = agents
         .iter_mut()
