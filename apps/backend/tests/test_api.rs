@@ -3605,6 +3605,7 @@ async fn floor_good_moment_gate_does_not_query_desk_hosts() {
             project: "alpha".into(),
             token: "alpha-token".into(),
             generation: state.0.coordinator.generation(),
+            context: "caller: previous line".into(),
             message: "alpha finished".into(),
             reason: "finished".into(),
         })
@@ -4771,7 +4772,7 @@ done
             .iter()
             .find(|frame| frame["type"] == "spoken")
             .expect("rewritten background speech")["entry"]["text"],
-        "An update from grapes: the ablation numbers are ready"
+        "the ablation numbers are ready"
     );
     assert_lifecycle_consistent(&state).await;
     let second_background = frames_until(&mut connection, "spoken").await;
@@ -4781,7 +4782,7 @@ done
             .iter()
             .find(|frame| frame["type"] == "spoken")
             .expect("original background speech")["entry"]["text"],
-        "An update from grapes: the latest ablation numbers are ready again"
+        "grapes: the latest ablation numbers are ready again"
     );
     assert_lifecycle_consistent(&state).await;
     assert!(state
@@ -4905,6 +4906,7 @@ async fn stale_floor_request_is_dropped_before_audio_reservation() {
             project: "grapes".into(),
             token: "grapes-token".into(),
             generation,
+            context: "caller: previous line".into(),
             message: "stale update".into(),
             reason: "finished".into(),
         },

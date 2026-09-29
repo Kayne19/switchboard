@@ -8,6 +8,7 @@ fn request(n: usize) -> FloorRequest {
         project: "grape".into(),
         token: "grape-token".into(),
         generation: 0,
+        context: "caller: previous line".into(),
         message: format!("update {n}"),
         reason: "finished".into(),
     }
@@ -29,8 +30,8 @@ fn hooks(
                 Ok(true)
             }) as GateFuture
         }),
-        rewrite: Arc::new(move |request| {
-            let text = request.message.clone();
+        rewrite: Arc::new(move |input| {
+            let text = input.message.clone();
             Box::pin(async move { Ok(text) }) as RewriteFuture
         }),
         release: Arc::new(move |request, text, announce| {
@@ -241,7 +242,7 @@ async fn rewrite_error_uses_the_original_message() {
     let floor_worker = floor.clone();
     let worker = tokio::spawn(async move { floor_worker.run(h).await });
     yield_worker().await;
-    assert_eq!(results.recv().await.unwrap().0, "update 1:update 1");
+    assert_eq!(results.recv().await.unwrap().0, "grape: update 1:update 1");
     worker.abort();
 }
 
@@ -275,7 +276,7 @@ async fn rewrite_timeout_uses_the_original_message() {
     assert!(results.try_recv().is_err());
     timeout_events.recv().await.unwrap();
     yield_worker().await;
-    assert_eq!(results.recv().await.unwrap().0, "update 1:update 1");
+    assert_eq!(results.recv().await.unwrap().0, "grape: update 1:update 1");
     worker.abort();
 }
 
@@ -386,5 +387,38 @@ async fn dead_or_promoted_agent_is_dropped_before_release() {
     yield_worker().await;
     assert!(results.try_recv().is_err());
     assert_eq!(floor.queue_len().await, 0);
+    worker.abort();
+}
+
+#[tokio::test]
+async fn rewrite_receives_conversation_project_quiet_and_message() {
+    let floor = Floor::new(Duration::ZERO);
+    let connected = Arc::new(AtomicBool::new(true));
+    let live = Arc::new(AtomicBool::new(true));
+    let (input_tx, mut input_rx) = mpsc::unbounded_channel();
+    let (released, mut results) = mpsc::unbounded_channel();
+    floor.set_page_connected(true).await;
+    floor.enqueue(request(1)).await;
+    let mut h = hooks(connected, live, Arc::new(AtomicUsize::new(0)), released);
+    h.rewrite = Arc::new(move |input| {
+        input_tx
+            .send((input.context, input.project, input.quiet, input.message))
+            .unwrap();
+        Box::pin(async { Ok("spoken result".into()) }) as RewriteFuture
+    });
+    let worker = tokio::spawn({
+        let floor = floor.clone();
+        async move { floor.run(h).await }
+    });
+    assert_eq!(
+        input_rx.recv().await.unwrap(),
+        (
+            "caller: previous line".to_owned(),
+            "grape".to_owned(),
+            true,
+            "update 1".to_owned()
+        )
+    );
+    assert_eq!(results.recv().await.unwrap().0, "spoken result:update 1");
     worker.abort();
 }

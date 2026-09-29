@@ -105,6 +105,15 @@ class SurfaceTest(unittest.TestCase):
         self.assertEqual(set(switchboard.__all__), surface)
 
 
+class RequestToSpeakContractTest(unittest.TestCase):
+    def test_docstring_describes_spoken_answer_contract(self):
+        doc = switchboard.request_to_speak.__doc__ or ""
+        self.assertIn("actual result", doc)
+        self.assertIn("not a teaser", doc)
+        self.assertIn("question and options", doc)
+        self.assertIn("what went wrong", doc)
+
+
 class BackgroundSurfaceTest(unittest.TestCase):
     def test_background_step_keeps_the_four_call_surface(self):
         self.assertEqual(set(switchboard.__all__), {"speak", "request_to_speak", "display", "view"})
