@@ -1314,7 +1314,8 @@ impl Switchboard {
                 }
                 self.coordinator
                     .register_background(previous_label.clone(), previous.token());
-                self.announce_agent_state(&previous_label, "idle").await;
+                let state = if previous.busy() { "busy" } else { "idle" };
+                self.announce_agent_state(&previous_label, state).await;
                 self.background_agents.insert(previous_label, previous);
             }
         }
@@ -1410,7 +1411,8 @@ impl Switchboard {
             }
             self.coordinator
                 .register_background(previous_label.clone(), previous.token());
-            self.announce_agent_state(&previous_label, "idle").await;
+            let state = if previous.busy() { "busy" } else { "idle" };
+            self.announce_agent_state(&previous_label, state).await;
             self.background_agents.insert(previous_label, previous);
         }
         self.announce_agent_state(&project.id, "idle").await;

@@ -2142,10 +2142,24 @@ async fn backgrounding_a_busy_foreground_sends_an_away_notice() {
         async move { alpha.prompt("long work").await }
     });
     started_rx.await.expect("the long turn started");
+    let states = Arc::new(StdMutex::new(Vec::new()));
+    let states_for_callback = Arc::clone(&states);
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        states_for_callback
+            .lock()
+            .unwrap()
+            .push((notice.project, notice.state));
+        Box::pin(async {})
+    })));
     let reply = board
         .transfer_ctx(&transcript("beta"), "beta", "", "")
         .await;
     assert_eq!(reply.route, "beta");
+    assert!(states
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(project, state)| project == "alpha" && state == "busy"));
     assert!(log
         .named("set_mode")
         .iter()
