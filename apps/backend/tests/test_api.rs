@@ -3456,6 +3456,45 @@ fn state_with_agents(root: &std::path::Path) -> AppState {
 }
 
 #[tokio::test]
+async fn a_slow_desk_host_does_not_hold_the_pbx_lock_during_routing_summary() {
+    let (client, _, _) = fake_jev_client();
+    let registry = Registry::new(vec![serde_json::from_value(json!({
+        "id": "alpha",
+        "host": "scriptorium",
+        "cwd": "/srv/alpha",
+    }))
+    .unwrap()]);
+    let state = state_with_jev(client, registry);
+    let host = state.0.switchboard.lock().await.hosts();
+    let listed = std::sync::Arc::new(tokio::sync::Notify::new());
+    let listed_for_host = listed.clone();
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| vec![]));
+    fake.on_command = Some(Box::new(move |name, _| {
+        if name == "list_sessions" {
+            listed_for_host.notify_one();
+            return Some(None);
+        }
+        None
+    }));
+    fake.serve(host.connect_fake("scriptorium"));
+
+    let routing_state = state.clone();
+    let routing = tokio::spawn(async move {
+        route_transcript(&routing_state, "caller asks about alpha").await
+    });
+    timeout(Duration::from_secs(1), listed.notified())
+        .await
+        .expect("the routing summary queried the host");
+    let guard = timeout(Duration::from_secs(1), state.0.switchboard.lock())
+        .await
+        .expect("a slow host query does not hold the PBX lock");
+    drop(guard);
+    host.disconnect_fake("scriptorium");
+    let _ = routing.await.expect("routing completed after the host link closed");
+    state.0.switchboard.lock().await.shutdown().await;
+}
+
+#[tokio::test]
 async fn hanging_up_with_nothing_on_the_line_says_so() {
     let state = state();
     let (mut connection, _, _) = state.register_connection().await;

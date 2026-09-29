@@ -814,26 +814,22 @@ impl Switchboard {
         )
     }
 
-    /// Build the Jev summary with live, untracked desk sessions that can be
-    /// offered for takeover. The host agent is the source of session truth;
-    /// only exact registered folders are exposed.
-    pub async fn call_summary_with_live_desk_sessions(
-        &self,
-        transcript: &[TranscriptEntry],
-        screen: Value,
-        utterance: impl Into<String>,
-    ) -> CallSummary {
-        let mut summary = self.call_summary(transcript, screen, utterance);
-        summary.live_desk_sessions = self.live_desk_sessions().await;
-        summary
-    }
-
     /// List foreign live sessions in registered project folders. The service
     /// labels a session as `taken_over` in the routing summary because that is
     /// the provenance it will record if the caller selects it.
+    #[cfg(test)]
     pub async fn live_desk_sessions(&self) -> Vec<DeskSession> {
+        Self::live_desk_sessions_from(self.hosts.clone(), Arc::clone(&self.registry)).await
+    }
+
+    /// Host I/O for the desk-session summary. Keep this outside the PBX lock:
+    /// a slow host must not stall unrelated caller turns or lifecycle actions.
+    pub(crate) async fn live_desk_sessions_from(
+        hosts: Hosts,
+        registry: Arc<Registry>,
+    ) -> Vec<DeskSession> {
         let mut projects_by_host: HashMap<String, Vec<&Project>> = HashMap::new();
-        for project in &self.registry.projects {
+        for project in &registry.projects {
             if let Some(host) = project.canonical_host() {
                 projects_by_host
                     .entry(host.to_owned())
@@ -844,8 +840,7 @@ impl Switchboard {
         let mut result = Vec::new();
         let mut seen = HashSet::new();
         for (host, projects) in projects_by_host {
-            let reply = match self
-                .hosts
+            let reply = match hosts
                 .command(&host, "list_sessions", json!({}), Duration::from_secs(5))
                 .await
             {

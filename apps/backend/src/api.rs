@@ -672,21 +672,17 @@ fn spawn_floor_worker(state: AppState) {
             Box::pin(async move {
                 let entries = state.0.transcript_log.lock().await.entries();
                 let screen = state.0.screen_state.lock().await.clone();
-                let (router, summary) = {
-                    let board = state.0.switchboard.lock().await;
-                    let mut summary = board
-                        .call_summary_with_live_desk_sessions(
-                            &entries,
-                            screen,
-                            request.message.clone(),
-                        )
-                        .await;
-                    // The queued message is the item being judged, not a new
-                    // caller utterance. Keeping it in the named field makes
-                    // the Jev prompt useful without adding another contract.
-                    summary.caller_just_said = request.message;
-                    (board.router(), summary)
-                };
+                let (router, mut summary) = call_summary_without_pbx_lock(
+                    &state,
+                    &entries,
+                    screen,
+                    request.message.clone(),
+                )
+                .await;
+                // The queued message is the item being judged, not a new
+                // caller utterance. Keeping it in the named field makes
+                // the Jev prompt useful without adding another contract.
+                summary.caller_just_said = request.message;
                 router.good_moment(&summary).await.map_err(|_| ())
             }) as floor::GateFuture
         }),
@@ -1096,20 +1092,37 @@ async fn route_final_transcript(state: &AppState, id: &str, generation: u64, tra
     dispatch_routed_transcript(state, id, generation, transcript).await;
 }
 
+/// Fetch host-owned desk sessions without holding the PBX lock. The summary
+/// is rebuilt under that lock after the bounded host queries, so route state is
+/// current at the point Jev sees it.
+async fn call_summary_without_pbx_lock(
+    state: &AppState,
+    entries: &[crate::history::TranscriptEntry],
+    screen: Value,
+    utterance: String,
+) -> (crate::router::Router, CallSummary) {
+    let (hosts, registry) = {
+        let board = state.0.switchboard.lock().await;
+        (board.hosts(), Arc::clone(&board.registry))
+    };
+    let live_desk_sessions =
+        Switchboard::live_desk_sessions_from(hosts, registry).await;
+    let mut summary = {
+        let board = state.0.switchboard.lock().await;
+        board.call_summary(entries, screen, utterance)
+    };
+    summary.live_desk_sessions = live_desk_sessions;
+    let router = state.0.switchboard.lock().await.router();
+    (router, summary)
+}
+
 /// Build a summary and ask Jev once for this utterance. The operator path is
 /// the only fallback for a timeout, malformed response, or missing key.
 async fn route_transcript(state: &AppState, transcript: &str) -> Decision {
     let entries = state.0.transcript_log.lock().await.entries();
     let screen = state.0.screen_state.lock().await.clone();
-    let (router, summary): (crate::router::Router, CallSummary) = {
-        let board = state.0.switchboard.lock().await;
-        (
-            board.router(),
-            board
-                .call_summary_with_live_desk_sessions(&entries, screen, transcript.to_owned())
-                .await,
-        )
-    };
+    let (router, summary) =
+        call_summary_without_pbx_lock(state, &entries, screen, transcript.to_owned()).await;
     match router.route(&summary).await {
         Ok(decision) => decision,
         Err(error) => {
