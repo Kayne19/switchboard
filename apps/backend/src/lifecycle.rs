@@ -355,6 +355,9 @@ pub struct Coordinator {
     projection: Arc<RwLock<Arc<Status>>>,
     next_operation: Arc<AtomicU64>,
     on_candidate: Arc<Mutex<Option<CandidateCallback>>>,
+    /// Serializes a background-token check with the projection mutation that
+    /// follows it. Promotion/removal takes this same owner lock.
+    background_owner: Arc<std::sync::Mutex<()>>,
 }
 
 impl Coordinator {
@@ -369,6 +372,7 @@ impl Coordinator {
             projection,
             next_operation: Arc::new(AtomicU64::new(1)),
             on_candidate: Arc::new(Mutex::new(None)),
+            background_owner: Arc::new(std::sync::Mutex::new(())),
         }
     }
 
@@ -452,6 +456,13 @@ impl Coordinator {
 
     pub fn generation(&self) -> u64 {
         self.current_identity().generation
+    }
+
+    /// Applies a synchronous projection mutation only while the stamped leg
+    /// generation is still current. The lifecycle lock covers both the check
+    /// and mutation, so a rescue/adoption cannot land between them.
+    pub fn with_generation<R>(&self, generation: u64, operation: impl FnOnce() -> R) -> Option<R> {
+        self.linearize(|state| (state.leg.generation == generation).then(operation))
     }
 
     pub fn begin_prompt(&self, leg: &LegIdentity) -> Result<OperationIdentity, LifecycleError> {
@@ -672,19 +683,42 @@ impl Coordinator {
     /// foreground. Its token is still valid for display and request calls, but
     /// not for speech.
     pub fn register_background(&self, project: impl Into<String>, token: impl Into<String>) {
+        let _owner = self
+            .background_owner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         self.linearize(|state| {
             state.background_tokens.insert(token.into(), project.into());
         });
     }
 
     pub fn remove_background(&self, token: &str) {
+        let _owner = self
+            .background_owner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         self.linearize(|state| {
             state.background_tokens.remove(token);
         });
     }
 
-    pub fn background_project(&self, token: &str) -> Option<String> {
-        self.linearize(|state| state.background_tokens.get(token).cloned())
+    /// Runs one background projection mutation while owning the token's
+    /// lifecycle check. Promotion/removal cannot happen between the check and
+    /// the mutation, so a request or held display cannot land on a foreground
+    /// session.
+    pub fn with_background<R>(&self, token: &str, operation: impl FnOnce(&str) -> R) -> Option<R> {
+        let _owner = self
+            .background_owner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.linearize(|state| {
+            let project = state.background_tokens.get(token)?.clone();
+            Some(operation(&project))
+        })
+    }
+
+    pub fn project_is_background(&self, project: &str) -> bool {
+        self.linearize(|state| state.background_tokens.values().any(|name| name == project))
     }
 
     pub fn is_background(&self, token: &str) -> bool {

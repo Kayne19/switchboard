@@ -31,7 +31,7 @@ use std::{
     future::Future,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc,
+        Arc, Mutex as StdMutex,
     },
 };
 use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex};
@@ -46,16 +46,26 @@ const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 /// projection directly, so waiting requests cannot be lost by a late idle.
 #[derive(Clone)]
 struct AgentProjection {
-    states: Arc<Mutex<Vec<AgentState>>>,
-    displays: Arc<Mutex<HashMap<String, Value>>>,
+    // These are deliberately synchronous locks. Coordinator's background
+    // owner holds its lifecycle mutex while it validates a resident and
+    // applies a waiting/display mutation, so the check and write cannot be
+    // separated by promotion.
+    states: Arc<StdMutex<Vec<AgentState>>>,
+    displays: Arc<StdMutex<HashMap<String, Value>>>,
 }
 
 impl AgentProjection {
-    async fn notice(&self, notice: &AgentStateNotice) -> Vec<AgentState> {
+    fn notice(&self, notice: &AgentStateNotice) -> Vec<AgentState> {
         if notice.state == "finished" {
-            self.displays.lock().await.remove(&notice.project);
+            self.displays
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(&notice.project);
         }
-        let mut agents = self.states.lock().await;
+        let mut agents = self
+            .states
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(agent) = agents
             .iter_mut()
             .find(|agent| agent.project == notice.project)
@@ -77,8 +87,11 @@ impl AgentProjection {
         agents.clone()
     }
 
-    async fn waiting(&self, project: String, request: AgentRequest) -> Vec<AgentState> {
-        let mut agents = self.states.lock().await;
+    fn waiting(&self, project: String, request: AgentRequest) -> Vec<AgentState> {
+        let mut agents = self
+            .states
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(agent) = agents.iter_mut().find(|agent| agent.project == project) {
             agent.state = "waiting".into();
             agent.pending_request = Some(request);
@@ -93,16 +106,25 @@ impl AgentProjection {
         agents.clone()
     }
 
-    async fn hold_display(&self, project: String, action: Value) {
-        self.displays.lock().await.insert(project, action);
+    fn hold_display(&self, project: String, action: Value) {
+        self.displays
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(project, action);
     }
 
-    async fn take_display(&self, project: &str) -> Option<Value> {
-        self.displays.lock().await.remove(project)
+    fn take_display(&self, project: &str) -> Option<Value> {
+        self.displays
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(project)
     }
 
-    async fn snapshot(&self) -> Vec<AgentState> {
-        self.states.lock().await.clone()
+    fn snapshot(&self) -> Vec<AgentState> {
+        self.states
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 }
 
@@ -221,7 +243,7 @@ impl LegAnnouncer {
         });
         gate.scene_leg = Some(leg.clone());
         if leg.route != crate::pbx::OPERATOR {
-            if let Some(action) = self.projection.take_display(&leg.route).await {
+            if let Some(action) = self.projection.take_display(&leg.route) {
                 let event = Event::Json(
                     ServerMessage::Display {
                         action: action.clone(),
@@ -410,8 +432,8 @@ impl AppState {
         let (turns, turn_rx) = mpsc::channel(64);
         let (shutdown, _) = watch::channel(false);
         let last_display = Arc::new(Mutex::new(None));
-        let background_displays = Arc::new(Mutex::new(HashMap::new()));
-        let agent_states = Arc::new(Mutex::new(Vec::new()));
+        let background_displays = Arc::new(StdMutex::new(HashMap::new()));
+        let agent_states = Arc::new(StdMutex::new(Vec::new()));
         let projection = AgentProjection {
             states: agent_states.clone(),
             displays: background_displays.clone(),
@@ -1311,9 +1333,17 @@ async fn process_turns(state: AppState) {
             tracing::warn!(clip = %id, route = %reply.route, %error, "the turn reported a failure");
         }
         tracing::info!(clip = %id, route = %reply.route, elapsed = ?started.elapsed(), "turn settled");
+        let delivery_generation = reply.delivery_generation.unwrap_or(generation);
+        let _delivered = deliver_turn_if_current(&state, &reply, delivery_generation, &id)
+            .instrument(turn)
+            .await;
+        // Settlement belongs to the same generation as delivery. In
+        // particular, do not publish idle for a stale reply after rescue has
+        // already replaced the resident or foreground session.
         if reply.route != crate::pbx::OPERATOR {
-            update_agent_state(
+            update_agent_state_if_current(
                 &state,
+                delivery_generation,
                 AgentStateNotice {
                     project: reply.route.clone(),
                     state: "idle".into(),
@@ -1321,14 +1351,6 @@ async fn process_turns(state: AppState) {
             )
             .await;
         }
-        deliver_turn_if_current(
-            &state,
-            &reply,
-            reply.delivery_generation.unwrap_or(generation),
-            &id,
-        )
-        .instrument(turn)
-        .await;
         state.0.turn_in_flight.store(false, Ordering::Release);
     }
     tracing::warn!("the turn worker stopped; no further turns will be dispatched");
@@ -1741,8 +1763,27 @@ async fn model(
 /// Updates the page projection for a resident project session. The PBX sends
 /// lifecycle notices; waiting requests are kept until promotion or stop.
 async fn update_agent_state(state: &AppState, notice: AgentStateNotice) {
-    let agents = state.0.projection.notice(&notice).await;
+    let agents = state.0.projection.notice(&notice);
     emit_message(state, ServerMessage::AgentsState { agents });
+}
+
+/// Settles a turn only if its stamped generation still owns the lifecycle.
+/// The coordinator owns the check and projection mutation together; stale
+/// replies cannot mark a replacement resident idle.
+async fn update_agent_state_if_current(
+    state: &AppState,
+    generation: u64,
+    notice: AgentStateNotice,
+) -> bool {
+    let Some(agents) = state
+        .0
+        .coordinator
+        .with_generation(generation, || state.0.projection.notice(&notice))
+    else {
+        return false;
+    };
+    emit_message(state, ServerMessage::AgentsState { agents });
+    true
 }
 
 /// A project session's `speak`: its words, and the call token it carried.
@@ -1896,18 +1937,19 @@ async fn request_to_speak(state: AppState, token: &str, raw: Value) -> Response 
         )
             .into_response();
     }
-    let Some(project) = state.0.coordinator.background_project(token) else {
+    let request = AgentRequest {
+        message: message.to_owned(),
+        reason: reason.to_owned(),
+    };
+    let Some(agents) = state.0.coordinator.with_background(token, |project| {
+        state.0.projection.waiting(project.to_owned(), request)
+    }) else {
         return (
             axum::http::StatusCode::CONFLICT,
             Json(json!({"delivered":false,"reason":"not_on_call","detail":"this session is not a background call"})),
         )
             .into_response();
     };
-    let request = AgentRequest {
-        message: message.to_owned(),
-        reason: reason.to_owned(),
-    };
-    let agents = state.0.projection.waiting(project, request).await;
     emit_message(&state, ServerMessage::AgentsState { agents });
     Json(json!({"delivered":false,"accepted":true,"reason":null})).into_response()
 }
@@ -1979,12 +2021,17 @@ async fn display(state: AppState, token: &str, raw: Value) -> Response {
         }
     }
 
-    if let Some(project) = state.0.coordinator.background_project(token) {
-        state
-            .0
-            .projection
-            .hold_display(project, normalized_action)
-            .await;
+    if state
+        .0
+        .coordinator
+        .with_background(token, |project| {
+            state
+                .0
+                .projection
+                .hold_display(project.to_owned(), normalized_action.clone())
+        })
+        .is_some()
+    {
         return Json(json!({"delivered":false,"accepted":true,"reason":"caller_away"}))
             .into_response();
     }
@@ -2635,7 +2682,7 @@ async fn snapshot_messages(state: &AppState) -> Vec<ServerMessage> {
     messages.push(ServerMessage::History {
         entries: state.0.transcript_log.lock().await.entries(),
     });
-    let agents = state.0.projection.snapshot().await;
+    let agents = state.0.projection.snapshot();
     if !agents.is_empty() {
         messages.push(ServerMessage::AgentsState { agents });
     }

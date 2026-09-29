@@ -890,6 +890,53 @@ async fn queued_turn_from_before_page_rescue_never_reaches_the_new_leg() {
     assert!(worker.await.unwrap_err().is_cancelled());
 }
 
+/// Test-only lifecycle oracle. It checks the projections together rather
+/// than asserting a single event, so every failure path can use the same
+/// consistency contract.
+async fn assert_lifecycle_consistent(state: &AppState) {
+    let agents = state.0.projection.states.lock().unwrap().clone();
+    let displays = state.0.projection.displays.lock().unwrap().clone();
+    let route = state.0.coordinator.route();
+    let board = state.0.switchboard.lock().await;
+    for agent in &agents {
+        if agent.state == "busy" {
+            let in_flight = if agent.project == route {
+                board.foreground_busy_for_test(&agent.project)
+            } else {
+                board
+                    .residents_for_test()
+                    .into_iter()
+                    .find(|(project, _, _)| project == &agent.project)
+                    .is_some_and(|(_, alive, busy)| alive && busy)
+            };
+            assert!(in_flight, "busy agent has no in-flight turn: {:?}", agent);
+        }
+        assert_eq!(
+            agent.pending_request.is_some(),
+            agent.state == "waiting",
+            "waiting state and request must agree: {:?}",
+            agent
+        );
+    }
+    for project in displays.keys() {
+        let resident = board
+            .residents_for_test()
+            .into_iter()
+            .find(|(name, _, _)| name == project)
+            .expect("held display belongs to a resident");
+        assert!(resident.1, "held display belongs to a dead resident");
+    }
+    if route != OPERATOR {
+        let foreground = agents.iter().find(|agent| agent.project == route);
+        assert!(foreground.is_none_or(|agent| agent.pending_request.is_none()));
+        assert!(!displays.contains_key(&route));
+    }
+    for (project, alive, _) in board.residents_for_test() {
+        assert!(alive, "dead resident remains in registry: {project}");
+        assert!(board.coordinator().project_is_background(&project));
+    }
+}
+
 async fn next_event_of(events: &mut broadcast::Receiver<Event>, event_type: &str) -> Value {
     timeout(Duration::from_secs(1), async {
         loop {
@@ -4391,7 +4438,7 @@ async fn background_speak_is_refused_and_latest_display_is_released_on_promotion
         .projection
         .displays
         .lock()
-        .await
+        .unwrap()
         .contains_key("alpha"));
 
     begin_alpha_candidate(&state, "foreground-token");
@@ -4411,7 +4458,7 @@ async fn background_speak_is_refused_and_latest_display_is_released_on_promotion
         .projection
         .displays
         .lock()
-        .await
+        .unwrap()
         .contains_key("alpha"));
 }
 
@@ -4437,7 +4484,7 @@ async fn stopping_a_background_agent_discards_its_held_display() {
         .projection
         .displays
         .lock()
-        .await
+        .unwrap()
         .contains_key("alpha"));
 
     update_agent_state(
@@ -4453,8 +4500,75 @@ async fn stopping_a_background_agent_discards_its_held_display() {
         .projection
         .displays
         .lock()
-        .await
+        .unwrap()
         .contains_key("alpha"));
+}
+
+#[tokio::test]
+async fn failed_promotion_finished_notice_clears_the_held_display_projection() {
+    let state = state();
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "background-token");
+    let held = module_call(
+        &state,
+        AgentCall {
+            call: "display".into(),
+            token: "background-token".into(),
+            args: diagram_show(),
+        },
+    )
+    .await;
+    assert_eq!(held["status"], "accepted");
+
+    // This is the projection side of a failed promotion: PBX's terminal
+    // `finished` owner notice must release the resident's held scene.
+    update_agent_state(
+        &state,
+        AgentStateNotice {
+            project: "alpha".into(),
+            state: "finished".into(),
+        },
+    )
+    .await;
+    assert!(state
+        .0
+        .projection
+        .displays
+        .lock()
+        .unwrap()
+        .get("alpha")
+        .is_none());
+}
+
+#[tokio::test]
+async fn background_request_and_display_owner_rejects_after_promotion_removes_token() {
+    let state = state();
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "background-token");
+    let agents = state
+        .0
+        .coordinator
+        .with_background("background-token", |project| {
+            state.0.projection.waiting(
+                project.to_owned(),
+                AgentRequest {
+                    message: "ready".into(),
+                    reason: "finished".into(),
+                },
+            )
+        });
+    assert!(agents.is_some());
+    state.0.coordinator.remove_background("background-token");
+    assert!(state
+        .0
+        .coordinator
+        .with_background("background-token", |_| ())
+        .is_none());
+    assert_lifecycle_consistent(&state).await;
 }
 
 #[tokio::test]
@@ -4481,7 +4595,7 @@ async fn an_idle_notice_does_not_clear_a_background_speak_request() {
     )
     .await;
 
-    let agents = state.0.projection.states.lock().await;
+    let agents = state.0.projection.states.lock().unwrap();
     let agent = agents
         .iter()
         .find(|agent| agent.project == "alpha")
@@ -4551,13 +4665,23 @@ async fn process_turns_settlement_preserves_a_waiting_request() {
         .await
         .unwrap();
 
-    let _ = next_event_of(&mut events, "agents_state").await;
+    // The continuing foreground turn announces busy before it settles. Read
+    // through that transition to the owner-published waiting state.
+    loop {
+        let event = next_event_of(&mut events, "agents_state").await;
+        if event["agents"]
+            .as_array()
+            .is_some_and(|agents| agents.iter().any(|agent| agent["state"] == "waiting"))
+        {
+            break;
+        }
+    }
     let agent = state
         .0
         .projection
         .states
         .lock()
-        .await
+        .unwrap()
         .iter()
         .find(|agent| agent.project == "alpha")
         .cloned()
@@ -4595,7 +4719,7 @@ async fn agents_state_publishes_idle_after_turn_and_finished_after_hangup() {
         .transfer_ctx(&context, "alpha", "", "")
         .await;
     assert_eq!(reply.route, "alpha");
-    let agents = state.0.projection.states.lock().await.clone();
+    let agents = state.0.projection.states.lock().unwrap().clone();
     assert_eq!(
         agents
             .iter()
@@ -4617,7 +4741,10 @@ async fn agents_state_publishes_idle_after_turn_and_finished_after_hangup() {
         .any(|event| event["agents"][0]["state"] == "idle"));
 
     state.0.switchboard.lock().await.force_hangup().await;
-    assert_eq!(state.0.projection.states.lock().await[0].state, "finished");
+    assert_eq!(
+        state.0.projection.states.lock().unwrap()[0].state,
+        "finished"
+    );
     assert!(std::iter::from_fn(|| events.try_recv().ok()).any(|event| {
         matches!(event, Event::Json(value) if value["type"] == "agents_state" && value["agents"][0]["state"] == "finished")
     }));
