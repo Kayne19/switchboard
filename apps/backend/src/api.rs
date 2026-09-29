@@ -77,14 +77,6 @@ impl AgentProjection {
         agents.clone()
     }
 
-    async fn settle(&self, project: &str) -> Option<Vec<AgentState>> {
-        let mut agents = self.states.lock().await;
-        let agent = agents.iter_mut().find(|agent| agent.project == project)?;
-        agent.state = "idle".into();
-        agent.pending_request = None;
-        Some(agents.clone())
-    }
-
     async fn waiting(&self, project: String, request: AgentRequest) -> Vec<AgentState> {
         let mut agents = self.states.lock().await;
         if let Some(agent) = agents.iter_mut().find(|agent| agent.project == project) {
@@ -1320,9 +1312,14 @@ async fn process_turns(state: AppState) {
         }
         tracing::info!(clip = %id, route = %reply.route, elapsed = ?started.elapsed(), "turn settled");
         if reply.route != crate::pbx::OPERATOR {
-            if let Some(agents) = state.0.projection.settle(&reply.route).await {
-                emit_message(&state, ServerMessage::AgentsState { agents });
-            }
+            update_agent_state(
+                &state,
+                AgentStateNotice {
+                    project: reply.route.clone(),
+                    state: "idle".into(),
+                },
+            )
+            .await;
         }
         deliver_turn_if_current(
             &state,

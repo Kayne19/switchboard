@@ -4495,6 +4495,90 @@ async fn an_idle_notice_does_not_clear_a_background_speak_request() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn process_turns_settlement_preserves_a_waiting_request() {
+    let root = scratch_root("process-turn-waiting");
+    let state = state_with_agents(&root);
+    {
+        let mut board = state.0.switchboard.lock().await;
+        let reply = board
+            .transfer_ctx(
+                &crate::pbx::TransferContext {
+                    exact_caller_transcript: "put me through to alpha".into(),
+                    ..Default::default()
+                },
+                "alpha",
+                "",
+                "",
+            )
+            .await;
+        assert_eq!(reply.route, "alpha");
+    }
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "waiting-token");
+    let request = request_to_speak(
+        state.clone(),
+        "waiting-token",
+        json!({"message":"alpha is ready", "reason":"finished"}),
+    )
+    .await;
+    assert_eq!(request.status(), StatusCode::OK);
+
+    let mut events = state.0.events.subscribe();
+    let id = "settled-waiting";
+    let generation = state.0.coordinator.generation();
+    state.0.routed_decisions.lock().await.insert(
+        id.into(),
+        crate::router::Decision {
+            action: crate::router::Action::Continue,
+            target: Some("alpha".into()),
+            continue_or_fresh: Some(crate::router::ConversationMode::Continue),
+            confidence: 1.0,
+            for_current_agent: 1.0,
+            multi_target: false,
+            unsure: false,
+            confirm: false,
+            reason: "test".into(),
+        },
+    );
+    state.0.queued_turns.store(1, Ordering::Release);
+    let worker = tokio::spawn(process_turns(state.clone()));
+    state
+        .0
+        .turns
+        .send((id.into(), "continue alpha".into(), generation))
+        .await
+        .unwrap();
+
+    let _ = next_event_of(&mut events, "agents_state").await;
+    let agent = state
+        .0
+        .projection
+        .states
+        .lock()
+        .await
+        .iter()
+        .find(|agent| agent.project == "alpha")
+        .cloned()
+        .expect("waiting agent state");
+    assert_eq!(agent.state, "waiting");
+    assert_eq!(
+        agent
+            .pending_request
+            .as_ref()
+            .map(|request| request.message.as_str()),
+        Some("alpha is ready")
+    );
+
+    worker.abort();
+    let _ = worker.await;
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn agents_state_publishes_idle_after_turn_and_finished_after_hangup() {
     let root = scratch_root("agents-state-lifecycle");
     let state = state_with_agents(&root);
