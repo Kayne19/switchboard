@@ -2129,6 +2129,71 @@ async fn background_prompt_transport_failure_evicts_the_resident_and_finishes() 
     board.shutdown().await;
 }
 
+#[tokio::test]
+async fn stale_host_loss_callback_after_resume_keeps_the_replacement_resident() {
+    let mut board = board_with(vec![project("alpha", "")], false);
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| vec![Step::Hold]));
+    fake.on_command = Some(Box::new(|name, args| match name {
+        "create_session" => Some(Some(Ok(json!({
+            "session": "s1",
+            "session_id": "saved-alpha",
+            "name": "sb-alpha-1",
+            "project": "alpha",
+            "cwd": "/srv/alpha",
+            "provenance": "created",
+            "model": "anthropic/current",
+            "thinking": "medium"
+        })))),
+        "open_session" => Some(Some(Ok(json!({
+            "session": "s2",
+            "session_id": args["session_id"],
+            "name": "sb-alpha-2",
+            "project": "alpha",
+            "cwd": "/srv/alpha",
+            "provenance": "created",
+            "model": "anthropic/current",
+            "thinking": "medium"
+        })))),
+        _ => None,
+    }));
+    fake.serve(board.hosts().connect_fake(HOST));
+
+    let launch = || ProjectLaunch {
+        host: HOST.into(),
+        project: "alpha".into(),
+        cwd: "/srv/alpha".into(),
+        spec: "anthropic/current".into(),
+        brief: String::new(),
+        turn_timeout: Duration::from_secs(10),
+        on_activity: None,
+        on_module: None,
+        on_closed: None,
+    };
+    let old = ProjectSession::create(&board.hosts(), launch())
+        .await
+        .unwrap()
+        .0;
+    let replacement = ProjectSession::open(&board.hosts(), launch(), old.session_id())
+        .await
+        .unwrap()
+        .0;
+    assert_eq!(old.session_id(), replacement.session_id());
+    assert_ne!(old.instance_id(), replacement.instance_id());
+
+    board
+        .background_agents
+        .insert("alpha".into(), replacement.clone());
+    let callback = board.session_closed_callback();
+    callback("alpha".into(), old.session_id().into(), old.instance_id()).await;
+
+    let resident = board
+        .background_agents
+        .get("alpha")
+        .expect("stale callback must not evict replacement");
+    assert!(resident.same_session(&replacement));
+    board.shutdown().await;
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn host_loss_evicts_a_background_resident_without_a_later_action() {

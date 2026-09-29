@@ -6,7 +6,7 @@ use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, Command};
@@ -25,6 +25,9 @@ const STDERR_LINE_LIMIT: usize = 16 * 1024;
 /// How long a failure report waits for a process that has stopped talking
 /// to exit and finish saying why on stderr.
 const EXIT_REPORT_GRACE: Duration = Duration::from_secs(5);
+
+/// Distinguishes live handles that reopen the same persistent daemon session.
+static NEXT_PROJECT_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
 const ACTIVITY_ARG_ORDER: [&str; 11] = [
     "path",
     "file_path",
@@ -594,7 +597,7 @@ pub type ModuleCallback =
 /// Called once when the host reports that a project session closed. The PBX
 /// uses this to evict a background resident without waiting for another call.
 pub type SessionClosedCallback =
-    Arc<dyn Fn(String, String) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+    Arc<dyn Fn(String, String, u64) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 /// How long a host agent has to answer a session command.
 const SESSION_COMMAND_WAIT: Duration = Duration::from_secs(30);
@@ -649,6 +652,8 @@ struct ProjectInner {
     session: String,
     /// The persisted id used to reopen the resident session.
     persistent_session_id: String,
+    /// Unique for each live service handle, even when it resumes the same id.
+    instance_id: u64,
     label: String,
     /// Provenance controls whether hangup kills or detaches the session.
     provenance: String,
@@ -732,6 +737,7 @@ impl ProjectInner {
             if let Err(panic) = AssertUnwindSafe(callback(
                 self.label.clone(),
                 self.persistent_session_id.clone(),
+                self.instance_id,
             ))
             .catch_unwind()
             .await
@@ -870,6 +876,7 @@ impl ProjectSession {
                 .map(str::to_owned)
                 .or_else(|| reply.result["session_id"].as_str().map(str::to_owned))
                 .unwrap_or_default(),
+            instance_id: NEXT_PROJECT_INSTANCE_ID.fetch_add(1, Ordering::Relaxed),
             label: launch.project,
             provenance: reply.result["provenance"]
                 .as_str()
@@ -902,6 +909,10 @@ impl ProjectSession {
 
     pub fn session_id(&self) -> &str {
         &self.inner.persistent_session_id
+    }
+
+    pub fn instance_id(&self) -> u64 {
+        self.inner.instance_id
     }
 
     pub fn busy(&self) -> bool {

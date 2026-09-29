@@ -319,6 +319,7 @@ async fn releasing_a_taken_over_session_aborts_before_detaching() {
         host: "scriptorium".into(),
         session: "s1".into(),
         persistent_session_id: "saved-1".into(),
+        instance_id: 1,
         label: "alpha".into(),
         provenance: "taken_over".into(),
         token: StdMutex::new("call-token".into()),

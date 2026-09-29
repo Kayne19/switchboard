@@ -422,15 +422,19 @@ impl BackgroundRegistry {
             .remove(project)
     }
 
-    fn remove_closed(&self, project: &str, session_id: &str) -> Option<ProjectSession> {
+    fn remove_closed(
+        &self,
+        project: &str,
+        session_id: &str,
+        instance_id: u64,
+    ) -> Option<ProjectSession> {
         let mut sessions = self
             .sessions
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if sessions
-            .get(project)
-            .is_some_and(|session| session.session_id() == session_id)
-        {
+        if sessions.get(project).is_some_and(|session| {
+            session.session_id() == session_id && session.instance_id() == instance_id
+        }) {
             self.invalidate(project);
             sessions.remove(project)
         } else {
@@ -672,31 +676,35 @@ impl Switchboard {
 
     /// Evicts a resident as soon as its host reports session death. A callback
     /// from an old session cannot remove a replacement because the persistent
-    /// session id is checked by the shared registry.
+    /// id and unique live-handle instance are checked by the shared registry.
     fn session_closed_callback(&self) -> SessionClosedCallback {
         let registry = self.background_agents.clone();
         let coordinator = self.coordinator.clone();
         let state_callback = self.agent_state_callback.clone();
-        Arc::new(move |project: String, session_id: String| {
-            let registry = registry.clone();
-            let coordinator = coordinator.clone();
-            let state_callback = state_callback.clone();
-            Box::pin(async move {
-                if let Some(session) = registry.remove_closed(&project, &session_id) {
-                    // Retire the call token before releasing the shared
-                    // resident handle, so no request/display can pass the
-                    // lifecycle check while cleanup is in flight.
-                    coordinator.remove_background(&session.token());
-                    if let Some(callback) = state_callback {
-                        callback(AgentStateNotice {
-                            project,
-                            state: "finished".into(),
-                        })
-                        .await;
+        Arc::new(
+            move |project: String, session_id: String, instance_id: u64| {
+                let registry = registry.clone();
+                let coordinator = coordinator.clone();
+                let state_callback = state_callback.clone();
+                Box::pin(async move {
+                    if let Some(session) =
+                        registry.remove_closed(&project, &session_id, instance_id)
+                    {
+                        // Retire the call token before releasing the shared
+                        // resident handle, so no request/display can pass the
+                        // lifecycle check while cleanup is in flight.
+                        coordinator.remove_background(&session.token());
+                        if let Some(callback) = state_callback {
+                            callback(AgentStateNotice {
+                                project,
+                                state: "finished".into(),
+                            })
+                            .await;
+                        }
                     }
-                }
-            })
-        })
+                })
+            },
+        )
     }
 
     /// What answers a project session's `speak`, `display` and `view`.
@@ -1020,6 +1028,7 @@ impl Switchboard {
         let closed_callback = self.session_closed_callback();
         let project_id = project.to_owned();
         let session_id = session.session_id().to_owned();
+        let instance_id = session.instance_id();
         let task = tokio::spawn(async move {
             let result = session.prompt(&text).await;
             if let Err(error) = result {
@@ -1027,7 +1036,7 @@ impl Switchboard {
                 // Prompt transport failure is terminal for this resident. Do
                 // not leave a dead token reusable or publish an idle notice.
                 session.close();
-                closed_callback(project_id.clone(), session_id).await;
+                closed_callback(project_id.clone(), session_id, instance_id).await;
                 return;
             }
             if let Some(callback) = callback {
