@@ -921,6 +921,11 @@ async fn dispatch_routed_transcript(
             .attach_steer(&state.0.coordinator.current_identity())
             .ok();
         let active = state.0.active_session.lock().await;
+        if generation != state.0.coordinator.generation() {
+            drop(active);
+            emit_stale_clip(state, id);
+            return;
+        }
         match active.as_ref().cloned() {
             None => false,
             Some(session)

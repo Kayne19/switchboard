@@ -960,6 +960,69 @@ async fn a_non_steered_continue_uses_one_jev_decision_for_one_utterance() {
 }
 
 #[tokio::test]
+async fn steer_rechecks_generation_under_the_active_session_guard() {
+    let (endpoint, key_path, _requests, responded, server) = fake_jev_server().await;
+    let state = state_with_jev(&endpoint, &key_path);
+    let mut events = state.0.events.subscribe();
+    let session = PiSession::start(
+        vec!["sh".into(), "-c".into(), "sleep 60".into()],
+        OPERATOR,
+        OPERATOR,
+        None,
+        None,
+        Duration::from_secs(60),
+        None,
+    )
+    .await
+    .expect("session");
+    let prompt = {
+        let session = session.clone();
+        tokio::spawn(async move { session.prompt("hold this turn").await })
+    };
+    timeout(Duration::from_secs(1), async {
+        while !session.busy() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("session is busy");
+    *state.0.active_session.lock().await = Some(LegSession::Operator(session.clone()));
+    let active_guard = state.0.active_session.lock().await;
+    let generation = state.0.coordinator.generation();
+    state
+        .0
+        .coordinator
+        .begin_prompt(&state.0.coordinator.current_identity())
+        .expect("active operation");
+
+    let dispatch_state = state.clone();
+    let dispatch = tokio::spawn(async move {
+        dispatch_routed_transcript(
+            &dispatch_state,
+            "steer-stale",
+            generation,
+            "hello again".into(),
+        )
+        .await;
+    });
+    responded.notified().await;
+    state.0.coordinator.begin_rescue("test rescue");
+    drop(active_guard);
+    dispatch.await.expect("dispatch");
+
+    let stale = next_event_of(&mut events, "error").await;
+    assert_eq!(stale["id"], "steer-stale");
+    assert_eq!(state.0.queued_turns.load(Ordering::Acquire), 0);
+
+    prompt.abort();
+    let _ = prompt.await;
+    session.close().await;
+    server.abort();
+    let _ = server.await;
+    let _ = std::fs::remove_file(key_path);
+}
+
+#[tokio::test]
 async fn typed_turn_from_a_retired_epoch_is_dropped() {
     let state = state();
     let mut events = state.0.events.subscribe();
