@@ -1182,10 +1182,12 @@ async fn clip_accepted_before_a_page_rescue_is_dropped_after_transcription() {
 
     // The worker may finish transcription, but stale history and live
     // transcript events must be suppressed before either side effect.
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    for _ in 0..4 {
+        tokio::task::yield_now().await;
+    }
     assert!(state.0.transcript_log.lock().await.entries().is_empty());
-    let stale = events.try_recv().expect("stale clip is acknowledged");
-    assert!(matches!(stale, Event::Json(ref value) if value["code"] == "stale_epoch"));
+    let stale = next_event_of(&mut events, "error").await;
+    assert_eq!(stale["code"], "stale_epoch");
     assert_eq!(state.0.queued_turns.load(Ordering::Acquire), 0);
     let mut turns = state.0.turn_rx.lock().await.take().unwrap();
     assert!(matches!(
