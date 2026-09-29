@@ -1977,6 +1977,7 @@ impl Switchboard {
         if self.coordinator.is_candidate() {
             if let Err(error) = self.coordinator.adopt_candidate(&leg_token) {
                 session.close();
+                self.announce_agent_state(&project.id, "finished").await;
                 self.rollback_startup(format!("adoption failed: {error}"));
                 self.drop_agent().await;
                 return self.reply(
