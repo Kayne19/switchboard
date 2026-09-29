@@ -307,8 +307,10 @@ host; the host-agent installer ships the skill module.
 
 Prewarm reports a catalog that could not be listed as unavailable, with its
 reason; it does not decide what that admits. `ModelCatalog::resolve` in
-`models.rs` does: a provider-qualified spec passes through, a bare name is
-refused.
+`models.rs` does: a provider-qualified spec passes through when discovery is
+unavailable, and also passes through when its provider is listed but its model
+id is not. The daemon remains authoritative for that model id. A bare name is
+still resolved against the catalog, and an unknown provider is refused.
 
 ## Ports and adapters
 

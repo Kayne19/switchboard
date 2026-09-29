@@ -249,9 +249,10 @@ rewriting a newer leg selection.
 ### A swap is decided before its rescue
 
 A rescue ends the live leg. `/model` and `/thinking` used to rescue first
-and let the PBX decide afterwards, so a swap the PBX then refused (a model the
-catalog does not resolve, the model already running) left the caller on a
-closed leg, and their next turn dropped them to the operator (#63). A swap
+and let the PBX decide afterwards, so a swap the PBX then refused (a bare or
+unknown-provider model the catalog does not resolve, the model already
+running) left the caller on a closed leg, and their next turn dropped them to
+the operator (#63). A swap
 that keeps the conversation now only aborts the turn in flight, and the
 session stays up.
 
