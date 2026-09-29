@@ -936,7 +936,6 @@ async fn assert_lifecycle_consistent(state: &AppState) {
         assert!(board.coordinator().project_is_background(&project));
     }
 }
-
 async fn next_event_of(events: &mut broadcast::Receiver<Event>, event_type: &str) -> Value {
     timeout(Duration::from_secs(1), async {
         loop {
@@ -4627,6 +4626,7 @@ async fn process_turns_settlement_preserves_a_waiting_request() {
             .await;
         assert_eq!(reply.route, "alpha");
     }
+    assert_lifecycle_consistent(&state).await;
     state
         .0
         .coordinator
