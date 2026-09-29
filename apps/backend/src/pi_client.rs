@@ -17,6 +17,7 @@ pub const STREAM_LIMIT: usize = 16 * 1024 * 1024;
 pub const ROUTE_TOOL: &str = "route";
 pub const SECOND_OPINION_TOOL: &str = "second_opinion";
 pub const DISPATCH_PARTS_TOOL: &str = "dispatch_parts";
+pub const REWRITE_TOOL: &str = "rewrite";
 pub const SPEAK_TOOL: &str = "speak";
 const ERROR_STOP_REASON: &str = "error";
 const ERROR_DETAIL_CHARS: usize = 160;
@@ -493,6 +494,7 @@ impl PiSession {
                         ROUTE_TOOL,
                         SECOND_OPINION_TOOL,
                         DISPATCH_PARTS_TOOL,
+                        REWRITE_TOOL,
                         SPEAK_TOOL,
                     ]
                     .contains(&name)

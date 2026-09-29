@@ -113,7 +113,7 @@ async function utilityExtensionBehavior() {
 	};
 	pi.getFlag = (name) => pi.flags?.get(name) ?? false;
 	extension.default(pi);
-	assert.deepEqual([...pi.tools.keys()], ["second_opinion", "dispatch_parts"]);
+	assert.deepEqual([...pi.tools.keys()], ["second_opinion", "rewrite", "dispatch_parts"]);
 	const split = await pi.tools.get("dispatch_parts").execute("call", {
 		parts: [{ agent: "alpha", text: "Audit it" }],
 	});

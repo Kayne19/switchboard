@@ -59,7 +59,7 @@ const AGENT_BRIEF_SWAPS: &str = "";
 const AGENT_BRIEF_END: &str = "[END OF VOICE BRIEF]";
 /// Instructions for the separate, stateless process. This is code-owned so
 /// deploying the utility never requires another environment setting.
-const UTILITY_SYSTEM_PROMPT: &str = r#"You are the switchboard's stateless routing utility. You never speak to the caller and you never answer general questions. Inspect the supplied caller utterance and call exactly one tool. For a single target, call second_opinion with an exact registered project id, mode (continue or fresh), and confident true only when it is safe to route without asking. If unclear, call second_opinion with no target and confident false. If the utterance clearly addresses several projects, call dispatch_parts with one exact project id and a short caller-worded part for each target. Never invent projects, never call tools not provided, and never emit a prose answer."#;
+const UTILITY_SYSTEM_PROMPT: &str = r#"You are the switchboard's stateless utility process. You never speak to the caller and you never answer general questions. For routing prompts, call exactly one routing tool: second_opinion for one target, dispatch_parts for several targets. For a floor rewrite prompt, call rewrite with a natural short spoken version of the supplied message. A rewrite may not add facts, names, numbers, promises, or requests that are not in the original. Never invent projects, never emit a prose answer, and never call more than one tool."#;
 #[derive(Clone, Debug, Serialize)]
 pub struct Utterance {
     pub text: String,
@@ -1283,6 +1283,44 @@ impl Switchboard {
             }));
         }
         Ok(utility_decision(&turn.signals))
+    }
+
+    /// Ask the stateless utility to rewrite a background message. The utility
+    /// is deliberately separate from the conversational operator, so this
+    /// never waits on or pollutes the caller's turn history.
+    #[allow(dead_code)]
+    pub async fn rewrite_floor(
+        &mut self,
+        message: &str,
+        reason: &str,
+    ) -> Result<Option<String>, PiSessionError> {
+        let session = self.ensure_utility().await?.clone();
+        let prompt = format!(
+            "[FLOOR REWRITE]\nOriginal message: {message}\nReason: {reason}\nCall rewrite with only a faithful spoken rewrite.",
+        );
+        let turn = session.prompt(&prompt).await?;
+        if turn.failed {
+            return Err(PiSessionError(if turn.error.is_empty() {
+                "floor rewrite utility failed".into()
+            } else {
+                turn.error
+            }));
+        }
+        Ok(turn
+            .signals
+            .iter()
+            .find(|signal| signal.name == crate::pi_client::REWRITE_TOOL)
+            .and_then(|signal| {
+                signal
+                    .args
+                    .get("text")
+                    .or_else(|| signal.args.get("message"))
+                    .or_else(|| signal.args.get("rewrite"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .map(str::to_owned)
+            }))
     }
 
     async fn handle_operator_ctx(&mut self, context: &TransferContext) -> Reply {
