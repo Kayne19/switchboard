@@ -62,6 +62,28 @@ fn resolves_digits_and_rejects_ambiguity() {
 }
 
 #[test]
+fn provider_qualified_missing_models_are_left_to_the_daemon() {
+    let catalog = listing();
+    let choice = catalog
+        .resolve("anthropic/claude-opus-5-5", "high")
+        .unwrap();
+    assert_eq!(
+        choice,
+        ModelChoice {
+            provider: "anthropic".into(),
+            model: "claude-opus-5-5".into(),
+            thinking: "high".into(),
+        }
+    );
+    assert!(catalog
+        .resolve("claude-opus-5-5", "")
+        .unwrap_err()
+        .to_string()
+        .contains("I don't have a model matching"));
+    assert!(catalog.resolve("unknown/claude-opus-5-5", "").is_err());
+}
+
+#[test]
 fn validates_thinking_and_pins_specs() {
     assert_eq!(
         normalize_thinking("set thinking to medium").unwrap(),

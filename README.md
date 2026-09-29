@@ -149,14 +149,17 @@ ends the session and creates a new one, and the agent is told the history was
 cleared on purpose so it does not try to recall it.
 
 What the caller says goes through speech-to-text and then through a model's
-guess, so `models.rs` refuses rather than guesses. A name is resolved against
-the catalog prewarm listed through the host agent **on the host the leg runs
-on** — providers are configured per box, so asking damocles would answer for the
-wrong machine — and a phrase matching two entries comes back as an error naming
-both. That is the case worth spending code on: one model id served by two
-providers, picked wrong, leaves the caller on the thing they were trying to get
-away from with no way to say so. The resolved spec is always provider-qualified
-even when the caller was not that specific.
+guess, so `models.rs` refuses rather than guesses. A bare name is resolved
+against the catalog prewarm listed through the host agent **on the host the leg
+runs on** — providers are configured per box, so asking damocles would answer
+for the wrong machine — and a phrase matching two entries comes back as an
+error naming both. A provider-qualified model is accepted when its provider is
+listed even if that catalog snapshot lacks the model id; the daemon is
+authoritative for whether that id exists. An unknown provider is still refused.
+That is the case worth spending code on: one model id served by two providers,
+picked wrong, leaves the caller on the thing they were trying to get away from
+with no way to say so. The resolved spec is always provider-qualified even when
+the caller was not that specific.
 
 If the catalog cannot be read at all, a provider-qualified spec is passed
 through (it is unambiguous by construction) and a bare name is refused. A
@@ -166,7 +169,7 @@ picker contains only the provider-qualified entries from that host's catalog;
 the current entry is retained even if a refreshed catalog no longer lists it.
 
 A swap is decided before anything is torn down. Every refusal (no project on
-the line, swaps turned off, a host that is not connected, a model the catalog does not resolve, the model
+the line, swaps turned off, a host that is not connected, a bare or unknown-provider model the catalog does not resolve, the model
 already running) is made from the leg the coordinator names and the launch
 plan prewarm holds, without the PBX lock, and the live leg keeps running: the
 caller hears why, and their next turn reaches the same agent. That holds for the
