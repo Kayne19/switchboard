@@ -146,6 +146,55 @@ fi
     path
 }
 
+#[cfg(unix)]
+fn fake_routing_process_sequence(
+    root: &std::path::Path,
+    utility_events: &[&str],
+    operator_event: &str,
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    let path = root.join("fake-routing-process-sequence");
+    let calls = root.join("utility-calls");
+    let mut utility_branch = String::new();
+    for (index, event) in utility_events.iter().enumerate() {
+        let next = index + 1;
+        let keyword = if index == 0 { "if" } else { "elif" };
+        utility_branch.push_str(&format!(
+            "{keyword} [ \"$count\" -eq {next} ]; then printf '%s\n' '{event}'\n",
+        ));
+    }
+    let fallback = utility_events.last().copied().unwrap_or("");
+    utility_branch.push_str(&format!(
+        "else printf '%s\n' '{fallback}'\nfi
+"
+    ));
+    let body = format!(
+        r#"is_utility=0
+for arg in "$@"; do
+  if [ "$arg" = "--switchboard-utility" ]; then is_utility=1; fi
+done
+if [ "$is_utility" -eq 1 ]; then
+  while IFS= read -r _line; do
+    count=0
+    if [ -f '{calls}' ]; then count=$(cat '{calls}'); fi
+    count=$((count + 1))
+    printf '%s' "$count" > '{calls}'
+    {utility_branch}    printf '%s\n' '{{"type":"agent_settled"}}'
+  done
+else
+  while IFS= read -r _line; do
+    printf '%s\n' '{operator_event}'
+    printf '%s\n' '{{"type":"agent_settled"}}'
+  done
+fi
+"#,
+        calls = calls.display(),
+        utility_branch = utility_branch,
+        operator_event = operator_event,
+    );
+    crate::pi_client::write_executable_script(&path, &body);
+    (path, calls)
+}
+
 /// Puts the call on `project` the way a transfer leaves it, without launching
 /// anything: a candidate on `spec` and `catalog`, adopted, its intro finished.
 fn put_on(board: &Switchboard, project: &str, spec: &str, catalog: ModelCatalog) {
@@ -487,6 +536,235 @@ async fn unsure_jev_gets_a_utility_second_opinion_before_the_operator_asks() {
         .any(|prompt| prompt.contains("inspect alpha")));
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn multi_target_jev_retries_a_single_utility_target_then_splits() {
+    let root = scratch_dir("multi-target-retry");
+    let (binary, calls) = fake_routing_process_sequence(
+        &root,
+        &[
+            r#"{"type":"tool_execution_start","toolName":"second_opinion","args":{"target":"grape-segmentation","mode":"continue","confident":true}}"#,
+            r#"{"type":"tool_execution_start","toolName":"dispatch_parts","args":{"parts":[{"agent":"grape-segmentation","text":"tell me the validation low on the 1-8th HRnet versus the 1-16th branch version"},{"agent":"switchboard","text":"tell me the latest commit on the switchboard project what that one was titled"}]}}"#,
+        ],
+        r#"{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"The operator needs to clarify."}}"#,
+    );
+    let mut board = board_on(
+        vec![
+            project("grape-segmentation", "Grape project"),
+            project("switchboard", "Switchboard project"),
+        ],
+        &[("SWITCHBOARD_PI_BINARY", &binary.to_string_lossy())],
+        two_model_catalog(),
+    );
+    let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+    let _log = serve(
+        &board,
+        Box::new(move |session, message| {
+            let _ = prompt_tx.send((session.to_owned(), message.to_owned()));
+            says("handled")
+        }),
+    );
+    board
+        .transfer_ctx(
+            &transcript("connect grape-segmentation"),
+            "grape-segmentation",
+            "",
+            "",
+        )
+        .await;
+
+    let caller = "can you go ahead and tell me the validation low on the 1-8th HRnet versus the 1-16th branch version and then can you also tell me the latest commit on the switchboard project what that one was titled?";
+    let reply = board
+        .handle_decision(
+            caller,
+            &Decision {
+                action: crate::router::Action::Continue,
+                target: Some("grape-segmentation".into()),
+                continue_or_fresh: Some(crate::router::ConversationMode::Continue),
+                confidence: 0.97,
+                for_current_agent: 0.79,
+                multi_target: true,
+                unsure: false,
+                confirm: false,
+                reason: "Jev found two projects".into(),
+            },
+        )
+        .await;
+
+    assert_eq!(reply.route, "grape-segmentation");
+    assert_eq!(std::fs::read_to_string(&calls).unwrap(), "2");
+    assert!(board.coordinator.project_is_background("switchboard"));
+    let mut saw_grape = false;
+    let mut saw_switchboard = false;
+    while let Some((session, message)) = prompt_rx.recv().await {
+        saw_grape |= session == "s1" && message.contains("validation low");
+        saw_switchboard |= session == "s2" && message.contains("latest commit on the switchboard");
+        if saw_grape && saw_switchboard {
+            break;
+        }
+    }
+    assert!(saw_grape, "foreground grape part was dispatched");
+    assert!(
+        saw_switchboard,
+        "background switchboard part was dispatched"
+    );
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn multi_target_jev_uses_a_first_utility_split_without_retry() {
+    let root = scratch_dir("multi-target-first-split");
+    let (binary, calls) = fake_routing_process_sequence(
+        &root,
+        &[
+            r#"{"type":"tool_execution_start","toolName":"dispatch_parts","args":{"parts":[{"agent":"grape-segmentation","text":"grape work"},{"agent":"switchboard","text":"switchboard work"}]}}"#,
+        ],
+        r#"{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Operator asked."}}"#,
+    );
+    let mut board = board_on(
+        vec![
+            project("grape-segmentation", "Grape"),
+            project("switchboard", "Switchboard"),
+        ],
+        &[("SWITCHBOARD_PI_BINARY", &binary.to_string_lossy())],
+        two_model_catalog(),
+    );
+    let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+    let _log = serve(
+        &board,
+        Box::new(move |session, message| {
+            let _ = prompt_tx.send((session.to_owned(), message.to_owned()));
+            says("handled")
+        }),
+    );
+    board
+        .transfer_ctx(
+            &transcript("connect grape-segmentation"),
+            "grape-segmentation",
+            "",
+            "",
+        )
+        .await;
+    let reply = board
+        .handle_decision(
+            "grape work and switchboard work",
+            &Decision {
+                action: crate::router::Action::Continue,
+                target: Some("grape-segmentation".into()),
+                continue_or_fresh: None,
+                confidence: 1.0,
+                for_current_agent: 1.0,
+                multi_target: true,
+                unsure: false,
+                confirm: false,
+                reason: "Jev found two projects".into(),
+            },
+        )
+        .await;
+    assert_eq!(reply.route, "grape-segmentation");
+    assert_eq!(std::fs::read_to_string(&calls).unwrap(), "1");
+    assert!(board.coordinator.project_is_background("switchboard"));
+    let mut saw_switchboard = false;
+    while let Some((session, message)) = prompt_rx.recv().await {
+        saw_switchboard |= session == "s2" && message.contains("switchboard work");
+        if saw_switchboard {
+            break;
+        }
+    }
+    assert!(saw_switchboard);
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn multi_target_jev_that_never_splits_is_handled_by_operator() {
+    let root = scratch_dir("multi-target-no-split");
+    let (binary, calls) = fake_routing_process_sequence(
+        &root,
+        &[
+            r#"{"type":"tool_execution_start","toolName":"second_opinion","args":{"target":"grape-segmentation","mode":"continue","confident":true}}"#,
+        ],
+        r#"{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Which project should handle that?"}}"#,
+    );
+    let mut board = board_on(
+        vec![
+            project("grape-segmentation", "Grape"),
+            project("switchboard", "Switchboard"),
+        ],
+        &[("SWITCHBOARD_PI_BINARY", &binary.to_string_lossy())],
+        two_model_catalog(),
+    );
+    let log = serve(&board, Box::new(|_, _| says("grape should not see this")));
+    board
+        .transfer_ctx(
+            &transcript("connect grape-segmentation"),
+            "grape-segmentation",
+            "",
+            "",
+        )
+        .await;
+    let reply = board
+        .handle_decision(
+            "grape work and switchboard work",
+            &Decision {
+                action: crate::router::Action::Continue,
+                target: Some("grape-segmentation".into()),
+                continue_or_fresh: None,
+                confidence: 1.0,
+                for_current_agent: 1.0,
+                multi_target: true,
+                unsure: false,
+                confirm: false,
+                reason: "Jev found two projects".into(),
+            },
+        )
+        .await;
+    assert_eq!(std::fs::read_to_string(&calls).unwrap(), "2");
+    assert_eq!(reply.text, "Which project should handle that?");
+    assert!(!prompts(&log)
+        .iter()
+        .any(|prompt| prompt.contains("grape should not see this")));
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn multi_target_utility_request_includes_jev_hint_projects_and_caller_words() {
+    let board = board_with(
+        vec![
+            project("grape-segmentation", "Grape"),
+            project("switchboard", "Switchboard"),
+        ],
+        true,
+    );
+    let request = board.utility_routing_request(
+        "grape answer and switchboard answer",
+        &Decision {
+            action: crate::router::Action::Continue,
+            target: Some("grape-segmentation".into()),
+            continue_or_fresh: None,
+            confidence: 0.97,
+            for_current_agent: 0.79,
+            multi_target: true,
+            unsure: false,
+            confirm: false,
+            reason: "two projects".into(),
+        },
+        false,
+    );
+    assert!(request.contains("multi_target=true"));
+    assert!(request.contains("action=continue"));
+    assert!(request.contains("target=grape-segmentation"));
+    assert!(request.contains("grape-segmentation"));
+    assert!(request.contains("switchboard"));
+    assert!(request.contains("dispatch_parts"));
+    assert!(request.contains("grape answer and switchboard answer"));
+    assert!(request.contains("never invent projects"));
 }
 
 #[cfg(unix)]
