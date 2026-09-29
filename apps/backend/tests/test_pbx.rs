@@ -1878,6 +1878,54 @@ async fn idle_background_split_part_continues_without_a_new_session() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn stopped_background_prompt_does_not_publish_idle_after_close() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let mut started_tx = Some(started_tx);
+    let _log = serve(
+        &board,
+        Box::new(move |session, _message| {
+            if session == "s2" {
+                if let Some(tx) = started_tx.take() {
+                    let _ = tx.send(());
+                }
+                vec![Step::WaitFor("kill")]
+            } else {
+                says("handled")
+            }
+        }),
+    );
+    let (state_tx, mut state_rx) = tokio::sync::mpsc::unbounded_channel();
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        let _ = state_tx.send((notice.project, notice.state));
+        Box::pin(async {})
+    })));
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .start_background_part("beta", "long beta work")
+        .await
+        .unwrap();
+    started_rx.await.expect("the background turn started");
+    while state_rx.try_recv().is_ok() {}
+    board.stop_project("beta").await;
+
+    let idle = tokio::time::timeout(std::time::Duration::from_millis(250), async {
+        while let Some((project, state)) = state_rx.recv().await {
+            if project == "beta" && state == "idle" {
+                return true;
+            }
+        }
+        false
+    })
+    .await;
+    assert!(idle.is_err(), "a stopped prompt must not publish idle");
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn a_dead_background_resident_is_removed_before_a_later_split_part() {
     let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
     let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();

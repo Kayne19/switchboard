@@ -822,11 +822,13 @@ impl Switchboard {
                     tracing::warn!(%error, "background agent prompt failed");
                 }
                 if let Some(callback) = callback {
-                    callback(AgentStateNotice {
-                        project: project_id,
-                        state: "idle".into(),
-                    })
-                    .await;
+                    if session.alive() {
+                        callback(AgentStateNotice {
+                            project: project_id,
+                            state: "idle".into(),
+                        })
+                        .await;
+                    }
                 }
             });
             return Ok(());
@@ -864,11 +866,13 @@ impl Switchboard {
                 tracing::warn!(%error, "background agent prompt failed");
             }
             if let Some(callback) = callback {
-                callback(AgentStateNotice {
-                    project: project_id,
-                    state: "idle".into(),
-                })
-                .await;
+                if session.alive() {
+                    callback(AgentStateNotice {
+                        project: project_id,
+                        state: "idle".into(),
+                    })
+                    .await;
+                }
             }
         });
         Ok(())
