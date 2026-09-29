@@ -1999,3 +1999,69 @@ async fn a_saved_resident_session_is_resumed_with_open_session() {
     assert_eq!(board.agent.as_ref().unwrap().session_id(), "saved-alpha");
     board.shutdown().await;
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn backgrounding_a_busy_foreground_sends_an_away_notice() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let mut started_tx = Some(started_tx);
+    let log = serve(
+        &board,
+        Box::new(move |session, message| {
+            if session == "s1"
+                && (message.trim() == "long work" || message.contains("\nlong work\n"))
+            {
+                if let Some(tx) = started_tx.take() {
+                    let _ = tx.send(());
+                }
+                vec![Step::Hold]
+            } else {
+                says("handled")
+            }
+        }),
+    );
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    let alpha = board.agent.clone().expect("alpha is foreground");
+    let held = tokio::spawn({
+        let alpha = alpha.clone();
+        async move { alpha.prompt("long work").await }
+    });
+    started_rx.await.expect("the long turn started");
+    let reply = board
+        .transfer_ctx(&transcript("beta"), "beta", "", "")
+        .await;
+    assert_eq!(reply.route, "beta");
+    assert!(log
+        .named("set_mode")
+        .iter()
+        .any(|args| args["mode"] == "background"));
+    assert!(log.named("steer").iter().any(|args| args["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("caller is now listening to another agent")));
+    held.abort();
+    let _ = held.await;
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_stopped_project_starts_fresh_after_close() {
+    let (mut board, log) = on_alpha(&[], Box::new(|_, _| says("handled"))).await;
+    let first = board.agent.as_ref().unwrap().session_id().to_owned();
+    board.pending_stop = Some("alpha".into());
+    let stopped = board
+        .handle_decision("yes", &Decision::fallback("confirm"))
+        .await;
+    assert_eq!(stopped.route, OPERATOR);
+    let resumed = board
+        .transfer_ctx(&transcript("fresh alpha"), "alpha", "", "")
+        .await;
+    assert_eq!(resumed.route, "alpha");
+    assert_ne!(board.agent.as_ref().unwrap().session_id(), first);
+    assert_eq!(log.named("create_session").len(), 2);
+    board.shutdown().await;
+}
