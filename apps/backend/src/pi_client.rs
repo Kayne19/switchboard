@@ -794,7 +794,6 @@ impl ProjectSession {
     /// Reopens a saved resident session after a service restart. The host
     /// validates the cwd and project provenance before returning the live
     /// handle; this path never creates a second session.
-    #[allow(dead_code)]
     pub async fn open(
         hosts: &crate::hosts::Hosts,
         launch: ProjectLaunch,
@@ -868,11 +867,6 @@ impl ProjectSession {
 
     pub fn session_id(&self) -> &str {
         &self.inner.persistent_session_id
-    }
-
-    #[allow(dead_code)]
-    pub fn provenance(&self) -> &str {
-        &self.inner.provenance
     }
 
     pub fn busy(&self) -> bool {
