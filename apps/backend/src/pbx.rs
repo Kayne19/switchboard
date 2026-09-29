@@ -21,7 +21,7 @@ use crate::registry::{Project, Registry};
 use crate::router::{
     utility_decision, CallSummary, Decision, DeskSession, Router, UtilityDecision,
 };
-use futures_util::FutureExt;
+use futures_util::{future::join_all, FutureExt};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -837,13 +837,20 @@ impl Switchboard {
                     .push(project);
             }
         }
+        let replies = join_all(projects_by_host.into_iter().map(|(host, projects)| {
+            let hosts = hosts.clone();
+            async move {
+                let reply = hosts
+                    .command(&host, "list_sessions", json!({}), Duration::from_secs(5))
+                    .await;
+                (host, projects, reply)
+            }
+        }))
+        .await;
         let mut result = Vec::new();
         let mut seen = HashSet::new();
-        for (host, projects) in projects_by_host {
-            let reply = match hosts
-                .command(&host, "list_sessions", json!({}), Duration::from_secs(5))
-                .await
-            {
+        for (host, projects, reply) in replies {
+            let reply = match reply {
                 Ok(reply) => reply,
                 Err(error) => {
                     tracing::debug!(%host, %error, "could not list desk sessions for routing summary");
