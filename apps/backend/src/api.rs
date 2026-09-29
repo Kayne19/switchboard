@@ -849,6 +849,7 @@ async fn route_final_transcript(state: &AppState, id: &str, generation: u64, tra
         Some(id.to_owned()),
     );
     drop(_transition);
+    emit_transcript_verdict(state, id, &transcript);
     dispatch_routed_transcript(state, id, generation, transcript).await;
 }
 
@@ -1073,6 +1074,7 @@ async fn process_clips(state: AppState) {
             Some(clip.id.clone()),
         );
         drop(_transition);
+        emit_transcript_verdict(&state, &clip.id, &transcript);
         dispatch_routed_transcript(&state, &clip.id, clip.generation, transcript).await;
     }
     tracing::warn!("the clip worker stopped; no further speech will be transcribed");
