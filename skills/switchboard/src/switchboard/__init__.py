@@ -14,7 +14,7 @@ import json as _json
 import os as _os
 import socket as _socket
 
-__all__ = ["speak", "display", "view"]
+__all__ = ["speak", "request_to_speak", "display", "view"]
 
 _STATUSES = ("delivered", "accepted", "refused", "failed")
 _HELLO_TIMEOUT_S = 5.0
@@ -195,6 +195,26 @@ def speak(text):
         )
 
     return _send("speak", {"text": text}, describe)
+
+
+def request_to_speak(message, reason):
+    """Ask the caller to bring this background session to the foreground.
+
+    ``reason`` is one of ``finished``, ``needs_decision`` or ``problem``.
+    The request is queued by the service; it does not speak for a background
+    session.
+    """
+    _require_str("message", message)
+    _require_str("reason", reason)
+    if reason not in ("finished", "needs_decision", "problem"):
+        raise ValueError("reason must be one of: finished, needs_decision, problem")
+
+    def describe(result):
+        if result.accepted or result.delivered:
+            return "Request to speak accepted."
+        return _common(result) or _refused(result, "request to speak")
+
+    return _send("request_to_speak", {"message": message, "reason": reason}, describe)
 
 
 def _check_display_action(action):

@@ -104,11 +104,11 @@ test("calls: token check, then delivery decided from session state", async () =>
 		assert.deepEqual(await call("request_to_speak", { message: "done", reason: "finished" }), { status: "refused", reason: "caller_listening" });
 		assert.deepEqual(await call("display", { action: { op: "show" } }), { status: "delivered", reason: null });
 		assert.equal(relayed.at(-1)?.timeoutMs, 1234);
-		assert.deepEqual(await call("return_to_operator", { summary: "bye" }), { status: "delivered", reason: null });
+		assert.deepEqual(await call("return_to_operator", { summary: "bye" }), { status: "refused", reason: "unknown_call" });
 		await manager.handle("set_mode", { session: handle, mode: "background" });
 		const before = relayed.length;
 		assert.deepEqual(await call("speak", { text: "hi" }), { status: "refused", reason: "caller_away" });
-		assert.deepEqual(await call("transfer_to_project", { project: "x" }), { status: "refused", reason: "caller_away" });
+		assert.deepEqual(await call("transfer_to_project", { project: "x" }), { status: "refused", reason: "unknown_call" });
 		assert.equal(relayed.length, before);
 		setReply({ status: "accepted", reason: null });
 		assert.deepEqual(await call("request_to_speak", { message: "done", reason: "finished" }), { status: "accepted", reason: null });
