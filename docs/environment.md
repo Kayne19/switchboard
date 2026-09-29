@@ -39,6 +39,7 @@ means unset.
 | `SWITCHBOARD_JEV_FOR_CURRENT_AGENT_UPPER` | `0.7` | At or above this probability a project utterance stays with its current agent. |
 | `SWITCHBOARD_JEV_ACTION_THRESHOLD` | `0.6` | Minimum Jev action confidence for a non-uncertain decision. Stopping still asks for confirmation. |
 | `SWITCHBOARD_JEV_SUMMARY_TOKEN_BUDGET` | `8000` | Approximate state token budget; oldest conversation turns are removed first and the Jev 32000-token per-question limit is enforced. |
+| `SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS` | `10000` | Caller silence in milliseconds before a held background update is released with its short announcement. |
 | `SWITCHBOARD_STT_COMMAND` | none | Complete-clip speech-to-text: WebM on stdin, text on stdout. |
 | `SWITCHBOARD_STT_STREAM_COMMAND` | none | Optional long-lived streaming worker; framing is described in `README.md`. |
 | `SWITCHBOARD_LOG` | `switchboard=info,warn` | Log filter; falls back to `RUST_LOG`. A filter that does not parse is reported and replaced by the default. |
