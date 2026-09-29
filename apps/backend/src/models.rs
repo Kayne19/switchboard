@@ -276,6 +276,18 @@ impl ModelCatalog {
             .copied()
             .filter(|entry| normalize(&entry.model) == key)
             .collect::<Vec<_>>();
+        if !wanted_provider.is_empty() && exact.is_empty() {
+            tracing::warn!(
+                provider = %wanted_provider,
+                model = %wanted_model,
+                "the host catalog does not list this provider-qualified model; the daemon decides whether it exists"
+            );
+            return Ok(ModelChoice {
+                provider: wanted_provider,
+                model: wanted_model,
+                thinking: level,
+            });
+        }
         let matches: Vec<&CatalogEntry> = if exact.is_empty() {
             pool.into_iter()
                 .filter(|entry| normalize(&entry.model).contains(&key))

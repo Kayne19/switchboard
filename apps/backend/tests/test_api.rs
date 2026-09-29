@@ -3962,7 +3962,7 @@ async fn a_picker_the_catalog_does_not_resolve_leaves_its_leg_running() {
     let error = call
         .refused(
             "/model",
-            json!({"model":"anthropic/missing"}),
+            json!({"model":"openai/missing"}),
             "I didn't switch",
         )
         .await;
@@ -3972,7 +3972,15 @@ async fn a_picker_the_catalog_does_not_resolve_leaves_its_leg_running() {
     call.prewarm.settle_catalog(
         "scriptorium",
         crate::prewarm::CatalogState::Ready {
-            snapshot: catalog_of(&["next"]),
+            snapshot: crate::models::ModelCatalog {
+                entries: vec![crate::models::CatalogEntry {
+                    provider: "openai".into(),
+                    model: "next".into(),
+                    thinks: true,
+                }],
+                available: true,
+                diagnostic: None,
+            },
             degraded_reason: None,
         },
     );
