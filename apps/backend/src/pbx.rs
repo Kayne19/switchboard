@@ -26,8 +26,10 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tokio::time::Duration;
 
 pub const OPERATOR: &str = "operator";
@@ -348,6 +350,98 @@ impl RedialPlanner {
     }
 }
 
+/// Owns resident sessions and the task reservations that may write their
+/// lifecycle projection. Callers never mutate the resident map directly: every
+/// removal invalidates the task epoch first, so a late completion cannot make a
+/// replaced or promoted session look idle.
+struct BackgroundRegistry {
+    sessions: HashMap<String, ProjectSession>,
+    tasks: HashMap<String, JoinHandle<()>>,
+    epochs: HashMap<String, Arc<AtomicU64>>,
+    next_epoch: u64,
+}
+
+impl Default for BackgroundRegistry {
+    fn default() -> Self {
+        Self {
+            sessions: HashMap::new(),
+            tasks: HashMap::new(),
+            epochs: HashMap::new(),
+            next_epoch: 1,
+        }
+    }
+}
+
+impl BackgroundRegistry {
+    fn contains_key(&self, project: &str) -> bool {
+        self.sessions.contains_key(project)
+    }
+
+    fn get(&self, project: &str) -> Option<&ProjectSession> {
+        self.sessions.get(project)
+    }
+
+    fn insert(&mut self, project: String, session: ProjectSession) {
+        self.epochs
+            .entry(project.clone())
+            .or_insert_with(|| Arc::new(AtomicU64::new(0)));
+        self.sessions.insert(project, session);
+    }
+
+    fn remove(&mut self, project: &str) -> Option<ProjectSession> {
+        self.invalidate(project);
+        self.sessions.remove(project)
+    }
+
+    fn invalidate(&mut self, project: &str) {
+        if let Some(epoch) = self.epochs.get(project) {
+            epoch.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
+    fn begin_task(&mut self, project: &str) -> (Arc<AtomicU64>, u64) {
+        let epoch = self
+            .epochs
+            .entry(project.to_owned())
+            .or_insert_with(|| Arc::new(AtomicU64::new(0)))
+            .clone();
+        let generation = self.next_epoch;
+        self.next_epoch = self.next_epoch.wrapping_add(1);
+        epoch.store(generation, Ordering::Release);
+        (epoch, generation)
+    }
+
+    fn set_task(&mut self, project: String, task: JoinHandle<()>) {
+        if let Some(previous) = self.tasks.insert(project, task) {
+            previous.abort();
+        }
+    }
+
+    fn take_task(&mut self, project: &str) -> Option<JoinHandle<()>> {
+        self.invalidate(project);
+        self.tasks.remove(project)
+    }
+
+    async fn cancel_task(&mut self, project: &str) {
+        if let Some(task) = self.take_task(project) {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+
+    fn drain_sessions(&mut self) -> Vec<ProjectSession> {
+        self.sessions.drain().map(|(_, session)| session).collect()
+    }
+
+    async fn cancel_all_tasks(&mut self) {
+        let tasks = self.tasks.drain().map(|(_, task)| task).collect::<Vec<_>>();
+        for task in tasks {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+}
+
 pub struct Switchboard {
     pub registry: Arc<Registry>,
     pi_binary: String,
@@ -367,8 +461,8 @@ pub struct Switchboard {
     /// share the operator's turn lock or conversation history.
     utility: Option<PiSession>,
     agent: Option<ProjectSession>,
-    /// Resident project sessions not currently carrying the caller.
-    background_agents: HashMap<String, ProjectSession>,
+    /// Resident project sessions and their guarded background prompts.
+    background_agents: BackgroundRegistry,
     operator_note: Option<String>,
     /// Project awaiting a caller confirmation before it is stopped.
     pending_stop: Option<String>,
@@ -442,7 +536,7 @@ impl Switchboard {
             operator: None,
             utility: None,
             agent: None,
-            background_agents: HashMap::new(),
+            background_agents: BackgroundRegistry::default(),
             operator_note: None,
             pending_stop: None,
             resume_blocked: HashSet::new(),
@@ -534,7 +628,8 @@ impl Switchboard {
         if let Some(session) = self.agent.take() {
             session.close();
         }
-        for (_, session) in self.background_agents.drain() {
+        self.background_agents.cancel_all_tasks().await;
+        for session in self.background_agents.drain_sessions() {
             session.close();
         }
         if let Some(session) = self.operator.take() {
@@ -680,7 +775,7 @@ impl Switchboard {
             );
         }
         if target != OPERATOR && self.coordinator.route() != target {
-            if self.remove_dead_background(target) {
+            if self.remove_dead_background(target).await {
                 self.announce_agent_state(target, "finished").await;
             }
             if matches!(mode, crate::router::ConversationMode::Fresh)
@@ -695,8 +790,8 @@ impl Switchboard {
             }
             if self.background_agents.contains_key(target) {
                 let session = self
-                    .background_agents
-                    .remove(target)
+                    .take_background(target)
+                    .await
                     .expect("background session exists");
                 return self.promote_background(session, context).await;
             }
@@ -777,7 +872,7 @@ impl Switchboard {
     /// otherwise enough to enforce one live session per project, but a closed
     /// handle would make later work prompt a dead session and reject a fresh
     /// start forever.
-    fn remove_dead_background(&mut self, project: &str) -> bool {
+    async fn remove_dead_background(&mut self, project: &str) -> bool {
         let dead = self
             .background_agents
             .get(project)
@@ -785,10 +880,47 @@ impl Switchboard {
         if !dead {
             return false;
         }
+        self.background_agents.cancel_task(project).await;
         if let Some(session) = self.background_agents.remove(project) {
             self.coordinator.remove_background(&session.token());
         }
         true
+    }
+
+    /// Removes a resident for a foreground promotion only after its detached
+    /// prompt has been cancelled and joined. This is the reservation boundary:
+    /// mode and token cannot change while the old background task is running.
+    async fn take_background(&mut self, project: &str) -> Option<ProjectSession> {
+        let session = self.background_agents.remove(project)?;
+        self.background_agents.cancel_task(project).await;
+        self.coordinator.remove_background(&session.token());
+        Some(session)
+    }
+
+    fn spawn_background_prompt(&mut self, project: &str, session: ProjectSession, text: String) {
+        let (epoch, generation) = self.background_agents.begin_task(project);
+        let token = session.token();
+        let callback = self.agent_state_callback.clone();
+        let project_id = project.to_owned();
+        let task = tokio::spawn(async move {
+            if let Err(error) = session.prompt(&text).await {
+                tracing::warn!(%error, project = %project_id, "background agent prompt failed");
+            }
+            if let Some(callback) = callback {
+                if session.alive()
+                    && !session.busy()
+                    && epoch.load(Ordering::Acquire) == generation
+                    && session.token() == token
+                {
+                    callback(AgentStateNotice {
+                        project: project_id,
+                        state: "idle".into(),
+                    })
+                    .await;
+                }
+            }
+        });
+        self.background_agents.set_task(project.to_owned(), task);
     }
 
     /// Start one split part without changing the caller's foreground route.
@@ -804,7 +936,7 @@ impl Switchboard {
         {
             return Err(format!("project {} is already busy", project.id));
         }
-        if self.remove_dead_background(&project.id) {
+        if self.remove_dead_background(&project.id).await {
             self.announce_agent_state(&project.id, "finished").await;
         }
         // A resident background session can be idle after its prior turn. Keep
@@ -814,23 +946,7 @@ impl Switchboard {
                 return Err(format!("project {} is already busy", project.id));
             }
             self.announce_agent_state(&project.id, "busy").await;
-            let callback = self.agent_state_callback.clone();
-            let project_id = project.id.clone();
-            let text = text.to_owned();
-            tokio::spawn(async move {
-                if let Err(error) = session.prompt(&text).await {
-                    tracing::warn!(%error, "background agent prompt failed");
-                }
-                if let Some(callback) = callback {
-                    if session.alive() {
-                        callback(AgentStateNotice {
-                            project: project_id,
-                            state: "idle".into(),
-                        })
-                        .await;
-                    }
-                }
-            });
+            self.spawn_background_prompt(&project.id, session, text.to_owned());
             return Ok(());
         }
         let plan = self
@@ -859,22 +975,7 @@ impl Switchboard {
         self.background_agents
             .insert(project.id.clone(), session.clone());
         self.announce_agent_state(&project.id, "busy").await;
-        let callback = self.agent_state_callback.clone();
-        let project_id = project.id.clone();
-        tokio::spawn(async move {
-            if let Err(error) = session.prompt(&intro).await {
-                tracing::warn!(%error, "background agent prompt failed");
-            }
-            if let Some(callback) = callback {
-                if session.alive() {
-                    callback(AgentStateNotice {
-                        project: project_id,
-                        state: "idle".into(),
-                    })
-                    .await;
-                }
-            }
-        });
+        self.spawn_background_prompt(&project.id, session, intro);
         Ok(())
     }
 
@@ -1161,6 +1262,22 @@ impl Switchboard {
             "transferring caller"
         );
 
+        // Reuse a resident before creating a candidate. This is the direct
+        // transfer/dial path, which otherwise only checked the foreground
+        // handle and could create a second live session for this project.
+        if self.coordinator.route() != project.id {
+            if self.remove_dead_background(&project.id).await {
+                self.announce_agent_state(&project.id, "finished").await;
+            }
+            if self.background_agents.contains_key(&project.id) {
+                let session = self
+                    .take_background(&project.id)
+                    .await
+                    .expect("background session exists");
+                return self.promote_background(session, context.clone()).await;
+            }
+        }
+
         // The leg the caller is on now, which every failure below hands the
         // line back to: the project leg on an agent-to-agent transfer, else
         // the operator, as in `drop_agent`.
@@ -1273,6 +1390,7 @@ impl Switchboard {
             };
             tracing::error!(project = %project.id, %detail, "project intro turn failed");
             session.close();
+            self.announce_agent_state(&project.id, "finished").await;
             self.set_active_session(live_session.clone()).await;
             self.rollback_startup(format!("intro failed: {detail}"));
             self.operator_note = Some(format!("Transfer to {} failed: {detail}", project.id));
@@ -1334,7 +1452,9 @@ impl Switchboard {
         let project = match self.registry.resolve_detailed(session.label()) {
             crate::registry::ResolveResult::Exact(project) => project.clone(),
             _ => {
+                let project = session.label().to_owned();
                 session.close();
+                self.announce_agent_state(&project, "finished").await;
                 return self.reply_transfer_error(
                     "The background project is no longer registered.".into(),
                     Some("project is no longer registered".into()),
@@ -1342,8 +1462,9 @@ impl Switchboard {
             }
         };
         let token = uuid_like();
-        let old_token = session.token();
         if let Err(error) = session.set_mode("foreground").await {
+            session.close();
+            self.announce_agent_state(&project.id, "finished").await;
             return self.reply_transfer_error(
                 format!("I couldn't bring {} forward: {error}", project.id),
                 Some(error.to_string()),
@@ -1354,13 +1475,13 @@ impl Switchboard {
             .await
         {
             session.close();
+            self.announce_agent_state(&project.id, "finished").await;
             return self.reply_transfer_error(
                 format!("I couldn't bring {} forward: {error}", project.id),
                 Some(error.to_string()),
             );
         }
         self.announce_agent_state(&project.id, "busy").await;
-        self.coordinator.remove_background(&old_token);
         let candidate = CandidateLeg::new(
             project.id.clone(),
             project.id.clone(),
@@ -1370,6 +1491,8 @@ impl Switchboard {
             self.coordinator.thinking_default(),
         );
         if let Err(error) = self.coordinator.begin_candidate(candidate) {
+            session.close();
+            self.announce_agent_state(&project.id, "finished").await;
             return self.reply_transfer_error(
                 format!("I couldn't bring {} forward: {error}", project.id),
                 Some(error.to_string()),
@@ -1385,7 +1508,8 @@ impl Switchboard {
             },
         };
         if turn.failed && turn.text.is_empty() {
-            session.set_mode("background").await.ok();
+            session.close();
+            self.announce_agent_state(&project.id, "finished").await;
             self.rollback_startup(format!("background promotion failed: {}", turn.error));
             return self.reply_transfer_error(
                 format!("{} did not answer: {}", project.id, turn.error),
@@ -1394,6 +1518,8 @@ impl Switchboard {
         }
         if self.coordinator.is_candidate() {
             if let Err(error) = self.coordinator.adopt_candidate(&token) {
+                session.close();
+                self.announce_agent_state(&project.id, "finished").await;
                 return self.reply_transfer_error(
                     format!("{} did not come up.", project.id),
                     Some(error.to_string()),
@@ -1886,8 +2012,13 @@ impl Switchboard {
                 None,
             );
         }
-        if let Some(session) = self.background_agents.remove(target) {
+        if self.background_agents.contains_key(target) {
             self.resume_blocked.insert(target.to_owned());
+            self.background_agents.cancel_task(target).await;
+            let session = self
+                .background_agents
+                .remove(target)
+                .expect("background session exists");
             self.coordinator.remove_background(&session.token());
             session.close();
             self.announce_agent_state(target, "finished").await;

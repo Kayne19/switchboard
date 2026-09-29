@@ -41,6 +41,79 @@ use tracing::Instrument;
 
 const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
+/// The presentation-side owner of resident agent state and held displays.
+/// PBX transitions and turn settlement feed it notices; no caller edits either
+/// projection directly, so waiting requests cannot be lost by a late idle.
+#[derive(Clone)]
+struct AgentProjection {
+    states: Arc<Mutex<Vec<AgentState>>>,
+    displays: Arc<Mutex<HashMap<String, Value>>>,
+}
+
+impl AgentProjection {
+    async fn notice(&self, notice: &AgentStateNotice) -> Vec<AgentState> {
+        if notice.state == "finished" {
+            self.displays.lock().await.remove(&notice.project);
+        }
+        let mut agents = self.states.lock().await;
+        if let Some(agent) = agents
+            .iter_mut()
+            .find(|agent| agent.project == notice.project)
+        {
+            if !(agent.state == "waiting" && notice.state == "idle") {
+                agent.state = notice.state.clone();
+                if notice.state != "waiting" {
+                    agent.pending_request = None;
+                }
+            }
+        } else {
+            agents.push(AgentState {
+                project: notice.project.clone(),
+                state: notice.state.clone(),
+                pending_request: None,
+            });
+            agents.sort_by(|left, right| left.project.cmp(&right.project));
+        }
+        agents.clone()
+    }
+
+    async fn settle(&self, project: &str) -> Option<Vec<AgentState>> {
+        let mut agents = self.states.lock().await;
+        let agent = agents.iter_mut().find(|agent| agent.project == project)?;
+        agent.state = "idle".into();
+        agent.pending_request = None;
+        Some(agents.clone())
+    }
+
+    async fn waiting(&self, project: String, request: AgentRequest) -> Vec<AgentState> {
+        let mut agents = self.states.lock().await;
+        if let Some(agent) = agents.iter_mut().find(|agent| agent.project == project) {
+            agent.state = "waiting".into();
+            agent.pending_request = Some(request);
+        } else {
+            agents.push(AgentState {
+                project,
+                state: "waiting".into(),
+                pending_request: Some(request),
+            });
+            agents.sort_by(|left, right| left.project.cmp(&right.project));
+        }
+        agents.clone()
+    }
+
+    async fn hold_display(&self, project: String, action: Value) {
+        self.displays.lock().await.insert(project, action);
+    }
+
+    async fn take_display(&self, project: &str) -> Option<Value> {
+        self.displays.lock().await.remove(project)
+    }
+
+    async fn snapshot(&self) -> Vec<AgentState> {
+        self.states.lock().await.clone()
+    }
+}
+
 /// Tells the browser the call has moved to a new leg.
 ///
 /// A transfer is announced from two places: candidate promotion, when the
@@ -56,7 +129,7 @@ struct LegAnnouncer {
     display_gate: Arc<Mutex<DisplayGateState>>,
     display_confirm: watch::Sender<ConfirmState>,
     last_display: Arc<Mutex<Option<Value>>>,
-    background_displays: Arc<Mutex<HashMap<String, Value>>>,
+    projection: AgentProjection,
 }
 
 impl LegAnnouncer {
@@ -156,7 +229,7 @@ impl LegAnnouncer {
         });
         gate.scene_leg = Some(leg.clone());
         if leg.route != crate::pbx::OPERATOR {
-            if let Some(action) = self.background_displays.lock().await.remove(&leg.route) {
+            if let Some(action) = self.projection.take_display(&leg.route).await {
                 let event = Event::Json(
                     ServerMessage::Display {
                         action: action.clone(),
@@ -202,13 +275,12 @@ pub struct AppInner {
     clip_verdicts: std::sync::Mutex<ClipVerdicts>,
     stream_clips: Mutex<HashMap<String, StreamClipState>>,
     pub last_display: Arc<Mutex<Option<Value>>>,
-    pub background_displays: Arc<Mutex<HashMap<String, Value>>>,
     pub screen_state: Mutex<Value>,
     pub display_gate: Arc<Mutex<DisplayGateState>>,
     pub display_confirm: watch::Sender<ConfirmState>,
     pub active_session: Arc<Mutex<Option<LegSession>>>,
     /// Last known state for resident project agents, including pending speak requests.
-    pub agent_states: Arc<Mutex<Vec<AgentState>>>,
+    projection: AgentProjection,
     leg_announcer: LegAnnouncer,
     operation_transition: Mutex<()>,
     active_operations: Mutex<HashMap<TaskId, AbortHandle>>,
@@ -347,6 +419,11 @@ impl AppState {
         let (shutdown, _) = watch::channel(false);
         let last_display = Arc::new(Mutex::new(None));
         let background_displays = Arc::new(Mutex::new(HashMap::new()));
+        let agent_states = Arc::new(Mutex::new(Vec::new()));
+        let projection = AgentProjection {
+            states: agent_states.clone(),
+            displays: background_displays.clone(),
+        };
         let delivery = DeliveryState::new();
         let speech_deadline = speaker.speech_deadline;
         let mut coordinator = switchboard.coordinator();
@@ -376,7 +453,7 @@ impl AppState {
             display_gate: display_gate.clone(),
             display_confirm: display_confirm_tx.clone(),
             last_display: last_display.clone(),
-            background_displays: background_displays.clone(),
+            projection: projection.clone(),
         };
         let activity_announcer = leg_announcer.clone();
         let activity_callback: ActivityCallback = Arc::new(move |activity: Activity| {
@@ -411,7 +488,6 @@ impl AppState {
             Box::pin(async move { announcer.announce_route().await })
         });
         let active_session = switchboard.session_control();
-        let agent_states = Arc::new(Mutex::new(Vec::new()));
         let redials = switchboard.redial_planner();
         let hosts = switchboard.hosts();
         let mut switchboard = switchboard;
@@ -462,7 +538,6 @@ impl AppState {
                 clip_verdicts: std::sync::Mutex::new(ClipVerdicts::default()),
                 stream_clips: Mutex::new(HashMap::new()),
                 last_display,
-                background_displays,
                 screen_state: Mutex::new(json!({
                     "view": "auto",
                     "pinned": false,
@@ -476,7 +551,7 @@ impl AppState {
                 display_gate,
                 display_confirm: display_confirm_tx,
                 active_session,
-                agent_states,
+                projection,
                 leg_announcer,
                 operation_transition: Mutex::new(()),
                 active_operations: Mutex::new(HashMap::new()),
@@ -1245,16 +1320,8 @@ async fn process_turns(state: AppState) {
         }
         tracing::info!(clip = %id, route = %reply.route, elapsed = ?started.elapsed(), "turn settled");
         if reply.route != crate::pbx::OPERATOR {
-            let mut agents = state.0.agent_states.lock().await;
-            if let Some(agent) = agents.iter_mut().find(|agent| agent.project == reply.route) {
-                agent.state = "idle".into();
-                agent.pending_request = None;
-                emit_message(
-                    &state,
-                    ServerMessage::AgentsState {
-                        agents: agents.clone(),
-                    },
-                );
+            if let Some(agents) = state.0.projection.settle(&reply.route).await {
+                emit_message(&state, ServerMessage::AgentsState { agents });
             }
         }
         deliver_turn_if_current(
@@ -1677,42 +1744,8 @@ async fn model(
 /// Updates the page projection for a resident project session. The PBX sends
 /// lifecycle notices; waiting requests are kept until promotion or stop.
 async fn update_agent_state(state: &AppState, notice: AgentStateNotice) {
-    if notice.state == "finished" {
-        state
-            .0
-            .background_displays
-            .lock()
-            .await
-            .remove(&notice.project);
-    }
-    let mut agents = state.0.agent_states.lock().await;
-    if let Some(agent) = agents
-        .iter_mut()
-        .find(|agent| agent.project == notice.project)
-    {
-        // A background turn can finish after request_to_speak has put the
-        // agent in waiting. Its idle notice must not erase that request;
-        // promotion or stop will send the next state that clears it.
-        if !(agent.state == "waiting" && notice.state == "idle") {
-            agent.state = notice.state.clone();
-            if notice.state != "waiting" {
-                agent.pending_request = None;
-            }
-        }
-    } else {
-        agents.push(AgentState {
-            project: notice.project,
-            state: notice.state,
-            pending_request: None,
-        });
-        agents.sort_by(|left, right| left.project.cmp(&right.project));
-    }
-    emit_message(
-        state,
-        ServerMessage::AgentsState {
-            agents: agents.clone(),
-        },
-    );
+    let agents = state.0.projection.notice(&notice).await;
+    emit_message(state, ServerMessage::AgentsState { agents });
 }
 
 /// A project session's `speak`: its words, and the call token it carried.
@@ -1877,26 +1910,8 @@ async fn request_to_speak(state: AppState, token: &str, raw: Value) -> Response 
         message: message.to_owned(),
         reason: reason.to_owned(),
     };
-    {
-        let mut agents = state.0.agent_states.lock().await;
-        if let Some(agent) = agents.iter_mut().find(|agent| agent.project == project) {
-            agent.state = "waiting".into();
-            agent.pending_request = Some(request);
-        } else {
-            agents.push(AgentState {
-                project,
-                state: "waiting".into(),
-                pending_request: Some(request),
-            });
-            agents.sort_by(|left, right| left.project.cmp(&right.project));
-        }
-        emit_message(
-            &state,
-            ServerMessage::AgentsState {
-                agents: agents.clone(),
-            },
-        );
-    }
+    let agents = state.0.projection.waiting(project, request).await;
+    emit_message(&state, ServerMessage::AgentsState { agents });
     Json(json!({"delivered":false,"accepted":true,"reason":null})).into_response()
 }
 
@@ -1970,10 +1985,9 @@ async fn display(state: AppState, token: &str, raw: Value) -> Response {
     if let Some(project) = state.0.coordinator.background_project(token) {
         state
             .0
-            .background_displays
-            .lock()
-            .await
-            .insert(project, normalized_action);
+            .projection
+            .hold_display(project, normalized_action)
+            .await;
         return Json(json!({"delivered":false,"accepted":true,"reason":"caller_away"}))
             .into_response();
     }
@@ -2624,7 +2638,7 @@ async fn snapshot_messages(state: &AppState) -> Vec<ServerMessage> {
     messages.push(ServerMessage::History {
         entries: state.0.transcript_log.lock().await.entries(),
     });
-    let agents = state.0.agent_states.lock().await.clone();
+    let agents = state.0.projection.snapshot().await;
     if !agents.is_empty() {
         messages.push(ServerMessage::AgentsState { agents });
     }

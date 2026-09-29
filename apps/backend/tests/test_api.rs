@@ -4388,7 +4388,8 @@ async fn background_speak_is_refused_and_latest_display_is_released_on_promotion
     assert_eq!(held["reason"], "caller_away");
     assert!(state
         .0
-        .background_displays
+        .projection
+        .displays
         .lock()
         .await
         .contains_key("alpha"));
@@ -4407,7 +4408,8 @@ async fn background_speak_is_refused_and_latest_display_is_released_on_promotion
         .any(|frame| frame["type"] == "display" && frame["action"]["id"] == "d1"));
     assert!(!state
         .0
-        .background_displays
+        .projection
+        .displays
         .lock()
         .await
         .contains_key("alpha"));
@@ -4432,7 +4434,8 @@ async fn stopping_a_background_agent_discards_its_held_display() {
     assert_eq!(held["status"], "accepted");
     assert!(state
         .0
-        .background_displays
+        .projection
+        .displays
         .lock()
         .await
         .contains_key("alpha"));
@@ -4447,7 +4450,8 @@ async fn stopping_a_background_agent_discards_its_held_display() {
     .await;
     assert!(!state
         .0
-        .background_displays
+        .projection
+        .displays
         .lock()
         .await
         .contains_key("alpha"));
@@ -4477,7 +4481,7 @@ async fn an_idle_notice_does_not_clear_a_background_speak_request() {
     )
     .await;
 
-    let agents = state.0.agent_states.lock().await;
+    let agents = state.0.projection.states.lock().await;
     let agent = agents
         .iter()
         .find(|agent| agent.project == "alpha")
@@ -4507,7 +4511,7 @@ async fn agents_state_publishes_idle_after_turn_and_finished_after_hangup() {
         .transfer_ctx(&context, "alpha", "", "")
         .await;
     assert_eq!(reply.route, "alpha");
-    let agents = state.0.agent_states.lock().await.clone();
+    let agents = state.0.projection.states.lock().await.clone();
     assert_eq!(
         agents
             .iter()
@@ -4529,7 +4533,7 @@ async fn agents_state_publishes_idle_after_turn_and_finished_after_hangup() {
         .any(|event| event["agents"][0]["state"] == "idle"));
 
     state.0.switchboard.lock().await.force_hangup().await;
-    assert_eq!(state.0.agent_states.lock().await[0].state, "finished");
+    assert_eq!(state.0.projection.states.lock().await[0].state, "finished");
     assert!(std::iter::from_fn(|| events.try_recv().ok()).any(|event| {
         matches!(event, Event::Json(value) if value["type"] == "agents_state" && value["agents"][0]["state"] == "finished")
     }));
