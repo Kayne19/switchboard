@@ -960,6 +960,39 @@ async fn a_non_steered_continue_uses_one_jev_decision_for_one_utterance() {
 }
 
 #[tokio::test]
+async fn a_stale_queued_turn_removes_its_retained_jev_decision() {
+    let state = state();
+    state
+        .0
+        .routed_decisions
+        .lock()
+        .await
+        .insert("stale".into(), Decision::fallback("test"));
+    let old_generation = state.0.coordinator.generation();
+    state.0.coordinator.begin_rescue("test rescue");
+    state.0.queued_turns.store(1, Ordering::Release);
+    let worker = tokio::spawn(process_turns(state.clone()));
+    state
+        .0
+        .turns
+        .send(("stale".into(), "old words".into(), old_generation))
+        .await
+        .expect("queued turn");
+
+    timeout(Duration::from_secs(1), async {
+        while state.0.queued_turns.load(Ordering::Acquire) != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("stale turn processed");
+    assert!(!state.0.routed_decisions.lock().await.contains_key("stale"));
+
+    worker.abort();
+    let _ = worker.await;
+}
+
+#[tokio::test]
 async fn steer_rechecks_generation_under_the_active_session_guard() {
     let (endpoint, key_path, _requests, responded, server) = fake_jev_server().await;
     let state = state_with_jev(&endpoint, &key_path);

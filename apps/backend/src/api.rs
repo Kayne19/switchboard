@@ -1113,14 +1113,16 @@ async fn process_turns(state: AppState) {
         // Normal clip processing stores the decision beside the queued clip.
         // Tests and internal callers may enqueue a raw turn, so route that
         // compatibility path here without changing the public channel shape.
+        let routed_decision = state.0.routed_decisions.lock().await.remove(&id);
         if generation != state.0.coordinator.generation() {
             tracing::info!(clip = %id, stamped = generation, current = state.0.coordinator.generation(), "dropping a queued turn before Jev routing");
             emit_stale_clip(&state, &id);
             continue;
         }
-        let decision = match state.0.routed_decisions.lock().await.remove(&id) {
-            Some(decision) => decision,
-            None => route_transcript(&state, &transcript).await,
+        let decision = if let Some(decision) = routed_decision {
+            decision
+        } else {
+            route_transcript(&state, &transcript).await
         };
 
         let turn_state = state.clone();
