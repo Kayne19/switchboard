@@ -22,7 +22,7 @@ use crate::router::{utility_decision, CallSummary, Decision, Router, UtilityDeci
 use futures_util::FutureExt;
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
@@ -361,6 +361,8 @@ pub struct Switchboard {
     operator_note: Option<String>,
     /// Project awaiting a caller confirmation before it is stopped.
     pending_stop: Option<String>,
+    /// Projects explicitly stopped by the caller must start fresh once.
+    resume_blocked: HashSet<String>,
     /// The one owner of the leg on the line, and of the status the page is
     /// shown.
     coordinator: Coordinator,
@@ -431,6 +433,7 @@ impl Switchboard {
             background_agents: HashMap::new(),
             operator_note: None,
             pending_stop: None,
+            resume_blocked: HashSet::new(),
             coordinator,
             hosts,
             prewarm,
@@ -1328,7 +1331,7 @@ impl Switchboard {
     /// the call with `leg_token`. Nothing here sets anything up: the host's
     /// catalog and the prepare report were settled by prewarm.
     async fn start_agent(
-        &self,
+        &mut self,
         project: &Project,
         model: &str,
         leg_token: &str,
@@ -1339,7 +1342,7 @@ impl Switchboard {
     }
 
     async fn start_agent_mode(
-        &self,
+        &mut self,
         project: &Project,
         model: &str,
         leg_token: &str,
@@ -1358,7 +1361,8 @@ impl Switchboard {
         };
         // A host-agent restart keeps resident sessions alive. Prefer the
         // matching service-created session rather than creating a duplicate.
-        let resumed_id = if self.hosts.link_epoch(&plan.host).is_some() {
+        let resume_blocked = self.resume_blocked.remove(&project.id);
+        let resumed_id = if !resume_blocked && self.hosts.link_epoch(&plan.host).is_some() {
             self.hosts
                 .command(
                     &plan.host,
@@ -1772,6 +1776,7 @@ impl Switchboard {
     }
     async fn stop_project(&mut self, target: &str) -> Reply {
         if self.coordinator.route() == target {
+            self.resume_blocked.insert(target.to_owned());
             self.drop_agent().await;
             return self.reply(
                 [format!("Stopped {target}. You are back with the operator.")],
@@ -1779,6 +1784,7 @@ impl Switchboard {
             );
         }
         if let Some(session) = self.background_agents.remove(target) {
+            self.resume_blocked.insert(target.to_owned());
             self.coordinator.remove_background(&session.token());
             session.close();
             return self.reply([format!("Stopped {target}.")], None);
