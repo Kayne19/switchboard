@@ -38,6 +38,13 @@ These follow from the findings below and change the plan's details for step 2.
   by cursor. When the host agent itself restarts, it rebuilds each session
   from the daemon's snapshot.
 - **Tool policy** keeps `ipython` (the `switchboard` module needs it).
+- **Desk takeover.** `attach {session, project, cwd}` adopts a live top-level
+  desk session only when the service has matched its exact registered folder.
+  The state file records `taken_over`; `join_call` then registers the session
+  with the skill socket. `detach` clears that registration and releases the
+  daemon session without killing it. A host-link loss clears call state locally
+  so the globally installed module becomes inert until the service joins it
+  again.
 
 ## The probe
 

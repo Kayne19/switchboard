@@ -103,6 +103,28 @@ test("list_sessions reports provenance; kill is refused for taken_over and forei
 	assert.deepEqual(manager.handles(), []);
 });
 
+test("attach adopts an exact-folder desk session as taken_over and detach never kills it", async () => {
+	const { daemon, manager, stateFile } = setup();
+	daemon.addLive({ handle: "desk", sessionId: "desk-saved", cwd: "/srv/homelab", name: "notes" });
+	const info = (await manager.handle("attach", { session: "desk", project: "homelab", cwd: "/srv/homelab" })) as Message;
+	assert.equal(info.provenance, "taken_over");
+	assert.equal(info.session_id, "desk-saved");
+	const state = JSON.parse(readFileSync(stateFile, "utf8"));
+	assert.equal(state.sessions[0].provenance, "taken_over");
+	await manager.handle("join_call", { session: "desk", token: "call", persona: "Jev", speech_deadline_ms: 1000 });
+	await manager.handle("detach", { session: "desk" });
+	assert.equal(daemon.live.has("desk"), true);
+	assert.ok(!daemon.ops().includes("kill"));
+});
+
+test("attach refuses a folder mismatch and an already tracked session", async () => {
+	const { daemon, manager } = setup();
+	daemon.addLive({ handle: "desk", cwd: "/srv/homelab" });
+	await assert.rejects(manager.handle("attach", { session: "desk", project: "homelab", cwd: "/srv/other" }), (e: Error & { code?: string }) => e.code === "refused");
+	await manager.handle("attach", { session: "desk", project: "homelab", cwd: "/srv/homelab" });
+	await assert.rejects(manager.handle("attach", { session: "desk", project: "homelab", cwd: "/srv/homelab" }), (e: Error & { code?: string }) => e.code === "refused");
+});
+
 test("resume: open_session reopens a saved sb- session; a desk session is refused", async () => {
 	const { daemon, manager } = setup();
 	daemon.saved.set("old1", { handle: "", sessionId: "old1", name: "sb-homelab-1234abcd", cwd: "/srv/homelab", busy: false, model: null, thinking: "low", depth: 0 });

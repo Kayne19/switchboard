@@ -206,6 +206,7 @@ model does not have). `call_mode` is `null` when the session is not on a call.
 |---|---|---|
 | `create_session` | `project`, `config: {cwd, provider?, model?, thinking?}` | `info` |
 | `open_session` | `session_id`, `cwd`, `project?` | `info` |
+| `attach` | `session`, `project`, `cwd` | `info` |
 | `list_sessions` | — | `{sessions: [...]}` |
 | `list_saved_sessions` | `cwd`, `project?` | `{sessions: [...]}` |
 | `prompt` | `session`, `message` | `{sent_as: "prompt" \| "follow_up"}` |
@@ -277,8 +278,12 @@ model does not have). `call_mode` is `null` when the session is not on a call.
 
   `outcome` is `succeeded`, `failed` or `timed_out`.
 
-Reserved, not implemented yet: `attach` (desk takeover, provenance
-`taken_over`).
+- **`attach`** adopts one live top-level desk session in the exact registered
+  `cwd`, without creating or reopening it. It records provenance
+  `taken_over`, subscribes to its events, and persists that provenance. The
+  session remains inert to the skill module until `join_call`; `detach` is the
+  only release path and never kills it. A tracked session, a non-top-level
+  session, or a folder mismatch is refused.
 
 ### Session events
 

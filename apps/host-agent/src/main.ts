@@ -99,7 +99,10 @@ export async function main(argv: string[]): Promise<void> {
 		command: (name, args) => manager.handle(name, args),
 		sessions: () => manager.handles(),
 		describe: (handle) => manager.describe(handle),
-		onStatus: (s) => log(`link ${s.state}${s.reason ? ` (${s.reason})` : ""}${s.epoch !== undefined ? ` epoch ${s.epoch}` : ""}`),
+		onStatus: (s) => {
+			if (s.state === "closed" || s.state === "refused") manager.clearCalls();
+			log(`link ${s.state}${s.reason ? ` (${s.reason})` : ""}${s.epoch !== undefined ? ` epoch ${s.epoch}` : ""}`);
+		},
 	});
 	const manager = new SessionManager({
 		port,
