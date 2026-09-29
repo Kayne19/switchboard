@@ -8,6 +8,7 @@
 //! only through the coordinator's transitions. A model or thinking change is
 //! decided by `RedialPlanner`, which needs no PBX lock; the switchboard runs
 //! the ones that go ahead.
+use crate::floor::FloorRewriteInput;
 use crate::history::TranscriptEntry;
 use crate::hosts::Hosts;
 use crate::lifecycle::{CandidateLeg, Coordinator, LifecycleError, ProjectLeg, StatusConfig};
@@ -56,12 +57,12 @@ pub type AgentStateCallback =
 /// prompt a project session gets for the caller, and again on the first after
 /// a compaction; it is never a message of its own.
 const AGENT_BRIEF_HEADER: &str = "[SWITCHBOARD VOICE BRIEF]\nYou are on a voice call in the {project} project, in its own directory. The caller hears only what you pass to the `switchboard` module in your Python REPL (already imported); your written output goes to their screen and is not read aloud.\n";
-const AGENT_BRIEF_TOOLS: &str = "- switchboard.speak(text): say a sentence or two of plain speech. Use it to answer, and before and during long work. No code, paths or lists.\n- switchboard.request_to_speak(message, reason) asks the caller to bring a background session forward; use it when finished, blocked or needing a decision.\n- switchboard.display(...) shows things on their screen; switchboard.view() tells you what they see.\n- Routing is handled by the switchboard before your turn. Do not try to transfer, return, or change models; answer the caller or explain what you completed.\n";
+const AGENT_BRIEF_TOOLS: &str = "- switchboard.speak(text): say a sentence or two of plain speech. Use it to answer, and before and during long work. No code, paths or lists.\n- switchboard.request_to_speak(message, reason): queue exactly what the caller should hear from you. For finished, message is the actual result in one to three short spoken sentences; for needs_decision, it is the question and options; for problem, it is what went wrong and what you need. The service lightly smooths it and speaks it at a good moment; do not send a teaser.\n- switchboard.display(...) shows things on their screen; switchboard.view() tells you what they see.\n- Routing is handled by the switchboard before your turn. Do not try to transfer, return, or change models; answer the caller or explain what you completed.\n";
 const AGENT_BRIEF_SWAPS: &str = "";
 const AGENT_BRIEF_END: &str = "[END OF VOICE BRIEF]";
 /// Instructions for the separate, stateless process. This is code-owned so
 /// deploying the utility never requires another environment setting.
-const UTILITY_SYSTEM_PROMPT: &str = r#"You are the switchboard's stateless utility process. You never speak to the caller and you never answer general questions. For routing prompts, call exactly one routing tool: second_opinion for one target, dispatch_parts for several targets. When the caller asks for things from two or more registered projects, call dispatch_parts with one part per project and preserve the caller's exact wording in each part. When the request names only one project, call second_opinion. Never invent projects, never emit a prose answer, and never call more than one tool. For a floor rewrite prompt, call rewrite with a natural short spoken version of the supplied message. A rewrite may not add facts, names, numbers, promises, or requests that are not in the original."#;
+const UTILITY_SYSTEM_PROMPT: &str = r#"You are the switchboard's stateless utility process. You never speak to the caller and you never answer general questions. For routing prompts, call exactly one routing tool: second_opinion for one target, dispatch_parts for several targets. When the caller asks for things from two or more registered projects, call dispatch_parts with one part per project and preserve the caller's exact wording in each part. When the request names only one project, call second_opinion. Never invent projects, never emit a prose answer, and never call more than one tool. For a floor rewrite prompt, call rewrite with a natural short spoken version of the supplied message. Speak as one person continuing the conversation. Vary the phrasing, mention the project only when needed for clarity, and keep it short. If the caller has been quiet longer than the floor threshold, a brief natural lead-in may make the project clear. Keep every fact from the agent's message and add none: no new names, numbers, paths, promises, or requests."#;
 #[derive(Clone, Debug, Serialize)]
 pub struct Utterance {
     pub text: String,
@@ -1224,7 +1225,7 @@ impl Switchboard {
         }
         if previous.busy() {
             let _ = previous
-                .steer("[switchboard] The caller is now listening to another agent. Continue your work quietly; use request_to_speak when you need the caller.")
+                .steer("[switchboard] The caller is now listening to another agent. Continue your work quietly. When you have something for the caller, use request_to_speak with the actual words they should hear: the result, decision question, or problem—not a teaser.")
                 .await;
         }
         let state = if previous.busy() { "busy" } else { "idle" };
@@ -1539,11 +1540,19 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
 
     pub async fn rewrite_floor_with_session(
         session: &PiSession,
-        message: &str,
-        reason: &str,
+        input: &FloorRewriteInput,
     ) -> Result<Option<String>, PiSessionError> {
+        let context = if input.context.trim().is_empty() {
+            "(no recent conversation)"
+        } else {
+            input.context.trim()
+        };
         let prompt = format!(
-            "[FLOOR REWRITE]\nOriginal message: {message}\nReason: {reason}\nCall rewrite with only a faithful spoken rewrite.",
+            "[FLOOR REWRITE]\nProject: {project}\nReason: {reason}\nCaller quiet longer than floor threshold: {quiet}\n[RECENT CONVERSATION]\n{context}\n[AGENT MESSAGE]\n{message}\n[INSTRUCTION]\nRewrite the agent message as a short, natural spoken continuation. Vary the phrasing. Mention the project only when needed for clarity. Keep every fact and add none. Call rewrite with only the spoken rewrite.",
+            project = input.project,
+            reason = input.reason,
+            quiet = if input.quiet { "yes" } else { "no" },
+            message = input.message,
         );
         let turn = session.prompt(&prompt).await?;
         if turn.failed {
@@ -1566,12 +1575,27 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
                     .and_then(Value::as_str)
                     .map(str::trim)
                     .filter(|text| !text.is_empty())
-                    .filter(|text| Self::faithful_floor_rewrite(message, text))
+                    .filter(|text| {
+                        Self::faithful_floor_rewrite_with_allowlist(
+                            &input.message,
+                            text,
+                            &[input.project.as_str()],
+                        )
+                    })
                     .map(str::to_owned)
             }))
     }
 
+    #[cfg(test)]
     fn faithful_floor_rewrite(original: &str, rewrite: &str) -> bool {
+        Self::faithful_floor_rewrite_with_allowlist(original, rewrite, &[])
+    }
+
+    fn faithful_floor_rewrite_with_allowlist(
+        original: &str,
+        rewrite: &str,
+        allowed: &[&str],
+    ) -> bool {
         let original_len = original.chars().count();
         let rewrite_len = rewrite.chars().count();
         if rewrite_len > original_len.saturating_mul(2).saturating_add(20) {
@@ -1582,6 +1606,12 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
             .map(Self::normalize_floor_token)
             .filter(|token| !token.is_empty())
             .collect::<HashSet<_>>();
+        let allowed_tokens = allowed
+            .iter()
+            .flat_map(|value| value.split_whitespace())
+            .map(Self::normalize_floor_token)
+            .filter(|token| !token.is_empty())
+            .collect::<HashSet<_>>();
         rewrite
             .split_whitespace()
             .filter_map(|raw| {
@@ -1589,7 +1619,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
                 (!token.is_empty()).then_some((raw, token))
             })
             .all(|(raw, token)| {
-                let present = original_tokens.contains(&token);
+                let present = original_tokens.contains(&token) || allowed_tokens.contains(&token);
                 let has_number = token.chars().any(char::is_numeric);
                 let has_url_or_path = token.starts_with("http://")
                     || token.starts_with("https://")
@@ -1603,9 +1633,35 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
                     .next()
                     .is_some_and(|character| character.is_uppercase())
                     && raw.chars().any(|character| character.is_lowercase())
-                    && !present;
+                    && !present
+                    && !Self::is_floor_lead_in(&token);
                 present || (!has_number && !has_url_or_path && !has_new_capitalized_name)
             })
+    }
+
+    fn is_floor_lead_in(token: &str) -> bool {
+        matches!(
+            token,
+            "a" | "an"
+                | "also"
+                | "and"
+                | "but"
+                | "by"
+                | "for"
+                | "from"
+                | "here"
+                | "i"
+                | "just"
+                | "now"
+                | "one"
+                | "so"
+                | "the"
+                | "this"
+                | "there"
+                | "update"
+                | "well"
+                | "with"
+        )
     }
 
     fn normalize_floor_token(token: &str) -> String {

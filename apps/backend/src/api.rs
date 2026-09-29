@@ -6,7 +6,7 @@ use crate::display::{
     SceneLeg, DISPLAY_CONFIRM_DEADLINE_MS,
 };
 use crate::floor;
-use crate::floor::{Floor, FloorHooks, FloorRequest, ReleaseOutcome};
+use crate::floor::{Floor, FloorHooks, FloorRequest, FloorRewriteInput, ReleaseOutcome};
 use crate::history::{TranscriptLog, AGENT, CALLER};
 use crate::hosts::Hosts;
 use crate::lifecycle::{ActivityDisposition, Coordinator};
@@ -689,30 +689,23 @@ fn spawn_floor_worker(state: AppState) {
                 router.good_moment(&summary).await.map_err(|_| ())
             }) as floor::GateFuture
         }),
-        rewrite: Arc::new(move |request: &FloorRequest| {
+        rewrite: Arc::new(move |input: FloorRewriteInput| {
             let state = rewrite_state.clone();
-            let request = request.clone();
             Box::pin(async move {
-                let original = request.message.clone();
                 let session = {
                     let mut board = state.0.switchboard.lock().await;
                     board.floor_rewrite_session().await.map_err(|_| ())?
                 };
                 let operation = async {
-                    Switchboard::rewrite_floor_with_session(
-                        &session,
-                        &request.message,
-                        &request.reason,
-                    )
-                    .await
-                    .ok()
-                    .flatten()
-                    .filter(|text| !text.trim().is_empty())
-                    .unwrap_or(original)
+                    Switchboard::rewrite_floor_with_session(&session, &input)
+                        .await
+                        .map_err(|_| ())?
+                        .filter(|text| !text.trim().is_empty())
+                        .ok_or(())
                 };
                 tokio::time::timeout(floor::REWRITE_TIMEOUT, operation)
                     .await
-                    .map_err(|_| ())
+                    .map_err(|_| ())?
             }) as floor::RewriteFuture
         }),
         release: Arc::new(
@@ -1965,9 +1958,9 @@ async fn release_floor(
     if text.is_empty() {
         text = request.message.clone();
     }
-    if announce {
-        text = format!("An update from {}: {}", request.project, text);
-    }
+    // The rewrite owns any natural conversational lead-in. On rewrite failure
+    // the floor supplied the minimal project-labelled fallback.
+    let _ = announce;
     let spoken = state.0.speaker.clip_for_speech(&text);
     if spoken.is_empty() {
         return ReleaseOutcome::Played;
@@ -2056,7 +2049,7 @@ async fn speak(state: AppState, req: Speak) -> Response {
     }
     if state.0.coordinator.is_background(&req.token) {
         tracing::info!("not spoken: caller is away from background agent");
-        return Json(json!({"delivered":false,"reason":"caller_away","detail":"the caller is not listening to this session"})).into_response();
+        return Json(json!({"delivered":false,"reason":"caller_away","detail":"the caller is listening to another session; use request_to_speak with the actual words they should hear"})).into_response();
     }
     promote_candidate_for_token(&state, &req.token).await;
     if let Err(error) = state.0.coordinator.accept_side_effect(&req.token) {
@@ -2160,6 +2153,17 @@ async fn speak(state: AppState, req: Speak) -> Response {
 
     Json(json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})).into_response()
 }
+fn recent_floor_context(entries: &[crate::history::TranscriptEntry]) -> String {
+    entries
+        .iter()
+        .rev()
+        .take(6)
+        .rev()
+        .map(|entry| format!("{}: {}", entry.role, entry.text))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Records a background agent's request without speaking for it. The floor
 /// slice consumes this state when the caller answers waiting.
 async fn request_to_speak(state: AppState, token: &str, raw: Value) -> Response {
@@ -2193,6 +2197,7 @@ async fn request_to_speak(state: AppState, token: &str, raw: Value) -> Response 
         reason: reason.to_owned(),
     };
     let generation = state.0.coordinator.generation();
+    let context = recent_floor_context(&state.0.transcript_log.lock().await.entries());
     let Some((project, agents)) = state.0.coordinator.with_background(token, |project| {
         let project = project.to_owned();
         let agents = state.0.projection.waiting(project.clone(), request.clone());
@@ -2212,6 +2217,7 @@ async fn request_to_speak(state: AppState, token: &str, raw: Value) -> Response 
             project,
             token: token.to_owned(),
             generation,
+            context,
             message: request.message,
             reason: request.reason,
         })

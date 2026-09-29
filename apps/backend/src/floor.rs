@@ -21,6 +21,20 @@ pub(crate) struct FloorRequest {
     /// The lifecycle generation at admission. A route rescue during rewrite
     /// makes this request stale even if the resident token is still present.
     pub generation: u64,
+    /// A small snapshot of the recent conversation, used to make the spoken
+    /// update flow naturally from what the caller just heard.
+    pub context: String,
+    pub message: String,
+    pub reason: String,
+}
+
+/// All information the floor rewrite model needs. The caller's recent context
+/// is captured when the request is queued; `quiet` is computed at release time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FloorRewriteInput {
+    pub context: String,
+    pub project: String,
+    pub quiet: bool,
     pub message: String,
     pub reason: String,
 }
@@ -47,7 +61,7 @@ pub(crate) struct FloorHooks {
     pub connected: Arc<dyn Fn() -> bool + Send + Sync>,
     pub live: Arc<dyn Fn(&FloorRequest) -> bool + Send + Sync>,
     pub gate: Arc<dyn Fn(&FloorRequest) -> GateFuture + Send + Sync>,
-    pub rewrite: Arc<dyn Fn(&FloorRequest) -> RewriteFuture + Send + Sync>,
+    pub rewrite: Arc<dyn Fn(FloorRewriteInput) -> RewriteFuture + Send + Sync>,
     pub release: Arc<dyn Fn(FloorRequest, String, bool) -> ReleaseFuture + Send + Sync>,
 }
 
@@ -141,9 +155,16 @@ impl Floor {
                 self.drop_front(&entry.request).await;
                 continue;
             }
-            let rewritten = (hooks.rewrite)(&entry.request)
-                .await
-                .unwrap_or_else(|_| entry.request.message.clone());
+            let input = FloorRewriteInput {
+                context: entry.request.context.clone(),
+                project: entry.request.project.clone(),
+                quiet: announce,
+                message: entry.request.message.clone(),
+                reason: entry.request.reason.clone(),
+            };
+            let rewritten = (hooks.rewrite)(input).await.unwrap_or_else(|_| {
+                format!("{}: {}", entry.request.project, entry.request.message)
+            });
             if !(hooks.live)(&entry.request) {
                 self.drop_front(&entry.request).await;
                 continue;

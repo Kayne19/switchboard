@@ -172,7 +172,7 @@ pub struct AgentState {
     pub pending_request: Option<AgentRequest>,
 }
 
-/// A background agent's request to bring it to the foreground.
+/// A background agent's spoken message queued for a good moment on the floor.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(serde::Deserialize))]
 pub struct AgentRequest {

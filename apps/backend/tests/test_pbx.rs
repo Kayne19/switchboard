@@ -1208,6 +1208,9 @@ fn the_voice_brief_teaches_the_switchboard_module_and_names_the_targets() {
     let brief = board.agent_brief(&project("alpha", ""));
     for taught in [
         "switchboard.speak(text)",
+        "switchboard.request_to_speak(message, reason)",
+        "actual result in one to three short spoken sentences",
+        "do not send a teaser",
         "switchboard.display(",
         "switchboard.view()",
         "Routing is handled by the switchboard",
@@ -2949,6 +2952,13 @@ async fn backgrounding_a_busy_foreground_sends_an_away_notice() {
         .as_str()
         .unwrap_or_default()
         .contains("caller is now listening to another agent")));
+    let steer_calls = log.named("steer");
+    let away = steer_calls
+        .iter()
+        .find_map(|args| args["message"].as_str())
+        .unwrap_or_default();
+    assert!(away.contains("actual words they should hear"));
+    assert!(away.contains("not a teaser"));
     held.abort();
     let _ = held.await;
     board.shutdown().await;
