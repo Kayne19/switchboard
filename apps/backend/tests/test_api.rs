@@ -4413,6 +4413,42 @@ async fn background_speak_is_refused_and_latest_display_is_released_on_promotion
         .contains_key("alpha"));
 }
 
+#[tokio::test]
+async fn an_idle_notice_does_not_clear_a_background_speak_request() {
+    let state = state();
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "background-token");
+    let response = request_to_speak(
+        state.clone(),
+        "background-token",
+        json!({"message":"I finished", "reason":"finished"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    update_agent_state(
+        &state,
+        AgentStateNotice {
+            project: "alpha".into(),
+            state: "idle".into(),
+        },
+    )
+    .await;
+
+    let agents = state.0.agent_states.lock().await;
+    let agent = agents
+        .iter()
+        .find(|agent| agent.project == "alpha")
+        .unwrap();
+    assert_eq!(agent.state, "waiting");
+    assert_eq!(
+        agent.pending_request.as_ref().unwrap().message,
+        "I finished"
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn agents_state_publishes_idle_after_turn_and_finished_after_hangup() {

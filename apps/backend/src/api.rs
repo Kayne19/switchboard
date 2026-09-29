@@ -1682,9 +1682,14 @@ async fn update_agent_state(state: &AppState, notice: AgentStateNotice) {
         .iter_mut()
         .find(|agent| agent.project == notice.project)
     {
-        agent.state = notice.state.clone();
-        if notice.state != "waiting" {
-            agent.pending_request = None;
+        // A background turn can finish after request_to_speak has put the
+        // agent in waiting. Its idle notice must not erase that request;
+        // promotion or stop will send the next state that clears it.
+        if !(agent.state == "waiting" && notice.state == "idle") {
+            agent.state = notice.state.clone();
+            if notice.state != "waiting" {
+                agent.pending_request = None;
+            }
         }
     } else {
         agents.push(AgentState {
