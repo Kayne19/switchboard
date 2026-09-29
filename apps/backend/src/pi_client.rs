@@ -591,6 +591,10 @@ pub struct AgentCall {
 }
 pub type ModuleCallback =
     Arc<dyn Fn(AgentCall) -> Pin<Box<dyn Future<Output = Value> + Send>> + Send + Sync>;
+/// Called once when the host reports that a project session closed. The PBX
+/// uses this to evict a background resident without waiting for another call.
+pub type SessionClosedCallback =
+    Arc<dyn Fn(String, String) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 /// How long a host agent has to answer a session command.
 const SESSION_COMMAND_WAIT: Duration = Duration::from_secs(30);
@@ -609,6 +613,7 @@ pub struct ProjectLaunch {
     pub turn_timeout: Duration,
     pub on_activity: Option<ActivityCallback>,
     pub on_module: Option<ModuleCallback>,
+    pub on_closed: Option<SessionClosedCallback>,
 }
 
 /// The model and effective thinking level a host agent reports for a
@@ -653,6 +658,7 @@ struct ProjectInner {
     turn_timeout: Duration,
     on_activity: Option<ActivityCallback>,
     on_module: Option<ModuleCallback>,
+    on_closed: Option<SessionClosedCallback>,
     turn_lock: Mutex<()>,
     busy: AtomicBool,
     closed: AtomicBool,
@@ -718,6 +724,27 @@ impl ProjectInner {
                 }
             }
         });
+    }
+
+    async fn report_closed(&self) {
+        if let Some(callback) = &self.on_closed {
+            let callback = Arc::clone(callback);
+            if let Err(panic) = AssertUnwindSafe(callback(
+                self.label.clone(),
+                self.persistent_session_id.clone(),
+            ))
+            .catch_unwind()
+            .await
+            {
+                tracing::error!(label = %self.label, panic = %panic_message(&panic), "session closed callback panicked");
+            }
+        }
+    }
+
+    async fn mark_closed(&self) {
+        if !self.closed.swap(true, Ordering::AcqRel) {
+            self.report_closed().await;
+        }
     }
 
     async fn report_activity(&self, state: &str, tool: &str) {
@@ -852,6 +879,7 @@ impl ProjectSession {
             turn_timeout: launch.turn_timeout,
             on_activity: launch.on_activity,
             on_module: launch.on_module,
+            on_closed: launch.on_closed,
             turn_lock: Mutex::new(()),
             busy: AtomicBool::new(false),
             closed: AtomicBool::new(false),
@@ -895,11 +923,21 @@ impl ProjectSession {
             return Err(PiSessionError("the project session has ended".into()));
         }
         args["session"] = Value::String(self.inner.session.clone());
-        self.inner
+        match self
+            .inner
             .hosts
             .command(&self.inner.host, name, args, SESSION_COMMAND_WAIT)
             .await
-            .map_err(|error| PiSessionError(error.to_string()))
+        {
+            Ok(reply) => Ok(reply),
+            Err(error) => {
+                // A failed host command means this resident is no longer
+                // usable. Mark it closed before returning so its owner can
+                // evict it instead of publishing a misleading idle state.
+                self.inner.mark_closed().await;
+                Err(PiSessionError(error.to_string()))
+            }
+        }
     }
 
     /// Puts the session on the call with `token`: module calls must carry it
@@ -1173,7 +1211,7 @@ async fn pump(
                         inner.brief_due.store(true, Ordering::Release);
                     }
                     Some("session_closed") => {
-                        inner.closed.store(true, Ordering::Release);
+                        inner.mark_closed().await;
                     }
                     Some("tool_start") => {
                         inner.report_activity("life", "").await;

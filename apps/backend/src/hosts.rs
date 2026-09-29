@@ -798,6 +798,19 @@ impl Hosts {
         if let Some(state) = hosts.get_mut(host) {
             if state.link.as_ref().map(|link| link.epoch) == Some(epoch) {
                 state.link = None;
+                // A resident handle subscribed to this link must not remain
+                // reusable after the host has gone away. Its pump turns this
+                // into the normal session-closed callback, which evicts the
+                // background projection immediately. A later call may reopen
+                // the saved session after the host reconnects.
+                state.seq += 1;
+                let seq = state.seq;
+                for subscriber in state.subscribers.values() {
+                    let _ = subscriber.send(SessionFrame::Event {
+                        seq,
+                        event: json!({"kind": "session_closed", "reason": "host link closed"}),
+                    });
+                }
             }
             state.pending.retain(|_, pending| pending.epoch != epoch);
         }

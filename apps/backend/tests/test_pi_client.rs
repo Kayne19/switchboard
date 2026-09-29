@@ -325,6 +325,7 @@ async fn releasing_a_taken_over_session_aborts_before_detaching() {
         turn_timeout: Duration::from_secs(1),
         on_activity: None,
         on_module: None,
+        on_closed: None,
         turn_lock: Mutex::new(()),
         busy: AtomicBool::new(true),
         closed: AtomicBool::new(false),
