@@ -89,6 +89,18 @@ The dependency direction is intentional:
 - browsers render and capture but do not own authority
 - deployment supplies contracts but is not hidden inside the application
 
+### Jev utterance routing
+
+`jev.rs` is the typed HTTP adapter for TypeSafe System One. `router.rs` owns
+one routing decision per final transcript: it builds the named call summary,
+asks the fixed action/target/current-agent/freshness/multi-target questions,
+and applies the confidence thresholds from `Config`. The summary drops its
+oldest conversation turns first when the configured budget would be exceeded.
+A timeout, malformed response, or uncertain decision goes through the existing
+operator LLM path. The PBX applies a confident decision; project agents and
+the operator transfer tool do not independently choose the route. The Jev key
+is read from the configured secret file and never appears in logs or errors.
+
 ## Core rules
 
 ### 1. Switchboard owns the call lifecycle

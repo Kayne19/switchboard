@@ -263,6 +263,10 @@ export function RuntimeIntegration() {
           dispatch({ op: "runtime_say", text: body });
           break;
         }
+        case "routing_unavailable":
+          // CallRuntime shows this as a page status error. Do not put it on
+          // the conversation surface or send it through speech synthesis.
+          break;
       }
     };
 

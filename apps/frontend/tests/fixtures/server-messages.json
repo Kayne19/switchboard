@@ -207,7 +207,7 @@
       "message": {
         "type": "error",
         "id": "clip-1",
-        "message": "I didn't catch that — say it again."
+        "message": "I didn't catch that \u2014 say it again."
       }
     },
     {
@@ -217,6 +217,13 @@
         "id": "clip-5",
         "code": "stale_epoch",
         "message": "that recording belongs to the previous leg"
+      }
+    },
+    {
+      "name": "routing_unavailable",
+      "message": {
+        "type": "routing_unavailable",
+        "message": "Routing is unavailable. Please try again."
       }
     },
     {

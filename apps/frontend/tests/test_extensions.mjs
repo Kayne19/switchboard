@@ -55,6 +55,13 @@ function fakePi(thinking = "high") {
 		registerTool(tool) {
 			tools.set(tool.name, tool);
 		},
+		registerFlag(name, options) {
+			this.flags ??= new Map();
+			this.flags.set(name, options.default ?? false);
+		},
+		getFlag(name) {
+			return this.flags?.get(name) ?? false;
+		},
 		on(name, handler) {
 			handlers.set(name, handler);
 		},
@@ -86,16 +93,33 @@ async function operatorExtensionBehavior() {
 		const extension = await loadExtension("extensions/operator-switchboard.ts");
 		const pi = fakePi();
 		extension.default(pi);
-		assert.deepEqual([...pi.tools.keys()], ["transfer_to_project"]);
-		const transferred = await pi.tools
-			.get("transfer_to_project")
-			.execute("call", { project: "alpha", intent: "Audit it" });
-		assert.deepEqual(transferred.details, { project: "alpha" });
+		assert.deepEqual([...pi.tools.keys()], ["route"]);
+		const routed = await pi.tools
+			.get("route")
+			.execute("call", { target: "alpha", mode: "fresh" });
+		assert.deepEqual(routed.details, { target: "alpha", mode: "fresh" });
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 		delete process.env.SWITCHBOARD_PROJECTS_FILE;
 	}
 }
 
+async function utilityExtensionBehavior() {
+	const extension = await loadExtension("extensions/operator-switchboard.ts");
+	const pi = fakePi();
+	pi.registerFlag = (name) => {
+		pi.flags ??= new Map();
+		pi.flags.set(name, true);
+	};
+	pi.getFlag = (name) => pi.flags?.get(name) ?? false;
+	extension.default(pi);
+	assert.deepEqual([...pi.tools.keys()], ["second_opinion", "dispatch_parts"]);
+	const split = await pi.tools.get("dispatch_parts").execute("call", {
+		parts: [{ agent: "alpha", text: "Audit it" }],
+	});
+	assert.deepEqual(split.details, { count: 1 });
+}
+
 await operatorExtensionBehavior();
-console.log("ok — operator extension tools");
+await utilityExtensionBehavior();
+console.log("ok — operator and utility extension tools");

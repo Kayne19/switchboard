@@ -72,6 +72,10 @@ pub enum ServerMessage {
         code: Option<ErrorCode>,
         message: String,
     },
+    /// Jev and the conversational top-level LLM were both unavailable. This
+    /// is a page error, not a spoken error, so the caller is not left hearing
+    /// a synthesized apology from a failed route.
+    RoutingUnavailable { message: String },
     /// A turn was dispatched to the leg on `route`.
     Thinking { route: String, waiting: u64 },
     /// A tool call on the live leg started or ended (`state` is `start` or

@@ -92,7 +92,7 @@ while IFS= read -r line; do
 count=$((count + 1))
 if [ "$count" -eq 1 ]; then
     printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Connecting now."}}'
-    printf '%s\n' '{"type":"tool_execution_start","toolName":"transfer_to_project","args":{"project":"alpha","intent":"inspect it"}}'
+    printf '%s\n' '{"type":"tool_execution_start","toolName":"route","args":{"target":"alpha","mode":"fresh"}}'
 else
     case "$line" in
         *"work complete"*) printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"NOTE_DELIVERED"}}' ;;
@@ -104,6 +104,45 @@ done
 "##,
     );
     operator
+}
+
+/// A local pi stand-in that emits one structured utility verdict. Its
+/// non-utility branch is configurable so tests can hold the conversational
+/// operator's turn lock without involving a real process.
+#[cfg(unix)]
+fn fake_routing_process(
+    root: &std::path::Path,
+    utility_event: &str,
+    operator_event: Option<&str>,
+) -> std::path::PathBuf {
+    let path = root.join("fake-routing-process");
+    let operator_branch = operator_event.map_or_else(
+        || "while IFS= read -r _line; do sleep 60; done".to_owned(),
+        |event| {
+            format!(
+                "while IFS= read -r _line; do printf '%s\n' '{event}'; printf '%s\n' '{{\"type\":\"agent_settled\"}}'; done"
+            )
+        },
+    );
+    let body = format!(
+        r#"is_utility=0
+for arg in "$@"; do
+  if [ "$arg" = "--switchboard-utility" ]; then is_utility=1; fi
+done
+if [ "$is_utility" -eq 1 ]; then
+  while IFS= read -r _line; do
+    printf '%s\n' '{utility_event}'
+    printf '%s\n' '{{"type":"agent_settled"}}'
+  done
+else
+  {operator_branch}
+fi
+"#,
+        utility_event = utility_event,
+        operator_branch = operator_branch,
+    );
+    crate::pi_client::write_executable_script(&path, &body);
+    path
 }
 
 /// Puts the call on `project` the way a transfer leaves it, without launching
@@ -369,6 +408,226 @@ async fn transfer_ctx_ambiguous_project_returns_candidate_options() {
         .contains("was ambiguous"));
 }
 
+#[tokio::test]
+async fn jev_transfer_omits_the_internal_reason_from_the_intro_prompt() {
+    let mut board = board_on(
+        vec![project("alpha", "test project")],
+        &[],
+        two_model_catalog(),
+    );
+    let log = serve(&board, Box::new(|_, _| says("Alpha is ready.")));
+    let decision = Decision {
+        action: crate::router::Action::GoToProject,
+        target: Some("alpha".into()),
+        continue_or_fresh: None,
+        confidence: 1.0,
+        for_current_agent: 0.0,
+        multi_target: false,
+        unsure: false,
+        confirm: false,
+        reason: "internal Jev reason must not become caller intent".into(),
+    };
+
+    let reply = board.handle_decision("put me through", &decision).await;
+    assert_eq!(reply.route, "alpha");
+    let prompt = prompts(&log).into_iter().next().expect("intro prompt");
+    assert!(prompt.contains("put me through"), "{prompt}");
+    assert!(!prompt.contains("[DERIVED INTENT]"), "{prompt}");
+    assert!(!prompt.contains("internal Jev reason"), "{prompt}");
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unsure_jev_gets_a_utility_second_opinion_before_the_operator_asks() {
+    let root = scratch_dir("utility-second-opinion");
+    let binary = fake_routing_process(
+        &root,
+        r#"{"type":"tool_execution_start","toolName":"second_opinion","args":{"target":"alpha","mode":"fresh","confident":true}}"#,
+        Some(
+            r#"{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"The operator should not ask."}}"#,
+        ),
+    );
+    let mut board = board_on(
+        vec![project("alpha", "Alpha project")],
+        &[("SWITCHBOARD_PI_BINARY", &binary.to_string_lossy())],
+        two_model_catalog(),
+    );
+    let log = serve(&board, Box::new(|_, _| says("Alpha handled it.")));
+    let decision = Decision {
+        action: crate::router::Action::General,
+        target: None,
+        continue_or_fresh: None,
+        confidence: 0.5,
+        for_current_agent: 0.5,
+        multi_target: false,
+        unsure: true,
+        confirm: false,
+        reason: "Jev was unsure".into(),
+    };
+
+    let reply = board.handle_decision("inspect alpha", &decision).await;
+
+    assert_eq!(reply.route, "alpha");
+    assert_eq!(reply.text, "Alpha handled it.");
+    assert!(
+        board.operator.is_none(),
+        "the conversational operator was not asked"
+    );
+    assert!(prompts(&log)
+        .iter()
+        .any(|prompt| prompt.contains("inspect alpha")));
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn utility_split_keeps_the_current_agent_foreground_even_without_jev_multi_target() {
+    let root = scratch_dir("utility-split-foreground");
+    let binary = fake_routing_process(
+        &root,
+        r#"{"type":"tool_execution_start","toolName":"dispatch_parts","args":{"parts":[{"agent":"alpha","text":"Check alpha logs"},{"agent":"beta","text":"Review beta build"}]}}"#,
+        None,
+    );
+    let mut board = board_on(
+        vec![
+            project("alpha", "Alpha project"),
+            project("beta", "Beta project"),
+        ],
+        &[("SWITCHBOARD_PI_BINARY", &binary.to_string_lossy())],
+        two_model_catalog(),
+    );
+    let log = serve(&board, Box::new(|_, _| says("Alpha is ready.")));
+    let connected = board
+        .transfer_ctx(&transcript("connect alpha"), "alpha", "", "")
+        .await;
+    assert_eq!(connected.route, "alpha");
+    let before = prompts(&log).len();
+    let decision = Decision {
+        action: crate::router::Action::General,
+        target: None,
+        continue_or_fresh: None,
+        confidence: 0.4,
+        for_current_agent: 0.4,
+        multi_target: false,
+        unsure: true,
+        confirm: false,
+        reason: "Jev was unsure".into(),
+    };
+
+    let reply = board.handle_decision("check both", &decision).await;
+
+    assert_eq!(reply.route, "alpha");
+    let routed_prompts = prompts(&log);
+    assert!(routed_prompts[before..]
+        .iter()
+        .any(|prompt| prompt.contains("Check alpha logs")));
+    assert!(!routed_prompts[before..]
+        .iter()
+        .any(|prompt| prompt.contains("Review beta build")));
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn utility_operator_target_is_handled_by_the_operator_leg() {
+    let root = scratch_dir("utility-operator-target");
+    let binary = fake_routing_process(
+        &root,
+        r#"{"type":"tool_execution_start","toolName":"second_opinion","args":{"target":"operator","mode":"continue","confident":true}}"#,
+        Some(
+            r#"{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Operator handled it."}}"#,
+        ),
+    );
+    let mut board = board_on(
+        vec![project("alpha", "Alpha project")],
+        &[("SWITCHBOARD_PI_BINARY", &binary.to_string_lossy())],
+        two_model_catalog(),
+    );
+    let _log = serve(&board, Box::new(|_, _| says("Alpha is ready.")));
+    let connected = board
+        .transfer_ctx(&transcript("connect alpha"), "alpha", "", "")
+        .await;
+    assert_eq!(connected.route, "alpha");
+    let decision = Decision {
+        action: crate::router::Action::General,
+        target: None,
+        continue_or_fresh: None,
+        confidence: 0.4,
+        for_current_agent: 0.4,
+        multi_target: false,
+        unsure: true,
+        confirm: false,
+        reason: "Jev was unsure".into(),
+    };
+
+    let reply = board.handle_decision("go back", &decision).await;
+
+    assert_eq!(reply.route, OPERATOR);
+    assert_eq!(reply.text, "Operator handled it.");
+    assert!(board.agent.is_none());
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn utility_second_opinion_does_not_wait_on_the_conversational_turn_lock() {
+    let root = scratch_dir("utility-turn-lock");
+    let binary = fake_routing_process(
+        &root,
+        r#"{"type":"tool_execution_start","toolName":"second_opinion","args":{"target":"alpha","mode":"fresh","confident":true}}"#,
+        None,
+    );
+    let mut board = board_on(
+        vec![project("alpha", "Alpha project")],
+        &[("SWITCHBOARD_PI_BINARY", &binary.to_string_lossy())],
+        two_model_catalog(),
+    );
+    let _log = serve(&board, Box::new(|_, _| says("Alpha handled it.")));
+    let operator = board.ensure_operator().await.expect("operator").clone();
+    let held = tokio::spawn({
+        let operator = operator.clone();
+        async move { operator.prompt("hold the operator turn").await }
+    });
+    for _ in 0..100 {
+        if operator.busy() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        operator.busy(),
+        "the conversational process should be in flight"
+    );
+    let decision = Decision {
+        action: crate::router::Action::General,
+        target: None,
+        continue_or_fresh: None,
+        confidence: 0.4,
+        for_current_agent: 0.4,
+        multi_target: false,
+        unsure: true,
+        confirm: false,
+        reason: "Jev was unsure".into(),
+    };
+
+    let reply = tokio::time::timeout(
+        Duration::from_secs(2),
+        board.handle_decision("inspect alpha", &decision),
+    )
+    .await
+    .expect("utility routing is independent of the operator turn lock");
+
+    assert_eq!(reply.route, "alpha");
+    board.shutdown().await;
+    held.abort();
+    let _ = held.await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
 #[test]
 fn unicode_payload_preserved_in_transfer_context_and_intro_prompt() {
     let unicode_text = "Caller voice text with Unicode: 🌐 🚀 日本語, emoji, and quote \"hello\".";
@@ -472,29 +731,21 @@ async fn a_transfer_and_a_return_act_on_a_session_over_the_host_link() {
     assert_eq!(announced.models.len(), 2);
 
     let returned = board.handle("we are done").await;
-    assert_eq!(returned.route, OPERATOR);
+    // A host that still has the removed module receives a refusal. It cannot
+    // move the caller or kill the live project leg.
+    assert_eq!(returned.route, "alpha");
     assert!(returned.text.contains("Alpha finished."), "{returned:?}");
-    // The operator heard why the caller came back.
-    assert!(returned.text.contains("NOTE_DELIVERED"), "{returned:?}");
-    assert_eq!(board.coordinator.route(), OPERATOR);
-    assert!(board.agent.is_none());
-    assert_eq!(until_named(&log, "kill").await, [json!({"session": "s1"})]);
+    assert_eq!(board.coordinator.route(), "alpha");
+    assert!(board.agent.is_some());
+    assert_eq!(log.named("kill").len(), 0);
     assert_eq!(
         log.module_replies()
             .iter()
             .map(|reply| reply["status"].clone())
             .collect::<Vec<_>>(),
-        [json!("accepted")]
+        [json!("refused")]
     );
-    assert_eq!(
-        statuses
-            .lock()
-            .unwrap()
-            .last()
-            .map(|status| status.route.clone()),
-        Some(OPERATOR.to_owned()),
-        "the return is announced too"
-    );
+    assert_eq!(log.module_replies()[0]["reason"], "removed");
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }
@@ -534,22 +785,20 @@ async fn an_agent_to_agent_transfer_ends_the_old_session_after_the_new_one_is_up
     );
 
     let r2 = board.handle("please hand off to beta").await;
-    assert_eq!(r2.route, "beta");
-    assert_eq!(r2.text, "Beta response.");
-    assert_eq!(r2.to_speak, vec!["Beta response."]);
-    let intro = &prompts(&log)[2];
-    assert!(intro.contains("ID: beta"), "{intro}");
-    assert!(intro.contains("continue work"), "{intro}");
-    // alpha ends once beta is on the line, and not before.
-    until_named(&log, "kill").await;
-    let names = log.names();
-    let created = names
-        .iter()
-        .rposition(|name| name == "create_session")
-        .unwrap();
-    let killed = names.iter().position(|name| name == "kill").unwrap();
-    assert!(created < killed, "{names:?}");
-    assert_eq!(log.named("kill"), [json!({"session": "s1"})]);
+    assert_eq!(r2.route, "alpha");
+    assert_eq!(r2.text, "Alpha transferring to Beta.");
+    assert_eq!(r2.to_speak, vec!["Alpha transferring to Beta."]);
+    // The stale host's transfer signal is refused, so beta is never started.
+    assert_eq!(log.named("create_session").len(), 1);
+    assert!(log.named("kill").is_empty());
+    assert_eq!(
+        log.module_replies()
+            .iter()
+            .map(|reply| reply["status"].clone())
+            .collect::<Vec<_>>(),
+        [json!("refused")]
+    );
+    assert_eq!(log.module_replies()[0]["reason"], "removed");
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }
@@ -657,9 +906,7 @@ fn the_voice_brief_teaches_the_switchboard_module_and_names_the_targets() {
         "switchboard.speak(text)",
         "switchboard.display(",
         "switchboard.view()",
-        "switchboard.return_to_operator(",
-        "switchboard.transfer_to_project(",
-        "switchboard.set_model(",
+        "Routing is handled by the switchboard",
         "  - beta: no description",
     ] {
         assert!(brief.contains(taught), "{taught} missing from {brief}");
@@ -959,21 +1206,10 @@ async fn the_agents_own_set_model_is_decided_by_the_pickers_checks() {
             .as_ref()
             .is_some_and(|agent| agent.same_session(&live)));
         assert!(live.alive());
-        if swaps == "0" {
-            assert_eq!(
-                reply.text,
-                "Switching.\n\nModel swapping is turned off on this switchboard."
-            );
-            assert!(log.named("set_model").is_empty());
-            assert_eq!(board.coordinator.status().model, "anthropic/current:medium");
-        } else {
-            assert_eq!(
-                reply.text,
-                "Switching.\n\nNow on next on anthropic, thinking medium."
-            );
-            assert_eq!(log.named("set_model").len(), 1);
-            assert_eq!(board.coordinator.status().model, "anthropic/next:medium");
-        }
+        let _ = swaps;
+        assert_eq!(reply.text, "Switching.");
+        assert!(log.named("set_model").is_empty());
+        assert_eq!(board.coordinator.status().model, "anthropic/current:medium");
         board.shutdown().await;
     }
 }

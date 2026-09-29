@@ -32,6 +32,13 @@ means unset.
 | `SWITCHBOARD_MAX_SPOKEN_CHARS` | `700` | Longest reply the switchboard voices; longer text is clipped, at a sentence end when one is near. |
 | `SWITCHBOARD_SPEECH_DEADLINE_MS` | `25000` | Deadline for one synthesized utterance, 1–120000. Also given to each project session when it joins the call; its host agent enforces the same deadline. |
 | `SWITCHBOARD_HISTORY_LIMIT` | `200` | Transcript entries kept for page reloads; `0` keeps none. |
+| `SWITCHBOARD_JEV_KEY_FILE` | `/etc/switchboard/secrets/typesafe-api-key` | Secret file path. The Jev bearer key is read from this file and never logged or returned in errors. |
+| `SWITCHBOARD_JEV_URL` | `https://api.typesafe.ai/v1/systemone` | Jev System One endpoint. Tests use an in-process fake URL. |
+| `SWITCHBOARD_JEV_TIMEOUT_MS` | `2000` | Maximum time for one Jev request, 1–120000 ms; timeout uses the top-level LLM path. |
+| `SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER` | `0.3` | Below this probability band Jev's action can be used when its confidence meets the action threshold. |
+| `SWITCHBOARD_JEV_FOR_CURRENT_AGENT_UPPER` | `0.7` | At or above this probability a project utterance stays with its current agent. |
+| `SWITCHBOARD_JEV_ACTION_THRESHOLD` | `0.6` | Minimum Jev action confidence for a non-uncertain decision. Stopping still asks for confirmation. |
+| `SWITCHBOARD_JEV_SUMMARY_TOKEN_BUDGET` | `8000` | Approximate state token budget; oldest conversation turns are removed first and the Jev 32000-token per-question limit is enforced. |
 | `SWITCHBOARD_STT_COMMAND` | none | Complete-clip speech-to-text: WebM on stdin, text on stdout. |
 | `SWITCHBOARD_STT_STREAM_COMMAND` | none | Optional long-lived streaming worker; framing is described in `README.md`. |
 | `SWITCHBOARD_LOG` | `switchboard=info,warn` | Log filter; falls back to `RUST_LOG`. A filter that does not parse is reported and replaced by the default. |

@@ -14,7 +14,7 @@ import json as _json
 import os as _os
 import socket as _socket
 
-__all__ = ["speak", "display", "view", "return_to_operator", "transfer_to_project", "set_model"]
+__all__ = ["speak", "display", "view"]
 
 _STATUSES = ("delivered", "accepted", "refused", "failed")
 _HELLO_TIMEOUT_S = 5.0
@@ -24,7 +24,6 @@ _RELAY_TIMEOUT_S = 30.0
 _MARGIN_S = 5.0
 
 _VIEW_TARGETS = ("visual", "comms", "system", "theater", "auto")
-_THINKING_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
 _DISPLAY_OPS = ("show", "hide", "focus", "say", "clear")
 _ROLES = ("primary", "compare", "secondary", "ambient")
 # Required `data` keys per show type, and the shape hint given when one is missing.
@@ -282,61 +281,3 @@ def view(target=None):
         return text
 
     return _send("view", _optional_args(target=target), describe)
-
-
-def return_to_operator(summary=None):
-    """Hand the caller back to the operator. `summary`: what happened and what is unfinished."""
-    _require_str("summary", summary, optional=True)
-
-    def describe(result):
-        if result.ok:
-            return "Handing the caller back to the operator. Say a short goodbye and nothing else."
-        return _common(result) or _refused(result, "hand-back")
-
-    return _send("return_to_operator", _optional_args(summary=summary), describe)
-
-
-def transfer_to_project(project, intent=None, model=None, thinking=None):
-    """Put the caller straight through to another project's agent. The transfer is silent."""
-    _require_str("project", project)
-    _require_str("intent", intent, optional=True)
-    _require_str("model", model, optional=True)
-    _check_thinking(thinking)
-
-    def describe(result):
-        if result.ok:
-            return f"Connecting the caller to {project}. The transfer is silent; say nothing further."
-        return _common(result) or _refused(result, "transfer")
-
-    args = _optional_args(project=project, intent=intent, model=model, thinking=thinking)
-    return _send("transfer_to_project", args, describe)
-
-
-def set_model(model=None, thinking=None, keep_context=True, intent=None):
-    """Switch this session to another model or thinking level because the caller asked.
-
-    keep_context=False ends this session and starts a new one instead."""
-    _require_str("model", model, optional=True)
-    _check_thinking(thinking)
-    _require_str("intent", intent, optional=True)
-    if not isinstance(keep_context, bool):
-        raise TypeError(f"keep_context must be a bool, not {type(keep_context).__name__}")
-    if model is None and thinking is None:
-        raise ValueError("set_model needs a model, a thinking level, or both")
-
-    def describe(result):
-        if result.ok:
-            level = f" at thinking {thinking}" if thinking else ""
-            target = f"{model or 'the same model'}{level}"
-            if keep_context:
-                return f"Switching to {target}. Say nothing further."
-            return f"Starting a new session on {target}. Say nothing further; this session is ending."
-        return _common(result) or _refused(result, "model change")
-
-    args = _optional_args(model=model, thinking=thinking, keep_context=keep_context, intent=intent)
-    return _send("set_model", args, describe)
-
-
-def _check_thinking(thinking):
-    if thinking is not None and thinking not in _THINKING_LEVELS:
-        raise ValueError(f"unknown thinking level {thinking!r}; use one of: {', '.join(_THINKING_LEVELS)}")

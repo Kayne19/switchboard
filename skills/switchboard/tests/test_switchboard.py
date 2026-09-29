@@ -99,7 +99,7 @@ class SurfaceTest(unittest.TestCase):
     def test_module_exposes_exactly_the_foundation_surface(self):
         # Update this assertion in the same commit as any step that changes the surface
         # (req:ext-via-host): Jev removes the routing signals, background adds request_to_speak.
-        surface = {"speak", "display", "view", "return_to_operator", "transfer_to_project", "set_model"}
+        surface = {"speak", "display", "view"}
         public = {name for name in dir(switchboard) if not name.startswith("_")}
         self.assertEqual(public, surface)
         self.assertEqual(set(switchboard.__all__), surface)
@@ -185,9 +185,6 @@ class FailureTest(ModuleTestCase):
                 (switchboard.speak, ("Hi.",), {}),
                 (switchboard.display, (), {"op": "hide", "id": "x"}),
                 (switchboard.view, ("comms",), {}),
-                (switchboard.return_to_operator, (), {}),
-                (switchboard.transfer_to_project, ("alpha",), {}),
-                (switchboard.set_model, ("anthropic/claude-opus-5",), {}),
             ]
             for fn, args, kwargs in calls:
                 with self.subTest(reason=reason, call=fn.__name__):
@@ -209,21 +206,6 @@ class CallsTest(ModuleTestCase):
             (switchboard.display, (), dict(action), "display", {"action": action}),
             (switchboard.view, (), {}, "view", {}),
             (switchboard.view, ("theater",), {}, "view", {"target": "theater"}),
-            (switchboard.return_to_operator, ("Done; tests pass.",), {}, "return_to_operator", {"summary": "Done; tests pass."}),
-            (
-                switchboard.transfer_to_project,
-                ("alpha",),
-                {"intent": "Audit it", "thinking": "high"},
-                "transfer_to_project",
-                {"project": "alpha", "intent": "Audit it", "thinking": "high"},
-            ),
-            (
-                switchboard.set_model,
-                (),
-                {"thinking": "low", "keep_context": False},
-                "set_model",
-                {"thinking": "low", "keep_context": False},
-            ),
         ]
         for fn, args, kwargs, call, sent in cases:
             with self.subTest(call=call, args=args, kwargs=kwargs):
@@ -272,10 +254,6 @@ class ProgrammingErrorTest(ModuleTestCase):
             (TypeError, switchboard.speak, (42,), {}),
             (ValueError, switchboard.speak, ("  ",), {}),
             (ValueError, switchboard.view, ("everything",), {}),
-            (ValueError, switchboard.set_model, (), {}),
-            (ValueError, switchboard.set_model, (), {"thinking": "ultra"}),
-            (TypeError, switchboard.set_model, ("m",), {"keep_context": "yes"}),
-            (TypeError, switchboard.transfer_to_project, (None,), {}),
         ]
         for error, fn, args, kwargs in cases:
             with self.subTest(call=fn.__name__, args=args, kwargs=kwargs):

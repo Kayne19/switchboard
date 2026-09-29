@@ -8,18 +8,20 @@
 //! only through the coordinator's transitions. A model or thinking change is
 //! decided by `RedialPlanner`, which needs no PBX lock; the switchboard runs
 //! the ones that go ahead.
+use crate::history::TranscriptEntry;
 use crate::hosts::Hosts;
 use crate::lifecycle::{CandidateLeg, Coordinator, LifecycleError, ProjectLeg, StatusConfig};
 use crate::models::{normalize_thinking, parse_spec, pin_thinking, ModelCatalog};
 use crate::pi_client::{
     local_argv, ActivityCallback, LegSession, ModuleCallback, PiSession, PiSessionError,
-    ProjectLaunch, ProjectSession, SessionState, Signal, Turn, RETURN_TOOL, SET_MODEL_TOOL,
-    TRANSFER_TOOL,
+    ProjectLaunch, ProjectSession, SessionState, Signal, Turn, ROUTE_TOOL,
 };
 use crate::prewarm::{LaunchPlan, Prewarm};
 use crate::registry::{Project, Registry};
+use crate::router::{utility_decision, CallSummary, Decision, Router, UtilityDecision};
 use futures_util::FutureExt;
 use serde::Serialize;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
@@ -40,9 +42,12 @@ pub type RouteCallback = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>
 /// prompt a project session gets for the caller, and again on the first after
 /// a compaction; it is never a message of its own.
 const AGENT_BRIEF_HEADER: &str = "[SWITCHBOARD VOICE BRIEF]\nYou are on a voice call in the {project} project, in its own directory. The caller hears only what you pass to the `switchboard` module in your Python REPL (already imported); your written output goes to their screen and is not read aloud.\n";
-const AGENT_BRIEF_TOOLS: &str = "- switchboard.speak(text): say a sentence or two of plain speech. Use it to answer, and before and during long work. No code, paths or lists.\n- switchboard.display(...) shows things on their screen; switchboard.view() tells you what they see.\n- switchboard.return_to_operator(summary=...) when they ask for the operator or are done here; say a short goodbye and nothing else.\n- switchboard.transfer_to_project(project, intent=...) when they ask for another project, with their request as intent. Known projects:\n";
-const AGENT_BRIEF_SWAPS: &str = "- switchboard.set_model(model=..., thinking=..., keep_context=True) when they ask for another model or thinking level; keep_context=False only for a fresh start. Say nothing alongside it.\n";
+const AGENT_BRIEF_TOOLS: &str = "- switchboard.speak(text): say a sentence or two of plain speech. Use it to answer, and before and during long work. No code, paths or lists.\n- switchboard.display(...) shows things on their screen; switchboard.view() tells you what they see.\n- Routing is handled by the switchboard before your turn. Do not try to transfer, return, or change models; answer the caller or explain what you completed.\n";
+const AGENT_BRIEF_SWAPS: &str = "";
 const AGENT_BRIEF_END: &str = "[END OF VOICE BRIEF]";
+/// Instructions for the separate, stateless process. This is code-owned so
+/// deploying the utility never requires another environment setting.
+const UTILITY_SYSTEM_PROMPT: &str = r#"You are the switchboard's stateless routing utility. You never speak to the caller and you never answer general questions. Inspect the supplied caller utterance and call exactly one tool. For a single target, call second_opinion with an exact registered project id, mode (continue or fresh), and confident true only when it is safe to route without asking. If unclear, call second_opinion with no target and confident false. If the utterance clearly addresses several projects, call dispatch_parts with one exact project id and a short caller-worded part for each target. Never invent projects, never call tools not provided, and never emit a prose answer."#;
 #[derive(Clone, Debug, Serialize)]
 pub struct Utterance {
     pub text: String,
@@ -347,6 +352,9 @@ pub struct Switchboard {
     module_callback: Option<ModuleCallback>,
     active_session: Arc<Mutex<Option<LegSession>>>,
     operator: Option<PiSession>,
+    /// A separate process for second opinions and split dispatch. It must not
+    /// share the operator's turn lock or conversation history.
+    utility: Option<PiSession>,
     agent: Option<ProjectSession>,
     operator_note: Option<String>,
     /// The one owner of the leg on the line, and of the status the page is
@@ -359,6 +367,9 @@ pub struct Switchboard {
     prewarm: Arc<Prewarm>,
     /// Decides model and thinking changes, and which model a leg asks for.
     planner: RedialPlanner,
+    /// The sole utterance routing decider. The operator remains the fallback
+    /// conversation when this client is unavailable or unsure.
+    router: Router,
     /// `PROJECT_TURN_TIMEOUT`, held per switchboard so a test can wait out a
     /// silent leg without waiting ten minutes.
     project_turn_timeout: Duration,
@@ -382,6 +393,21 @@ impl Switchboard {
             agent_model: config.agent_model.clone(),
             model_swaps: config.model_swaps,
         };
+        let jev = crate::jev::JevClient::new(
+            config.jev_url.clone(),
+            config.jev_key_file.clone(),
+            Duration::from_millis(config.jev_timeout_ms),
+        )
+        .expect("build Jev HTTP client");
+        let router = Router::new(
+            jev,
+            Arc::clone(&registry),
+            coordinator.clone(),
+            config.jev_summary_token_budget,
+            config.jev_for_current_agent_lower,
+            config.jev_for_current_agent_upper,
+            config.jev_action_threshold,
+        );
         Self {
             registry,
             pi_binary: config.pi_binary.clone(),
@@ -396,12 +422,14 @@ impl Switchboard {
             module_callback: None,
             active_session: Arc::new(Mutex::new(None)),
             operator: None,
+            utility: None,
             agent: None,
             operator_note: None,
             coordinator,
             hosts,
             prewarm,
             planner,
+            router,
             project_turn_timeout: PROJECT_TURN_TIMEOUT,
         }
     }
@@ -474,11 +502,162 @@ impl Switchboard {
         if let Some(session) = self.operator.take() {
             session.close().await;
         }
+        if let Some(session) = self.utility.take() {
+            session.close().await;
+        }
         self.set_active_session(None).await;
         // Idempotent: the service's shutdown path may reach here twice.
         self.prewarm.shutdown();
     }
 
+    pub fn router(&self) -> Router {
+        self.router.clone()
+    }
+
+    pub fn call_summary(
+        &self,
+        transcript: &[TranscriptEntry],
+        screen: Value,
+        utterance: impl Into<String>,
+    ) -> CallSummary {
+        CallSummary::from_runtime(
+            &self.coordinator.status(),
+            &self.registry,
+            transcript,
+            screen,
+            utterance,
+        )
+    }
+
+    /// Dispatch an utterance after Jev has made the routing decision. An
+    /// unsure or unsupported action deliberately goes through the existing
+    /// operator LLM path; project agents never mutate the route themselves.
+    pub async fn handle_decision(&mut self, text: &str, decision: &Decision) -> Reply {
+        // Jev's outage is the conversational LLM fallback. A healthy Jev
+        // decision that is unsure (or addresses multiple projects) gets one
+        // isolated utility call before the caller is asked to clarify.
+        let jev_unavailable = decision.reason.starts_with("Jev unavailable:");
+        if decision.multi_target || (decision.unsure && !jev_unavailable) {
+            match self.utility_decision(text).await {
+                Ok(Some(UtilityDecision::DispatchParts(parts))) => {
+                    // A split returned for an unsure Jev decision is still a
+                    // useful utility verdict. Jev's multi_target flag is a
+                    // hint to consult the utility, not permission to discard
+                    // the utility's structured dispatch.
+                    return self.dispatch_parts(text, parts).await;
+                }
+                Ok(Some(UtilityDecision::SecondOpinion {
+                    target: Some(target),
+                    mode,
+                    confident: true,
+                })) if decision.unsure => {
+                    return self.route_project_part(text, &target, mode).await;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "routing utility unavailable; asking the conversational operator");
+                }
+            }
+        }
+
+        if matches!(decision.action, crate::router::Action::GoToProject)
+            && !decision.sends_to_operator()
+        {
+            if let Some(target) = decision.target.as_deref() {
+                let context = TransferContext {
+                    exact_caller_transcript: text.to_owned(),
+                    // Jev's reason is an internal routing record, not caller
+                    // intent. Do not leak it into the target's prompt.
+                    derived_intent: String::new(),
+                };
+                return self.transfer_ctx(&context, target, "", "").await;
+            }
+        }
+        if matches!(decision.action, crate::router::Action::Continue)
+            && !decision.sends_to_operator()
+            && self.coordinator.route() != OPERATOR
+        {
+            return self
+                .handle_agent_ctx(&TransferContext {
+                    exact_caller_transcript: text.to_owned(),
+                    derived_intent: String::new(),
+                })
+                .await;
+        }
+        let context = TransferContext {
+            exact_caller_transcript: text.to_owned(),
+            derived_intent: String::new(),
+        };
+        self.handle_operator_ctx(&context).await
+    }
+
+    async fn route_project_part(
+        &mut self,
+        text: &str,
+        target: &str,
+        mode: crate::router::ConversationMode,
+    ) -> Reply {
+        let context = TransferContext {
+            exact_caller_transcript: text.to_owned(),
+            derived_intent: String::new(),
+        };
+        if target == OPERATOR {
+            // The utility may explicitly choose the operator. Do not send
+            // that target through the project handler: it has no project
+            // session and would manufacture a spurious "project session is
+            // gone" recovery. Returning from a project also drops that leg
+            // before the operator answers.
+            if self.coordinator.route() != OPERATOR {
+                self.drop_agent().await;
+            }
+            return Box::pin(self.handle_operator_ctx(&context)).await;
+        }
+        if self.coordinator.route() == target
+            && matches!(mode, crate::router::ConversationMode::Continue)
+        {
+            // The utility's opinion can confirm that an unsure utterance is
+            // for the project already on the line. Box this back-edge because
+            // a missing project session may legitimately fall through to the
+            // operator handler.
+            return Box::pin(self.handle_agent_ctx(&context)).await;
+        }
+        self.transfer_ctx(
+            &TransferContext {
+                exact_caller_transcript: text.to_owned(),
+                derived_intent: String::new(),
+            },
+            target,
+            "",
+            "",
+        )
+        .await
+    }
+
+    /// Until background agents are available, the foreground rule still
+    /// determines which split part owns the caller's next turn: retain the
+    /// current project when it received a part, otherwise choose the first.
+    async fn dispatch_parts(
+        &mut self,
+        _original: &str,
+        parts: Vec<crate::router::DispatchPart>,
+    ) -> Reply {
+        let current = self.coordinator.route();
+        let part = parts
+            .iter()
+            .find(|part| part.agent == current)
+            .or_else(|| parts.first());
+        let Some(part) = part else {
+            return self.handle_operator_ctx(&TransferContext::default()).await;
+        };
+        self.route_project_part(
+            &part.text,
+            &part.agent,
+            crate::router::ConversationMode::Continue,
+        )
+        .await
+    }
+
+    #[allow(dead_code)]
     pub async fn handle(&mut self, text: &str) -> Reply {
         let context = TransferContext {
             exact_caller_transcript: text.to_owned(),
@@ -487,6 +666,7 @@ impl Switchboard {
         self.handle_ctx(&context).await
     }
 
+    #[allow(dead_code)]
     pub async fn handle_ctx(&mut self, context: &TransferContext) -> Reply {
         if self.coordinator.route() == OPERATOR {
             self.handle_operator_ctx(context).await
@@ -512,7 +692,10 @@ impl Switchboard {
             }
         }
         if self.operator.is_none() {
-            let catalog = self.registry.operator_prompt_catalog();
+            let catalog = self
+                .registry
+                .operator_prompt_catalog()
+                .replace("transfer_to_project", "route");
             let argv = local_argv(
                 &self.pi_binary,
                 self.operator_model.as_deref(),
@@ -538,15 +721,79 @@ impl Switchboard {
             .as_ref()
             .ok_or_else(|| PiSessionError("operator session was not created".into()))
     }
+    async fn ensure_utility(&mut self) -> Result<&PiSession, PiSessionError> {
+        let alive = match self.utility.as_ref() {
+            Some(session) => session.alive().await,
+            None => false,
+        };
+        if !alive {
+            if let Some(session) = self.utility.take() {
+                tracing::warn!("routing utility process died; restarting");
+                session.close().await;
+            }
+        }
+        if self.utility.is_none() {
+            let utility_prompt = format!(
+                "{UTILITY_SYSTEM_PROMPT}\n\n[REGISTERED PROJECTS]\n{}",
+                self.registry.operator_prompt_catalog().replace(
+                    "Available projects for transfer. Use the exact project id with transfer_to_project; aliases are included for recognition.",
+                    "Available projects for the routing utility. Use the exact project id with second_opinion or dispatch_parts; aliases are included for recognition.",
+                )
+            );
+            let argv = local_argv(
+                &self.pi_binary,
+                self.operator_model.as_deref(),
+                None,
+                Some(&utility_prompt),
+                self.operator_extension.as_deref(),
+                &[
+                    "--no-builtin-tools".into(),
+                    "--no-session".into(),
+                    "--switchboard-utility".into(),
+                ],
+            )?;
+            let session = PiSession::start(
+                argv,
+                "routing utility",
+                "utility",
+                None,
+                Some(self.env.clone()),
+                Duration::from_secs(180),
+                None,
+            )
+            .await?;
+            self.utility = Some(session);
+        }
+        self.utility
+            .as_ref()
+            .ok_or_else(|| PiSessionError("utility process was not created".into()))
+    }
+
+    /// Ask the isolated utility process. This call never touches the
+    /// conversational operator session, so an operator turn cannot block it.
+    async fn utility_decision(
+        &mut self,
+        text: &str,
+    ) -> Result<Option<UtilityDecision>, PiSessionError> {
+        let session = self.ensure_utility().await?.clone();
+        let turn = session.prompt(text).await?;
+        if turn.failed {
+            return Err(PiSessionError(if turn.error.is_empty() {
+                "routing utility failed".into()
+            } else {
+                turn.error
+            }));
+        }
+        Ok(utility_decision(&turn.signals))
+    }
+
     async fn handle_operator_ctx(&mut self, context: &TransferContext) -> Reply {
         let session = match self.ensure_operator().await {
             Ok(session) => session.clone(),
             Err(e) => {
                 tracing::error!(error = %e, "operator unavailable");
-                return self.reply(
-                    [format!("The operator is not answering: {e}")],
-                    Some(e.to_string()),
-                );
+                tracing::error!(error = %e, "operator unavailable for routing");
+                return self.routing_unavailable();
             }
         };
         let message = self.operator_note.take().map_or_else(
@@ -578,16 +825,14 @@ impl Switchboard {
             };
             return self.recover_operator(error).await;
         }
-        if let Some(signal) = turn.signals.iter().find(|s| s.name == TRANSFER_TOOL) {
-            let mut onward_ctx = context.clone();
-            onward_ctx.derived_intent = arg(signal, "intent");
+        if let Some(signal) = turn.signals.iter().find(|s| s.name == ROUTE_TOOL) {
+            let target = arg_first(signal, &["target", "project"]);
+            let mode = conversation_mode(signal);
+            if target.is_empty() {
+                return self.reply([turn.text], None);
+            }
             return self
-                .transfer_ctx(
-                    &onward_ctx,
-                    &arg(signal, "project"),
-                    &arg(signal, "model"),
-                    &arg(signal, "thinking"),
-                )
+                .route_project_part(&context.exact_caller_transcript, &target, mode)
                 .await;
         }
         self.reply([turn.text], None)
@@ -616,9 +861,7 @@ impl Switchboard {
                 );
             }
         };
-        let returning = turn.signals.iter().any(|s| s.name == RETURN_TOOL);
-        let transfer = turn.signals.iter().find(|s| s.name == TRANSFER_TOOL);
-        if turn.failed && turn.text.is_empty() && !returning && transfer.is_none() {
+        if turn.failed && turn.text.is_empty() {
             let detail = if turn.error.is_empty() {
                 "agent turn failed".to_owned()
             } else {
@@ -634,72 +877,6 @@ impl Switchboard {
                 )],
                 Some(detail),
             );
-        }
-        if let Some(signal) = transfer {
-            let mut onward_ctx = context.clone();
-            onward_ctx.derived_intent = arg(signal, "intent");
-            let onward = self
-                .transfer_ctx(
-                    &onward_ctx,
-                    &arg(signal, "project"),
-                    &arg(signal, "model"),
-                    &arg(signal, "thinking"),
-                )
-                .await;
-            if onward.error.is_none() && onward.route != OPERATOR {
-                return onward;
-            }
-            return self.prepend(turn, onward);
-        }
-        if !returning {
-            if let Some(signal) = turn.signals.iter().find(|s| s.name == SET_MODEL_TOOL) {
-                let decided = self
-                    .planner
-                    .plan(
-                        &arg(signal, "model"),
-                        &arg(signal, "thinking"),
-                        &arg(signal, "intent"),
-                        arg_bool(signal, "keep_context", true),
-                    )
-                    .await;
-                let mut reply = match decided {
-                    Redial::Answered(reply) => reply,
-                    Redial::Planned(plan) => match self.redial(*plan).await {
-                        Ok(reply) => reply,
-                        // While this turn holds the PBX lock only a rescue
-                        // replaces the leg, and a rescue cancels the turn.
-                        Err(error) => self.reply(
-                            ["I didn't switch: the line moved first."],
-                            Some(error.to_string()),
-                        ),
-                    },
-                };
-                self.prepend_utterance(&turn.text, false, &mut reply);
-                return reply;
-            }
-        }
-        if returning {
-            let text = turn.text.clone();
-            let synthesize = !turn.agent_spoke();
-            let summary = turn
-                .signals
-                .iter()
-                .find(|signal| signal.name == RETURN_TOOL)
-                .map(|signal| arg(signal, "summary"))
-                .filter(|summary| !summary.trim().is_empty())
-                .map(|summary| format!(" Summary from that agent: {summary}"))
-                .unwrap_or_default();
-            let mut reply = self
-                .return_operator_ctx(
-                    context,
-                    &format!(
-                        "The caller was handed back from {}.{summary}",
-                        self.route_label()
-                    ),
-                )
-                .await;
-            self.prepend_utterance(&text, synthesize && reply.route == OPERATOR, &mut reply);
-            return reply;
         }
         self.reply_with_turn(turn)
     }
@@ -1239,10 +1416,8 @@ impl Switchboard {
             s.close().await;
         }
         self.set_active_session(None).await;
-        self.reply(
-            ["The operator dropped the line. Say that again and I'll pick it back up."],
-            Some(error),
-        )
+        tracing::error!(%error, "operator unavailable after a failed turn");
+        self.routing_unavailable()
     }
     async fn drop_agent(&mut self) {
         let was_on_a_project = self.coordinator.route() != OPERATOR;
@@ -1262,6 +1437,16 @@ impl Switchboard {
     {
         spoken_reply(&self.coordinator, texts, error)
     }
+
+    /// A routing outage is a page error, not a sentence synthesized into the
+    /// call. `api.rs` turns this marker into `routing_unavailable`.
+    fn routing_unavailable(&self) -> Reply {
+        self.reply(
+            std::iter::empty::<String>(),
+            Some("routing_unavailable".into()),
+        )
+    }
+
     fn reply_with_turn(&self, turn: Turn) -> Reply {
         let spoke = turn.agent_spoke();
         let failed = turn.failed;
@@ -1292,25 +1477,6 @@ impl Switchboard {
         )
     }
 
-    fn prepend(&self, turn: Turn, mut reply: Reply) -> Reply {
-        let synthesize = !turn.agent_spoke() && reply.route == OPERATOR;
-        self.prepend_utterance(&turn.text, synthesize, &mut reply);
-        reply
-    }
-
-    fn prepend_utterance(&self, text: &str, synthesize: bool, reply: &mut Reply) {
-        if text.is_empty() {
-            return;
-        }
-        reply.text = if reply.text.is_empty() {
-            text.to_owned()
-        } else {
-            format!("{text}\n\n{}", reply.text)
-        };
-        if synthesize {
-            reply.to_speak.insert(0, text.to_owned());
-        }
-    }
     pub async fn dial(&mut self, project: &str, intent: &str) -> Reply {
         self.force_hangup().await;
         if project.eq_ignore_ascii_case(OPERATOR) {
@@ -1368,14 +1534,6 @@ fn thinking_in_spec(spec: &str) -> String {
     parse_spec(spec).2
 }
 
-fn arg_bool(signal: &Signal, name: &str, default: bool) -> bool {
-    signal
-        .args
-        .get(name)
-        .and_then(|value| value.as_bool())
-        .unwrap_or(default)
-}
-
 fn arg(signal: &Signal, name: &str) -> String {
     signal
         .args
@@ -1383,6 +1541,21 @@ fn arg(signal: &Signal, name: &str) -> String {
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_owned()
+}
+
+fn arg_first(signal: &Signal, names: &[&str]) -> String {
+    names
+        .iter()
+        .map(|name| arg(signal, name))
+        .find(|value| !value.is_empty())
+        .unwrap_or_default()
+}
+
+fn conversation_mode(signal: &Signal) -> crate::router::ConversationMode {
+    match arg(signal, "mode").as_str() {
+        "continue" => crate::router::ConversationMode::Continue,
+        _ => crate::router::ConversationMode::Fresh,
+    }
 }
 pub(crate) fn uuid_like() -> String {
     format!(

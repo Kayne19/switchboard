@@ -19,6 +19,70 @@ fn state_with_stt(stt: Option<String>) -> AppState {
     state_with_stream(stt, None)
 }
 
+fn state_with_jev(url: &str, key_path: &std::path::Path) -> AppState {
+    let key_path = key_path.to_str().expect("key path");
+    let config = crate::Config::for_tests(&[
+        ("SWITCHBOARD_JEV_URL", url),
+        ("SWITCHBOARD_JEV_KEY_FILE", key_path),
+        ("SWITCHBOARD_PI_BINARY", "/bin/sh"),
+    ]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    let board = Switchboard::new(&config, registry, std::sync::Arc::new(prewarm));
+    state_on(board)
+}
+
+async fn fake_jev_server() -> (
+    String,
+    std::path::PathBuf,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    std::sync::Arc<tokio::sync::Notify>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener");
+    let endpoint = format!(
+        "http://{}/v1/systemone",
+        listener.local_addr().expect("address")
+    );
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let key_path = std::env::temp_dir().join(format!(
+        "switchboard-api-jev-{}-{nonce}",
+        std::process::id()
+    ));
+    std::fs::write(&key_path, "fixture-key").expect("fixture key");
+    let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = requests.clone();
+    let responded = std::sync::Arc::new(tokio::sync::Notify::new());
+    let response_notice = responded.clone();
+    let server = tokio::spawn(async move {
+        let body = r#"{"model":"jev-test","answers":{"action":{"type":"choice","choice":"continue","probabilities":{"continue":1.0},"confidence":1.0},"for_current_agent":{"type":"noul","noul":0.0},"target":{"type":"choice","choice":"none","probabilities":{"none":1.0},"confidence":1.0},"continue_or_fresh":{"type":"choice","choice":"not_applicable","probabilities":{"not_applicable":1.0},"confidence":1.0},"multi_target":{"type":"noul","noul":0.0}}}"#;
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut request = vec![0_u8; 8192];
+            let _ = tokio::io::AsyncReadExt::read(&mut stream, &mut request).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(), body
+            );
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut stream, response.as_bytes()).await;
+            response_notice.notify_one();
+        }
+    });
+    (endpoint, key_path, requests, responded, server)
+}
+
 fn state_with_stream(stt: Option<String>, stream: Option<String>) -> AppState {
     let config = crate::Config::for_tests(&[]);
     let registry = Registry::new(vec![]);
@@ -871,6 +935,121 @@ async fn typed_turn_is_logged_echoed_and_queued_like_a_transcript() {
         (id.as_str(), text.as_str(), turn_generation),
         ("typed-1", "deploy it", generation)
     );
+}
+
+#[tokio::test]
+async fn a_non_steered_continue_uses_one_jev_decision_for_one_utterance() {
+    let (endpoint, key_path, requests, _responded, server) = fake_jev_server().await;
+    let state = state_with_jev(&endpoint, &key_path);
+    let mut events = state.0.events.subscribe();
+    let generation = state.0.coordinator.generation();
+
+    dispatch_routed_transcript(&state, "once", generation, "hello".into()).await;
+    assert!(state.0.routed_decisions.lock().await.contains_key("once"));
+
+    let worker = tokio::spawn(process_turns(state.clone()));
+    let thinking = next_event_of(&mut events, "thinking").await;
+    assert_eq!(thinking["type"], "thinking");
+    assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    worker.abort();
+    let _ = worker.await;
+    server.abort();
+    let _ = server.await;
+    let _ = std::fs::remove_file(key_path);
+}
+
+#[tokio::test]
+async fn a_stale_queued_turn_removes_its_retained_jev_decision() {
+    let state = state();
+    let mut events = state.0.events.subscribe();
+    state
+        .0
+        .routed_decisions
+        .lock()
+        .await
+        .insert("stale".into(), Decision::fallback("test"));
+    let old_generation = state.0.coordinator.generation();
+    state.0.coordinator.begin_rescue("test rescue");
+    state.0.queued_turns.store(1, Ordering::Release);
+    let worker = tokio::spawn(process_turns(state.clone()));
+    state
+        .0
+        .turns
+        .send(("stale".into(), "old words".into(), old_generation))
+        .await
+        .expect("queued turn");
+
+    let stale = next_event_of(&mut events, "error").await;
+    assert_eq!(stale["id"], "stale");
+    assert_eq!(stale["code"], "stale_epoch");
+    assert!(!state.0.routed_decisions.lock().await.contains_key("stale"));
+
+    worker.abort();
+    let _ = worker.await;
+}
+
+#[tokio::test]
+async fn steer_rechecks_generation_under_the_active_session_guard() {
+    let (endpoint, key_path, _requests, responded, server) = fake_jev_server().await;
+    let state = state_with_jev(&endpoint, &key_path);
+    let mut events = state.0.events.subscribe();
+    let session = PiSession::start(
+        vec!["sh".into(), "-c".into(), "sleep 60".into()],
+        OPERATOR,
+        OPERATOR,
+        None,
+        None,
+        Duration::from_secs(60),
+        None,
+    )
+    .await
+    .expect("session");
+    let prompt = {
+        let session = session.clone();
+        tokio::spawn(async move { session.prompt("hold this turn").await })
+    };
+    timeout(Duration::from_secs(1), async {
+        while !session.busy() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("session is busy");
+    *state.0.active_session.lock().await = Some(LegSession::Operator(session.clone()));
+    let active_guard = state.0.active_session.lock().await;
+    let generation = state.0.coordinator.generation();
+    state
+        .0
+        .coordinator
+        .begin_prompt(&state.0.coordinator.current_identity())
+        .expect("active operation");
+
+    let dispatch_state = state.clone();
+    let dispatch = tokio::spawn(async move {
+        dispatch_routed_transcript(
+            &dispatch_state,
+            "steer-stale",
+            generation,
+            "hello again".into(),
+        )
+        .await;
+    });
+    responded.notified().await;
+    state.0.coordinator.begin_rescue("test rescue");
+    drop(active_guard);
+    dispatch.await.expect("dispatch");
+
+    let stale = next_event_of(&mut events, "error").await;
+    assert_eq!(stale["id"], "steer-stale");
+    assert_eq!(state.0.queued_turns.load(Ordering::Acquire), 0);
+
+    prompt.abort();
+    let _ = prompt.await;
+    session.close().await;
+    server.abort();
+    let _ = server.await;
+    let _ = std::fs::remove_file(key_path);
 }
 
 #[tokio::test]
@@ -2659,7 +2838,7 @@ fn runtime_with_a_gated_intro(root: &std::path::Path) -> std::path::PathBuf {
     crate::pi_client::write_executable_script(
         &runtime,
         r##"while IFS= read -r line; do
-printf '%s\n' '{"type":"tool_execution_start","toolName":"transfer_to_project","args":{"project":"alpha","intent":"look"}}'
+printf '%s\n' '{"type":"tool_execution_start","toolName":"route","args":{"target":"alpha","mode":"fresh"}}'
 printf '%s\n' '{"type":"agent_settled"}'
 done
 "##,
@@ -3120,6 +3299,13 @@ fn scratch_root(label: &str) -> std::path::PathBuf {
 
 /// A pi stand-in that answers every prompt with `reply`.
 #[cfg(unix)]
+fn failing_agent(root: &std::path::Path) -> std::path::PathBuf {
+    let path = root.join("failing-pi");
+    crate::pi_client::write_executable_script(&path, "exit 1");
+    path
+}
+
+#[cfg(unix)]
 fn answering_agent(root: &std::path::Path, name: &str, reply: &str) -> std::path::PathBuf {
     let path = root.join(name);
     crate::pi_client::write_executable_script(
@@ -3133,6 +3319,53 @@ done
         ),
     );
     path
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn both_routing_authorities_down_emit_a_page_error_without_audio() {
+    let root = scratch_root("routing-unavailable");
+    let binary = failing_agent(&root);
+    let config = crate::Config::for_tests(&[("SWITCHBOARD_PI_BINARY", &binary.to_string_lossy())]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    let state = state_on(Switchboard::new(
+        &config,
+        registry,
+        std::sync::Arc::new(prewarm),
+    ));
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let generation = state.0.coordinator.generation();
+    state.0.routed_decisions.lock().await.insert(
+        "down".into(),
+        crate::router::Decision::fallback("Jev unavailable: test"),
+    );
+    state.0.queued_turns.store(1, Ordering::Release);
+    let worker = tokio::spawn(process_turns(state.clone()));
+    state
+        .0
+        .turns
+        .send(("down".into(), "hello".into(), generation))
+        .await
+        .unwrap();
+
+    let frames = frames_until(&mut connection, "routing_unavailable").await;
+
+    assert!(types_of(&frames).contains(&"routing_unavailable"));
+    assert!(!types_of(&frames).contains(&"reply"));
+    assert!(!types_of(&frames).contains(&"final_response_audio_closed"));
+    assert_eq!(
+        frames.last().expect("routing error")["message"],
+        "Routing is unavailable. Please try again."
+    );
+    worker.abort();
+    let _ = worker.await;
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
 }
 
 /// An app whose operator is a pi stand-in under `root`, and whose one

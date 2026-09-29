@@ -448,6 +448,21 @@ describe("CallRuntime voice clips", () => {
   // Issue #71: the verdict on a clip that was on the wire can land while the
   // tab is away. The clip is sent again under the stamp it went out with, so
   // the server recognizes it and answers with the verdict the tab missed.
+  it("shows routing outages as a page error without a spoken reply", async () => {
+    const { runtime, latestState } = makeRuntime();
+    const socket = await connectAt(runtime);
+    socket.receive({
+      type: "routing_unavailable",
+      message: "Routing is unavailable. Please try again.",
+    });
+    await settle();
+    expect(latestState()).toMatchObject({
+      status: "Routing is unavailable. Please try again.",
+      statusError: true,
+    });
+    runtime.dispose();
+  });
+
   it("asks again about a clip already on the wire, under its own stamp, after a reconnect", async () => {
     const { runtime, latestState } = makeRuntime();
     const socket = await connectAt(runtime, 3);

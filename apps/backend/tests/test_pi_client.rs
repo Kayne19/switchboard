@@ -100,8 +100,8 @@ async fn steer_writes_into_the_running_process() {
 }
 
 #[tokio::test]
-async fn process_prompt_collects_text_signal_and_sentinel() {
-    let script = "read line; printf '%s\\n' '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_end\",\"content\":\"All done. [[SWITCHBOARD:RETURN]]\"}}' '{\"type\":\"agent_settled\"}'";
+async fn process_prompt_collects_text_and_route_signal() {
+    let script = "read line; printf '%s\n' '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_end\",\"content\":\"Connecting.\"}}' '{\"type\":\"tool_execution_start\",\"toolName\":\"route\",\"args\":{\"target\":\"alpha\",\"mode\":\"fresh\"}}' '{\"type\":\"agent_settled\"}'";
     let session = PiSession::start(
         vec!["sh".into(), "-c".into(), script.into()],
         "test",
@@ -114,8 +114,8 @@ async fn process_prompt_collects_text_signal_and_sentinel() {
     .await
     .unwrap();
     let turn = session.prompt("hello").await.unwrap();
-    assert_eq!(turn.text, "All done.");
-    assert_eq!(turn.signals[0].name, RETURN_TOOL);
+    assert_eq!(turn.text, "Connecting.");
+    assert_eq!(turn.signals[0].name, ROUTE_TOOL);
     session.close().await;
 }
 

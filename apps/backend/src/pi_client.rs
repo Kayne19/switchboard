@@ -14,11 +14,10 @@ use tokio::sync::{watch, Mutex};
 use tokio::time::{timeout, timeout_at, Duration, Instant};
 
 pub const STREAM_LIMIT: usize = 16 * 1024 * 1024;
-pub const TRANSFER_TOOL: &str = "transfer_to_project";
-pub const RETURN_TOOL: &str = "return_to_operator";
-pub const SET_MODEL_TOOL: &str = "set_model";
+pub const ROUTE_TOOL: &str = "route";
+pub const SECOND_OPINION_TOOL: &str = "second_opinion";
+pub const DISPATCH_PARTS_TOOL: &str = "dispatch_parts";
 pub const SPEAK_TOOL: &str = "speak";
-pub const RETURN_SENTINEL: &str = "[[SWITCHBOARD:RETURN]]";
 const ERROR_STOP_REASON: &str = "error";
 const ERROR_DETAIL_CHARS: usize = 160;
 const ACTIVITY_DETAIL_CHARS: usize = 80;
@@ -486,7 +485,14 @@ impl PiSession {
                 }
                 Some("tool_execution_start") => {
                     let name = event.get("toolName").and_then(Value::as_str).unwrap_or("");
-                    if [TRANSFER_TOOL, RETURN_TOOL, SET_MODEL_TOOL, SPEAK_TOOL].contains(&name) {
+                    if [
+                        ROUTE_TOOL,
+                        SECOND_OPINION_TOOL,
+                        DISPATCH_PARTS_TOOL,
+                        SPEAK_TOOL,
+                    ]
+                    .contains(&name)
+                    {
                         let args = event
                             .get("args")
                             .and_then(Value::as_object)
@@ -541,18 +547,7 @@ impl PiSession {
                 _ => {}
             }
         }
-        let mut text = chunks.join("\n").trim().to_owned();
-        if text.contains(RETURN_SENTINEL) {
-            text = text.replace(RETURN_SENTINEL, "").trim().to_owned();
-            if !signals.iter().any(|signal| signal.name == RETURN_TOOL) {
-                signals.push(Signal {
-                    name: RETURN_TOOL.into(),
-                    args: Map::from_iter([(String::from("via"), Value::String("sentinel".into()))]),
-                    tool_call_id: None,
-                    successful_end: true,
-                });
-            }
-        }
+        let text = chunks.join("\n").trim().to_owned();
         Ok(Turn {
             text,
             signals,
@@ -1127,23 +1122,12 @@ async fn answer_module_call(inner: Arc<ProjectInner>, call: crate::hosts::Module
         return;
     }
     match call.call.as_str() {
-        TRANSFER_TOOL | RETURN_TOOL | SET_MODEL_TOOL => {
-            let args = call.args.as_object().cloned().unwrap_or_default();
-            // The signal name and argument count are enough to trace routing
-            // without writing speech or model content.
-            tracing::info!(%label, signal = %call.call, arg_count = args.len(), "agent raised a routing signal");
-            let signal = Signal {
-                name: call.call.clone(),
-                args,
-                tool_call_id: None,
-                successful_end: true,
-            };
-            if inner.to_turn(TurnFrame::Signal(signal)) {
-                call.answer(json!({"status": "accepted", "reason": null}));
-            } else {
-                tracing::info!(%label, signal = %call.call, "routing signal outside a turn refused");
-                call.answer(json!({"status": "refused", "reason": "not_in_turn"}));
-            }
+        // These names remain recognized for one release so hosts that still
+        // have the old module installed get a useful result. They are not
+        // signals: stale hosts must never move the caller.
+        "transfer_to_project" | "return_to_operator" | "set_model" => {
+            tracing::info!(%label, call = %call.call, "removed project routing call refused");
+            call.answer(json!({"status": "refused", "reason": "removed"}));
         }
         SPEAK_TOOL | "display" | "view" => {
             let Some(callback) = inner.on_module.clone() else {

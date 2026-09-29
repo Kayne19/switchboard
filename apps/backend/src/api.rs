@@ -11,6 +11,7 @@ use crate::lifecycle::{ActivityDisposition, Coordinator};
 use crate::pbx::{Redial, RedialPlan, RedialPlanner, RouteCallback, Switchboard};
 use crate::pi_client::{Activity, ActivityCallback, AgentCall, LegSession, ModuleCallback};
 use crate::protocol::{CandidateEnd, ErrorCode, ServerMessage, Status};
+use crate::router::{Action, CallSummary, Decision};
 use axum::extract::ws::{Message, WebSocket};
 use axum::{
     extract::rejection::JsonRejection,
@@ -188,6 +189,10 @@ pub struct AppInner {
     active_operations: Mutex<HashMap<TaskId, AbortHandle>>,
     pub queued_turns: AtomicU64,
     pub turn_in_flight: AtomicBool,
+    /// Decisions made before a queued turn reaches the PBX lock. Keeping the
+    /// decision with the clip prevents a second Jev request while preserving
+    /// steering for a turn that was already active.
+    routed_decisions: Mutex<HashMap<String, Decision>>,
     shutdown: watch::Sender<bool>,
     audio: Mutex<AudioQueue>,
     speech_deadline: std::time::Duration,
@@ -437,6 +442,7 @@ impl AppState {
                 active_operations: Mutex::new(HashMap::new()),
                 queued_turns: AtomicU64::new(0),
                 turn_in_flight: AtomicBool::new(false),
+                routed_decisions: Mutex::new(HashMap::new()),
                 shutdown,
                 audio: Mutex::new(AudioQueue::new()),
                 speech_deadline,
@@ -839,40 +845,117 @@ async fn route_final_transcript(state: &AppState, id: &str, generation: u64, tra
     state.0.transcript_log.lock().await.add_with_id(
         CALLER,
         &transcript,
-        route.clone(),
+        route,
         Some(id.to_owned()),
     );
+    drop(_transition);
+    emit_transcript_verdict(state, id, &transcript);
+    dispatch_routed_transcript(state, id, generation, transcript).await;
+}
+
+/// Build a summary and ask Jev once for this utterance. The operator path is
+/// the only fallback for a timeout, malformed response, or missing key.
+async fn route_transcript(state: &AppState, transcript: &str) -> Decision {
+    let entries = state.0.transcript_log.lock().await.entries();
+    let screen = state.0.screen_state.lock().await.clone();
+    let (router, summary): (crate::router::Router, CallSummary) = {
+        let board = state.0.switchboard.lock().await;
+        (
+            board.router(),
+            board.call_summary(&entries, screen, transcript.to_owned()),
+        )
+    };
+    match router.route(&summary).await {
+        Ok(decision) => decision,
+        Err(error) => {
+            let decision = router.fallback(&error);
+            tracing::warn!(
+                action = decision.action.as_str(),
+                confidence = decision.confidence,
+                unsure = decision.unsure,
+                reason = %decision.reason,
+                "Jev routing unavailable; using the top-level LLM path"
+            );
+            decision
+        }
+    }
+}
+
+fn emit_transcript_verdict(state: &AppState, id: &str, transcript: &str) {
     emit_clip_verdict(
         state,
         id,
         ServerMessage::Transcript {
             id: id.to_owned(),
-            text: transcript.clone(),
+            text: transcript.to_owned(),
         },
     );
-    drop(_transition);
-    let steer_operation = state
-        .0
-        .coordinator
-        .attach_steer(&state.0.coordinator.current_identity())
-        .ok();
-    let active = state.0.active_session.lock().await;
-    let steered = match active.as_ref().cloned() {
-        None => false,
-        Some(session) if steer_operation.is_none() || !session.busy() || !session.alive().await => {
-            false
+}
+
+/// Apply a Jev decision without holding the PBX lock while Jev is contacted.
+/// A project turn is steered only for an explicit `continue`; every other
+/// action is queued for the PBX and uses its normal operation path.
+async fn dispatch_routed_transcript(
+    state: &AppState,
+    id: &str,
+    generation: u64,
+    transcript: String,
+) {
+    let decision = route_transcript(state, &transcript).await;
+    let can_steer = matches!(decision.action, Action::Continue) && !decision.sends_to_operator();
+    // Routing itself can span a rescue. Do not let a fallback decision queue
+    // words for the leg that was current when Jev started.
+    if generation != state.0.coordinator.generation() {
+        emit_stale_clip(state, id);
+        return;
+    }
+    let steered = if can_steer {
+        let _transition = state.0.operation_transition.lock().await;
+        if generation != state.0.coordinator.generation() {
+            emit_stale_clip(state, id);
+            return;
         }
-        Some(session) => match session.steer(&transcript).await {
-            Ok(()) => active
-                .as_ref()
-                .is_some_and(|current| current.same_session(&session)),
-            Err(error) => {
-                tracing::warn!(%error, clip = id, "steering failed; queueing streamed utterance");
+        let steer_operation = state
+            .0
+            .coordinator
+            .attach_steer(&state.0.coordinator.current_identity())
+            .ok();
+        let active = state.0.active_session.lock().await;
+        if generation != state.0.coordinator.generation() {
+            drop(active);
+            emit_stale_clip(state, id);
+            return;
+        }
+        match active.as_ref().cloned() {
+            None => false,
+            Some(session)
+                if steer_operation.is_none() || !session.busy() || !session.alive().await =>
+            {
                 false
             }
-        },
+            Some(session) => match session.steer(&transcript).await {
+                Ok(()) => active
+                    .as_ref()
+                    .is_some_and(|current| current.same_session(&session)),
+                Err(error) => {
+                    tracing::warn!(%error, clip = id, "steering failed; queueing routed utterance");
+                    false
+                }
+            },
+        }
+    } else {
+        // A non-steer action still needs the same short session guard. A
+        // rescue bumps the generation before it closes that guard, so speech
+        // waiting behind a connecting leg is refused rather than queued.
+        let active = state.0.active_session.lock().await;
+        if generation != state.0.coordinator.generation() {
+            drop(active);
+            emit_stale_clip(state, id);
+            return;
+        }
+        drop(active);
+        false
     };
-    drop(active);
     if steered {
         emit_message(
             state,
@@ -882,33 +965,53 @@ async fn route_final_transcript(state: &AppState, id: &str, generation: u64, tra
                 steered: true,
             },
         );
-    } else {
-        let waiting = state.0.queued_turns.fetch_add(1, Ordering::AcqRel) + 1;
-        if state
-            .0
-            .turns
-            .send((id.to_owned(), transcript, generation))
-            .await
-            .is_ok()
-        {
-            if waiting > 1 || state.0.turn_in_flight.load(Ordering::Acquire) {
-                emit_message(
-                    state,
-                    ServerMessage::Queued {
-                        id: id.to_owned(),
-                        waiting,
-                        steered: false,
-                    },
-                );
-            }
-        } else {
-            state.0.queued_turns.fetch_sub(1, Ordering::AcqRel);
-            emit_clip_verdict(
+        return;
+    }
+    // If the decision could not attach to a live turn, the queued worker will
+    // use the same decision and deliver it to the project. This includes an
+    // explicit continue on a route with no steerable session: Jev must not be
+    // called again for the same utterance.
+    state
+        .0
+        .routed_decisions
+        .lock()
+        .await
+        .insert(id.to_owned(), decision.clone());
+    if !can_steer {
+        tracing::info!(
+            clip = id,
+            action = decision.action.as_str(),
+            confidence = decision.confidence,
+            unsure = decision.unsure,
+            "queued Jev routing decision"
+        );
+    }
+    let waiting = state.0.queued_turns.fetch_add(1, Ordering::AcqRel) + 1;
+    if state
+        .0
+        .turns
+        .send((id.to_owned(), transcript, generation))
+        .await
+        .is_ok()
+    {
+        if waiting > 1 || state.0.turn_in_flight.load(Ordering::Acquire) {
+            emit_message(
                 state,
-                id,
-                ServerMessage::error_for(id, "The call worker is unavailable."),
+                ServerMessage::Queued {
+                    id: id.to_owned(),
+                    waiting,
+                    steered: false,
+                },
             );
         }
+    } else {
+        state.0.queued_turns.fetch_sub(1, Ordering::AcqRel);
+        state.0.routed_decisions.lock().await.remove(id);
+        emit_clip_verdict(
+            state,
+            id,
+            ServerMessage::error_for(id, "The call worker is unavailable."),
+        );
     }
 }
 
@@ -972,106 +1075,9 @@ async fn process_clips(state: AppState) {
             route.clone(),
             Some(clip.id.clone()),
         );
-        emit_clip_verdict(
-            &state,
-            &clip.id,
-            ServerMessage::Transcript {
-                id: clip.id.clone(),
-                text: transcript.clone(),
-            },
-        );
         drop(_transition);
-        // Steering is deliberately performed through the shared session handle,
-        // not while holding the PBX mutex. The turn worker keeps that mutex for
-        // the duration of handle(), so awaiting here would deadlock it.
-        let steered = {
-            // Steering attaches to the prompt operation already registered by
-            // the turn worker. PiSession::steer has its own wire path and is
-            // intentionally not serialized by the prompt mutex.
-            let steer_operation = state
-                .0
-                .coordinator
-                .attach_steer(&state.0.coordinator.current_identity())
-                .ok();
-            // Hold the session-control guard across the write so a hangup or
-            // redial cannot replace the child between the identity check and
-            // the steer. The PBX mutex is intentionally not held here.
-            let active = state.0.active_session.lock().await;
-            // Speech captured before a page rescue is discarded rather than
-            // acted on. Checked under the session guard because a rescue bumps
-            // the generation before it closes the session, so a steer that wins
-            // this lock still observes the new epoch.
-            let current = state.0.coordinator.generation();
-            if clip.generation != current {
-                tracing::info!(
-                    clip = %clip.id,
-                    stamped = clip.generation,
-                    %current,
-                    "discarding speech captured before a page rescue"
-                );
-                emit_stale_clip(&state, &clip.id);
-                continue;
-            }
-            match active.as_ref().cloned() {
-                None => false,
-                Some(session)
-                    if steer_operation.is_none() || !session.busy() || !session.alive().await =>
-                {
-                    false
-                }
-                Some(session) => match session.steer(&transcript).await {
-                    Ok(()) => {
-                        // A session swapped out under us means the steer landed
-                        // in a leg the caller has already left.
-                        let same = active
-                            .as_ref()
-                            .is_some_and(|current| current.same_session(&session));
-                        if !same {
-                            tracing::warn!(clip = %clip.id, "the leg was replaced mid-steer; queueing the utterance");
-                        }
-                        same
-                    }
-                    Err(error) => {
-                        tracing::warn!(clip = %clip.id, %error, "steering failed; queueing the utterance");
-                        false
-                    }
-                },
-            }
-        };
-        if steered {
-            tracing::info!(clip = %clip.id, %route, "steered the live turn");
-            emit_message(
-                &state,
-                ServerMessage::Queued {
-                    id: clip.id.clone(),
-                    waiting: 0,
-                    steered: true,
-                },
-            );
-        } else {
-            let waiting = state.0.queued_turns.fetch_add(1, Ordering::AcqRel) + 1;
-            if state
-                .0
-                .turns
-                .send((clip.id.clone(), transcript, clip.generation))
-                .await
-                .is_ok()
-            {
-                if waiting > 1 || state.0.turn_in_flight.load(Ordering::Acquire) {
-                    emit_message(
-                        &state,
-                        ServerMessage::Queued {
-                            id: clip.id.clone(),
-                            waiting,
-                            steered: false,
-                        },
-                    );
-                }
-            } else {
-                tracing::error!(clip = %clip.id, "the turn worker is gone; the utterance was dropped");
-                state.0.queued_turns.fetch_sub(1, Ordering::AcqRel);
-            }
-        }
+        emit_transcript_verdict(&state, &clip.id, &transcript);
+        dispatch_routed_transcript(&state, &clip.id, clip.generation, transcript).await;
     }
     tracing::warn!("the clip worker stopped; no further speech will be transcribed");
 }
@@ -1103,6 +1109,21 @@ async fn process_turns(state: AppState) {
         // leg the turn would run on, and a prompt must not begin while a leg is
         // starting.
         drop(state.0.switchboard.lock().await);
+        // Normal clip processing stores the decision beside the queued clip.
+        // Tests and internal callers may enqueue a raw turn, so route that
+        // compatibility path here without changing the public channel shape.
+        let routed_decision = state.0.routed_decisions.lock().await.remove(&id);
+        if generation != state.0.coordinator.generation() {
+            tracing::info!(clip = %id, stamped = generation, current = state.0.coordinator.generation(), "dropping a queued turn before Jev routing");
+            emit_stale_clip(&state, &id);
+            continue;
+        }
+        let decision = if let Some(decision) = routed_decision {
+            decision
+        } else {
+            route_transcript(&state, &transcript).await
+        };
+
         let turn_state = state.clone();
         let started = std::time::Instant::now();
         // Register the abort handle before awaiting the task. Page-level rescue
@@ -1132,7 +1153,7 @@ async fn process_turns(state: AppState) {
         let turn = tracing::info_span!("turn", clip = %id);
         let handle_turn = async move {
             let mut board = turn_state.0.switchboard.lock().await;
-            board.handle(&transcript).await
+            board.handle_decision(&transcript, &decision).await
         };
         let Some((task, task_id)) =
             spawn_registered_operation(&state, generation, handle_turn.instrument(turn.clone()))
@@ -2174,6 +2195,16 @@ async fn deliver_page_reply_if_current(
     if generation != state.0.coordinator.generation() {
         return false;
     }
+    if reply.error.as_deref() == Some("routing_unavailable") {
+        emit_message(
+            state,
+            ServerMessage::RoutingUnavailable {
+                message: "Routing is unavailable. Please try again.".into(),
+            },
+        );
+        publish_status(state);
+        return true;
+    }
     if !reply.text.is_empty() {
         if let Some(entry) =
             state
@@ -2207,6 +2238,16 @@ async fn deliver_turn_if_current(
     let _transition = state.0.operation_transition.lock().await;
     if generation != state.0.coordinator.generation() {
         return false;
+    }
+    if reply.error.as_deref() == Some("routing_unavailable") {
+        emit_message(
+            state,
+            ServerMessage::RoutingUnavailable {
+                message: "Routing is unavailable. Please try again.".into(),
+            },
+        );
+        publish_status(state);
+        return true;
     }
     if !reply.text.is_empty() {
         state
