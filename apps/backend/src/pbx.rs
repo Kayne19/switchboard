@@ -1964,6 +1964,10 @@ impl Switchboard {
                 Some(format!("unknown project {target:?}")),
             );
         };
+        // Keep the exact foreground owner across a failed takeover. The
+        // coordinator rolls its route back, but the active-session guard is a
+        // separate lifecycle handoff and must follow the same previous leg.
+        let previous_foreground = self.active_session.lock().await.clone();
         if self
             .agent
             .as_ref()
@@ -2089,8 +2093,8 @@ impl Switchboard {
             };
             session.close();
             self.announce_agent_state(&project.id, "finished").await;
-            self.set_active_session(self.operator_leg()).await;
             self.rollback_startup(format!("takeover turn failed: {detail}"));
+            self.set_active_session(previous_foreground.clone()).await;
             return self.reply_transfer_error(
                 format!("{} did not answer after takeover: {detail}", project.id),
                 Some(detail),
@@ -2100,8 +2104,8 @@ impl Switchboard {
             if let Err(error) = self.coordinator.adopt_candidate(&leg_token) {
                 session.close();
                 self.announce_agent_state(&project.id, "finished").await;
-                self.set_active_session(self.operator_leg()).await;
                 self.rollback_startup(format!("takeover adoption failed: {error}"));
+                self.set_active_session(previous_foreground).await;
                 return self.reply_transfer_error(
                     format!("{} did not come up after takeover.", project.id),
                     Some(error.to_string()),

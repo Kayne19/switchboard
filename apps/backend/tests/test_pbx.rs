@@ -3094,8 +3094,121 @@ async fn takeover_refuses_a_live_service_created_agent_before_attach() {
 }
 
 #[tokio::test]
+async fn failed_takeover_from_project_restores_foreground_for_steering() {
+    let mut board = board_with(
+        vec![project("alpha", "Alpha"), project("beta", "Beta")],
+        false,
+    );
+    let list_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let list_calls_for_host = list_calls.clone();
+    let prompt_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let prompt_calls_for_host = prompt_calls.clone();
+    let mut host = FakeHostAgent::new(Box::new(|_, _| says("Alpha stayed on the line")));
+    host.on_command = Some(Box::new(move |name, args| {
+        if name == "list_sessions" {
+            if list_calls_for_host.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                return Some(Some(Ok(json!({"sessions": []}))));
+            }
+            return Some(Some(Ok(json!({"sessions": [{
+                "session":"desk-beta", "session_id":"desk-beta-saved", "cwd":"/srv/beta",
+                "provenance":null, "busy":false, "model":"anthropic/current", "thinking":"medium"
+            }]}))));
+        }
+        if name == "attach" {
+            return Some(Some(Ok(json!({
+                "session":"desk-beta", "session_id":"desk-beta-saved", "project":"beta",
+                "cwd":args["cwd"], "provenance":"taken_over", "busy":false,
+                "turn_open":false, "model":"anthropic/current", "thinking":"medium"
+            }))));
+        }
+        if name == "prompt"
+            && prompt_calls_for_host.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1
+        {
+            return Some(Some(Err((
+                "failed".into(),
+                "takeover prompt failed".into(),
+            ))));
+        }
+        None
+    }));
+    let log = host.serve(board.hosts().connect_fake(HOST));
+    board
+        .transfer_ctx(&transcript("connect alpha"), "alpha", "", "")
+        .await;
+    assert_eq!(board.coordinator.route(), "alpha");
+
+    let reply = board
+        .handle_decision(
+            "take over beta",
+            &Decision {
+                action: Action::TakeOver,
+                target: Some("beta".into()),
+                continue_or_fresh: None,
+                confidence: 1.0,
+                for_current_agent: 0.0,
+                multi_target: false,
+                unsure: false,
+                confirm: false,
+                reason: "test".into(),
+            },
+        )
+        .await;
+    assert_eq!(reply.route, "alpha");
+    assert_eq!(board.route_label(), "alpha");
+    assert_eq!(
+        board
+            .session_control()
+            .lock()
+            .await
+            .as_ref()
+            .map(LegSession::label),
+        Some("alpha")
+    );
+
+    let continued = board
+        .handle_decision(
+            "continue alpha",
+            &Decision {
+                action: Action::Continue,
+                target: None,
+                continue_or_fresh: None,
+                confidence: 1.0,
+                for_current_agent: 1.0,
+                multi_target: false,
+                unsure: false,
+                confirm: false,
+                reason: "test".into(),
+            },
+        )
+        .await;
+    assert_eq!(continued.route, "alpha");
+    assert_eq!(continued.text, "Alpha stayed on the line");
+    let prompt_messages = prompts(&log);
+    assert_eq!(prompt_messages.len(), 3);
+    assert!(prompt_messages[2].contains("continue alpha"));
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn takeover_attach_failure_rolls_back_without_killing_the_desk_session() {
-    let mut board = board_with(vec![project("alpha", "Alpha")], false);
+    let root = scratch_dir("takeover-operator-rollback");
+    let operator = fake_operator(&root);
+    let mut board = board_on(
+        vec![project("alpha", "Alpha")],
+        &[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())],
+        two_model_catalog(),
+    );
+    board.ensure_operator().await.expect("operator starts");
+    assert_eq!(
+        board
+            .session_control()
+            .lock()
+            .await
+            .as_ref()
+            .map(LegSession::label),
+        Some("operator")
+    );
     let mut host = FakeHostAgent::new(Box::new(|_, _| says("unused")));
     host.on_command = Some(Box::new(|name, _| {
         if name == "list_sessions" {
@@ -3125,6 +3238,8 @@ async fn takeover_attach_failure_rolls_back_without_killing_the_desk_session() {
     assert!(reply.text.contains("desk disappeared"));
     assert!(!board.coordinator.is_candidate());
     assert!(!log.names().contains(&"kill".into()));
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[tokio::test]
