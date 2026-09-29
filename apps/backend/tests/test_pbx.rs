@@ -2693,3 +2693,23 @@ async fn a_stopped_project_starts_fresh_after_close() {
     assert_eq!(log.named("create_session").len(), 2);
     board.shutdown().await;
 }
+
+#[test]
+fn floor_rewrite_guard_accepts_plain_rephrasing_and_rejects_new_facts() {
+    assert!(Switchboard::faithful_floor_rewrite(
+        "the update is ready",
+        "the update is complete",
+    ));
+    assert!(!Switchboard::faithful_floor_rewrite(
+        "the update is ready",
+        "the update is ready with 42 results",
+    ));
+    assert!(!Switchboard::faithful_floor_rewrite(
+        "the update is ready",
+        "the update is ready at https://example.invalid",
+    ));
+    assert!(!Switchboard::faithful_floor_rewrite(
+        "the update is ready",
+        "the update is ready for Switchboard",
+    ));
+}

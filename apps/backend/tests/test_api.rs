@@ -4417,7 +4417,7 @@ async fn floor_pbx_api_flow_gates_rewrites_announces_and_plays_in_order() {
     crate::pi_client::write_executable_script(
         &utility,
         r##"while IFS= read -r line; do
-printf '%s\n' '{"type":"tool_execution_start","toolName":"rewrite","args":{"text":"Rewritten update"}}'
+printf '%s\n' '{"type":"tool_execution_start","toolName":"rewrite","args":{"text":"rewritten update"}}'
 printf '%s\n' '{"type":"agent_settled"}'
 done
 "##,
@@ -4465,7 +4465,7 @@ done
         .expect("floor speech");
     assert_eq!(
         spoken["entry"]["text"],
-        "An update from grape: Rewritten update"
+        "An update from grape: rewritten update"
     );
     let types = types_of(&frames);
     assert!(types

@@ -563,6 +563,32 @@ pub struct Switchboard {
 }
 impl Switchboard {
     pub fn new(config: &crate::Config, registry: Registry, prewarm: Arc<Prewarm>) -> Self {
+        let jev = crate::jev::JevClient::new(
+            config.jev_url.clone(),
+            config.jev_key_file.clone(),
+            Duration::from_millis(config.jev_timeout_ms),
+        )
+        .expect("build Jev HTTP client");
+        Self::new_with_router(config, registry, prewarm, jev)
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn new_with_jev(
+        config: &crate::Config,
+        registry: Registry,
+        prewarm: Arc<Prewarm>,
+        jev: crate::jev::JevClient,
+    ) -> Self {
+        Self::new_with_router(config, registry, prewarm, jev)
+    }
+
+    fn new_with_router(
+        config: &crate::Config,
+        registry: Registry,
+        prewarm: Arc<Prewarm>,
+        jev: crate::jev::JevClient,
+    ) -> Self {
         let hosts = prewarm.hosts();
         let coordinator = Coordinator::new(
             StatusConfig {
@@ -580,12 +606,6 @@ impl Switchboard {
             agent_model: config.agent_model.clone(),
             model_swaps: config.model_swaps,
         };
-        let jev = crate::jev::JevClient::new(
-            config.jev_url.clone(),
-            config.jev_key_file.clone(),
-            Duration::from_millis(config.jev_timeout_ms),
-        )
-        .expect("build Jev HTTP client");
         let router = Router::new(
             jev,
             Arc::clone(&registry),
@@ -1291,16 +1311,18 @@ impl Switchboard {
         Ok(utility_decision(&turn.signals))
     }
 
-    /// Ask the stateless utility to rewrite a background message. The utility
-    /// is deliberately separate from the conversational operator, so this
-    /// never waits on or pollutes the caller's turn history.
-    #[allow(dead_code)]
-    pub async fn rewrite_floor(
-        &mut self,
+    /// Take a clone of the utility session while the PBX lock is held. The
+    /// caller must prompt the clone after releasing that lock: utility work is
+    /// allowed to take seconds and must not block caller turns.
+    pub async fn floor_rewrite_session(&mut self) -> Result<PiSession, PiSessionError> {
+        Ok(self.ensure_utility().await?.clone())
+    }
+
+    pub async fn rewrite_floor_with_session(
+        session: &PiSession,
         message: &str,
         reason: &str,
     ) -> Result<Option<String>, PiSessionError> {
-        let session = self.ensure_utility().await?.clone();
         let prompt = format!(
             "[FLOOR REWRITE]\nOriginal message: {message}\nReason: {reason}\nCall rewrite with only a faithful spoken rewrite.",
         );
@@ -1325,8 +1347,54 @@ impl Switchboard {
                     .and_then(Value::as_str)
                     .map(str::trim)
                     .filter(|text| !text.is_empty())
+                    .filter(|text| Self::faithful_floor_rewrite(message, text))
                     .map(str::to_owned)
             }))
+    }
+
+    fn faithful_floor_rewrite(original: &str, rewrite: &str) -> bool {
+        let original_len = original.chars().count();
+        let rewrite_len = rewrite.chars().count();
+        if rewrite_len > original_len.saturating_mul(2).saturating_add(20) {
+            return false;
+        }
+        let original_tokens = original
+            .split_whitespace()
+            .map(Self::normalize_floor_token)
+            .filter(|token| !token.is_empty())
+            .collect::<HashSet<_>>();
+        rewrite
+            .split_whitespace()
+            .filter_map(|raw| {
+                let token = Self::normalize_floor_token(raw);
+                (!token.is_empty()).then_some((raw, token))
+            })
+            .all(|(raw, token)| {
+                let present = original_tokens.contains(&token);
+                let has_number = token.chars().any(char::is_numeric);
+                let has_url_or_path = token.starts_with("http://")
+                    || token.starts_with("https://")
+                    || token.starts_with("www.")
+                    || token.contains('/')
+                    || token.contains('\\')
+                    || token.contains('_');
+                let raw = raw.trim_matches(|character: char| !character.is_alphanumeric());
+                let has_new_capitalized_name = raw
+                    .chars()
+                    .next()
+                    .is_some_and(|character| character.is_uppercase())
+                    && raw.chars().any(|character| character.is_lowercase())
+                    && !present;
+                present || (!has_number && !has_url_or_path && !has_new_capitalized_name)
+            })
+    }
+
+    fn normalize_floor_token(token: &str) -> String {
+        token
+            .trim_matches(|character: char| {
+                !character.is_alphanumeric() && !"/_\\:._-".contains(character)
+            })
+            .to_ascii_lowercase()
     }
 
     async fn handle_operator_ctx(&mut self, context: &TransferContext) -> Reply {

@@ -686,15 +686,21 @@ fn spawn_floor_worker(state: AppState) {
             let request = request.clone();
             Box::pin(async move {
                 let original = request.message.clone();
-                let operation = async {
+                let session = {
                     let mut board = state.0.switchboard.lock().await;
-                    board
-                        .rewrite_floor(&request.message, &request.reason)
-                        .await
-                        .ok()
-                        .flatten()
-                        .filter(|text| !text.trim().is_empty())
-                        .unwrap_or(original.clone())
+                    board.floor_rewrite_session().await.map_err(|_| ())?
+                };
+                let operation = async {
+                    Switchboard::rewrite_floor_with_session(
+                        &session,
+                        &request.message,
+                        &request.reason,
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+                    .filter(|text| !text.trim().is_empty())
+                    .unwrap_or(original)
                 };
                 tokio::time::timeout(floor::REWRITE_TIMEOUT, operation)
                     .await
