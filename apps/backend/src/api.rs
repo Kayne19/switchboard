@@ -5,12 +5,17 @@ use crate::display::{
     is_display_event, stamp_display_seq, ConfirmState, DisplayGateState, DisplayProjection,
     SceneLeg, DISPLAY_CONFIRM_DEADLINE_MS,
 };
+use crate::floor;
+use crate::floor::{Floor, FloorHooks, FloorRequest, ReleaseOutcome};
 use crate::history::{TranscriptLog, AGENT, CALLER};
 use crate::hosts::Hosts;
 use crate::lifecycle::{ActivityDisposition, Coordinator};
-use crate::pbx::{Redial, RedialPlan, RedialPlanner, RouteCallback, Switchboard};
+use crate::pbx::{
+    AgentStateCallback, AgentStateNotice, Redial, RedialPlan, RedialPlanner, RouteCallback,
+    Switchboard,
+};
 use crate::pi_client::{Activity, ActivityCallback, AgentCall, LegSession, ModuleCallback};
-use crate::protocol::{CandidateEnd, ErrorCode, ServerMessage, Status};
+use crate::protocol::{AgentRequest, AgentState, CandidateEnd, ErrorCode, ServerMessage, Status};
 use crate::router::{Action, CallSummary, Decision};
 use axum::extract::ws::{Message, WebSocket};
 use axum::{
@@ -28,7 +33,7 @@ use std::{
     future::Future,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc,
+        Arc, Mutex as StdMutex,
     },
 };
 use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex};
@@ -37,6 +42,110 @@ use tower_http::services::ServeDir;
 use tracing::Instrument;
 
 const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+
+/// The presentation-side owner of resident agent state and held displays.
+/// PBX transitions and turn settlement feed it notices; no caller edits either
+/// projection directly, so waiting requests cannot be lost by a late idle.
+#[derive(Clone)]
+struct AgentProjection {
+    // These are deliberately synchronous locks. Coordinator's background
+    // owner holds its lifecycle mutex while it validates a resident and
+    // applies a waiting/display mutation, so the check and write cannot be
+    // separated by promotion.
+    states: Arc<StdMutex<Vec<AgentState>>>,
+    displays: Arc<StdMutex<HashMap<String, Value>>>,
+}
+
+impl AgentProjection {
+    fn notice(&self, notice: &AgentStateNotice) -> Vec<AgentState> {
+        if notice.state == "finished" {
+            self.displays
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(&notice.project);
+        }
+        let mut agents = self
+            .states
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(agent) = agents
+            .iter_mut()
+            .find(|agent| agent.project == notice.project)
+        {
+            if !(agent.state == "waiting" && notice.state == "idle") {
+                agent.state = notice.state.clone();
+                if notice.state != "waiting" {
+                    agent.pending_request = None;
+                }
+            }
+        } else {
+            agents.push(AgentState {
+                project: notice.project.clone(),
+                state: notice.state.clone(),
+                pending_request: None,
+            });
+            agents.sort_by(|left, right| left.project.cmp(&right.project));
+        }
+        agents.clone()
+    }
+
+    fn waiting(&self, project: String, request: AgentRequest) -> Vec<AgentState> {
+        let mut agents = self
+            .states
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(agent) = agents.iter_mut().find(|agent| agent.project == project) {
+            agent.state = "waiting".into();
+            agent.pending_request = Some(request);
+        } else {
+            agents.push(AgentState {
+                project,
+                state: "waiting".into(),
+                pending_request: Some(request),
+            });
+            agents.sort_by(|left, right| left.project.cmp(&right.project));
+        }
+        agents.clone()
+    }
+
+    /// A floor message consumed the pending request. This is distinct from a
+    /// normal idle settlement, which deliberately preserves a request that a
+    /// turn finished beside.
+    fn floor_released(&self, project: &str) -> Vec<AgentState> {
+        let mut agents = self
+            .states
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(agent) = agents.iter_mut().find(|agent| agent.project == project) {
+            if agent.state == "waiting" {
+                agent.state = "idle".into();
+                agent.pending_request = None;
+            }
+        }
+        agents.clone()
+    }
+
+    fn hold_display(&self, project: String, action: Value) {
+        self.displays
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(project, action);
+    }
+
+    fn take_display(&self, project: &str) -> Option<Value> {
+        self.displays
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(project)
+    }
+
+    fn snapshot(&self) -> Vec<AgentState> {
+        self.states
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+}
 
 /// Tells the browser the call has moved to a new leg.
 ///
@@ -53,6 +162,7 @@ struct LegAnnouncer {
     display_gate: Arc<Mutex<DisplayGateState>>,
     display_confirm: watch::Sender<ConfirmState>,
     last_display: Arc<Mutex<Option<Value>>>,
+    projection: AgentProjection,
 }
 
 impl LegAnnouncer {
@@ -150,7 +260,25 @@ impl LegAnnouncer {
         self.publish(ServerMessage::Epoch {
             generation: leg.generation,
         });
-        gate.scene_leg = Some(leg);
+        gate.scene_leg = Some(leg.clone());
+        if leg.route != crate::pbx::OPERATOR {
+            if let Some(action) = self.projection.take_display(&leg.route) {
+                let event = Event::Json(
+                    ServerMessage::Display {
+                        action: action.clone(),
+                        seq: None,
+                    }
+                    .to_value(),
+                );
+                let (delivered, sequence) = self.delivery.publish_sequenced(event.clone());
+                let _ = self.events.send(event);
+                gate.projection.apply(&action, sequence);
+                gate.watermark = sequence;
+                *self.last_display.lock().await =
+                    Some(ServerMessage::Display { action, seq: None }.to_value());
+                tracing::info!(route = %leg.route, delivered, "released the final background display on foreground");
+            }
+        }
     }
 }
 
@@ -184,6 +312,10 @@ pub struct AppInner {
     pub display_gate: Arc<Mutex<DisplayGateState>>,
     pub display_confirm: watch::Sender<ConfirmState>,
     pub active_session: Arc<Mutex<Option<LegSession>>>,
+    /// Last known state for resident project agents, including pending speak requests.
+    projection: AgentProjection,
+    /// One owner of queued background speech and its release order.
+    floor: Floor,
     leg_announcer: LegAnnouncer,
     operation_transition: Mutex<()>,
     active_operations: Mutex<HashMap<TaskId, AbortHandle>>,
@@ -255,6 +387,9 @@ enum StreamClipState {
 
 struct SpeechRequest {
     text: String,
+    /// Transcript route for floor speech; ordinary agent speech uses the live
+    /// coordinator route.
+    route: String,
     generation: u64,
     sequence: u64,
     deadline: std::time::Instant,
@@ -286,6 +421,7 @@ impl AppState {
         let epoch = connection.epoch;
         gate.active_epoch = Some(epoch);
         gate.screen_state["stale"] = json!(true);
+        self.0.floor.set_page_connected(true).await;
         *self.0.screen_state.lock().await = gate.screen_state.clone();
         let snapshot_actions = gate.projection.snapshot_actions();
         let watermark = gate.watermark;
@@ -302,6 +438,10 @@ impl AppState {
             }
         }
         self.0.delivery.retire(epoch);
+        self.0
+            .floor
+            .set_page_connected(self.0.delivery.connected())
+            .await;
     }
 
     pub fn new(
@@ -321,6 +461,12 @@ impl AppState {
         let (turns, turn_rx) = mpsc::channel(64);
         let (shutdown, _) = watch::channel(false);
         let last_display = Arc::new(Mutex::new(None));
+        let background_displays = Arc::new(StdMutex::new(HashMap::new()));
+        let agent_states = Arc::new(StdMutex::new(Vec::new()));
+        let projection = AgentProjection {
+            states: agent_states.clone(),
+            displays: background_displays.clone(),
+        };
         let delivery = DeliveryState::new();
         let speech_deadline = speaker.speech_deadline;
         let mut coordinator = switchboard.coordinator();
@@ -350,6 +496,7 @@ impl AppState {
             display_gate: display_gate.clone(),
             display_confirm: display_confirm_tx.clone(),
             last_display: last_display.clone(),
+            projection: projection.clone(),
         };
         let activity_announcer = leg_announcer.clone();
         let activity_callback: ActivityCallback = Arc::new(move |activity: Activity| {
@@ -383,6 +530,7 @@ impl AppState {
             let announcer = route_announcer.clone();
             Box::pin(async move { announcer.announce_route().await })
         });
+        let floor = Floor::new(switchboard.floor_quiet_threshold());
         let active_session = switchboard.session_control();
         let redials = switchboard.redial_planner();
         let hosts = switchboard.hosts();
@@ -390,6 +538,16 @@ impl AppState {
         switchboard.set_activity_callback(Some(activity_callback));
         switchboard.set_route_callback(Some(route_callback));
         Self(Arc::new_cyclic(|app: &std::sync::Weak<AppInner>| {
+            let state_app = app.clone();
+            let state_callback: AgentStateCallback = Arc::new(move |notice: AgentStateNotice| {
+                let app = state_app.upgrade();
+                Box::pin(async move {
+                    if let Some(app) = app {
+                        update_agent_state(&AppState(app), notice).await;
+                    }
+                })
+            });
+            switchboard.set_agent_state_callback(Some(state_callback));
             // A project session's `speak`, `display` and `view` are answered
             // here, by the same code for every one of them.
             let app = app.clone();
@@ -437,6 +595,8 @@ impl AppState {
                 display_gate,
                 display_confirm: display_confirm_tx,
                 active_session,
+                projection,
+                floor,
                 leg_announcer,
                 operation_transition: Mutex::new(()),
                 active_operations: Mutex::new(HashMap::new()),
@@ -481,10 +641,86 @@ pub fn spawn_workers(state: AppState) {
     tokio::spawn(async move {
         process_clips(clip_state).await;
     });
+    let turn_state = state.clone();
     tokio::spawn(async move {
-        process_turns(state).await;
+        process_turns(turn_state).await;
     });
+    spawn_floor_worker(state);
 }
+fn spawn_floor_worker(state: AppState) {
+    let floor = state.0.floor.clone();
+    let connected_state = state.clone();
+    let live_state = state.clone();
+    let gate_state = state.clone();
+    let rewrite_state = state.clone();
+    let release_state = state.clone();
+    let hooks = FloorHooks {
+        connected: Arc::new(move || connected_state.0.delivery.connected()),
+        live: Arc::new(move |request: &FloorRequest| {
+            let current_generation = live_state.0.coordinator.generation();
+            live_state
+                .0
+                .coordinator
+                .with_background(&request.token, |project| {
+                    project == request.project && current_generation == request.generation
+                })
+                .is_some()
+        }),
+        gate: Arc::new(move |request: &FloorRequest| {
+            let state = gate_state.clone();
+            let request = request.clone();
+            Box::pin(async move {
+                let entries = state.0.transcript_log.lock().await.entries();
+                let screen = state.0.screen_state.lock().await.clone();
+                let (router, summary) = {
+                    let board = state.0.switchboard.lock().await;
+                    let mut summary = board.call_summary(&entries, screen, request.message.clone());
+                    // The queued message is the item being judged, not a new
+                    // caller utterance. Keeping it in the named field makes
+                    // the Jev prompt useful without adding another contract.
+                    summary.caller_just_said = request.message;
+                    (board.router(), summary)
+                };
+                router.good_moment(&summary).await.map_err(|_| ())
+            }) as floor::GateFuture
+        }),
+        rewrite: Arc::new(move |request: &FloorRequest| {
+            let state = rewrite_state.clone();
+            let request = request.clone();
+            Box::pin(async move {
+                let original = request.message.clone();
+                let session = {
+                    let mut board = state.0.switchboard.lock().await;
+                    board.floor_rewrite_session().await.map_err(|_| ())?
+                };
+                let operation = async {
+                    Switchboard::rewrite_floor_with_session(
+                        &session,
+                        &request.message,
+                        &request.reason,
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+                    .filter(|text| !text.trim().is_empty())
+                    .unwrap_or(original)
+                };
+                tokio::time::timeout(floor::REWRITE_TIMEOUT, operation)
+                    .await
+                    .map_err(|_| ())
+            }) as floor::RewriteFuture
+        }),
+        release: Arc::new(
+            move |request: FloorRequest, rewritten: String, announce: bool| {
+                let state = release_state.clone();
+                Box::pin(async move { release_floor(&state, request, rewritten, announce).await })
+                    as floor::ReleaseFuture
+            },
+        ),
+    };
+    tokio::spawn(async move { floor.run(hooks).await });
+}
+
 pub async fn shutdown(state: &AppState) {
     // Linearize shutdown before cancellation so late callbacks and deliveries
     // fail closed while the process resources are being reaped.
@@ -683,6 +919,7 @@ async fn process_speech(state: AppState) {
     while let Some(request) = receiver.recv().await {
         let SpeechRequest {
             text,
+            route,
             generation,
             sequence,
             deadline,
@@ -730,7 +967,6 @@ async fn process_speech(state: AppState) {
             Ok((bytes, delivered)) => {
                 tracing::info!(chars = text.chars().count(), bytes, elapsed = ?started.elapsed(), "synthesized a mid-turn line");
                 if delivered {
-                    let route = state.0.coordinator.route();
                     if let Some(entry) =
                         state.0.transcript_log.lock().await.add(AGENT, &text, route)
                     {
@@ -836,6 +1072,7 @@ async fn route_final_transcript(state: &AppState, id: &str, generation: u64, tra
         );
         return;
     }
+    state.0.floor.caller_spoke().await;
     let _transition = state.0.operation_transition.lock().await;
     if generation != state.0.coordinator.generation() {
         emit_stale_clip(state, id);
@@ -1055,6 +1292,7 @@ async fn process_clips(state: AppState) {
             );
             continue;
         }
+        state.0.floor.caller_spoke().await;
         let _transition = state.0.operation_transition.lock().await;
         if clip.generation != state.0.coordinator.generation() {
             tracing::info!(clip = %clip.id, "discarding stale transcript before persistence");
@@ -1204,14 +1442,24 @@ async fn process_turns(state: AppState) {
             tracing::warn!(clip = %id, route = %reply.route, %error, "the turn reported a failure");
         }
         tracing::info!(clip = %id, route = %reply.route, elapsed = ?started.elapsed(), "turn settled");
-        deliver_turn_if_current(
-            &state,
-            &reply,
-            reply.delivery_generation.unwrap_or(generation),
-            &id,
-        )
-        .instrument(turn)
-        .await;
+        let delivery_generation = reply.delivery_generation.unwrap_or(generation);
+        let _delivered = deliver_turn_if_current(&state, &reply, delivery_generation, &id)
+            .instrument(turn)
+            .await;
+        // Settlement belongs to the same generation as delivery. In
+        // particular, do not publish idle for a stale reply after rescue has
+        // already replaced the resident or foreground session.
+        if reply.route != crate::pbx::OPERATOR {
+            update_agent_state_if_current(
+                &state,
+                delivery_generation,
+                AgentStateNotice {
+                    project: reply.route.clone(),
+                    state: "idle".into(),
+                },
+            )
+            .await;
+        }
         state.0.turn_in_flight.store(false, Ordering::Release);
     }
     tracing::warn!("the turn worker stopped; no further turns will be dispatched");
@@ -1621,6 +1869,129 @@ async fn model(
         Err(refused) => refused,
     }
 }
+/// Updates the page projection for a resident project session. The PBX sends
+/// lifecycle notices; waiting requests are kept until promotion or stop.
+async fn update_agent_state(state: &AppState, notice: AgentStateNotice) {
+    let agents = state.0.projection.notice(&notice);
+    emit_message(state, ServerMessage::AgentsState { agents });
+}
+
+/// Settles a turn only if its stamped generation still owns the lifecycle.
+/// The coordinator owns the check and projection mutation together; stale
+/// replies cannot mark a replacement resident idle.
+async fn update_agent_state_if_current(
+    state: &AppState,
+    generation: u64,
+    notice: AgentStateNotice,
+) -> bool {
+    let Some(agents) = state
+        .0
+        .coordinator
+        .with_generation(generation, || state.0.projection.notice(&notice))
+    else {
+        return false;
+    };
+    emit_message(state, ServerMessage::AgentsState { agents });
+    true
+}
+
+/// Send one background update through the same ordered speech worker as every
+/// other utterance. The lifecycle token is checked both before reserving audio
+/// and after synthesis starts; a promoted or stopped resident can never speak
+/// from the old queue entry.
+async fn release_floor(
+    state: &AppState,
+    request: FloorRequest,
+    rewritten: String,
+    announce: bool,
+) -> ReleaseOutcome {
+    if !state.0.delivery.connected() {
+        return ReleaseOutcome::Retry;
+    }
+    let live = request.generation == state.0.coordinator.generation()
+        && state
+            .0
+            .coordinator
+            .with_background(&request.token, |project| project == request.project)
+            .is_some();
+    if !live {
+        return ReleaseOutcome::Drop;
+    }
+    let mut text = rewritten.trim().to_owned();
+    if text.is_empty() {
+        text = request.message.clone();
+    }
+    if announce {
+        text = format!("An update from {}: {}", request.project, text);
+    }
+    let spoken = state.0.speaker.clip_for_speech(&text);
+    if spoken.is_empty() {
+        return ReleaseOutcome::Played;
+    }
+    let permit = match state.0.speech.reserve().await {
+        Ok(permit) => permit,
+        Err(_) => return ReleaseOutcome::Retry,
+    };
+    if !state.0.delivery.connected() {
+        drop(permit);
+        return ReleaseOutcome::Retry;
+    }
+    let generation = state.0.coordinator.generation();
+    let Some(sequence) = reserve_audio(state, generation).await else {
+        drop(permit);
+        return ReleaseOutcome::Retry;
+    };
+    // Promotion or host loss may have happened while the audio slot was
+    // reserved. Do not let a stale background request cross the final speech
+    // side-effect boundary.
+    if request.generation != state.0.coordinator.generation()
+        || state
+            .0
+            .coordinator
+            .with_background(&request.token, |project| project == request.project)
+            .is_none()
+    {
+        finish_audio(state, sequence, generation, Vec::new()).await;
+        drop(permit);
+        return ReleaseOutcome::Drop;
+    }
+    let (result_tx, result_rx) = oneshot::channel();
+    permit.send(SpeechRequest {
+        text: spoken,
+        route: request.project.clone(),
+        generation,
+        sequence,
+        deadline: std::time::Instant::now() + state.0.speech_deadline,
+        result: result_tx,
+        span: tracing::Span::current(),
+    });
+    match result_rx.await {
+        Ok(Ok(())) => {
+            if let Some(agents) = state
+                .0
+                .coordinator
+                .with_background(&request.token, |project| {
+                    state.0.projection.floor_released(project)
+                })
+            {
+                emit_message(state, ServerMessage::AgentsState { agents });
+                ReleaseOutcome::Played
+            } else {
+                ReleaseOutcome::Drop
+            }
+        }
+        Ok(Err(_)) => {
+            finish_audio(state, sequence, generation, Vec::new()).await;
+            if state.0.delivery.connected() {
+                ReleaseOutcome::Drop
+            } else {
+                ReleaseOutcome::Retry
+            }
+        }
+        Err(_) => ReleaseOutcome::Retry,
+    }
+}
+
 /// A project session's `speak`: its words, and the call token it carried.
 struct Speak {
     text: String,
@@ -1638,6 +2009,10 @@ async fn speak(state: AppState, req: Speak) -> Response {
             Json(json!({"detail":"text must not be empty"})),
         )
             .into_response();
+    }
+    if state.0.coordinator.is_background(&req.token) {
+        tracing::info!("not spoken: caller is away from background agent");
+        return Json(json!({"delivered":false,"reason":"caller_away","detail":"the caller is not listening to this session"})).into_response();
     }
     promote_candidate_for_token(&state, &req.token).await;
     if let Err(error) = state.0.coordinator.accept_side_effect(&req.token) {
@@ -1708,6 +2083,7 @@ async fn speak(state: AppState, req: Speak) -> Response {
         let (result_tx, result_rx) = oneshot::channel();
         permit.send(SpeechRequest {
             text: spoken,
+            route: state.0.coordinator.route(),
             generation,
             sequence,
             deadline: std::time::Instant::now() + state.0.speech_deadline,
@@ -1740,6 +2116,65 @@ async fn speak(state: AppState, req: Speak) -> Response {
 
     Json(json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})).into_response()
 }
+/// Records a background agent's request without speaking for it. The floor
+/// slice consumes this state when the caller answers waiting.
+async fn request_to_speak(state: AppState, token: &str, raw: Value) -> Response {
+    let Some(message) = raw
+        .get("message")
+        .and_then(Value::as_str)
+        .filter(|v| !v.trim().is_empty())
+    else {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({"detail":"message is required"})),
+        )
+            .into_response();
+    };
+    let Some(reason) = raw.get("reason").and_then(Value::as_str) else {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({"detail":"reason is required"})),
+        )
+            .into_response();
+    };
+    if !matches!(reason, "finished" | "needs_decision" | "problem") {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({"detail":"reason must be finished, needs_decision or problem"})),
+        )
+            .into_response();
+    }
+    let request = AgentRequest {
+        message: message.to_owned(),
+        reason: reason.to_owned(),
+    };
+    let generation = state.0.coordinator.generation();
+    let Some((project, agents)) = state.0.coordinator.with_background(token, |project| {
+        let project = project.to_owned();
+        let agents = state.0.projection.waiting(project.clone(), request.clone());
+        (project, agents)
+    }) else {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({"delivered":false,"reason":"not_on_call","detail":"this session is not a background call"})),
+        )
+            .into_response();
+    };
+    emit_message(&state, ServerMessage::AgentsState { agents });
+    state
+        .0
+        .floor
+        .enqueue(FloorRequest {
+            project,
+            token: token.to_owned(),
+            generation,
+            message: request.message,
+            reason: request.reason,
+        })
+        .await;
+    Json(json!({"delivered":false,"accepted":true,"reason":null})).into_response()
+}
+
 #[tracing::instrument(
     name = "module_call",
     skip_all,
@@ -1807,6 +2242,20 @@ async fn display(state: AppState, token: &str, raw: Value) -> Response {
         }
     }
 
+    if state
+        .0
+        .coordinator
+        .with_background(token, |project| {
+            state
+                .0
+                .projection
+                .hold_display(project.to_owned(), normalized_action.clone())
+        })
+        .is_some()
+    {
+        return Json(json!({"delivered":false,"accepted":true,"reason":"caller_away"}))
+            .into_response();
+    }
     promote_candidate_for_token(&state, token).await;
     if let Err(error) = state.0.coordinator.accept_side_effect(token) {
         tracing::info!(reason = %error, "refused: the leg is not live on the call");
@@ -2120,6 +2569,7 @@ async fn agent_call(state: &AppState, call: &AgentCall) -> Response {
             )
             .await
         }
+        "request_to_speak" => request_to_speak(state.clone(), &call.token, call.args.clone()).await,
         "display" => display(state.clone(), &call.token, call.args.clone()).await,
         "view" => {
             let args = if call.args.is_null() {
@@ -2156,6 +2606,8 @@ async fn module_reply(call: &str, response: Response) -> Value {
         .map(str::to_owned);
     let (outcome, reason) = if status.is_success() && body["delivered"] == true {
         ("delivered", None)
+    } else if status.is_success() && body["accepted"] == true {
+        ("accepted", None)
     } else if status.is_success() && call == "display" {
         ("accepted", detail)
     } else if body["delivered"] == false || status.is_success() || status.is_client_error() {
@@ -2437,7 +2889,7 @@ async fn serve_connection(
 /// while that leg was connecting (#70). Without it, the tab cannot tell an
 /// adoption from the hangup that moves the epoch the same way.
 async fn snapshot_messages(state: &AppState) -> Vec<ServerMessage> {
-    let mut messages = Vec::with_capacity(4);
+    let mut messages = Vec::with_capacity(5);
     let (generation, adopted_route) = state.0.coordinator.generation_and_adoption();
     if let Some(route) = adopted_route {
         messages.push(ServerMessage::CandidateCleared {
@@ -2451,6 +2903,10 @@ async fn snapshot_messages(state: &AppState) -> Vec<ServerMessage> {
     messages.push(ServerMessage::History {
         entries: state.0.transcript_log.lock().await.entries(),
     });
+    let agents = state.0.projection.snapshot();
+    if !agents.is_empty() {
+        messages.push(ServerMessage::AgentsState { agents });
+    }
     messages
 }
 

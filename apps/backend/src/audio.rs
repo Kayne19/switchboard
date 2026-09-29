@@ -991,6 +991,20 @@ impl Speaker {
 struct OfflineTtsTransport;
 
 #[cfg(test)]
+struct ImmediateTtsTransport;
+
+#[cfg(test)]
+impl TtsTransport for ImmediateTtsTransport {
+    fn send_stream(&self, _request: TtsRequest) -> TtsStreamFuture {
+        Box::pin(async {
+            let stream =
+                futures_util::stream::once(async { Ok::<Vec<u8>, AudioError>(vec![1, 2, 3]) });
+            Ok((StatusCode::OK, Some(3), Box::pin(stream) as TtsByteStream))
+        })
+    }
+}
+
+#[cfg(test)]
 impl TtsTransport for OfflineTtsTransport {
     fn send_stream(&self, _request: TtsRequest) -> TtsStreamFuture {
         Box::pin(async { Err(AudioError::Tts("tests do not reach ElevenLabs".into())) })
@@ -1005,6 +1019,14 @@ impl Speaker {
         let values = HashMap::from([("ELEVENLABS_API_KEY".into(), "offline-test-key".into())]);
         let mut speaker = Self::from_values(max_chars, speech_deadline, &values);
         speaker.transport = Arc::new(OfflineTtsTransport);
+        speaker
+    }
+    /// A successful in-process transport for application floor tests. It never
+    /// reaches ElevenLabs and emits one tiny audio chunk.
+    pub(crate) fn test_success(max_chars: usize, speech_deadline: Duration) -> Self {
+        let values = HashMap::from([("ELEVENLABS_API_KEY".into(), "offline-test-key".into())]);
+        let mut speaker = Self::from_values(max_chars, speech_deadline, &values);
+        speaker.transport = Arc::new(ImmediateTtsTransport);
         speaker
     }
 }

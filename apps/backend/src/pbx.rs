@@ -14,20 +14,22 @@ use crate::lifecycle::{CandidateLeg, Coordinator, LifecycleError, ProjectLeg, St
 use crate::models::{normalize_thinking, parse_spec, pin_thinking, ModelCatalog};
 use crate::pi_client::{
     local_argv, ActivityCallback, LegSession, ModuleCallback, PiSession, PiSessionError,
-    ProjectLaunch, ProjectSession, SessionState, Signal, Turn, ROUTE_TOOL,
+    ProjectLaunch, ProjectSession, SessionClosedCallback, SessionState, Signal, Turn, ROUTE_TOOL,
 };
 use crate::prewarm::{LaunchPlan, Prewarm};
 use crate::registry::{Project, Registry};
 use crate::router::{utility_decision, CallSummary, Decision, Router, UtilityDecision};
 use futures_util::FutureExt;
 use serde::Serialize;
-use serde_json::Value;
-use std::collections::HashMap;
+use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tokio::time::Duration;
 
 pub const OPERATOR: &str = "operator";
@@ -37,17 +39,27 @@ const PROJECT_TURN_TIMEOUT: Duration = Duration::from_secs(600);
 /// Told the switchboard has settled on a leg; it reads which one from the
 /// coordinator.
 pub type RouteCallback = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+/// Reports resident project-agent lifecycle transitions to the application
+/// presentation layer. The PBX remains the lifecycle owner; this is only a
+/// projection callback.
+#[derive(Clone, Debug)]
+pub struct AgentStateNotice {
+    pub project: String,
+    pub state: String,
+}
+pub type AgentStateCallback =
+    Arc<dyn Fn(AgentStateNotice) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 /// The voice brief's opening. The brief rides at the start of the first
 /// prompt a project session gets for the caller, and again on the first after
 /// a compaction; it is never a message of its own.
 const AGENT_BRIEF_HEADER: &str = "[SWITCHBOARD VOICE BRIEF]\nYou are on a voice call in the {project} project, in its own directory. The caller hears only what you pass to the `switchboard` module in your Python REPL (already imported); your written output goes to their screen and is not read aloud.\n";
-const AGENT_BRIEF_TOOLS: &str = "- switchboard.speak(text): say a sentence or two of plain speech. Use it to answer, and before and during long work. No code, paths or lists.\n- switchboard.display(...) shows things on their screen; switchboard.view() tells you what they see.\n- Routing is handled by the switchboard before your turn. Do not try to transfer, return, or change models; answer the caller or explain what you completed.\n";
+const AGENT_BRIEF_TOOLS: &str = "- switchboard.speak(text): say a sentence or two of plain speech. Use it to answer, and before and during long work. No code, paths or lists.\n- switchboard.request_to_speak(message, reason) asks the caller to bring a background session forward; use it when finished, blocked or needing a decision.\n- switchboard.display(...) shows things on their screen; switchboard.view() tells you what they see.\n- Routing is handled by the switchboard before your turn. Do not try to transfer, return, or change models; answer the caller or explain what you completed.\n";
 const AGENT_BRIEF_SWAPS: &str = "";
 const AGENT_BRIEF_END: &str = "[END OF VOICE BRIEF]";
 /// Instructions for the separate, stateless process. This is code-owned so
 /// deploying the utility never requires another environment setting.
-const UTILITY_SYSTEM_PROMPT: &str = r#"You are the switchboard's stateless routing utility. You never speak to the caller and you never answer general questions. Inspect the supplied caller utterance and call exactly one tool. For a single target, call second_opinion with an exact registered project id, mode (continue or fresh), and confident true only when it is safe to route without asking. If unclear, call second_opinion with no target and confident false. If the utterance clearly addresses several projects, call dispatch_parts with one exact project id and a short caller-worded part for each target. Never invent projects, never call tools not provided, and never emit a prose answer."#;
+const UTILITY_SYSTEM_PROMPT: &str = r#"You are the switchboard's stateless utility process. You never speak to the caller and you never answer general questions. For routing prompts, call exactly one routing tool: second_opinion for one target, dispatch_parts for several targets. For a floor rewrite prompt, call rewrite with a natural short spoken version of the supplied message. A rewrite may not add facts, names, numbers, promises, or requests that are not in the original. Never invent projects, never emit a prose answer, and never call more than one tool."#;
 #[derive(Clone, Debug, Serialize)]
 pub struct Utterance {
     pub text: String,
@@ -338,6 +350,173 @@ impl RedialPlanner {
     }
 }
 
+/// Owns resident sessions and the task reservations that may write their
+/// lifecycle projection. Callers never mutate the resident map directly: every
+/// removal invalidates the task epoch first, so a late completion cannot make a
+/// replaced or promoted session look idle.
+#[derive(Clone)]
+struct BackgroundRegistry {
+    // Session membership is shared with the closed-session reaper. The PBX
+    // still owns lifecycle decisions, while a host death can evict its
+    // resident immediately from the pump task.
+    sessions: Arc<StdMutex<HashMap<String, ProjectSession>>>,
+    tasks: Arc<StdMutex<HashMap<String, JoinHandle<()>>>>,
+    epochs: Arc<StdMutex<HashMap<String, Arc<AtomicU64>>>>,
+    next_epoch: Arc<AtomicU64>,
+}
+
+impl Default for BackgroundRegistry {
+    fn default() -> Self {
+        Self {
+            sessions: Arc::new(StdMutex::new(HashMap::new())),
+            tasks: Arc::new(StdMutex::new(HashMap::new())),
+            epochs: Arc::new(StdMutex::new(HashMap::new())),
+            next_epoch: Arc::new(AtomicU64::new(1)),
+        }
+    }
+}
+
+impl BackgroundRegistry {
+    #[cfg(test)]
+    pub(crate) fn sessions_snapshot_for_test(&self) -> Vec<(String, ProjectSession)> {
+        self.sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .map(|(project, session)| (project.clone(), session.clone()))
+            .collect()
+    }
+
+    fn contains_key(&self, project: &str) -> bool {
+        self.sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains_key(project)
+    }
+
+    fn get(&self, project: &str) -> Option<ProjectSession> {
+        self.sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(project)
+            .cloned()
+    }
+
+    fn insert(&self, project: String, session: ProjectSession) {
+        self.epochs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entry(project.clone())
+            .or_insert_with(|| Arc::new(AtomicU64::new(0)));
+        self.sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(project, session);
+    }
+
+    fn remove(&self, project: &str) -> Option<ProjectSession> {
+        self.invalidate(project);
+        self.sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(project)
+    }
+
+    fn remove_closed(
+        &self,
+        project: &str,
+        session_id: &str,
+        instance_id: u64,
+    ) -> Option<ProjectSession> {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if sessions.get(project).is_some_and(|session| {
+            session.session_id() == session_id && session.instance_id() == instance_id
+        }) {
+            self.invalidate(project);
+            sessions.remove(project)
+        } else {
+            None
+        }
+    }
+
+    fn invalidate(&self, project: &str) {
+        if let Some(epoch) = self
+            .epochs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(project)
+        {
+            epoch.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
+    fn begin_task(&self, project: &str) -> (Arc<AtomicU64>, u64) {
+        let mut epochs = self
+            .epochs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let epoch = epochs
+            .entry(project.to_owned())
+            .or_insert_with(|| Arc::new(AtomicU64::new(0)))
+            .clone();
+        let generation = self.next_epoch.fetch_add(1, Ordering::Relaxed);
+        epoch.store(generation, Ordering::Release);
+        (epoch, generation)
+    }
+
+    fn set_task(&self, project: String, task: JoinHandle<()>) {
+        if let Some(previous) = self
+            .tasks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(project, task)
+        {
+            previous.abort();
+        }
+    }
+
+    fn take_task(&self, project: &str) -> Option<JoinHandle<()>> {
+        self.invalidate(project);
+        self.tasks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(project)
+    }
+
+    async fn cancel_task(&self, project: &str) {
+        if let Some(task) = self.take_task(project) {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+
+    fn drain_sessions(&self) -> Vec<ProjectSession> {
+        self.sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .drain()
+            .map(|(_, session)| session)
+            .collect()
+    }
+
+    async fn cancel_all_tasks(&self) {
+        let tasks = self
+            .tasks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .drain()
+            .map(|(_, task)| task)
+            .collect::<Vec<_>>();
+        for task in tasks {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+}
+
 pub struct Switchboard {
     pub registry: Arc<Registry>,
     pi_binary: String,
@@ -349,6 +528,7 @@ pub struct Switchboard {
     speech_deadline_ms: u64,
     activity_callback: Option<ActivityCallback>,
     route_callback: Option<RouteCallback>,
+    agent_state_callback: Option<AgentStateCallback>,
     module_callback: Option<ModuleCallback>,
     active_session: Arc<Mutex<Option<LegSession>>>,
     operator: Option<PiSession>,
@@ -356,7 +536,13 @@ pub struct Switchboard {
     /// share the operator's turn lock or conversation history.
     utility: Option<PiSession>,
     agent: Option<ProjectSession>,
+    /// Resident project sessions and their guarded background prompts.
+    background_agents: BackgroundRegistry,
     operator_note: Option<String>,
+    /// Project awaiting a caller confirmation before it is stopped.
+    pending_stop: Option<String>,
+    /// Projects explicitly stopped by the caller must start fresh once.
+    resume_blocked: HashSet<String>,
     /// The one owner of the leg on the line, and of the status the page is
     /// shown.
     coordinator: Coordinator,
@@ -373,9 +559,36 @@ pub struct Switchboard {
     /// `PROJECT_TURN_TIMEOUT`, held per switchboard so a test can wait out a
     /// silent leg without waiting ten minutes.
     project_turn_timeout: Duration,
+    floor_quiet_threshold: Duration,
 }
 impl Switchboard {
     pub fn new(config: &crate::Config, registry: Registry, prewarm: Arc<Prewarm>) -> Self {
+        let jev = crate::jev::JevClient::new(
+            config.jev_url.clone(),
+            config.jev_key_file.clone(),
+            Duration::from_millis(config.jev_timeout_ms),
+        )
+        .expect("build Jev HTTP client");
+        Self::new_with_router(config, registry, prewarm, jev)
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn new_with_jev(
+        config: &crate::Config,
+        registry: Registry,
+        prewarm: Arc<Prewarm>,
+        jev: crate::jev::JevClient,
+    ) -> Self {
+        Self::new_with_router(config, registry, prewarm, jev)
+    }
+
+    fn new_with_router(
+        config: &crate::Config,
+        registry: Registry,
+        prewarm: Arc<Prewarm>,
+        jev: crate::jev::JevClient,
+    ) -> Self {
         let hosts = prewarm.hosts();
         let coordinator = Coordinator::new(
             StatusConfig {
@@ -393,12 +606,6 @@ impl Switchboard {
             agent_model: config.agent_model.clone(),
             model_swaps: config.model_swaps,
         };
-        let jev = crate::jev::JevClient::new(
-            config.jev_url.clone(),
-            config.jev_key_file.clone(),
-            Duration::from_millis(config.jev_timeout_ms),
-        )
-        .expect("build Jev HTTP client");
         let router = Router::new(
             jev,
             Arc::clone(&registry),
@@ -419,19 +626,28 @@ impl Switchboard {
             speech_deadline_ms: config.speech_deadline_ms,
             activity_callback: None,
             route_callback: None,
+            agent_state_callback: None,
             module_callback: None,
             active_session: Arc::new(Mutex::new(None)),
             operator: None,
             utility: None,
             agent: None,
+            background_agents: BackgroundRegistry::default(),
             operator_note: None,
+            pending_stop: None,
+            resume_blocked: HashSet::new(),
             coordinator,
             hosts,
             prewarm,
             planner,
             router,
             project_turn_timeout: PROJECT_TURN_TIMEOUT,
+            floor_quiet_threshold: Duration::from_millis(config.floor_quiet_threshold_ms),
         }
+    }
+
+    pub fn floor_quiet_threshold(&self) -> Duration {
+        self.floor_quiet_threshold
     }
     /// The project hosts' links; the application serves them on `/host`.
     pub fn hosts(&self) -> Hosts {
@@ -441,6 +657,22 @@ impl Switchboard {
     pub fn coordinator(&self) -> Coordinator {
         self.coordinator.clone()
     }
+    #[cfg(test)]
+    pub(crate) fn foreground_busy_for_test(&self, project: &str) -> bool {
+        self.agent
+            .as_ref()
+            .is_some_and(|session| session.label() == project && session.busy())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn residents_for_test(&self) -> Vec<(String, bool, bool)> {
+        self.background_agents
+            .sessions_snapshot_for_test()
+            .into_iter()
+            .map(|(project, session)| (project, session.alive(), session.busy()))
+            .collect()
+    }
+
     /// The planner this switchboard decides redials with; the application
     /// shares it, so the pickers decide without the PBX lock.
     pub fn redial_planner(&self) -> RedialPlanner {
@@ -452,6 +684,53 @@ impl Switchboard {
 
     pub fn set_route_callback(&mut self, callback: Option<RouteCallback>) {
         self.route_callback = callback;
+    }
+
+    pub fn set_agent_state_callback(&mut self, callback: Option<AgentStateCallback>) {
+        self.agent_state_callback = callback;
+    }
+
+    async fn announce_agent_state(&self, project: &str, state: &str) {
+        if let Some(callback) = &self.agent_state_callback {
+            callback(AgentStateNotice {
+                project: project.to_owned(),
+                state: state.to_owned(),
+            })
+            .await;
+        }
+    }
+
+    /// Evicts a resident as soon as its host reports session death. A callback
+    /// from an old session cannot remove a replacement because the persistent
+    /// id and unique live-handle instance are checked by the shared registry.
+    fn session_closed_callback(&self) -> SessionClosedCallback {
+        let registry = self.background_agents.clone();
+        let coordinator = self.coordinator.clone();
+        let state_callback = self.agent_state_callback.clone();
+        Arc::new(
+            move |project: String, session_id: String, instance_id: u64| {
+                let registry = registry.clone();
+                let coordinator = coordinator.clone();
+                let state_callback = state_callback.clone();
+                Box::pin(async move {
+                    if let Some(session) =
+                        registry.remove_closed(&project, &session_id, instance_id)
+                    {
+                        // Retire the call token before releasing the shared
+                        // resident handle, so no request/display can pass the
+                        // lifecycle check while cleanup is in flight.
+                        coordinator.remove_background(&session.token());
+                        if let Some(callback) = state_callback {
+                            callback(AgentStateNotice {
+                                project,
+                                state: "finished".into(),
+                            })
+                            .await;
+                        }
+                    }
+                })
+            },
+        )
     }
 
     /// What answers a project session's `speak`, `display` and `view`.
@@ -499,6 +778,10 @@ impl Switchboard {
         if let Some(session) = self.agent.take() {
             session.close();
         }
+        self.background_agents.cancel_all_tasks().await;
+        for session in self.background_agents.drain_sessions() {
+            session.close();
+        }
         if let Some(session) = self.operator.take() {
             session.close().await;
         }
@@ -533,6 +816,37 @@ impl Switchboard {
     /// unsure or unsupported action deliberately goes through the existing
     /// operator LLM path; project agents never mutate the route themselves.
     pub async fn handle_decision(&mut self, text: &str, decision: &Decision) -> Reply {
+        // These actions are owned by the PBX, not by an agent. A stop decision
+        // is deliberately confirmation-only here; the next utterance must
+        // confirm before a resident session is closed.
+        if let Some(target) = self.pending_stop.take() {
+            if is_confirmation(text) {
+                return self.stop_project(&target).await;
+            }
+        }
+        if matches!(decision.action, crate::router::Action::Stop) {
+            let target = decision.target.clone().or_else(|| {
+                (self.coordinator.route() != OPERATOR).then(|| self.coordinator.route())
+            });
+            let Some(target) = target else {
+                return self.reply(["There is no project agent to stop."], None);
+            };
+            self.pending_stop = Some(target.clone());
+            return self.reply(
+                [format!(
+                    "Do you want me to stop {target}? Say yes to confirm."
+                )],
+                None,
+            );
+        }
+        if matches!(decision.action, crate::router::Action::AnswerWaiting) {
+            if let Some(target) = decision.target.as_deref() {
+                return self
+                    .route_project_part(text, target, crate::router::ConversationMode::Continue)
+                    .await;
+            }
+        }
+
         // Jev's outage is the conversational LLM fallback. A healthy Jev
         // decision that is unsure (or addresses multiple projects) gets one
         // isolated utility call before the caller is asked to clarify.
@@ -601,6 +915,37 @@ impl Switchboard {
             exact_caller_transcript: text.to_owned(),
             derived_intent: String::new(),
         };
+        if target != OPERATOR
+            && self.coordinator.route() == target
+            && matches!(mode, crate::router::ConversationMode::Fresh)
+        {
+            return self.reply_transfer_error(
+                format!("{target} is already running. Say continue to use it, or stop it first."),
+                Some("project is busy".into()),
+            );
+        }
+        if target != OPERATOR && self.coordinator.route() != target {
+            if self.remove_dead_background(target).await {
+                self.announce_agent_state(target, "finished").await;
+            }
+            if matches!(mode, crate::router::ConversationMode::Fresh)
+                && self.background_agents.contains_key(target)
+            {
+                return self.reply_transfer_error(
+                    format!(
+                        "{target} is already running. Say continue to use it, or stop it first."
+                    ),
+                    Some("project is busy".into()),
+                );
+            }
+            if self.background_agents.contains_key(target) {
+                let session = self
+                    .take_background(target)
+                    .await
+                    .expect("background session exists");
+                return self.promote_background(session, context).await;
+            }
+        }
         if target == OPERATOR {
             // The utility may explicitly choose the operator. Do not send
             // that target through the project handler: it has no project
@@ -633,28 +978,207 @@ impl Switchboard {
         .await
     }
 
-    /// Until background agents are available, the foreground rule still
-    /// determines which split part owns the caller's next turn: retain the
-    /// current project when it received a part, otherwise choose the first.
+    /// Dispatch every part of a split. The part for the agent already on the
+    /// line remains foreground; otherwise the first part is foreground and all
+    /// other parts become resident background sessions.
     async fn dispatch_parts(
         &mut self,
-        _original: &str,
+        original: &str,
         parts: Vec<crate::router::DispatchPart>,
     ) -> Reply {
         let current = self.coordinator.route();
-        let part = parts
+        let foreground_index = parts
             .iter()
-            .find(|part| part.agent == current)
-            .or_else(|| parts.first());
-        let Some(part) = part else {
-            return self.handle_operator_ctx(&TransferContext::default()).await;
+            .position(|part| part.agent == current)
+            .unwrap_or(0);
+        let Some(foreground) = parts.get(foreground_index).cloned() else {
+            return self
+                .handle_operator_ctx(&TransferContext {
+                    exact_caller_transcript: original.to_owned(),
+                    ..TransferContext::default()
+                })
+                .await;
         };
+
+        // Start resident background work before awaiting the foreground turn.
+        // A slow foreground model must not serialize unrelated project parts.
+        for (index, part) in parts.iter().enumerate() {
+            if index == foreground_index || part.agent == foreground.agent {
+                continue;
+            }
+            if let Err(error) = self.start_background_part(&part.agent, &part.text).await {
+                tracing::warn!(project = %part.agent, %error, "background split part failed");
+            }
+        }
         self.route_project_part(
-            &part.text,
-            &part.agent,
+            &foreground.text,
+            &foreground.agent,
             crate::router::ConversationMode::Continue,
         )
         .await
+    }
+
+    /// Removes a resident whose host session has already closed. The map is
+    /// otherwise enough to enforce one live session per project, but a closed
+    /// handle would make later work prompt a dead session and reject a fresh
+    /// start forever.
+    async fn remove_dead_background(&mut self, project: &str) -> bool {
+        let dead = self
+            .background_agents
+            .get(project)
+            .is_some_and(|session| !session.alive());
+        if !dead {
+            return false;
+        }
+        self.background_agents.cancel_task(project).await;
+        if let Some(session) = self.background_agents.remove(project) {
+            self.coordinator.remove_background(&session.token());
+        }
+        true
+    }
+
+    /// Removes a resident for a foreground promotion only after its detached
+    /// prompt has been cancelled and joined. This is the reservation boundary:
+    /// mode and token cannot change while the old background task is running.
+    async fn take_background(&mut self, project: &str) -> Option<ProjectSession> {
+        let session = self.background_agents.remove(project)?;
+        self.background_agents.cancel_task(project).await;
+        self.coordinator.remove_background(&session.token());
+        Some(session)
+    }
+
+    /// Registers a resident and rechecks the host handle after insertion. A
+    /// host can report death between the token registration and map insertion;
+    /// the final check closes that gap without leaving a dead token resident.
+    fn register_background_session(&self, project: String, session: ProjectSession) -> bool {
+        self.register_background_session_with(project, session, || {})
+    }
+
+    fn register_background_session_with(
+        &self,
+        project: String,
+        session: ProjectSession,
+        before_insert: impl FnOnce(),
+    ) -> bool {
+        let token = session.token();
+        self.coordinator.register_background(project.clone(), token);
+        before_insert();
+        self.background_agents
+            .insert(project.clone(), session.clone());
+        let still_registered = session.alive()
+            && self
+                .background_agents
+                .get(&project)
+                .is_some_and(|current| current.same_session(&session));
+        if !still_registered {
+            if let Some(removed) = self.background_agents.remove(&project) {
+                self.coordinator.remove_background(&removed.token());
+            }
+        }
+        still_registered
+    }
+
+    #[cfg(test)]
+    fn register_background_session_with_fake_death(
+        &self,
+        project: String,
+        session: ProjectSession,
+    ) -> bool {
+        self.register_background_session_with(project, session.clone(), || session.close())
+    }
+
+    fn spawn_background_prompt(&mut self, project: &str, session: ProjectSession, text: String) {
+        let (epoch, generation) = self.background_agents.begin_task(project);
+        let token = session.token();
+        let callback = self.agent_state_callback.clone();
+        let closed_callback = self.session_closed_callback();
+        let project_id = project.to_owned();
+        let session_id = session.session_id().to_owned();
+        let instance_id = session.instance_id();
+        let task = tokio::spawn(async move {
+            let result = session.prompt(&text).await;
+            if let Err(error) = result {
+                tracing::warn!(%error, project = %project_id, "background agent prompt failed");
+                // Prompt transport failure is terminal for this resident. Do
+                // not leave a dead token reusable or publish an idle notice.
+                session.close();
+                closed_callback(project_id.clone(), session_id, instance_id).await;
+                return;
+            }
+            if let Some(callback) = callback {
+                if session.alive()
+                    && !session.busy()
+                    && epoch.load(Ordering::Acquire) == generation
+                    && session.token() == token
+                {
+                    callback(AgentStateNotice {
+                        project: project_id,
+                        state: "idle".into(),
+                    })
+                    .await;
+                }
+            }
+        });
+        self.background_agents.set_task(project.to_owned(), task);
+    }
+
+    /// Start one split part without changing the caller's foreground route.
+    async fn start_background_part(&mut self, target: &str, text: &str) -> Result<(), String> {
+        let project = match self.registry.resolve_detailed(target) {
+            crate::registry::ResolveResult::Exact(project) => project.clone(),
+            _ => return Err(format!("unknown project {target}")),
+        };
+        if self
+            .agent
+            .as_ref()
+            .is_some_and(|agent| agent.label() == project.id)
+        {
+            return Err(format!("project {} is already busy", project.id));
+        }
+        if self.remove_dead_background(&project.id).await {
+            self.announce_agent_state(&project.id, "finished").await;
+        }
+        // A resident background session can be idle after its prior turn. Keep
+        // its history and address it instead of treating existence as busy.
+        if let Some(session) = self.background_agents.get(&project.id) {
+            if session.busy() {
+                return Err(format!("project {} is already busy", project.id));
+            }
+            self.announce_agent_state(&project.id, "busy").await;
+            self.spawn_background_prompt(&project.id, session, text.to_owned());
+            return Ok(());
+        }
+        let plan = self
+            .prewarm
+            .launch_plan(&project)
+            .await
+            .map_err(|error| error.to_string())?;
+        let model = self
+            .select_transfer_model(&project, &plan.catalog, "", "")
+            .map_err(|error| error.to_string())?;
+        let token = uuid_like();
+        let session = self
+            .start_agent_mode(&project, &model, &token, &plan, "background")
+            .await
+            .map_err(|error| error.to_string())?;
+        let intro = build_intro_prompt(
+            &TransferContext {
+                exact_caller_transcript: text.to_owned(),
+                ..TransferContext::default()
+            },
+            &project,
+            plan.prepare_report.as_ref(),
+        );
+        if !self.register_background_session(project.id.clone(), session.clone()) {
+            self.announce_agent_state(&project.id, "finished").await;
+            return Err(format!(
+                "project {} ended before background registration",
+                project.id
+            ));
+        }
+        self.announce_agent_state(&project.id, "busy").await;
+        self.spawn_background_prompt(&project.id, session, intro);
+        Ok(())
     }
 
     #[allow(dead_code)]
@@ -787,6 +1311,92 @@ impl Switchboard {
         Ok(utility_decision(&turn.signals))
     }
 
+    /// Take a clone of the utility session while the PBX lock is held. The
+    /// caller must prompt the clone after releasing that lock: utility work is
+    /// allowed to take seconds and must not block caller turns.
+    pub async fn floor_rewrite_session(&mut self) -> Result<PiSession, PiSessionError> {
+        Ok(self.ensure_utility().await?.clone())
+    }
+
+    pub async fn rewrite_floor_with_session(
+        session: &PiSession,
+        message: &str,
+        reason: &str,
+    ) -> Result<Option<String>, PiSessionError> {
+        let prompt = format!(
+            "[FLOOR REWRITE]\nOriginal message: {message}\nReason: {reason}\nCall rewrite with only a faithful spoken rewrite.",
+        );
+        let turn = session.prompt(&prompt).await?;
+        if turn.failed {
+            return Err(PiSessionError(if turn.error.is_empty() {
+                "floor rewrite utility failed".into()
+            } else {
+                turn.error
+            }));
+        }
+        Ok(turn
+            .signals
+            .iter()
+            .find(|signal| signal.name == crate::pi_client::REWRITE_TOOL)
+            .and_then(|signal| {
+                signal
+                    .args
+                    .get("text")
+                    .or_else(|| signal.args.get("message"))
+                    .or_else(|| signal.args.get("rewrite"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .filter(|text| Self::faithful_floor_rewrite(message, text))
+                    .map(str::to_owned)
+            }))
+    }
+
+    fn faithful_floor_rewrite(original: &str, rewrite: &str) -> bool {
+        let original_len = original.chars().count();
+        let rewrite_len = rewrite.chars().count();
+        if rewrite_len > original_len.saturating_mul(2).saturating_add(20) {
+            return false;
+        }
+        let original_tokens = original
+            .split_whitespace()
+            .map(Self::normalize_floor_token)
+            .filter(|token| !token.is_empty())
+            .collect::<HashSet<_>>();
+        rewrite
+            .split_whitespace()
+            .filter_map(|raw| {
+                let token = Self::normalize_floor_token(raw);
+                (!token.is_empty()).then_some((raw, token))
+            })
+            .all(|(raw, token)| {
+                let present = original_tokens.contains(&token);
+                let has_number = token.chars().any(char::is_numeric);
+                let has_url_or_path = token.starts_with("http://")
+                    || token.starts_with("https://")
+                    || token.starts_with("www.")
+                    || token.contains('/')
+                    || token.contains('\\')
+                    || token.contains('_');
+                let raw = raw.trim_matches(|character: char| !character.is_alphanumeric());
+                let has_new_capitalized_name = raw
+                    .chars()
+                    .next()
+                    .is_some_and(|character| character.is_uppercase())
+                    && raw.chars().any(|character| character.is_lowercase())
+                    && !present;
+                present || (!has_number && !has_url_or_path && !has_new_capitalized_name)
+            })
+    }
+
+    fn normalize_floor_token(token: &str) -> String {
+        token
+            .trim_matches(|character: char| {
+                !character.is_alphanumeric() && !"/_\\:._-".contains(character)
+            })
+            .to_ascii_lowercase()
+    }
+
     async fn handle_operator_ctx(&mut self, context: &TransferContext) -> Reply {
         let session = match self.ensure_operator().await {
             Ok(session) => session.clone(),
@@ -845,6 +1455,13 @@ impl Switchboard {
                 .return_operator_ctx(context, "project session is gone")
                 .await;
         };
+        // A synthetic/background token can coexist in lifecycle tests while
+        // the foreground handle is still being drained. In production a
+        // promoted resident is removed first; avoid clearing its waiting
+        // request in that transitional case.
+        if !self.coordinator.project_is_background(session.label()) {
+            self.announce_agent_state(session.label(), "busy").await;
+        }
         let turn = match session.prompt(&context.exact_caller_transcript).await {
             Ok(t) => t,
             Err(error) => {
@@ -940,6 +1557,22 @@ impl Switchboard {
             "transferring caller"
         );
 
+        // Reuse a resident before creating a candidate. This is the direct
+        // transfer/dial path, which otherwise only checked the foreground
+        // handle and could create a second live session for this project.
+        if self.coordinator.route() != project.id {
+            if self.remove_dead_background(&project.id).await {
+                self.announce_agent_state(&project.id, "finished").await;
+            }
+            if self.background_agents.contains_key(&project.id) {
+                let session = self
+                    .take_background(&project.id)
+                    .await
+                    .expect("background session exists");
+                return self.promote_background(session, context.clone()).await;
+            }
+        }
+
         // The leg the caller is on now, which every failure below hands the
         // line back to: the project leg on an agent-to-agent transfer, else
         // the operator, as in `drop_agent`.
@@ -1030,6 +1663,7 @@ impl Switchboard {
 
         let intro_prompt = build_intro_prompt(context, &project, plan.prepare_report.as_ref());
 
+        self.announce_agent_state(&project.id, "busy").await;
         let turn = match session.prompt(&intro_prompt).await {
             Ok(t) => t,
             Err(e) => {
@@ -1051,6 +1685,7 @@ impl Switchboard {
             };
             tracing::error!(project = %project.id, %detail, "project intro turn failed");
             session.close();
+            self.announce_agent_state(&project.id, "finished").await;
             self.set_active_session(live_session.clone()).await;
             self.rollback_startup(format!("intro failed: {detail}"));
             self.operator_note = Some(format!("Transfer to {} failed: {detail}", project.id));
@@ -1067,6 +1702,7 @@ impl Switchboard {
         if self.coordinator.is_candidate() {
             if let Err(error) = self.coordinator.adopt_candidate(&leg_token) {
                 session.close();
+                self.announce_agent_state(&project.id, "finished").await;
                 self.set_active_session(live_session.clone()).await;
                 self.rollback_startup(format!("adoption failed: {error}"));
                 return self.reply_transfer_error(
@@ -1078,8 +1714,131 @@ impl Switchboard {
         self.coordinator.finish_intro();
 
         if let Some(previous) = self.agent.take() {
-            previous.close();
+            if previous.label() == project.id {
+                previous.close();
+            } else {
+                let previous_label = previous.label().to_owned();
+                if let Err(error) = previous.set_mode("background").await {
+                    tracing::warn!(project = %previous_label, %error, "could not mark previous foreground agent background");
+                }
+                if previous.busy() {
+                    let _ = previous
+                        .steer("[switchboard] The caller is now listening to another agent. Continue your work quietly; use request_to_speak when you need the caller.")
+                        .await;
+                }
+                let state = if previous.busy() { "busy" } else { "idle" };
+                let registered = self.register_background_session(previous_label.clone(), previous);
+                self.announce_agent_state(
+                    &previous_label,
+                    if registered { state } else { "finished" },
+                )
+                .await;
+            }
         }
+        self.announce_agent_state(&project.id, "idle").await;
+        self.agent = Some(session);
+        self.set_active_session(self.agent_leg()).await;
+        self.announce_route().await;
+        self.reply_with_turn(turn)
+    }
+
+    async fn promote_background(
+        &mut self,
+        session: ProjectSession,
+        context: TransferContext,
+    ) -> Reply {
+        let project = match self.registry.resolve_detailed(session.label()) {
+            crate::registry::ResolveResult::Exact(project) => project.clone(),
+            _ => {
+                let project = session.label().to_owned();
+                session.close();
+                self.announce_agent_state(&project, "finished").await;
+                return self.reply_transfer_error(
+                    "The background project is no longer registered.".into(),
+                    Some("project is no longer registered".into()),
+                );
+            }
+        };
+        let token = uuid_like();
+        if let Err(error) = session.set_mode("foreground").await {
+            session.close();
+            self.announce_agent_state(&project.id, "finished").await;
+            return self.reply_transfer_error(
+                format!("I couldn't bring {} forward: {error}", project.id),
+                Some(error.to_string()),
+            );
+        }
+        if let Err(error) = session
+            .join_call_mode(&token, &self.persona, self.speech_deadline_ms, "foreground")
+            .await
+        {
+            session.close();
+            self.announce_agent_state(&project.id, "finished").await;
+            return self.reply_transfer_error(
+                format!("I couldn't bring {} forward: {error}", project.id),
+                Some(error.to_string()),
+            );
+        }
+        self.announce_agent_state(&project.id, "busy").await;
+        let candidate = CandidateLeg::new(
+            project.id.clone(),
+            project.id.clone(),
+            session.session_id(),
+            token.clone(),
+            "",
+            self.coordinator.thinking_default(),
+        );
+        if let Err(error) = self.coordinator.begin_candidate(candidate) {
+            session.close();
+            self.announce_agent_state(&project.id, "finished").await;
+            return self.reply_transfer_error(
+                format!("I couldn't bring {} forward: {error}", project.id),
+                Some(error.to_string()),
+            );
+        }
+        let turn = match session.prompt(&context.exact_caller_transcript).await {
+            Ok(turn) => turn,
+            Err(error) => Turn {
+                text: String::new(),
+                signals: vec![],
+                failed: true,
+                error: error.to_string(),
+            },
+        };
+        if turn.failed && turn.text.is_empty() {
+            session.close();
+            self.announce_agent_state(&project.id, "finished").await;
+            self.rollback_startup(format!("background promotion failed: {}", turn.error));
+            return self.reply_transfer_error(
+                format!("{} did not answer: {}", project.id, turn.error),
+                Some(turn.error),
+            );
+        }
+        if self.coordinator.is_candidate() {
+            if let Err(error) = self.coordinator.adopt_candidate(&token) {
+                session.close();
+                self.announce_agent_state(&project.id, "finished").await;
+                return self.reply_transfer_error(
+                    format!("{} did not come up.", project.id),
+                    Some(error.to_string()),
+                );
+            }
+        }
+        self.coordinator.finish_intro();
+        if let Some(previous) = self.agent.take() {
+            let previous_label = previous.label().to_owned();
+            previous.set_mode("background").await.ok();
+            if previous.busy() {
+                let _ = previous
+                    .steer("[switchboard] The caller is now listening to another agent. Continue your work quietly; use request_to_speak when you need the caller.")
+                    .await;
+            }
+            let state = if previous.busy() { "busy" } else { "idle" };
+            let registered = self.register_background_session(previous_label.clone(), previous);
+            self.announce_agent_state(&previous_label, if registered { state } else { "finished" })
+                .await;
+        }
+        self.announce_agent_state(&project.id, "idle").await;
         self.agent = Some(session);
         self.set_active_session(self.agent_leg()).await;
         self.announce_route().await;
@@ -1090,28 +1849,74 @@ impl Switchboard {
     /// the call with `leg_token`. Nothing here sets anything up: the host's
     /// catalog and the prepare report were settled by prewarm.
     async fn start_agent(
-        &self,
+        &mut self,
         project: &Project,
         model: &str,
         leg_token: &str,
         plan: &LaunchPlan,
     ) -> Result<ProjectSession, PiSessionError> {
-        let (session, state) = ProjectSession::create(
-            &self.hosts,
-            ProjectLaunch {
-                host: plan.host.clone(),
-                project: project.id.clone(),
-                cwd: project.cwd.clone(),
-                spec: model.to_owned(),
-                brief: self.agent_brief(project),
-                turn_timeout: self.project_turn_timeout,
-                on_activity: self.activity_callback.clone(),
-                on_module: self.module_callback.clone(),
-            },
-        )
-        .await?;
+        self.start_agent_mode(project, model, leg_token, plan, "foreground")
+            .await
+    }
+
+    async fn start_agent_mode(
+        &mut self,
+        project: &Project,
+        model: &str,
+        leg_token: &str,
+        plan: &LaunchPlan,
+        mode: &str,
+    ) -> Result<ProjectSession, PiSessionError> {
+        let launch = ProjectLaunch {
+            host: plan.host.clone(),
+            project: project.id.clone(),
+            cwd: project.cwd.clone(),
+            spec: model.to_owned(),
+            brief: self.agent_brief(project),
+            turn_timeout: self.project_turn_timeout,
+            on_activity: self.activity_callback.clone(),
+            on_module: self.module_callback.clone(),
+            on_closed: Some(self.session_closed_callback()),
+        };
+        // A host-agent restart keeps resident sessions alive. Prefer the
+        // matching service-created session rather than creating a duplicate.
+        let resume_blocked = self.resume_blocked.remove(&project.id);
+        let resumed_id = if !resume_blocked && self.hosts.link_epoch(&plan.host).is_some() {
+            self.hosts
+                .command(
+                    &plan.host,
+                    "list_sessions",
+                    json!({}),
+                    std::time::Duration::from_secs(5),
+                )
+                .await
+                .ok()
+                .and_then(|reply| {
+                    reply.result["sessions"].as_array().and_then(|sessions| {
+                        sessions.iter().find_map(|session| {
+                            (session["project"].as_str() == Some(project.id.as_str())
+                                && session["cwd"].as_str() == Some(project.cwd.as_str())
+                                && session["provenance"].as_str().unwrap_or("created") == "created")
+                                .then(|| {
+                                    session["session_id"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .to_owned()
+                                })
+                                .filter(|id| !id.is_empty())
+                        })
+                    })
+                })
+        } else {
+            None
+        };
+        let (session, state) = if let Some(session_id) = resumed_id {
+            ProjectSession::open(&self.hosts, launch.clone(), &session_id).await?
+        } else {
+            ProjectSession::create(&self.hosts, launch).await?
+        };
         if let Err(error) = session
-            .join_call(leg_token, &self.persona, self.speech_deadline_ms)
+            .join_call_mode(leg_token, &self.persona, self.speech_deadline_ms, mode)
             .await
         {
             session.close();
@@ -1336,6 +2141,7 @@ impl Switchboard {
         if self.coordinator.is_candidate() {
             if let Err(error) = self.coordinator.adopt_candidate(&leg_token) {
                 session.close();
+                self.announce_agent_state(&project.id, "finished").await;
                 self.rollback_startup(format!("adoption failed: {error}"));
                 self.drop_agent().await;
                 return self.reply(
@@ -1421,8 +2227,15 @@ impl Switchboard {
     }
     async fn drop_agent(&mut self) {
         let was_on_a_project = self.coordinator.route() != OPERATOR;
+        let project = self
+            .agent
+            .as_ref()
+            .map(|session| session.label().to_owned());
         if let Some(s) = self.agent.take() {
             s.close();
+        }
+        if let Some(project) = project {
+            self.announce_agent_state(&project, "finished").await;
         }
         self.set_active_session(self.operator_leg()).await;
         self.coordinator.return_to_operator();
@@ -1488,6 +2301,30 @@ impl Switchboard {
         };
         self.transfer_ctx(&context, project, "", "").await
     }
+    async fn stop_project(&mut self, target: &str) -> Reply {
+        if self.coordinator.route() == target {
+            self.resume_blocked.insert(target.to_owned());
+            self.drop_agent().await;
+            return self.reply(
+                [format!("Stopped {target}. You are back with the operator.")],
+                None,
+            );
+        }
+        if self.background_agents.contains_key(target) {
+            self.resume_blocked.insert(target.to_owned());
+            self.background_agents.cancel_task(target).await;
+            let session = self
+                .background_agents
+                .remove(target)
+                .expect("background session exists");
+            self.coordinator.remove_background(&session.token());
+            session.close();
+            self.announce_agent_state(target, "finished").await;
+            return self.reply([format!("Stopped {target}.")], None);
+        }
+        self.reply([format!("{target} is not running.")], None)
+    }
+
     pub async fn force_hangup(&mut self) -> Option<String> {
         let route = self.coordinator.route();
         if route == OPERATOR {
@@ -1505,6 +2342,13 @@ impl Switchboard {
         self.operator_note = Some(format!("The caller dropped the line to {left}."));
         Some(left)
     }
+}
+
+fn is_confirmation(text: &str) -> bool {
+    matches!(
+        text.trim().to_ascii_lowercase().as_str(),
+        "yes" | "yeah" | "yep" | "confirm" | "do it" | "stop it"
+    )
 }
 
 /// A reply the switchboard speaks itself, labelled with the leg the

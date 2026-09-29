@@ -3,7 +3,7 @@ use crate::delivery::DELIVERY_QUEUE;
 use crate::hosts::{FakeHostAgent, FakeLog, Step};
 use crate::pbx::OPERATOR;
 use crate::pi_client::PiSession;
-use crate::registry::Registry;
+use crate::registry::{Project, Registry};
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use http_body_util::BodyExt;
@@ -19,68 +19,54 @@ fn state_with_stt(stt: Option<String>) -> AppState {
     state_with_stream(stt, None)
 }
 
-fn state_with_jev(url: &str, key_path: &std::path::Path) -> AppState {
-    let key_path = key_path.to_str().expect("key path");
-    let config = crate::Config::for_tests(&[
-        ("SWITCHBOARD_JEV_URL", url),
-        ("SWITCHBOARD_JEV_KEY_FILE", key_path),
-        ("SWITCHBOARD_PI_BINARY", "/bin/sh"),
-    ]);
-    let registry = Registry::new(vec![]);
+fn state_with_jev(client: crate::jev::JevClient, registry: Registry) -> AppState {
+    let config = crate::Config::for_tests(&[("SWITCHBOARD_PI_BINARY", "/bin/sh")]);
     let prewarm = crate::prewarm::Prewarm::settled(
         &config,
         &registry,
-        crate::models::ModelCatalog::unavailable("no projects are registered"),
+        crate::models::ModelCatalog::unavailable("test catalog"),
     );
-    let board = Switchboard::new(&config, registry, std::sync::Arc::new(prewarm));
+    let board = Switchboard::new_with_jev(&config, registry, std::sync::Arc::new(prewarm), client);
     state_on(board)
 }
 
-async fn fake_jev_server() -> (
-    String,
-    std::path::PathBuf,
+fn fake_jev_client() -> (
+    crate::jev::JevClient,
     std::sync::Arc<std::sync::atomic::AtomicUsize>,
     std::sync::Arc<tokio::sync::Notify>,
-    tokio::task::JoinHandle<()>,
 ) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("listener");
-    let endpoint = format!(
-        "http://{}/v1/systemone",
-        listener.local_addr().expect("address")
-    );
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("clock")
-        .as_nanos();
-    let key_path = std::env::temp_dir().join(format!(
-        "switchboard-api-jev-{}-{nonce}",
-        std::process::id()
-    ));
-    std::fs::write(&key_path, "fixture-key").expect("fixture key");
     let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let count = requests.clone();
     let responded = std::sync::Arc::new(tokio::sync::Notify::new());
-    let response_notice = responded.clone();
-    let server = tokio::spawn(async move {
-        let body = r#"{"model":"jev-test","answers":{"action":{"type":"choice","choice":"continue","probabilities":{"continue":1.0},"confidence":1.0},"for_current_agent":{"type":"noul","noul":0.0},"target":{"type":"choice","choice":"none","probabilities":{"none":1.0},"confidence":1.0},"continue_or_fresh":{"type":"choice","choice":"not_applicable","probabilities":{"not_applicable":1.0},"confidence":1.0},"multi_target":{"type":"noul","noul":0.0}}}"#;
-        loop {
-            let Ok((mut stream, _)) = listener.accept().await else {
-                return;
+    let count = requests.clone();
+    let notice = responded.clone();
+    let client = crate::jev::JevClient::new(
+        "http://unused.invalid/v1/systemone",
+        "/nonexistent/typesafe-api-key",
+        Duration::from_secs(1),
+    )
+    .expect("client")
+    .with_test_responder(move |request| {
+        count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        notice.notify_one();
+        async move {
+            let answers = if request.questions.contains_key("good_moment") {
+                serde_json::json!({
+                    "good_moment": {"type":"choice","choice":"yes","probabilities":{"yes":1.0},"confidence":1.0}
+                })
+            } else {
+                serde_json::json!({
+                    "action": {"type":"choice","choice":"continue","probabilities":{"continue":1.0},"confidence":1.0},
+                    "for_current_agent": {"type":"noul","noul":0.0},
+                    "target": {"type":"choice","choice":"none","probabilities":{"none":1.0},"confidence":1.0},
+                    "continue_or_fresh": {"type":"choice","choice":"not_applicable","probabilities":{"not_applicable":1.0},"confidence":1.0},
+                    "multi_target": {"type":"noul","noul":0.0}
+                })
             };
-            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let mut request = vec![0_u8; 8192];
-            let _ = tokio::io::AsyncReadExt::read(&mut stream, &mut request).await;
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(), body
-            );
-            let _ = tokio::io::AsyncWriteExt::write_all(&mut stream, response.as_bytes()).await;
-            response_notice.notify_one();
+            Ok(serde_json::from_value(serde_json::json!({"model":"jev-test","answers":answers}))
+                .expect("fixture response"))
         }
     });
-    (endpoint, key_path, requests, responded, server)
+    (client, requests, responded)
 }
 
 fn state_with_stream(stt: Option<String>, stream: Option<String>) -> AppState {
@@ -890,6 +876,52 @@ async fn queued_turn_from_before_page_rescue_never_reaches_the_new_leg() {
     assert!(worker.await.unwrap_err().is_cancelled());
 }
 
+/// Test-only lifecycle oracle. It checks the projections together rather
+/// than asserting a single event, so every failure path can use the same
+/// consistency contract.
+async fn assert_lifecycle_consistent(state: &AppState) {
+    let agents = state.0.projection.states.lock().unwrap().clone();
+    let displays = state.0.projection.displays.lock().unwrap().clone();
+    let route = state.0.coordinator.route();
+    let board = state.0.switchboard.lock().await;
+    for agent in &agents {
+        if agent.state == "busy" {
+            let in_flight = if agent.project == route {
+                board.foreground_busy_for_test(&agent.project)
+            } else {
+                board
+                    .residents_for_test()
+                    .into_iter()
+                    .find(|(project, _, _)| project == &agent.project)
+                    .is_some_and(|(_, alive, busy)| alive && busy)
+            };
+            assert!(in_flight, "busy agent has no in-flight turn: {:?}", agent);
+        }
+        assert_eq!(
+            agent.pending_request.is_some(),
+            agent.state == "waiting",
+            "waiting state and request must agree: {:?}",
+            agent
+        );
+    }
+    for project in displays.keys() {
+        let resident = board
+            .residents_for_test()
+            .into_iter()
+            .find(|(name, _, _)| name == project)
+            .expect("held display belongs to a resident");
+        assert!(resident.1, "held display belongs to a dead resident");
+    }
+    if route != OPERATOR {
+        let foreground = agents.iter().find(|agent| agent.project == route);
+        assert!(foreground.is_none_or(|agent| agent.pending_request.is_none()));
+        assert!(!displays.contains_key(&route));
+    }
+    for (project, alive, _) in board.residents_for_test() {
+        assert!(alive, "dead resident remains in registry: {project}");
+        assert!(board.coordinator().project_is_background(&project));
+    }
+}
 async fn next_event_of(events: &mut broadcast::Receiver<Event>, event_type: &str) -> Value {
     timeout(Duration::from_secs(1), async {
         loop {
@@ -939,8 +971,8 @@ async fn typed_turn_is_logged_echoed_and_queued_like_a_transcript() {
 
 #[tokio::test]
 async fn a_non_steered_continue_uses_one_jev_decision_for_one_utterance() {
-    let (endpoint, key_path, requests, _responded, server) = fake_jev_server().await;
-    let state = state_with_jev(&endpoint, &key_path);
+    let (client, requests, _responded) = fake_jev_client();
+    let state = state_with_jev(client, Registry::new(vec![]));
     let mut events = state.0.events.subscribe();
     let generation = state.0.coordinator.generation();
 
@@ -954,9 +986,7 @@ async fn a_non_steered_continue_uses_one_jev_decision_for_one_utterance() {
 
     worker.abort();
     let _ = worker.await;
-    server.abort();
-    let _ = server.await;
-    let _ = std::fs::remove_file(key_path);
+    // The Jev responder is in-process and needs no teardown.
 }
 
 #[tokio::test]
@@ -991,8 +1021,8 @@ async fn a_stale_queued_turn_removes_its_retained_jev_decision() {
 
 #[tokio::test]
 async fn steer_rechecks_generation_under_the_active_session_guard() {
-    let (endpoint, key_path, _requests, responded, server) = fake_jev_server().await;
-    let state = state_with_jev(&endpoint, &key_path);
+    let (client, _requests, responded) = fake_jev_client();
+    let state = state_with_jev(client, Registry::new(vec![]));
     let mut events = state.0.events.subscribe();
     let session = PiSession::start(
         vec!["sh".into(), "-c".into(), "sleep 60".into()],
@@ -1047,9 +1077,7 @@ async fn steer_rechecks_generation_under_the_active_session_guard() {
     prompt.abort();
     let _ = prompt.await;
     session.close().await;
-    server.abort();
-    let _ = server.await;
-    let _ = std::fs::remove_file(key_path);
+    // The Jev responder is in-process and needs no teardown.
 }
 
 #[tokio::test]
@@ -1154,10 +1182,12 @@ async fn clip_accepted_before_a_page_rescue_is_dropped_after_transcription() {
 
     // The worker may finish transcription, but stale history and live
     // transcript events must be suppressed before either side effect.
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    for _ in 0..4 {
+        tokio::task::yield_now().await;
+    }
     assert!(state.0.transcript_log.lock().await.entries().is_empty());
-    let stale = events.try_recv().expect("stale clip is acknowledged");
-    assert!(matches!(stale, Event::Json(ref value) if value["code"] == "stale_epoch"));
+    let stale = next_event_of(&mut events, "error").await;
+    assert_eq!(stale["code"], "stale_epoch");
     assert_eq!(state.0.queued_turns.load(Ordering::Acquire), 0);
     let mut turns = state.0.turn_rx.lock().await.take().unwrap();
     assert!(matches!(
@@ -2341,6 +2371,27 @@ fn types_of(frames: &[Value]) -> Vec<&str> {
         .iter()
         .filter_map(|frame| frame["type"].as_str())
         .collect()
+}
+
+fn assert_serial_audio(frames: &[Value]) {
+    let mut active = false;
+    for frame in frames {
+        match frame["type"].as_str() {
+            Some("audio_start") => {
+                assert!(!active, "a second speaker started before the first ended");
+                active = true;
+            }
+            Some("audio_done") => {
+                assert!(active, "audio ended without a speaker start");
+                active = false;
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        !active,
+        "speech was still active at the end of the delivery batch"
+    );
 }
 
 /// The PBX finishing a transfer to the leg the coordinator already holds.
@@ -4356,4 +4407,778 @@ async fn a_module_call_carrying_a_retired_token_is_refused() {
         .projection
         .snapshot_actions()
         .is_empty());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn floor_pbx_api_flow_gates_rewrites_announces_and_plays_in_order() {
+    let root = std::env::temp_dir().join(format!(
+        "switchboard-floor-{}-{}",
+        std::process::id(),
+        crate::pbx::uuid_like()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let utility = root.join("fake-utility");
+    crate::pi_client::write_executable_script(
+        &utility,
+        r##"rewrite_count=0
+while IFS= read -r line; do
+case "$line" in
+  *"FLOOR REWRITE"*)
+    rewrite_count=$((rewrite_count + 1))
+    if [ "$rewrite_count" -eq 1 ]; then
+      printf '%s\n' '{"type":"tool_execution_start","toolName":"rewrite","args":{"text":"the ablation numbers are ready"}}'
+    else
+      printf '%s\n' '{"type":"tool_execution_start","toolName":"rewrite","args":{"text":"invented 99"}}'
+    fi
+    ;;
+  *)
+    printf '%s\n' '{"type":"tool_execution_start","toolName":"dispatch_parts","args":{"parts":[{"agent":"grapes","text":"the latest ablation numbers are ready"},{"agent":"switchboard","text":"answer the caller"}]}}'
+    ;;
+esac
+printf '%s\n' '{"type":"agent_settled"}'
+done
+"##,
+    );
+    let foreground_release = std::sync::Arc::new(tokio::sync::Notify::new());
+    let gate_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let gate_wait = foreground_release.clone();
+    let gate_count = gate_calls.clone();
+    let jev = crate::jev::JevClient::new(
+        "http://unused.invalid/v1/systemone",
+        "/nonexistent/typesafe-api-key",
+        Duration::from_secs(1),
+    )
+    .expect("client")
+    .with_test_responder(move |request| {
+        let gate_wait = gate_wait.clone();
+        let gate_count = gate_count.clone();
+        async move {
+            if request.questions.contains_key("good_moment")
+                && gate_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0
+            {
+                gate_wait.notified().await;
+            }
+            let answers = if request.questions.contains_key("good_moment") {
+                serde_json::json!({
+                    "good_moment": {"type":"choice","choice":"yes","probabilities":{"yes":1.0},"confidence":1.0}
+                })
+            } else {
+                serde_json::json!({
+                    "action": {"type":"choice","choice":"general","probabilities":{"general":1.0},"confidence":1.0},
+                    "for_current_agent": {"type":"noul","noul":0.0},
+                    "target": {"type":"choice","choice":"none","probabilities":{"none":1.0},"confidence":1.0},
+                    "continue_or_fresh": {"type":"choice","choice":"not_applicable","probabilities":{"not_applicable":1.0},"confidence":1.0},
+                    "multi_target": {"type":"noul","noul":1.0}
+                })
+            };
+            Ok(serde_json::from_value(serde_json::json!({"model":"jev-test","answers":answers}))
+                .expect("fixture response"))
+        }
+    });
+    let config = crate::Config::for_tests(&[
+        ("SWITCHBOARD_PI_BINARY", &utility.to_string_lossy()),
+        ("SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS", "1"),
+    ]);
+    let project = |id: &str, description: &str| Project {
+        id: id.into(),
+        description: description.into(),
+        aliases: vec![],
+        host: Some("test-host".into()),
+        cwd: format!("/srv/{id}"),
+        model: Some("anthropic/current".into()),
+        prepare: String::new(),
+    };
+    let registry = Registry::new(vec![
+        project("grapes", "ablation runs"),
+        project("switchboard", "the voice front door"),
+    ]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog {
+            entries: vec![crate::models::CatalogEntry {
+                provider: "anthropic".into(),
+                model: "current".into(),
+                thinks: true,
+            }],
+            available: true,
+            diagnostic: None,
+        },
+    );
+    let board = Switchboard::new_with_jev(&config, registry, std::sync::Arc::new(prewarm), jev);
+    let state = AppState::new(
+        board,
+        TranscriptLog::new(10),
+        Speaker::test_success(100, Duration::from_millis(25_000)),
+        SttAdapter::from_command(None),
+        SttStreamAdapter::from_command(None),
+    );
+    let _host_log = FakeHostAgent::new(Box::new(|session, _message| {
+        if session == "s2" {
+            vec![
+                Step::Call(
+                    "request_to_speak",
+                    json!({"message":"the latest ablation numbers are ready", "reason":"finished"}),
+                ),
+                Step::Call(
+                    "request_to_speak",
+                    json!({"message":"the latest ablation numbers are ready again", "reason":"finished"}),
+                ),
+                Step::Event(json!({"kind":"text","text":"background finished"})),
+            ]
+        } else {
+            vec![
+                Step::Call("speak", json!({"text":"Foreground answer"})),
+                Step::Event(json!({"kind":"text","text":"foreground answered"})),
+            ]
+        }
+    }))
+    .serve(state.0.hosts.connect_fake("test-host"));
+    let (mut connection, _, _) = state.register_connection().await;
+    spawn_workers(state.clone());
+    let foreground_reply = state
+        .0
+        .switchboard
+        .lock()
+        .await
+        .transfer_ctx(
+            &crate::pbx::TransferContext {
+                exact_caller_transcript: "start on switchboard".into(),
+                ..Default::default()
+            },
+            "switchboard",
+            "",
+            "",
+        )
+        .await;
+    assert_eq!(foreground_reply.route, "switchboard");
+    let initial_frames = frames_until(&mut connection, "spoken").await;
+    assert_serial_audio(&initial_frames);
+    assert_eq!(
+        initial_frames
+            .iter()
+            .find(|frame| frame["type"] == "spoken")
+            .expect("foreground speech")["entry"]["text"],
+        "Foreground answer"
+    );
+    assert_lifecycle_consistent(&state).await;
+
+    let generation = state.0.coordinator.generation();
+    route_final_transcript(
+        &state,
+        "multi-target",
+        generation,
+        "can you tell me the numbers of the latest ablation run from the grapes and then also tell me what the latest commit from the switchboard project is?".into(),
+    )
+    .await;
+    assert_lifecycle_consistent(&state).await;
+
+    let foreground_frames = frames_until(&mut connection, "spoken").await;
+    assert_serial_audio(&foreground_frames);
+    assert_eq!(
+        foreground_frames
+            .iter()
+            .find(|frame| frame["type"] == "spoken")
+            .expect("foreground answer")["entry"]["text"],
+        "Foreground answer"
+    );
+    // Do not let Jev release the floor until the foreground audio has settled.
+    foreground_release.notify_one();
+    assert_lifecycle_consistent(&state).await;
+
+    let first_background = frames_until(&mut connection, "spoken").await;
+    assert_serial_audio(&first_background);
+    assert_eq!(
+        first_background
+            .iter()
+            .find(|frame| frame["type"] == "spoken")
+            .expect("rewritten background speech")["entry"]["text"],
+        "An update from grapes: the ablation numbers are ready"
+    );
+    assert_lifecycle_consistent(&state).await;
+    let second_background = frames_until(&mut connection, "spoken").await;
+    assert_serial_audio(&second_background);
+    assert_eq!(
+        second_background
+            .iter()
+            .find(|frame| frame["type"] == "spoken")
+            .expect("original background speech")["entry"]["text"],
+        "An update from grapes: the latest ablation numbers are ready again"
+    );
+    assert_lifecycle_consistent(&state).await;
+    assert!(state
+        .0
+        .projection
+        .snapshot()
+        .iter()
+        .find(|agent| agent.project == "grapes")
+        .is_some_and(|agent| agent.pending_request.is_none()));
+    let _ = state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn floor_rewrite_does_not_hold_the_pbx_lock_across_utility_wait() {
+    let root = std::env::temp_dir().join(format!(
+        "switchboard-floor-lock-{}-{}",
+        std::process::id(),
+        crate::pbx::uuid_like()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let utility = root.join("fake-utility");
+    let script = r##"while IFS= read -r line; do
+case "$line" in
+  *"FLOOR REWRITE"*) read -r ignored ;;
+  *) printf '%s\n' '{{"type":"agent_settled"}}' ;;
+esac
+done
+"##;
+    crate::pi_client::write_executable_script(&utility, script);
+    let jev = crate::jev::JevClient::new(
+        "http://unused.invalid/v1/systemone",
+        "/nonexistent/typesafe-api-key",
+        Duration::from_secs(1),
+    )
+    .expect("client")
+    .with_test_responder(|request| async move {
+        let answers = if request.questions.contains_key("good_moment") {
+            serde_json::json!({
+                "good_moment": {"type":"choice","choice":"yes","probabilities":{"yes":1.0},"confidence":1.0}
+            })
+        } else {
+            serde_json::json!({
+                "action": {"type":"choice","choice":"general","probabilities":{"general":1.0},"confidence":1.0},
+                "for_current_agent": {"type":"noul","noul":0.0},
+                "target": {"type":"choice","choice":"none","probabilities":{"none":1.0},"confidence":1.0},
+                "continue_or_fresh": {"type":"choice","choice":"not_applicable","probabilities":{"not_applicable":1.0},"confidence":1.0},
+                "multi_target": {"type":"noul","noul":0.0}
+            })
+        };
+        Ok(serde_json::from_value(serde_json::json!({"model":"jev-test","answers":answers}))
+            .expect("fixture response"))
+    });
+    let config = crate::Config::for_tests(&[
+        ("SWITCHBOARD_PI_BINARY", &utility.to_string_lossy()),
+        ("SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS", "1"),
+    ]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("test catalog"),
+    );
+    let state = state_on(Switchboard::new_with_jev(
+        &config,
+        registry,
+        std::sync::Arc::new(prewarm),
+        jev,
+    ));
+    let (_connection, _, _) = state.register_connection().await;
+    state
+        .0
+        .coordinator
+        .register_background("grapes", "grapes-token");
+    let rewrite_started = std::sync::Arc::new(tokio::sync::Notify::new());
+    let rewrite_notice = rewrite_started.clone();
+    crate::pi_client::set_prompt_hook_for_test(Some(std::sync::Arc::new(move |message| {
+        if message.contains("[FLOOR REWRITE]") {
+            rewrite_notice.notify_one();
+        }
+    })));
+    spawn_workers(state.clone());
+    state.0.floor.force_quiet_for_test().await;
+    let accepted = request_to_speak(
+        state.clone(),
+        "grapes-token",
+        json!({"message":"the update is ready", "reason":"finished"}),
+    )
+    .await;
+    assert_eq!(accepted.status(), StatusCode::OK);
+    timeout(Duration::from_secs(1), rewrite_started.notified())
+        .await
+        .expect("rewrite reached the utility");
+    crate::pi_client::set_prompt_hook_for_test(None);
+
+    // The foreground turn path can acquire the PBX lock while the utility is
+    // still waiting. This is the caller-audible-delay regression guard.
+    let mut board = timeout(Duration::from_millis(100), state.0.switchboard.lock())
+        .await
+        .expect("rewrite must not hold the PBX lock");
+    let summary = board.call_summary(&[], json!({}), "caller turn");
+    assert_eq!(summary.caller_just_said, "caller turn");
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn stale_floor_request_is_dropped_before_audio_reservation() {
+    let state = state();
+    let (_connection, _, _) = state.register_connection().await;
+    state
+        .0
+        .coordinator
+        .register_background("grapes", "grapes-token");
+    let generation = state.0.coordinator.generation();
+    state.0.coordinator.begin_rescue("new foreground leg");
+    let outcome = release_floor(
+        &state,
+        FloorRequest {
+            project: "grapes".into(),
+            token: "grapes-token".into(),
+            generation,
+            message: "stale update".into(),
+            reason: "finished".into(),
+        },
+        "stale update".into(),
+        false,
+    )
+    .await;
+    assert_eq!(outcome, ReleaseOutcome::Drop);
+}
+
+#[tokio::test]
+async fn background_speak_is_refused_and_latest_display_is_released_on_promotion() {
+    let state = state();
+    let (mut connection, _, _) = state.register_connection().await;
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "background-token");
+    assert_lifecycle_consistent(&state).await;
+    let (code, spoken) = agent_call_json(
+        &state,
+        "/speak",
+        json!({"token":"background-token", "text":"not now"}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(spoken["delivered"], false);
+    assert_eq!(spoken["reason"], "caller_away");
+
+    let action = diagram_show();
+    let (code, held) = agent_call_json(
+        &state,
+        "/display",
+        json!({"token":"background-token", "action":action["action"].clone()}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(held["accepted"], true);
+    assert_eq!(held["reason"], "caller_away");
+    assert!(state
+        .0
+        .projection
+        .displays
+        .lock()
+        .unwrap()
+        .contains_key("alpha"));
+
+    begin_alpha_candidate(&state, "foreground-token");
+    assert!(
+        state
+            .0
+            .leg_announcer
+            .promote_candidate("foreground-token")
+            .await
+    );
+    assert_lifecycle_consistent(&state).await;
+    let frames = queued_frames(&mut connection);
+    assert!(frames
+        .iter()
+        .any(|frame| frame["type"] == "display" && frame["action"]["id"] == "d1"));
+    assert!(!state
+        .0
+        .projection
+        .displays
+        .lock()
+        .unwrap()
+        .contains_key("alpha"));
+}
+
+#[tokio::test]
+async fn stopping_a_background_agent_discards_its_held_display() {
+    let state = state();
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "background-token");
+    assert_lifecycle_consistent(&state).await;
+    let held = module_call(
+        &state,
+        AgentCall {
+            call: "display".into(),
+            token: "background-token".into(),
+            args: diagram_show(),
+        },
+    )
+    .await;
+    assert_eq!(held["status"], "accepted");
+    assert!(state
+        .0
+        .projection
+        .displays
+        .lock()
+        .unwrap()
+        .contains_key("alpha"));
+
+    update_agent_state(
+        &state,
+        AgentStateNotice {
+            project: "alpha".into(),
+            state: "finished".into(),
+        },
+    )
+    .await;
+    assert!(!state
+        .0
+        .projection
+        .displays
+        .lock()
+        .unwrap()
+        .contains_key("alpha"));
+    assert_lifecycle_consistent(&state).await;
+}
+
+#[tokio::test]
+async fn failed_promotion_finished_notice_clears_the_held_display_projection() {
+    let state = state();
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "background-token");
+    assert_lifecycle_consistent(&state).await;
+    let held = module_call(
+        &state,
+        AgentCall {
+            call: "display".into(),
+            token: "background-token".into(),
+            args: diagram_show(),
+        },
+    )
+    .await;
+    assert_eq!(held["status"], "accepted");
+
+    // This is the projection side of a failed promotion: PBX's terminal
+    // `finished` owner notice must release the resident's held scene.
+    update_agent_state(
+        &state,
+        AgentStateNotice {
+            project: "alpha".into(),
+            state: "finished".into(),
+        },
+    )
+    .await;
+    assert!(state
+        .0
+        .projection
+        .displays
+        .lock()
+        .unwrap()
+        .get("alpha")
+        .is_none());
+    assert_lifecycle_consistent(&state).await;
+}
+
+#[tokio::test]
+async fn background_request_and_display_owner_rejects_after_promotion_removes_token() {
+    let state = state();
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "background-token");
+    let agents = state
+        .0
+        .coordinator
+        .with_background("background-token", |project| {
+            state.0.projection.waiting(
+                project.to_owned(),
+                AgentRequest {
+                    message: "ready".into(),
+                    reason: "finished".into(),
+                },
+            )
+        });
+    assert!(agents.is_some());
+    state.0.coordinator.remove_background("background-token");
+    assert!(state
+        .0
+        .coordinator
+        .with_background("background-token", |_| ())
+        .is_none());
+    assert_lifecycle_consistent(&state).await;
+}
+
+#[tokio::test]
+async fn an_idle_notice_does_not_clear_a_background_speak_request() {
+    let state = state();
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "background-token");
+    let response = request_to_speak(
+        state.clone(),
+        "background-token",
+        json!({"message":"I finished", "reason":"finished"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_lifecycle_consistent(&state).await;
+
+    update_agent_state(
+        &state,
+        AgentStateNotice {
+            project: "alpha".into(),
+            state: "idle".into(),
+        },
+    )
+    .await;
+    assert_lifecycle_consistent(&state).await;
+
+    let agents = state.0.projection.states.lock().unwrap();
+    let agent = agents
+        .iter()
+        .find(|agent| agent.project == "alpha")
+        .unwrap();
+    assert_eq!(agent.state, "waiting");
+    assert_eq!(
+        agent.pending_request.as_ref().unwrap().message,
+        "I finished"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn process_turns_settlement_preserves_a_waiting_request() {
+    let root = scratch_root("process-turn-waiting");
+    let state = state_with_agents(&root);
+    {
+        let mut board = state.0.switchboard.lock().await;
+        let reply = board
+            .transfer_ctx(
+                &crate::pbx::TransferContext {
+                    exact_caller_transcript: "put me through to alpha".into(),
+                    ..Default::default()
+                },
+                "alpha",
+                "",
+                "",
+            )
+            .await;
+        assert_eq!(reply.route, "alpha");
+    }
+    assert_lifecycle_consistent(&state).await;
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "waiting-token");
+    let request = request_to_speak(
+        state.clone(),
+        "waiting-token",
+        json!({"message":"alpha is ready", "reason":"finished"}),
+    )
+    .await;
+    assert_eq!(request.status(), StatusCode::OK);
+
+    let mut events = state.0.events.subscribe();
+    let id = "settled-waiting";
+    let generation = state.0.coordinator.generation();
+    state.0.routed_decisions.lock().await.insert(
+        id.into(),
+        crate::router::Decision {
+            action: crate::router::Action::Continue,
+            target: Some("alpha".into()),
+            continue_or_fresh: Some(crate::router::ConversationMode::Continue),
+            confidence: 1.0,
+            for_current_agent: 1.0,
+            multi_target: false,
+            unsure: false,
+            confirm: false,
+            reason: "test".into(),
+        },
+    );
+    state.0.queued_turns.store(1, Ordering::Release);
+    let worker = tokio::spawn(process_turns(state.clone()));
+    state
+        .0
+        .turns
+        .send((id.into(), "continue alpha".into(), generation))
+        .await
+        .unwrap();
+
+    // The continuing foreground turn announces busy before it settles. Read
+    // through that transition to the owner-published waiting state.
+    loop {
+        let event = next_event_of(&mut events, "agents_state").await;
+        if event["agents"]
+            .as_array()
+            .is_some_and(|agents| agents.iter().any(|agent| agent["state"] == "waiting"))
+        {
+            break;
+        }
+    }
+    let agent = state
+        .0
+        .projection
+        .states
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|agent| agent.project == "alpha")
+        .cloned()
+        .expect("waiting agent state");
+    assert_eq!(agent.state, "waiting");
+    assert_eq!(
+        agent
+            .pending_request
+            .as_ref()
+            .map(|request| request.message.as_str()),
+        Some("alpha is ready")
+    );
+
+    worker.abort();
+    let _ = worker.await;
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn process_turns_settles_foreground_idle_once() {
+    let root = scratch_root("process-turn-idle-once");
+    let state = state_with_agents(&root);
+    {
+        let mut board = state.0.switchboard.lock().await;
+        let reply = board
+            .transfer_ctx(
+                &crate::pbx::TransferContext {
+                    exact_caller_transcript: "put me through to alpha".into(),
+                    ..Default::default()
+                },
+                "alpha",
+                "",
+                "",
+            )
+            .await;
+        assert_eq!(reply.route, "alpha");
+    }
+    let mut events = state.0.events.subscribe();
+    while events.try_recv().is_ok() {}
+    let id = "settled-idle-once";
+    let generation = state.0.coordinator.generation();
+    state.0.routed_decisions.lock().await.insert(
+        id.into(),
+        crate::router::Decision {
+            action: crate::router::Action::Continue,
+            target: Some("alpha".into()),
+            continue_or_fresh: Some(crate::router::ConversationMode::Continue),
+            confidence: 1.0,
+            for_current_agent: 1.0,
+            multi_target: false,
+            unsure: false,
+            confirm: false,
+            reason: "test".into(),
+        },
+    );
+    state.0.queued_turns.store(1, Ordering::Release);
+    let worker = tokio::spawn(process_turns(state.clone()));
+    state
+        .0
+        .turns
+        .send((id.into(), "continue alpha".into(), generation))
+        .await
+        .unwrap();
+    let busy = next_event_of(&mut events, "agents_state").await;
+    assert!(busy["agents"].as_array().is_some_and(|agents| {
+        agents
+            .iter()
+            .any(|agent| agent["project"] == "alpha" && agent["state"] == "busy")
+    }));
+    timeout(Duration::from_secs(1), async {
+        while state.0.turn_in_flight.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("foreground turn settled");
+
+    let idle_events: Vec<Value> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            Event::Json(value)
+                if value["type"] == "agents_state"
+                    && value["agents"].as_array().is_some_and(|agents| {
+                        agents
+                            .iter()
+                            .any(|agent| agent["project"] == "alpha" && agent["state"] == "idle")
+                    }) =>
+            {
+                Some(value)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        idle_events.len(),
+        1,
+        "idle must settle through one owner: {idle_events:#?}"
+    );
+
+    worker.abort();
+    let _ = worker.await;
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn agents_state_publishes_idle_after_turn_and_finished_after_hangup() {
+    let root = scratch_root("agents-state-lifecycle");
+    let state = state_with_agents(&root);
+    let mut events = state.0.events.subscribe();
+    let context = crate::pbx::TransferContext {
+        exact_caller_transcript: "put me through to alpha".into(),
+        ..Default::default()
+    };
+    let reply = state
+        .0
+        .switchboard
+        .lock()
+        .await
+        .transfer_ctx(&context, "alpha", "", "")
+        .await;
+    assert_eq!(reply.route, "alpha");
+    assert_lifecycle_consistent(&state).await;
+    let agents = state.0.projection.states.lock().unwrap().clone();
+    assert_eq!(
+        agents
+            .iter()
+            .find(|agent| agent.project == "alpha")
+            .map(|agent| agent.state.as_str()),
+        Some("idle")
+    );
+    let lifecycle_events: Vec<Value> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            Event::Json(value) if value["type"] == "agents_state" => Some(value),
+            _ => None,
+        })
+        .collect();
+    assert!(lifecycle_events
+        .iter()
+        .any(|event| event["agents"][0]["state"] == "busy"));
+    assert!(lifecycle_events
+        .iter()
+        .any(|event| event["agents"][0]["state"] == "idle"));
+
+    state.0.switchboard.lock().await.force_hangup().await;
+    assert_lifecycle_consistent(&state).await;
+    assert_eq!(
+        state.0.projection.states.lock().unwrap()[0].state,
+        "finished"
+    );
+    assert!(std::iter::from_fn(|| events.try_recv().ok()).any(|event| {
+        matches!(event, Event::Json(value) if value["type"] == "agents_state" && value["agents"][0]["state"] == "finished")
+    }));
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
 }

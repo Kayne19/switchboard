@@ -370,10 +370,8 @@ The last is the reply for any `depth` other than 0.
 ```
 
 Calls: `speak {text}`, `request_to_speak {message, reason}` (`reason` is
-`finished`, `needs_decision` or `problem`), `display {action}`,
-`view {target?}`, and the routing signals `return_to_operator {summary?}`,
-`transfer_to_project {project, intent?, model?, thinking?}` and
-`set_model {model?, thinking?, keep_context?, intent?}`.
+`finished`, `needs_decision` or `problem`), `display {action}`, and
+`view {target?}`.
 
 Reply: `{status, reason, result?}`, `status` one of `delivered`, `accepted`,
 `refused`, `failed`. Checks, in order:
@@ -393,6 +391,5 @@ A request that is not JSON gets `refused`, `bad_request`.
 | `speak` | relayed | `refused`, `caller_away` |
 | `request_to_speak` | `refused`, `caller_listening` | relayed |
 | `display`, `view` | relayed | relayed |
-| routing signals | relayed | `refused`, `caller_away` |
 
 `active` currently delivers like `foreground`.

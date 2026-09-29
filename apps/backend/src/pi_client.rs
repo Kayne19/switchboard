@@ -6,7 +6,9 @@ use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(test)]
+use std::sync::OnceLock;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, Command};
@@ -17,6 +19,7 @@ pub const STREAM_LIMIT: usize = 16 * 1024 * 1024;
 pub const ROUTE_TOOL: &str = "route";
 pub const SECOND_OPINION_TOOL: &str = "second_opinion";
 pub const DISPATCH_PARTS_TOOL: &str = "dispatch_parts";
+pub const REWRITE_TOOL: &str = "rewrite";
 pub const SPEAK_TOOL: &str = "speak";
 const ERROR_STOP_REASON: &str = "error";
 const ERROR_DETAIL_CHARS: usize = 160;
@@ -25,6 +28,9 @@ const STDERR_LINE_LIMIT: usize = 16 * 1024;
 /// How long a failure report waits for a process that has stopped talking
 /// to exit and finish saying why on stderr.
 const EXIT_REPORT_GRACE: Duration = Duration::from_secs(5);
+
+/// Distinguishes live handles that reopen the same persistent daemon session.
+static NEXT_PROJECT_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
 const ACTIVITY_ARG_ORDER: [&str; 11] = [
     "path",
     "file_path",
@@ -86,6 +92,28 @@ pub struct Activity {
 }
 pub type ActivityCallback =
     Arc<dyn Fn(Activity) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+
+#[cfg(test)]
+type TestPromptHook = Arc<dyn Fn(&str) + Send + Sync>;
+
+#[cfg(test)]
+static TEST_PROMPT_HOOK: OnceLock<StdMutex<Option<TestPromptHook>>> = OnceLock::new();
+
+#[cfg(test)]
+pub(crate) fn set_prompt_hook_for_test(hook: Option<TestPromptHook>) {
+    let slot = TEST_PROMPT_HOOK.get_or_init(|| StdMutex::new(None));
+    *slot.lock().expect("test prompt hook lock") = hook;
+}
+
+#[cfg(test)]
+fn notify_prompt_hook_for_test(message: &str) {
+    let hook = TEST_PROMPT_HOOK
+        .get()
+        .and_then(|slot| slot.lock().ok().and_then(|hook| hook.clone()));
+    if let Some(hook) = hook {
+        hook(message);
+    }
+}
 
 struct SessionInner {
     child: Mutex<Option<Child>>,
@@ -225,6 +253,7 @@ impl PiSession {
     pub fn label(&self) -> &str {
         &self.inner.label
     }
+
     pub fn same_session(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
@@ -269,6 +298,8 @@ impl PiSession {
     }
 
     pub async fn prompt(&self, message: &str) -> Result<Turn, PiSessionError> {
+        #[cfg(test)]
+        notify_prompt_hook_for_test(message);
         let _turn = self.inner.turn_lock.lock().await;
         if !self.alive().await {
             return Err(self.exited_error().await);
@@ -489,6 +520,7 @@ impl PiSession {
                         ROUTE_TOOL,
                         SECOND_OPINION_TOOL,
                         DISPATCH_PARTS_TOOL,
+                        REWRITE_TOOL,
                         SPEAK_TOOL,
                     ]
                     .contains(&name)
@@ -590,11 +622,16 @@ pub struct AgentCall {
 }
 pub type ModuleCallback =
     Arc<dyn Fn(AgentCall) -> Pin<Box<dyn Future<Output = Value> + Send>> + Send + Sync>;
+/// Called once when the host reports that a project session closed. The PBX
+/// uses this to evict a background resident without waiting for another call.
+pub type SessionClosedCallback =
+    Arc<dyn Fn(String, String, u64) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 /// How long a host agent has to answer a session command.
 const SESSION_COMMAND_WAIT: Duration = Duration::from_secs(30);
 
 /// What starts a project session: where it runs and what it is told.
+#[derive(Clone)]
 pub struct ProjectLaunch {
     pub host: String,
     pub project: String,
@@ -607,6 +644,7 @@ pub struct ProjectLaunch {
     pub turn_timeout: Duration,
     pub on_activity: Option<ActivityCallback>,
     pub on_module: Option<ModuleCallback>,
+    pub on_closed: Option<SessionClosedCallback>,
 }
 
 /// The model and effective thinking level a host agent reports for a
@@ -615,6 +653,7 @@ pub struct ProjectLaunch {
 pub struct SessionState {
     pub model: String,
     pub thinking: String,
+    pub provenance: String,
 }
 
 impl SessionState {
@@ -622,6 +661,7 @@ impl SessionState {
         Self {
             model: info["model"].as_str().unwrap_or_default().to_owned(),
             thinking: info["thinking"].as_str().unwrap_or_default().to_owned(),
+            provenance: info["provenance"].as_str().unwrap_or("created").to_owned(),
         }
     }
 }
@@ -638,13 +678,20 @@ struct ProjectInner {
     host: String,
     /// The daemon's live handle for the session.
     session: String,
+    /// The persisted id used to reopen the resident session.
+    persistent_session_id: String,
+    /// Unique for each live service handle, even when it resumes the same id.
+    instance_id: u64,
     label: String,
+    /// Provenance controls whether hangup kills or detaches the session.
+    provenance: String,
     /// The call token the session was last joined with; module calls must
     /// carry it.
     token: StdMutex<String>,
     turn_timeout: Duration,
     on_activity: Option<ActivityCallback>,
     on_module: Option<ModuleCallback>,
+    on_closed: Option<SessionClosedCallback>,
     turn_lock: Mutex<()>,
     busy: AtomicBool,
     closed: AtomicBool,
@@ -671,34 +718,67 @@ impl ProjectInner {
             .unwrap_or(false)
     }
 
-    /// Queues `kill` for the session now, so any command sent after it (a
-    /// new session for the same project, say) reaches the host after it;
-    /// nothing waits for the answer.
-    fn kill_in_background(&self) {
+    /// Queues kill for service-created sessions. A session taken over from a
+    /// desk is never killed: abort its active turn first, then detach it so
+    /// the desk can keep owning it.
+    fn release_in_background(&self) {
         self.hosts.unsubscribe(&self.host, &self.session);
-        let sent = self
-            .hosts
-            .send_command(&self.host, "kill", json!({"session": self.session}));
-        let label = self.label.clone();
         let host = self.host.clone();
-        let sent = match sent {
-            Ok(sent) => sent,
-            Err(error) => {
-                tracing::warn!(%label, %host, %error, "could not end the project session");
-                return;
-            }
-        };
+        let session = self.session.clone();
+        let label = self.label.clone();
+        let taken_over = self.provenance == "taken_over";
+        let hosts = self.hosts.clone();
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
         runtime.spawn(async move {
-            match sent.reply(SESSION_COMMAND_WAIT).await {
-                Ok(_) => tracing::info!(%label, %host, "project session ended"),
-                Err(error) => {
-                    tracing::warn!(%label, %host, %error, "could not end the project session")
+            if taken_over {
+                if let Ok(abort) = hosts.send_command(&host, "abort", json!({"session": session})) {
+                    if let Err(error) = abort.reply(SESSION_COMMAND_WAIT).await {
+                        tracing::warn!(%label, %host, %error, "could not abort the taken-over project session");
+                    }
+                } else {
+                    tracing::warn!(%label, %host, "could not queue abort for the taken-over project session");
+                }
+                match hosts.send_command(&host, "detach", json!({"session": session})) {
+                    Ok(sent) => match sent.reply(SESSION_COMMAND_WAIT).await {
+                        Ok(_) => tracing::info!(%label, %host, "taken-over project session detached"),
+                        Err(error) => tracing::warn!(%label, %host, %error, "could not detach the taken-over project session"),
+                    },
+                    Err(error) => tracing::warn!(%label, %host, %error, "could not detach the taken-over project session"),
+                }
+            } else {
+                match hosts.send_command(&host, "kill", json!({"session": session})) {
+                    Ok(sent) => match sent.reply(SESSION_COMMAND_WAIT).await {
+                        Ok(_) => tracing::info!(%label, %host, "project session ended"),
+                        Err(error) => tracing::warn!(%label, %host, %error, "could not end the project session"),
+                    },
+                    Err(error) => tracing::warn!(%label, %host, %error, "could not end the project session"),
                 }
             }
         });
+    }
+
+    async fn report_closed(&self) {
+        if let Some(callback) = &self.on_closed {
+            let callback = Arc::clone(callback);
+            if let Err(panic) = AssertUnwindSafe(callback(
+                self.label.clone(),
+                self.persistent_session_id.clone(),
+                self.instance_id,
+            ))
+            .catch_unwind()
+            .await
+            {
+                tracing::error!(label = %self.label, panic = %panic_message(&panic), "session closed callback panicked");
+            }
+        }
+    }
+
+    async fn mark_closed(&self) {
+        if !self.closed.swap(true, Ordering::AcqRel) {
+            self.report_closed().await;
+        }
     }
 
     async fn report_activity(&self, state: &str, tool: &str) {
@@ -722,7 +802,7 @@ impl Drop for ProjectInner {
     /// transfer was cancelled half way is not left running on its host.
     fn drop(&mut self) {
         if !self.closed.swap(true, Ordering::AcqRel) {
-            self.kill_in_background();
+            self.release_in_background();
         }
     }
 }
@@ -776,6 +856,40 @@ impl ProjectSession {
             )
             .await
             .map_err(|error| PiSessionError(format!("could not start a session: {error}")))?;
+        Self::from_open_reply(hosts, launch, reply, None, "created").await
+    }
+
+    /// Reopens a saved resident session after a service restart. The host
+    /// validates the cwd and project provenance before returning the live
+    /// handle; this path never creates a second session.
+    pub async fn open(
+        hosts: &crate::hosts::Hosts,
+        launch: ProjectLaunch,
+        session_id: &str,
+    ) -> Result<(Self, SessionState), PiSessionError> {
+        if session_id.trim().is_empty() {
+            return Err(PiSessionError("a saved session id is required".into()));
+        }
+        tracing::info!(project = %launch.project, host = %launch.host, session_id, "opening a project session");
+        let reply = hosts
+            .command(
+                &launch.host,
+                "open_session",
+                json!({"session_id": session_id, "cwd": launch.cwd, "project": launch.project}),
+                SESSION_COMMAND_WAIT,
+            )
+            .await
+            .map_err(|error| PiSessionError(format!("could not open a session: {error}")))?;
+        Self::from_open_reply(hosts, launch, reply, Some(session_id), "opened").await
+    }
+
+    async fn from_open_reply(
+        hosts: &crate::hosts::Hosts,
+        launch: ProjectLaunch,
+        reply: crate::hosts::CommandReply,
+        requested_session_id: Option<&str>,
+        verb: &str,
+    ) -> Result<(Self, SessionState), PiSessionError> {
         let Some(session) = reply.result["session"].as_str().map(str::to_owned) else {
             return Err(PiSessionError(
                 "the host agent did not name the new session".into(),
@@ -786,11 +900,21 @@ impl ProjectSession {
             hosts: hosts.clone(),
             host: launch.host,
             session,
+            persistent_session_id: requested_session_id
+                .map(str::to_owned)
+                .or_else(|| reply.result["session_id"].as_str().map(str::to_owned))
+                .unwrap_or_default(),
+            instance_id: NEXT_PROJECT_INSTANCE_ID.fetch_add(1, Ordering::Relaxed),
             label: launch.project,
+            provenance: reply.result["provenance"]
+                .as_str()
+                .unwrap_or(if verb == "opened" { "created" } else { verb })
+                .to_owned(),
             token: StdMutex::new(String::new()),
             turn_timeout: launch.turn_timeout,
             on_activity: launch.on_activity,
             on_module: launch.on_module,
+            on_closed: launch.on_closed,
             turn_lock: Mutex::new(()),
             busy: AtomicBool::new(false),
             closed: AtomicBool::new(false),
@@ -799,13 +923,26 @@ impl ProjectSession {
             turn: StdMutex::new(None),
         });
         tokio::spawn(pump(Arc::downgrade(&inner), frames));
-        tracing::info!(label = %inner.label, host = %inner.host, name = reply.result["name"].as_str().unwrap_or_default(), "project session created");
+        tracing::info!(label = %inner.label, host = %inner.host, name = reply.result["name"].as_str().unwrap_or_default(), %verb, "project session ready");
         Ok((Self { inner }, SessionState::from_info(&reply.result)))
     }
 
     pub fn label(&self) -> &str {
         &self.inner.label
     }
+
+    pub fn token(&self) -> String {
+        self.inner.token()
+    }
+
+    pub fn session_id(&self) -> &str {
+        &self.inner.persistent_session_id
+    }
+
+    pub fn instance_id(&self) -> u64 {
+        self.inner.instance_id
+    }
+
     pub fn busy(&self) -> bool {
         self.inner.busy.load(Ordering::Acquire)
     }
@@ -825,11 +962,21 @@ impl ProjectSession {
             return Err(PiSessionError("the project session has ended".into()));
         }
         args["session"] = Value::String(self.inner.session.clone());
-        self.inner
+        match self
+            .inner
             .hosts
             .command(&self.inner.host, name, args, SESSION_COMMAND_WAIT)
             .await
-            .map_err(|error| PiSessionError(error.to_string()))
+        {
+            Ok(reply) => Ok(reply),
+            Err(error) => {
+                // A failed host command means this resident is no longer
+                // usable. Mark it closed before returning so its owner can
+                // evict it instead of publishing a misleading idle state.
+                self.inner.mark_closed().await;
+                Err(PiSessionError(error.to_string()))
+            }
+        }
     }
 
     /// Puts the session on the call with `token`: module calls must carry it
@@ -840,15 +987,35 @@ impl ProjectSession {
         persona: &str,
         speech_deadline_ms: u64,
     ) -> Result<(), PiSessionError> {
+        self.join_call_mode(token, persona, speech_deadline_ms, "foreground")
+            .await
+    }
+
+    /// Puts the session on the call in an explicit delivery mode. Background
+    /// sessions stay live but the host agent refuses their speech.
+    pub async fn join_call_mode(
+        &self,
+        token: &str,
+        persona: &str,
+        speech_deadline_ms: u64,
+        mode: &str,
+    ) -> Result<(), PiSessionError> {
         if let Ok(mut current) = self.inner.token.lock() {
             *current = token.to_owned();
         }
         self.command(
             "join_call",
-            json!({"token": token, "persona": persona, "speech_deadline_ms": speech_deadline_ms}),
+            json!({"token": token, "persona": persona, "speech_deadline_ms": speech_deadline_ms, "mode": mode}),
         )
         .await
         .map(|_| ())
+    }
+
+    /// Changes delivery mode without replacing the resident session.
+    pub async fn set_mode(&self, mode: &str) -> Result<(), PiSessionError> {
+        self.command("set_mode", json!({"mode": mode}))
+            .await
+            .map(|_| ())
     }
 
     /// Switches the live session to `provider/model`; it keeps its history.
@@ -876,7 +1043,7 @@ impl ProjectSession {
     pub fn close(&self) {
         if !self.inner.closed.swap(true, Ordering::AcqRel) {
             tracing::info!(label = %self.inner.label, "closing the project session");
-            self.inner.kill_in_background();
+            self.inner.release_in_background();
         }
     }
 
@@ -1083,7 +1250,7 @@ async fn pump(
                         inner.brief_due.store(true, Ordering::Release);
                     }
                     Some("session_closed") => {
-                        inner.closed.store(true, Ordering::Release);
+                        inner.mark_closed().await;
                     }
                     Some("tool_start") => {
                         inner.report_activity("life", "").await;
@@ -1129,15 +1296,21 @@ async fn answer_module_call(inner: Arc<ProjectInner>, call: crate::hosts::Module
             tracing::info!(%label, call = %call.call, "removed project routing call refused");
             call.answer(json!({"status": "refused", "reason": "removed"}));
         }
-        SPEAK_TOOL | "display" | "view" => {
+        SPEAK_TOOL | "request_to_speak" | "display" | "view" => {
             let Some(callback) = inner.on_module.clone() else {
                 call.answer(json!({"status": "failed", "reason": "failed"}));
                 return;
             };
+            let mut args = call.args.clone();
+            if call.call == "request_to_speak" {
+                if let Some(object) = args.as_object_mut() {
+                    object.insert("_project".into(), Value::String(label.clone()));
+                }
+            }
             let request = AgentCall {
                 call: call.call.clone(),
                 token: call.token.clone(),
-                args: call.args.clone(),
+                args,
             };
             let reply = match AssertUnwindSafe(callback(request)).catch_unwind().await {
                 Ok(reply) => reply,

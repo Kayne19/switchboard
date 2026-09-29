@@ -77,6 +77,14 @@ router slice:
 - `multi_target`: a Noul asking whether more than one project or agent is
   addressed.
 
+## Floor good-moment gate
+
+Background `request_to_speak` messages use the same Jev client and timeout but a
+separate one-question request named `good_moment`. Jev answers `yes` or `no`.
+A failure or timeout is held until the next configured quiet moment; the floor
+does not retry the failed gate in a loop. The floor setting is
+`SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS` in `docs/environment.md`.
+
 ## Call state
 
 The state is what the switchboard knows at the moment the caller speaks.

@@ -45,6 +45,21 @@ export default function operatorSwitchboard(pi: ExtensionAPI) {
 			},
 		});
 		pi.registerTool({
+			name: "rewrite",
+			label: "Rewrite floor message",
+			description:
+			"Rewrite a background agent update for natural spoken delivery. Preserve every fact from the original and add none.",
+			parameters: Type.Object({
+				text: Type.String({ description: "A faithful, short spoken rewrite of the original message." }),
+			}),
+			async execute(_toolCallId, params) {
+				return {
+					content: [{ type: "text", text: "Floor rewrite recorded." }],
+					details: { text: params.text },
+				};
+			},
+		});
+		pi.registerTool({
 			name: "dispatch_parts",
 			label: "Dispatch parts",
 			description:

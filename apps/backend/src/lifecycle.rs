@@ -11,6 +11,7 @@
 
 use crate::models::{parse_spec, ModelCatalog, THINKING_LEVELS};
 use crate::protocol::{CandidateEnd, ModelEntry, Status};
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -220,6 +221,8 @@ pub struct CallLifecycle {
     adopted: Option<LegIdentity>,
     /// The catalog the project leg launched with.
     catalog: Option<Arc<ModelCatalog>>,
+    /// Tokens belonging to resident sessions that are not foreground.
+    background_tokens: HashMap<String, String>,
 }
 
 impl CallLifecycle {
@@ -240,6 +243,7 @@ impl CallLifecycle {
             startup_rollback: None,
             adopted: None,
             catalog: None,
+            background_tokens: HashMap::new(),
         }
     }
 
@@ -351,6 +355,9 @@ pub struct Coordinator {
     projection: Arc<RwLock<Arc<Status>>>,
     next_operation: Arc<AtomicU64>,
     on_candidate: Arc<Mutex<Option<CandidateCallback>>>,
+    /// Serializes a background-token check with the projection mutation that
+    /// follows it. Promotion/removal takes this same owner lock.
+    background_owner: Arc<std::sync::Mutex<()>>,
 }
 
 impl Coordinator {
@@ -365,6 +372,7 @@ impl Coordinator {
             projection,
             next_operation: Arc::new(AtomicU64::new(1)),
             on_candidate: Arc::new(Mutex::new(None)),
+            background_owner: Arc::new(std::sync::Mutex::new(())),
         }
     }
 
@@ -448,6 +456,13 @@ impl Coordinator {
 
     pub fn generation(&self) -> u64 {
         self.current_identity().generation
+    }
+
+    /// Applies a synchronous projection mutation only while the stamped leg
+    /// generation is still current. The lifecycle lock covers both the check
+    /// and mutation, so a rescue/adoption cannot land between them.
+    pub fn with_generation<R>(&self, generation: u64, operation: impl FnOnce() -> R) -> Option<R> {
+        self.linearize(|state| (state.leg.generation == generation).then(operation))
     }
 
     pub fn begin_prompt(&self, leg: &LegIdentity) -> Result<OperationIdentity, LifecycleError> {
@@ -664,8 +679,57 @@ impl Coordinator {
         self.linearize(|state| matches!(state.phase, Phase::Starting))
     }
 
+    /// Register a resident session that may continue while another agent is
+    /// foreground. Its token is still valid for display and request calls, but
+    /// not for speech.
+    pub fn register_background(&self, project: impl Into<String>, token: impl Into<String>) {
+        let _owner = self
+            .background_owner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.linearize(|state| {
+            state.background_tokens.insert(token.into(), project.into());
+        });
+    }
+
+    pub fn remove_background(&self, token: &str) {
+        let _owner = self
+            .background_owner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.linearize(|state| {
+            state.background_tokens.remove(token);
+        });
+    }
+
+    /// Runs one background projection mutation while owning the token's
+    /// lifecycle check. Promotion/removal cannot happen between the check and
+    /// the mutation, so a request or held display cannot land on a foreground
+    /// session.
+    pub fn with_background<R>(&self, token: &str, operation: impl FnOnce(&str) -> R) -> Option<R> {
+        let _owner = self
+            .background_owner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.linearize(|state| {
+            let project = state.background_tokens.get(token)?.clone();
+            Some(operation(&project))
+        })
+    }
+
+    pub fn project_is_background(&self, project: &str) -> bool {
+        self.linearize(|state| state.background_tokens.values().any(|name| name == project))
+    }
+
+    pub fn is_background(&self, token: &str) -> bool {
+        self.linearize(|state| state.background_tokens.contains_key(token))
+    }
+
     pub fn accept_side_effect(&self, token: &str) -> Result<(), LifecycleError> {
         self.linearize(|state| {
+            if state.background_tokens.contains_key(token) {
+                return Ok(());
+            }
             if matches!(state.phase, Phase::Starting) {
                 return Err(LifecycleError::CandidateSideEffect);
             }
@@ -764,6 +828,15 @@ impl Coordinator {
 
     /// Adopts the staged candidate if it is the leg `token` names: the PBX
     /// once its intro turn ends, or a sign of life from the candidate itself.
+    #[cfg(test)]
+    pub(crate) fn set_candidate_token_for_test(&self, token: &str) {
+        self.linearize(|state| {
+            if let Some(candidate) = state.candidate.as_mut() {
+                candidate.identity.token = token.to_owned();
+            }
+        });
+    }
+
     pub fn adopt_candidate(&self, token: &str) -> Result<LegIdentity, LifecycleError> {
         self.linearize(|state| {
             let candidate = match state
@@ -869,6 +942,7 @@ impl Coordinator {
             } else {
                 state.phase = Phase::Shutdown;
                 state.operation = None;
+                state.background_tokens.clear();
                 let next_token =
                     format!("{}-shutdown-{}", state.leg.token, state.leg.generation + 1);
                 state.leg = LegIdentity::new(next_token, state.leg.generation + 1);

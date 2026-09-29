@@ -99,10 +99,17 @@ class SurfaceTest(unittest.TestCase):
     def test_module_exposes_exactly_the_foundation_surface(self):
         # Update this assertion in the same commit as any step that changes the surface
         # (req:ext-via-host): Jev removes the routing signals, background adds request_to_speak.
-        surface = {"speak", "display", "view"}
+        surface = {"speak", "request_to_speak", "display", "view"}
         public = {name for name in dir(switchboard) if not name.startswith("_")}
         self.assertEqual(public, surface)
         self.assertEqual(set(switchboard.__all__), surface)
+
+
+class BackgroundSurfaceTest(unittest.TestCase):
+    def test_background_step_keeps_the_four_call_surface(self):
+        self.assertEqual(set(switchboard.__all__), {"speak", "request_to_speak", "display", "view"})
+        self.assertNotIn("transfer_to_project", dir(switchboard))
+        self.assertNotIn("return_to_operator", dir(switchboard))
 
 
 class IdentityTest(ModuleTestCase):
@@ -205,7 +212,9 @@ class CallsTest(ModuleTestCase):
             (switchboard.display, (action,), {}, "display", {"action": action}),
             (switchboard.display, (), dict(action), "display", {"action": action}),
             (switchboard.view, (), {}, "view", {}),
+            (switchboard.request_to_speak, ("Done", "finished"), {}, "request_to_speak", {"message": "Done", "reason": "finished"}),
             (switchboard.view, ("theater",), {}, "view", {"target": "theater"}),
+            (switchboard.request_to_speak, ("Need input", "needs_decision"), {}, "request_to_speak", {"message": "Need input", "reason": "needs_decision"}),
         ]
         for fn, args, kwargs, call, sent in cases:
             with self.subTest(call=call, args=args, kwargs=kwargs):
@@ -254,6 +263,8 @@ class ProgrammingErrorTest(ModuleTestCase):
             (TypeError, switchboard.speak, (42,), {}),
             (ValueError, switchboard.speak, ("  ",), {}),
             (ValueError, switchboard.view, ("everything",), {}),
+            (ValueError, switchboard.request_to_speak, ("Done", "unknown"), {}),
+            (TypeError, switchboard.request_to_speak, (42, "finished"), {}),
         ]
         for error, fn, args, kwargs in cases:
             with self.subTest(call=fn.__name__, args=args, kwargs=kwargs):

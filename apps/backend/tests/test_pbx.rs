@@ -200,6 +200,13 @@ fn transcript(text: &str) -> TransferContext {
     }
 }
 
+fn assert_background_registry_consistent(board: &Switchboard) {
+    for (project, alive, _) in board.residents_for_test() {
+        assert!(alive, "dead resident remains registered: {project}");
+        assert!(board.coordinator().project_is_background(&project));
+    }
+}
+
 fn read_lines(path: &std::path::Path) -> Vec<String> {
     std::fs::read_to_string(path)
         .unwrap_or_default()
@@ -498,7 +505,14 @@ async fn utility_split_keeps_the_current_agent_foreground_even_without_jev_multi
         &[("SWITCHBOARD_PI_BINARY", &binary.to_string_lossy())],
         two_model_catalog(),
     );
-    let log = serve(&board, Box::new(|_, _| says("Alpha is ready.")));
+    let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+    let log = serve(
+        &board,
+        Box::new(move |session, message| {
+            let _ = prompt_tx.send((session.to_owned(), message.to_owned()));
+            says("Alpha is ready.")
+        }),
+    );
     let connected = board
         .transfer_ctx(&transcript("connect alpha"), "alpha", "", "")
         .await;
@@ -516,14 +530,25 @@ async fn utility_split_keeps_the_current_agent_foreground_even_without_jev_multi
         reason: "Jev was unsure".into(),
     };
 
-    let reply = board.handle_decision("check both", &decision).await;
+    let reply = board
+        .handle_decision(
+            "can you tell me the numbers of the latest ablation run from the grapes and then also tell me what the latest commit from the switchboard project is?",
+            &decision,
+        )
+        .await;
 
     assert_eq!(reply.route, "alpha");
-    let routed_prompts = prompts(&log);
+    let mut routed_prompts = prompts(&log);
     assert!(routed_prompts[before..]
         .iter()
         .any(|prompt| prompt.contains("Check alpha logs")));
-    assert!(!routed_prompts[before..]
+    while let Some((_session, prompt)) = prompt_rx.recv().await {
+        if prompt.contains("Review beta build") {
+            break;
+        }
+    }
+    routed_prompts = prompts(&log);
+    assert!(routed_prompts
         .iter()
         .any(|prompt| prompt.contains("Review beta build")));
     board.shutdown().await;
@@ -936,6 +961,7 @@ async fn a_turn_ends_only_on_the_settled_turn_end() {
                     turn_timeout: Duration::from_secs(10),
                     on_activity: None,
                     on_module: None,
+                    on_closed: None,
                 },
             )
             .await
@@ -1730,4 +1756,960 @@ async fn at_most_one_session_per_project_stays_up() {
         log.named("kill"),
         [json!({"session": "s1"}), json!({"session": "s2"})]
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn background_split_selects_foreground_and_hangup_keeps_residents() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+    let _log = serve(
+        &board,
+        Box::new(move |session, message| {
+            let _ = prompt_tx.send((session.to_owned(), message.to_owned()));
+            says("handled")
+        }),
+    );
+    assert_eq!(
+        board
+            .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+            .await
+            .route,
+        "alpha"
+    );
+    let reply = board
+        .dispatch_parts(
+            "both",
+            vec![
+                crate::router::DispatchPart {
+                    agent: "alpha".into(),
+                    text: "alpha part".into(),
+                },
+                crate::router::DispatchPart {
+                    agent: "beta".into(),
+                    text: "beta part".into(),
+                },
+            ],
+        )
+        .await;
+    assert_eq!(reply.route, "alpha");
+    let mut saw_beta = false;
+    while let Some((session, message)) = prompt_rx.recv().await {
+        if session == "s2" && message.contains("beta part") {
+            saw_beta = true;
+            break;
+        }
+    }
+    assert!(saw_beta, "the split's non-foreground part was dispatched");
+    assert!(board.background_agents.contains_key("beta"));
+
+    let promoted = board
+        .route_project_part(
+            "bring beta forward",
+            "beta",
+            crate::router::ConversationMode::Continue,
+        )
+        .await;
+    assert_eq!(promoted.route, "beta");
+    assert!(board.background_agents.contains_key("alpha"));
+    let alpha = board.background_agents.get("alpha").unwrap().clone();
+    assert!(alpha.alive(), "the former foreground is resident");
+
+    assert_eq!(board.force_hangup().await.as_deref(), Some("beta"));
+    assert!(alpha.alive(), "hangup drops only the foreground agent");
+    assert!(board.background_agents.contains_key("alpha"));
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn idle_background_split_part_continues_without_a_new_session() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+    let log = serve(
+        &board,
+        Box::new(move |session, message| {
+            let _ = prompt_tx.send((session.to_owned(), message.to_owned()));
+            says("handled")
+        }),
+    );
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .dispatch_parts(
+            "first",
+            vec![
+                crate::router::DispatchPart {
+                    agent: "alpha".into(),
+                    text: "alpha one".into(),
+                },
+                crate::router::DispatchPart {
+                    agent: "beta".into(),
+                    text: "beta one".into(),
+                },
+            ],
+        )
+        .await;
+    while let Some((session, message)) = prompt_rx.recv().await {
+        if session == "s2" && message.contains("beta one") {
+            break;
+        }
+    }
+    let creates = log.named("create_session").len();
+    board
+        .dispatch_parts(
+            "second",
+            vec![
+                crate::router::DispatchPart {
+                    agent: "alpha".into(),
+                    text: "alpha two".into(),
+                },
+                crate::router::DispatchPart {
+                    agent: "beta".into(),
+                    text: "beta two".into(),
+                },
+            ],
+        )
+        .await;
+    let mut saw_second = false;
+    while let Some((session, message)) = prompt_rx.recv().await {
+        if session == "s2" && message.contains("beta two") {
+            saw_second = true;
+            break;
+        }
+    }
+    assert!(saw_second, "idle background sessions receive a later part");
+    assert_eq!(log.named("create_session").len(), creates);
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn direct_dial_reuses_a_background_resident_instead_of_creating_a_duplicate() {
+    let mut board = board_on(
+        vec![project("alpha", ""), project("beta", "")],
+        &[],
+        two_model_catalog(),
+    );
+    let log = serve(&board, Box::new(|_, _| says("ready")));
+    assert_eq!(
+        board
+            .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+            .await
+            .route,
+        "alpha"
+    );
+    board
+        .start_background_part("beta", "beta work")
+        .await
+        .expect("background resident");
+    let resident = board
+        .background_agents
+        .get("beta")
+        .expect("beta resident")
+        .clone();
+
+    let reply = board.dial("beta", "").await;
+
+    assert_eq!(reply.route, "beta");
+    assert!(board
+        .agent
+        .as_ref()
+        .is_some_and(|agent| agent.same_session(&resident)));
+    assert_eq!(log.named("create_session").len(), 2, "dial must reuse beta");
+    assert!(!board.background_agents.contains_key("beta"));
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn promoting_a_background_resident_cancels_its_detached_prompt_before_foreground_work() {
+    let mut board = board_on(
+        vec![project("alpha", ""), project("beta", "")],
+        &[],
+        two_model_catalog(),
+    );
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let calls = Arc::new(StdMutex::new(0usize));
+    let entered_for_prompt = entered.clone();
+    let calls_for_prompt = calls.clone();
+    let notices = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let notices_for_callback = notices.clone();
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        let notices = notices_for_callback.clone();
+        Box::pin(async move {
+            notices
+                .lock()
+                .unwrap()
+                .push(format!("{}:{}", notice.project, notice.state));
+        })
+    })));
+    let _log = serve(
+        &board,
+        Box::new(move |session, _| {
+            if session == "s2" {
+                let mut calls = calls_for_prompt.lock().unwrap();
+                *calls += 1;
+                if *calls == 1 {
+                    entered_for_prompt.notify_one();
+                    return vec![Step::Hold];
+                }
+            }
+            says("ready")
+        }),
+    );
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .start_background_part("beta", "background work")
+        .await
+        .expect("background resident");
+    tokio::time::timeout(Duration::from_secs(1), entered.notified())
+        .await
+        .expect("background prompt started");
+    let idle_before = notices
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|notice| *notice == "beta:idle")
+        .count();
+
+    let reply = board
+        .route_project_part(
+            "bring beta forward",
+            "beta",
+            crate::router::ConversationMode::Continue,
+        )
+        .await;
+
+    assert_eq!(reply.route, "beta");
+    let idle_notices = notices
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|notice| *notice == "beta:idle")
+        .count();
+    assert_eq!(
+        idle_notices,
+        idle_before + 1,
+        "cancelled background work cannot announce idle later"
+    );
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn foreground_continuation_publishes_busy_before_prompt() {
+    let mut board = board_with(vec![project("alpha", "")], false);
+    let notices = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let notices_for_callback = notices.clone();
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        notices_for_callback
+            .lock()
+            .unwrap()
+            .push(format!("{}:{}", notice.project, notice.state));
+        Box::pin(async {})
+    })));
+    let _log = serve(&board, Box::new(|_, _| says("ready")));
+    board
+        .transfer_ctx(&transcript("start alpha"), "alpha", "", "")
+        .await;
+    notices.lock().unwrap().clear();
+
+    let reply = board.handle_agent_ctx(&transcript("continue work")).await;
+    assert_eq!(reply.route, "alpha");
+    let notices = notices.lock().unwrap().clone();
+    assert_eq!(notices, ["alpha:busy"]);
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn fresh_start_does_not_publish_idle_before_busy() {
+    let mut board = board_with(vec![project("alpha", "")], false);
+    let notices = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let notices_for_callback = notices.clone();
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        notices_for_callback
+            .lock()
+            .unwrap()
+            .push(format!("{}:{}", notice.project, notice.state));
+        Box::pin(async {})
+    })));
+    let _log = serve(&board, Box::new(|_, _| says("ready")));
+
+    let reply = board
+        .transfer_ctx(&transcript("start alpha"), "alpha", "", "")
+        .await;
+    assert_eq!(reply.route, "alpha");
+    assert_eq!(
+        notices.lock().unwrap().first().map(String::as_str),
+        Some("alpha:busy")
+    );
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn failed_background_promotion_closes_the_resident_and_finishes_its_state() {
+    let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
+    let notices = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let notices_for_callback = notices.clone();
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        let notices = notices_for_callback.clone();
+        Box::pin(async move {
+            notices
+                .lock()
+                .unwrap()
+                .push(format!("{}:{}", notice.project, notice.state));
+        })
+    })));
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| says("ready")));
+    fake.on_command = Some(Box::new(|name, _| {
+        (name == "set_mode").then(|| Some(Err(("mode_failed".into(), "cannot switch mode".into()))))
+    }));
+    fake.serve(board.hosts().connect_fake(HOST));
+    board
+        .start_background_part("alpha", "background work")
+        .await
+        .expect("background resident");
+    let resident = board.background_agents.get("alpha").unwrap().clone();
+
+    let reply = board
+        .route_project_part(
+            "bring alpha forward",
+            "alpha",
+            crate::router::ConversationMode::Continue,
+        )
+        .await;
+
+    assert!(reply.error.is_some());
+    assert!(!resident.alive());
+    assert!(!board.background_agents.contains_key("alpha"));
+    assert_eq!(
+        notices.lock().unwrap().last().map(String::as_str),
+        Some("alpha:finished")
+    );
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn background_prompt_transport_failure_evicts_the_resident_and_finishes() {
+    let mut board = board_with(vec![project("alpha", "")], false);
+    let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
+    let finished_tx = Arc::new(StdMutex::new(Some(finished_tx)));
+    let finished_for_callback = finished_tx.clone();
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        if notice.project == "alpha" && notice.state == "finished" {
+            if let Some(tx) = finished_for_callback.lock().unwrap().take() {
+                let _ = tx.send(());
+            }
+        }
+        Box::pin(async {})
+    })));
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| says("unused")));
+    fake.on_command = Some(Box::new(|name, _| {
+        (name == "prompt").then(|| Some(Err(("transport".into(), "host prompt failed".into()))))
+    }));
+    fake.serve(board.hosts().connect_fake(HOST));
+
+    board
+        .start_background_part("alpha", "background work")
+        .await
+        .expect("the resident launch itself succeeds");
+    assert_background_registry_consistent(&board);
+    finished_rx.await.expect("failed prompt publishes finished");
+
+    assert!(!board.background_agents.contains_key("alpha"));
+    assert!(!board.coordinator.project_is_background("alpha"));
+    board.shutdown().await;
+}
+
+#[tokio::test]
+async fn dead_background_handle_is_evicted_after_registration_recheck() {
+    let mut board = board_with(vec![project("alpha", "")], false);
+    let fake = FakeHostAgent::new(Box::new(|_, _| vec![]));
+    let _log = fake.serve(board.hosts().connect_fake(HOST));
+    let launch = ProjectLaunch {
+        host: HOST.into(),
+        project: "alpha".into(),
+        cwd: "/srv/alpha".into(),
+        spec: "anthropic/current".into(),
+        brief: String::new(),
+        turn_timeout: Duration::from_secs(10),
+        on_activity: None,
+        on_module: None,
+        on_closed: None,
+    };
+    let session = ProjectSession::create(&board.hosts(), launch)
+        .await
+        .unwrap()
+        .0;
+    // The fake dies synchronously after token registration and before map
+    // insertion, exactly the window the helper must close.
+    assert!(!board.register_background_session_with_fake_death("alpha".into(), session));
+    assert!(!board.background_agents.contains_key("alpha"));
+    assert!(!board.coordinator.project_is_background("alpha"));
+    board.shutdown().await;
+}
+
+#[tokio::test]
+async fn stale_host_loss_callback_after_resume_keeps_the_replacement_resident() {
+    let mut board = board_with(vec![project("alpha", "")], false);
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| vec![Step::Hold]));
+    fake.on_command = Some(Box::new(|name, args| match name {
+        "create_session" => Some(Some(Ok(json!({
+            "session": "s1",
+            "session_id": "saved-alpha",
+            "name": "sb-alpha-1",
+            "project": "alpha",
+            "cwd": "/srv/alpha",
+            "provenance": "created",
+            "model": "anthropic/current",
+            "thinking": "medium"
+        })))),
+        "open_session" => Some(Some(Ok(json!({
+            "session": "s2",
+            "session_id": args["session_id"],
+            "name": "sb-alpha-2",
+            "project": "alpha",
+            "cwd": "/srv/alpha",
+            "provenance": "created",
+            "model": "anthropic/current",
+            "thinking": "medium"
+        })))),
+        _ => None,
+    }));
+    fake.serve(board.hosts().connect_fake(HOST));
+
+    let launch = || ProjectLaunch {
+        host: HOST.into(),
+        project: "alpha".into(),
+        cwd: "/srv/alpha".into(),
+        spec: "anthropic/current".into(),
+        brief: String::new(),
+        turn_timeout: Duration::from_secs(10),
+        on_activity: None,
+        on_module: None,
+        on_closed: None,
+    };
+    let old = ProjectSession::create(&board.hosts(), launch())
+        .await
+        .unwrap()
+        .0;
+    let replacement = ProjectSession::open(&board.hosts(), launch(), old.session_id())
+        .await
+        .unwrap()
+        .0;
+    assert_eq!(old.session_id(), replacement.session_id());
+    assert_ne!(old.instance_id(), replacement.instance_id());
+
+    board
+        .background_agents
+        .insert("alpha".into(), replacement.clone());
+    let callback = board.session_closed_callback();
+    callback("alpha".into(), old.session_id().into(), old.instance_id()).await;
+
+    let resident = board
+        .background_agents
+        .get("alpha")
+        .expect("stale callback must not evict replacement");
+    assert!(resident.same_session(&replacement));
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn host_loss_evicts_a_background_resident_without_a_later_action() {
+    let mut board = board_with(vec![project("alpha", "")], false);
+    let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
+    let finished_tx = Arc::new(StdMutex::new(Some(finished_tx)));
+    let finished_for_callback = finished_tx.clone();
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        if notice.project == "alpha" && notice.state == "finished" {
+            if let Some(tx) = finished_for_callback.lock().unwrap().take() {
+                let _ = tx.send(());
+            }
+        }
+        Box::pin(async {})
+    })));
+    let fake = FakeHostAgent::new(Box::new(|_, _| vec![Step::Hold]));
+    fake.serve(board.hosts().connect_fake(HOST));
+
+    board
+        .start_background_part("alpha", "background work")
+        .await
+        .expect("resident launch");
+    assert_background_registry_consistent(&board);
+    board.hosts().disconnect_fake(HOST);
+    finished_rx.await.expect("host loss publishes finished");
+
+    assert!(!board.background_agents.contains_key("alpha"));
+    assert!(!board.coordinator.project_is_background("alpha"));
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn failed_transfer_adoption_returns_to_the_operator_and_cleans_up() {
+    let mut board = board_with(vec![project("alpha", "")], false);
+    let coordinator = board.coordinator();
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        if notice.project == "alpha" && notice.state == "busy" {
+            // The candidate is staged before its intro prompt. Simulate a
+            // competing lifecycle owner changing it before PBX adoption.
+            coordinator.set_candidate_token_for_test("not-the-transfer-token");
+        }
+        Box::pin(async {})
+    })));
+    let log = serve(&board, Box::new(|_, _| says("ready")));
+
+    let reply = board
+        .transfer_ctx(&transcript("put me through"), "alpha", "", "")
+        .await;
+
+    assert!(reply.error.is_some(), "adoption must fail: {reply:?}");
+    assert_eq!(reply.route, OPERATOR);
+    assert!(board.agent.is_none());
+    assert!(!board.coordinator.is_candidate());
+    assert!(!board
+        .coordinator
+        .status()
+        .route
+        .eq_ignore_ascii_case("alpha"));
+    assert_eq!(until_named(&log, "kill").await.len(), 1);
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn failed_transfer_intro_publishes_finished_instead_of_stuck_busy() {
+    let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
+    let notices = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let notices_for_callback = notices.clone();
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        let notices = notices_for_callback.clone();
+        Box::pin(async move {
+            notices
+                .lock()
+                .unwrap()
+                .push(format!("{}:{}", notice.project, notice.state));
+        })
+    })));
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| says("never")));
+    fake.on_command = Some(Box::new(|name, _| {
+        (name == "prompt").then(|| Some(Err(("prompt_failed".into(), "intro failed".into()))))
+    }));
+    fake.serve(board.hosts().connect_fake(HOST));
+
+    let reply = board
+        .transfer_ctx(&transcript("put me through"), "alpha", "", "")
+        .await;
+
+    assert!(reply.error.is_some());
+    assert!(board.agent.is_none());
+    assert_eq!(
+        notices.lock().unwrap().last().map(String::as_str),
+        Some("alpha:finished")
+    );
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn stopped_background_prompt_cancels_without_a_late_idle_notice() {
+    let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let entered_for_prompt = entered.clone();
+    let notices = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let notices_for_callback = notices.clone();
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        let notices = notices_for_callback.clone();
+        Box::pin(async move {
+            notices
+                .lock()
+                .unwrap()
+                .push(format!("{}:{}", notice.project, notice.state));
+        })
+    })));
+    let fake = FakeHostAgent::new(Box::new(move |_, _| {
+        entered_for_prompt.notify_one();
+        vec![Step::Hold]
+    }));
+    fake.serve(board.hosts().connect_fake(HOST));
+    board
+        .start_background_part("alpha", "background work")
+        .await
+        .expect("background resident");
+    tokio::time::timeout(Duration::from_secs(1), entered.notified())
+        .await
+        .expect("background prompt started");
+    let idle_before = notices
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|notice| *notice == "alpha:idle")
+        .count();
+
+    let reply = board.stop_project("alpha").await;
+
+    assert!(reply.text.contains("Stopped alpha"));
+    assert_eq!(
+        notices.lock().unwrap().last().map(String::as_str),
+        Some("alpha:finished")
+    );
+    let idle_after = notices
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|notice| *notice == "alpha:idle")
+        .count();
+    assert_eq!(
+        idle_after, idle_before,
+        "stop cannot receive a late idle notice"
+    );
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn stopped_background_prompt_does_not_publish_idle_after_close() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let mut started_tx = Some(started_tx);
+    let _log = serve(
+        &board,
+        Box::new(move |session, _message| {
+            if session == "s2" {
+                if let Some(tx) = started_tx.take() {
+                    let _ = tx.send(());
+                }
+                vec![Step::WaitFor("kill")]
+            } else {
+                says("handled")
+            }
+        }),
+    );
+    let (state_tx, mut state_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
+    let finished_tx = Arc::new(StdMutex::new(Some(finished_tx)));
+    let finished_for_callback = finished_tx.clone();
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        if notice.project == "beta" && notice.state == "finished" {
+            if let Some(tx) = finished_for_callback.lock().unwrap().take() {
+                let _ = tx.send(());
+            }
+        }
+        let _ = state_tx.send((notice.project, notice.state));
+        Box::pin(async {})
+    })));
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .start_background_part("beta", "long beta work")
+        .await
+        .unwrap();
+    started_rx.await.expect("the background turn started");
+    while state_rx.try_recv().is_ok() {}
+    board.stop_project("beta").await;
+
+    finished_rx.await.expect("stop published finished");
+    let mut late_idle = false;
+    while let Ok((project, state)) = state_rx.try_recv() {
+        late_idle |= project == "beta" && state == "idle";
+    }
+    assert!(!late_idle, "a stopped prompt must not publish idle");
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_dead_background_resident_is_removed_before_a_later_split_part() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+    let log = serve(
+        &board,
+        Box::new(move |session, message| {
+            let _ = prompt_tx.send((session.to_owned(), message.to_owned()));
+            says("handled")
+        }),
+    );
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .dispatch_parts(
+            "first",
+            vec![
+                crate::router::DispatchPart {
+                    agent: "alpha".into(),
+                    text: "alpha one".into(),
+                },
+                crate::router::DispatchPart {
+                    agent: "beta".into(),
+                    text: "beta one".into(),
+                },
+            ],
+        )
+        .await;
+    while let Some((session, message)) = prompt_rx.recv().await {
+        if session == "s2" && message.contains("beta one") {
+            break;
+        }
+    }
+    let dead = board.background_agents.get("beta").unwrap().clone();
+    let old_session_id = dead.session_id().to_owned();
+    dead.close();
+    assert!(!dead.alive());
+    let creates = log.named("create_session").len();
+
+    board
+        .start_background_part("beta", "beta after host close")
+        .await
+        .expect("a dead resident is replaced by a fresh session");
+    let mut saw_fresh_prompt = false;
+    while let Some((session, message)) = prompt_rx.recv().await {
+        if session == "s3" && message.contains("beta after host close") {
+            saw_fresh_prompt = true;
+            break;
+        }
+    }
+    assert!(
+        saw_fresh_prompt,
+        "the replacement session received the split part"
+    );
+    assert_eq!(log.named("create_session").len(), creates + 1);
+    assert_ne!(
+        board.background_agents.get("beta").unwrap().session_id(),
+        old_session_id
+    );
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn busy_background_split_part_is_refused_and_fresh_start_is_rejected() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+    let log = serve(
+        &board,
+        Box::new(move |session, message| {
+            let _ = prompt_tx.send((session.to_owned(), message.to_owned()));
+            if session == "s2" {
+                vec![Step::Hold]
+            } else {
+                says("handled")
+            }
+        }),
+    );
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .dispatch_parts(
+            "first",
+            vec![
+                crate::router::DispatchPart {
+                    agent: "alpha".into(),
+                    text: "alpha one".into(),
+                },
+                crate::router::DispatchPart {
+                    agent: "beta".into(),
+                    text: "beta busy".into(),
+                },
+            ],
+        )
+        .await;
+    while let Some((session, message)) = prompt_rx.recv().await {
+        if session == "s2" && message.contains("beta busy") {
+            break;
+        }
+    }
+    let creates = log.named("create_session").len();
+    board
+        .dispatch_parts(
+            "second",
+            vec![
+                crate::router::DispatchPart {
+                    agent: "alpha".into(),
+                    text: "alpha two".into(),
+                },
+                crate::router::DispatchPart {
+                    agent: "beta".into(),
+                    text: "beta refused".into(),
+                },
+            ],
+        )
+        .await;
+    assert_eq!(log.named("create_session").len(), creates);
+    let refusal = board
+        .route_project_part("fresh beta", "beta", crate::router::ConversationMode::Fresh)
+        .await;
+    assert_eq!(refusal.error.as_deref(), Some("project is busy"));
+    assert_eq!(refusal.route, "alpha");
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn stop_requires_confirmation_before_closing_a_project() {
+    let (mut board, _log) = on_alpha(&[], Box::new(|_, _| says("handled"))).await;
+    let stop = Decision {
+        action: crate::router::Action::Stop,
+        target: Some("alpha".into()),
+        continue_or_fresh: None,
+        confidence: 1.0,
+        for_current_agent: 1.0,
+        multi_target: false,
+        unsure: false,
+        confirm: true,
+        reason: "stop requested".into(),
+    };
+    let ask = board.handle_decision("stop alpha", &stop).await;
+    assert!(ask.text.contains("Say yes to confirm"));
+    assert!(
+        board.agent.is_some(),
+        "confirmation does not stop the session"
+    );
+    let stopped = board
+        .handle_decision("yes", &Decision::fallback("confirmation"))
+        .await;
+    assert_eq!(stopped.route, OPERATOR);
+    assert!(board.agent.is_none());
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_saved_resident_session_is_resumed_with_open_session() {
+    let mut board = board_with(vec![project("alpha", "")], false);
+    let mut fake = crate::hosts::FakeHostAgent::new(Box::new(|_, _| says("resumed")));
+    fake.on_command = Some(Box::new(|name, args| match name {
+        "list_sessions" => Some(Some(Ok(json!({"sessions":[{
+            "session":"s-old", "session_id":"saved-alpha", "project":"alpha",
+            "cwd":"/srv/alpha", "provenance":"created", "busy":false,
+        }]})))),
+        "open_session" => Some(Some(Ok(json!({
+            "session":"s-old", "session_id":"saved-alpha", "project":"alpha",
+            "cwd":args["cwd"], "provenance":"created", "busy":false,
+            "turn_open":false, "thinking":"medium",
+        })))),
+        _ => None,
+    }));
+    let log = fake.serve(board.hosts().connect_fake(HOST));
+    let reply = board
+        .transfer_ctx(&transcript("resume alpha"), "alpha", "", "")
+        .await;
+    assert_eq!(reply.route, "alpha");
+    assert_eq!(log.named("create_session").len(), 0);
+    assert_eq!(
+        log.named("open_session"),
+        [json!({"session_id":"saved-alpha", "cwd":"/srv/alpha", "project":"alpha"})]
+    );
+    assert_eq!(board.agent.as_ref().unwrap().session_id(), "saved-alpha");
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn backgrounding_a_busy_foreground_sends_an_away_notice() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let mut started_tx = Some(started_tx);
+    let log = serve(
+        &board,
+        Box::new(move |session, message| {
+            if session == "s1"
+                && (message.trim() == "long work" || message.contains("\nlong work\n"))
+            {
+                if let Some(tx) = started_tx.take() {
+                    let _ = tx.send(());
+                }
+                vec![Step::Hold]
+            } else {
+                says("handled")
+            }
+        }),
+    );
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    let alpha = board.agent.clone().expect("alpha is foreground");
+    let held = tokio::spawn({
+        let alpha = alpha.clone();
+        async move { alpha.prompt("long work").await }
+    });
+    started_rx.await.expect("the long turn started");
+    let states = Arc::new(StdMutex::new(Vec::new()));
+    let states_for_callback = Arc::clone(&states);
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        states_for_callback
+            .lock()
+            .unwrap()
+            .push((notice.project, notice.state));
+        Box::pin(async {})
+    })));
+    let reply = board
+        .transfer_ctx(&transcript("beta"), "beta", "", "")
+        .await;
+    assert_eq!(reply.route, "beta");
+    assert!(states
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(project, state)| project == "alpha" && state == "busy"));
+    assert!(log
+        .named("set_mode")
+        .iter()
+        .any(|args| args["mode"] == "background"));
+    assert!(log.named("steer").iter().any(|args| args["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("caller is now listening to another agent")));
+    held.abort();
+    let _ = held.await;
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_stopped_project_starts_fresh_after_close() {
+    let (mut board, log) = on_alpha(&[], Box::new(|_, _| says("handled"))).await;
+    let first = board.agent.as_ref().unwrap().session_id().to_owned();
+    board.pending_stop = Some("alpha".into());
+    let stopped = board
+        .handle_decision("yes", &Decision::fallback("confirm"))
+        .await;
+    assert_eq!(stopped.route, OPERATOR);
+    let resumed = board
+        .transfer_ctx(&transcript("fresh alpha"), "alpha", "", "")
+        .await;
+    assert_eq!(resumed.route, "alpha");
+    assert_ne!(board.agent.as_ref().unwrap().session_id(), first);
+    assert_eq!(log.named("create_session").len(), 2);
+    board.shutdown().await;
+}
+
+#[test]
+fn floor_rewrite_guard_accepts_plain_rephrasing_and_rejects_new_facts() {
+    assert!(Switchboard::faithful_floor_rewrite(
+        "the update is ready",
+        "the update is complete",
+    ));
+    assert!(!Switchboard::faithful_floor_rewrite(
+        "the update is ready",
+        "the update is ready with 42 results",
+    ));
+    assert!(!Switchboard::faithful_floor_rewrite(
+        "the update is ready",
+        "the update is ready at https://example.invalid",
+    ));
+    assert!(!Switchboard::faithful_floor_rewrite(
+        "the update is ready",
+        "the update is ready for Switchboard",
+    ));
 }

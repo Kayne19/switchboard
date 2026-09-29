@@ -127,6 +127,8 @@ pub enum ServerMessage {
     View { target: String, reason: String },
     /// The browser's `screen_state` report was applied.
     ScreenStateAck,
+    /// State of every service-tracked project agent.
+    AgentsState { agents: Vec<AgentState> },
 }
 
 /// The fields of a `status` message.
@@ -157,6 +159,25 @@ pub struct Status {
     pub models_diagnostic: Option<String>,
     pub model_swaps: bool,
     pub projects: Vec<String>,
+}
+
+/// State of one resident project agent.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(serde::Deserialize))]
+pub struct AgentState {
+    pub project: String,
+    /// `busy`, `idle`, `finished`, or `waiting`.
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_request: Option<AgentRequest>,
+}
+
+/// A background agent's request to bring it to the foreground.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(serde::Deserialize))]
+pub struct AgentRequest {
+    pub message: String,
+    pub reason: String,
 }
 
 /// One model the picker offers.

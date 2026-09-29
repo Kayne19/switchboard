@@ -297,3 +297,44 @@ async fn broken_activity_callback_does_not_fail_the_turn() {
     assert!(!turn.failed);
     session.close().await;
 }
+
+#[tokio::test]
+async fn releasing_a_taken_over_session_aborts_before_detaching() {
+    let hosts = crate::hosts::Hosts::new(
+        std::collections::HashMap::from([("scriptorium".to_owned(), "token".to_owned())]),
+        crate::hosts::Heartbeat {
+            interval: Duration::from_secs(60),
+            missed_pong_limit: 3,
+        },
+    );
+    let (command_tx, mut command_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut fake = crate::hosts::FakeHostAgent::new(Box::new(|_, _| vec![]));
+    fake.on_command = Some(Box::new(move |name, _| {
+        let _ = command_tx.send(name.to_owned());
+        None
+    }));
+    let _log = fake.serve(hosts.connect_fake("scriptorium"));
+    let inner = Arc::new(ProjectInner {
+        hosts: hosts.clone(),
+        host: "scriptorium".into(),
+        session: "s1".into(),
+        persistent_session_id: "saved-1".into(),
+        instance_id: 1,
+        label: "alpha".into(),
+        provenance: "taken_over".into(),
+        token: StdMutex::new("call-token".into()),
+        turn_timeout: Duration::from_secs(1),
+        on_activity: None,
+        on_module: None,
+        on_closed: None,
+        turn_lock: Mutex::new(()),
+        busy: AtomicBool::new(true),
+        closed: AtomicBool::new(false),
+        brief: String::new(),
+        brief_due: AtomicBool::new(false),
+        turn: StdMutex::new(None),
+    });
+    ProjectSession { inner }.close();
+    assert_eq!(command_rx.recv().await.as_deref(), Some("abort"));
+    assert_eq!(command_rx.recv().await.as_deref(), Some("detach"));
+}

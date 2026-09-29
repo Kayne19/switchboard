@@ -798,6 +798,19 @@ impl Hosts {
         if let Some(state) = hosts.get_mut(host) {
             if state.link.as_ref().map(|link| link.epoch) == Some(epoch) {
                 state.link = None;
+                // A resident handle subscribed to this link must not remain
+                // reusable after the host has gone away. Its pump turns this
+                // into the normal session-closed callback, which evicts the
+                // background projection immediately. A later call may reopen
+                // the saved session after the host reconnects.
+                state.seq += 1;
+                let seq = state.seq;
+                for subscriber in state.subscribers.values() {
+                    let _ = subscriber.send(SessionFrame::Event {
+                        seq,
+                        event: json!({"kind": "session_closed", "reason": "host link closed"}),
+                    });
+                }
             }
             state.pending.retain(|_, pending| pending.epoch != epoch);
         }
@@ -995,6 +1008,7 @@ impl FakeHostAgent {
     async fn run(mut self, mut link: FakeLink, log: FakeLog) {
         let mut sessions = 0u32;
         let mut tokens: HashMap<String, String> = HashMap::new();
+        let mut modes: HashMap<String, String> = HashMap::new();
         let mut cursor = 0u64;
         let mut calls = 0u64;
         let mut stash: std::collections::VecDeque<Value> = Default::default();
@@ -1063,7 +1077,14 @@ impl FakeHostAgent {
                             session.clone(),
                             args["token"].as_str().unwrap_or_default().to_owned(),
                         );
-                        Ok(json!({"on_call": true, "mode": "foreground"}))
+                        let mode = args["mode"].as_str().unwrap_or("foreground").to_owned();
+                        modes.insert(session.clone(), mode.clone());
+                        Ok(json!({"on_call": true, "mode": mode}))
+                    }
+                    "set_mode" => {
+                        let mode = args["mode"].as_str().unwrap_or("foreground").to_owned();
+                        modes.insert(session.clone(), mode.clone());
+                        Ok(json!({"mode": mode}))
                     }
                     "set_model" => Ok(
                         json!({"model": format!("{}/{}", args["provider"].as_str().unwrap_or_default(), args["model"].as_str().unwrap_or_default()), "thinking": "medium"}),

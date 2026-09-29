@@ -7,7 +7,13 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
+#[cfg(test)]
+use std::future::Future;
 use std::path::PathBuf;
+#[cfg(test)]
+use std::pin::Pin;
+#[cfg(test)]
+use std::sync::Arc;
 use std::time::Duration;
 
 pub const DEFAULT_MODEL: &str = "jev-latest";
@@ -67,6 +73,13 @@ pub struct JevAnswer {
     pub noul: Option<f64>,
 }
 
+#[cfg(test)]
+type TestResponder = Arc<
+    dyn Fn(JevRequest) -> Pin<Box<dyn Future<Output = Result<JevResponse, JevError>> + Send>>
+        + Send
+        + Sync,
+>;
+
 #[derive(Clone)]
 pub struct JevClient {
     client: reqwest::Client,
@@ -74,6 +87,8 @@ pub struct JevClient {
     key_file: PathBuf,
     timeout: Duration,
     model: String,
+    #[cfg(test)]
+    test_responder: Option<TestResponder>,
 }
 
 impl JevClient {
@@ -92,6 +107,8 @@ impl JevClient {
             key_file: key_file.into(),
             timeout,
             model: DEFAULT_MODEL.to_owned(),
+            #[cfg(test)]
+            test_responder: None,
         })
     }
 
@@ -99,6 +116,18 @@ impl JevClient {
     #[allow(dead_code)]
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = model.into();
+        self
+    }
+
+    /// Installs an in-process responder for tests. This keeps Jev coverage
+    /// deterministic without binding a local socket or touching a network.
+    #[cfg(test)]
+    pub fn with_test_responder<F, Fut>(mut self, responder: F) -> Self
+    where
+        F: Fn(JevRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<JevResponse, JevError>> + Send + 'static,
+    {
+        self.test_responder = Some(Arc::new(move |request| Box::pin(responder(request))));
         self
     }
 
@@ -111,6 +140,18 @@ impl JevClient {
         state: Value,
         questions: BTreeMap<String, Question>,
     ) -> Result<JevResponse, JevError> {
+        let request = JevRequest {
+            model: self.model.clone(),
+            state,
+            questions,
+        };
+        #[cfg(test)]
+        if let Some(responder) = &self.test_responder {
+            return match tokio::time::timeout(self.timeout, responder(request)).await {
+                Ok(response) => response,
+                Err(_) => Err(JevError::Transport("request timed out".into())),
+            };
+        }
         let key = std::fs::read_to_string(&self.key_file).map_err(|error| {
             JevError::KeyFile(format!("could not read configured Jev key file: {error}"))
         })?;
@@ -118,11 +159,6 @@ impl JevClient {
         if key.is_empty() {
             return Err(JevError::KeyFile("configured Jev key file is empty".into()));
         }
-        let request = JevRequest {
-            model: self.model.clone(),
-            state,
-            questions,
-        };
         let response = self
             .client
             .post(&self.url)

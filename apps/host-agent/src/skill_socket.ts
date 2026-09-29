@@ -14,9 +14,8 @@ import { createInterface } from "node:readline";
 import type { ModuleReply } from "./link.ts";
 import type { CallMode, CallState } from "./sessions.ts";
 
-/** Calls the module may make. The routing signals exist until Jev routes. */
-export const MODULE_CALLS: readonly string[] = ["speak", "request_to_speak", "display", "view", "return_to_operator", "transfer_to_project", "set_model"];
-const SIGNALS = new Set(["return_to_operator", "transfer_to_project", "set_model"]);
+/** Calls exposed by the installed switchboard skill. */
+export const MODULE_CALLS: readonly string[] = ["speak", "request_to_speak", "display", "view"];
 
 /** Longest request line accepted; a longer one closes the connection. */
 const MAX_LINE_BYTES = 1024 * 1024;
@@ -33,7 +32,7 @@ export interface SkillSocketOptions {
 /** What a call does in a mode: relay it to the service, or refuse it here. */
 export function decide(mode: CallMode, call: string): "relay" | ModuleReply {
 	if (mode === "background") {
-		if (call === "speak" || SIGNALS.has(call)) return { status: "refused", reason: "caller_away" };
+		if (call === "speak") return { status: "refused", reason: "caller_away" };
 		return "relay";
 	}
 	// foreground and active: the caller is listening to this session.

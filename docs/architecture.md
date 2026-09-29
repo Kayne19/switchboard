@@ -352,6 +352,7 @@ removes the real coupling; do not create interfaces for ceremony.
 |---|---|---|
 | `apps/backend/src/main.rs` | composition root; `Config`, the only reader of the environment | turn policy |
 | `api.rs` | HTTP/WebSocket coordination, turn dispatch, workers, generation checks | provider wire formats, PBX policy, the display projection, the audio queue |
+| `floor.rs` | ordered background request queue, Jev good-moment holds, stateless rewrites, announce-first release | lifecycle membership, agent-state projection, route authority, TTS provider wire format |
 | `lifecycle.rs` | call identity, the current route and the leg on it, phases, candidate legs, operations, the status | async work or I/O |
 | `pbx.rs` | leg lifecycle: transfer, return, rescue, redial and its decision; the operator process and project sessions | host setup, browser rendering, TTS encoding, a copy of the route |
 | `hosts.rs` | the host link: admission by token, heartbeats, commands and replies, session subscriptions, module calls | routing decisions, leg lifecycle |
