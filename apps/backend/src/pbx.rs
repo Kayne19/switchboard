@@ -61,7 +61,7 @@ const AGENT_BRIEF_SWAPS: &str = "";
 const AGENT_BRIEF_END: &str = "[END OF VOICE BRIEF]";
 /// Instructions for the separate, stateless process. This is code-owned so
 /// deploying the utility never requires another environment setting.
-const UTILITY_SYSTEM_PROMPT: &str = r#"You are the switchboard's stateless utility process. You never speak to the caller and you never answer general questions. For routing prompts, call exactly one routing tool: second_opinion for one target, dispatch_parts for several targets. For a floor rewrite prompt, call rewrite with a natural short spoken version of the supplied message. A rewrite may not add facts, names, numbers, promises, or requests that are not in the original. Never invent projects, never emit a prose answer, and never call more than one tool."#;
+const UTILITY_SYSTEM_PROMPT: &str = r#"You are the switchboard's stateless utility process. You never speak to the caller and you never answer general questions. For routing prompts, call exactly one routing tool: second_opinion for one target, dispatch_parts for several targets. When the caller asks for things from two or more registered projects, call dispatch_parts with one part per project and preserve the caller's exact wording in each part. When the request names only one project, call second_opinion. Never invent projects, never emit a prose answer, and never call more than one tool. For a floor rewrite prompt, call rewrite with a natural short spoken version of the supplied message. A rewrite may not add facts, names, numbers, promises, or requests that are not in the original."#;
 #[derive(Clone, Debug, Serialize)]
 pub struct Utterance {
     pub text: String,
@@ -966,31 +966,71 @@ impl Switchboard {
             }
         }
 
-        // Jev's outage is the conversational LLM fallback. A healthy Jev
-        // decision that is unsure (or addresses multiple projects) gets one
-        // isolated utility call before the caller is asked to clarify.
-        let jev_unavailable = decision.reason.starts_with("Jev unavailable:");
-        if decision.multi_target || (decision.unsure && !jev_unavailable) {
-            match self.utility_decision(text).await {
-                Ok(Some(UtilityDecision::DispatchParts(parts))) => {
-                    // A split returned for an unsure Jev decision is still a
-                    // useful utility verdict. Jev's multi_target flag is a
-                    // hint to consult the utility, not permission to discard
-                    // the utility's structured dispatch.
-                    return self.dispatch_parts(text, parts).await;
+        // Jev's outage is the conversational LLM fallback. A healthy or
+        // unavailable Jev decision that is unsure (or addresses multiple
+        // projects) gets an isolated utility call before the caller is asked
+        // to clarify. Jev is still called exactly once by the API worker;
+        // this is only a second routing opinion from the stateless utility.
+        let utility_required = decision.multi_target || decision.unsure;
+        if utility_required {
+            let request = self.utility_routing_request(text, decision, false);
+            let first = self.utility_decision(&request).await;
+            if decision.multi_target {
+                match first {
+                    Ok(Some(UtilityDecision::DispatchParts(parts))) => {
+                        return self.dispatch_parts(text, parts).await;
+                    }
+                    Ok(_) => {
+                        // Jev found several targets. A one-target or empty
+                        // utility answer is not permission to send the whole
+                        // utterance to the current agent, so ask once with an
+                        // explicit split instruction.
+                        let retry = self
+                            .utility_decision(&self.utility_routing_request(text, decision, true))
+                            .await;
+                        match retry {
+                            Ok(Some(UtilityDecision::DispatchParts(parts))) => {
+                                return self.dispatch_parts(text, parts).await;
+                            }
+                            Ok(_) => {}
+                            Err(error) => {
+                                tracing::warn!(%error, "routing utility retry unavailable; asking the conversational operator");
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "routing utility unavailable; asking the conversational operator");
+                    }
                 }
-                Ok(Some(UtilityDecision::SecondOpinion {
-                    target: Some(target),
-                    mode,
-                    confident: true,
-                })) if decision.unsure => {
-                    return self.route_project_part(text, &target, mode).await;
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    tracing::warn!(%error, "routing utility unavailable; asking the conversational operator");
+            } else {
+                match first {
+                    Ok(Some(UtilityDecision::DispatchParts(parts))) => {
+                        return self.dispatch_parts(text, parts).await;
+                    }
+                    Ok(Some(UtilityDecision::SecondOpinion {
+                        target: Some(target),
+                        mode,
+                        confident: true,
+                    })) => {
+                        return self.route_project_part(text, &target, mode).await;
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::warn!(%error, "routing utility unavailable; asking the conversational operator");
+                    }
                 }
             }
+        }
+
+        // A Jev multi-target verdict that the utility could not split must
+        // never fall through to the current project with the whole utterance.
+        // Let the conversational operator ask the caller instead.
+        if decision.multi_target {
+            let context = TransferContext {
+                exact_caller_transcript: text.to_owned(),
+                derived_intent: String::new(),
+            };
+            return self.handle_operator_ctx(&context).await;
         }
 
         if matches!(decision.action, crate::router::Action::GoToProject)
@@ -1439,14 +1479,47 @@ impl Switchboard {
             .ok_or_else(|| PiSessionError("utility process was not created".into()))
     }
 
+    /// Build a complete routing request instead of relying on the utility's
+    /// system prompt. The utility process is isolated and stateless, so each
+    /// request carries Jev's finding, the exact registered catalog, and the
+    /// caller wording it must preserve in split parts.
+    fn utility_routing_request(&self, text: &str, decision: &Decision, retry: bool) -> String {
+        let target = decision.target.as_deref().unwrap_or("(none)");
+        let projects = self.registry.operator_prompt_catalog().replace(
+            "Available projects for transfer. Use the exact project id with transfer_to_project; aliases are included for recognition.",
+            "Registered projects (use exact ids; never invent projects):",
+        );
+        let instruction = if retry {
+            "This request names several projects; split it with dispatch_parts or answer that it names only one. Do not route the whole utterance to one project. Use one part per registered project and preserve the exact caller wording in each part."
+        } else {
+            "When the caller asks for things from two or more registered projects, call dispatch_parts with one part per project and preserve the exact caller wording for each part. If it names only one project, call second_opinion. Never invent projects."
+        };
+        format!(
+            "[ROUTING REQUEST]
+Jev found: action={}, target={}, multi_target={}, unsure={}.
+{}
+[CALLER WORDING]
+{}
+[INSTRUCTION]
+{}",
+            decision.action.as_str(),
+            target,
+            decision.multi_target,
+            decision.unsure,
+            projects.trim_end(),
+            text,
+            instruction,
+        )
+    }
+
     /// Ask the isolated utility process. This call never touches the
     /// conversational operator session, so an operator turn cannot block it.
     async fn utility_decision(
         &mut self,
-        text: &str,
+        request: &str,
     ) -> Result<Option<UtilityDecision>, PiSessionError> {
         let session = self.ensure_utility().await?.clone();
-        let turn = session.prompt(text).await?;
+        let turn = session.prompt(request).await?;
         if turn.failed {
             return Err(PiSessionError(if turn.error.is_empty() {
                 "routing utility failed".into()
