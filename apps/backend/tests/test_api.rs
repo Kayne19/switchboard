@@ -3,7 +3,7 @@ use crate::delivery::DELIVERY_QUEUE;
 use crate::hosts::{FakeHostAgent, FakeLog, Step};
 use crate::pbx::OPERATOR;
 use crate::pi_client::PiSession;
-use crate::registry::Registry;
+use crate::registry::{Project, Registry};
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use http_body_util::BodyExt;
@@ -19,68 +19,54 @@ fn state_with_stt(stt: Option<String>) -> AppState {
     state_with_stream(stt, None)
 }
 
-fn state_with_jev(url: &str, key_path: &std::path::Path) -> AppState {
-    let key_path = key_path.to_str().expect("key path");
-    let config = crate::Config::for_tests(&[
-        ("SWITCHBOARD_JEV_URL", url),
-        ("SWITCHBOARD_JEV_KEY_FILE", key_path),
-        ("SWITCHBOARD_PI_BINARY", "/bin/sh"),
-    ]);
-    let registry = Registry::new(vec![]);
+fn state_with_jev(client: crate::jev::JevClient, registry: Registry) -> AppState {
+    let config = crate::Config::for_tests(&[("SWITCHBOARD_PI_BINARY", "/bin/sh")]);
     let prewarm = crate::prewarm::Prewarm::settled(
         &config,
         &registry,
-        crate::models::ModelCatalog::unavailable("no projects are registered"),
+        crate::models::ModelCatalog::unavailable("test catalog"),
     );
-    let board = Switchboard::new(&config, registry, std::sync::Arc::new(prewarm));
+    let board = Switchboard::new_with_jev(&config, registry, std::sync::Arc::new(prewarm), client);
     state_on(board)
 }
 
-async fn fake_jev_server() -> (
-    String,
-    std::path::PathBuf,
+fn fake_jev_client() -> (
+    crate::jev::JevClient,
     std::sync::Arc<std::sync::atomic::AtomicUsize>,
     std::sync::Arc<tokio::sync::Notify>,
-    tokio::task::JoinHandle<()>,
 ) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("listener");
-    let endpoint = format!(
-        "http://{}/v1/systemone",
-        listener.local_addr().expect("address")
-    );
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("clock")
-        .as_nanos();
-    let key_path = std::env::temp_dir().join(format!(
-        "switchboard-api-jev-{}-{nonce}",
-        std::process::id()
-    ));
-    std::fs::write(&key_path, "fixture-key").expect("fixture key");
     let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let count = requests.clone();
     let responded = std::sync::Arc::new(tokio::sync::Notify::new());
-    let response_notice = responded.clone();
-    let server = tokio::spawn(async move {
-        let body = r#"{"model":"jev-test","answers":{"action":{"type":"choice","choice":"continue","probabilities":{"continue":1.0},"confidence":1.0},"for_current_agent":{"type":"noul","noul":0.0},"target":{"type":"choice","choice":"none","probabilities":{"none":1.0},"confidence":1.0},"continue_or_fresh":{"type":"choice","choice":"not_applicable","probabilities":{"not_applicable":1.0},"confidence":1.0},"multi_target":{"type":"noul","noul":0.0},"good_moment":{"type":"choice","choice":"yes","probabilities":{"yes":1.0,"no":0.0},"confidence":1.0}}}"#;
-        loop {
-            let Ok((mut stream, _)) = listener.accept().await else {
-                return;
+    let count = requests.clone();
+    let notice = responded.clone();
+    let client = crate::jev::JevClient::new(
+        "http://unused.invalid/v1/systemone",
+        "/nonexistent/typesafe-api-key",
+        Duration::from_secs(1),
+    )
+    .expect("client")
+    .with_test_responder(move |request| {
+        count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        notice.notify_one();
+        async move {
+            let answers = if request.questions.contains_key("good_moment") {
+                serde_json::json!({
+                    "good_moment": {"type":"choice","choice":"yes","probabilities":{"yes":1.0},"confidence":1.0}
+                })
+            } else {
+                serde_json::json!({
+                    "action": {"type":"choice","choice":"continue","probabilities":{"continue":1.0},"confidence":1.0},
+                    "for_current_agent": {"type":"noul","noul":0.0},
+                    "target": {"type":"choice","choice":"none","probabilities":{"none":1.0},"confidence":1.0},
+                    "continue_or_fresh": {"type":"choice","choice":"not_applicable","probabilities":{"not_applicable":1.0},"confidence":1.0},
+                    "multi_target": {"type":"noul","noul":0.0}
+                })
             };
-            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let mut request = vec![0_u8; 8192];
-            let _ = tokio::io::AsyncReadExt::read(&mut stream, &mut request).await;
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(), body
-            );
-            let _ = tokio::io::AsyncWriteExt::write_all(&mut stream, response.as_bytes()).await;
-            response_notice.notify_one();
+            Ok(serde_json::from_value(serde_json::json!({"model":"jev-test","answers":answers}))
+                .expect("fixture response"))
         }
     });
-    (endpoint, key_path, requests, responded, server)
+    (client, requests, responded)
 }
 
 fn state_with_stream(stt: Option<String>, stream: Option<String>) -> AppState {
@@ -985,8 +971,8 @@ async fn typed_turn_is_logged_echoed_and_queued_like_a_transcript() {
 
 #[tokio::test]
 async fn a_non_steered_continue_uses_one_jev_decision_for_one_utterance() {
-    let (endpoint, key_path, requests, _responded, server) = fake_jev_server().await;
-    let state = state_with_jev(&endpoint, &key_path);
+    let (client, requests, _responded) = fake_jev_client();
+    let state = state_with_jev(client, Registry::new(vec![]));
     let mut events = state.0.events.subscribe();
     let generation = state.0.coordinator.generation();
 
@@ -1000,9 +986,7 @@ async fn a_non_steered_continue_uses_one_jev_decision_for_one_utterance() {
 
     worker.abort();
     let _ = worker.await;
-    server.abort();
-    let _ = server.await;
-    let _ = std::fs::remove_file(key_path);
+    // The Jev responder is in-process and needs no teardown.
 }
 
 #[tokio::test]
@@ -1037,8 +1021,8 @@ async fn a_stale_queued_turn_removes_its_retained_jev_decision() {
 
 #[tokio::test]
 async fn steer_rechecks_generation_under_the_active_session_guard() {
-    let (endpoint, key_path, _requests, responded, server) = fake_jev_server().await;
-    let state = state_with_jev(&endpoint, &key_path);
+    let (client, _requests, responded) = fake_jev_client();
+    let state = state_with_jev(client, Registry::new(vec![]));
     let mut events = state.0.events.subscribe();
     let session = PiSession::start(
         vec!["sh".into(), "-c".into(), "sleep 60".into()],
@@ -1093,9 +1077,7 @@ async fn steer_rechecks_generation_under_the_active_session_guard() {
     prompt.abort();
     let _ = prompt.await;
     session.close().await;
-    server.abort();
-    let _ = server.await;
-    let _ = std::fs::remove_file(key_path);
+    // The Jev responder is in-process and needs no teardown.
 }
 
 #[tokio::test]
@@ -4416,76 +4398,290 @@ async fn floor_pbx_api_flow_gates_rewrites_announces_and_plays_in_order() {
     let utility = root.join("fake-utility");
     crate::pi_client::write_executable_script(
         &utility,
-        r##"while IFS= read -r line; do
-printf '%s\n' '{"type":"tool_execution_start","toolName":"rewrite","args":{"text":"rewritten update"}}'
+        r##"rewrite_count=0
+while IFS= read -r line; do
+case "$line" in
+  *"FLOOR REWRITE"*)
+    rewrite_count=$((rewrite_count + 1))
+    if [ "$rewrite_count" -eq 1 ]; then
+      printf '%s\n' '{"type":"tool_execution_start","toolName":"rewrite","args":{"text":"the ablation numbers are ready"}}'
+    else
+      printf '%s\n' '{"type":"tool_execution_start","toolName":"rewrite","args":{"text":"invented 99"}}'
+    fi
+    ;;
+  *)
+    printf '%s\n' '{"type":"tool_execution_start","toolName":"dispatch_parts","args":{"parts":[{"agent":"grapes","text":"the latest ablation numbers are ready"},{"agent":"switchboard","text":"answer the caller"}]}}'
+    ;;
+esac
 printf '%s\n' '{"type":"agent_settled"}'
 done
 "##,
     );
-    let (jev_url, key_path, _requests, _responded, jev_server) = fake_jev_server().await;
+    let foreground_release = std::sync::Arc::new(tokio::sync::Notify::new());
+    let gate_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let gate_wait = foreground_release.clone();
+    let gate_count = gate_calls.clone();
+    let jev = crate::jev::JevClient::new(
+        "http://unused.invalid/v1/systemone",
+        "/nonexistent/typesafe-api-key",
+        Duration::from_secs(1),
+    )
+    .expect("client")
+    .with_test_responder(move |request| {
+        let gate_wait = gate_wait.clone();
+        let gate_count = gate_count.clone();
+        async move {
+            if request.questions.contains_key("good_moment")
+                && gate_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0
+            {
+                gate_wait.notified().await;
+            }
+            let answers = if request.questions.contains_key("good_moment") {
+                serde_json::json!({
+                    "good_moment": {"type":"choice","choice":"yes","probabilities":{"yes":1.0},"confidence":1.0}
+                })
+            } else {
+                serde_json::json!({
+                    "action": {"type":"choice","choice":"general","probabilities":{"general":1.0},"confidence":1.0},
+                    "for_current_agent": {"type":"noul","noul":0.0},
+                    "target": {"type":"choice","choice":"none","probabilities":{"none":1.0},"confidence":1.0},
+                    "continue_or_fresh": {"type":"choice","choice":"not_applicable","probabilities":{"not_applicable":1.0},"confidence":1.0},
+                    "multi_target": {"type":"noul","noul":1.0}
+                })
+            };
+            Ok(serde_json::from_value(serde_json::json!({"model":"jev-test","answers":answers}))
+                .expect("fixture response"))
+        }
+    });
     let config = crate::Config::for_tests(&[
         ("SWITCHBOARD_PI_BINARY", &utility.to_string_lossy()),
-        ("SWITCHBOARD_JEV_URL", &jev_url),
-        ("SWITCHBOARD_JEV_KEY_FILE", &key_path.to_string_lossy()),
+        ("SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS", "1"),
+    ]);
+    let project = |id: &str, description: &str| Project {
+        id: id.into(),
+        description: description.into(),
+        aliases: vec![],
+        host: Some("test-host".into()),
+        cwd: format!("/srv/{id}"),
+        model: Some("anthropic/current".into()),
+        prepare: String::new(),
+    };
+    let registry = Registry::new(vec![
+        project("grapes", "ablation runs"),
+        project("switchboard", "the voice front door"),
+    ]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog {
+            entries: vec![crate::models::CatalogEntry {
+                provider: "anthropic".into(),
+                model: "current".into(),
+                thinks: true,
+            }],
+            available: true,
+            diagnostic: None,
+        },
+    );
+    let board = Switchboard::new_with_jev(&config, registry, std::sync::Arc::new(prewarm), jev);
+    let state = AppState::new(
+        board,
+        TranscriptLog::new(10),
+        Speaker::test_success(100, Duration::from_millis(25_000)),
+        SttAdapter::from_command(None),
+        SttStreamAdapter::from_command(None),
+    );
+    let _host_log = FakeHostAgent::new(Box::new(|session, _message| {
+        if session == "s2" {
+            vec![
+                Step::Call(
+                    "request_to_speak",
+                    json!({"message":"the latest ablation numbers are ready", "reason":"finished"}),
+                ),
+                Step::Call(
+                    "request_to_speak",
+                    json!({"message":"the latest ablation numbers are ready again", "reason":"finished"}),
+                ),
+                Step::Event(json!({"kind":"text","text":"background finished"})),
+            ]
+        } else {
+            vec![
+                Step::Call("speak", json!({"text":"Foreground answer"})),
+                Step::Event(json!({"kind":"text","text":"foreground answered"})),
+            ]
+        }
+    }))
+    .serve(state.0.hosts.connect_fake("test-host"));
+    let (mut connection, _, _) = state.register_connection().await;
+    spawn_workers(state.clone());
+    let foreground_reply = state
+        .0
+        .switchboard
+        .lock()
+        .await
+        .transfer_ctx(
+            &crate::pbx::TransferContext {
+                exact_caller_transcript: "start on switchboard".into(),
+                ..Default::default()
+            },
+            "switchboard",
+            "",
+            "",
+        )
+        .await;
+    assert_eq!(foreground_reply.route, "switchboard");
+    let initial_frames = frames_until(&mut connection, "spoken").await;
+    assert_eq!(
+        initial_frames
+            .iter()
+            .find(|frame| frame["type"] == "spoken")
+            .expect("foreground speech")["entry"]["text"],
+        "Foreground answer"
+    );
+    assert_lifecycle_consistent(&state).await;
+
+    let generation = state.0.coordinator.generation();
+    route_final_transcript(
+        &state,
+        "multi-target",
+        generation,
+        "can you tell me the numbers of the latest ablation run from the grapes and then also tell me what the latest commit from the switchboard project is?".into(),
+    )
+    .await;
+    assert_lifecycle_consistent(&state).await;
+
+    let foreground_frames = frames_until(&mut connection, "spoken").await;
+    assert_eq!(
+        foreground_frames
+            .iter()
+            .find(|frame| frame["type"] == "spoken")
+            .expect("foreground answer")["entry"]["text"],
+        "Foreground answer"
+    );
+    // Do not let Jev release the floor until the foreground audio has settled.
+    foreground_release.notify_one();
+    assert_lifecycle_consistent(&state).await;
+
+    let first_background = frames_until(&mut connection, "spoken").await;
+    assert_eq!(
+        first_background
+            .iter()
+            .find(|frame| frame["type"] == "spoken")
+            .expect("rewritten background speech")["entry"]["text"],
+        "An update from grapes: the ablation numbers are ready"
+    );
+    assert_lifecycle_consistent(&state).await;
+    let second_background = frames_until(&mut connection, "spoken").await;
+    assert_eq!(
+        second_background
+            .iter()
+            .find(|frame| frame["type"] == "spoken")
+            .expect("original background speech")["entry"]["text"],
+        "An update from grapes: the latest ablation numbers are ready again"
+    );
+    assert_lifecycle_consistent(&state).await;
+    assert!(state
+        .0
+        .projection
+        .snapshot()
+        .iter()
+        .find(|agent| agent.project == "grapes")
+        .is_some_and(|agent| agent.pending_request.is_none()));
+    let _ = state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn floor_rewrite_does_not_hold_the_pbx_lock_across_utility_wait() {
+    let root = std::env::temp_dir().join(format!(
+        "switchboard-floor-lock-{}-{}",
+        std::process::id(),
+        crate::pbx::uuid_like()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let marker = root.join("rewrite-started");
+    let utility = root.join("fake-utility");
+    let script = format!(
+        r##"while IFS= read -r line; do
+case "$line" in
+  *"FLOOR REWRITE"*) : > "{marker}"; sleep 60 ;;
+  *) printf '%s\n' '{{"type":"agent_settled"}}' ;;
+esac
+done
+"##,
+        marker = marker.display()
+    );
+    crate::pi_client::write_executable_script(&utility, &script);
+    let jev = crate::jev::JevClient::new(
+        "http://unused.invalid/v1/systemone",
+        "/nonexistent/typesafe-api-key",
+        Duration::from_secs(1),
+    )
+    .expect("client")
+    .with_test_responder(|request| async move {
+        let answers = if request.questions.contains_key("good_moment") {
+            serde_json::json!({
+                "good_moment": {"type":"choice","choice":"yes","probabilities":{"yes":1.0},"confidence":1.0}
+            })
+        } else {
+            serde_json::json!({
+                "action": {"type":"choice","choice":"general","probabilities":{"general":1.0},"confidence":1.0},
+                "for_current_agent": {"type":"noul","noul":0.0},
+                "target": {"type":"choice","choice":"none","probabilities":{"none":1.0},"confidence":1.0},
+                "continue_or_fresh": {"type":"choice","choice":"not_applicable","probabilities":{"not_applicable":1.0},"confidence":1.0},
+                "multi_target": {"type":"noul","noul":0.0}
+            })
+        };
+        Ok(serde_json::from_value(serde_json::json!({"model":"jev-test","answers":answers}))
+            .expect("fixture response"))
+    });
+    let config = crate::Config::for_tests(&[
+        ("SWITCHBOARD_PI_BINARY", &utility.to_string_lossy()),
         ("SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS", "1"),
     ]);
     let registry = Registry::new(vec![]);
     let prewarm = crate::prewarm::Prewarm::settled(
         &config,
         &registry,
-        crate::models::ModelCatalog::unavailable("no projects are registered"),
+        crate::models::ModelCatalog::unavailable("test catalog"),
     );
-    let state = AppState::new(
-        Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
-        TranscriptLog::new(10),
-        Speaker::test_success(100, Duration::from_millis(25_000)),
-        SttAdapter::from_command(None),
-        SttStreamAdapter::from_command(None),
-    );
-    let (mut connection, _, _) = state.register_connection().await;
-    state.0.floor.force_quiet_for_test().await;
+    let state = state_on(Switchboard::new_with_jev(
+        &config,
+        registry,
+        std::sync::Arc::new(prewarm),
+        jev,
+    ));
+    let (_connection, _, _) = state.register_connection().await;
     state
         .0
         .coordinator
-        .register_background("grape", "grape-token");
-    assert_lifecycle_consistent(&state).await;
+        .register_background("grapes", "grapes-token");
+    spawn_workers(state.clone());
+    state.0.floor.force_quiet_for_test().await;
     let accepted = request_to_speak(
         state.clone(),
-        "grape-token",
-        json!({"message":"Original update", "reason":"finished"}),
+        "grapes-token",
+        json!({"message":"the update is ready", "reason":"finished"}),
     )
     .await;
     assert_eq!(accepted.status(), StatusCode::OK);
-    assert_lifecycle_consistent(&state).await;
-    spawn_workers(state.clone());
-    let frames = frames_until(&mut connection, "spoken").await;
-    let spoken = frames
-        .iter()
-        .find(|frame| frame["type"] == "spoken")
-        .expect("floor speech");
-    assert_eq!(
-        spoken["entry"]["text"],
-        "An update from grape: rewritten update"
-    );
-    let types = types_of(&frames);
-    assert!(types
-        .iter()
-        .position(|kind| *kind == "agents_state")
-        .is_some());
-    assert!(types.iter().position(|kind| *kind == "spoken").is_some());
-    for _ in 0..20 {
-        tokio::task::yield_now().await;
-    }
-    let agents = state.0.projection.snapshot();
-    let grape = agents
-        .iter()
-        .find(|agent| agent.project == "grape")
-        .unwrap();
-    assert_eq!(grape.state, "idle");
-    assert!(grape.pending_request.is_none());
-    assert_lifecycle_consistent(&state).await;
-    jev_server.abort();
-    let _ = std::fs::remove_file(key_path);
+    timeout(Duration::from_secs(1), async {
+        while !marker.exists() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("rewrite reached the utility");
+
+    // The foreground turn path can acquire the PBX lock while the utility is
+    // still waiting. This is the caller-audible-delay regression guard.
+    let mut board = timeout(Duration::from_millis(100), state.0.switchboard.lock())
+        .await
+        .expect("rewrite must not hold the PBX lock");
+    let summary = board.call_summary(&[], json!({}), "caller turn");
+    assert_eq!(summary.caller_just_said, "caller turn");
+    board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }
 
