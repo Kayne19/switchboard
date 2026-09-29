@@ -672,13 +672,16 @@ fn spawn_floor_worker(state: AppState) {
             Box::pin(async move {
                 let entries = state.0.transcript_log.lock().await.entries();
                 let screen = state.0.screen_state.lock().await.clone();
-                let (router, mut summary) = call_summary_without_pbx_lock(
-                    &state,
-                    &entries,
-                    screen,
-                    request.message.clone(),
-                )
-                .await;
+                // Floor admission only asks whether a background agent may
+                // speak. Desk discovery is for caller routing and would make
+                // this gate wait on every host link for no decision benefit.
+                let (router, mut summary) = {
+                    let board = state.0.switchboard.lock().await;
+                    (
+                        board.router(),
+                        board.call_summary(&entries, screen, request.message.clone()),
+                    )
+                };
                 // The queued message is the item being judged, not a new
                 // caller utterance. Keeping it in the named field makes
                 // the Jev prompt useful without adding another contract.
