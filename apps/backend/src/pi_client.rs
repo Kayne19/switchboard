@@ -679,35 +679,42 @@ impl ProjectInner {
             .unwrap_or(false)
     }
 
-    /// Queues kill for service-created sessions, or detach for a session
-    /// taken over from a desk. Nothing waits for the answer.
+    /// Queues kill for service-created sessions. A session taken over from a
+    /// desk is never killed: abort its active turn first, then detach it so
+    /// the desk can keep owning it.
     fn release_in_background(&self) {
         self.hosts.unsubscribe(&self.host, &self.session);
-        let command = if self.provenance == "taken_over" {
-            "detach"
-        } else {
-            "kill"
-        };
-        let sent = self
-            .hosts
-            .send_command(&self.host, command, json!({"session": self.session}));
-        let label = self.label.clone();
         let host = self.host.clone();
-        let sent = match sent {
-            Ok(sent) => sent,
-            Err(error) => {
-                tracing::warn!(%label, %host, %error, "could not end the project session");
-                return;
-            }
-        };
+        let session = self.session.clone();
+        let label = self.label.clone();
+        let taken_over = self.provenance == "taken_over";
+        let hosts = self.hosts.clone();
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
         runtime.spawn(async move {
-            match sent.reply(SESSION_COMMAND_WAIT).await {
-                Ok(_) => tracing::info!(%label, %host, "project session ended"),
-                Err(error) => {
-                    tracing::warn!(%label, %host, %error, "could not end the project session")
+            if taken_over {
+                if let Ok(abort) = hosts.send_command(&host, "abort", json!({"session": session})) {
+                    if let Err(error) = abort.reply(SESSION_COMMAND_WAIT).await {
+                        tracing::warn!(%label, %host, %error, "could not abort the taken-over project session");
+                    }
+                } else {
+                    tracing::warn!(%label, %host, "could not queue abort for the taken-over project session");
+                }
+                match hosts.send_command(&host, "detach", json!({"session": session})) {
+                    Ok(sent) => match sent.reply(SESSION_COMMAND_WAIT).await {
+                        Ok(_) => tracing::info!(%label, %host, "taken-over project session detached"),
+                        Err(error) => tracing::warn!(%label, %host, %error, "could not detach the taken-over project session"),
+                    },
+                    Err(error) => tracing::warn!(%label, %host, %error, "could not detach the taken-over project session"),
+                }
+            } else {
+                match hosts.send_command(&host, "kill", json!({"session": session})) {
+                    Ok(sent) => match sent.reply(SESSION_COMMAND_WAIT).await {
+                        Ok(_) => tracing::info!(%label, %host, "project session ended"),
+                        Err(error) => tracing::warn!(%label, %host, %error, "could not end the project session"),
+                    },
+                    Err(error) => tracing::warn!(%label, %host, %error, "could not end the project session"),
                 }
             }
         });
