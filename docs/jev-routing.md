@@ -3,10 +3,11 @@
 ## Purpose
 
 This is the step-1 check for plan `sb-one-assistant` (#52, #53). The plan makes
-Jev the routing decider for caller utterances. Today the operator LLM still
-routes; nothing in the service calls Jev yet. This document records how Jev was
-evaluated and what the numbers were, so the router slice can set its thresholds
-from evidence.
+Jev the routing decider for caller utterances. The backend router now uses the
+request and thresholds below; when Jev is unavailable or unsure, the existing
+operator LLM path handles the utterance. This document records how Jev was
+evaluated and what the numbers were, so the deployed thresholds remain tied to
+evidence.
 
 Jev receives speech-to-text text and a compact call summary. It returns typed
 decisions. In the plan, the top-level LLM takes over when Jev is unavailable or
