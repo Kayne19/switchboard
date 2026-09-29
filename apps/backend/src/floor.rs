@@ -52,8 +52,9 @@ pub(crate) struct FloorHooks {
 struct QueuedRequest {
     request: FloorRequest,
     /// A failed Jev request is not retried. It is released at the next quiet
-    /// moment, as required by the floor contract.
-    held_until_quiet: bool,
+    /// moment, as required by the floor contract. The timestamp starts after
+    /// the rejection, so an already-quiet line cannot release immediately.
+    held_after: Option<Instant>,
 }
 
 struct FloorState {
@@ -86,7 +87,7 @@ impl Floor {
     pub(crate) async fn enqueue(&self, request: FloorRequest) {
         self.state.lock().await.queue.push_back(QueuedRequest {
             request,
-            held_until_quiet: false,
+            held_after: None,
         });
         self.changed.notify_waiters();
     }
@@ -109,7 +110,13 @@ impl Floor {
     #[cfg(test)]
     pub(crate) async fn force_quiet_for_test(&self) {
         let mut state = self.state.lock().await;
-        state.caller_last_spoke = Instant::now() - self.quiet_threshold - Duration::from_millis(1);
+        let quiet_at = Instant::now() - self.quiet_threshold - Duration::from_millis(1);
+        state.caller_last_spoke = quiet_at;
+        if let Some(entry) = state.queue.front_mut() {
+            if entry.held_after.is_some() {
+                entry.held_after = Some(quiet_at);
+            }
+        }
         self.changed.notify_waiters();
     }
 
@@ -164,9 +171,14 @@ impl Floor {
                 if !state.page_connected || !(hooks.connected)() {
                     (entry, None, false, true)
                 } else {
-                    let quiet_at = state.caller_last_spoke + self.quiet_threshold;
+                    let quiet_baseline = entry
+                        .held_after
+                        .map_or(state.caller_last_spoke, |held_after| {
+                            held_after.max(state.caller_last_spoke)
+                        });
+                    let quiet_at = quiet_baseline + self.quiet_threshold;
                     let quiet = Instant::now() >= quiet_at;
-                    if entry.held_until_quiet && !quiet {
+                    if entry.held_after.is_some() && !quiet {
                         (entry, Some(quiet_at), false, false)
                     } else {
                         (entry, None, quiet, false)
@@ -196,7 +208,7 @@ impl Floor {
                 state
                     .queue
                     .front()
-                    .is_some_and(|item| item.held_until_quiet)
+                    .is_some_and(|item| item.held_after.is_some())
             };
             if !held {
                 match (hooks.gate)(&entry.request).await {
@@ -204,7 +216,7 @@ impl Floor {
                     Ok(false) | Err(()) => {
                         let mut state = self.state.lock().await;
                         if let Some(item) = state.queue.front_mut() {
-                            item.held_until_quiet = true;
+                            item.held_after = Some(Instant::now());
                         }
                         self.changed.notify_waiters();
                         continue;

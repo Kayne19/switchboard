@@ -79,8 +79,59 @@ async fn queue_order_and_one_speaker_at_a_time() {
 }
 
 #[tokio::test]
+async fn releases_record_no_overlapping_speakers() {
+    let floor = Floor::new(Duration::ZERO);
+    let connected = Arc::new(AtomicBool::new(true));
+    let live = Arc::new(AtomicBool::new(true));
+    let (events, mut event_rx) = mpsc::unbounded_channel();
+    let active = Arc::new(AtomicUsize::new(0));
+    let maximum = Arc::new(AtomicUsize::new(0));
+    let (allow_first, allow_signal) = oneshot::channel();
+    let allow_signal = Arc::new(Mutex::new(Some(allow_signal)));
+    let mut h = hooks(
+        connected,
+        live,
+        Arc::new(AtomicUsize::new(0)),
+        mpsc::unbounded_channel().0,
+    );
+    let maximum_for_release = maximum.clone();
+    h.release = Arc::new(move |request, _text, _announce| {
+        let events = events.clone();
+        let active = active.clone();
+        let maximum = maximum_for_release.clone();
+        let allow_signal = allow_signal.clone();
+        Box::pin(async move {
+            let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+            maximum.fetch_max(now, Ordering::SeqCst);
+            events.send(format!("start:{}", request.message)).unwrap();
+            if request.message == "update 1" {
+                if let Some(signal) = allow_signal.lock().await.take() {
+                    let _ = signal.await;
+                }
+            }
+            events.send(format!("end:{}", request.message)).unwrap();
+            active.fetch_sub(1, Ordering::SeqCst);
+            ReleaseOutcome::Played
+        }) as ReleaseFuture
+    });
+    floor.set_page_connected(true).await;
+    floor.enqueue(request(1)).await;
+    floor.enqueue(request(2)).await;
+    let floor_worker = floor.clone();
+    let worker = tokio::spawn(async move { floor_worker.run(h).await });
+    assert_eq!(event_rx.recv().await.as_deref(), Some("start:update 1"));
+    assert!(event_rx.try_recv().is_err(), "second speaker started early");
+    allow_first.send(()).unwrap();
+    assert_eq!(event_rx.recv().await.as_deref(), Some("end:update 1"));
+    assert_eq!(event_rx.recv().await.as_deref(), Some("start:update 2"));
+    assert_eq!(event_rx.recv().await.as_deref(), Some("end:update 2"));
+    assert_eq!(maximum.load(Ordering::SeqCst), 1);
+    worker.abort();
+}
+
+#[tokio::test]
 async fn gate_negative_answer_holds_until_the_next_quiet_moment() {
-    let floor = Floor::new(Duration::from_secs(1));
+    let floor = Floor::new(Duration::from_millis(20));
     let connected = Arc::new(AtomicBool::new(true));
     let live = Arc::new(AtomicBool::new(true));
     let calls = Arc::new(AtomicUsize::new(0));
@@ -106,6 +157,37 @@ async fn gate_negative_answer_holds_until_the_next_quiet_moment() {
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert!(results.try_recv().is_err());
     floor.force_quiet_for_test().await;
+    yield_worker().await;
+    assert_eq!(results.recv().await.unwrap().0, "update 1:update 1");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    worker.abort();
+}
+
+#[tokio::test]
+async fn gate_rejection_requires_a_new_quiet_period() {
+    let floor = Floor::new(Duration::from_millis(20));
+    let connected = Arc::new(AtomicBool::new(true));
+    let live = Arc::new(AtomicBool::new(true));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (released, mut results) = mpsc::unbounded_channel();
+    floor.set_page_connected(true).await;
+    floor.force_quiet_for_test().await;
+    floor.enqueue(request(1)).await;
+    let calls_for_gate = calls.clone();
+    let mut h = hooks(connected, live, calls.clone(), released);
+    h.gate = Arc::new(move |_| {
+        let calls = calls_for_gate.clone();
+        Box::pin(async move {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(false)
+        }) as GateFuture
+    });
+    let floor_worker = floor.clone();
+    let worker = tokio::spawn(async move { floor_worker.run(h).await });
+    yield_worker().await;
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(results.try_recv().is_err());
+    tokio::time::sleep(Duration::from_millis(30)).await;
     yield_worker().await;
     assert_eq!(results.recv().await.unwrap().0, "update 1:update 1");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -169,25 +251,25 @@ async fn rewrite_timeout_uses_the_original_message() {
     let connected = Arc::new(AtomicBool::new(true));
     let live = Arc::new(AtomicBool::new(true));
     let (released, mut results) = mpsc::unbounded_channel();
-    let (rewrite_done, rewrite_signal) = oneshot::channel();
-    let rewrite_signal = Arc::new(Mutex::new(Some(rewrite_signal)));
     floor.set_page_connected(true).await;
     floor.enqueue(request(1)).await;
     let mut h = hooks(connected, live, Arc::new(AtomicUsize::new(0)), released);
-    h.rewrite = Arc::new(move |_| {
-        let rewrite_signal = rewrite_signal.clone();
-        Box::pin(async move {
-            if let Some(signal) = rewrite_signal.lock().await.take() {
-                let _ = signal.await;
-            }
-            Err(())
+    h.rewrite = Arc::new(|_| {
+        Box::pin(async {
+            tokio::time::timeout(
+                Duration::from_millis(20),
+                std::future::pending::<Result<String, ()>>(),
+            )
+            .await
+            .map_err(|_| ())
+            .and_then(|result| result)
         }) as RewriteFuture
     });
     let floor_worker = floor.clone();
     let worker = tokio::spawn(async move { floor_worker.run(h).await });
     yield_worker().await;
     assert!(results.try_recv().is_err());
-    rewrite_done.send(()).unwrap();
+    tokio::time::sleep(Duration::from_millis(30)).await;
     yield_worker().await;
     assert_eq!(results.recv().await.unwrap().0, "update 1:update 1");
     worker.abort();
