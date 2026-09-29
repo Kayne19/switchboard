@@ -498,7 +498,14 @@ async fn utility_split_keeps_the_current_agent_foreground_even_without_jev_multi
         &[("SWITCHBOARD_PI_BINARY", &binary.to_string_lossy())],
         two_model_catalog(),
     );
-    let log = serve(&board, Box::new(|_, _| says("Alpha is ready.")));
+    let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+    let log = serve(
+        &board,
+        Box::new(move |session, message| {
+            let _ = prompt_tx.send((session.to_owned(), message.to_owned()));
+            says("Alpha is ready.")
+        }),
+    );
     let connected = board
         .transfer_ctx(&transcript("connect alpha"), "alpha", "", "")
         .await;
@@ -516,23 +523,24 @@ async fn utility_split_keeps_the_current_agent_foreground_even_without_jev_multi
         reason: "Jev was unsure".into(),
     };
 
-    let reply = board.handle_decision("check both", &decision).await;
+    let reply = board
+        .handle_decision(
+            "can you tell me the numbers of the latest ablation run from the grapes and then also tell me what the latest commit from the switchboard project is?",
+            &decision,
+        )
+        .await;
 
     assert_eq!(reply.route, "alpha");
     let mut routed_prompts = prompts(&log);
-    for _ in 0..100 {
-        if routed_prompts
-            .iter()
-            .any(|prompt| prompt.contains("Review beta build"))
-        {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-        routed_prompts = prompts(&log);
-    }
     assert!(routed_prompts[before..]
         .iter()
         .any(|prompt| prompt.contains("Check alpha logs")));
+    while let Some((_session, prompt)) = prompt_rx.recv().await {
+        if prompt.contains("Review beta build") {
+            break;
+        }
+    }
+    routed_prompts = prompts(&log);
     assert!(routed_prompts
         .iter()
         .any(|prompt| prompt.contains("Review beta build")));
@@ -1740,4 +1748,254 @@ async fn at_most_one_session_per_project_stays_up() {
         log.named("kill"),
         [json!({"session": "s1"}), json!({"session": "s2"})]
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn background_split_selects_foreground_and_hangup_keeps_residents() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+    let _log = serve(
+        &board,
+        Box::new(move |session, message| {
+            let _ = prompt_tx.send((session.to_owned(), message.to_owned()));
+            says("handled")
+        }),
+    );
+    assert_eq!(
+        board
+            .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+            .await
+            .route,
+        "alpha"
+    );
+    let reply = board
+        .dispatch_parts(
+            "both",
+            vec![
+                crate::router::DispatchPart {
+                    agent: "alpha".into(),
+                    text: "alpha part".into(),
+                },
+                crate::router::DispatchPart {
+                    agent: "beta".into(),
+                    text: "beta part".into(),
+                },
+            ],
+        )
+        .await;
+    assert_eq!(reply.route, "alpha");
+    let mut saw_beta = false;
+    while let Some((session, message)) = prompt_rx.recv().await {
+        if session == "s2" && message.contains("beta part") {
+            saw_beta = true;
+            break;
+        }
+    }
+    assert!(saw_beta, "the split's non-foreground part was dispatched");
+    assert!(board.background_agents.contains_key("beta"));
+
+    let promoted = board
+        .route_project_part(
+            "bring beta forward",
+            "beta",
+            crate::router::ConversationMode::Continue,
+        )
+        .await;
+    assert_eq!(promoted.route, "beta");
+    assert!(board.background_agents.contains_key("alpha"));
+    let alpha = board.background_agents.get("alpha").unwrap().clone();
+    assert!(alpha.alive(), "the former foreground is resident");
+
+    assert_eq!(board.force_hangup().await.as_deref(), Some("beta"));
+    assert!(alpha.alive(), "hangup drops only the foreground agent");
+    assert!(board.background_agents.contains_key("alpha"));
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn idle_background_split_part_continues_without_a_new_session() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+    let log = serve(
+        &board,
+        Box::new(move |session, message| {
+            let _ = prompt_tx.send((session.to_owned(), message.to_owned()));
+            says("handled")
+        }),
+    );
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .dispatch_parts(
+            "first",
+            vec![
+                crate::router::DispatchPart {
+                    agent: "alpha".into(),
+                    text: "alpha one".into(),
+                },
+                crate::router::DispatchPart {
+                    agent: "beta".into(),
+                    text: "beta one".into(),
+                },
+            ],
+        )
+        .await;
+    while let Some((session, message)) = prompt_rx.recv().await {
+        if session == "s2" && message.contains("beta one") {
+            break;
+        }
+    }
+    let creates = log.named("create_session").len();
+    board
+        .dispatch_parts(
+            "second",
+            vec![
+                crate::router::DispatchPart {
+                    agent: "alpha".into(),
+                    text: "alpha two".into(),
+                },
+                crate::router::DispatchPart {
+                    agent: "beta".into(),
+                    text: "beta two".into(),
+                },
+            ],
+        )
+        .await;
+    let mut saw_second = false;
+    while let Some((session, message)) = prompt_rx.recv().await {
+        if session == "s2" && message.contains("beta two") {
+            saw_second = true;
+            break;
+        }
+    }
+    assert!(saw_second, "idle background sessions receive a later part");
+    assert_eq!(log.named("create_session").len(), creates);
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn busy_background_split_part_is_refused_and_fresh_start_is_rejected() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+    let log = serve(
+        &board,
+        Box::new(move |session, message| {
+            let _ = prompt_tx.send((session.to_owned(), message.to_owned()));
+            if session == "s2" {
+                vec![Step::Hold]
+            } else {
+                says("handled")
+            }
+        }),
+    );
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .dispatch_parts(
+            "first",
+            vec![
+                crate::router::DispatchPart {
+                    agent: "alpha".into(),
+                    text: "alpha one".into(),
+                },
+                crate::router::DispatchPart {
+                    agent: "beta".into(),
+                    text: "beta busy".into(),
+                },
+            ],
+        )
+        .await;
+    while let Some((session, message)) = prompt_rx.recv().await {
+        if session == "s2" && message.contains("beta busy") {
+            break;
+        }
+    }
+    let creates = log.named("create_session").len();
+    board
+        .dispatch_parts(
+            "second",
+            vec![
+                crate::router::DispatchPart {
+                    agent: "alpha".into(),
+                    text: "alpha two".into(),
+                },
+                crate::router::DispatchPart {
+                    agent: "beta".into(),
+                    text: "beta refused".into(),
+                },
+            ],
+        )
+        .await;
+    assert_eq!(log.named("create_session").len(), creates);
+    let refusal = board
+        .route_project_part("fresh beta", "beta", crate::router::ConversationMode::Fresh)
+        .await;
+    assert_eq!(refusal.error.as_deref(), Some("project is busy"));
+    assert_eq!(refusal.route, "alpha");
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn stop_requires_confirmation_before_closing_a_project() {
+    let (mut board, _log) = on_alpha(&[], Box::new(|_, _| says("handled"))).await;
+    let stop = Decision {
+        action: crate::router::Action::Stop,
+        target: Some("alpha".into()),
+        continue_or_fresh: None,
+        confidence: 1.0,
+        for_current_agent: 1.0,
+        multi_target: false,
+        unsure: false,
+        confirm: true,
+        reason: "stop requested".into(),
+    };
+    let ask = board.handle_decision("stop alpha", &stop).await;
+    assert!(ask.text.contains("Say yes to confirm"));
+    assert!(
+        board.agent.is_some(),
+        "confirmation does not stop the session"
+    );
+    let stopped = board
+        .handle_decision("yes", &Decision::fallback("confirmation"))
+        .await;
+    assert_eq!(stopped.route, OPERATOR);
+    assert!(board.agent.is_none());
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_saved_resident_session_is_resumed_with_open_session() {
+    let mut board = board_with(vec![project("alpha", "")], false);
+    let mut fake = crate::hosts::FakeHostAgent::new(Box::new(|_, _| says("resumed")));
+    fake.on_command = Some(Box::new(|name, args| match name {
+        "list_sessions" => Some(Some(Ok(json!({"sessions":[{
+            "session":"s-old", "session_id":"saved-alpha", "project":"alpha",
+            "cwd":"/srv/alpha", "provenance":"created", "busy":false,
+        }]})))),
+        "open_session" => Some(Some(Ok(json!({
+            "session":"s-old", "session_id":"saved-alpha", "project":"alpha",
+            "cwd":args["cwd"], "provenance":"created", "busy":false,
+            "turn_open":false, "thinking":"medium",
+        })))),
+        _ => None,
+    }));
+    let log = fake.serve(board.hosts().connect_fake(HOST));
+    let reply = board
+        .transfer_ctx(&transcript("resume alpha"), "alpha", "", "")
+        .await;
+    assert_eq!(reply.route, "alpha");
+    assert_eq!(log.named("create_session").len(), 0);
+    assert_eq!(
+        log.named("open_session"),
+        [json!({"session_id":"saved-alpha", "cwd":"/srv/alpha", "project":"alpha"})]
+    );
+    assert_eq!(board.agent.as_ref().unwrap().session_id(), "saved-alpha");
+    board.shutdown().await;
 }

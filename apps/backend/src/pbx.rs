@@ -37,6 +37,17 @@ const PROJECT_TURN_TIMEOUT: Duration = Duration::from_secs(600);
 /// Told the switchboard has settled on a leg; it reads which one from the
 /// coordinator.
 pub type RouteCallback = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+/// Reports resident project-agent lifecycle transitions to the application
+/// presentation layer. The PBX remains the lifecycle owner; this is only a
+/// projection callback.
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub struct AgentStateNotice {
+    pub project: String,
+    pub state: String,
+}
+pub type AgentStateCallback =
+    Arc<dyn Fn(AgentStateNotice) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 /// The voice brief's opening. The brief rides at the start of the first
 /// prompt a project session gets for the caller, and again on the first after
@@ -349,6 +360,7 @@ pub struct Switchboard {
     speech_deadline_ms: u64,
     activity_callback: Option<ActivityCallback>,
     route_callback: Option<RouteCallback>,
+    agent_state_callback: Option<AgentStateCallback>,
     module_callback: Option<ModuleCallback>,
     active_session: Arc<Mutex<Option<LegSession>>>,
     operator: Option<PiSession>,
@@ -425,6 +437,7 @@ impl Switchboard {
             speech_deadline_ms: config.speech_deadline_ms,
             activity_callback: None,
             route_callback: None,
+            agent_state_callback: None,
             module_callback: None,
             active_session: Arc::new(Mutex::new(None)),
             operator: None,
@@ -461,6 +474,21 @@ impl Switchboard {
 
     pub fn set_route_callback(&mut self, callback: Option<RouteCallback>) {
         self.route_callback = callback;
+    }
+
+    #[allow(dead_code)]
+    pub fn set_agent_state_callback(&mut self, callback: Option<AgentStateCallback>) {
+        self.agent_state_callback = callback;
+    }
+
+    async fn announce_agent_state(&self, project: &str, state: &str) {
+        if let Some(callback) = &self.agent_state_callback {
+            callback(AgentStateNotice {
+                project: project.to_owned(),
+                state: state.to_owned(),
+            })
+            .await;
+        }
     }
 
     /// What answers a project session's `speak`, `display` and `view`.
@@ -726,14 +754,9 @@ impl Switchboard {
                 .await;
         };
 
-        let reply = self
-            .route_project_part(
-                &foreground.text,
-                &foreground.agent,
-                crate::router::ConversationMode::Continue,
-            )
-            .await;
-        for (index, part) in parts.into_iter().enumerate() {
+        // Start resident background work before awaiting the foreground turn.
+        // A slow foreground model must not serialize unrelated project parts.
+        for (index, part) in parts.iter().enumerate() {
             if index == foreground_index || part.agent == foreground.agent {
                 continue;
             }
@@ -741,7 +764,12 @@ impl Switchboard {
                 tracing::warn!(project = %part.agent, %error, "background split part failed");
             }
         }
-        reply
+        self.route_project_part(
+            &foreground.text,
+            &foreground.agent,
+            crate::router::ConversationMode::Continue,
+        )
+        .await
     }
 
     /// Start one split part without changing the caller's foreground route.
@@ -754,9 +782,32 @@ impl Switchboard {
             .agent
             .as_ref()
             .is_some_and(|agent| agent.label() == project.id)
-            || self.background_agents.contains_key(&project.id)
         {
             return Err(format!("project {} is already busy", project.id));
+        }
+        // A resident background session can be idle after its prior turn. Keep
+        // its history and address it instead of treating existence as busy.
+        if let Some(session) = self.background_agents.get(&project.id).cloned() {
+            if session.busy() {
+                return Err(format!("project {} is already busy", project.id));
+            }
+            self.announce_agent_state(&project.id, "busy").await;
+            let callback = self.agent_state_callback.clone();
+            let project_id = project.id.clone();
+            let text = text.to_owned();
+            tokio::spawn(async move {
+                if let Err(error) = session.prompt(&text).await {
+                    tracing::warn!(%error, "background agent prompt failed");
+                }
+                if let Some(callback) = callback {
+                    callback(AgentStateNotice {
+                        project: project_id,
+                        state: "idle".into(),
+                    })
+                    .await;
+                }
+            });
+            return Ok(());
         }
         let plan = self
             .prewarm
@@ -783,9 +834,19 @@ impl Switchboard {
             .register_background(project.id.clone(), token.clone());
         self.background_agents
             .insert(project.id.clone(), session.clone());
+        self.announce_agent_state(&project.id, "busy").await;
+        let callback = self.agent_state_callback.clone();
+        let project_id = project.id.clone();
         tokio::spawn(async move {
             if let Err(error) = session.prompt(&intro).await {
                 tracing::warn!(%error, "background agent prompt failed");
+            }
+            if let Some(callback) = callback {
+                callback(AgentStateNotice {
+                    project: project_id,
+                    state: "idle".into(),
+                })
+                .await;
             }
         });
         Ok(())
@@ -1164,6 +1225,7 @@ impl Switchboard {
 
         let intro_prompt = build_intro_prompt(context, &project, plan.prepare_report.as_ref());
 
+        self.announce_agent_state(&project.id, "busy").await;
         let turn = match session.prompt(&intro_prompt).await {
             Ok(t) => t,
             Err(e) => {
@@ -1226,9 +1288,11 @@ impl Switchboard {
                 }
                 self.coordinator
                     .register_background(previous_label.clone(), previous.token());
+                self.announce_agent_state(&previous_label, "idle").await;
                 self.background_agents.insert(previous_label, previous);
             }
         }
+        self.announce_agent_state(&project.id, "idle").await;
         self.agent = Some(session);
         self.set_active_session(self.agent_leg()).await;
         self.announce_route().await;
@@ -1268,6 +1332,7 @@ impl Switchboard {
                 Some(error.to_string()),
             );
         }
+        self.announce_agent_state(&project.id, "busy").await;
         self.coordinator.remove_background(&old_token);
         let candidate = CandidateLeg::new(
             project.id.clone(),
@@ -1319,8 +1384,10 @@ impl Switchboard {
             }
             self.coordinator
                 .register_background(previous_label.clone(), previous.token());
+            self.announce_agent_state(&previous_label, "idle").await;
             self.background_agents.insert(previous_label, previous);
         }
+        self.announce_agent_state(&project.id, "idle").await;
         self.agent = Some(session);
         self.set_active_session(self.agent_leg()).await;
         self.announce_route().await;
@@ -1404,6 +1471,7 @@ impl Switchboard {
             return Err(error);
         }
         self.confirm_thinking(leg_token, &state);
+        self.announce_agent_state(&project.id, "idle").await;
         Ok(session)
     }
 
@@ -1707,8 +1775,15 @@ impl Switchboard {
     }
     async fn drop_agent(&mut self) {
         let was_on_a_project = self.coordinator.route() != OPERATOR;
+        let project = self
+            .agent
+            .as_ref()
+            .map(|session| session.label().to_owned());
         if let Some(s) = self.agent.take() {
             s.close();
+        }
+        if let Some(project) = project {
+            self.announce_agent_state(&project, "finished").await;
         }
         self.set_active_session(self.operator_leg()).await;
         self.coordinator.return_to_operator();
@@ -1787,17 +1862,10 @@ impl Switchboard {
             self.resume_blocked.insert(target.to_owned());
             self.coordinator.remove_background(&session.token());
             session.close();
+            self.announce_agent_state(target, "finished").await;
             return self.reply([format!("Stopped {target}.")], None);
         }
         self.reply([format!("{target} is not running.")], None)
-    }
-
-    async fn close_background_agents(&mut self) {
-        for (_, session) in self.background_agents.drain() {
-            let token = session.token();
-            self.coordinator.remove_background(&token);
-            session.close();
-        }
     }
 
     pub async fn force_hangup(&mut self) -> Option<String> {
@@ -1806,7 +1874,6 @@ impl Switchboard {
             if let Some(session) = self.operator.take() {
                 tracing::info!("caller hung up a wedged operator turn from the page");
                 session.close().await;
-                self.close_background_agents().await;
                 self.set_active_session(None).await;
                 return Some(OPERATOR.into());
             }
@@ -1815,7 +1882,6 @@ impl Switchboard {
         let left = route;
         tracing::info!(%left, "caller hung up the project leg from the page");
         self.drop_agent().await;
-        self.close_background_agents().await;
         self.operator_note = Some(format!("The caller dropped the line to {left}."));
         Some(left)
     }
