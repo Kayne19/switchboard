@@ -376,7 +376,10 @@ The last is the reply for any `depth` other than 0.
 
 Calls: `speak {text}`, `request_to_speak {message, reason}` (`reason` is
 `finished`, `needs_decision` or `problem`), `display {action}`, and
-`view {target?}`.
+`view {target?}`. For `request_to_speak`, `message` is exactly what the caller
+should hear: the actual result, decision question and options, or problem and
+need. It is queued and lightly smoothed; it does not ask the caller to bring
+the background session forward.
 
 Reply: `{status, reason, result?}`, `status` one of `delivered`, `accepted`,
 `refused`, `failed`. Checks, in order:

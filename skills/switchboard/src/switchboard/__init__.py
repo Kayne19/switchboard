@@ -161,7 +161,7 @@ def _common(result):
             detail = result.reason
         return f"Could not reach the switchboard{f': {detail}' if detail else ''}. Nothing was sent."
     if result.reason == "caller_away":
-        return "The caller is not listening to this session right now; nothing was sent."
+        return "The caller is listening to another session; use request_to_speak with the actual words they should hear."
     return None
 
 
@@ -198,11 +198,13 @@ def speak(text):
 
 
 def request_to_speak(message, reason):
-    """Ask the caller to bring this background session to the foreground.
+    """Queue exactly what the caller should hear from this background session.
 
-    ``reason`` is one of ``finished``, ``needs_decision`` or ``problem``.
-    The request is queued by the service; it does not speak for a background
-    session.
+    ``message`` is the spoken content, not a teaser: for ``finished`` give the
+    actual result in one to three short sentences; for ``needs_decision`` give
+    the question and options; for ``problem`` say what went wrong and what is
+    needed. ``reason`` is one of ``finished``, ``needs_decision`` or ``problem``.
+    The service lightly smooths the message and speaks it at a good moment.
     """
     _require_str("message", message)
     _require_str("reason", reason)

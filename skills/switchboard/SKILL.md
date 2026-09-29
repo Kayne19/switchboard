@@ -33,6 +33,13 @@ target or thinking level, or a value JSON cannot carry). Values with
   before a long stretch of work, and to check in while it runs. Keep each
   line to a sentence or two of plain spoken English: no markdown, no file
   paths, no code, no lists.
+- `request_to_speak(message, reason)`: queue exactly what the caller should
+  hear when this session is working in the background. The `message` is not a
+  teaser. For `finished`, give the actual result in one to three short spoken
+  sentences. For `needs_decision`, give the question and options. For
+  `problem`, say what went wrong and what is needed. The service lightly
+  smooths it and speaks it at a good moment; do not ask the caller to bring
+  this session forward.
 - `display(action)` or `display(**action)`: one display action per call, with
   `op` `show`, `hide`, `focus`, `say` or `clear`. See "Display" below.
 - `view(target=None)`: with no target, report what is on the caller's screen.
