@@ -913,7 +913,9 @@ impl ProjectSession {
             )
             .await
             .map_err(|error| PiSessionError(format!("could not take over a session: {error}")))?;
-        let result = Self::from_open_reply(hosts, launch.clone(), reply, None, "attached", "taken_over").await;
+        let result =
+            Self::from_open_reply(hosts, launch.clone(), reply, None, "attached", "taken_over")
+                .await;
         if result.is_err() {
             // The host persists taken_over provenance before replying. A
             // malformed success must therefore undo the attach even though no
@@ -927,8 +929,12 @@ impl ProjectSession {
                 )
                 .await
             {
-                Ok(_) => tracing::info!(host = %launch.host, session, "rolled back malformed desk takeover"),
-                Err(error) => tracing::warn!(host = %launch.host, session, %error, "could not roll back malformed desk takeover"),
+                Ok(_) => {
+                    tracing::info!(host = %launch.host, session, "rolled back malformed desk takeover")
+                }
+                Err(error) => {
+                    tracing::warn!(host = %launch.host, session, %error, "could not roll back malformed desk takeover")
+                }
             }
         }
         result

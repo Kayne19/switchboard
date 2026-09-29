@@ -1105,8 +1105,7 @@ async fn call_summary_without_pbx_lock(
         let board = state.0.switchboard.lock().await;
         (board.hosts(), Arc::clone(&board.registry))
     };
-    let live_desk_sessions =
-        Switchboard::live_desk_sessions_from(hosts, registry).await;
+    let live_desk_sessions = Switchboard::live_desk_sessions_from(hosts, registry).await;
     let mut summary = {
         let board = state.0.switchboard.lock().await;
         board.call_summary(entries, screen, utterance)

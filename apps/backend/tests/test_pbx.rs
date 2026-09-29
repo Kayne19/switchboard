@@ -2790,7 +2790,10 @@ async fn takeover_attaches_and_voice_briefs_then_hangup_detaches_without_kill() 
 
 #[tokio::test]
 async fn takeover_backgrounds_an_existing_service_foreground_agent() {
-    let mut board = board_with(vec![project("alpha", "Alpha"), project("beta", "Beta")], false);
+    let mut board = board_with(
+        vec![project("alpha", "Alpha"), project("beta", "Beta")],
+        false,
+    );
     let list_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let list_calls_for_host = list_calls.clone();
     let mut host = FakeHostAgent::new(Box::new(|_, _| says("handled")));
@@ -2840,7 +2843,10 @@ async fn takeover_backgrounds_an_existing_service_foreground_agent() {
         .residents_for_test()
         .iter()
         .any(|(project, alive, _)| project == "alpha" && *alive));
-    assert!(log.named("set_mode").iter().any(|args| args["mode"] == "background"));
+    assert!(log
+        .named("set_mode")
+        .iter()
+        .any(|args| args["mode"] == "background"));
     board.shutdown().await;
 }
 
@@ -2941,7 +2947,10 @@ async fn takeover_link_drop_during_attach_rolls_back_without_kill() {
 
 #[tokio::test]
 async fn leaving_a_taken_over_leg_by_transfer_detaches_without_kill() {
-    let mut board = board_with(vec![project("alpha", "Alpha"), project("beta", "Beta")], false);
+    let mut board = board_with(
+        vec![project("alpha", "Alpha"), project("beta", "Beta")],
+        false,
+    );
     let mut host = FakeHostAgent::new(Box::new(|_, _| says("handled")));
     host.on_command = Some(Box::new(|name, args| {
         if name == "list_sessions" {
@@ -2981,7 +2990,10 @@ async fn leaving_a_taken_over_leg_by_transfer_detaches_without_kill() {
         .await;
     assert_eq!(reply.route, "beta");
     until_named(&log, "detach").await;
-    assert!(log.named("kill").is_empty(), "leaving a desk session never kills it");
+    assert!(
+        log.named("kill").is_empty(),
+        "leaving a desk session never kills it"
+    );
     board.shutdown().await;
 }
 
@@ -3040,7 +3052,10 @@ async fn stopping_a_taken_over_leg_detaches_without_kill() {
         .await;
     assert_eq!(stopped.route, OPERATOR);
     until_named(&log, "detach").await;
-    assert!(log.named("kill").is_empty(), "stopping a desk session never kills it");
+    assert!(
+        log.named("kill").is_empty(),
+        "stopping a desk session never kills it"
+    );
     board.shutdown().await;
 }
 

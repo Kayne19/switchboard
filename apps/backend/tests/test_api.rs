@@ -3479,9 +3479,10 @@ async fn a_slow_desk_host_does_not_hold_the_pbx_lock_during_routing_summary() {
     fake.serve(host.connect_fake("scriptorium"));
 
     let routing_state = state.clone();
-    let routing = tokio::spawn(async move {
-        route_transcript(&routing_state, "caller asks about alpha").await
-    });
+    let routing =
+        tokio::spawn(
+            async move { route_transcript(&routing_state, "caller asks about alpha").await },
+        );
     timeout(Duration::from_secs(1), listed.notified())
         .await
         .expect("the routing summary queried the host");
@@ -3490,7 +3491,9 @@ async fn a_slow_desk_host_does_not_hold_the_pbx_lock_during_routing_summary() {
         .expect("a slow host query does not hold the PBX lock");
     drop(guard);
     host.disconnect_fake("scriptorium");
-    let _ = routing.await.expect("routing completed after the host link closed");
+    let _ = routing
+        .await
+        .expect("routing completed after the host link closed");
     state.0.switchboard.lock().await.shutdown().await;
 }
 
