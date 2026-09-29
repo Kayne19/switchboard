@@ -3299,6 +3299,13 @@ fn scratch_root(label: &str) -> std::path::PathBuf {
 
 /// A pi stand-in that answers every prompt with `reply`.
 #[cfg(unix)]
+fn failing_agent(root: &std::path::Path) -> std::path::PathBuf {
+    let path = root.join("failing-pi");
+    crate::pi_client::write_executable_script(&path, "exit 1");
+    path
+}
+
+#[cfg(unix)]
 fn answering_agent(root: &std::path::Path, name: &str, reply: &str) -> std::path::PathBuf {
     let path = root.join(name);
     crate::pi_client::write_executable_script(
@@ -3312,6 +3319,53 @@ done
         ),
     );
     path
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn both_routing_authorities_down_emit_a_page_error_without_audio() {
+    let root = scratch_root("routing-unavailable");
+    let binary = failing_agent(&root);
+    let config = crate::Config::for_tests(&[("SWITCHBOARD_PI_BINARY", &binary.to_string_lossy())]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    let state = state_on(Switchboard::new(
+        &config,
+        registry,
+        std::sync::Arc::new(prewarm),
+    ));
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let generation = state.0.coordinator.generation();
+    state.0.routed_decisions.lock().await.insert(
+        "down".into(),
+        crate::router::Decision::fallback("Jev unavailable: test"),
+    );
+    state.0.queued_turns.store(1, Ordering::Release);
+    let worker = tokio::spawn(process_turns(state.clone()));
+    state
+        .0
+        .turns
+        .send(("down".into(), "hello".into(), generation))
+        .await
+        .unwrap();
+
+    let frames = frames_until(&mut connection, "routing_unavailable").await;
+
+    assert!(types_of(&frames).contains(&"routing_unavailable"));
+    assert!(!types_of(&frames).contains(&"reply"));
+    assert!(!types_of(&frames).contains(&"final_response_audio_closed"));
+    assert_eq!(
+        frames.last().expect("routing error")["message"],
+        "Routing is unavailable. Please try again."
+    );
+    worker.abort();
+    let _ = worker.await;
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
 }
 
 /// An app whose operator is a pi stand-in under `root`, and whose one
