@@ -1130,6 +1130,33 @@ impl Switchboard {
         Some(session)
     }
 
+    /// Shelves the former foreground leg when another project takes the line.
+    /// Foreign desk sessions are released, never made resident: the service
+    /// owns only sessions it created.
+    async fn shelve_previous_foreground(&mut self, next_project: &str) {
+        let Some(previous) = self.agent.take() else {
+            return;
+        };
+        let previous_label = previous.label().to_owned();
+        if previous_label == next_project || previous.is_taken_over() {
+            previous.close();
+            self.announce_agent_state(&previous_label, "finished").await;
+            return;
+        }
+        if let Err(error) = previous.set_mode("background").await {
+            tracing::warn!(project = %previous_label, %error, "could not mark previous foreground agent background");
+        }
+        if previous.busy() {
+            let _ = previous
+                .steer("[switchboard] The caller is now listening to another agent. Continue your work quietly; use request_to_speak when you need the caller.")
+                .await;
+        }
+        let state = if previous.busy() { "busy" } else { "idle" };
+        let registered = self.register_background_session(previous_label.clone(), previous);
+        self.announce_agent_state(&previous_label, if registered { state } else { "finished" })
+            .await;
+    }
+
     /// Registers a resident and rechecks the host handle after insertion. A
     /// host can report death between the token registration and map insertion;
     /// the final check closes that gap without leaving a dead token resident.
@@ -1796,28 +1823,7 @@ impl Switchboard {
         }
         self.coordinator.finish_intro();
 
-        if let Some(previous) = self.agent.take() {
-            if previous.label() == project.id {
-                previous.close();
-            } else {
-                let previous_label = previous.label().to_owned();
-                if let Err(error) = previous.set_mode("background").await {
-                    tracing::warn!(project = %previous_label, %error, "could not mark previous foreground agent background");
-                }
-                if previous.busy() {
-                    let _ = previous
-                        .steer("[switchboard] The caller is now listening to another agent. Continue your work quietly; use request_to_speak when you need the caller.")
-                        .await;
-                }
-                let state = if previous.busy() { "busy" } else { "idle" };
-                let registered = self.register_background_session(previous_label.clone(), previous);
-                self.announce_agent_state(
-                    &previous_label,
-                    if registered { state } else { "finished" },
-                )
-                .await;
-            }
-        }
+        self.shelve_previous_foreground(&project.id).await;
         self.announce_agent_state(&project.id, "idle").await;
         self.agent = Some(session);
         self.set_active_session(self.agent_leg()).await;
@@ -1908,19 +1914,7 @@ impl Switchboard {
             }
         }
         self.coordinator.finish_intro();
-        if let Some(previous) = self.agent.take() {
-            let previous_label = previous.label().to_owned();
-            previous.set_mode("background").await.ok();
-            if previous.busy() {
-                let _ = previous
-                    .steer("[switchboard] The caller is now listening to another agent. Continue your work quietly; use request_to_speak when you need the caller.")
-                    .await;
-            }
-            let state = if previous.busy() { "busy" } else { "idle" };
-            let registered = self.register_background_session(previous_label.clone(), previous);
-            self.announce_agent_state(&previous_label, if registered { state } else { "finished" })
-                .await;
-        }
+        self.shelve_previous_foreground(&project.id).await;
         self.announce_agent_state(&project.id, "idle").await;
         self.agent = Some(session);
         self.set_active_session(self.agent_leg()).await;
@@ -2115,9 +2109,10 @@ impl Switchboard {
             }
         }
         self.coordinator.finish_intro();
+        self.shelve_previous_foreground(&project.id).await;
+        self.announce_agent_state(&project.id, "idle").await;
         self.agent = Some(session);
         self.set_active_session(self.agent_leg()).await;
-        self.announce_agent_state(&project.id, "idle").await;
         self.announce_route().await;
         self.reply_with_turn(turn)
     }

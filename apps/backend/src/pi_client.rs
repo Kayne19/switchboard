@@ -992,6 +992,10 @@ impl ProjectSession {
         &self.inner.persistent_session_id
     }
 
+    pub fn is_taken_over(&self) -> bool {
+        self.inner.provenance == "taken_over"
+    }
+
     pub fn instance_id(&self) -> u64 {
         self.inner.instance_id
     }
