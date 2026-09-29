@@ -4562,6 +4562,11 @@ done
     foreground_release.notify_one();
     assert_lifecycle_consistent(&state).await;
 
+    eprintln!(
+        "queue {} generation {}",
+        state.0.floor.queue_len().await,
+        state.0.coordinator.generation()
+    );
     let first_background = frames_until(&mut connection, "spoken").await;
     assert_eq!(
         first_background
@@ -4683,6 +4688,32 @@ done
     assert_eq!(summary.caller_just_said, "caller turn");
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn stale_floor_request_is_dropped_before_audio_reservation() {
+    let state = state();
+    let (_connection, _, _) = state.register_connection().await;
+    state
+        .0
+        .coordinator
+        .register_background("grapes", "grapes-token");
+    let generation = state.0.coordinator.generation();
+    state.0.coordinator.begin_rescue("new foreground leg");
+    let outcome = release_floor(
+        &state,
+        FloorRequest {
+            project: "grapes".into(),
+            token: "grapes-token".into(),
+            generation,
+            message: "stale update".into(),
+            reason: "finished".into(),
+        },
+        "stale update".into(),
+        false,
+    )
+    .await;
+    assert_eq!(outcome, ReleaseOutcome::Drop);
 }
 
 #[tokio::test]

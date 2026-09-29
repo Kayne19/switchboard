@@ -657,10 +657,13 @@ fn spawn_floor_worker(state: AppState) {
     let hooks = FloorHooks {
         connected: Arc::new(move || connected_state.0.delivery.connected()),
         live: Arc::new(move |request: &FloorRequest| {
+            let current_generation = live_state.0.coordinator.generation();
             live_state
                 .0
                 .coordinator
-                .with_background(&request.token, |project| project == request.project)
+                .with_background(&request.token, |project| {
+                    project == request.project && current_generation == request.generation
+                })
                 .is_some()
         }),
         gate: Arc::new(move |request: &FloorRequest| {
@@ -1905,11 +1908,12 @@ async fn release_floor(
     if !state.0.delivery.connected() {
         return ReleaseOutcome::Retry;
     }
-    let live = state
-        .0
-        .coordinator
-        .with_background(&request.token, |project| project == request.project)
-        .is_some();
+    let live = request.generation == state.0.coordinator.generation()
+        && state
+            .0
+            .coordinator
+            .with_background(&request.token, |project| project == request.project)
+            .is_some();
     if !live {
         return ReleaseOutcome::Drop;
     }
@@ -1940,11 +1944,12 @@ async fn release_floor(
     // Promotion or host loss may have happened while the audio slot was
     // reserved. Do not let a stale background request cross the final speech
     // side-effect boundary.
-    if state
-        .0
-        .coordinator
-        .with_background(&request.token, |project| project == request.project)
-        .is_none()
+    if request.generation != state.0.coordinator.generation()
+        || state
+            .0
+            .coordinator
+            .with_background(&request.token, |project| project == request.project)
+            .is_none()
     {
         finish_audio(state, sequence, generation, Vec::new()).await;
         drop(permit);
@@ -2143,6 +2148,7 @@ async fn request_to_speak(state: AppState, token: &str, raw: Value) -> Response 
         message: message.to_owned(),
         reason: reason.to_owned(),
     };
+    let generation = state.0.coordinator.generation();
     let Some((project, agents)) = state.0.coordinator.with_background(token, |project| {
         let project = project.to_owned();
         let agents = state.0.projection.waiting(project.clone(), request.clone());
@@ -2161,6 +2167,7 @@ async fn request_to_speak(state: AppState, token: &str, raw: Value) -> Response 
         .enqueue(FloorRequest {
             project,
             token: token.to_owned(),
+            generation,
             message: request.message,
             reason: request.reason,
         })

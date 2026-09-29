@@ -18,6 +18,9 @@ pub(crate) const REWRITE_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) struct FloorRequest {
     pub project: String,
     pub token: String,
+    /// The lifecycle generation at admission. A route rescue during rewrite
+    /// makes this request stale even if the resident token is still present.
+    pub generation: u64,
     pub message: String,
     pub reason: String,
 }

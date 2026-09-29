@@ -8,6 +8,7 @@ fn request(n: usize) -> FloorRequest {
     FloorRequest {
         project: "grape".into(),
         token: "grape-token".into(),
+        generation: 0,
         message: format!("update {n}"),
         reason: "finished".into(),
     }
