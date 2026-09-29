@@ -1,5 +1,7 @@
 use super::*;
 use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[test]
 fn request_serializes_system_one_shape_without_a_key_field() {
@@ -72,4 +74,94 @@ async fn fake_server_returns_typed_answers_without_real_network() {
     );
     server.await.expect("server task");
     let _ = std::fs::remove_file(key_path);
+}
+
+#[derive(Clone, Copy)]
+enum FailureResponse {
+    Timeout,
+    ServerError,
+    BadJson,
+}
+
+async fn route_failure(response_kind: FailureResponse) -> crate::router::Decision {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener");
+    let endpoint = format!(
+        "http://{}/v1/systemone",
+        listener.local_addr().expect("address")
+    );
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let key_path = std::env::temp_dir().join(format!(
+        "switchboard-jev-fallback-{}-{nonce}",
+        std::process::id()
+    ));
+    std::fs::write(&key_path, "fixture-key").expect("fixture key file");
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("request");
+        if matches!(response_kind, FailureResponse::Timeout) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            return;
+        }
+        let body = match response_kind {
+            FailureResponse::ServerError => "jev is unavailable",
+            FailureResponse::BadJson => "not json",
+            FailureResponse::Timeout => unreachable!(),
+        };
+        let status = if matches!(response_kind, FailureResponse::ServerError) {
+            "500 Internal Server Error"
+        } else {
+            "200 OK"
+        };
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        tokio::io::AsyncWriteExt::write_all(&mut stream, response.as_bytes())
+            .await
+            .expect("response");
+    });
+    let client = JevClient::new(&endpoint, &key_path, Duration::from_millis(20)).expect("client");
+    let registry = Arc::new(crate::registry::Registry::new(vec![]));
+    let coordinator =
+        crate::lifecycle::Coordinator::new(crate::lifecycle::StatusConfig::default(), "medium");
+    let router = crate::router::Router::new(client, registry, coordinator, 8_000, 0.3, 0.7, 0.6);
+    let summary = crate::router::CallSummary::new(
+        "operator",
+        BTreeMap::new(),
+        vec![],
+        vec![],
+        serde_json::json!({}),
+        "hello",
+        vec![],
+    );
+    let error = router.route(&summary).await.expect_err("Jev failure");
+    let fallback = router.fallback(&error);
+    server.await.expect("server task");
+    let _ = std::fs::remove_file(key_path);
+    fallback
+}
+
+#[tokio::test]
+async fn timeout_falls_back_to_an_unsure_operator_decision() {
+    let decision = route_failure(FailureResponse::Timeout).await;
+    assert!(decision.unsure);
+    assert_eq!(decision.action, crate::router::Action::General);
+}
+
+#[tokio::test]
+async fn server_error_falls_back_to_an_unsure_operator_decision() {
+    let decision = route_failure(FailureResponse::ServerError).await;
+    assert!(decision.unsure);
+    assert_eq!(decision.action, crate::router::Action::General);
+}
+
+#[tokio::test]
+async fn malformed_response_falls_back_to_an_unsure_operator_decision() {
+    let decision = route_failure(FailureResponse::BadJson).await;
+    assert!(decision.unsure);
+    assert_eq!(decision.action, crate::router::Action::General);
 }
