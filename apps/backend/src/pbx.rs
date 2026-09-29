@@ -41,7 +41,6 @@ pub type RouteCallback = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>
 /// presentation layer. The PBX remains the lifecycle owner; this is only a
 /// projection callback.
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub struct AgentStateNotice {
     pub project: String,
     pub state: String,
@@ -476,7 +475,6 @@ impl Switchboard {
         self.route_callback = callback;
     }
 
-    #[allow(dead_code)]
     pub fn set_agent_state_callback(&mut self, callback: Option<AgentStateCallback>) {
         self.agent_state_callback = callback;
     }

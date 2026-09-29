@@ -4357,3 +4357,106 @@ async fn a_module_call_carrying_a_retired_token_is_refused() {
         .snapshot_actions()
         .is_empty());
 }
+
+#[tokio::test]
+async fn background_speak_is_refused_and_latest_display_is_released_on_promotion() {
+    let state = state();
+    let (mut connection, _, _) = state.register_connection().await;
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "background-token");
+    let (code, spoken) = agent_call_json(
+        &state,
+        "/speak",
+        json!({"token":"background-token", "text":"not now"}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(spoken["delivered"], false);
+    assert_eq!(spoken["reason"], "caller_away");
+
+    let action = diagram_show();
+    let (code, held) = agent_call_json(
+        &state,
+        "/display",
+        json!({"token":"background-token", "action":action["action"].clone()}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(held["accepted"], true);
+    assert_eq!(held["reason"], "caller_away");
+    assert!(state
+        .0
+        .background_displays
+        .lock()
+        .await
+        .contains_key("alpha"));
+
+    begin_alpha_candidate(&state, "foreground-token");
+    assert!(
+        state
+            .0
+            .leg_announcer
+            .promote_candidate("foreground-token")
+            .await
+    );
+    let frames = queued_frames(&mut connection);
+    assert!(frames
+        .iter()
+        .any(|frame| frame["type"] == "display" && frame["action"]["id"] == "d1"));
+    assert!(!state
+        .0
+        .background_displays
+        .lock()
+        .await
+        .contains_key("alpha"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn agents_state_publishes_idle_after_turn_and_finished_after_hangup() {
+    let root = scratch_root("agents-state-lifecycle");
+    let state = state_with_agents(&root);
+    let mut events = state.0.events.subscribe();
+    let context = crate::pbx::TransferContext {
+        exact_caller_transcript: "put me through to alpha".into(),
+        ..Default::default()
+    };
+    let reply = state
+        .0
+        .switchboard
+        .lock()
+        .await
+        .transfer_ctx(&context, "alpha", "", "")
+        .await;
+    assert_eq!(reply.route, "alpha");
+    let agents = state.0.agent_states.lock().await.clone();
+    assert_eq!(
+        agents
+            .iter()
+            .find(|agent| agent.project == "alpha")
+            .map(|agent| agent.state.as_str()),
+        Some("idle")
+    );
+    let lifecycle_events: Vec<Value> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            Event::Json(value) if value["type"] == "agents_state" => Some(value),
+            _ => None,
+        })
+        .collect();
+    assert!(lifecycle_events
+        .iter()
+        .any(|event| event["agents"][0]["state"] == "busy"));
+    assert!(lifecycle_events
+        .iter()
+        .any(|event| event["agents"][0]["state"] == "idle"));
+
+    state.0.switchboard.lock().await.force_hangup().await;
+    assert_eq!(state.0.agent_states.lock().await[0].state, "finished");
+    assert!(std::iter::from_fn(|| events.try_recv().ok()).any(|event| {
+        matches!(event, Event::Json(value) if value["type"] == "agents_state" && value["agents"][0]["state"] == "finished")
+    }));
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}

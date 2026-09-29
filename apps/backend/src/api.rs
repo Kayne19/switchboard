@@ -8,7 +8,10 @@ use crate::display::{
 use crate::history::{TranscriptLog, AGENT, CALLER};
 use crate::hosts::Hosts;
 use crate::lifecycle::{ActivityDisposition, Coordinator};
-use crate::pbx::{Redial, RedialPlan, RedialPlanner, RouteCallback, Switchboard};
+use crate::pbx::{
+    AgentStateCallback, AgentStateNotice, Redial, RedialPlan, RedialPlanner, RouteCallback,
+    Switchboard,
+};
 use crate::pi_client::{Activity, ActivityCallback, AgentCall, LegSession, ModuleCallback};
 use crate::protocol::{AgentRequest, AgentState, CandidateEnd, ErrorCode, ServerMessage, Status};
 use crate::router::{Action, CallSummary, Decision};
@@ -415,6 +418,16 @@ impl AppState {
         switchboard.set_activity_callback(Some(activity_callback));
         switchboard.set_route_callback(Some(route_callback));
         Self(Arc::new_cyclic(|app: &std::sync::Weak<AppInner>| {
+            let state_app = app.clone();
+            let state_callback: AgentStateCallback = Arc::new(move |notice: AgentStateNotice| {
+                let app = state_app.upgrade();
+                Box::pin(async move {
+                    if let Some(app) = app {
+                        update_agent_state(&AppState(app), notice).await;
+                    }
+                })
+            });
+            switchboard.set_agent_state_callback(Some(state_callback));
             // A project session's `speak`, `display` and `view` are answered
             // here, by the same code for every one of them.
             let app = app.clone();
@@ -1234,7 +1247,7 @@ async fn process_turns(state: AppState) {
         if reply.route != crate::pbx::OPERATOR {
             let mut agents = state.0.agent_states.lock().await;
             if let Some(agent) = agents.iter_mut().find(|agent| agent.project == reply.route) {
-                agent.state = "busy".into();
+                agent.state = "idle".into();
                 agent.pending_request = None;
                 emit_message(
                     &state,
@@ -1661,6 +1674,34 @@ async fn model(
         Err(refused) => refused,
     }
 }
+/// Updates the page projection for a resident project session. The PBX sends
+/// lifecycle notices; waiting requests are kept until promotion or stop.
+async fn update_agent_state(state: &AppState, notice: AgentStateNotice) {
+    let mut agents = state.0.agent_states.lock().await;
+    if let Some(agent) = agents
+        .iter_mut()
+        .find(|agent| agent.project == notice.project)
+    {
+        agent.state = notice.state.clone();
+        if notice.state != "waiting" {
+            agent.pending_request = None;
+        }
+    } else {
+        agents.push(AgentState {
+            project: notice.project,
+            state: notice.state,
+            pending_request: None,
+        });
+        agents.sort_by(|left, right| left.project.cmp(&right.project));
+    }
+    emit_message(
+        state,
+        ServerMessage::AgentsState {
+            agents: agents.clone(),
+        },
+    );
+}
+
 /// A project session's `speak`: its words, and the call token it carried.
 struct Speak {
     text: String,
