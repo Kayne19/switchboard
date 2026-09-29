@@ -8,6 +8,7 @@
 //! only through the coordinator's transitions. A model or thinking change is
 //! decided by `RedialPlanner`, which needs no PBX lock; the switchboard runs
 //! the ones that go ahead.
+use crate::history::TranscriptEntry;
 use crate::hosts::Hosts;
 use crate::lifecycle::{CandidateLeg, Coordinator, LifecycleError, ProjectLeg, StatusConfig};
 use crate::models::{normalize_thinking, parse_spec, pin_thinking, ModelCatalog};
@@ -18,8 +19,10 @@ use crate::pi_client::{
 };
 use crate::prewarm::{LaunchPlan, Prewarm};
 use crate::registry::{Project, Registry};
+use crate::router::{CallSummary, Decision, Router};
 use futures_util::FutureExt;
 use serde::Serialize;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
@@ -359,6 +362,9 @@ pub struct Switchboard {
     prewarm: Arc<Prewarm>,
     /// Decides model and thinking changes, and which model a leg asks for.
     planner: RedialPlanner,
+    /// The sole utterance routing decider. The operator remains the fallback
+    /// conversation when this client is unavailable or unsure.
+    router: Router,
     /// `PROJECT_TURN_TIMEOUT`, held per switchboard so a test can wait out a
     /// silent leg without waiting ten minutes.
     project_turn_timeout: Duration,
@@ -382,6 +388,21 @@ impl Switchboard {
             agent_model: config.agent_model.clone(),
             model_swaps: config.model_swaps,
         };
+        let jev = crate::jev::JevClient::new(
+            config.jev_url.clone(),
+            config.jev_key_file.clone(),
+            Duration::from_millis(config.jev_timeout_ms),
+        )
+        .expect("build Jev HTTP client");
+        let router = Router::new(
+            jev,
+            Arc::clone(&registry),
+            coordinator.clone(),
+            config.jev_summary_token_budget,
+            config.jev_for_current_agent_lower,
+            config.jev_for_current_agent_upper,
+            config.jev_action_threshold,
+        );
         Self {
             registry,
             pi_binary: config.pi_binary.clone(),
@@ -402,6 +423,7 @@ impl Switchboard {
             hosts,
             prewarm,
             planner,
+            router,
             project_turn_timeout: PROJECT_TURN_TIMEOUT,
         }
     }
@@ -479,6 +501,59 @@ impl Switchboard {
         self.prewarm.shutdown();
     }
 
+    pub fn router(&self) -> Router {
+        self.router.clone()
+    }
+
+    pub fn call_summary(
+        &self,
+        transcript: &[TranscriptEntry],
+        screen: Value,
+        utterance: impl Into<String>,
+    ) -> CallSummary {
+        CallSummary::from_runtime(
+            &self.coordinator.status(),
+            &self.registry,
+            transcript,
+            screen,
+            utterance,
+        )
+    }
+
+    /// Dispatch an utterance after Jev has made the routing decision. An
+    /// unsure or unsupported action deliberately goes through the existing
+    /// operator LLM path; project agents never mutate the route themselves.
+    pub async fn handle_decision(&mut self, text: &str, decision: &Decision) -> Reply {
+        if matches!(decision.action, crate::router::Action::GoToProject)
+            && !decision.sends_to_operator()
+        {
+            if let Some(target) = decision.target.as_deref() {
+                let context = TransferContext {
+                    exact_caller_transcript: text.to_owned(),
+                    derived_intent: decision.reason.clone(),
+                };
+                return self.transfer_ctx(&context, target, "", "").await;
+            }
+        }
+        if matches!(decision.action, crate::router::Action::Continue)
+            && !decision.sends_to_operator()
+            && self.coordinator.route() != OPERATOR
+        {
+            return self
+                .handle_agent_ctx(&TransferContext {
+                    exact_caller_transcript: text.to_owned(),
+                    derived_intent: String::new(),
+                })
+                .await;
+        }
+        let context = TransferContext {
+            exact_caller_transcript: text.to_owned(),
+            derived_intent: String::new(),
+        };
+        self.handle_operator_ctx(&context).await
+    }
+
+    #[allow(dead_code)]
     pub async fn handle(&mut self, text: &str) -> Reply {
         let context = TransferContext {
             exact_caller_transcript: text.to_owned(),
@@ -487,6 +562,7 @@ impl Switchboard {
         self.handle_ctx(&context).await
     }
 
+    #[allow(dead_code)]
     pub async fn handle_ctx(&mut self, context: &TransferContext) -> Reply {
         if self.coordinator.route() == OPERATOR {
             self.handle_operator_ctx(context).await
