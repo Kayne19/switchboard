@@ -62,3 +62,23 @@ fn speech_deadline_is_parsed_once_with_its_default() {
 fn invalid_speech_deadline_stops_startup() {
     Config::for_tests(&[("SWITCHBOARD_SPEECH_DEADLINE_MS", "invalid")]);
 }
+
+#[test]
+fn jev_settings_enter_only_through_config() {
+    let config = Config::for_tests(&[
+        ("SWITCHBOARD_JEV_KEY_FILE", "/outside/key"),
+        ("SWITCHBOARD_JEV_URL", "http://127.0.0.1:9/v1/systemone"),
+        ("SWITCHBOARD_JEV_TIMEOUT_MS", "900"),
+        ("SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER", "0.31"),
+        ("SWITCHBOARD_JEV_FOR_CURRENT_AGENT_UPPER", "0.71"),
+        ("SWITCHBOARD_JEV_ACTION_THRESHOLD", "0.61"),
+        ("SWITCHBOARD_JEV_SUMMARY_TOKEN_BUDGET", "1234"),
+    ]);
+    assert_eq!(config.jev_key_file, PathBuf::from("/outside/key"));
+    assert_eq!(config.jev_url, "http://127.0.0.1:9/v1/systemone");
+    assert_eq!(config.jev_timeout_ms, 900);
+    assert_eq!(config.jev_for_current_agent_lower, 0.31);
+    assert_eq!(config.jev_for_current_agent_upper, 0.71);
+    assert_eq!(config.jev_action_threshold, 0.61);
+    assert_eq!(config.jev_summary_token_budget, 1234);
+}

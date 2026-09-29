@@ -4,6 +4,7 @@ mod delivery;
 mod display;
 mod history;
 mod hosts;
+mod jev;
 mod lifecycle;
 mod models;
 mod pbx;
@@ -11,6 +12,7 @@ mod pi_client;
 mod prewarm;
 mod protocol;
 mod registry;
+mod router;
 mod visual_protocol;
 
 use std::collections::HashMap;
@@ -50,6 +52,13 @@ pub struct Config {
     pub max_spoken_chars: usize,
     pub speech_deadline_ms: u64,
     pub history_limit: usize,
+    pub jev_key_file: PathBuf,
+    pub jev_url: String,
+    pub jev_timeout_ms: u64,
+    pub jev_for_current_agent_lower: f64,
+    pub jev_for_current_agent_upper: f64,
+    pub jev_action_threshold: f64,
+    pub jev_summary_token_budget: usize,
     /// Environment values loaded from the deployment env file and inherited
     /// process environment. The operator's process receives them.
     pub environment: HashMap<String, String>,
@@ -95,7 +104,7 @@ impl Config {
             "SWITCHBOARD_OPERATOR_PROMPT",
             &config_dir.join("operator.system.md").to_string_lossy(),
         ));
-        Self {
+        let config = Self {
             env_file,
             projects_file,
             host_tokens_file,
@@ -118,8 +127,42 @@ impl Config {
             max_spoken_chars: usize_value(values, "SWITCHBOARD_MAX_SPOKEN_CHARS", 700, false),
             speech_deadline_ms: bounded_ms(values, "SWITCHBOARD_SPEECH_DEADLINE_MS", 25_000),
             history_limit: usize_value(values, "SWITCHBOARD_HISTORY_LIMIT", 200, true),
+            jev_key_file: PathBuf::from(get(
+                values,
+                "SWITCHBOARD_JEV_KEY_FILE",
+                "/etc/switchboard/secrets/typesafe-api-key",
+            )),
+            jev_url: get(
+                values,
+                "SWITCHBOARD_JEV_URL",
+                "https://api.typesafe.ai/v1/systemone",
+            ),
+            jev_timeout_ms: bounded_ms(values, "SWITCHBOARD_JEV_TIMEOUT_MS", 2_000),
+            jev_for_current_agent_lower: fraction_value(
+                values,
+                "SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER",
+                0.3,
+            ),
+            jev_for_current_agent_upper: fraction_value(
+                values,
+                "SWITCHBOARD_JEV_FOR_CURRENT_AGENT_UPPER",
+                0.7,
+            ),
+            jev_action_threshold: fraction_value(values, "SWITCHBOARD_JEV_ACTION_THRESHOLD", 0.6),
+            jev_summary_token_budget: usize_value(
+                values,
+                "SWITCHBOARD_JEV_SUMMARY_TOKEN_BUDGET",
+                8_000,
+                false,
+            )
+            .min(32_000),
             environment: values.clone(),
-        }
+        };
+        assert!(
+            config.jev_for_current_agent_lower <= config.jev_for_current_agent_upper,
+            "SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER must not exceed UPPER"
+        );
+        config
     }
 }
 
@@ -163,6 +206,19 @@ fn bounded_ms(values: &HashMap<String, String>, name: &str, default: u64) -> u64
             .unwrap_or_else(|| panic!("{name} must be a positive integer from 1 to {MAX_MS} ms")),
     }
 }
+fn fraction_value(values: &HashMap<String, String>, name: &str, default: f64) -> f64 {
+    let Some(raw) = values.get(name).map(|value| value.trim()) else {
+        return default;
+    };
+    match raw.parse::<f64>() {
+        Ok(value) if value.is_finite() && (0.0..=1.0).contains(&value) => value,
+        _ => {
+            tracing::warn!(setting = name, value = raw, %default, "setting is not a fraction from 0 to 1; using the default");
+            default
+        }
+    }
+}
+
 fn usize_value(
     values: &HashMap<String, String>,
     name: &str,
@@ -351,6 +407,12 @@ async fn main() {
         max_spoken_chars = config.max_spoken_chars,
         speech_deadline_ms = config.speech_deadline_ms,
         history_limit = config.history_limit,
+        jev_key_file = %config.jev_key_file.display(),
+        jev_timeout_ms = config.jev_timeout_ms,
+        jev_for_current_agent_lower = config.jev_for_current_agent_lower,
+        jev_for_current_agent_upper = config.jev_for_current_agent_upper,
+        jev_action_threshold = config.jev_action_threshold,
+        jev_summary_token_budget = config.jev_summary_token_budget,
         log_filter = %filter,
         "switchboard configuration"
     );
