@@ -1773,7 +1773,7 @@ async fn speak(state: AppState, req: Speak) -> Response {
 }
 /// Records a background agent's request without speaking for it. The floor
 /// slice consumes this state when the caller answers waiting.
-async fn request_to_speak(state: AppState, _token: &str, raw: Value) -> Response {
+async fn request_to_speak(state: AppState, token: &str, raw: Value) -> Response {
     let Some(message) = raw
         .get("message")
         .and_then(Value::as_str)
@@ -1799,11 +1799,13 @@ async fn request_to_speak(state: AppState, _token: &str, raw: Value) -> Response
         )
             .into_response();
     }
-    let project = raw
-        .get("_project")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown")
-        .to_owned();
+    let Some(project) = state.0.coordinator.background_project(token) else {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({"delivered":false,"reason":"not_on_call","detail":"this session is not a background call"})),
+        )
+            .into_response();
+    };
     let request = AgentRequest {
         message: message.to_owned(),
         reason: reason.to_owned(),
