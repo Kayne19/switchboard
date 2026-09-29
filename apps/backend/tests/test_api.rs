@@ -4412,6 +4412,7 @@ async fn background_speak_is_refused_and_latest_display_is_released_on_promotion
         .0
         .coordinator
         .register_background("alpha", "background-token");
+    assert_lifecycle_consistent(&state).await;
     let (code, spoken) = agent_call_json(
         &state,
         "/speak",
@@ -4448,6 +4449,7 @@ async fn background_speak_is_refused_and_latest_display_is_released_on_promotion
             .promote_candidate("foreground-token")
             .await
     );
+    assert_lifecycle_consistent(&state).await;
     let frames = queued_frames(&mut connection);
     assert!(frames
         .iter()
@@ -4468,6 +4470,7 @@ async fn stopping_a_background_agent_discards_its_held_display() {
         .0
         .coordinator
         .register_background("alpha", "background-token");
+    assert_lifecycle_consistent(&state).await;
     let held = module_call(
         &state,
         AgentCall {
@@ -4501,6 +4504,7 @@ async fn stopping_a_background_agent_discards_its_held_display() {
         .lock()
         .unwrap()
         .contains_key("alpha"));
+    assert_lifecycle_consistent(&state).await;
 }
 
 #[tokio::test]
@@ -4510,6 +4514,7 @@ async fn failed_promotion_finished_notice_clears_the_held_display_projection() {
         .0
         .coordinator
         .register_background("alpha", "background-token");
+    assert_lifecycle_consistent(&state).await;
     let held = module_call(
         &state,
         AgentCall {
@@ -4539,6 +4544,7 @@ async fn failed_promotion_finished_notice_clears_the_held_display_projection() {
         .unwrap()
         .get("alpha")
         .is_none());
+    assert_lifecycle_consistent(&state).await;
 }
 
 #[tokio::test]
@@ -4584,6 +4590,7 @@ async fn an_idle_notice_does_not_clear_a_background_speak_request() {
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
+    assert_lifecycle_consistent(&state).await;
 
     update_agent_state(
         &state,
@@ -4593,6 +4600,7 @@ async fn an_idle_notice_does_not_clear_a_background_speak_request() {
         },
     )
     .await;
+    assert_lifecycle_consistent(&state).await;
 
     let agents = state.0.projection.states.lock().unwrap();
     let agent = agents
@@ -4719,6 +4727,7 @@ async fn agents_state_publishes_idle_after_turn_and_finished_after_hangup() {
         .transfer_ctx(&context, "alpha", "", "")
         .await;
     assert_eq!(reply.route, "alpha");
+    assert_lifecycle_consistent(&state).await;
     let agents = state.0.projection.states.lock().unwrap().clone();
     assert_eq!(
         agents
@@ -4741,6 +4750,7 @@ async fn agents_state_publishes_idle_after_turn_and_finished_after_hangup() {
         .any(|event| event["agents"][0]["state"] == "idle"));
 
     state.0.switchboard.lock().await.force_hangup().await;
+    assert_lifecycle_consistent(&state).await;
     assert_eq!(
         state.0.projection.states.lock().unwrap()[0].state,
         "finished"
