@@ -4587,11 +4587,6 @@ done
     foreground_release.notify_one();
     assert_lifecycle_consistent(&state).await;
 
-    eprintln!(
-        "queue {} generation {}",
-        state.0.floor.queue_len().await,
-        state.0.coordinator.generation()
-    );
     let first_background = frames_until(&mut connection, "spoken").await;
     assert_serial_audio(&first_background);
     assert_eq!(
@@ -4632,19 +4627,15 @@ async fn floor_rewrite_does_not_hold_the_pbx_lock_across_utility_wait() {
         crate::pbx::uuid_like()
     ));
     std::fs::create_dir_all(&root).unwrap();
-    let marker = root.join("rewrite-started");
     let utility = root.join("fake-utility");
-    let script = format!(
-        r##"while IFS= read -r line; do
+    let script = r##"while IFS= read -r line; do
 case "$line" in
-  *"FLOOR REWRITE"*) : > "{marker}"; sleep 60 ;;
+  *"FLOOR REWRITE"*) read -r ignored ;;
   *) printf '%s\n' '{{"type":"agent_settled"}}' ;;
 esac
 done
-"##,
-        marker = marker.display()
-    );
-    crate::pi_client::write_executable_script(&utility, &script);
+"##;
+    crate::pi_client::write_executable_script(&utility, script);
     let jev = crate::jev::JevClient::new(
         "http://unused.invalid/v1/systemone",
         "/nonexistent/typesafe-api-key",
@@ -4689,6 +4680,13 @@ done
         .0
         .coordinator
         .register_background("grapes", "grapes-token");
+    let rewrite_started = std::sync::Arc::new(tokio::sync::Notify::new());
+    let rewrite_notice = rewrite_started.clone();
+    crate::pi_client::set_prompt_hook_for_test(Some(std::sync::Arc::new(move |message| {
+        if message.contains("[FLOOR REWRITE]") {
+            rewrite_notice.notify_one();
+        }
+    })));
     spawn_workers(state.clone());
     state.0.floor.force_quiet_for_test().await;
     let accepted = request_to_speak(
@@ -4698,13 +4696,10 @@ done
     )
     .await;
     assert_eq!(accepted.status(), StatusCode::OK);
-    timeout(Duration::from_secs(1), async {
-        while !marker.exists() {
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-    })
-    .await
-    .expect("rewrite reached the utility");
+    timeout(Duration::from_secs(1), rewrite_started.notified())
+        .await
+        .expect("rewrite reached the utility");
+    crate::pi_client::set_prompt_hook_for_test(None);
 
     // The foreground turn path can acquire the PBX lock while the utility is
     // still waiting. This is the caller-audible-delay regression guard.

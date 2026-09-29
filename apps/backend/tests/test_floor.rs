@@ -187,7 +187,7 @@ async fn gate_rejection_requires_a_new_quiet_period() {
     yield_worker().await;
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert!(results.try_recv().is_err());
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    floor.force_quiet_for_test().await;
     yield_worker().await;
     assert_eq!(results.recv().await.unwrap().0, "update 1:update 1");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -254,22 +254,26 @@ async fn rewrite_timeout_uses_the_original_message() {
     floor.set_page_connected(true).await;
     floor.enqueue(request(1)).await;
     let mut h = hooks(connected, live, Arc::new(AtomicUsize::new(0)), released);
-    h.rewrite = Arc::new(|_| {
-        Box::pin(async {
-            tokio::time::timeout(
+    let (timed_out, mut timeout_events) = mpsc::unbounded_channel();
+    h.rewrite = Arc::new(move |_| {
+        let timed_out = timed_out.clone();
+        Box::pin(async move {
+            let result = tokio::time::timeout(
                 Duration::from_millis(20),
                 std::future::pending::<Result<String, ()>>(),
             )
             .await
             .map_err(|_| ())
-            .and_then(|result| result)
+            .and_then(|result| result);
+            timed_out.send(()).unwrap();
+            result
         }) as RewriteFuture
     });
     let floor_worker = floor.clone();
     let worker = tokio::spawn(async move { floor_worker.run(h).await });
     yield_worker().await;
     assert!(results.try_recv().is_err());
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    timeout_events.recv().await.unwrap();
     yield_worker().await;
     assert_eq!(results.recv().await.unwrap().0, "update 1:update 1");
     worker.abort();

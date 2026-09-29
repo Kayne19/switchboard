@@ -7,6 +7,8 @@ use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(test)]
+use std::sync::OnceLock;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, Command};
@@ -90,6 +92,28 @@ pub struct Activity {
 }
 pub type ActivityCallback =
     Arc<dyn Fn(Activity) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+
+#[cfg(test)]
+type TestPromptHook = Arc<dyn Fn(&str) + Send + Sync>;
+
+#[cfg(test)]
+static TEST_PROMPT_HOOK: OnceLock<StdMutex<Option<TestPromptHook>>> = OnceLock::new();
+
+#[cfg(test)]
+pub(crate) fn set_prompt_hook_for_test(hook: Option<TestPromptHook>) {
+    let slot = TEST_PROMPT_HOOK.get_or_init(|| StdMutex::new(None));
+    *slot.lock().expect("test prompt hook lock") = hook;
+}
+
+#[cfg(test)]
+fn notify_prompt_hook_for_test(message: &str) {
+    let hook = TEST_PROMPT_HOOK
+        .get()
+        .and_then(|slot| slot.lock().ok().and_then(|hook| hook.clone()));
+    if let Some(hook) = hook {
+        hook(message);
+    }
+}
 
 struct SessionInner {
     child: Mutex<Option<Child>>,
@@ -274,6 +298,8 @@ impl PiSession {
     }
 
     pub async fn prompt(&self, message: &str) -> Result<Turn, PiSessionError> {
+        #[cfg(test)]
+        notify_prompt_hook_for_test(message);
         let _turn = self.inner.turn_lock.lock().await;
         if !self.alive().await {
             return Err(self.exited_error().await);

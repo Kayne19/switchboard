@@ -147,7 +147,10 @@ impl JevClient {
         };
         #[cfg(test)]
         if let Some(responder) = &self.test_responder {
-            return responder(request).await;
+            return match tokio::time::timeout(self.timeout, responder(request)).await {
+                Ok(response) => response,
+                Err(_) => Err(JevError::Transport("request timed out".into())),
+            };
         }
         let key = std::fs::read_to_string(&self.key_file).map_err(|error| {
             JevError::KeyFile(format!("could not read configured Jev key file: {error}"))

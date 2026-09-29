@@ -87,8 +87,7 @@ async fn route_failure(response_kind: FailureResponse) -> crate::router::Decisio
     .with_test_responder(move |_request| async move {
         match response_kind {
             FailureResponse::Timeout => {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                Err(JevError::Transport("test timeout".into()))
+                std::future::pending::<Result<crate::jev::JevResponse, JevError>>().await
             }
             FailureResponse::ServerError => Err(JevError::Http {
                 status: 500,
