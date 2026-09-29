@@ -865,7 +865,7 @@ impl ProjectSession {
             )
             .await
             .map_err(|error| PiSessionError(format!("could not start a session: {error}")))?;
-        Self::from_open_reply(hosts, launch, reply, None, "created", "created").await
+        Self::from_open_reply(hosts, launch, reply, None, "created", "created", None).await
     }
 
     /// Reopens a saved resident session after a service restart. The host
@@ -889,7 +889,16 @@ impl ProjectSession {
             )
             .await
             .map_err(|error| PiSessionError(format!("could not open a session: {error}")))?;
-        Self::from_open_reply(hosts, launch, reply, Some(session_id), "opened", "created").await
+        Self::from_open_reply(
+            hosts,
+            launch,
+            reply,
+            Some(session_id),
+            "opened",
+            "created",
+            None,
+        )
+        .await
     }
 
     /// Attaches to a live desk session in the registered folder. This never
@@ -913,9 +922,16 @@ impl ProjectSession {
             )
             .await
             .map_err(|error| PiSessionError(format!("could not take over a session: {error}")))?;
-        let result =
-            Self::from_open_reply(hosts, launch.clone(), reply, None, "attached", "taken_over")
-                .await;
+        let result = Self::from_open_reply(
+            hosts,
+            launch.clone(),
+            reply,
+            None,
+            "attached",
+            "taken_over",
+            Some("taken_over"),
+        )
+        .await;
         if result.is_err() {
             // The host persists taken_over provenance before replying. A
             // malformed success must therefore undo the attach even though no
@@ -947,6 +963,7 @@ impl ProjectSession {
         requested_session_id: Option<&str>,
         verb: &str,
         default_provenance: &str,
+        forced_provenance: Option<&str>,
     ) -> Result<(Self, SessionState), PiSessionError> {
         let Some(session) = reply.result["session"].as_str().map(str::to_owned) else {
             return Err(PiSessionError(
@@ -964,8 +981,8 @@ impl ProjectSession {
                 .unwrap_or_default(),
             instance_id: NEXT_PROJECT_INSTANCE_ID.fetch_add(1, Ordering::Relaxed),
             label: launch.project,
-            provenance: reply.result["provenance"]
-                .as_str()
+            provenance: forced_provenance
+                .or_else(|| reply.result["provenance"].as_str())
                 .unwrap_or(default_provenance)
                 .to_owned(),
             token: StdMutex::new(String::new()),

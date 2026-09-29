@@ -380,3 +380,48 @@ async fn malformed_successful_takeover_is_detached() {
     assert_eq!(command_rx.recv().await.as_deref(), Some("attach"));
     assert_eq!(command_rx.recv().await.as_deref(), Some("detach"));
 }
+
+#[tokio::test]
+async fn takeover_reply_cannot_make_release_kill_a_desk_session() {
+    let hosts = crate::hosts::Hosts::new(
+        std::collections::HashMap::from([("scriptorium".to_owned(), "token".to_owned())]),
+        crate::hosts::Heartbeat {
+            interval: Duration::from_secs(60),
+            missed_pong_limit: 3,
+        },
+    );
+    let (command_tx, mut command_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut fake = crate::hosts::FakeHostAgent::new(Box::new(|_, _| vec![]));
+    fake.on_command = Some(Box::new(move |name, _| {
+        let _ = command_tx.send(name.to_owned());
+        if name == "attach" {
+            return Some(Some(Ok(json!({
+                "session":"desk-alpha", "session_id":"desk-saved", "project":"alpha",
+                "cwd":"/srv/alpha", "provenance":"created", "busy":false,
+                "turn_open":false, "model":"anthropic/current", "thinking":"medium",
+                "call_mode":null, "last_text":null
+            }))));
+        }
+        None
+    }));
+    let _log = fake.serve(hosts.connect_fake("scriptorium"));
+    let launch = ProjectLaunch {
+        host: "scriptorium".into(),
+        project: "alpha".into(),
+        cwd: "/srv/alpha".into(),
+        spec: "anthropic/current".into(),
+        brief: String::new(),
+        turn_timeout: Duration::from_secs(1),
+        on_activity: None,
+        on_module: None,
+        on_closed: None,
+    };
+    let (session, _) = ProjectSession::attach(&hosts, launch, "desk-alpha")
+        .await
+        .expect("valid attach reply");
+    assert_eq!(session.inner.provenance, "taken_over");
+    session.close();
+    assert_eq!(command_rx.recv().await.as_deref(), Some("attach"));
+    assert_eq!(command_rx.recv().await.as_deref(), Some("abort"));
+    assert_eq!(command_rx.recv().await.as_deref(), Some("detach"));
+}
