@@ -962,6 +962,7 @@ async fn a_non_steered_continue_uses_one_jev_decision_for_one_utterance() {
 #[tokio::test]
 async fn a_stale_queued_turn_removes_its_retained_jev_decision() {
     let state = state();
+    let mut events = state.0.events.subscribe();
     state
         .0
         .routed_decisions
@@ -979,13 +980,9 @@ async fn a_stale_queued_turn_removes_its_retained_jev_decision() {
         .await
         .expect("queued turn");
 
-    timeout(Duration::from_secs(1), async {
-        while state.0.queued_turns.load(Ordering::Acquire) != 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("stale turn processed");
+    let stale = next_event_of(&mut events, "error").await;
+    assert_eq!(stale["id"], "stale");
+    assert_eq!(stale["code"], "stale_epoch");
     assert!(!state.0.routed_decisions.lock().await.contains_key("stale"));
 
     worker.abort();
