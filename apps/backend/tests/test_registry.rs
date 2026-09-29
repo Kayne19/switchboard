@@ -17,10 +17,7 @@ impl Project {
             aliases: Vec::new(),
             host: None,
             cwd: String::new(),
-            runtime: "pi".into(),
             model: None,
-            stage_extension: true,
-            extra_args: Vec::new(),
             prepare: String::new(),
         }
     }
@@ -69,20 +66,39 @@ fn malformed_or_missing_registry_is_empty() {
     assert!(Registry::load("/no/such/projects.json").projects.is_empty());
 }
 
+/// A registry rendered before the SSH transport went still carries
+/// `runtime`, `stage_extension` and `extra_args`. The entry loads; the keys
+/// have no effect and are named in a warning.
+#[test]
+fn retired_keys_are_ignored_and_the_entry_still_loads() {
+    let path = std::env::temp_dir().join(format!(
+        "switchboard-registry-retired-{}",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        r#"{"projects":[{"id":"alpha","host":"h1","cwd":"/srv/alpha","runtime":"pi","stage_extension":true,"extra_args":["--x"]}]}"#,
+    )
+    .unwrap();
+    let registry = Registry::load(&path);
+    let _ = fs::remove_file(path);
+    assert_eq!(registry.projects.len(), 1);
+    assert_eq!(registry.projects[0].canonical_host(), Some("h1"));
+    assert!(!PROJECT_FIELDS.contains(&"runtime"));
+}
+
 #[test]
 fn blank_optional_values_use_the_registry_defaults() {
     let registry = Registry::new(vec![Project {
         id: "local".into(),
         host: Some("  ".into()),
-        runtime: String::new(),
         model: Some(String::new()),
         ..Project::default_for_test()
     }]);
     let project = &registry.projects[0];
     assert_eq!(project.host, None);
-    assert_eq!(project.runtime, "pi");
     assert_eq!(project.model, None);
-    assert!(!project.is_remote());
+    assert_eq!(project.canonical_host(), None);
 }
 
 #[test]

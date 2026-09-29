@@ -4,16 +4,19 @@ A project agent pushes anything it wants the caller to *see* — a diagram, a ch
 
 ## Wire shape and transport
 
-The agent tool `display` posts an envelope containing the current leg token and the canonical `DisplayAction`:
+A project agent calls `switchboard.display(action)` from the `switchboard` Python skill module (`skills/switchboard/`). The module sends the canonical `DisplayAction` to the host agent on the host's skill socket, and the host agent relays it to the service with the current call token (`docs/host-link.md`, "Skill socket" and "Module calls"):
 
 | piece | contract |
 | --- | --- |
-| env var handed to the agent | `SWITCHBOARD_DISPLAY_URL` |
-| intake endpoint | `POST /display` (outer envelope: `{ token, action }`) |
-| view endpoint | Derived via `new URL("/view", DISPLAY_URL)` |
+| agent call | `switchboard.display(action)` or `switchboard.display(**action)` |
+| skill socket request | `{ op: "call", call: "display", token, args: { action } }` |
+| view | `switchboard.view(target=None)`, sent as `call: "view"` |
+| service intake endpoint | `POST /display` (outer envelope: `{ token, action }`) |
 | broadcast | `{"type":"display","action":<normalized>}` |
 
-`display` replaces separate per-kind tools with a single semantic tool. The parameters passed to `display` represent exactly one `DisplayAction`.
+`display` replaces separate per-kind tools with a single semantic function. One call carries exactly one `DisplayAction`.
+
+The module checks only the outline of an action before it sends it: the `op`, the `type` and `role` names, and the required `data` keys of each type. A wrong one raises (`ValueError` or `TypeError`) with the shape of each type as a hint, because it is a programming error. The service validation below is authoritative; the module returns its rejection as a `refused` result with the reason, and never raises for it.
 
 ## The DisplayAction v1 protocol
 

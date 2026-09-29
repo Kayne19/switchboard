@@ -222,8 +222,8 @@ documented above:
    validator now discriminates on `type` before checking shape, so a bad
    `diagram` payload is scored against the diagram schema and names which
    diagram field is wrong — not a chart's. See `docs/display-tool.md`'s per-type
-   `data` table and the `display` tool's per-type "Shapes" hint in
-   `extensions/agent-switchboard.ts`.
+   `data` table and the per-type `data` shapes in the `switchboard` skill
+   module's `skills/switchboard/SKILL.md`.
 2. **Silent failure: "On screen" when nothing rendered.** `/display` used to
    report success the moment the action was handed to the delivery layer,
    with no signal that the browser ever actually painted it. That is exactly

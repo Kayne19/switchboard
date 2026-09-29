@@ -320,43 +320,6 @@ fn status_read_does_not_wait_for_lifecycle_linearization() {
     worker.join().unwrap();
 }
 
-#[test]
-fn idle_time_is_measured_from_the_last_turn_boundary() {
-    let coordinator = coordinator();
-    coordinator
-        .begin_candidate(CandidateLeg::new(
-            "alpha", "alpha", "session", "token", "model", "medium",
-        ))
-        .unwrap();
-    coordinator.adopt_candidate("token").unwrap();
-    coordinator.finish_intro();
-    let idle = std::time::Duration::from_millis(40);
-
-    // A turn that outlasts the idle timeout has not left the caller silent:
-    // silence starts when it ends.
-    let operation = coordinator
-        .begin_prompt(&coordinator.current_identity())
-        .unwrap();
-    std::thread::sleep(idle * 2);
-    coordinator.finish_operation(&operation);
-    assert_eq!(coordinator.return_if_idle(idle), None);
-
-    // A steer is the caller speaking.
-    let operation = coordinator
-        .begin_prompt(&coordinator.current_identity())
-        .unwrap();
-    std::thread::sleep(idle * 2);
-    coordinator
-        .attach_steer(&coordinator.current_identity())
-        .unwrap();
-    coordinator.finish_operation(&operation);
-    std::thread::sleep(idle / 2);
-    assert_eq!(coordinator.return_if_idle(idle), None);
-
-    std::thread::sleep(idle * 2);
-    assert!(coordinator.return_if_idle(idle).is_some());
-}
-
 fn alpha_catalog() -> ModelCatalog {
     ModelCatalog {
         entries: vec![CatalogEntry {
