@@ -540,9 +540,11 @@ impl Switchboard {
         if decision.multi_target || (decision.unsure && !jev_unavailable) {
             match self.utility_decision(text).await {
                 Ok(Some(UtilityDecision::DispatchParts(parts))) => {
-                    if decision.multi_target {
-                        return self.dispatch_parts(text, parts).await;
-                    }
+                    // A split returned for an unsure Jev decision is still a
+                    // useful utility verdict. Jev's multi_target flag is a
+                    // hint to consult the utility, not permission to discard
+                    // the utility's structured dispatch.
+                    return self.dispatch_parts(text, parts).await;
                 }
                 Ok(Some(UtilityDecision::SecondOpinion {
                     target: Some(target),
@@ -595,6 +597,21 @@ impl Switchboard {
         target: &str,
         mode: crate::router::ConversationMode,
     ) -> Reply {
+        let context = TransferContext {
+            exact_caller_transcript: text.to_owned(),
+            derived_intent: String::new(),
+        };
+        if target == OPERATOR {
+            // The utility may explicitly choose the operator. Do not send
+            // that target through the project handler: it has no project
+            // session and would manufacture a spurious "project session is
+            // gone" recovery. Returning from a project also drops that leg
+            // before the operator answers.
+            if self.coordinator.route() != OPERATOR {
+                self.drop_agent().await;
+            }
+            return Box::pin(self.handle_operator_ctx(&context)).await;
+        }
         if self.coordinator.route() == target
             && matches!(mode, crate::router::ConversationMode::Continue)
         {
@@ -602,11 +619,7 @@ impl Switchboard {
             // for the project already on the line. Box this back-edge because
             // a missing project session may legitimately fall through to the
             // operator handler.
-            return Box::pin(self.handle_agent_ctx(&TransferContext {
-                exact_caller_transcript: text.to_owned(),
-                derived_intent: String::new(),
-            }))
-            .await;
+            return Box::pin(self.handle_agent_ctx(&context)).await;
         }
         self.transfer_ctx(
             &TransferContext {
@@ -722,9 +735,10 @@ impl Switchboard {
         if self.utility.is_none() {
             let utility_prompt = format!(
                 "{UTILITY_SYSTEM_PROMPT}\n\n[REGISTERED PROJECTS]\n{}",
-                self.registry
-                    .operator_prompt_catalog()
-                    .replace("transfer_to_project", "route")
+                self.registry.operator_prompt_catalog().replace(
+                    "Available projects for transfer. Use the exact project id with transfer_to_project; aliases are included for recognition.",
+                    "Available projects for the routing utility. Use the exact project id with second_opinion or dispatch_parts; aliases are included for recognition.",
+                )
             );
             let argv = local_argv(
                 &self.pi_binary,
