@@ -291,3 +291,25 @@ fn utility_signals_accept_second_opinions_and_split_parts() {
         ]))
     );
 }
+
+#[test]
+fn utility_route_regression_becomes_single_target_second_opinion() {
+    let route = crate::pi_client::Signal {
+        name: "route".into(),
+        args: serde_json::from_value(json!({
+            "target": "atlas",
+            "mode": "continue",
+        }))
+        .unwrap(),
+        tool_call_id: None,
+        successful_end: true,
+    };
+    assert_eq!(
+        utility_decision(&[route]),
+        Some(UtilityDecision::SecondOpinion {
+            target: Some("atlas".into()),
+            mode: ConversationMode::Continue,
+            confident: true,
+        })
+    );
+}

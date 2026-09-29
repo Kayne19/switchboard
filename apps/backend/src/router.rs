@@ -258,6 +258,45 @@ pub enum UtilityDecision {
 pub fn utility_decision(signals: &[Signal]) -> Option<UtilityDecision> {
     if let Some(signal) = signals
         .iter()
+        .find(|signal| signal.name == crate::pi_client::ROUTE_TOOL)
+    {
+        // A utility that raises `route` has loaded the conversational tool set.
+        // Preserve its useful target rather than letting the whole utterance
+        // fall through to the current agent.
+        tracing::warn!("routing utility raised route; treating it as a second opinion");
+        let target = signal
+            .args
+            .get("target")
+            .or_else(|| signal.args.get("project"))
+            .or_else(|| signal.args.get("agent"))
+            .and_then(Value::as_str)
+            .filter(|target| !target.trim().is_empty())
+            .map(str::to_owned);
+        let mode = match signal.args.get("mode").and_then(Value::as_str) {
+            Some("continue") => ConversationMode::Continue,
+            Some("fresh") | None => ConversationMode::Fresh,
+            Some(_) => return None,
+        };
+        let confident = signal
+            .args
+            .get("confident")
+            .and_then(Value::as_bool)
+            .or_else(|| {
+                signal
+                    .args
+                    .get("confidence")
+                    .and_then(Value::as_f64)
+                    .map(|value| value >= 0.5)
+            })
+            .unwrap_or(target.is_some());
+        return Some(UtilityDecision::SecondOpinion {
+            target,
+            mode,
+            confident,
+        });
+    }
+    if let Some(signal) = signals
+        .iter()
         .find(|signal| signal.name == SECOND_OPINION_TOOL)
     {
         let target = signal

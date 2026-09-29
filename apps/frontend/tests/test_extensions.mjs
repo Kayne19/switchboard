@@ -1,20 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import ts from "typescript";
 
 const typeboxStub = `
 const Type = {
   Object: (properties, options = {}) => ({ type: "object", properties, ...options }),
-  Union: (anyOf, options = {}) => ({ type: "union", anyOf, ...options }),
-  Literal: (value, options = {}) => ({ type: "literal", const: value, ...options }),
   String: (options = {}) => ({ type: "string", ...options }),
-  Number: (options = {}) => ({ type: "number", ...options }),
   Boolean: (options = {}) => ({ type: "boolean", ...options }),
   Array: (items, options = {}) => ({ type: "array", items, ...options }),
   Optional: (schema) => ({ ...schema, optional: true }),
-  Null: () => ({ type: "null" }),
 };`;
 let moduleNumber = 0;
 
@@ -46,80 +40,63 @@ async function loadExtension(path) {
 	return import(`data:text/javascript;base64,${encoded}#${moduleNumber}`);
 }
 
-function fakePi(thinking = "high") {
+function fakePi(utility = false) {
 	const tools = new Map();
 	const handlers = new Map();
+	let sessionStarted = false;
 	return {
 		tools,
 		handlers,
+		activeTools: [],
 		registerTool(tool) {
 			tools.set(tool.name, tool);
 		},
 		registerFlag(name, options) {
-			this.flags ??= new Map();
-			this.flags.set(name, options.default ?? false);
+			this.flagName = name;
+			this.flagDefault = options.default ?? false;
 		},
 		getFlag(name) {
-			return this.flags?.get(name) ?? false;
+			assert.equal(name, "switchboard-utility");
+			return sessionStarted ? utility : undefined;
 		},
 		on(name, handler) {
 			handlers.set(name, handler);
 		},
-		getThinkingLevel() {
-			return thinking;
+		setActiveTools(names) {
+			this.activeTools = [...names];
+		},
+		startSession() {
+			sessionStarted = true;
+			return handlers.get("session_start")?.();
 		},
 	};
 }
 
-async function operatorExtensionBehavior() {
-	const directory = mkdtempSync(join(tmpdir(), "switchboard-extension-"));
-	const registry = join(directory, "projects.json");
-	writeFileSync(
-		registry,
-		JSON.stringify({
-			projects: [
-				{
-					id: "alpha",
-					description: "Alpha project",
-					aliases: ["a"],
-					host: "scriptorium",
-					cwd: "/srv/alpha",
-				},
-			],
-		}),
-	);
-	process.env.SWITCHBOARD_PROJECTS_FILE = registry;
-	try {
-		const extension = await loadExtension("extensions/operator-switchboard.ts");
-		const pi = fakePi();
-		extension.default(pi);
-		assert.deepEqual([...pi.tools.keys()], ["route"]);
-		const routed = await pi.tools
-			.get("route")
-			.execute("call", { target: "alpha", mode: "fresh" });
-		assert.deepEqual(routed.details, { target: "alpha", mode: "fresh" });
-	} finally {
-		rmSync(directory, { recursive: true, force: true });
-		delete process.env.SWITCHBOARD_PROJECTS_FILE;
-	}
-}
-
-async function utilityExtensionBehavior() {
+async function extensionBehavior(utility, expectedActive) {
 	const extension = await loadExtension("extensions/operator-switchboard.ts");
-	const pi = fakePi();
-	pi.registerFlag = (name) => {
-		pi.flags ??= new Map();
-		pi.flags.set(name, true);
-	};
-	pi.getFlag = (name) => pi.flags?.get(name) ?? false;
+	const pi = fakePi(utility);
 	extension.default(pi);
-	assert.deepEqual([...pi.tools.keys()], ["second_opinion", "rewrite", "dispatch_parts"]);
-	const split = await pi.tools.get("dispatch_parts").execute("call", {
-		parts: [{ agent: "alpha", text: "Audit it" }],
-	});
-	assert.deepEqual(split.details, { count: 1 });
+	assert.deepEqual(
+		[...pi.tools.keys()],
+		["route", "second_opinion", "rewrite", "dispatch_parts"],
+		"the factory registers tools before CLI flags are available",
+	);
+	assert.deepEqual(pi.activeTools, [], "tools are selected after session_start");
+	await pi.startSession();
+	assert.deepEqual(pi.activeTools, expectedActive);
+	return pi;
 }
 
-await operatorExtensionBehavior();
-await utilityExtensionBehavior();
+const operator = await extensionBehavior(false, ["route"]);
+const routed = await operator.tools.get("route").execute("call", {
+	target: "alpha",
+	mode: "fresh",
+});
+assert.deepEqual(routed.details, { target: "alpha", mode: "fresh" });
+
+const utility = await extensionBehavior(true, ["second_opinion", "rewrite", "dispatch_parts"]);
+const split = await utility.tools.get("dispatch_parts").execute("call", {
+	parts: [{ agent: "alpha", text: "Audit it" }],
+});
+assert.deepEqual(split.details, { count: 1 });
 console.log("ok — operator and utility extension tools");
