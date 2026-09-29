@@ -616,6 +616,7 @@ pub struct ProjectLaunch {
 pub struct SessionState {
     pub model: String,
     pub thinking: String,
+    pub provenance: String,
 }
 
 impl SessionState {
@@ -623,6 +624,7 @@ impl SessionState {
         Self {
             model: info["model"].as_str().unwrap_or_default().to_owned(),
             thinking: info["thinking"].as_str().unwrap_or_default().to_owned(),
+            provenance: info["provenance"].as_str().unwrap_or("created").to_owned(),
         }
     }
 }
@@ -642,6 +644,8 @@ struct ProjectInner {
     /// The persisted id used to reopen the resident session.
     persistent_session_id: String,
     label: String,
+    /// Provenance controls whether hangup kills or detaches the session.
+    provenance: String,
     /// The call token the session was last joined with; module calls must
     /// carry it.
     token: StdMutex<String>,
@@ -674,14 +678,18 @@ impl ProjectInner {
             .unwrap_or(false)
     }
 
-    /// Queues `kill` for the session now, so any command sent after it (a
-    /// new session for the same project, say) reaches the host after it;
-    /// nothing waits for the answer.
-    fn kill_in_background(&self) {
+    /// Queues kill for service-created sessions, or detach for a session
+    /// taken over from a desk. Nothing waits for the answer.
+    fn release_in_background(&self) {
         self.hosts.unsubscribe(&self.host, &self.session);
+        let command = if self.provenance == "taken_over" {
+            "detach"
+        } else {
+            "kill"
+        };
         let sent = self
             .hosts
-            .send_command(&self.host, "kill", json!({"session": self.session}));
+            .send_command(&self.host, command, json!({"session": self.session}));
         let label = self.label.clone();
         let host = self.host.clone();
         let sent = match sent {
@@ -725,7 +733,7 @@ impl Drop for ProjectInner {
     /// transfer was cancelled half way is not left running on its host.
     fn drop(&mut self) {
         if !self.closed.swap(true, Ordering::AcqRel) {
-            self.kill_in_background();
+            self.release_in_background();
         }
     }
 }
@@ -829,6 +837,10 @@ impl ProjectSession {
                 .or_else(|| reply.result["session_id"].as_str().map(str::to_owned))
                 .unwrap_or_default(),
             label: launch.project,
+            provenance: reply.result["provenance"]
+                .as_str()
+                .unwrap_or(if verb == "opened" { "created" } else { verb })
+                .to_owned(),
             token: StdMutex::new(String::new()),
             turn_timeout: launch.turn_timeout,
             on_activity: launch.on_activity,
@@ -855,6 +867,11 @@ impl ProjectSession {
 
     pub fn session_id(&self) -> &str {
         &self.inner.persistent_session_id
+    }
+
+    #[allow(dead_code)]
+    pub fn provenance(&self) -> &str {
+        &self.inner.provenance
     }
 
     pub fn busy(&self) -> bool {
@@ -947,7 +964,7 @@ impl ProjectSession {
     pub fn close(&self) {
         if !self.inner.closed.swap(true, Ordering::AcqRel) {
             tracing::info!(label = %self.inner.label, "closing the project session");
-            self.inner.kill_in_background();
+            self.inner.release_in_background();
         }
     }
 
