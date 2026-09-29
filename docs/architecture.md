@@ -96,10 +96,13 @@ one routing decision per final transcript: it builds the named call summary,
 asks the fixed action/target/current-agent/freshness/multi-target questions,
 and applies the confidence thresholds from `Config`. The summary drops its
 oldest conversation turns first when the configured budget would be exceeded.
-A timeout, malformed response, or uncertain decision goes through the existing
-operator LLM path. The PBX applies a confident decision; project agents and
-the operator transfer tool do not independently choose the route. The Jev key
-is read from the configured secret file and never appears in logs or errors.
+It also contains only live, top-level desk sessions whose folders exactly match
+registered projects; the PBX attaches one only after rechecking that no
+service-created agent is live. A timeout, malformed response, or uncertain
+decision goes through the existing operator LLM path. The PBX applies a
+confident decision; project agents and the operator transfer tool do not
+independently choose the route. The Jev key is read from the configured secret
+file and never appears in logs or errors.
 
 ## Core rules
 
@@ -314,8 +317,7 @@ refused.
 - browser WebSocket audio/control frames
 - browser HTTP controls: connect, hangup, thinking, and model
 - host-link frames: command replies, session events and snapshots, and module
-  calls (speak, display, view, return_to_operator, transfer_to_project,
-  set_model)
+  calls (speak, display, view, request_to_speak)
 - Pi RPC events and tool signals from the operator
 - process/stdin/stdout lifecycle events
 - startup configuration and environment values
@@ -354,7 +356,7 @@ removes the real coupling; do not create interfaces for ceremony.
 | `api.rs` | HTTP/WebSocket coordination, turn dispatch, workers, generation checks | provider wire formats, PBX policy, the display projection, the audio queue |
 | `floor.rs` | ordered background request queue, Jev good-moment holds, stateless rewrites, announce-first release | lifecycle membership, agent-state projection, route authority, TTS provider wire format |
 | `lifecycle.rs` | call identity, the current route and the leg on it, phases, candidate legs, operations, the status | async work or I/O |
-| `pbx.rs` | leg lifecycle: transfer, return, rescue, redial and its decision; the operator process and project sessions | host setup, browser rendering, TTS encoding, a copy of the route |
+| `pbx.rs` | leg lifecycle: transfer, takeover, return, rescue, redial and its decision; the operator process and project sessions | host setup, browser rendering, TTS encoding, a copy of the route |
 | `hosts.rs` | the host link: admission by token, heartbeats, commands and replies, session subscriptions, module calls | routing decisions, leg lifecycle |
 | `prewarm.rs` | per-host setup and launch plans: catalogs, prepare | routing decisions, model policy |
 | `pi_client.rs` | the operator's Pi process/RPC transport, project sessions over the host link, process-tree cleanup | route authority or deployment registry |

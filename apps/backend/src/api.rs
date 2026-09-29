@@ -672,15 +672,20 @@ fn spawn_floor_worker(state: AppState) {
             Box::pin(async move {
                 let entries = state.0.transcript_log.lock().await.entries();
                 let screen = state.0.screen_state.lock().await.clone();
-                let (router, summary) = {
+                // Floor admission only asks whether a background agent may
+                // speak. Desk discovery is for caller routing and would make
+                // this gate wait on every host link for no decision benefit.
+                let (router, mut summary) = {
                     let board = state.0.switchboard.lock().await;
-                    let mut summary = board.call_summary(&entries, screen, request.message.clone());
-                    // The queued message is the item being judged, not a new
-                    // caller utterance. Keeping it in the named field makes
-                    // the Jev prompt useful without adding another contract.
-                    summary.caller_just_said = request.message;
-                    (board.router(), summary)
+                    (
+                        board.router(),
+                        board.call_summary(&entries, screen, request.message.clone()),
+                    )
                 };
+                // The queued message is the item being judged, not a new
+                // caller utterance. Keeping it in the named field makes
+                // the Jev prompt useful without adding another contract.
+                summary.caller_just_said = request.message;
                 router.good_moment(&summary).await.map_err(|_| ())
             }) as floor::GateFuture
         }),
@@ -1090,18 +1095,54 @@ async fn route_final_transcript(state: &AppState, id: &str, generation: u64, tra
     dispatch_routed_transcript(state, id, generation, transcript).await;
 }
 
+/// Fetch host-owned desk sessions without holding the PBX lock. The summary
+/// is rebuilt under that lock after the bounded host queries, so route state is
+/// current at the point Jev sees it.
+async fn call_summary_without_pbx_lock(
+    state: &AppState,
+    entries: &[crate::history::TranscriptEntry],
+    screen: Value,
+    utterance: String,
+) -> (crate::router::Router, CallSummary) {
+    let (hosts, registry) = {
+        let board = state.0.switchboard.lock().await;
+        (board.hosts(), Arc::clone(&board.registry))
+    };
+    let live_desk_sessions = Switchboard::live_desk_sessions_from(hosts, registry).await;
+    let mut summary = {
+        let board = state.0.switchboard.lock().await;
+        board.call_summary(entries, screen, utterance)
+    };
+    summary.live_desk_sessions = live_desk_sessions;
+    let router = state.0.switchboard.lock().await.router();
+    (router, summary)
+}
+
+/// Prepare host-owned takeover discovery before the PBX mutex is acquired by
+/// the turn operation. The selected handle and provenance are checked again by
+/// `Switchboard::take_over` immediately before attach.
+async fn prepare_takeover_lookup(
+    state: &AppState,
+    decision: &Decision,
+) -> Option<Result<Option<Value>, String>> {
+    let target = decision
+        .target
+        .as_deref()
+        .filter(|_| matches!(decision.action, Action::TakeOver))?;
+    let (hosts, registry) = {
+        let board = state.0.switchboard.lock().await;
+        (board.hosts(), Arc::clone(&board.registry))
+    };
+    Some(Switchboard::desk_session_for_takeover_from(hosts, registry, target).await)
+}
+
 /// Build a summary and ask Jev once for this utterance. The operator path is
 /// the only fallback for a timeout, malformed response, or missing key.
 async fn route_transcript(state: &AppState, transcript: &str) -> Decision {
     let entries = state.0.transcript_log.lock().await.entries();
     let screen = state.0.screen_state.lock().await.clone();
-    let (router, summary): (crate::router::Router, CallSummary) = {
-        let board = state.0.switchboard.lock().await;
-        (
-            board.router(),
-            board.call_summary(&entries, screen, transcript.to_owned()),
-        )
-    };
+    let (router, summary) =
+        call_summary_without_pbx_lock(state, &entries, screen, transcript.to_owned()).await;
     match router.route(&summary).await {
         Ok(decision) => decision,
         Err(error) => {
@@ -1361,6 +1402,7 @@ async fn process_turns(state: AppState) {
         } else {
             route_transcript(&state, &transcript).await
         };
+        let takeover = prepare_takeover_lookup(&state, &decision).await;
 
         let turn_state = state.clone();
         let started = std::time::Instant::now();
@@ -1391,7 +1433,9 @@ async fn process_turns(state: AppState) {
         let turn = tracing::info_span!("turn", clip = %id);
         let handle_turn = async move {
             let mut board = turn_state.0.switchboard.lock().await;
-            board.handle_decision(&transcript, &decision).await
+            board
+                .handle_decision_with_takeover(&transcript, &decision, takeover)
+                .await
         };
         let Some((task, task_id)) =
             spawn_registered_operation(&state, generation, handle_turn.instrument(turn.clone()))

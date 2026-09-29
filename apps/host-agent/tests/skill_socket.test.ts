@@ -84,6 +84,16 @@ test("hello: not on call, then settings once the service puts the session on a c
 	});
 });
 
+test("host-link loss unregisters the session from the skill socket", async () => {
+	await withSocket(async ({ ask, manager, handle, sessionId }) => {
+		await manager.handle("join_call", { session: handle, ...CALL });
+		assert.equal((await ask({ op: "hello", session_id: sessionId, depth: 0 })).on_call, true);
+		manager.clearCalls();
+		assert.deepEqual(await ask({ op: "hello", session_id: sessionId, depth: 0 }), { on_call: false });
+		assert.deepEqual(await ask({ op: "call", session_id: sessionId, depth: 0, token: CALL.token, call: "speak", args: { text: "stale" } }), { status: "refused", reason: "not_on_call" });
+	});
+});
+
 test("depth above 0 is refused for hello and calls", async () => {
 	await withSocket(async ({ ask, manager, handle, sessionId, relayed }) => {
 		await manager.handle("join_call", { session: handle, ...CALL });

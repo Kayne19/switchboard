@@ -228,6 +228,11 @@ real evaluation.
   confidence is at least 0.6, and the LLM decides below that. Stopping an agent
   always asks the caller first, whatever the confidence.
 - Revisit the thresholds with real calls once several agents can run at once.
+- A `take_over` decision is offered only for a live top-level desk session whose
+  exact folder is registered. The PBX rechecks the host before attaching and
+  refuses when a service-created agent already owns that project; attachment
+  records `taken_over` provenance and the session is detached, never killed,
+  when the caller leaves.
 
 ## Results
 

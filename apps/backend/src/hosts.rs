@@ -1072,6 +1072,20 @@ impl FakeHostAgent {
                             "last_text": null,
                         }))
                     }
+                    "attach" => Ok(json!({
+                        "session": session,
+                        "session_id": format!("desk-{session}"),
+                        "name": null,
+                        "project": args["project"],
+                        "cwd": args["cwd"],
+                        "provenance": "taken_over",
+                        "busy": false,
+                        "turn_open": false,
+                        "model": "anthropic/current",
+                        "thinking": "medium",
+                        "call_mode": null,
+                        "last_text": null,
+                    })),
                     "join_call" => {
                         tokens.insert(
                             session.clone(),

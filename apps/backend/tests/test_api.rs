@@ -3456,6 +3456,175 @@ fn state_with_agents(root: &std::path::Path) -> AppState {
 }
 
 #[tokio::test]
+async fn a_slow_desk_host_does_not_hold_the_pbx_lock_during_routing_summary() {
+    let (client, _, _) = fake_jev_client();
+    let registry = Registry::new(vec![serde_json::from_value(json!({
+        "id": "alpha",
+        "host": "scriptorium",
+        "cwd": "/srv/alpha",
+    }))
+    .unwrap()]);
+    let state = state_with_jev(client, registry);
+    let host = state.0.switchboard.lock().await.hosts();
+    let listed = std::sync::Arc::new(tokio::sync::Notify::new());
+    let listed_for_host = listed.clone();
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| vec![]));
+    fake.on_command = Some(Box::new(move |name, _| {
+        if name == "list_sessions" {
+            listed_for_host.notify_one();
+            return Some(None);
+        }
+        None
+    }));
+    fake.serve(host.connect_fake("scriptorium"));
+
+    let routing_state = state.clone();
+    let routing =
+        tokio::spawn(
+            async move { route_transcript(&routing_state, "caller asks about alpha").await },
+        );
+    timeout(Duration::from_secs(1), listed.notified())
+        .await
+        .expect("the routing summary queried the host");
+    let guard = timeout(Duration::from_secs(1), state.0.switchboard.lock())
+        .await
+        .expect("a slow host query does not hold the PBX lock");
+    drop(guard);
+    host.disconnect_fake("scriptorium");
+    let _ = routing
+        .await
+        .expect("routing completed after the host link closed");
+    state.0.switchboard.lock().await.shutdown().await;
+}
+
+#[tokio::test]
+async fn takeover_desk_listing_does_not_hold_the_pbx_lock() {
+    let (client, _, _) = fake_jev_client();
+    let registry = Registry::new(vec![serde_json::from_value(json!({
+        "id": "alpha",
+        "host": "scriptorium",
+        "cwd": "/srv/alpha",
+    }))
+    .unwrap()]);
+    let state = state_with_jev(client, registry);
+    let host = state.0.switchboard.lock().await.hosts();
+    let listed = std::sync::Arc::new(tokio::sync::Notify::new());
+    let listed_for_host = listed.clone();
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| vec![]));
+    fake.on_command = Some(Box::new(move |name, _| {
+        if name == "list_sessions" {
+            listed_for_host.notify_one();
+            return Some(None);
+        }
+        None
+    }));
+    fake.serve(host.connect_fake("scriptorium"));
+
+    state.0.routed_decisions.lock().await.insert(
+        "takeover-lock".into(),
+        crate::router::Decision {
+            action: crate::router::Action::TakeOver,
+            target: Some("alpha".into()),
+            continue_or_fresh: None,
+            confidence: 1.0,
+            for_current_agent: 0.0,
+            multi_target: false,
+            unsure: false,
+            confirm: false,
+            reason: "test".into(),
+        },
+    );
+    let generation = state.0.coordinator.generation();
+    state.0.queued_turns.store(1, Ordering::Release);
+    let worker = tokio::spawn(process_turns(state.clone()));
+    state
+        .0
+        .turns
+        .send(("takeover-lock".into(), "take over alpha".into(), generation))
+        .await
+        .unwrap();
+
+    timeout(Duration::from_secs(1), listed.notified())
+        .await
+        .expect("takeover queried the host");
+    let guard = timeout(Duration::from_secs(1), state.0.switchboard.lock())
+        .await
+        .expect("a slow takeover listing does not hold the PBX lock");
+    drop(guard);
+    host.disconnect_fake("scriptorium");
+    worker.abort();
+    let _ = worker.await;
+    state.0.switchboard.lock().await.shutdown().await;
+}
+
+#[tokio::test]
+async fn floor_good_moment_gate_does_not_query_desk_hosts() {
+    let (client, _, jev_called) = fake_jev_client();
+    let config = crate::Config::for_tests(&[
+        ("SWITCHBOARD_PI_BINARY", "/bin/sh"),
+        ("SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS", "1"),
+    ]);
+    let registry = Registry::new(vec![serde_json::from_value(json!({
+        "id": "alpha",
+        "host": "scriptorium",
+        "cwd": "/srv/alpha",
+    }))
+    .unwrap()]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("test catalog"),
+    );
+    let state = state_on(Switchboard::new_with_jev(
+        &config,
+        registry,
+        std::sync::Arc::new(prewarm),
+        client,
+    ));
+    let host = state.0.switchboard.lock().await.hosts();
+    let listed = std::sync::Arc::new(tokio::sync::Notify::new());
+    let listed_for_host = listed.clone();
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| vec![]));
+    fake.on_command = Some(Box::new(move |name, _| {
+        if name == "list_sessions" {
+            listed_for_host.notify_one();
+            return Some(None);
+        }
+        None
+    }));
+    fake.serve(host.connect_fake("scriptorium"));
+    let (_connection, _, _) = state.register_connection().await;
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "alpha-token");
+    state
+        .0
+        .floor
+        .enqueue(crate::floor::FloorRequest {
+            project: "alpha".into(),
+            token: "alpha-token".into(),
+            generation: state.0.coordinator.generation(),
+            message: "alpha finished".into(),
+            reason: "finished".into(),
+        })
+        .await;
+    state.0.floor.force_quiet_for_test().await;
+    spawn_floor_worker(state.clone());
+
+    timeout(Duration::from_secs(1), jev_called.notified())
+        .await
+        .expect("floor gate asked Jev about the good moment");
+    assert!(
+        timeout(Duration::from_millis(100), listed.notified())
+            .await
+            .is_err(),
+        "floor admission does not discover desk sessions"
+    );
+    host.disconnect_fake("scriptorium");
+}
+
+#[tokio::test]
 async fn hanging_up_with_nothing_on_the_line_says_so() {
     let state = state();
     let (mut connection, _, _) = state.register_connection().await;

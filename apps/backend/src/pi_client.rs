@@ -695,6 +695,7 @@ struct ProjectInner {
     turn_lock: Mutex<()>,
     busy: AtomicBool,
     closed: AtomicBool,
+    released: AtomicBool,
     brief: String,
     brief_due: AtomicBool,
     /// Where the events of the turn being collected go.
@@ -718,10 +719,15 @@ impl ProjectInner {
             .unwrap_or(false)
     }
 
-    /// Queues kill for service-created sessions. A session taken over from a
-    /// desk is never killed: abort its active turn first, then detach it so
-    /// the desk can keep owning it.
+    /// Queues release for this session exactly once. A session taken over from
+    /// a desk is never killed: abort its active turn first, then detach it so
+    /// the desk can keep owning it. Release is separate from `closed`: a host
+    /// command can mark a handle closed before its lifecycle owner gets a
+    /// chance to release a taken-over session.
     fn release_in_background(&self) {
+        if self.released.swap(true, Ordering::AcqRel) {
+            return;
+        }
         self.hosts.unsubscribe(&self.host, &self.session);
         let host = self.host.clone();
         let session = self.session.clone();
@@ -801,7 +807,10 @@ impl Drop for ProjectInner {
     /// A session the service created dies with its last handle, so one whose
     /// transfer was cancelled half way is not left running on its host.
     fn drop(&mut self) {
-        if !self.closed.swap(true, Ordering::AcqRel) {
+        if self.provenance == "taken_over" {
+            self.closed.store(true, Ordering::Release);
+            self.release_in_background();
+        } else if !self.closed.swap(true, Ordering::AcqRel) {
             self.release_in_background();
         }
     }
@@ -856,7 +865,7 @@ impl ProjectSession {
             )
             .await
             .map_err(|error| PiSessionError(format!("could not start a session: {error}")))?;
-        Self::from_open_reply(hosts, launch, reply, None, "created").await
+        Self::from_open_reply(hosts, launch, reply, None, "created", "created", None).await
     }
 
     /// Reopens a saved resident session after a service restart. The host
@@ -880,7 +889,71 @@ impl ProjectSession {
             )
             .await
             .map_err(|error| PiSessionError(format!("could not open a session: {error}")))?;
-        Self::from_open_reply(hosts, launch, reply, Some(session_id), "opened").await
+        Self::from_open_reply(
+            hosts,
+            launch,
+            reply,
+            Some(session_id),
+            "opened",
+            "created",
+            None,
+        )
+        .await
+    }
+
+    /// Attaches to a live desk session in the registered folder. This never
+    /// creates or reopens a daemon session; its `taken_over` provenance makes
+    /// close release it with abort followed by detach.
+    pub async fn attach(
+        hosts: &crate::hosts::Hosts,
+        launch: ProjectLaunch,
+        session: &str,
+    ) -> Result<(Self, SessionState), PiSessionError> {
+        if session.trim().is_empty() {
+            return Err(PiSessionError("a live session handle is required".into()));
+        }
+        tracing::info!(project = %launch.project, host = %launch.host, session, "taking over a desk session");
+        let reply = hosts
+            .command(
+                &launch.host,
+                "attach",
+                json!({"session": session, "project": launch.project, "cwd": launch.cwd}),
+                SESSION_COMMAND_WAIT,
+            )
+            .await
+            .map_err(|error| PiSessionError(format!("could not take over a session: {error}")))?;
+        let result = Self::from_open_reply(
+            hosts,
+            launch.clone(),
+            reply,
+            None,
+            "attached",
+            "taken_over",
+            Some("taken_over"),
+        )
+        .await;
+        if result.is_err() {
+            // The host persists taken_over provenance before replying. A
+            // malformed success must therefore undo the attach even though no
+            // session handle could be built for the pump.
+            match hosts
+                .command(
+                    &launch.host,
+                    "detach",
+                    json!({"session": session}),
+                    SESSION_COMMAND_WAIT,
+                )
+                .await
+            {
+                Ok(_) => {
+                    tracing::info!(host = %launch.host, session, "rolled back malformed desk takeover")
+                }
+                Err(error) => {
+                    tracing::warn!(host = %launch.host, session, %error, "could not roll back malformed desk takeover")
+                }
+            }
+        }
+        result
     }
 
     async fn from_open_reply(
@@ -889,6 +962,8 @@ impl ProjectSession {
         reply: crate::hosts::CommandReply,
         requested_session_id: Option<&str>,
         verb: &str,
+        default_provenance: &str,
+        forced_provenance: Option<&str>,
     ) -> Result<(Self, SessionState), PiSessionError> {
         let Some(session) = reply.result["session"].as_str().map(str::to_owned) else {
             return Err(PiSessionError(
@@ -906,9 +981,9 @@ impl ProjectSession {
                 .unwrap_or_default(),
             instance_id: NEXT_PROJECT_INSTANCE_ID.fetch_add(1, Ordering::Relaxed),
             label: launch.project,
-            provenance: reply.result["provenance"]
-                .as_str()
-                .unwrap_or(if verb == "opened" { "created" } else { verb })
+            provenance: forced_provenance
+                .or_else(|| reply.result["provenance"].as_str())
+                .unwrap_or(default_provenance)
                 .to_owned(),
             token: StdMutex::new(String::new()),
             turn_timeout: launch.turn_timeout,
@@ -918,6 +993,7 @@ impl ProjectSession {
             turn_lock: Mutex::new(()),
             busy: AtomicBool::new(false),
             closed: AtomicBool::new(false),
+            released: AtomicBool::new(false),
             brief: launch.brief,
             brief_due: AtomicBool::new(true),
             turn: StdMutex::new(None),
@@ -937,6 +1013,10 @@ impl ProjectSession {
 
     pub fn session_id(&self) -> &str {
         &self.inner.persistent_session_id
+    }
+
+    pub fn is_taken_over(&self) -> bool {
+        self.inner.provenance == "taken_over"
     }
 
     pub fn instance_id(&self) -> u64 {
@@ -1041,7 +1121,8 @@ impl ProjectSession {
 
     /// Ends the session on its host. Idempotent; nothing waits for the host.
     pub fn close(&self) {
-        if !self.inner.closed.swap(true, Ordering::AcqRel) {
+        let was_closed = self.inner.closed.swap(true, Ordering::AcqRel);
+        if self.inner.provenance == "taken_over" || !was_closed {
             tracing::info!(label = %self.inner.label, "closing the project session");
             self.inner.release_in_background();
         }

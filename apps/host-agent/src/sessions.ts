@@ -123,6 +123,11 @@ export class SessionManager {
 		return [...this.#tracked.keys()];
 	}
 
+	/** A lost service link cannot keep a desk module on a call. */
+	clearCalls(): void {
+		for (const t of this.#tracked.values()) t.call = null;
+	}
+
 	/** The tracked session whose persisted id is `sessionId` (the skill socket's key). */
 	bySessionId(sessionId: string): { handle: string; call: CallState | null } | null {
 		for (const t of this.#tracked.values()) if (t.sessionId === sessionId) return { handle: t.handle, call: t.call };
@@ -215,6 +220,8 @@ export class SessionManager {
 				return this.createSession(requireString(args, "project"), (args.config ?? {}) as Record<string, unknown>);
 			case "open_session":
 				return this.openSession(requireString(args, "session_id"), requireString(args, "cwd"), optionalString(args, "project"));
+			case "attach":
+				return this.attach(requireString(args, "session"), requireString(args, "project"), requireString(args, "cwd"));
 			case "list_sessions":
 				return this.listSessions();
 			case "list_saved_sessions":
@@ -308,8 +315,20 @@ export class SessionManager {
 		return this.#adopt(opened, projectId, cwd, "created");
 	}
 
-	async #adopt(session: DaemonSession, project: string, cwd: string, provenance: Provenance): Promise<Record<string, unknown>> {
-		const snapshot = await this.#port.attach(session.handle);
+	/** Track one live desk session without creating or reopening it. */
+	async attach(handle: string, project: string, cwd: string): Promise<Record<string, unknown>> {
+		if (!PROJECT_RE.test(project)) throw new CommandError("bad_request", `invalid project id: ${project}`);
+		if (this.#tracked.has(handle)) throw new CommandError("refused", `session ${handle} is already tracked by this host agent`);
+		const live = (await this.#port.list()).find((session) => session.handle === handle && session.depth === 0);
+		if (!live) throw new CommandError("not_found", `session ${handle} is not a live top-level session`);
+		if (live.cwd !== cwd) throw new CommandError("refused", `session ${handle} is not in the requested project folder`);
+		const snapshot = await this.#port.attach(handle);
+		if (snapshot.cwd !== cwd) throw new CommandError("refused", `session ${handle} changed project folder while attaching`);
+		return this.#adopt(snapshot, project, cwd, "taken_over", snapshot);
+	}
+
+	async #adopt(session: DaemonSession, project: string, cwd: string, provenance: Provenance, attached?: DaemonSession): Promise<Record<string, unknown>> {
+		const snapshot = attached ?? (await this.#port.attach(session.handle));
 		const t: Tracked = {
 			handle: session.handle,
 			sessionId: session.sessionId || snapshot.sessionId,
