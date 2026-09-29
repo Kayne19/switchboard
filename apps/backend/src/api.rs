@@ -1115,6 +1115,24 @@ async fn call_summary_without_pbx_lock(
     (router, summary)
 }
 
+/// Prepare host-owned takeover discovery before the PBX mutex is acquired by
+/// the turn operation. The selected handle and provenance are checked again by
+/// `Switchboard::take_over` immediately before attach.
+async fn prepare_takeover_lookup(
+    state: &AppState,
+    decision: &Decision,
+) -> Option<Result<Option<Value>, String>> {
+    let target = decision
+        .target
+        .as_deref()
+        .filter(|_| matches!(decision.action, Action::TakeOver))?;
+    let (hosts, registry) = {
+        let board = state.0.switchboard.lock().await;
+        (board.hosts(), Arc::clone(&board.registry))
+    };
+    Some(Switchboard::desk_session_for_takeover_from(hosts, registry, target).await)
+}
+
 /// Build a summary and ask Jev once for this utterance. The operator path is
 /// the only fallback for a timeout, malformed response, or missing key.
 async fn route_transcript(state: &AppState, transcript: &str) -> Decision {
@@ -1381,6 +1399,7 @@ async fn process_turns(state: AppState) {
         } else {
             route_transcript(&state, &transcript).await
         };
+        let takeover = prepare_takeover_lookup(&state, &decision).await;
 
         let turn_state = state.clone();
         let started = std::time::Instant::now();
@@ -1411,7 +1430,9 @@ async fn process_turns(state: AppState) {
         let turn = tracing::info_span!("turn", clip = %id);
         let handle_turn = async move {
             let mut board = turn_state.0.switchboard.lock().await;
-            board.handle_decision(&transcript, &decision).await
+            board
+                .handle_decision_with_takeover(&transcript, &decision, takeover)
+                .await
         };
         let Some((task, task_id)) =
             spawn_registered_operation(&state, generation, handle_turn.instrument(turn.clone()))

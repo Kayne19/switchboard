@@ -889,7 +889,30 @@ impl Switchboard {
     /// Dispatch an utterance after Jev has made the routing decision. An
     /// unsure or unsupported action deliberately goes through the existing
     /// operator LLM path; project agents never mutate the route themselves.
+    /// Dispatches a decision from a direct caller. Takeover discovery happens
+    /// before this switchboard can be held by an outer request lock.
+    #[cfg(test)]
     pub async fn handle_decision(&mut self, text: &str, decision: &Decision) -> Reply {
+        let takeover = match (
+            matches!(decision.action, crate::router::Action::TakeOver),
+            decision.target.as_deref(),
+        ) {
+            (true, Some(target)) => Some(self.desk_session_for_takeover_target(target).await),
+            _ => None,
+        };
+        self.handle_decision_with_takeover(text, decision, takeover)
+            .await
+    }
+
+    /// Applies a decision after any host-owned takeover lookup has completed.
+    /// The API worker uses this entry point so the PBX mutex is not held while
+    /// `list_sessions` waits on a host link.
+    pub(crate) async fn handle_decision_with_takeover(
+        &mut self,
+        text: &str,
+        decision: &Decision,
+        takeover: Option<Result<Option<Value>, String>>,
+    ) -> Reply {
         // These actions are owned by the PBX, not by an agent. A stop decision
         // is deliberately confirmation-only here; the next utterance must
         // confirm before a resident session is closed.
@@ -915,7 +938,13 @@ impl Switchboard {
         }
         if matches!(decision.action, crate::router::Action::TakeOver) {
             if let Some(target) = decision.target.as_deref() {
-                return self.take_over(text, target).await;
+                let Some(takeover) = takeover else {
+                    return self.reply_transfer_error(
+                        "I couldn't inspect the live desk session before taking it over.".into(),
+                        Some("takeover lookup was not prepared".into()),
+                    );
+                };
+                return self.take_over(text, target, takeover).await;
             }
             return self.reply(
                 ["Tell me which project session you want to take over."],
@@ -1925,12 +1954,44 @@ impl Switchboard {
     /// Find one untracked top-level desk session for a registered project.
     /// Service-created sessions are returned as a refusal, not silently reused
     /// by takeover: only their original lifecycle may own them.
+    #[cfg(test)]
     async fn desk_session_for_takeover(&self, project: &Project) -> Result<Option<Value>, String> {
+        Self::desk_session_for_takeover_from_project(self.hosts.clone(), project).await
+    }
+
+    #[cfg(test)]
+    async fn desk_session_for_takeover_target(
+        &self,
+        target: &str,
+    ) -> Result<Option<Value>, String> {
+        let Some(project) = self.registry.get(target).cloned() else {
+            return Err(format!("unknown project {target:?}"));
+        };
+        self.desk_session_for_takeover(&project).await
+    }
+
+    /// Performs the host-owned part of takeover discovery without requiring a
+    /// switchboard lock. The caller must validate the returned handle and
+    /// provenance again before attaching it.
+    pub(crate) async fn desk_session_for_takeover_from(
+        hosts: Hosts,
+        registry: Arc<Registry>,
+        target: &str,
+    ) -> Result<Option<Value>, String> {
+        let Some(project) = registry.get(target).cloned() else {
+            return Err(format!("unknown project {target:?}"));
+        };
+        Self::desk_session_for_takeover_from_project(hosts, &project).await
+    }
+
+    async fn desk_session_for_takeover_from_project(
+        hosts: Hosts,
+        project: &Project,
+    ) -> Result<Option<Value>, String> {
         let Some(host) = project.canonical_host() else {
             return Err(format!("{} has no project host configured", project.id));
         };
-        let reply = self
-            .hosts
+        let reply = hosts
             .command(host, "list_sessions", json!({}), Duration::from_secs(5))
             .await
             .map_err(|error| format!("could not inspect {} sessions: {error}", project.id))?;
@@ -1957,7 +2018,12 @@ impl Switchboard {
     /// Route the caller onto a live desk session without creating a second
     /// agent. The takeover request is the first routed line, so `prompt`
     /// carries the normal voice brief in front of it.
-    async fn take_over(&mut self, text: &str, target: &str) -> Reply {
+    async fn take_over(
+        &mut self,
+        text: &str,
+        target: &str,
+        takeover: Result<Option<Value>, String>,
+    ) -> Reply {
         let Some(project) = self.registry.get(target).cloned() else {
             return self.reply_transfer_error(
                 format!("I don't have a registered project called {target}."),
@@ -1982,7 +2048,7 @@ impl Switchboard {
                 Some("project already has a live switchboard agent".into()),
             );
         }
-        let desk = match self.desk_session_for_takeover(&project).await {
+        let desk = match takeover {
             Ok(Some(session)) => session,
             Ok(None) => {
                 return self.reply_transfer_error(
@@ -1995,6 +2061,18 @@ impl Switchboard {
             }
             Err(error) => return self.reply_transfer_error(error.clone(), Some(error)),
         };
+        // This is the lock-held recheck after the host listing. A stale
+        // discovery result must never be attached to another project or a
+        // session the host has already registered for the service.
+        if desk["cwd"].as_str() != Some(project.cwd.as_str()) || !desk["provenance"].is_null() {
+            return self.reply_transfer_error(
+                format!(
+                    "The live desk session for {} changed before takeover.",
+                    project.id
+                ),
+                Some("desk session changed during takeover".into()),
+            );
+        }
         let Some(session_handle) = desk["session"].as_str() else {
             return self.reply_transfer_error(
                 format!("The live desk session for {} had no handle.", project.id),
