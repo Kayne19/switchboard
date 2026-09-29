@@ -2130,6 +2130,36 @@ async fn background_prompt_transport_failure_evicts_the_resident_and_finishes() 
 }
 
 #[tokio::test]
+async fn dead_background_handle_is_evicted_after_registration_recheck() {
+    let mut board = board_with(vec![project("alpha", "")], false);
+    let fake = FakeHostAgent::new(Box::new(|_, _| vec![]));
+    let _log = fake.serve(board.hosts().connect_fake(HOST));
+    let launch = ProjectLaunch {
+        host: HOST.into(),
+        project: "alpha".into(),
+        cwd: "/srv/alpha".into(),
+        spec: "anthropic/current".into(),
+        brief: String::new(),
+        turn_timeout: Duration::from_secs(10),
+        on_activity: None,
+        on_module: None,
+        on_closed: None,
+    };
+    let session = ProjectSession::create(&board.hosts(), launch)
+        .await
+        .unwrap()
+        .0;
+    // A synchronous fake death between registration and insertion is modeled
+    // by the host handle being closed before the helper's post-insert check.
+    session.close();
+
+    assert!(!board.register_background_session("alpha".into(), session));
+    assert!(!board.background_agents.contains_key("alpha"));
+    assert!(!board.coordinator.project_is_background("alpha"));
+    board.shutdown().await;
+}
+
+#[tokio::test]
 async fn stale_host_loss_callback_after_resume_keeps_the_replacement_resident() {
     let mut board = board_with(vec![project("alpha", "")], false);
     let mut fake = FakeHostAgent::new(Box::new(|_, _| vec![Step::Hold]));

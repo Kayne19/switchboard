@@ -1021,6 +1021,27 @@ impl Switchboard {
         Some(session)
     }
 
+    /// Registers a resident and rechecks the host handle after insertion. A
+    /// host can report death between the token registration and map insertion;
+    /// the final check closes that gap without leaving a dead token resident.
+    fn register_background_session(&self, project: String, session: ProjectSession) -> bool {
+        let token = session.token();
+        self.coordinator.register_background(project.clone(), token);
+        self.background_agents
+            .insert(project.clone(), session.clone());
+        let still_registered = session.alive()
+            && self
+                .background_agents
+                .get(&project)
+                .is_some_and(|current| current.same_session(&session));
+        if !still_registered {
+            if let Some(removed) = self.background_agents.remove(&project) {
+                self.coordinator.remove_background(&removed.token());
+            }
+        }
+        still_registered
+    }
+
     fn spawn_background_prompt(&mut self, project: &str, session: ProjectSession, text: String) {
         let (epoch, generation) = self.background_agents.begin_task(project);
         let token = session.token();
@@ -1103,10 +1124,13 @@ impl Switchboard {
             &project,
             plan.prepare_report.as_ref(),
         );
-        self.coordinator
-            .register_background(project.id.clone(), token.clone());
-        self.background_agents
-            .insert(project.id.clone(), session.clone());
+        if !self.register_background_session(project.id.clone(), session.clone()) {
+            self.announce_agent_state(&project.id, "finished").await;
+            return Err(format!(
+                "project {} ended before background registration",
+                project.id
+            ));
+        }
         self.announce_agent_state(&project.id, "busy").await;
         self.spawn_background_prompt(&project.id, session, intro);
         Ok(())
@@ -1572,11 +1596,13 @@ impl Switchboard {
                         .steer("[switchboard] The caller is now listening to another agent. Continue your work quietly; use request_to_speak when you need the caller.")
                         .await;
                 }
-                self.coordinator
-                    .register_background(previous_label.clone(), previous.token());
                 let state = if previous.busy() { "busy" } else { "idle" };
-                self.announce_agent_state(&previous_label, state).await;
-                self.background_agents.insert(previous_label, previous);
+                let registered = self.register_background_session(previous_label.clone(), previous);
+                self.announce_agent_state(
+                    &previous_label,
+                    if registered { state } else { "finished" },
+                )
+                .await;
             }
         }
         self.announce_agent_state(&project.id, "idle").await;
@@ -1677,11 +1703,10 @@ impl Switchboard {
                     .steer("[switchboard] The caller is now listening to another agent. Continue your work quietly; use request_to_speak when you need the caller.")
                     .await;
             }
-            self.coordinator
-                .register_background(previous_label.clone(), previous.token());
             let state = if previous.busy() { "busy" } else { "idle" };
-            self.announce_agent_state(&previous_label, state).await;
-            self.background_agents.insert(previous_label, previous);
+            let registered = self.register_background_session(previous_label.clone(), previous);
+            self.announce_agent_state(&previous_label, if registered { state } else { "finished" })
+                .await;
         }
         self.announce_agent_state(&project.id, "idle").await;
         self.agent = Some(session);
