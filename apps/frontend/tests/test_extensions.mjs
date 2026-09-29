@@ -55,6 +55,13 @@ function fakePi(thinking = "high") {
 		registerTool(tool) {
 			tools.set(tool.name, tool);
 		},
+		registerFlag(name, options) {
+			this.flags ??= new Map();
+			this.flags.set(name, options.default ?? false);
+		},
+		getFlag(name) {
+			return this.flags?.get(name) ?? false;
+		},
 		on(name, handler) {
 			handlers.set(name, handler);
 		},
@@ -86,11 +93,11 @@ async function operatorExtensionBehavior() {
 		const extension = await loadExtension("extensions/operator-switchboard.ts");
 		const pi = fakePi();
 		extension.default(pi);
-		assert.deepEqual([...pi.tools.keys()], ["transfer_to_project"]);
-		const transferred = await pi.tools
-			.get("transfer_to_project")
-			.execute("call", { project: "alpha", intent: "Audit it" });
-		assert.deepEqual(transferred.details, { project: "alpha" });
+		assert.deepEqual([...pi.tools.keys()], ["route"]);
+		const routed = await pi.tools
+			.get("route")
+			.execute("call", { target: "alpha", mode: "fresh" });
+		assert.deepEqual(routed.details, { target: "alpha", mode: "fresh" });
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 		delete process.env.SWITCHBOARD_PROJECTS_FILE;
