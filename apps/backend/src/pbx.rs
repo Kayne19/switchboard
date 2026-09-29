@@ -720,11 +720,17 @@ impl Switchboard {
             }
         }
         if self.utility.is_none() {
+            let utility_prompt = format!(
+                "{UTILITY_SYSTEM_PROMPT}\n\n[REGISTERED PROJECTS]\n{}",
+                self.registry
+                    .operator_prompt_catalog()
+                    .replace("transfer_to_project", "route")
+            );
             let argv = local_argv(
                 &self.pi_binary,
                 self.operator_model.as_deref(),
                 None,
-                Some(UTILITY_SYSTEM_PROMPT),
+                Some(&utility_prompt),
                 self.operator_extension.as_deref(),
                 &[
                     "--no-builtin-tools".into(),
