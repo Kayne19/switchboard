@@ -779,6 +779,41 @@ impl ProjectSession {
             )
             .await
             .map_err(|error| PiSessionError(format!("could not start a session: {error}")))?;
+        Self::from_open_reply(hosts, launch, reply, None, "created").await
+    }
+
+    /// Reopens a saved resident session after a service restart. The host
+    /// validates the cwd and project provenance before returning the live
+    /// handle; this path never creates a second session.
+    #[allow(dead_code)]
+    pub async fn open(
+        hosts: &crate::hosts::Hosts,
+        launch: ProjectLaunch,
+        session_id: &str,
+    ) -> Result<(Self, SessionState), PiSessionError> {
+        if session_id.trim().is_empty() {
+            return Err(PiSessionError("a saved session id is required".into()));
+        }
+        tracing::info!(project = %launch.project, host = %launch.host, session_id, "opening a project session");
+        let reply = hosts
+            .command(
+                &launch.host,
+                "open_session",
+                json!({"session_id": session_id, "cwd": launch.cwd, "project": launch.project}),
+                SESSION_COMMAND_WAIT,
+            )
+            .await
+            .map_err(|error| PiSessionError(format!("could not open a session: {error}")))?;
+        Self::from_open_reply(hosts, launch, reply, Some(session_id), "opened").await
+    }
+
+    async fn from_open_reply(
+        hosts: &crate::hosts::Hosts,
+        launch: ProjectLaunch,
+        reply: crate::hosts::CommandReply,
+        requested_session_id: Option<&str>,
+        verb: &str,
+    ) -> Result<(Self, SessionState), PiSessionError> {
         let Some(session) = reply.result["session"].as_str().map(str::to_owned) else {
             return Err(PiSessionError(
                 "the host agent did not name the new session".into(),
@@ -789,10 +824,10 @@ impl ProjectSession {
             hosts: hosts.clone(),
             host: launch.host,
             session,
-            persistent_session_id: reply.result["session_id"]
-                .as_str()
-                .unwrap_or_default()
-                .to_owned(),
+            persistent_session_id: requested_session_id
+                .map(str::to_owned)
+                .or_else(|| reply.result["session_id"].as_str().map(str::to_owned))
+                .unwrap_or_default(),
             label: launch.project,
             token: StdMutex::new(String::new()),
             turn_timeout: launch.turn_timeout,
@@ -806,7 +841,7 @@ impl ProjectSession {
             turn: StdMutex::new(None),
         });
         tokio::spawn(pump(Arc::downgrade(&inner), frames));
-        tracing::info!(label = %inner.label, host = %inner.host, name = reply.result["name"].as_str().unwrap_or_default(), "project session created");
+        tracing::info!(label = %inner.label, host = %inner.host, name = reply.result["name"].as_str().unwrap_or_default(), %verb, "project session ready");
         Ok((Self { inner }, SessionState::from_info(&reply.result)))
     }
 
