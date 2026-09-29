@@ -856,7 +856,7 @@ impl ProjectSession {
             )
             .await
             .map_err(|error| PiSessionError(format!("could not start a session: {error}")))?;
-        Self::from_open_reply(hosts, launch, reply, None, "created").await
+        Self::from_open_reply(hosts, launch, reply, None, "created", "created").await
     }
 
     /// Reopens a saved resident session after a service restart. The host
@@ -880,7 +880,31 @@ impl ProjectSession {
             )
             .await
             .map_err(|error| PiSessionError(format!("could not open a session: {error}")))?;
-        Self::from_open_reply(hosts, launch, reply, Some(session_id), "opened").await
+        Self::from_open_reply(hosts, launch, reply, Some(session_id), "opened", "created").await
+    }
+
+    /// Attaches to a live desk session in the registered folder. This never
+    /// creates or reopens a daemon session; its `taken_over` provenance makes
+    /// close release it with abort followed by detach.
+    pub async fn attach(
+        hosts: &crate::hosts::Hosts,
+        launch: ProjectLaunch,
+        session: &str,
+    ) -> Result<(Self, SessionState), PiSessionError> {
+        if session.trim().is_empty() {
+            return Err(PiSessionError("a live session handle is required".into()));
+        }
+        tracing::info!(project = %launch.project, host = %launch.host, session, "taking over a desk session");
+        let reply = hosts
+            .command(
+                &launch.host,
+                "attach",
+                json!({"session": session, "project": launch.project, "cwd": launch.cwd}),
+                SESSION_COMMAND_WAIT,
+            )
+            .await
+            .map_err(|error| PiSessionError(format!("could not take over a session: {error}")))?;
+        Self::from_open_reply(hosts, launch, reply, None, "attached", "taken_over").await
     }
 
     async fn from_open_reply(
@@ -889,6 +913,7 @@ impl ProjectSession {
         reply: crate::hosts::CommandReply,
         requested_session_id: Option<&str>,
         verb: &str,
+        default_provenance: &str,
     ) -> Result<(Self, SessionState), PiSessionError> {
         let Some(session) = reply.result["session"].as_str().map(str::to_owned) else {
             return Err(PiSessionError(
@@ -908,7 +933,7 @@ impl ProjectSession {
             label: launch.project,
             provenance: reply.result["provenance"]
                 .as_str()
-                .unwrap_or(if verb == "opened" { "created" } else { verb })
+                .unwrap_or(default_provenance)
                 .to_owned(),
             token: StdMutex::new(String::new()),
             turn_timeout: launch.turn_timeout,

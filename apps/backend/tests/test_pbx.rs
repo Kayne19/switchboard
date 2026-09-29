@@ -1,5 +1,6 @@
 use super::*;
 use crate::hosts::{FakeHostAgent, FakeLog, OnPrompt, Step};
+use crate::router::{Action, ConversationMode};
 use serde_json::{json, Value};
 use std::sync::Mutex as StdMutex;
 
@@ -2712,4 +2713,145 @@ fn floor_rewrite_guard_accepts_plain_rephrasing_and_rejects_new_facts() {
         "the update is ready",
         "the update is ready for Switchboard",
     ));
+}
+
+#[tokio::test]
+async fn takeover_lists_only_registered_foreign_desk_sessions() {
+    let board = board_with(vec![project("alpha", "Alpha")], false);
+    let mut host = FakeHostAgent::new(Box::new(|_, _| says("desk")));
+    host.on_command = Some(Box::new(|name, _| {
+        if name == "list_sessions" {
+            return Some(Some(Ok(json!({"sessions": [
+                {"session":"desk-alpha","session_id":"desk-saved","cwd":"/srv/alpha","provenance":null,"busy":false},
+                {"session":"other","session_id":"other-saved","cwd":"/srv/other","provenance":null,"busy":false},
+                {"session":"service","session_id":"service-saved","cwd":"/srv/alpha","provenance":"created","busy":false}
+            ]}))));
+        }
+        None
+    }));
+    let _log = host.serve(board.hosts().connect_fake(HOST));
+    let sessions = board.live_desk_sessions().await;
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].project, "alpha");
+    assert_eq!(sessions[0].state, "idle");
+    assert_eq!(sessions[0].provenance, "taken_over");
+}
+
+#[tokio::test]
+async fn takeover_attaches_and_voice_briefs_then_hangup_detaches_without_kill() {
+    let mut board = board_with(vec![project("alpha", "Alpha")], false);
+    let mut host = FakeHostAgent::new(Box::new(|_, _| says("Desk answered")));
+    let (command_tx, mut command_rx) = tokio::sync::mpsc::unbounded_channel();
+    host.on_command = Some(Box::new(move |name, args| {
+        let _ = command_tx.send(name.to_owned());
+        if name == "list_sessions" {
+            return Some(Some(Ok(json!({"sessions": [
+                {"session":"desk-alpha","session_id":"desk-saved","cwd":"/srv/alpha","provenance":null,"busy":false,"model":"anthropic/current","thinking":"high"}
+            ]}))));
+        }
+        if name == "attach" {
+            return Some(Some(Ok(json!({
+                "session":"desk-alpha","session_id":"desk-saved","name":"notes","project":"alpha","cwd":"/srv/alpha","provenance":"taken_over","busy":false,"turn_open":false,"model":"anthropic/current","thinking":"high","call_mode":null,"last_text":null
+            }))));
+        }
+        let _ = args;
+        None
+    }));
+    let log = host.serve(board.hosts().connect_fake(HOST));
+    let decision = Decision {
+        action: Action::TakeOver,
+        target: Some("alpha".into()),
+        continue_or_fresh: Some(ConversationMode::Continue),
+        confidence: 1.0,
+        for_current_agent: 0.0,
+        multi_target: false,
+        unsure: false,
+        confirm: false,
+        reason: "test".into(),
+    };
+    let reply = board.handle_decision("take over alpha", &decision).await;
+    assert_eq!(reply.route, "alpha");
+    assert_eq!(reply.text, "Desk answered");
+    let prompt = log.named("prompt");
+    assert_eq!(prompt.len(), 1);
+    assert!(prompt[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("[SWITCHBOARD VOICE BRIEF]"));
+    assert!(log.names().contains(&"attach".into()));
+    for expected in ["list_sessions", "attach", "join_call", "prompt"] {
+        assert_eq!(command_rx.recv().await.as_deref(), Some(expected));
+    }
+    board.force_hangup().await;
+    assert_eq!(command_rx.recv().await.as_deref(), Some("abort"));
+    assert_eq!(command_rx.recv().await.as_deref(), Some("detach"));
+    assert!(!log.names().contains(&"kill".into()));
+}
+
+#[tokio::test]
+async fn takeover_refuses_a_live_service_created_agent_before_attach() {
+    let mut board = board_with(vec![project("alpha", "Alpha")], false);
+    let mut host = FakeHostAgent::new(Box::new(|_, _| says("unused")));
+    host.on_command = Some(Box::new(|name, _| {
+        if name == "list_sessions" {
+            return Some(Some(Ok(json!({"sessions": [
+                {"session":"service-alpha","session_id":"service-saved","cwd":"/srv/alpha","project":"alpha","provenance":"created","busy":false}
+            ]}))));
+        }
+        if name == "attach" {
+            panic!("takeover must not attach a service-created session");
+        }
+        None
+    }));
+    let log = host.serve(board.hosts().connect_fake(HOST));
+    let decision = Decision {
+        action: Action::TakeOver,
+        target: Some("alpha".into()),
+        continue_or_fresh: None,
+        confidence: 1.0,
+        for_current_agent: 0.0,
+        multi_target: false,
+        unsure: false,
+        confirm: false,
+        reason: "test".into(),
+    };
+    let reply = board.handle_decision("take over alpha", &decision).await;
+    assert_eq!(reply.route, OPERATOR);
+    assert!(reply.text.contains("service-created"));
+    assert!(!log.names().contains(&"attach".into()));
+    assert!(!board.coordinator.is_candidate());
+}
+
+#[tokio::test]
+async fn takeover_attach_failure_rolls_back_without_killing_the_desk_session() {
+    let mut board = board_with(vec![project("alpha", "Alpha")], false);
+    let mut host = FakeHostAgent::new(Box::new(|_, _| says("unused")));
+    host.on_command = Some(Box::new(|name, _| {
+        if name == "list_sessions" {
+            return Some(Some(Ok(json!({"sessions": [
+                {"session":"desk-alpha","session_id":"desk-saved","cwd":"/srv/alpha","provenance":null,"busy":false}
+            ]}))));
+        }
+        if name == "attach" {
+            return Some(Some(Err(("failed".into(), "desk disappeared".into()))));
+        }
+        None
+    }));
+    let log = host.serve(board.hosts().connect_fake(HOST));
+    let decision = Decision {
+        action: Action::TakeOver,
+        target: Some("alpha".into()),
+        continue_or_fresh: None,
+        confidence: 1.0,
+        for_current_agent: 0.0,
+        multi_target: false,
+        unsure: false,
+        confirm: false,
+        reason: "test".into(),
+    };
+    let reply = board.handle_decision("take over alpha", &decision).await;
+    assert_eq!(reply.route, OPERATOR);
+    assert!(reply.text.contains("desk disappeared"));
+    assert!(!board.coordinator.is_candidate());
+    assert!(!log.names().contains(&"kill".into()));
 }

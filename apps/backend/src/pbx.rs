@@ -18,7 +18,9 @@ use crate::pi_client::{
 };
 use crate::prewarm::{LaunchPlan, Prewarm};
 use crate::registry::{Project, Registry};
-use crate::router::{utility_decision, CallSummary, Decision, Router, UtilityDecision};
+use crate::router::{
+    utility_decision, CallSummary, Decision, DeskSession, Router, UtilityDecision,
+};
 use futures_util::FutureExt;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -812,6 +814,83 @@ impl Switchboard {
         )
     }
 
+    /// Build the Jev summary with live, untracked desk sessions that can be
+    /// offered for takeover. The host agent is the source of session truth;
+    /// only exact registered folders are exposed.
+    pub async fn call_summary_with_live_desk_sessions(
+        &self,
+        transcript: &[TranscriptEntry],
+        screen: Value,
+        utterance: impl Into<String>,
+    ) -> CallSummary {
+        let mut summary = self.call_summary(transcript, screen, utterance);
+        summary.live_desk_sessions = self.live_desk_sessions().await;
+        summary
+    }
+
+    /// List foreign live sessions in registered project folders. The service
+    /// labels a session as `taken_over` in the routing summary because that is
+    /// the provenance it will record if the caller selects it.
+    pub async fn live_desk_sessions(&self) -> Vec<DeskSession> {
+        let mut projects_by_host: HashMap<String, Vec<&Project>> = HashMap::new();
+        for project in &self.registry.projects {
+            if let Some(host) = project.canonical_host() {
+                projects_by_host
+                    .entry(host.to_owned())
+                    .or_default()
+                    .push(project);
+            }
+        }
+        let mut result = Vec::new();
+        let mut seen = HashSet::new();
+        for (host, projects) in projects_by_host {
+            let reply = match self
+                .hosts
+                .command(&host, "list_sessions", json!({}), Duration::from_secs(5))
+                .await
+            {
+                Ok(reply) => reply,
+                Err(error) => {
+                    tracing::debug!(%host, %error, "could not list desk sessions for routing summary");
+                    continue;
+                }
+            };
+            let Some(sessions) = reply.result["sessions"].as_array() else {
+                continue;
+            };
+            for session in sessions {
+                if !session["provenance"].is_null() {
+                    continue;
+                }
+                let Some(cwd) = session["cwd"].as_str() else {
+                    continue;
+                };
+                let Some(project) = projects.iter().find(|project| project.cwd == cwd) else {
+                    continue;
+                };
+                let key = session["session"].as_str().unwrap_or_default();
+                if key.is_empty() || !seen.insert((host.clone(), key.to_owned())) {
+                    continue;
+                }
+                result.push(DeskSession {
+                    project: project.id.clone(),
+                    state: if session["busy"] == true || session["turn_open"] == true {
+                        "busy".into()
+                    } else {
+                        "idle".into()
+                    },
+                    provenance: "taken_over".into(),
+                });
+            }
+        }
+        result.sort_by(|left, right| {
+            left.project
+                .cmp(&right.project)
+                .then(left.state.cmp(&right.state))
+        });
+        result
+    }
+
     /// Dispatch an utterance after Jev has made the routing decision. An
     /// unsure or unsupported action deliberately goes through the existing
     /// operator LLM path; project agents never mutate the route themselves.
@@ -837,6 +916,15 @@ impl Switchboard {
                     "Do you want me to stop {target}? Say yes to confirm."
                 )],
                 None,
+            );
+        }
+        if matches!(decision.action, crate::router::Action::TakeOver) {
+            if let Some(target) = decision.target.as_deref() {
+                return self.take_over(text, target).await;
+            }
+            return self.reply(
+                ["Tell me which project session you want to take over."],
+                Some("takeover target missing".into()),
             );
         }
         if matches!(decision.action, crate::router::Action::AnswerWaiting) {
@@ -1841,6 +1929,200 @@ impl Switchboard {
         self.announce_agent_state(&project.id, "idle").await;
         self.agent = Some(session);
         self.set_active_session(self.agent_leg()).await;
+        self.announce_route().await;
+        self.reply_with_turn(turn)
+    }
+
+    /// Find one untracked top-level desk session for a registered project.
+    /// Service-created sessions are returned as a refusal, not silently reused
+    /// by takeover: only their original lifecycle may own them.
+    async fn desk_session_for_takeover(&self, project: &Project) -> Result<Option<Value>, String> {
+        let Some(host) = project.canonical_host() else {
+            return Err(format!("{} has no project host configured", project.id));
+        };
+        let reply = self
+            .hosts
+            .command(host, "list_sessions", json!({}), Duration::from_secs(5))
+            .await
+            .map_err(|error| format!("could not inspect {} sessions: {error}", project.id))?;
+        let sessions = reply.result["sessions"]
+            .as_array()
+            .ok_or_else(|| format!("host {host} returned no session list"))?;
+        if sessions.iter().any(|session| {
+            session["cwd"] == project.cwd
+                && session["provenance"].as_str() == Some("created")
+                && (session["project"].is_null()
+                    || session["project"].as_str() == Some(project.id.as_str()))
+        }) {
+            return Err(format!(
+                "{} already has a live service-created agent; stop it first",
+                project.id
+            ));
+        }
+        Ok(sessions
+            .iter()
+            .find(|session| session["cwd"] == project.cwd && session["provenance"].is_null())
+            .cloned())
+    }
+
+    /// Route the caller onto a live desk session without creating a second
+    /// agent. The takeover request is the first routed line, so `prompt`
+    /// carries the normal voice brief in front of it.
+    async fn take_over(&mut self, text: &str, target: &str) -> Reply {
+        let Some(project) = self.registry.get(target).cloned() else {
+            return self.reply_transfer_error(
+                format!("I don't have a registered project called {target}."),
+                Some(format!("unknown project {target:?}")),
+            );
+        };
+        if self
+            .agent
+            .as_ref()
+            .is_some_and(|agent| agent.label() == project.id)
+            || self.background_agents.contains_key(&project.id)
+        {
+            return self.reply_transfer_error(
+                format!(
+                    "{} already has a live switchboard agent. Stop it before taking over the desk session.",
+                    project.id
+                ),
+                Some("project already has a live switchboard agent".into()),
+            );
+        }
+        let desk = match self.desk_session_for_takeover(&project).await {
+            Ok(Some(session)) => session,
+            Ok(None) => {
+                return self.reply_transfer_error(
+                    format!(
+                        "There is no live desk session for {} in its registered folder.",
+                        project.id
+                    ),
+                    Some("no matching desk session".into()),
+                )
+            }
+            Err(error) => return self.reply_transfer_error(error.clone(), Some(error)),
+        };
+        let Some(session_handle) = desk["session"].as_str() else {
+            return self.reply_transfer_error(
+                format!("The live desk session for {} had no handle.", project.id),
+                Some("desk session had no handle".into()),
+            );
+        };
+        let model = desk["model"].as_str().unwrap_or_default().to_owned();
+        let thinking = desk["thinking"].as_str().unwrap_or_default().to_owned();
+        let spec = if model.is_empty() {
+            String::new()
+        } else if thinking.is_empty() {
+            model.clone()
+        } else {
+            format!("{model}:{thinking}")
+        };
+        let leg_token = uuid_like();
+        let candidate = CandidateLeg::new(
+            project.id.clone(),
+            project.id.clone(),
+            desk["session_id"].as_str().unwrap_or_default(),
+            leg_token.clone(),
+            spec.clone(),
+            if thinking.is_empty() {
+                self.coordinator.thinking_default()
+            } else {
+                thinking.clone()
+            },
+        );
+        if let Err(error) = self.coordinator.begin_candidate(candidate) {
+            return self.reply_transfer_error(
+                format!("I couldn't take over {}: {error}", project.id),
+                Some(error.to_string()),
+            );
+        }
+        let host = match project.canonical_host() {
+            Some(host) => host.to_owned(),
+            None => unreachable!("desk_session_for_takeover checked project host"),
+        };
+        let launch = ProjectLaunch {
+            host,
+            project: project.id.clone(),
+            cwd: project.cwd.clone(),
+            spec,
+            brief: self.agent_brief(&project),
+            turn_timeout: self.project_turn_timeout,
+            on_activity: self.activity_callback.clone(),
+            on_module: self.module_callback.clone(),
+            on_closed: Some(self.session_closed_callback()),
+        };
+        let session = match ProjectSession::attach(&self.hosts, launch, session_handle).await {
+            Ok((session, state)) => {
+                self.confirm_thinking(&leg_token, &state);
+                session
+            }
+            Err(error) => {
+                self.rollback_startup(format!("takeover failed: {error}"));
+                return self.reply_transfer_error(
+                    format!("I couldn't take over {}: {error}", project.id),
+                    Some(error.to_string()),
+                );
+            }
+        };
+        if let Err(error) = session
+            .join_call_mode(
+                &leg_token,
+                &self.persona,
+                self.speech_deadline_ms,
+                "foreground",
+            )
+            .await
+        {
+            session.close();
+            self.rollback_startup(format!("takeover call registration failed: {error}"));
+            return self.reply_transfer_error(
+                format!("I couldn't put {} on the call: {error}", project.id),
+                Some(error.to_string()),
+            );
+        }
+        self.set_active_session(Some(LegSession::Project(session.clone())))
+            .await;
+        self.announce_agent_state(&project.id, "busy").await;
+        let turn = match session.prompt(text).await {
+            Ok(turn) => turn,
+            Err(error) => Turn {
+                text: String::new(),
+                signals: vec![],
+                failed: true,
+                error: error.to_string(),
+            },
+        };
+        if turn.failed && turn.text.is_empty() {
+            let detail = if turn.error.is_empty() {
+                "the desk session did not answer".to_owned()
+            } else {
+                turn.error.clone()
+            };
+            session.close();
+            self.announce_agent_state(&project.id, "finished").await;
+            self.set_active_session(self.operator_leg()).await;
+            self.rollback_startup(format!("takeover turn failed: {detail}"));
+            return self.reply_transfer_error(
+                format!("{} did not answer after takeover: {detail}", project.id),
+                Some(detail),
+            );
+        }
+        if self.coordinator.is_candidate() {
+            if let Err(error) = self.coordinator.adopt_candidate(&leg_token) {
+                session.close();
+                self.announce_agent_state(&project.id, "finished").await;
+                self.set_active_session(self.operator_leg()).await;
+                self.rollback_startup(format!("takeover adoption failed: {error}"));
+                return self.reply_transfer_error(
+                    format!("{} did not come up after takeover.", project.id),
+                    Some(error.to_string()),
+                );
+            }
+        }
+        self.coordinator.finish_intro();
+        self.agent = Some(session);
+        self.set_active_session(self.agent_leg()).await;
+        self.announce_agent_state(&project.id, "idle").await;
         self.announce_route().await;
         self.reply_with_turn(turn)
     }

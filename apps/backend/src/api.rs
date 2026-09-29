@@ -674,7 +674,13 @@ fn spawn_floor_worker(state: AppState) {
                 let screen = state.0.screen_state.lock().await.clone();
                 let (router, summary) = {
                     let board = state.0.switchboard.lock().await;
-                    let mut summary = board.call_summary(&entries, screen, request.message.clone());
+                    let mut summary = board
+                        .call_summary_with_live_desk_sessions(
+                            &entries,
+                            screen,
+                            request.message.clone(),
+                        )
+                        .await;
                     // The queued message is the item being judged, not a new
                     // caller utterance. Keeping it in the named field makes
                     // the Jev prompt useful without adding another contract.
@@ -1099,7 +1105,9 @@ async fn route_transcript(state: &AppState, transcript: &str) -> Decision {
         let board = state.0.switchboard.lock().await;
         (
             board.router(),
-            board.call_summary(&entries, screen, transcript.to_owned()),
+            board
+                .call_summary_with_live_desk_sessions(&entries, screen, transcript.to_owned())
+                .await,
         )
     };
     match router.route(&summary).await {
