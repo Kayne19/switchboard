@@ -530,7 +530,9 @@ impl Switchboard {
             if let Some(target) = decision.target.as_deref() {
                 let context = TransferContext {
                     exact_caller_transcript: text.to_owned(),
-                    derived_intent: decision.reason.clone(),
+                    // Jev's reason is an internal routing record, not caller
+                    // intent. Do not leak it into the target's prompt.
+                    derived_intent: String::new(),
                 };
                 return self.transfer_ctx(&context, target, "", "").await;
             }
