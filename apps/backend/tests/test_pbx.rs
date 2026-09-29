@@ -3251,6 +3251,73 @@ async fn failed_takeover_from_project_restores_foreground_for_steering() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn failed_takeover_from_operator_restores_operator_session() {
+    let root = scratch_dir("takeover-operator-turn-failure");
+    let operator = fake_operator(&root);
+    let mut board = board_on(
+        vec![project("alpha", "Alpha")],
+        &[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())],
+        two_model_catalog(),
+    );
+    board.ensure_operator().await.expect("operator starts");
+    let mut host = FakeHostAgent::new(Box::new(|_, _| says("unused")));
+    host.on_command = Some(Box::new(|name, args| {
+        if name == "list_sessions" {
+            return Some(Some(Ok(json!({"sessions": [{
+                "session":"desk-alpha", "session_id":"desk-saved", "cwd":"/srv/alpha",
+                "provenance":null, "busy":false, "model":"anthropic/current", "thinking":"medium"
+            }]}))));
+        }
+        if name == "attach" {
+            return Some(Some(Ok(json!({
+                "session":"desk-alpha", "session_id":"desk-saved", "project":"alpha",
+                "cwd":args["cwd"], "provenance":"taken_over", "busy":false,
+                "turn_open":false, "model":"anthropic/current", "thinking":"medium"
+            }))));
+        }
+        if name == "prompt" {
+            return Some(Some(Err((
+                "failed".into(),
+                "operator takeover prompt failed".into(),
+            ))));
+        }
+        None
+    }));
+    let log = host.serve(board.hosts().connect_fake(HOST));
+    let reply = board
+        .handle_decision(
+            "take over alpha",
+            &Decision {
+                action: Action::TakeOver,
+                target: Some("alpha".into()),
+                continue_or_fresh: None,
+                confidence: 1.0,
+                for_current_agent: 0.0,
+                multi_target: false,
+                unsure: false,
+                confirm: false,
+                reason: "test".into(),
+            },
+        )
+        .await;
+    assert_eq!(reply.route, OPERATOR);
+    assert!(reply.text.contains("operator takeover prompt failed"));
+    assert_eq!(
+        board
+            .session_control()
+            .lock()
+            .await
+            .as_ref()
+            .map(LegSession::label),
+        Some("operator")
+    );
+    assert!(!log.names().contains(&"kill".into()));
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn takeover_attach_failure_rolls_back_without_killing_the_desk_session() {
     let root = scratch_dir("takeover-operator-rollback");
     let operator = fake_operator(&root);
