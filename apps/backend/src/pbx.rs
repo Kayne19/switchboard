@@ -1548,7 +1548,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
             input.context.trim()
         };
         let prompt = format!(
-            "[FLOOR REWRITE]\nProject: {project}\nReason: {reason}\nCaller quiet longer than floor threshold: {quiet}\n[RECENT CONVERSATION]\n{context}\n[AGENT MESSAGE]\n{message}\n[INSTRUCTION]\nRewrite the agent message as a short, natural spoken continuation. Vary the phrasing. Mention the project only when needed for clarity. Keep every fact and add none. Call rewrite with only the spoken rewrite.",
+            "[FLOOR REWRITE]\nProject: {project}\nReason: {reason}\nCaller quiet longer than floor threshold: {quiet}\n[RECENT CONVERSATION]\n{context}\n[AGENT MESSAGE]\n{message}\n[INSTRUCTION]\nRewrite the agent message as a short, natural spoken continuation, the way one person would bring it up in this conversation. Vary the phrasing and avoid stock openers. If the caller has been quiet a while, ease in so they know which project this is; otherwise name the project only when it is not obvious from the conversation. Keep every fact and add none. Call rewrite with only the spoken rewrite.",
             project = input.project,
             reason = input.reason,
             quiet = if input.quiet { "yes" } else { "no" },
