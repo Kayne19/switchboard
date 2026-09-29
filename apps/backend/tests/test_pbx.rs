@@ -2989,8 +2989,16 @@ async fn leaving_a_taken_over_leg_by_transfer_detaches_without_kill() {
         vec![project("alpha", "Alpha"), project("beta", "Beta")],
         false,
     );
+    let (detached_tx, detached_rx) = tokio::sync::oneshot::channel();
+    let detached_tx = Arc::new(StdMutex::new(Some(detached_tx)));
+    let detached_for_host = detached_tx.clone();
     let mut host = FakeHostAgent::new(Box::new(|_, _| says("handled")));
-    host.on_command = Some(Box::new(|name, args| {
+    host.on_command = Some(Box::new(move |name, args| {
+        if name == "detach" {
+            if let Some(tx) = detached_for_host.lock().unwrap().take() {
+                let _ = tx.send(());
+            }
+        }
         if name == "list_sessions" {
             return Some(Some(Ok(json!({"sessions": [{
                 "session":"desk-alpha", "session_id":"desk-saved", "cwd":"/srv/alpha",
@@ -3027,7 +3035,10 @@ async fn leaving_a_taken_over_leg_by_transfer_detaches_without_kill() {
         .transfer_ctx(&transcript("beta"), "beta", "", "")
         .await;
     assert_eq!(reply.route, "beta");
-    until_named(&log, "detach").await;
+    tokio::time::timeout(Duration::from_secs(1), detached_rx)
+        .await
+        .expect("taken-over transfer sends detach")
+        .expect("detach notification");
     assert!(
         log.named("kill").is_empty(),
         "leaving a desk session never kills it"
@@ -3038,8 +3049,16 @@ async fn leaving_a_taken_over_leg_by_transfer_detaches_without_kill() {
 #[tokio::test]
 async fn stopping_a_taken_over_leg_detaches_without_kill() {
     let mut board = board_with(vec![project("alpha", "Alpha")], false);
+    let (detached_tx, detached_rx) = tokio::sync::oneshot::channel();
+    let detached_tx = Arc::new(StdMutex::new(Some(detached_tx)));
+    let detached_for_host = detached_tx.clone();
     let mut host = FakeHostAgent::new(Box::new(|_, _| says("handled")));
-    host.on_command = Some(Box::new(|name, args| {
+    host.on_command = Some(Box::new(move |name, args| {
+        if name == "detach" {
+            if let Some(tx) = detached_for_host.lock().unwrap().take() {
+                let _ = tx.send(());
+            }
+        }
         if name == "list_sessions" {
             return Some(Some(Ok(json!({"sessions": [{
                 "session":"desk-alpha", "session_id":"desk-saved", "cwd":"/srv/alpha",
@@ -3089,7 +3108,10 @@ async fn stopping_a_taken_over_leg_detaches_without_kill() {
         .handle_decision("yes", &Decision::fallback("confirmation"))
         .await;
     assert_eq!(stopped.route, OPERATOR);
-    until_named(&log, "detach").await;
+    tokio::time::timeout(Duration::from_secs(1), detached_rx)
+        .await
+        .expect("stopping a taken-over leg sends detach")
+        .expect("detach notification");
     assert!(
         log.named("kill").is_empty(),
         "stopping a desk session never kills it"
