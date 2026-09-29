@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::time::Duration;
 
-
 fn request(n: usize) -> FloorRequest {
     FloorRequest {
         project: "grape".into(),

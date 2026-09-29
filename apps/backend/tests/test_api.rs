@@ -2373,6 +2373,27 @@ fn types_of(frames: &[Value]) -> Vec<&str> {
         .collect()
 }
 
+fn assert_serial_audio(frames: &[Value]) {
+    let mut active = false;
+    for frame in frames {
+        match frame["type"].as_str() {
+            Some("audio_start") => {
+                assert!(!active, "a second speaker started before the first ended");
+                active = true;
+            }
+            Some("audio_done") => {
+                assert!(active, "audio ended without a speaker start");
+                active = false;
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        !active,
+        "speech was still active at the end of the delivery batch"
+    );
+}
+
 /// The PBX finishing a transfer to the leg the coordinator already holds.
 async fn settle_transfer(state: &AppState) {
     state.0.leg_announcer.announce_route().await;
@@ -4533,6 +4554,7 @@ done
         .await;
     assert_eq!(foreground_reply.route, "switchboard");
     let initial_frames = frames_until(&mut connection, "spoken").await;
+    assert_serial_audio(&initial_frames);
     assert_eq!(
         initial_frames
             .iter()
@@ -4553,6 +4575,7 @@ done
     assert_lifecycle_consistent(&state).await;
 
     let foreground_frames = frames_until(&mut connection, "spoken").await;
+    assert_serial_audio(&foreground_frames);
     assert_eq!(
         foreground_frames
             .iter()
@@ -4570,6 +4593,7 @@ done
         state.0.coordinator.generation()
     );
     let first_background = frames_until(&mut connection, "spoken").await;
+    assert_serial_audio(&first_background);
     assert_eq!(
         first_background
             .iter()
@@ -4579,6 +4603,7 @@ done
     );
     assert_lifecycle_consistent(&state).await;
     let second_background = frames_until(&mut connection, "spoken").await;
+    assert_serial_audio(&second_background);
     assert_eq!(
         second_background
             .iter()
