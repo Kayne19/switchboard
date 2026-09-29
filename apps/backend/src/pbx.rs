@@ -559,7 +559,6 @@ pub struct Switchboard {
     /// `PROJECT_TURN_TIMEOUT`, held per switchboard so a test can wait out a
     /// silent leg without waiting ten minutes.
     project_turn_timeout: Duration,
-    #[allow(dead_code)]
     floor_quiet_threshold: Duration,
 }
 impl Switchboard {
@@ -627,7 +626,6 @@ impl Switchboard {
         }
     }
 
-    #[allow(dead_code)]
     pub fn floor_quiet_threshold(&self) -> Duration {
         self.floor_quiet_threshold
     }

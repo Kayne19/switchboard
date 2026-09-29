@@ -437,6 +437,52 @@ impl Router {
         Ok(decision)
     }
 
+    /// Ask Jev whether the caller is in a good moment for one queued floor
+    /// message. This is a separate one-question request so a routing answer
+    /// cannot accidentally release speech.
+    pub async fn good_moment(&self, summary: &CallSummary) -> Result<bool, JevError> {
+        let mut questions = BTreeMap::new();
+        questions.insert(
+            "good_moment".into(),
+            Question::new(
+                "choice",
+                "Is this a good moment to briefly announce one queued background-agent update to the caller?",
+                [
+                    ("yes", "The caller is quiet or the update should be heard now."),
+                    ("no", "The caller is speaking, listening to another response, or should not be interrupted now."),
+                ],
+            ),
+        );
+        let longest_question = questions
+            .values()
+            .map(|question| {
+                estimate_tokens(&serde_json::to_value(question).expect("question serializes"))
+            })
+            .max()
+            .unwrap_or_default();
+        let budget = self
+            .summary_token_budget
+            .min(MAX_STATE_TOKENS.saturating_sub(longest_question).max(1));
+        let response = self
+            .client
+            .decide(summary.state_with_budget(budget), questions)
+            .await?;
+        let answer = response
+            .answers
+            .get("good_moment")
+            .ok_or_else(|| missing("good_moment"))?;
+        if let Some(choice) = answer.choice.as_deref() {
+            return match choice {
+                "yes" | "true" | "good" | "now" => Ok(true),
+                "no" | "false" | "hold" => Ok(false),
+                _ => Err(JevError::InvalidAnswer(format!(
+                    "unknown good_moment choice {choice:?}"
+                ))),
+            };
+        }
+        finite_unit(answer.noul, "good_moment.noul").map(|value| value >= 0.5)
+    }
+
     fn map_response(&self, response: JevResponse) -> Result<Decision, JevError> {
         let action_answer = required_answer(&response, "action")?;
         let current = required_answer(&response, "for_current_agent")?;

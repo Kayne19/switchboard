@@ -2,7 +2,6 @@ mod api;
 mod audio;
 mod delivery;
 mod display;
-#[cfg(test)]
 mod floor;
 mod history;
 mod hosts;

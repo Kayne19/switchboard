@@ -12,7 +12,6 @@ use tokio::sync::{Mutex, Notify};
 use tokio::time::{sleep_until, Duration, Instant};
 
 /// Rewrite work is best effort and must not delay a queued announcement.
-#[allow(dead_code)]
 pub(crate) const REWRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,7 +23,6 @@ pub(crate) struct FloorRequest {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum ReleaseOutcome {
     /// The message was played and can leave the queue.
     Played,
