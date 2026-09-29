@@ -432,7 +432,7 @@ impl Router {
             confidence < self.action_threshold
         };
         let reason = if unsure {
-            format!("confidence policy requested top-level LLM (action={}, for_current_agent={confidence:.3}/{for_current_agent:.3})", chosen.as_str())
+            format!("confidence policy requested top-level LLM (action={}, action_conf={confidence:.3}, for_current_agent={for_current_agent:.3})", chosen.as_str())
         } else if matches!(chosen, Action::Stop) {
             "stop always requires caller confirmation".into()
         } else {

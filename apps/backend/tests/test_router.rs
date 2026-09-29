@@ -30,6 +30,45 @@ fn router(lower: f64, upper: f64, action: f64) -> Router {
     Router::new(client, registry, coordinator, 8_000, lower, upper, action)
 }
 
+fn project_router(lower: f64, upper: f64, action: f64) -> Router {
+    let registry = Arc::new(Registry::new(vec![Project {
+        id: "atlas".into(),
+        description: "planning project".into(),
+        aliases: vec!["plan".into()],
+        host: Some("fake".into()),
+        cwd: "/tmp".into(),
+        model: None,
+        prepare: String::new(),
+    }]));
+    let coordinator = Coordinator::new(
+        crate::lifecycle::StatusConfig {
+            projects: vec!["atlas".into()],
+            ..Default::default()
+        },
+        "medium",
+    );
+    coordinator
+        .begin_candidate(crate::lifecycle::CandidateLeg::new(
+            "atlas",
+            "atlas",
+            "session",
+            "atlas-token",
+            "provider/model",
+            "medium",
+        ))
+        .expect("candidate");
+    coordinator
+        .adopt_candidate("atlas-token")
+        .expect("project candidate");
+    let client = crate::jev::JevClient::new(
+        "http://127.0.0.1:1",
+        "/nonexistent/typesafe-api-key",
+        std::time::Duration::from_millis(10),
+    )
+    .expect("client");
+    Router::new(client, registry, coordinator, 8_000, lower, upper, action)
+}
+
 fn answers(action: &str, confidence: f64, for_current_agent: f64) -> JevResponse {
     let mut map = std::collections::BTreeMap::new();
     map.insert(
@@ -170,4 +209,37 @@ fn threshold_edges_and_stop_confirmation_match_policy() {
         .map_response(answers("continue", 0.6, 0.3))
         .expect("decision");
     assert!(!low.unsure);
+}
+
+#[test]
+fn current_agent_threshold_edges_are_exact_on_a_project_route() {
+    let router = project_router(0.3, 0.7, 0.6);
+
+    let upper = router
+        .map_response(answers("general", 0.9, 0.7))
+        .expect("upper threshold");
+    assert_eq!(upper.action, Action::Continue);
+    assert!(!upper.unsure);
+
+    for confidence in [0.69, 0.31] {
+        let unsure = router
+            .map_response(answers("general", 0.9, confidence))
+            .expect("unsure band");
+        assert!(unsure.unsure, "for_current_agent={confidence}");
+        assert!(unsure.reason.contains("action_conf=0.900"));
+        assert!(unsure
+            .reason
+            .contains(&format!("for_current_agent={confidence:.3}")));
+    }
+
+    let lower = router
+        .map_response(answers("general", 0.9, 0.3))
+        .expect("lower threshold");
+    assert_eq!(lower.action, Action::General);
+    assert!(!lower.unsure);
+
+    let below_action_threshold = router
+        .map_response(answers("general", 0.59, 0.3))
+        .expect("action threshold");
+    assert!(below_action_threshold.unsure);
 }
