@@ -359,6 +359,8 @@ pub struct Switchboard {
     /// Resident project sessions not currently carrying the caller.
     background_agents: HashMap<String, ProjectSession>,
     operator_note: Option<String>,
+    /// Project awaiting a caller confirmation before it is stopped.
+    pending_stop: Option<String>,
     /// The one owner of the leg on the line, and of the status the page is
     /// shown.
     coordinator: Coordinator,
@@ -428,6 +430,7 @@ impl Switchboard {
             agent: None,
             background_agents: HashMap::new(),
             operator_note: None,
+            pending_stop: None,
             coordinator,
             hosts,
             prewarm,
@@ -542,8 +545,19 @@ impl Switchboard {
         // These actions are owned by the PBX, not by an agent. A stop decision
         // is deliberately confirmation-only here; the next utterance must
         // confirm before a resident session is closed.
+        if let Some(target) = self.pending_stop.take() {
+            if is_confirmation(text) {
+                return self.stop_project(&target).await;
+            }
+        }
         if matches!(decision.action, crate::router::Action::Stop) {
-            let target = decision.target.as_deref().unwrap_or("the current project");
+            let target = decision.target.clone().or_else(|| {
+                (self.coordinator.route() != OPERATOR).then(|| self.coordinator.route())
+            });
+            let Some(target) = target else {
+                return self.reply(["There is no project agent to stop."], None);
+            };
+            self.pending_stop = Some(target.clone());
             return self.reply(
                 [format!(
                     "Do you want me to stop {target}? Say yes to confirm."
@@ -627,6 +641,15 @@ impl Switchboard {
             exact_caller_transcript: text.to_owned(),
             derived_intent: String::new(),
         };
+        if target != OPERATOR
+            && self.coordinator.route() == target
+            && matches!(mode, crate::router::ConversationMode::Fresh)
+        {
+            return self.reply_transfer_error(
+                format!("{target} is already running. Say continue to use it, or stop it first."),
+                Some("project is busy".into()),
+            );
+        }
         if target != OPERATOR && self.coordinator.route() != target {
             if matches!(mode, crate::router::ConversationMode::Fresh)
                 && self.background_agents.contains_key(target)
@@ -1715,6 +1738,22 @@ impl Switchboard {
         };
         self.transfer_ctx(&context, project, "", "").await
     }
+    async fn stop_project(&mut self, target: &str) -> Reply {
+        if self.coordinator.route() == target {
+            self.drop_agent().await;
+            return self.reply(
+                [format!("Stopped {target}. You are back with the operator.")],
+                None,
+            );
+        }
+        if let Some(session) = self.background_agents.remove(target) {
+            self.coordinator.remove_background(&session.token());
+            session.close();
+            return self.reply([format!("Stopped {target}.")], None);
+        }
+        self.reply([format!("{target} is not running.")], None)
+    }
+
     async fn close_background_agents(&mut self) {
         for (_, session) in self.background_agents.drain() {
             let token = session.token();
@@ -1742,6 +1781,13 @@ impl Switchboard {
         self.operator_note = Some(format!("The caller dropped the line to {left}."));
         Some(left)
     }
+}
+
+fn is_confirmation(text: &str) -> bool {
+    matches!(
+        text.trim().to_ascii_lowercase().as_str(),
+        "yes" | "yeah" | "yep" | "confirm" | "do it" | "stop it"
+    )
 }
 
 /// A reply the switchboard speaks itself, labelled with the leg the
