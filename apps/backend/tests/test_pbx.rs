@@ -92,7 +92,7 @@ while IFS= read -r line; do
 count=$((count + 1))
 if [ "$count" -eq 1 ]; then
     printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Connecting now."}}'
-    printf '%s\n' '{"type":"tool_execution_start","toolName":"transfer_to_project","args":{"project":"alpha","intent":"inspect it"}}'
+    printf '%s\n' '{"type":"tool_execution_start","toolName":"route","args":{"target":"alpha","mode":"fresh"}}'
 else
     case "$line" in
         *"work complete"*) printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"NOTE_DELIVERED"}}' ;;
@@ -501,29 +501,21 @@ async fn a_transfer_and_a_return_act_on_a_session_over_the_host_link() {
     assert_eq!(announced.models.len(), 2);
 
     let returned = board.handle("we are done").await;
-    assert_eq!(returned.route, OPERATOR);
+    // A host that still has the removed module receives a refusal. It cannot
+    // move the caller or kill the live project leg.
+    assert_eq!(returned.route, "alpha");
     assert!(returned.text.contains("Alpha finished."), "{returned:?}");
-    // The operator heard why the caller came back.
-    assert!(returned.text.contains("NOTE_DELIVERED"), "{returned:?}");
-    assert_eq!(board.coordinator.route(), OPERATOR);
-    assert!(board.agent.is_none());
-    assert_eq!(until_named(&log, "kill").await, [json!({"session": "s1"})]);
+    assert_eq!(board.coordinator.route(), "alpha");
+    assert!(board.agent.is_some());
+    assert_eq!(log.named("kill").len(), 0);
     assert_eq!(
         log.module_replies()
             .iter()
             .map(|reply| reply["status"].clone())
             .collect::<Vec<_>>(),
-        [json!("accepted")]
+        [json!("refused")]
     );
-    assert_eq!(
-        statuses
-            .lock()
-            .unwrap()
-            .last()
-            .map(|status| status.route.clone()),
-        Some(OPERATOR.to_owned()),
-        "the return is announced too"
-    );
+    assert_eq!(log.module_replies()[0]["reason"], "removed");
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }
@@ -563,22 +555,20 @@ async fn an_agent_to_agent_transfer_ends_the_old_session_after_the_new_one_is_up
     );
 
     let r2 = board.handle("please hand off to beta").await;
-    assert_eq!(r2.route, "beta");
-    assert_eq!(r2.text, "Beta response.");
-    assert_eq!(r2.to_speak, vec!["Beta response."]);
-    let intro = &prompts(&log)[2];
-    assert!(intro.contains("ID: beta"), "{intro}");
-    assert!(intro.contains("continue work"), "{intro}");
-    // alpha ends once beta is on the line, and not before.
-    until_named(&log, "kill").await;
-    let names = log.names();
-    let created = names
-        .iter()
-        .rposition(|name| name == "create_session")
-        .unwrap();
-    let killed = names.iter().position(|name| name == "kill").unwrap();
-    assert!(created < killed, "{names:?}");
-    assert_eq!(log.named("kill"), [json!({"session": "s1"})]);
+    assert_eq!(r2.route, "alpha");
+    assert_eq!(r2.text, "Alpha transferring to Beta.");
+    assert_eq!(r2.to_speak, vec!["Alpha transferring to Beta."]);
+    // The stale host's transfer signal is refused, so beta is never started.
+    assert_eq!(log.named("create_session").len(), 1);
+    assert!(log.named("kill").is_empty());
+    assert_eq!(
+        log.module_replies()
+            .iter()
+            .map(|reply| reply["status"].clone())
+            .collect::<Vec<_>>(),
+        [json!("refused")]
+    );
+    assert_eq!(log.module_replies()[0]["reason"], "removed");
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }
@@ -686,9 +676,7 @@ fn the_voice_brief_teaches_the_switchboard_module_and_names_the_targets() {
         "switchboard.speak(text)",
         "switchboard.display(",
         "switchboard.view()",
-        "switchboard.return_to_operator(",
-        "switchboard.transfer_to_project(",
-        "switchboard.set_model(",
+        "Routing is handled by the switchboard",
         "  - beta: no description",
     ] {
         assert!(brief.contains(taught), "{taught} missing from {brief}");
@@ -988,21 +976,10 @@ async fn the_agents_own_set_model_is_decided_by_the_pickers_checks() {
             .as_ref()
             .is_some_and(|agent| agent.same_session(&live)));
         assert!(live.alive());
-        if swaps == "0" {
-            assert_eq!(
-                reply.text,
-                "Switching.\n\nModel swapping is turned off on this switchboard."
-            );
-            assert!(log.named("set_model").is_empty());
-            assert_eq!(board.coordinator.status().model, "anthropic/current:medium");
-        } else {
-            assert_eq!(
-                reply.text,
-                "Switching.\n\nNow on next on anthropic, thinking medium."
-            );
-            assert_eq!(log.named("set_model").len(), 1);
-            assert_eq!(board.coordinator.status().model, "anthropic/next:medium");
-        }
+        let _ = swaps;
+        assert_eq!(reply.text, "Switching.");
+        assert!(log.named("set_model").is_empty());
+        assert_eq!(board.coordinator.status().model, "anthropic/current:medium");
         board.shutdown().await;
     }
 }

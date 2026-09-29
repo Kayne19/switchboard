@@ -2195,6 +2195,16 @@ async fn deliver_page_reply_if_current(
     if generation != state.0.coordinator.generation() {
         return false;
     }
+    if reply.error.as_deref() == Some("routing_unavailable") {
+        emit_message(
+            state,
+            ServerMessage::RoutingUnavailable {
+                message: "Routing is unavailable. Please try again.".into(),
+            },
+        );
+        publish_status(state);
+        return true;
+    }
     if !reply.text.is_empty() {
         if let Some(entry) =
             state
@@ -2228,6 +2238,16 @@ async fn deliver_turn_if_current(
     let _transition = state.0.operation_transition.lock().await;
     if generation != state.0.coordinator.generation() {
         return false;
+    }
+    if reply.error.as_deref() == Some("routing_unavailable") {
+        emit_message(
+            state,
+            ServerMessage::RoutingUnavailable {
+                message: "Routing is unavailable. Please try again.".into(),
+            },
+        );
+        publish_status(state);
+        return true;
     }
     if !reply.text.is_empty() {
         state

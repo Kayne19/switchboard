@@ -143,6 +143,13 @@ export interface ErrorMessage {
 	message: string;
 }
 
+/// Jev and the conversational top-level LLM were both unavailable. This is
+/// shown as a page error and is never sent to speech synthesis.
+export interface RoutingUnavailableMessage {
+	type: "routing_unavailable";
+	message: string;
+}
+
 /// A turn was dispatched to the leg on `route`.
 export interface ThinkingMessage {
 	type: "thinking";
@@ -239,6 +246,7 @@ export type ServerMessage =
 	| TranscriptMessage
 	| QueuedMessage
 	| ErrorMessage
+	| RoutingUnavailableMessage
 	| ThinkingMessage
 	| ActivityMessage
 	| ReplyMessage
@@ -376,6 +384,7 @@ const MESSAGE_FIELDS: { [Type in MessageType]: MessageFields<Type> } = {
 		code: optional(literal("stale_epoch")),
 		message: string,
 	},
+	routing_unavailable: { message: string },
 	thinking: { route: string, waiting: number },
 	activity: { state: string, tool: string, detail: string, label: string },
 	reply: { text: string, route: string },

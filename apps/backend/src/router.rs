@@ -3,6 +3,7 @@
 use crate::history::{TranscriptEntry, CALLER};
 use crate::jev::{JevAnswer, JevClient, JevError, JevRequest, JevResponse, Question};
 use crate::lifecycle::Coordinator;
+use crate::pi_client::Signal;
 use crate::protocol::Status;
 use crate::registry::Registry;
 use serde::{Deserialize, Serialize};
@@ -233,6 +234,90 @@ pub enum ConversationMode {
     Continue,
     Fresh,
 }
+
+/// A part returned by the stateless routing utility. The background-agent
+/// slice may fan these out; this slice keeps the foreground choice explicit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DispatchPart {
+    pub agent: String,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum UtilityDecision {
+    SecondOpinion {
+        target: Option<String>,
+        mode: ConversationMode,
+        confident: bool,
+    },
+    DispatchParts(Vec<DispatchPart>),
+}
+
+/// Interpret only the utility process's signal calls. A missing or malformed
+/// call is deliberately treated as no opinion, never as permission to guess.
+pub fn utility_decision(signals: &[Signal]) -> Option<UtilityDecision> {
+    if let Some(signal) = signals
+        .iter()
+        .find(|signal| signal.name == SECOND_OPINION_TOOL)
+    {
+        let target = signal
+            .args
+            .get("target")
+            .or_else(|| signal.args.get("project"))
+            .or_else(|| signal.args.get("agent"))
+            .and_then(Value::as_str)
+            .filter(|target| !target.trim().is_empty())
+            .map(str::to_owned);
+        let mode = match signal.args.get("mode").and_then(Value::as_str) {
+            Some("continue") => ConversationMode::Continue,
+            Some("fresh") | None => ConversationMode::Fresh,
+            Some(_) => return None,
+        };
+        let confident = signal
+            .args
+            .get("confident")
+            .and_then(Value::as_bool)
+            .or_else(|| {
+                signal
+                    .args
+                    .get("confidence")
+                    .and_then(Value::as_f64)
+                    .map(|value| value >= 0.5)
+            })
+            .unwrap_or(target.is_some());
+        return Some(UtilityDecision::SecondOpinion {
+            target,
+            mode,
+            confident,
+        });
+    }
+    let signal = signals
+        .iter()
+        .find(|signal| signal.name == DISPATCH_PARTS_TOOL)?;
+    let parts = signal.args.get("parts")?.as_array()?;
+    let mut parsed = Vec::with_capacity(parts.len());
+    for part in parts {
+        let object = part.as_object()?;
+        let agent = object
+            .get("agent")
+            .or_else(|| object.get("project"))
+            .or_else(|| object.get("target"))
+            .and_then(Value::as_str)
+            .filter(|agent| !agent.trim().is_empty())?;
+        let text = object
+            .get("text")
+            .and_then(Value::as_str)
+            .filter(|text| !text.trim().is_empty())?;
+        parsed.push(DispatchPart {
+            agent: agent.to_owned(),
+            text: text.to_owned(),
+        });
+    }
+    (!parsed.is_empty()).then_some(UtilityDecision::DispatchParts(parsed))
+}
+
+const SECOND_OPINION_TOOL: &str = "second_opinion";
+const DISPATCH_PARTS_TOOL: &str = "dispatch_parts";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Decision {

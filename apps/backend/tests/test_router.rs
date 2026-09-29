@@ -243,3 +243,51 @@ fn current_agent_threshold_edges_are_exact_on_a_project_route() {
         .expect("action threshold");
     assert!(below_action_threshold.unsure);
 }
+
+#[test]
+fn utility_signals_accept_second_opinions_and_split_parts() {
+    let opinion = crate::pi_client::Signal {
+        name: "second_opinion".into(),
+        args: serde_json::from_value(json!({
+            "target": "atlas",
+            "mode": "continue",
+            "confident": true,
+        }))
+        .unwrap(),
+        tool_call_id: None,
+        successful_end: true,
+    };
+    assert_eq!(
+        utility_decision(&[opinion]),
+        Some(UtilityDecision::SecondOpinion {
+            target: Some("atlas".into()),
+            mode: ConversationMode::Continue,
+            confident: true,
+        })
+    );
+    let split = crate::pi_client::Signal {
+        name: "dispatch_parts".into(),
+        args: serde_json::from_value(json!({
+            "parts": [
+                {"agent": "atlas", "text": "Check the plan"},
+                {"project": "beta", "text": "Review the build"},
+            ],
+        }))
+        .unwrap(),
+        tool_call_id: None,
+        successful_end: true,
+    };
+    assert_eq!(
+        utility_decision(&[split]),
+        Some(UtilityDecision::DispatchParts(vec![
+            DispatchPart {
+                agent: "atlas".into(),
+                text: "Check the plan".into()
+            },
+            DispatchPart {
+                agent: "beta".into(),
+                text: "Review the build".into()
+            },
+        ]))
+    );
+}

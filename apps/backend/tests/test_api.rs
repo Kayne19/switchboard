@@ -2838,7 +2838,7 @@ fn runtime_with_a_gated_intro(root: &std::path::Path) -> std::path::PathBuf {
     crate::pi_client::write_executable_script(
         &runtime,
         r##"while IFS= read -r line; do
-printf '%s\n' '{"type":"tool_execution_start","toolName":"transfer_to_project","args":{"project":"alpha","intent":"look"}}'
+printf '%s\n' '{"type":"tool_execution_start","toolName":"route","args":{"target":"alpha","mode":"fresh"}}'
 printf '%s\n' '{"type":"agent_settled"}'
 done
 "##,

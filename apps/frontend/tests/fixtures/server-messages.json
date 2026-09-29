@@ -220,6 +220,13 @@
       }
     },
     {
+      "name": "routing_unavailable",
+      "message": {
+        "type": "routing_unavailable",
+        "message": "Routing is unavailable. Please try again."
+      }
+    },
+    {
       "name": "thinking",
       "message": {
         "type": "thinking",
