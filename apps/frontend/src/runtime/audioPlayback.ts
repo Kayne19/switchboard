@@ -113,6 +113,20 @@ export class AudioPlayback {
     this.playing = false;
   }
 
+  /**
+   * Moves to `generation` on a handoff (a transfer this tab saw adopted, or a
+   * return to the operator): the goodbye already here keeps playing, and the
+   * new leg's audio queues behind it. A clip from another leg that is still
+   * arriving could never finish, so that case retires everything instead.
+   */
+  handOffToGeneration(generation: number): void {
+    if (this.msePending && this.msePending.generation !== generation) {
+      this.resetForGeneration(generation);
+      return;
+    }
+    this.audioEpoch = generation;
+  }
+
   /** Stops playback for good; used when the runtime is torn down. */
   dispose(): void {
     this.audioQueue.length = 0;

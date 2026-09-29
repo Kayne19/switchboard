@@ -483,6 +483,39 @@ describe("AudioPlayback streaming", () => {
     expect(playback.streamingEnabled).toBe(false);
   });
 
+  it("lets a handoff's goodbye finish and plays the new leg after it", () => {
+    const { player, urls, playback } = streamingPlayback();
+    playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+    playback.receiveAudioChunk(bytes("bye"));
+    playback.receiveAudioDone({ generation: 0, sequence: 1, done: true });
+    const goodbye = urls.get(player.src) as FakeMediaSource;
+
+    playback.handOffToGeneration(1);
+    expect(player.pauseCalls, "the goodbye is not cut off").toBe(0);
+    expect(urls.get(player.src), "the goodbye still owns the element").toBe(goodbye);
+
+    playback.receiveAudioStart({ generation: 1, sequence: 2, mime: "audio/mpeg" });
+    playback.receiveAudioChunk(bytes("hi"));
+    playback.receiveAudioDone({ generation: 1, sequence: 2, done: true });
+    expect(urls.get(player.src), "the new leg waits for the goodbye").toBe(goodbye);
+    player.emit("ended");
+    const greeting = urls.get(player.src) as FakeMediaSource;
+    expect(greeting).not.toBe(goodbye);
+    expect(player.playCalls.length).toBe(2);
+
+    playback.receiveAudioStart({ generation: 0, sequence: 3, mime: "audio/mpeg" });
+    expect(urls.get(player.src), "late audio from the old leg is ignored").toBe(greeting);
+  });
+
+  it("retires everything on a handoff while an old clip is still arriving", () => {
+    const { player, playback } = streamingPlayback();
+    playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+    playback.receiveAudioChunk(bytes("half"));
+    playback.handOffToGeneration(1);
+    expect(player.pauseCalls).toBe(1);
+    expect(playback.isDrained()).toBe(true);
+  });
+
   it("ignores audio stamped with another generation", () => {
     const { player, urls, playback } = streamingPlayback();
     playback.resetForGeneration(4);

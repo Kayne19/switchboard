@@ -813,6 +813,12 @@ export class CallRuntime {
           const adoption =
             this.adoption?.generation === epoch ? this.adoption : null;
           this.adoption = null;
+          // A handoff on a live connection lets the goodbye already playing
+          // finish: a transfer this tab saw adopted, or a return to the
+          // operator (same generation, new route). A hangup, a rescue or a
+          // reconnect's first epoch still cuts playback off at once.
+          const handoff =
+            this.snapshotReady && (adoption !== null || epoch === this.turnEpoch);
           const resubmitted = adoption
             ? restampStaleClips(this.outbox.all, adoption)
             : 0;
@@ -846,7 +852,8 @@ export class CallRuntime {
               true,
             );
           }
-          this.playback.resetForGeneration(epoch);
+          if (handoff) this.playback.handOffToGeneration(epoch);
+          else this.playback.resetForGeneration(epoch);
         }
         break;
       case "candidate":
