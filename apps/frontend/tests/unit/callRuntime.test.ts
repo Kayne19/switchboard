@@ -12,6 +12,7 @@ import {
   type RuntimeState,
 } from "../../src/runtime/callRuntime";
 import type { HelloAckMessage, ServerMessage } from "../../src/protocol";
+import { AudioPlayback } from "../../src/runtime/audioPlayback";
 import { helloAck, statusMessage } from "../fixtures/serverMessages";
 
 class FakeSocket {
@@ -520,6 +521,42 @@ describe("CallRuntime voice clips", () => {
     const clips = socket.sentJson().filter((frame) => frame.type === "clip");
     expect(clips.map((frame) => frame.generation)).toEqual([3]);
     runtime.dispose();
+  });
+
+  it("lets a handoff's goodbye finish and cuts playback on anything else", async () => {
+    const handOff = vi.spyOn(AudioPlayback.prototype, "handOffToGeneration");
+    const reset = vi.spyOn(AudioPlayback.prototype, "resetForGeneration");
+    const { runtime } = makeRuntime();
+    const socket = await connectAt(runtime, 3);
+    expect(reset, "a connection's first epoch retires old audio").toHaveBeenCalledWith(3);
+    reset.mockClear();
+
+    // A return to the operator: the route moves, the generation does not.
+    socket.receive({ type: "epoch", generation: 3 });
+    // A transfer this tab saw adopted.
+    socket.receive({ type: "candidate", route: "alpha", generation: 3 });
+    socket.receive({ type: "candidate_cleared", route: "alpha", generation: 4, reason: "adopted" });
+    socket.receive({ type: "epoch", generation: 4 });
+    expect(handOff.mock.calls).toEqual([[3], [4]]);
+    expect(reset).not.toHaveBeenCalled();
+
+    // A hangup or rescue: a new generation nobody announced.
+    socket.receive({ type: "epoch", generation: 5 });
+    expect(reset).toHaveBeenCalledWith(5);
+
+    // A reconnect's first epoch cuts off too, even at the same generation.
+    reset.mockClear();
+    socket.drop();
+    runtime.retry();
+    const next = FakeSocket.latest();
+    next.open();
+    next.receive(helloAck());
+    next.receive({ type: "epoch", generation: 5 });
+    expect(reset).toHaveBeenCalledWith(5);
+    expect(handOff.mock.calls.length).toBe(2);
+    runtime.dispose();
+    handOff.mockRestore();
+    reset.mockRestore();
   });
 
   it("ignores Talk while the line is down", async () => {

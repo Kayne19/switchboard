@@ -187,6 +187,18 @@ operator's (#77). Promotion holds the display gate from adoption until the
 `epoch` is published, so a display from the new leg cannot be applied, and then
 wiped, ahead of its own reset.
 
+An `epoch` does not always cut off the audio that is playing. On a handoff the
+handoff line (the operator's "transferring you", a project's goodbye) is already
+fully sent when the line moves, because `speak` answers only once its speech is
+synthesized, so cutting it off clipped every transfer and every return. The
+browser tells a handoff from a rescue: an `epoch` at the generation it already
+holds (a return to the operator), or at the generation of an adoption it saw
+announced, lets what is playing finish and queues the new leg behind it
+(`handOffToGeneration`). Any other `epoch` (a hangup, a rescue, the first one on
+a new connection) still retires everything at once (`resetForGeneration`). A
+clip from the old leg that is still arriving could never finish, so it retires
+everything too.
+
 Promotion only ever adopts the leg that asked for it. Module calls name their
 leg by its call token. Activity names it too: the operator's pi process is
 started with the token `operator`, a project session is put on the call with
