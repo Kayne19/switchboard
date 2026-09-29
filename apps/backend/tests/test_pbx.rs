@@ -2855,3 +2855,42 @@ async fn takeover_attach_failure_rolls_back_without_killing_the_desk_session() {
     assert!(!board.coordinator.is_candidate());
     assert!(!log.names().contains(&"kill".into()));
 }
+
+#[tokio::test]
+async fn host_loss_closes_a_taken_over_session_without_killing_the_desk_process() {
+    let board = board_with(vec![project("alpha", "Alpha")], false);
+    let (closed_tx, closed_rx) = tokio::sync::oneshot::channel();
+    let closed_tx = Arc::new(StdMutex::new(Some(closed_tx)));
+    let callback_tx = closed_tx.clone();
+    let host = FakeHostAgent::new(Box::new(|_, _| vec![]));
+    let log = host.serve(board.hosts().connect_fake(HOST));
+    let launch = ProjectLaunch {
+        host: HOST.into(),
+        project: "alpha".into(),
+        cwd: "/srv/alpha".into(),
+        spec: "anthropic/current".into(),
+        brief: String::new(),
+        turn_timeout: Duration::from_secs(1),
+        on_activity: None,
+        on_module: None,
+        on_closed: Some(Arc::new(move |_, _, _| {
+            let callback_tx = callback_tx.clone();
+            Box::pin(async move {
+                if let Some(tx) = callback_tx.lock().unwrap().take() {
+                    let _ = tx.send(());
+                }
+            })
+        })),
+    };
+    let (session, _) = ProjectSession::attach(&board.hosts(), launch, "desk-alpha")
+        .await
+        .unwrap();
+    session.join_call("desk-call", "Jev", 1_000).await.unwrap();
+    board.hosts().disconnect_fake(HOST);
+    closed_rx
+        .await
+        .expect("host loss closes the taken-over session");
+    assert!(!session.alive());
+    session.close();
+    assert!(!log.names().contains(&"kill".into()));
+}
