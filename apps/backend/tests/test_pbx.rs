@@ -2021,8 +2021,7 @@ async fn foreground_continuation_publishes_busy_before_prompt() {
     let reply = board.handle_agent_ctx(&transcript("continue work")).await;
     assert_eq!(reply.route, "alpha");
     let notices = notices.lock().unwrap().clone();
-    assert_eq!(notices.first().map(String::as_str), Some("alpha:busy"));
-    assert_eq!(notices.last().map(String::as_str), Some("alpha:idle"));
+    assert_eq!(notices, ["alpha:busy"]);
     board.shutdown().await;
 }
 

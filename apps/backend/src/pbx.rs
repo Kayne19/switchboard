@@ -1364,7 +1364,6 @@ impl Switchboard {
                 Some(detail),
             );
         }
-        self.announce_agent_state(session.label(), "idle").await;
         self.reply_with_turn(turn)
     }
 

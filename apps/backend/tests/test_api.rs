@@ -4711,6 +4711,93 @@ async fn process_turns_settlement_preserves_a_waiting_request() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn process_turns_settles_foreground_idle_once() {
+    let root = scratch_root("process-turn-idle-once");
+    let state = state_with_agents(&root);
+    {
+        let mut board = state.0.switchboard.lock().await;
+        let reply = board
+            .transfer_ctx(
+                &crate::pbx::TransferContext {
+                    exact_caller_transcript: "put me through to alpha".into(),
+                    ..Default::default()
+                },
+                "alpha",
+                "",
+                "",
+            )
+            .await;
+        assert_eq!(reply.route, "alpha");
+    }
+    let mut events = state.0.events.subscribe();
+    while events.try_recv().is_ok() {}
+    let id = "settled-idle-once";
+    let generation = state.0.coordinator.generation();
+    state.0.routed_decisions.lock().await.insert(
+        id.into(),
+        crate::router::Decision {
+            action: crate::router::Action::Continue,
+            target: Some("alpha".into()),
+            continue_or_fresh: Some(crate::router::ConversationMode::Continue),
+            confidence: 1.0,
+            for_current_agent: 1.0,
+            multi_target: false,
+            unsure: false,
+            confirm: false,
+            reason: "test".into(),
+        },
+    );
+    state.0.queued_turns.store(1, Ordering::Release);
+    let worker = tokio::spawn(process_turns(state.clone()));
+    state
+        .0
+        .turns
+        .send((id.into(), "continue alpha".into(), generation))
+        .await
+        .unwrap();
+    let busy = next_event_of(&mut events, "agents_state").await;
+    assert!(busy["agents"].as_array().is_some_and(|agents| {
+        agents
+            .iter()
+            .any(|agent| agent["project"] == "alpha" && agent["state"] == "busy")
+    }));
+    timeout(Duration::from_secs(1), async {
+        while state.0.turn_in_flight.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("foreground turn settled");
+
+    let idle_events: Vec<Value> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            Event::Json(value)
+                if value["type"] == "agents_state"
+                    && value["agents"].as_array().is_some_and(|agents| {
+                        agents
+                            .iter()
+                            .any(|agent| agent["project"] == "alpha" && agent["state"] == "idle")
+                    }) =>
+            {
+                Some(value)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        idle_events.len(),
+        1,
+        "idle must settle through one owner: {idle_events:#?}"
+    );
+
+    worker.abort();
+    let _ = worker.await;
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn agents_state_publishes_idle_after_turn_and_finished_after_hangup() {
     let root = scratch_root("agents-state-lifecycle");
     let state = state_with_agents(&root);
