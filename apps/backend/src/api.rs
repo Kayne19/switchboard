@@ -906,18 +906,8 @@ async fn dispatch_routed_transcript(
     // Routing itself can span a rescue. Do not let a fallback decision queue
     // words for the leg that was current when Jev started.
     if generation != state.0.coordinator.generation() {
-        emit_transcript_verdict(state, id, &transcript);
         emit_stale_clip(state, id);
         return;
-    }
-    emit_transcript_verdict(state, id, &transcript);
-    if !can_steer {
-        state
-            .0
-            .routed_decisions
-            .lock()
-            .await
-            .insert(id.to_owned(), decision.clone());
     }
     let steered = if can_steer {
         let _transition = state.0.operation_transition.lock().await;
@@ -973,8 +963,16 @@ async fn dispatch_routed_transcript(
         );
         return;
     }
-    // If an explicit continue could not attach to a live turn, the queued
-    // worker will use the same decision and deliver it to the project.
+    // If the decision could not attach to a live turn, the queued worker will
+    // use the same decision and deliver it to the project. This includes an
+    // explicit continue on a route with no steerable session: Jev must not be
+    // called again for the same utterance.
+    state
+        .0
+        .routed_decisions
+        .lock()
+        .await
+        .insert(id.to_owned(), decision.clone());
     if !can_steer {
         tracing::info!(
             clip = id,

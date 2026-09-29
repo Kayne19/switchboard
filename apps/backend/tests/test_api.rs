@@ -19,6 +19,70 @@ fn state_with_stt(stt: Option<String>) -> AppState {
     state_with_stream(stt, None)
 }
 
+fn state_with_jev(url: &str, key_path: &std::path::Path) -> AppState {
+    let key_path = key_path.to_str().expect("key path");
+    let config = crate::Config::for_tests(&[
+        ("SWITCHBOARD_JEV_URL", url),
+        ("SWITCHBOARD_JEV_KEY_FILE", key_path),
+        ("SWITCHBOARD_PI_BINARY", "/bin/sh"),
+    ]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    let board = Switchboard::new(&config, registry, std::sync::Arc::new(prewarm));
+    state_on(board)
+}
+
+async fn fake_jev_server() -> (
+    String,
+    std::path::PathBuf,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    std::sync::Arc<tokio::sync::Notify>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener");
+    let endpoint = format!(
+        "http://{}/v1/systemone",
+        listener.local_addr().expect("address")
+    );
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let key_path = std::env::temp_dir().join(format!(
+        "switchboard-api-jev-{}-{nonce}",
+        std::process::id()
+    ));
+    std::fs::write(&key_path, "fixture-key").expect("fixture key");
+    let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = requests.clone();
+    let responded = std::sync::Arc::new(tokio::sync::Notify::new());
+    let response_notice = responded.clone();
+    let server = tokio::spawn(async move {
+        let body = r#"{"model":"jev-test","answers":{"action":{"type":"choice","choice":"continue","probabilities":{"continue":1.0},"confidence":1.0},"for_current_agent":{"type":"noul","noul":0.0},"target":{"type":"choice","choice":"none","probabilities":{"none":1.0},"confidence":1.0},"continue_or_fresh":{"type":"choice","choice":"not_applicable","probabilities":{"not_applicable":1.0},"confidence":1.0},"multi_target":{"type":"noul","noul":0.0}}}"#;
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut request = vec![0_u8; 8192];
+            let _ = tokio::io::AsyncReadExt::read(&mut stream, &mut request).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(), body
+            );
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut stream, response.as_bytes()).await;
+            response_notice.notify_one();
+        }
+    });
+    (endpoint, key_path, requests, responded, server)
+}
+
 fn state_with_stream(stt: Option<String>, stream: Option<String>) -> AppState {
     let config = crate::Config::for_tests(&[]);
     let registry = Registry::new(vec![]);
@@ -871,6 +935,28 @@ async fn typed_turn_is_logged_echoed_and_queued_like_a_transcript() {
         (id.as_str(), text.as_str(), turn_generation),
         ("typed-1", "deploy it", generation)
     );
+}
+
+#[tokio::test]
+async fn a_non_steered_continue_uses_one_jev_decision_for_one_utterance() {
+    let (endpoint, key_path, requests, _responded, server) = fake_jev_server().await;
+    let state = state_with_jev(&endpoint, &key_path);
+    let mut events = state.0.events.subscribe();
+    let generation = state.0.coordinator.generation();
+
+    dispatch_routed_transcript(&state, "once", generation, "hello".into()).await;
+    assert!(state.0.routed_decisions.lock().await.contains_key("once"));
+
+    let worker = tokio::spawn(process_turns(state.clone()));
+    let thinking = next_event_of(&mut events, "thinking").await;
+    assert_eq!(thinking["type"], "thinking");
+    assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    worker.abort();
+    let _ = worker.await;
+    server.abort();
+    let _ = server.await;
+    let _ = std::fs::remove_file(key_path);
 }
 
 #[tokio::test]
