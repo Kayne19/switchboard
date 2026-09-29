@@ -64,7 +64,7 @@ async fn fake_jev_server() -> (
     let responded = std::sync::Arc::new(tokio::sync::Notify::new());
     let response_notice = responded.clone();
     let server = tokio::spawn(async move {
-        let body = r#"{"model":"jev-test","answers":{"action":{"type":"choice","choice":"continue","probabilities":{"continue":1.0},"confidence":1.0},"for_current_agent":{"type":"noul","noul":0.0},"target":{"type":"choice","choice":"none","probabilities":{"none":1.0},"confidence":1.0},"continue_or_fresh":{"type":"choice","choice":"not_applicable","probabilities":{"not_applicable":1.0},"confidence":1.0},"multi_target":{"type":"noul","noul":0.0}}}"#;
+        let body = r#"{"model":"jev-test","answers":{"action":{"type":"choice","choice":"continue","probabilities":{"continue":1.0},"confidence":1.0},"for_current_agent":{"type":"noul","noul":0.0},"target":{"type":"choice","choice":"none","probabilities":{"none":1.0},"confidence":1.0},"continue_or_fresh":{"type":"choice","choice":"not_applicable","probabilities":{"not_applicable":1.0},"confidence":1.0},"multi_target":{"type":"noul","noul":0.0},"good_moment":{"type":"choice","choice":"yes","probabilities":{"yes":1.0,"no":0.0},"confidence":1.0}}}"#;
         loop {
             let Ok((mut stream, _)) = listener.accept().await else {
                 return;
@@ -4402,6 +4402,91 @@ async fn a_module_call_carrying_a_retired_token_is_refused() {
         .projection
         .snapshot_actions()
         .is_empty());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn floor_pbx_api_flow_gates_rewrites_announces_and_plays_in_order() {
+    let root = std::env::temp_dir().join(format!(
+        "switchboard-floor-{}-{}",
+        std::process::id(),
+        crate::pbx::uuid_like()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let utility = root.join("fake-utility");
+    crate::pi_client::write_executable_script(
+        &utility,
+        r##"while IFS= read -r line; do
+printf '%s\n' '{"type":"tool_execution_start","toolName":"rewrite","args":{"text":"Rewritten update"}}'
+printf '%s\n' '{"type":"agent_settled"}'
+done
+"##,
+    );
+    let (jev_url, key_path, _requests, _responded, jev_server) = fake_jev_server().await;
+    let config = crate::Config::for_tests(&[
+        ("SWITCHBOARD_PI_BINARY", &utility.to_string_lossy()),
+        ("SWITCHBOARD_JEV_URL", &jev_url),
+        ("SWITCHBOARD_JEV_KEY_FILE", &key_path.to_string_lossy()),
+        ("SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS", "1"),
+    ]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    let state = AppState::new(
+        Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
+        TranscriptLog::new(10),
+        Speaker::test_success(100, Duration::from_millis(25_000)),
+        SttAdapter::from_command(None),
+        SttStreamAdapter::from_command(None),
+    );
+    let (mut connection, _, _) = state.register_connection().await;
+    state.0.floor.force_quiet_for_test().await;
+    state
+        .0
+        .coordinator
+        .register_background("grape", "grape-token");
+    assert_lifecycle_consistent(&state).await;
+    let accepted = request_to_speak(
+        state.clone(),
+        "grape-token",
+        json!({"message":"Original update", "reason":"finished"}),
+    )
+    .await;
+    assert_eq!(accepted.status(), StatusCode::OK);
+    assert_lifecycle_consistent(&state).await;
+    spawn_workers(state.clone());
+    let frames = frames_until(&mut connection, "spoken").await;
+    let spoken = frames
+        .iter()
+        .find(|frame| frame["type"] == "spoken")
+        .expect("floor speech");
+    assert_eq!(
+        spoken["entry"]["text"],
+        "An update from grape: Rewritten update"
+    );
+    let types = types_of(&frames);
+    assert!(types
+        .iter()
+        .position(|kind| *kind == "agents_state")
+        .is_some());
+    assert!(types.iter().position(|kind| *kind == "spoken").is_some());
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    let agents = state.0.projection.snapshot();
+    let grape = agents
+        .iter()
+        .find(|agent| agent.project == "grape")
+        .unwrap();
+    assert_eq!(grape.state, "idle");
+    assert!(grape.pending_request.is_none());
+    assert_lifecycle_consistent(&state).await;
+    jev_server.abort();
+    let _ = std::fs::remove_file(key_path);
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[tokio::test]

@@ -82,3 +82,10 @@ fn jev_settings_enter_only_through_config() {
     assert_eq!(config.jev_action_threshold, 0.61);
     assert_eq!(config.jev_summary_token_budget, 1234);
 }
+
+#[test]
+fn floor_quiet_threshold_is_parsed_by_config_only() {
+    assert_eq!(Config::for_tests(&[]).floor_quiet_threshold_ms, 10_000);
+    let config = Config::for_tests(&[("SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS", "321")]);
+    assert_eq!(config.floor_quiet_threshold_ms, 321);
+}

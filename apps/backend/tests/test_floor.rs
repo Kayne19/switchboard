@@ -1,6 +1,6 @@
 use super::*;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::time::Duration;
 
 
@@ -118,19 +118,76 @@ async fn gate_timeout_is_treated_as_a_hold_then_quiet_releases() {
     let connected = Arc::new(AtomicBool::new(true));
     let live = Arc::new(AtomicBool::new(true));
     let (released, mut results) = mpsc::unbounded_channel();
+    let (gate_done, gate_signal) = oneshot::channel();
+    let gate_signal = Arc::new(Mutex::new(Some(gate_signal)));
     floor.set_page_connected(true).await;
     floor.caller_spoke().await;
     floor.enqueue(request(1)).await;
     let mut h = hooks(connected, live, Arc::new(AtomicUsize::new(0)), released);
-    h.gate = Arc::new(|_| Box::pin(async { Err(()) }) as GateFuture);
-    let floor_worker = floor.clone();
-    let worker = tokio::spawn(async move {
-        floor_worker.run(h).await;
+    h.gate = Arc::new(move |_| {
+        let gate_signal = gate_signal.clone();
+        Box::pin(async move {
+            if let Some(signal) = gate_signal.lock().await.take() {
+                let _ = signal.await;
+            }
+            Err(())
+        }) as GateFuture
     });
+    let floor_worker = floor.clone();
+    let worker = tokio::spawn(async move { floor_worker.run(h).await });
     yield_worker().await;
+    assert!(results.try_recv().is_err());
+    gate_done.send(()).unwrap();
     yield_worker().await;
     assert!(results.try_recv().is_err());
     floor.force_quiet_for_test().await;
+    yield_worker().await;
+    assert_eq!(results.recv().await.unwrap().0, "update 1:update 1");
+    worker.abort();
+}
+
+#[tokio::test]
+async fn rewrite_error_uses_the_original_message() {
+    let floor = Floor::new(Duration::ZERO);
+    let connected = Arc::new(AtomicBool::new(true));
+    let live = Arc::new(AtomicBool::new(true));
+    let (released, mut results) = mpsc::unbounded_channel();
+    floor.set_page_connected(true).await;
+    floor.enqueue(request(1)).await;
+    let mut h = hooks(connected, live, Arc::new(AtomicUsize::new(0)), released);
+    h.rewrite = Arc::new(|_| Box::pin(async { Err(()) }) as RewriteFuture);
+    let floor_worker = floor.clone();
+    let worker = tokio::spawn(async move { floor_worker.run(h).await });
+    yield_worker().await;
+    assert_eq!(results.recv().await.unwrap().0, "update 1:update 1");
+    worker.abort();
+}
+
+#[tokio::test]
+async fn rewrite_timeout_uses_the_original_message() {
+    let floor = Floor::new(Duration::ZERO);
+    let connected = Arc::new(AtomicBool::new(true));
+    let live = Arc::new(AtomicBool::new(true));
+    let (released, mut results) = mpsc::unbounded_channel();
+    let (rewrite_done, rewrite_signal) = oneshot::channel();
+    let rewrite_signal = Arc::new(Mutex::new(Some(rewrite_signal)));
+    floor.set_page_connected(true).await;
+    floor.enqueue(request(1)).await;
+    let mut h = hooks(connected, live, Arc::new(AtomicUsize::new(0)), released);
+    h.rewrite = Arc::new(move |_| {
+        let rewrite_signal = rewrite_signal.clone();
+        Box::pin(async move {
+            if let Some(signal) = rewrite_signal.lock().await.take() {
+                let _ = signal.await;
+            }
+            Err(())
+        }) as RewriteFuture
+    });
+    let floor_worker = floor.clone();
+    let worker = tokio::spawn(async move { floor_worker.run(h).await });
+    yield_worker().await;
+    assert!(results.try_recv().is_err());
+    rewrite_done.send(()).unwrap();
     yield_worker().await;
     assert_eq!(results.recv().await.unwrap().0, "update 1:update 1");
     worker.abort();
