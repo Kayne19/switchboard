@@ -680,6 +680,9 @@ impl Switchboard {
             );
         }
         if target != OPERATOR && self.coordinator.route() != target {
+            if self.remove_dead_background(target) {
+                self.announce_agent_state(target, "finished").await;
+            }
             if matches!(mode, crate::router::ConversationMode::Fresh)
                 && self.background_agents.contains_key(target)
             {
@@ -770,6 +773,24 @@ impl Switchboard {
         .await
     }
 
+    /// Removes a resident whose host session has already closed. The map is
+    /// otherwise enough to enforce one live session per project, but a closed
+    /// handle would make later work prompt a dead session and reject a fresh
+    /// start forever.
+    fn remove_dead_background(&mut self, project: &str) -> bool {
+        let dead = self
+            .background_agents
+            .get(project)
+            .is_some_and(|session| !session.alive());
+        if !dead {
+            return false;
+        }
+        if let Some(session) = self.background_agents.remove(project) {
+            self.coordinator.remove_background(&session.token());
+        }
+        true
+    }
+
     /// Start one split part without changing the caller's foreground route.
     async fn start_background_part(&mut self, target: &str, text: &str) -> Result<(), String> {
         let project = match self.registry.resolve_detailed(target) {
@@ -782,6 +803,9 @@ impl Switchboard {
             .is_some_and(|agent| agent.label() == project.id)
         {
             return Err(format!("project {} is already busy", project.id));
+        }
+        if self.remove_dead_background(&project.id) {
+            self.announce_agent_state(&project.id, "finished").await;
         }
         // A resident background session can be idle after its prior turn. Keep
         // its history and address it instead of treating existence as busy.

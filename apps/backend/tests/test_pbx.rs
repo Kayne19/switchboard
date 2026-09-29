@@ -1878,6 +1878,70 @@ async fn idle_background_split_part_continues_without_a_new_session() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn a_dead_background_resident_is_removed_before_a_later_split_part() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+    let log = serve(
+        &board,
+        Box::new(move |session, message| {
+            let _ = prompt_tx.send((session.to_owned(), message.to_owned()));
+            says("handled")
+        }),
+    );
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .dispatch_parts(
+            "first",
+            vec![
+                crate::router::DispatchPart {
+                    agent: "alpha".into(),
+                    text: "alpha one".into(),
+                },
+                crate::router::DispatchPart {
+                    agent: "beta".into(),
+                    text: "beta one".into(),
+                },
+            ],
+        )
+        .await;
+    while let Some((session, message)) = prompt_rx.recv().await {
+        if session == "s2" && message.contains("beta one") {
+            break;
+        }
+    }
+    let dead = board.background_agents.get("beta").unwrap().clone();
+    let old_session_id = dead.session_id().to_owned();
+    dead.close();
+    assert!(!dead.alive());
+    let creates = log.named("create_session").len();
+
+    board
+        .start_background_part("beta", "beta after host close")
+        .await
+        .expect("a dead resident is replaced by a fresh session");
+    let mut saw_fresh_prompt = false;
+    while let Some((session, message)) = prompt_rx.recv().await {
+        if session == "s3" && message.contains("beta after host close") {
+            saw_fresh_prompt = true;
+            break;
+        }
+    }
+    assert!(
+        saw_fresh_prompt,
+        "the replacement session received the split part"
+    );
+    assert_eq!(log.named("create_session").len(), creates + 1);
+    assert_ne!(
+        board.background_agents.get("beta").unwrap().session_id(),
+        old_session_id
+    );
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn busy_background_split_part_is_refused_and_fresh_start_is_rejected() {
     let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
     let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
