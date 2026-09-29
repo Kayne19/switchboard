@@ -2257,6 +2257,38 @@ async fn host_loss_evicts_a_background_resident_without_a_later_action() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn failed_transfer_adoption_returns_to_the_operator_and_cleans_up() {
+    let mut board = board_with(vec![project("alpha", "")], false);
+    let coordinator = board.coordinator();
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        if notice.project == "alpha" && notice.state == "busy" {
+            // The candidate is staged before its intro prompt. Simulate a
+            // competing lifecycle owner changing it before PBX adoption.
+            coordinator.set_candidate_token_for_test("not-the-transfer-token");
+        }
+        Box::pin(async {})
+    })));
+    let log = serve(&board, Box::new(|_, _| says("ready")));
+
+    let reply = board
+        .transfer_ctx(&transcript("put me through"), "alpha", "", "")
+        .await;
+
+    assert!(reply.error.is_some(), "adoption must fail: {reply:?}");
+    assert_eq!(reply.route, OPERATOR);
+    assert!(board.agent.is_none());
+    assert!(!board.coordinator.is_candidate());
+    assert!(!board
+        .coordinator
+        .status()
+        .route
+        .eq_ignore_ascii_case("alpha"));
+    assert_eq!(until_named(&log, "kill").await.len(), 1);
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn failed_transfer_intro_publishes_finished_instead_of_stuck_busy() {
     let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
     let notices = Arc::new(StdMutex::new(Vec::<String>::new()));

@@ -828,6 +828,15 @@ impl Coordinator {
 
     /// Adopts the staged candidate if it is the leg `token` names: the PBX
     /// once its intro turn ends, or a sign of life from the candidate itself.
+    #[cfg(test)]
+    pub(crate) fn set_candidate_token_for_test(&self, token: &str) {
+        self.linearize(|state| {
+            if let Some(candidate) = state.candidate.as_mut() {
+                candidate.identity.token = token.to_owned();
+            }
+        });
+    }
+
     pub fn adopt_candidate(&self, token: &str) -> Result<LegIdentity, LifecycleError> {
         self.linearize(|state| {
             let candidate = match state
