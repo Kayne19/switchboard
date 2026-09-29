@@ -133,6 +133,28 @@ fn stale_generation_and_concurrent_prompt_are_rejected() {
 }
 
 #[test]
+fn stale_generation_cannot_settle_a_lifecycle_projection() {
+    let coordinator = coordinator();
+    let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let called_in_operation = called.clone();
+    assert!(coordinator
+        .with_generation(99, || {
+            called_in_operation.store(true, std::sync::atomic::Ordering::Release);
+        })
+        .is_none());
+    assert!(!called.load(std::sync::atomic::Ordering::Acquire));
+
+    let old_generation = coordinator.generation();
+    coordinator.begin_rescue("replace the leg");
+    assert!(coordinator
+        .with_generation(old_generation, || {
+            called.store(true, std::sync::atomic::Ordering::Release);
+        })
+        .is_none());
+    assert!(!called.load(std::sync::atomic::Ordering::Acquire));
+}
+
+#[test]
 fn no_prompt_begins_while_a_page_started_leg_is_starting() {
     // A page control starts a leg with no turn running. A prompt begun then
     // would take the call out of `Starting` with the candidate still staged,
