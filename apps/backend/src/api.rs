@@ -1231,6 +1231,19 @@ async fn process_turns(state: AppState) {
             tracing::warn!(clip = %id, route = %reply.route, %error, "the turn reported a failure");
         }
         tracing::info!(clip = %id, route = %reply.route, elapsed = ?started.elapsed(), "turn settled");
+        if reply.route != crate::pbx::OPERATOR {
+            let mut agents = state.0.agent_states.lock().await;
+            if let Some(agent) = agents.iter_mut().find(|agent| agent.project == reply.route) {
+                agent.state = "busy".into();
+                agent.pending_request = None;
+                emit_message(
+                    &state,
+                    ServerMessage::AgentsState {
+                        agents: agents.clone(),
+                    },
+                );
+            }
+        }
         deliver_turn_if_current(
             &state,
             &reply,
