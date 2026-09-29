@@ -950,7 +950,6 @@ async fn dispatch_routed_transcript(
         let active = state.0.active_session.lock().await;
         if generation != state.0.coordinator.generation() {
             drop(active);
-            state.0.routed_decisions.lock().await.remove(id);
             emit_stale_clip(state, id);
             return;
         }
