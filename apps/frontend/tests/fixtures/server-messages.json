@@ -369,6 +369,26 @@
       "message": {
         "type": "screen_state_ack"
       }
+    },
+    {
+      "name": "agents_state",
+      "message": {
+        "type": "agents_state",
+        "agents": [
+          {
+            "project": "alpha",
+            "state": "waiting",
+            "pending_request": {
+              "message": "Tests are done.",
+              "reason": "finished"
+            }
+          },
+          {
+            "project": "beta",
+            "state": "busy"
+          }
+        ]
+      }
     }
   ]
 }

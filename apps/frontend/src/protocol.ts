@@ -234,6 +234,22 @@ export interface ScreenStateAckMessage {
 	type: "screen_state_ack";
 }
 
+export interface AgentRequest {
+	message: string;
+	reason: string;
+}
+
+export interface AgentState {
+	project: string;
+	state: "busy" | "idle" | "finished" | "waiting";
+	pending_request?: AgentRequest;
+}
+
+export interface AgentsStateMessage {
+	type: "agents_state";
+	agents: AgentState[];
+}
+
 export type ServerMessage =
 	| HelloAckMessage
 	| PongMessage
@@ -257,7 +273,8 @@ export type ServerMessage =
 	| FinalResponseAudioClosedMessage
 	| DisplayMessage
 	| ViewMessage
-	| ScreenStateAckMessage;
+	| ScreenStateAckMessage
+	| AgentsStateMessage;
 
 // Readers: each takes a JSON value and returns it as the type it reads, or
 // INVALID. `fields` is checked by the compiler against the interface it
@@ -405,6 +422,13 @@ const MESSAGE_FIELDS: { [Type in MessageType]: MessageFields<Type> } = {
 	display: { action: present, seq: optional(number) },
 	view: { target: string, reason: string },
 	screen_state_ack: {},
+	agents_state: {
+		agents: list(object<AgentState>({
+			project: string,
+			state: oneOf("busy", "idle", "finished", "waiting"),
+			pending_request: optional(object<AgentRequest>({ message: string, reason: string })),
+		})),
+	},
 };
 
 /// Every `type` the page understands.

@@ -263,6 +263,11 @@ export function RuntimeIntegration() {
           dispatch({ op: "runtime_say", text: body });
           break;
         }
+        case "agents_state":
+          // Agent state is consumed by the station surfaces. The call runtime
+          // only transports it; it must never turn background status into
+          // caller speech.
+          break;
         case "routing_unavailable":
           // CallRuntime shows this as a page status error. Do not put it on
           // the conversation surface or send it through speech synthesis.
