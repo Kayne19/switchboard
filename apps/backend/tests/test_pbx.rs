@@ -369,6 +369,35 @@ async fn transfer_ctx_ambiguous_project_returns_candidate_options() {
         .contains("was ambiguous"));
 }
 
+#[tokio::test]
+async fn jev_transfer_omits_the_internal_reason_from_the_intro_prompt() {
+    let mut board = board_on(
+        vec![project("alpha", "test project")],
+        &[],
+        two_model_catalog(),
+    );
+    let log = serve(&board, Box::new(|_, _| says("Alpha is ready.")));
+    let decision = Decision {
+        action: crate::router::Action::GoToProject,
+        target: Some("alpha".into()),
+        continue_or_fresh: None,
+        confidence: 1.0,
+        for_current_agent: 0.0,
+        multi_target: false,
+        unsure: false,
+        confirm: false,
+        reason: "internal Jev reason must not become caller intent".into(),
+    };
+
+    let reply = board.handle_decision("put me through", &decision).await;
+    assert_eq!(reply.route, "alpha");
+    let prompt = prompts(&log).into_iter().next().expect("intro prompt");
+    assert!(prompt.contains("put me through"), "{prompt}");
+    assert!(!prompt.contains("[DERIVED INTENT]"), "{prompt}");
+    assert!(!prompt.contains("internal Jev reason"), "{prompt}");
+    board.shutdown().await;
+}
+
 #[test]
 fn unicode_payload_preserved_in_transfer_context_and_intro_prompt() {
     let unicode_text = "Caller voice text with Unicode: 🌐 🚀 日本語, emoji, and quote \"hello\".";
