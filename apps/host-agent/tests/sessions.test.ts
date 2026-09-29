@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { DaemonCommandError } from "../src/daemon_port.ts";
 import { HostLink } from "../src/link.ts";
 import { type LinkEvent, PREPARE_OUTPUT_LIMIT, runPrepare, SessionManager } from "../src/sessions.ts";
+import { SkillSocket } from "../src/skill_socket.ts";
 import { FakeDaemon, flush } from "./fake_daemon.ts";
 import { command, FakeService, type Message } from "./fake_service.ts";
 
@@ -115,6 +116,30 @@ test("attach adopts an exact-folder desk session as taken_over and detach never 
 	await manager.handle("detach", { session: "desk" });
 	assert.equal(daemon.live.has("desk"), true);
 	assert.ok(!daemon.ops().includes("kill"));
+});
+
+test("attach registers the skill socket and detach unregisters it", async () => {
+	const { daemon, manager } = setup();
+	daemon.addLive({ handle: "desk", sessionId: "desk-saved", cwd: "/srv/homelab", name: "notes" });
+	const socket = new SkillSocket({
+		socketPath: path.join(mkdtempSync(path.join(os.tmpdir(), "sb-skill-")), "host-agent.sock"),
+		lookup: (sessionId) => manager.bySessionId(sessionId),
+		relay: async () => ({ status: "delivered", reason: null }),
+	});
+	const request = (value: Record<string, unknown>) => socket.handle(JSON.stringify(value));
+	await manager.handle("attach", { session: "desk", project: "homelab", cwd: "/srv/homelab" });
+	await manager.handle("join_call", { session: "desk", token: "call", persona: "Jev", speech_deadline_ms: 1000 });
+	assert.deepEqual(
+		await request({ op: "call", session_id: "desk-saved", depth: 0, token: "call", call: "speak", args: { text: "hello" } }),
+		{ status: "delivered", reason: null },
+	);
+	await manager.handle("detach", { session: "desk" });
+	assert.deepEqual(await request({ op: "hello", session_id: "desk-saved", depth: 0 }), { on_call: false });
+	assert.deepEqual(
+		await request({ op: "call", session_id: "desk-saved", depth: 0, token: "call", call: "speak", args: { text: "stale" } }),
+		{ status: "refused", reason: "not_on_call" },
+	);
+	assert.equal(daemon.live.has("desk"), true);
 });
 
 test("attach refuses a folder mismatch and an already tracked session", async () => {
