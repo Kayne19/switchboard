@@ -299,7 +299,7 @@ async fn broken_activity_callback_does_not_fail_the_turn() {
 }
 
 #[tokio::test]
-async fn releasing_a_taken_over_session_aborts_before_detaching() {
+async fn releasing_a_closed_taken_over_session_still_aborts_before_detaching() {
     let hosts = crate::hosts::Hosts::new(
         std::collections::HashMap::from([("scriptorium".to_owned(), "token".to_owned())]),
         crate::hosts::Heartbeat {
@@ -330,10 +330,12 @@ async fn releasing_a_taken_over_session_aborts_before_detaching() {
         turn_lock: Mutex::new(()),
         busy: AtomicBool::new(true),
         closed: AtomicBool::new(false),
+        released: AtomicBool::new(false),
         brief: String::new(),
         brief_due: AtomicBool::new(false),
         turn: StdMutex::new(None),
     });
+    inner.mark_closed().await;
     ProjectSession { inner }.close();
     assert_eq!(command_rx.recv().await.as_deref(), Some("abort"));
     assert_eq!(command_rx.recv().await.as_deref(), Some("detach"));

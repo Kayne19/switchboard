@@ -695,6 +695,7 @@ struct ProjectInner {
     turn_lock: Mutex<()>,
     busy: AtomicBool,
     closed: AtomicBool,
+    released: AtomicBool,
     brief: String,
     brief_due: AtomicBool,
     /// Where the events of the turn being collected go.
@@ -718,10 +719,15 @@ impl ProjectInner {
             .unwrap_or(false)
     }
 
-    /// Queues kill for service-created sessions. A session taken over from a
-    /// desk is never killed: abort its active turn first, then detach it so
-    /// the desk can keep owning it.
+    /// Queues release for this session exactly once. A session taken over from
+    /// a desk is never killed: abort its active turn first, then detach it so
+    /// the desk can keep owning it. Release is separate from `closed`: a host
+    /// command can mark a handle closed before its lifecycle owner gets a
+    /// chance to release a taken-over session.
     fn release_in_background(&self) {
+        if self.released.swap(true, Ordering::AcqRel) {
+            return;
+        }
         self.hosts.unsubscribe(&self.host, &self.session);
         let host = self.host.clone();
         let session = self.session.clone();
@@ -801,7 +807,10 @@ impl Drop for ProjectInner {
     /// A session the service created dies with its last handle, so one whose
     /// transfer was cancelled half way is not left running on its host.
     fn drop(&mut self) {
-        if !self.closed.swap(true, Ordering::AcqRel) {
+        if self.provenance == "taken_over" {
+            self.closed.store(true, Ordering::Release);
+            self.release_in_background();
+        } else if !self.closed.swap(true, Ordering::AcqRel) {
             self.release_in_background();
         }
     }
@@ -943,6 +952,7 @@ impl ProjectSession {
             turn_lock: Mutex::new(()),
             busy: AtomicBool::new(false),
             closed: AtomicBool::new(false),
+            released: AtomicBool::new(false),
             brief: launch.brief,
             brief_due: AtomicBool::new(true),
             turn: StdMutex::new(None),
@@ -1066,7 +1076,8 @@ impl ProjectSession {
 
     /// Ends the session on its host. Idempotent; nothing waits for the host.
     pub fn close(&self) {
-        if !self.inner.closed.swap(true, Ordering::AcqRel) {
+        let was_closed = self.inner.closed.swap(true, Ordering::AcqRel);
+        if self.inner.provenance == "taken_over" || !was_closed {
             tracing::info!(label = %self.inner.label, "closing the project session");
             self.inner.release_in_background();
         }
