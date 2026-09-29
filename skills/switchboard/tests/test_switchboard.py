@@ -105,6 +105,13 @@ class SurfaceTest(unittest.TestCase):
         self.assertEqual(set(switchboard.__all__), surface)
 
 
+class BackgroundSurfaceTest(unittest.TestCase):
+    def test_background_step_keeps_the_four_call_surface(self):
+        self.assertEqual(set(switchboard.__all__), {"speak", "request_to_speak", "display", "view"})
+        self.assertNotIn("transfer_to_project", dir(switchboard))
+        self.assertNotIn("return_to_operator", dir(switchboard))
+
+
 class IdentityTest(ModuleTestCase):
     def test_identity_comes_from_rlm_session_dir_at_depth_zero(self):
         host = self.host()

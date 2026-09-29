@@ -130,3 +130,14 @@ test("join_call validates its arguments; set_mode needs a call", async () => {
 		assert.equal(state, null);
 	});
 });
+
+test("background mode refuses speak, but accepts request_to_speak and display", async () => {
+	await withSocket(async ({ ask, manager, handle, sessionId, relayed }) => {
+		const call = (name: string, args: Record<string, unknown> = {}) => ask({ op: "call", session_id: sessionId, depth: 0, token: CALL.token, call: name, args });
+		await manager.handle("join_call", { session: handle, ...CALL, mode: "background" });
+		assert.deepEqual(await call("speak", { text: "away" }), { status: "refused", reason: "caller_away" });
+		assert.deepEqual(await call("request_to_speak", { message: "finished", reason: "finished" }), { status: "delivered", reason: null });
+		assert.deepEqual(await call("display", { action: { op: "show", id: "chart", type: "chart", data: { series: [] } } }), { status: "delivered", reason: null });
+		assert.equal(relayed.length, 2, "speak is refused locally while request and display are relayed");
+	});
+});

@@ -316,3 +316,19 @@ test("the host agent never starts a daemon: DaemonPort has no start, and a lost 
 	assert.equal(kinds(s).at(-1), "session_closed");
 	assert.ok(daemon.ops().every((op) => !/start|launch|spawn|ensure/i.test(op)));
 });
+
+test("rediscovery restores service-created and taken-over provenance", async () => {
+	const dir = mkdtempSync(path.join(os.tmpdir(), "sb-host-"));
+	const stateFile = path.join(dir, "sessions.json");
+	const daemon = new FakeDaemon();
+	daemon.addLive({ handle: "desk", name: "notes", cwd: "/srv/homelab" });
+	writeFileSync(stateFile, JSON.stringify({ version: 1, sessions: [
+		{ handle: "desk", session_id: "sid-desk", name: "notes", project: "homelab", cwd: "/srv/homelab", provenance: "taken_over" },
+	], used_names: [] }));
+	const { manager } = setup({ daemon, stateFile });
+	const { live } = await manager.resync();
+	assert.deepEqual(live, ["desk"]);
+	const listed = ((await manager.handle("list_sessions", {})) as { sessions: Message[] }).sessions;
+	assert.equal(listed[0]?.provenance, "taken_over");
+	assert.equal(listed[0]?.project, "homelab");
+});
