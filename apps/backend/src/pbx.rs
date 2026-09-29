@@ -1025,8 +1025,18 @@ impl Switchboard {
     /// host can report death between the token registration and map insertion;
     /// the final check closes that gap without leaving a dead token resident.
     fn register_background_session(&self, project: String, session: ProjectSession) -> bool {
+        self.register_background_session_with(project, session, || {})
+    }
+
+    fn register_background_session_with(
+        &self,
+        project: String,
+        session: ProjectSession,
+        before_insert: impl FnOnce(),
+    ) -> bool {
         let token = session.token();
         self.coordinator.register_background(project.clone(), token);
+        before_insert();
         self.background_agents
             .insert(project.clone(), session.clone());
         let still_registered = session.alive()
@@ -1040,6 +1050,15 @@ impl Switchboard {
             }
         }
         still_registered
+    }
+
+    #[cfg(test)]
+    fn register_background_session_with_fake_death(
+        &self,
+        project: String,
+        session: ProjectSession,
+    ) -> bool {
+        self.register_background_session_with(project, session.clone(), || session.close())
     }
 
     fn spawn_background_prompt(&mut self, project: &str, session: ProjectSession, text: String) {

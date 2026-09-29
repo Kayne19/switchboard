@@ -2148,11 +2148,9 @@ async fn dead_background_handle_is_evicted_after_registration_recheck() {
         .await
         .unwrap()
         .0;
-    // A synchronous fake death between registration and insertion is modeled
-    // by the host handle being closed before the helper's post-insert check.
-    session.close();
-
-    assert!(!board.register_background_session("alpha".into(), session));
+    // The fake dies synchronously after token registration and before map
+    // insertion, exactly the window the helper must close.
+    assert!(!board.register_background_session_with_fake_death("alpha".into(), session));
     assert!(!board.background_agents.contains_key("alpha"));
     assert!(!board.coordinator.project_is_background("alpha"));
     board.shutdown().await;
