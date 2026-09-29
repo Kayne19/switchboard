@@ -11,6 +11,7 @@
 
 use crate::models::{parse_spec, ModelCatalog, THINKING_LEVELS};
 use crate::protocol::{CandidateEnd, ModelEntry, Status};
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -220,6 +221,8 @@ pub struct CallLifecycle {
     adopted: Option<LegIdentity>,
     /// The catalog the project leg launched with.
     catalog: Option<Arc<ModelCatalog>>,
+    /// Tokens belonging to resident sessions that are not foreground.
+    background_tokens: HashMap<String, String>,
 }
 
 impl CallLifecycle {
@@ -240,6 +243,7 @@ impl CallLifecycle {
             startup_rollback: None,
             adopted: None,
             catalog: None,
+            background_tokens: HashMap::new(),
         }
     }
 
@@ -664,8 +668,34 @@ impl Coordinator {
         self.linearize(|state| matches!(state.phase, Phase::Starting))
     }
 
+    /// Register a resident session that may continue while another agent is
+    /// foreground. Its token is still valid for display and request calls, but
+    /// not for speech.
+    pub fn register_background(&self, project: impl Into<String>, token: impl Into<String>) {
+        self.linearize(|state| {
+            state.background_tokens.insert(token.into(), project.into());
+        });
+    }
+
+    pub fn remove_background(&self, token: &str) {
+        self.linearize(|state| {
+            state.background_tokens.remove(token);
+        });
+    }
+
+    pub fn background_project(&self, token: &str) -> Option<String> {
+        self.linearize(|state| state.background_tokens.get(token).cloned())
+    }
+
+    pub fn is_background(&self, token: &str) -> bool {
+        self.linearize(|state| state.background_tokens.contains_key(token))
+    }
+
     pub fn accept_side_effect(&self, token: &str) -> Result<(), LifecycleError> {
         self.linearize(|state| {
+            if state.background_tokens.contains_key(token) {
+                return Ok(());
+            }
             if matches!(state.phase, Phase::Starting) {
                 return Err(LifecycleError::CandidateSideEffect);
             }
@@ -869,6 +899,7 @@ impl Coordinator {
             } else {
                 state.phase = Phase::Shutdown;
                 state.operation = None;
+                state.background_tokens.clear();
                 let next_token =
                     format!("{}-shutdown-{}", state.leg.token, state.leg.generation + 1);
                 state.leg = LegIdentity::new(next_token, state.leg.generation + 1);

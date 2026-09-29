@@ -42,7 +42,7 @@ pub type RouteCallback = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>
 /// prompt a project session gets for the caller, and again on the first after
 /// a compaction; it is never a message of its own.
 const AGENT_BRIEF_HEADER: &str = "[SWITCHBOARD VOICE BRIEF]\nYou are on a voice call in the {project} project, in its own directory. The caller hears only what you pass to the `switchboard` module in your Python REPL (already imported); your written output goes to their screen and is not read aloud.\n";
-const AGENT_BRIEF_TOOLS: &str = "- switchboard.speak(text): say a sentence or two of plain speech. Use it to answer, and before and during long work. No code, paths or lists.\n- switchboard.display(...) shows things on their screen; switchboard.view() tells you what they see.\n- Routing is handled by the switchboard before your turn. Do not try to transfer, return, or change models; answer the caller or explain what you completed.\n";
+const AGENT_BRIEF_TOOLS: &str = "- switchboard.speak(text): say a sentence or two of plain speech. Use it to answer, and before and during long work. No code, paths or lists.\n- switchboard.request_to_speak(message, reason) asks the caller to bring a background session forward; use it when finished, blocked or needing a decision.\n- switchboard.display(...) shows things on their screen; switchboard.view() tells you what they see.\n- Routing is handled by the switchboard before your turn. Do not try to transfer, return, or change models; answer the caller or explain what you completed.\n";
 const AGENT_BRIEF_SWAPS: &str = "";
 const AGENT_BRIEF_END: &str = "[END OF VOICE BRIEF]";
 /// Instructions for the separate, stateless process. This is code-owned so
@@ -356,6 +356,8 @@ pub struct Switchboard {
     /// share the operator's turn lock or conversation history.
     utility: Option<PiSession>,
     agent: Option<ProjectSession>,
+    /// Resident project sessions not currently carrying the caller.
+    background_agents: HashMap<String, ProjectSession>,
     operator_note: Option<String>,
     /// The one owner of the leg on the line, and of the status the page is
     /// shown.
@@ -424,6 +426,7 @@ impl Switchboard {
             operator: None,
             utility: None,
             agent: None,
+            background_agents: HashMap::new(),
             operator_note: None,
             coordinator,
             hosts,
@@ -499,6 +502,9 @@ impl Switchboard {
         if let Some(session) = self.agent.take() {
             session.close();
         }
+        for (_, session) in self.background_agents.drain() {
+            session.close();
+        }
         if let Some(session) = self.operator.take() {
             session.close().await;
         }
@@ -533,6 +539,26 @@ impl Switchboard {
     /// unsure or unsupported action deliberately goes through the existing
     /// operator LLM path; project agents never mutate the route themselves.
     pub async fn handle_decision(&mut self, text: &str, decision: &Decision) -> Reply {
+        // These actions are owned by the PBX, not by an agent. A stop decision
+        // is deliberately confirmation-only here; the next utterance must
+        // confirm before a resident session is closed.
+        if matches!(decision.action, crate::router::Action::Stop) {
+            let target = decision.target.as_deref().unwrap_or("the current project");
+            return self.reply(
+                [format!(
+                    "Do you want me to stop {target}? Say yes to confirm."
+                )],
+                None,
+            );
+        }
+        if matches!(decision.action, crate::router::Action::AnswerWaiting) {
+            if let Some(target) = decision.target.as_deref() {
+                return self
+                    .route_project_part(text, target, crate::router::ConversationMode::Continue)
+                    .await;
+            }
+        }
+
         // Jev's outage is the conversational LLM fallback. A healthy Jev
         // decision that is unsure (or addresses multiple projects) gets one
         // isolated utility call before the caller is asked to clarify.
@@ -601,6 +627,25 @@ impl Switchboard {
             exact_caller_transcript: text.to_owned(),
             derived_intent: String::new(),
         };
+        if target != OPERATOR && self.coordinator.route() != target {
+            if matches!(mode, crate::router::ConversationMode::Fresh)
+                && self.background_agents.contains_key(target)
+            {
+                return self.reply_transfer_error(
+                    format!(
+                        "{target} is already running. Say continue to use it, or stop it first."
+                    ),
+                    Some("project is busy".into()),
+                );
+            }
+            if self.background_agents.contains_key(target) {
+                let session = self
+                    .background_agents
+                    .remove(target)
+                    .expect("background session exists");
+                return self.promote_background(session, context).await;
+            }
+        }
         if target == OPERATOR {
             // The utility may explicitly choose the operator. Do not send
             // that target through the project handler: it has no project
@@ -633,28 +678,91 @@ impl Switchboard {
         .await
     }
 
-    /// Until background agents are available, the foreground rule still
-    /// determines which split part owns the caller's next turn: retain the
-    /// current project when it received a part, otherwise choose the first.
+    /// Dispatch every part of a split. The part for the agent already on the
+    /// line remains foreground; otherwise the first part is foreground and all
+    /// other parts become resident background sessions.
     async fn dispatch_parts(
         &mut self,
-        _original: &str,
+        original: &str,
         parts: Vec<crate::router::DispatchPart>,
     ) -> Reply {
         let current = self.coordinator.route();
-        let part = parts
+        let foreground_index = parts
             .iter()
-            .find(|part| part.agent == current)
-            .or_else(|| parts.first());
-        let Some(part) = part else {
-            return self.handle_operator_ctx(&TransferContext::default()).await;
+            .position(|part| part.agent == current)
+            .unwrap_or(0);
+        let Some(foreground) = parts.get(foreground_index).cloned() else {
+            return self
+                .handle_operator_ctx(&TransferContext {
+                    exact_caller_transcript: original.to_owned(),
+                    ..TransferContext::default()
+                })
+                .await;
         };
-        self.route_project_part(
-            &part.text,
-            &part.agent,
-            crate::router::ConversationMode::Continue,
-        )
-        .await
+
+        let reply = self
+            .route_project_part(
+                &foreground.text,
+                &foreground.agent,
+                crate::router::ConversationMode::Continue,
+            )
+            .await;
+        for (index, part) in parts.into_iter().enumerate() {
+            if index == foreground_index || part.agent == foreground.agent {
+                continue;
+            }
+            if let Err(error) = self.start_background_part(&part.agent, &part.text).await {
+                tracing::warn!(project = %part.agent, %error, "background split part failed");
+            }
+        }
+        reply
+    }
+
+    /// Start one split part without changing the caller's foreground route.
+    async fn start_background_part(&mut self, target: &str, text: &str) -> Result<(), String> {
+        let project = match self.registry.resolve_detailed(target) {
+            crate::registry::ResolveResult::Exact(project) => project.clone(),
+            _ => return Err(format!("unknown project {target}")),
+        };
+        if self
+            .agent
+            .as_ref()
+            .is_some_and(|agent| agent.label() == project.id)
+            || self.background_agents.contains_key(&project.id)
+        {
+            return Err(format!("project {} is already busy", project.id));
+        }
+        let plan = self
+            .prewarm
+            .launch_plan(&project)
+            .await
+            .map_err(|error| error.to_string())?;
+        let model = self
+            .select_transfer_model(&project, &plan.catalog, "", "")
+            .map_err(|error| error.to_string())?;
+        let token = uuid_like();
+        let session = self
+            .start_agent_mode(&project, &model, &token, &plan, "background")
+            .await
+            .map_err(|error| error.to_string())?;
+        let intro = build_intro_prompt(
+            &TransferContext {
+                exact_caller_transcript: text.to_owned(),
+                ..TransferContext::default()
+            },
+            &project,
+            plan.prepare_report.as_ref(),
+        );
+        self.coordinator
+            .register_background(project.id.clone(), token.clone());
+        self.background_agents
+            .insert(project.id.clone(), session.clone());
+        tokio::spawn(async move {
+            if let Err(error) = session.prompt(&intro).await {
+                tracing::warn!(%error, "background agent prompt failed");
+            }
+        });
+        Ok(())
     }
 
     #[allow(dead_code)]
@@ -1078,7 +1186,114 @@ impl Switchboard {
         self.coordinator.finish_intro();
 
         if let Some(previous) = self.agent.take() {
-            previous.close();
+            if previous.label() == project.id {
+                previous.close();
+            } else {
+                let previous_label = previous.label().to_owned();
+                if let Err(error) = previous.set_mode("background").await {
+                    tracing::warn!(project = %previous_label, %error, "could not mark previous foreground agent background");
+                }
+                if previous.busy() {
+                    let _ = previous
+                        .steer("[switchboard] The caller is now listening to another agent. Continue your work quietly; use request_to_speak when you need the caller.")
+                        .await;
+                }
+                self.coordinator
+                    .register_background(previous_label.clone(), previous.token());
+                self.background_agents.insert(previous_label, previous);
+            }
+        }
+        self.agent = Some(session);
+        self.set_active_session(self.agent_leg()).await;
+        self.announce_route().await;
+        self.reply_with_turn(turn)
+    }
+
+    async fn promote_background(
+        &mut self,
+        session: ProjectSession,
+        context: TransferContext,
+    ) -> Reply {
+        let project = match self.registry.resolve_detailed(session.label()) {
+            crate::registry::ResolveResult::Exact(project) => project.clone(),
+            _ => {
+                session.close();
+                return self.reply_transfer_error(
+                    "The background project is no longer registered.".into(),
+                    Some("project is no longer registered".into()),
+                );
+            }
+        };
+        let token = uuid_like();
+        let old_token = session.token();
+        if let Err(error) = session.set_mode("foreground").await {
+            return self.reply_transfer_error(
+                format!("I couldn't bring {} forward: {error}", project.id),
+                Some(error.to_string()),
+            );
+        }
+        if let Err(error) = session
+            .join_call_mode(&token, &self.persona, self.speech_deadline_ms, "foreground")
+            .await
+        {
+            session.close();
+            return self.reply_transfer_error(
+                format!("I couldn't bring {} forward: {error}", project.id),
+                Some(error.to_string()),
+            );
+        }
+        self.coordinator.remove_background(&old_token);
+        let candidate = CandidateLeg::new(
+            project.id.clone(),
+            project.id.clone(),
+            session.session_id(),
+            token.clone(),
+            "",
+            self.coordinator.thinking_default(),
+        );
+        if let Err(error) = self.coordinator.begin_candidate(candidate) {
+            return self.reply_transfer_error(
+                format!("I couldn't bring {} forward: {error}", project.id),
+                Some(error.to_string()),
+            );
+        }
+        let turn = match session.prompt(&context.exact_caller_transcript).await {
+            Ok(turn) => turn,
+            Err(error) => Turn {
+                text: String::new(),
+                signals: vec![],
+                failed: true,
+                error: error.to_string(),
+            },
+        };
+        if turn.failed && turn.text.is_empty() {
+            session.set_mode("background").await.ok();
+            self.rollback_startup(format!("background promotion failed: {}", turn.error));
+            return self.reply_transfer_error(
+                format!("{} did not answer: {}", project.id, turn.error),
+                Some(turn.error),
+            );
+        }
+        if self.coordinator.is_candidate() {
+            if let Err(error) = self.coordinator.adopt_candidate(&token) {
+                return self.reply_transfer_error(
+                    format!("{} did not come up.", project.id),
+                    Some(error.to_string()),
+                );
+            }
+        }
+        self.coordinator.finish_intro();
+        if let Some(previous) = self.agent.take() {
+            let previous_label = previous.label().to_owned();
+            previous.set_mode("background").await.ok();
+            if previous.busy() {
+                let _ = previous
+                    .steer("[switchboard] The caller is now listening to another agent. Continue your work quietly; use request_to_speak when you need the caller.")
+                    .await;
+            }
+            self.coordinator
+                .register_background(previous_label.clone(), previous.token());
+            self.background_agents.insert(previous_label, previous);
         }
         self.agent = Some(session);
         self.set_active_session(self.agent_leg()).await;
@@ -1096,6 +1311,18 @@ impl Switchboard {
         leg_token: &str,
         plan: &LaunchPlan,
     ) -> Result<ProjectSession, PiSessionError> {
+        self.start_agent_mode(project, model, leg_token, plan, "foreground")
+            .await
+    }
+
+    async fn start_agent_mode(
+        &self,
+        project: &Project,
+        model: &str,
+        leg_token: &str,
+        plan: &LaunchPlan,
+        mode: &str,
+    ) -> Result<ProjectSession, PiSessionError> {
         let (session, state) = ProjectSession::create(
             &self.hosts,
             ProjectLaunch {
@@ -1111,7 +1338,7 @@ impl Switchboard {
         )
         .await?;
         if let Err(error) = session
-            .join_call(leg_token, &self.persona, self.speech_deadline_ms)
+            .join_call_mode(leg_token, &self.persona, self.speech_deadline_ms, mode)
             .await
         {
             session.close();
@@ -1488,12 +1715,21 @@ impl Switchboard {
         };
         self.transfer_ctx(&context, project, "", "").await
     }
+    async fn close_background_agents(&mut self) {
+        for (_, session) in self.background_agents.drain() {
+            let token = session.token();
+            self.coordinator.remove_background(&token);
+            session.close();
+        }
+    }
+
     pub async fn force_hangup(&mut self) -> Option<String> {
         let route = self.coordinator.route();
         if route == OPERATOR {
             if let Some(session) = self.operator.take() {
                 tracing::info!("caller hung up a wedged operator turn from the page");
                 session.close().await;
+                self.close_background_agents().await;
                 self.set_active_session(None).await;
                 return Some(OPERATOR.into());
             }
@@ -1502,6 +1738,7 @@ impl Switchboard {
         let left = route;
         tracing::info!(%left, "caller hung up the project leg from the page");
         self.drop_agent().await;
+        self.close_background_agents().await;
         self.operator_note = Some(format!("The caller dropped the line to {left}."));
         Some(left)
     }

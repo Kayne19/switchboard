@@ -995,6 +995,7 @@ impl FakeHostAgent {
     async fn run(mut self, mut link: FakeLink, log: FakeLog) {
         let mut sessions = 0u32;
         let mut tokens: HashMap<String, String> = HashMap::new();
+        let mut modes: HashMap<String, String> = HashMap::new();
         let mut cursor = 0u64;
         let mut calls = 0u64;
         let mut stash: std::collections::VecDeque<Value> = Default::default();
@@ -1063,7 +1064,14 @@ impl FakeHostAgent {
                             session.clone(),
                             args["token"].as_str().unwrap_or_default().to_owned(),
                         );
-                        Ok(json!({"on_call": true, "mode": "foreground"}))
+                        let mode = args["mode"].as_str().unwrap_or("foreground").to_owned();
+                        modes.insert(session.clone(), mode.clone());
+                        Ok(json!({"on_call": true, "mode": mode}))
+                    }
+                    "set_mode" => {
+                        let mode = args["mode"].as_str().unwrap_or("foreground").to_owned();
+                        modes.insert(session.clone(), mode.clone());
+                        Ok(json!({"mode": mode}))
                     }
                     "set_model" => Ok(
                         json!({"model": format!("{}/{}", args["provider"].as_str().unwrap_or_default(), args["model"].as_str().unwrap_or_default()), "thinking": "medium"}),

@@ -225,6 +225,7 @@ impl PiSession {
     pub fn label(&self) -> &str {
         &self.inner.label
     }
+
     pub fn same_session(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
@@ -638,6 +639,8 @@ struct ProjectInner {
     host: String,
     /// The daemon's live handle for the session.
     session: String,
+    /// The persisted id used to reopen the resident session.
+    persistent_session_id: String,
     label: String,
     /// The call token the session was last joined with; module calls must
     /// carry it.
@@ -786,6 +789,10 @@ impl ProjectSession {
             hosts: hosts.clone(),
             host: launch.host,
             session,
+            persistent_session_id: reply.result["session_id"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
             label: launch.project,
             token: StdMutex::new(String::new()),
             turn_timeout: launch.turn_timeout,
@@ -806,6 +813,15 @@ impl ProjectSession {
     pub fn label(&self) -> &str {
         &self.inner.label
     }
+
+    pub fn token(&self) -> String {
+        self.inner.token()
+    }
+
+    pub fn session_id(&self) -> &str {
+        &self.inner.persistent_session_id
+    }
+
     pub fn busy(&self) -> bool {
         self.inner.busy.load(Ordering::Acquire)
     }
@@ -840,15 +856,35 @@ impl ProjectSession {
         persona: &str,
         speech_deadline_ms: u64,
     ) -> Result<(), PiSessionError> {
+        self.join_call_mode(token, persona, speech_deadline_ms, "foreground")
+            .await
+    }
+
+    /// Puts the session on the call in an explicit delivery mode. Background
+    /// sessions stay live but the host agent refuses their speech.
+    pub async fn join_call_mode(
+        &self,
+        token: &str,
+        persona: &str,
+        speech_deadline_ms: u64,
+        mode: &str,
+    ) -> Result<(), PiSessionError> {
         if let Ok(mut current) = self.inner.token.lock() {
             *current = token.to_owned();
         }
         self.command(
             "join_call",
-            json!({"token": token, "persona": persona, "speech_deadline_ms": speech_deadline_ms}),
+            json!({"token": token, "persona": persona, "speech_deadline_ms": speech_deadline_ms, "mode": mode}),
         )
         .await
         .map(|_| ())
+    }
+
+    /// Changes delivery mode without replacing the resident session.
+    pub async fn set_mode(&self, mode: &str) -> Result<(), PiSessionError> {
+        self.command("set_mode", json!({"mode": mode}))
+            .await
+            .map(|_| ())
     }
 
     /// Switches the live session to `provider/model`; it keeps its history.
@@ -1129,15 +1165,21 @@ async fn answer_module_call(inner: Arc<ProjectInner>, call: crate::hosts::Module
             tracing::info!(%label, call = %call.call, "removed project routing call refused");
             call.answer(json!({"status": "refused", "reason": "removed"}));
         }
-        SPEAK_TOOL | "display" | "view" => {
+        SPEAK_TOOL | "request_to_speak" | "display" | "view" => {
             let Some(callback) = inner.on_module.clone() else {
                 call.answer(json!({"status": "failed", "reason": "failed"}));
                 return;
             };
+            let mut args = call.args.clone();
+            if call.call == "request_to_speak" {
+                if let Some(object) = args.as_object_mut() {
+                    object.insert("_project".into(), Value::String(label.clone()));
+                }
+            }
             let request = AgentCall {
                 call: call.call.clone(),
                 token: call.token.clone(),
-                args: call.args.clone(),
+                args,
             };
             let reply = match AssertUnwindSafe(callback(request)).catch_unwind().await {
                 Ok(reply) => reply,

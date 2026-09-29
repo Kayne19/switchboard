@@ -519,11 +519,21 @@ async fn utility_split_keeps_the_current_agent_foreground_even_without_jev_multi
     let reply = board.handle_decision("check both", &decision).await;
 
     assert_eq!(reply.route, "alpha");
-    let routed_prompts = prompts(&log);
+    let mut routed_prompts = prompts(&log);
+    for _ in 0..100 {
+        if routed_prompts
+            .iter()
+            .any(|prompt| prompt.contains("Review beta build"))
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        routed_prompts = prompts(&log);
+    }
     assert!(routed_prompts[before..]
         .iter()
         .any(|prompt| prompt.contains("Check alpha logs")));
-    assert!(!routed_prompts[before..]
+    assert!(routed_prompts
         .iter()
         .any(|prompt| prompt.contains("Review beta build")));
     board.shutdown().await;

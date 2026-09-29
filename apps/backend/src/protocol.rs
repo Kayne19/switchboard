@@ -128,7 +128,6 @@ pub enum ServerMessage {
     /// The browser's `screen_state` report was applied.
     ScreenStateAck,
     /// State of every service-tracked project agent.
-    #[allow(dead_code)]
     AgentsState { agents: Vec<AgentState> },
 }
 
