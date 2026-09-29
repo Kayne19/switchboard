@@ -989,6 +989,11 @@ export class CallRuntime {
         if (message.id !== undefined) this.outbox.remove(message.id);
         this.setStatus("Error: " + message.message, true);
         break;
+      case "routing_unavailable":
+        // This is deliberately a page error. The backend emits no reply
+        // audio when both routing authorities are unavailable.
+        this.setStatus(message.message, true);
+        break;
     }
   }
 }

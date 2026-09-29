@@ -104,5 +104,22 @@ async function operatorExtensionBehavior() {
 	}
 }
 
+async function utilityExtensionBehavior() {
+	const extension = await loadExtension("extensions/operator-switchboard.ts");
+	const pi = fakePi();
+	pi.registerFlag = (name) => {
+		pi.flags ??= new Map();
+		pi.flags.set(name, true);
+	};
+	pi.getFlag = (name) => pi.flags?.get(name) ?? false;
+	extension.default(pi);
+	assert.deepEqual([...pi.tools.keys()], ["second_opinion", "dispatch_parts"]);
+	const split = await pi.tools.get("dispatch_parts").execute("call", {
+		parts: [{ agent: "alpha", text: "Audit it" }],
+	});
+	assert.deepEqual(split.details, { count: 1 });
+}
+
 await operatorExtensionBehavior();
-console.log("ok — operator extension tools");
+await utilityExtensionBehavior();
+console.log("ok — operator and utility extension tools");

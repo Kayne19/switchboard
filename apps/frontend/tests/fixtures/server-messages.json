@@ -207,7 +207,7 @@
       "message": {
         "type": "error",
         "id": "clip-1",
-        "message": "I didn't catch that — say it again."
+        "message": "I didn't catch that \u2014 say it again."
       }
     },
     {
