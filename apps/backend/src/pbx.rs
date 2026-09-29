@@ -559,6 +559,8 @@ pub struct Switchboard {
     /// `PROJECT_TURN_TIMEOUT`, held per switchboard so a test can wait out a
     /// silent leg without waiting ten minutes.
     project_turn_timeout: Duration,
+    #[allow(dead_code)]
+    floor_quiet_threshold: Duration,
 }
 impl Switchboard {
     pub fn new(config: &crate::Config, registry: Registry, prewarm: Arc<Prewarm>) -> Self {
@@ -621,7 +623,13 @@ impl Switchboard {
             planner,
             router,
             project_turn_timeout: PROJECT_TURN_TIMEOUT,
+            floor_quiet_threshold: Duration::from_millis(config.floor_quiet_threshold_ms),
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn floor_quiet_threshold(&self) -> Duration {
+        self.floor_quiet_threshold
     }
     /// The project hosts' links; the application serves them on `/host`.
     pub fn hosts(&self) -> Hosts {

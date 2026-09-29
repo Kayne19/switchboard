@@ -61,6 +61,9 @@ pub struct Config {
     pub jev_for_current_agent_upper: f64,
     pub jev_action_threshold: f64,
     pub jev_summary_token_budget: usize,
+    /// How long the caller must be quiet before a held floor request is
+    /// released with an announcement.
+    pub floor_quiet_threshold_ms: u64,
     /// Environment values loaded from the deployment env file and inherited
     /// process environment. The operator's process receives them.
     pub environment: HashMap<String, String>,
@@ -158,6 +161,11 @@ impl Config {
                 false,
             )
             .min(32_000),
+            floor_quiet_threshold_ms: bounded_ms(
+                values,
+                "SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS",
+                10_000,
+            ),
             environment: values.clone(),
         };
         assert!(
@@ -415,6 +423,7 @@ async fn main() {
         jev_for_current_agent_upper = config.jev_for_current_agent_upper,
         jev_action_threshold = config.jev_action_threshold,
         jev_summary_token_budget = config.jev_summary_token_budget,
+        floor_quiet_threshold_ms = config.floor_quiet_threshold_ms,
         log_filter = %filter,
         "switchboard configuration"
     );
