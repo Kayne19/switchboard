@@ -60,6 +60,10 @@ const AGENT_BRIEF_HEADER: &str = "[SWITCHBOARD VOICE BRIEF]\nYou are on a voice 
 const AGENT_BRIEF_TOOLS: &str = "- switchboard.speak(text): say a sentence or two of plain speech. Use it to answer, and before and during long work. No code, paths or lists.\n- switchboard.request_to_speak(message, reason): queue exactly what the caller should hear from you. For finished, message is the actual result in one to three short spoken sentences; for needs_decision, it is the question and options; for problem, it is what went wrong and what you need. The service lightly smooths it and speaks it at a good moment; do not send a teaser.\n- switchboard.display(...) shows things on their screen; switchboard.view() tells you what they see.\nWhile you are in the background, displays are held until the caller brings you forward; never say a display is on screen.\n- Routing is handled by the switchboard before your turn. Do not try to transfer, return, or change models; answer the caller or explain what you completed.\n";
 const AGENT_BRIEF_SWAPS: &str = "";
 const AGENT_BRIEF_END: &str = "[END OF VOICE BRIEF]";
+
+/// Sent with the first caller words after a background agent is brought
+/// forward, so its background instructions stop applying.
+const FOREGROUND_NOTICE: &str = "[switchboard] The caller brought you forward: you are in the foreground now. speak() is heard directly, display() shows on the caller's screen, and any display you held is on screen now. The caller's words follow.";
 /// Instructions for the separate, stateless process. This is code-owned so
 /// deploying the utility never requires another environment setting.
 const UTILITY_SYSTEM_PROMPT: &str = r#"You are the switchboard's stateless utility process. You never speak to the caller and you never answer general questions. For routing prompts, call exactly one routing tool: second_opinion for one target, dispatch_parts for several targets. When the caller asks for things from two or more registered projects, call dispatch_parts with one part per project and preserve the caller's exact wording in each part. When the request names only one project, call second_opinion. Never invent projects, never emit a prose answer, and never call more than one tool. For a floor rewrite prompt, call rewrite with a natural short spoken version of the supplied message. Speak as one person continuing the conversation. Vary the phrasing, mention the project only when needed for clarity, and keep it short. If the caller has been quiet longer than the floor threshold, a brief natural lead-in may make the project clear. Keep every fact from the agent's message and add none: no new names, numbers, paths, promises, or requests."#;
@@ -2130,7 +2134,10 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
                 Some(error.to_string()),
             );
         }
-        let turn = match session.prompt(&context.exact_caller_transcript).await {
+        // The agent was told background rules when it was shelved. Tell it
+        // they no longer apply before it answers the caller.
+        let prompt = format!("{FOREGROUND_NOTICE}\n\n{}", context.exact_caller_transcript);
+        let turn = match session.prompt(&prompt).await {
             Ok(turn) => turn,
             Err(error) => Turn {
                 text: String::new(),

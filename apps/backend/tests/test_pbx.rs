@@ -3946,3 +3946,51 @@ async fn a_failed_move_to_the_background_closes_the_previous_agent() {
         .contains(&"alpha:finished".to_owned()));
     board.shutdown().await;
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_promoted_agent_is_told_it_is_in_the_foreground() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+    let _log = serve(
+        &board,
+        Box::new(move |session, message| {
+            let _ = prompt_tx.send((session.to_owned(), message.to_owned()));
+            says("handled")
+        }),
+    );
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .start_background_part("beta", "beta chart")
+        .await
+        .expect("beta resident");
+    while let Some((_, message)) = prompt_rx.recv().await {
+        if message.contains("beta chart") {
+            break;
+        }
+    }
+
+    let reply = board
+        .route_project_part(
+            "show me beta",
+            "beta",
+            crate::router::ConversationMode::Continue,
+        )
+        .await;
+
+    assert_eq!(reply.route, "beta", "{reply:?}");
+    let promoted = loop {
+        let (_, message) = prompt_rx.recv().await.expect("promotion prompt");
+        if message.contains("show me beta") {
+            break message;
+        }
+    };
+    assert!(
+        promoted.contains("you are in the foreground now"),
+        "{promoted}"
+    );
+    assert!(promoted.ends_with("show me beta"), "{promoted}");
+    board.shutdown().await;
+}
