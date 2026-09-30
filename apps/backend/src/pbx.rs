@@ -50,6 +50,10 @@ pub struct AgentStateNotice {
     pub project: String,
     pub state: String,
 }
+/// Told when a session that is not a background resident closes on its host:
+/// project, session id and instance. The API retires it from the line.
+pub type ForegroundClosedCallback =
+    Arc<dyn Fn(String, String, u64) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 pub type AgentStateCallback =
     Arc<dyn Fn(AgentStateNotice) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
@@ -548,6 +552,7 @@ pub struct Switchboard {
     activity_callback: Option<ActivityCallback>,
     route_callback: Option<RouteCallback>,
     agent_state_callback: Option<AgentStateCallback>,
+    foreground_closed_callback: Option<ForegroundClosedCallback>,
     module_callback: Option<ModuleCallback>,
     active_session: Arc<Mutex<Option<LegSession>>>,
     operator: Option<PiSession>,
@@ -652,6 +657,7 @@ impl Switchboard {
             activity_callback: None,
             route_callback: None,
             agent_state_callback: None,
+            foreground_closed_callback: None,
             module_callback: None,
             active_session: Arc::new(Mutex::new(None)),
             operator: None,
@@ -734,14 +740,24 @@ impl Switchboard {
         let registry = self.background_agents.clone();
         let coordinator = self.coordinator.clone();
         let state_callback = self.agent_state_callback.clone();
+        let foreground_closed = self.foreground_closed_callback.clone();
         Arc::new(
             move |project: String, session_id: String, instance_id: u64| {
                 let registry = registry.clone();
                 let coordinator = coordinator.clone();
                 let state_callback = state_callback.clone();
+                let foreground_closed = foreground_closed.clone();
                 Box::pin(async move {
-                    if let Some(session) =
-                        registry.remove_closed(&project, &session_id, instance_id)
+                    let Some(session) = registry.remove_closed(&project, &session_id, instance_id)
+                    else {
+                        // Not a resident: it may be the agent on the line or
+                        // a taken-over desk session. The PBX checks and
+                        // retires it under its own lock.
+                        if let Some(callback) = foreground_closed {
+                            callback(project, session_id, instance_id).await;
+                        }
+                        return;
+                    };
                     {
                         // Retire the call token before releasing the shared
                         // resident handle, so no request/display can pass the
@@ -758,6 +774,35 @@ impl Switchboard {
                 })
             },
         )
+    }
+
+    pub fn set_foreground_closed_callback(&mut self, callback: Option<ForegroundClosedCallback>) {
+        self.foreground_closed_callback = callback;
+    }
+
+    /// Retire the agent on the line when its host session has closed, so the
+    /// route, status and routing state stop naming a dead agent before the
+    /// caller speaks again. Only the exact closed session is retired.
+    pub async fn retire_closed_foreground(
+        &mut self,
+        project: &str,
+        session_id: &str,
+        instance_id: u64,
+    ) -> bool {
+        let matches = self.agent.as_ref().is_some_and(|session| {
+            session.label() == project
+                && session.session_id() == session_id
+                && session.instance_id() == instance_id
+        });
+        if !matches {
+            return false;
+        }
+        tracing::warn!(%project, "the agent on the line closed on its host; returning to the operator");
+        self.drop_agent().await;
+        self.operator_note = Some(format!(
+            "The call to {project} ended: its session closed on the host."
+        ));
+        true
     }
 
     /// What answers a project session's `speak`, `display` and `view`.

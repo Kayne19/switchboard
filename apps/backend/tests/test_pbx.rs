@@ -3994,3 +3994,64 @@ async fn a_promoted_agent_is_told_it_is_in_the_foreground() {
     assert!(promoted.ends_with("show me beta"), "{promoted}");
     board.shutdown().await;
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_closed_agent_on_the_line_is_retired_to_the_operator() {
+    let (mut board, _log) = on_alpha(&[], Box::new(|_, _| says("handled"))).await;
+    let alpha = board.agent.clone().expect("alpha on the line");
+
+    assert!(
+        !board
+            .retire_closed_foreground("alpha", alpha.session_id(), alpha.instance_id() + 1)
+            .await,
+        "another instance of the session is not the one on the line"
+    );
+    assert_eq!(board.coordinator.route(), "alpha");
+
+    assert!(
+        board
+            .retire_closed_foreground("alpha", alpha.session_id(), alpha.instance_id())
+            .await
+    );
+    assert_eq!(board.coordinator.route(), OPERATOR);
+    assert!(board.agent.is_none());
+    assert!(board
+        .operator_note
+        .as_deref()
+        .is_some_and(|note| note.contains("alpha")));
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_closed_session_that_is_not_resident_is_reported_for_the_line() {
+    let (mut board, _log) = on_alpha(&[], Box::new(|_, _| says("handled"))).await;
+    let reported = Arc::new(StdMutex::new(Vec::<(String, String, u64)>::new()));
+    let reported_for_callback = reported.clone();
+    board.set_foreground_closed_callback(Some(Arc::new(move |project, session, instance| {
+        reported_for_callback
+            .lock()
+            .unwrap()
+            .push((project, session, instance));
+        Box::pin(async {})
+    })));
+    let alpha = board.agent.clone().expect("alpha on the line");
+
+    board.session_closed_callback()(
+        "alpha".into(),
+        alpha.session_id().into(),
+        alpha.instance_id(),
+    )
+    .await;
+
+    assert_eq!(
+        reported.lock().unwrap().as_slice(),
+        &[(
+            "alpha".to_owned(),
+            alpha.session_id().to_owned(),
+            alpha.instance_id()
+        )]
+    );
+    board.shutdown().await;
+}

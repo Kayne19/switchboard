@@ -555,6 +555,32 @@ impl AppState {
                 })
             });
             switchboard.set_agent_state_callback(Some(state_callback));
+            let closed_app = app.clone();
+            let foreground_closed: crate::pbx::ForegroundClosedCallback = Arc::new(
+                move |project: String, session_id: String, instance_id: u64| {
+                    let app = closed_app.upgrade();
+                    Box::pin(async move {
+                        let Some(app) = app else { return };
+                        // Never wait on the PBX from the host pump: a turn
+                        // may hold the lock while this session's reply is
+                        // being read. Retire it once the lock is free.
+                        tokio::spawn(async move {
+                            let state = AppState(app);
+                            let retired = state
+                                .0
+                                .switchboard
+                                .lock()
+                                .await
+                                .retire_closed_foreground(&project, &session_id, instance_id)
+                                .await;
+                            if retired {
+                                publish_status(&state);
+                            }
+                        });
+                    })
+                },
+            );
+            switchboard.set_foreground_closed_callback(Some(foreground_closed));
             // A project session's `speak`, `display` and `view` are answered
             // here, by the same code for every one of them.
             let app = app.clone();
