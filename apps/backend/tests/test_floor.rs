@@ -11,6 +11,7 @@ fn request(n: usize) -> FloorRequest {
         context: "caller: previous line".into(),
         message: format!("update {n}"),
         reason: "finished".into(),
+        held_display: false,
     }
 }
 
@@ -225,6 +226,31 @@ async fn gate_timeout_is_treated_as_a_hold_then_quiet_releases() {
     assert!(results.try_recv().is_err());
     floor.force_quiet_for_test().await;
     yield_worker().await;
+    assert_eq!(results.recv().await.unwrap().0, "update 1:update 1");
+    worker.abort();
+}
+
+#[tokio::test]
+async fn rewrite_receives_held_display_status() {
+    let floor = Floor::new(Duration::ZERO);
+    let connected = Arc::new(AtomicBool::new(true));
+    let live = Arc::new(AtomicBool::new(true));
+    let (released, mut results) = mpsc::unbounded_channel();
+    let (flags, mut flags_rx) = mpsc::unbounded_channel();
+    floor.set_page_connected(true).await;
+    let mut held_request = request(1);
+    held_request.held_display = true;
+    floor.enqueue(held_request).await;
+    let mut h = hooks(connected, live, Arc::new(AtomicUsize::new(0)), released);
+    h.rewrite = Arc::new(move |input| {
+        flags.send(input.held_display).unwrap();
+        Box::pin(async move { Ok(input.message) }) as RewriteFuture
+    });
+    let worker = tokio::spawn({
+        let floor = floor.clone();
+        async move { floor.run(h).await }
+    });
+    assert_eq!(flags_rx.recv().await, Some(true));
     assert_eq!(results.recv().await.unwrap().0, "update 1:update 1");
     worker.abort();
 }

@@ -57,7 +57,7 @@ pub type AgentStateCallback =
 /// prompt a project session gets for the caller, and again on the first after
 /// a compaction; it is never a message of its own.
 const AGENT_BRIEF_HEADER: &str = "[SWITCHBOARD VOICE BRIEF]\nYou are on a voice call in the {project} project, in its own directory. The caller hears only what you pass to the `switchboard` module in your Python REPL (already imported); your written output goes to their screen and is not read aloud.\n";
-const AGENT_BRIEF_TOOLS: &str = "- switchboard.speak(text): say a sentence or two of plain speech. Use it to answer, and before and during long work. No code, paths or lists.\n- switchboard.request_to_speak(message, reason): queue exactly what the caller should hear from you. For finished, message is the actual result in one to three short spoken sentences; for needs_decision, it is the question and options; for problem, it is what went wrong and what you need. The service lightly smooths it and speaks it at a good moment; do not send a teaser.\n- switchboard.display(...) shows things on their screen; switchboard.view() tells you what they see.\n- Routing is handled by the switchboard before your turn. Do not try to transfer, return, or change models; answer the caller or explain what you completed.\n";
+const AGENT_BRIEF_TOOLS: &str = "- switchboard.speak(text): say a sentence or two of plain speech. Use it to answer, and before and during long work. No code, paths or lists.\n- switchboard.request_to_speak(message, reason): queue exactly what the caller should hear from you. For finished, message is the actual result in one to three short spoken sentences; for needs_decision, it is the question and options; for problem, it is what went wrong and what you need. The service lightly smooths it and speaks it at a good moment; do not send a teaser.\n- switchboard.display(...) shows things on their screen; switchboard.view() tells you what they see.\nWhile you are in the background, displays are held until the caller brings you forward; never say a display is on screen.\n- Routing is handled by the switchboard before your turn. Do not try to transfer, return, or change models; answer the caller or explain what you completed.\n";
 const AGENT_BRIEF_SWAPS: &str = "";
 const AGENT_BRIEF_END: &str = "[END OF VOICE BRIEF]";
 /// Instructions for the separate, stateless process. This is code-owned so
@@ -1225,7 +1225,7 @@ impl Switchboard {
         }
         if previous.busy() {
             let _ = previous
-                .steer("[switchboard] The caller is now listening to another agent. Continue your work quietly. When you have something for the caller, use request_to_speak with the actual words they should hear: the result, decision question, or problem—not a teaser.")
+                .steer("[switchboard] The caller is now listening to another agent. Continue your work quietly. While you are in the background, displays are held until the caller brings you forward; never say a display is on screen. When you have something for the caller, use request_to_speak with the actual words they should hear: the result, decision question, or problem—not a teaser.")
                 .await;
         }
         let state = if previous.busy() { "busy" } else { "idle" };
@@ -1548,10 +1548,11 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
             input.context.trim()
         };
         let prompt = format!(
-            "[FLOOR REWRITE]\nProject: {project}\nReason: {reason}\nCaller quiet longer than floor threshold: {quiet}\n[RECENT CONVERSATION]\n{context}\n[AGENT MESSAGE]\n{message}\n[INSTRUCTION]\nRewrite the agent message as a short, natural spoken continuation, the way one person would bring it up in this conversation. Vary the phrasing and avoid stock openers. If the caller has been quiet a while, ease in so they know which project this is; otherwise name the project only when it is not obvious from the conversation. Keep every fact and add none. Call rewrite with only the spoken rewrite.",
+            "[FLOOR REWRITE]\nProject: {project}\nReason: {reason}\nCaller quiet longer than floor threshold: {quiet}\nHeld display not yet seen by caller: {held_display}\n[RECENT CONVERSATION]\n{context}\n[AGENT MESSAGE]\n{message}\n[INSTRUCTION]\nRewrite the agent message as a short, natural spoken continuation, the way one person would bring it up in this conversation. Vary the phrasing and avoid stock openers. If the caller has been quiet a while, ease in so they know which project this is; otherwise name the project only when it is not obvious from the conversation. Never claim anything is on screen. If a display is held, say it is ready to show when the caller wants it. Keep every fact and add none; the held-display status is an allowed fact for this instruction. Call rewrite with only the spoken rewrite.",
             project = input.project,
             reason = input.reason,
             quiet = if input.quiet { "yes" } else { "no" },
+            held_display = if input.held_display { "yes" } else { "no" },
             message = input.message,
         );
         let turn = session.prompt(&prompt).await?;

@@ -1213,6 +1213,8 @@ fn the_voice_brief_teaches_the_switchboard_module_and_names_the_targets() {
         "do not send a teaser",
         "switchboard.display(",
         "switchboard.view()",
+        "displays are held until the caller brings you forward",
+        "never say a display is on screen",
         "Routing is handled by the switchboard",
         "  - beta: no description",
     ] {
@@ -2959,6 +2961,8 @@ async fn backgrounding_a_busy_foreground_sends_an_away_notice() {
         .unwrap_or_default();
     assert!(away.contains("actual words they should hear"));
     assert!(away.contains("not a teaser"));
+    assert!(away.contains("displays are held until the caller brings you forward"));
+    assert!(away.contains("never say a display is on screen"));
     held.abort();
     let _ = held.await;
     board.shutdown().await;
