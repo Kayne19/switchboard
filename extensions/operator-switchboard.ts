@@ -52,9 +52,9 @@ export default function operatorSwitchboard(pi: ExtensionAPI) {
 			mode: Type.Optional(Type.String({
 				description: "continue (the default) for an agent already on the call or its conversation; fresh only when the caller asks to start over.",
 			})),
-			confident: Type.Optional(Type.Boolean({
+			confident: Type.Boolean({
 				description: "True only when the target and intent are clear enough to act without asking.",
-			})),
+			}),
 			reason: Type.Optional(Type.String({
 				description: "A short internal reason for the routing choice.",
 			})),

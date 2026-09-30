@@ -487,7 +487,8 @@ pub fn utility_decision(signals: &[Signal]) -> Option<UtilityDecision> {
                     .and_then(Value::as_f64)
                     .map(|value| value >= 0.5)
             })
-            .unwrap_or(target.is_some());
+            // An omitted flag is not a claim of confidence.
+            .unwrap_or(false);
         return Some(UtilityDecision::SecondOpinion {
             target,
             mode,

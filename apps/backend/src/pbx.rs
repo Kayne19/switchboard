@@ -1120,6 +1120,18 @@ impl Switchboard {
             exact_caller_transcript: text.to_owned(),
             derived_intent: String::new(),
         };
+        // Targets from Jev, the utility and the operator are exact ids. An
+        // unknown one must not move the caller or drop the leg on the line.
+        if target != OPERATOR && self.registry.get(target).is_none() {
+            tracing::warn!(%target, "refusing a route to an unregistered project");
+            return self.reply(
+                [format!(
+                    "I don't have a project called {target}. I know: {}.",
+                    self.registry.ids().join(", ")
+                )],
+                Some(format!("unknown project {target:?}")),
+            );
+        }
         if target != OPERATOR {
             self.agent_tasks.insert(target.to_owned(), text.to_owned());
         }
@@ -1182,6 +1194,12 @@ impl Switchboard {
         original: &str,
         parts: Vec<crate::router::DispatchPart>,
     ) -> Reply {
+        let (parts, unknown): (Vec<_>, Vec<_>) = parts
+            .into_iter()
+            .partition(|part| self.registry.get(&part.agent).is_some());
+        for part in &unknown {
+            tracing::warn!(project = %part.agent, "dropping a split part for an unregistered project");
+        }
         let current = self.coordinator.route();
         let foreground_index = parts
             .iter()

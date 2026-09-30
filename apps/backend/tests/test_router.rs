@@ -449,3 +449,21 @@ fn the_queued_update_is_its_own_field() {
     assert_eq!(with["caller_just_said"], json!("pull it up"));
     assert_eq!(with["queued_update"]["from_agent"], json!("grape"));
 }
+
+#[test]
+fn an_omitted_mode_continues_and_an_omitted_confidence_is_not_confident() {
+    let opinion = crate::pi_client::Signal {
+        name: "second_opinion".into(),
+        args: serde_json::from_value(json!({"target": "atlas"})).unwrap(),
+        tool_call_id: None,
+        successful_end: true,
+    };
+    assert_eq!(
+        utility_decision(&[opinion]),
+        Some(UtilityDecision::SecondOpinion {
+            target: Some("atlas".into()),
+            mode: ConversationMode::Continue,
+            confident: false,
+        })
+    );
+}

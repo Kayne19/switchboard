@@ -3800,6 +3800,27 @@ async fn the_routing_utility_request_carries_the_call_state() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn a_route_to_an_unregistered_project_keeps_the_caller_on_the_line() {
+    let (mut board, log) = on_alpha(&[], Box::new(|_, _| says("handled"))).await;
+    let creates = log.named("create_session").len();
+
+    let reply = board
+        .route_project_part(
+            "show me",
+            "ghost",
+            crate::router::ConversationMode::Continue,
+        )
+        .await;
+
+    assert_eq!(reply.route, "alpha");
+    assert_eq!(reply.error.as_deref(), Some("unknown project \"ghost\""));
+    assert_eq!(board.coordinator.route(), "alpha");
+    assert_eq!(log.named("create_session").len(), creates);
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn go_to_project_with_fresh_brings_a_live_background_agent_forward() {
     let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
     let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -3849,5 +3870,35 @@ async fn go_to_project_with_fresh_brings_a_live_background_agent_forward() {
     assert_eq!(reply.error, None, "{reply:?}");
     assert_eq!(reply.route, "beta");
     assert_eq!(log.named("create_session").len(), creates);
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_split_part_for_an_unregistered_project_is_dropped() {
+    let (mut board, log) = on_alpha(&[], Box::new(|_, _| says("handled"))).await;
+    let creates = log.named("create_session").len();
+
+    let reply = board
+        .dispatch_parts(
+            "both",
+            vec![
+                crate::router::DispatchPart {
+                    agent: "ghost".into(),
+                    text: "ghost part".into(),
+                },
+                crate::router::DispatchPart {
+                    agent: "alpha".into(),
+                    text: "alpha part".into(),
+                },
+            ],
+        )
+        .await;
+
+    assert_eq!(reply.route, "alpha");
+    assert_eq!(log.named("create_session").len(), creates);
+    assert!(!prompts(&log)
+        .iter()
+        .any(|prompt| prompt.contains("ghost part")));
     board.shutdown().await;
 }
