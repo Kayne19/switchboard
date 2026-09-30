@@ -1664,7 +1664,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
             input.context.trim()
         };
         let prompt = format!(
-            "[FLOOR REWRITE]\nProject: {project}\nReason: {reason}\nCaller quiet longer than floor threshold: {quiet}\nHeld display not yet seen by caller: {held_display}\n[RECENT CONVERSATION]\n{context}\n[AGENT MESSAGE]\n{message}\n[INSTRUCTION]\nRewrite the agent message as a short, natural spoken continuation, the way one person would bring it up in this conversation. Vary the phrasing and avoid stock openers. If the caller has been quiet a while, ease in so they know which project this is; otherwise name the project only when it is not obvious from the conversation. Never claim anything is on screen. If a display is held, say it is ready to show when the caller wants it. Keep every fact and add none; the held-display status is an allowed fact for this instruction. Call rewrite with only the spoken rewrite.",
+            "[FLOOR REWRITE]\nProject: {project}\nReason: {reason}\nCaller quiet longer than floor threshold: {quiet}\nHeld display not yet seen by caller: {held_display}\n[RECENT CONVERSATION]\n{context}\n[AGENT MESSAGE]\n{message}\n[INSTRUCTION]\nRewrite the agent message as a short, natural spoken continuation, the way one person would bring it up in this conversation. Vary the phrasing and avoid stock openers. If the caller has been quiet a while, ease in so they know which project this is; otherwise name the project only when it is not obvious from the conversation. Never claim anything is on screen. If a display is held, say it is ready to show when the caller wants it. Keep every fact and add none. Call rewrite with only the spoken rewrite.",
             project = input.project,
             reason = input.reason,
             quiet = if input.quiet { "yes" } else { "no" },
@@ -1692,101 +1692,8 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
                     .and_then(Value::as_str)
                     .map(str::trim)
                     .filter(|text| !text.is_empty())
-                    .filter(|text| {
-                        Self::faithful_floor_rewrite_with_allowlist(
-                            &input.message,
-                            text,
-                            &[input.project.as_str()],
-                        )
-                    })
                     .map(str::to_owned)
             }))
-    }
-
-    #[cfg(test)]
-    fn faithful_floor_rewrite(original: &str, rewrite: &str) -> bool {
-        Self::faithful_floor_rewrite_with_allowlist(original, rewrite, &[])
-    }
-
-    fn faithful_floor_rewrite_with_allowlist(
-        original: &str,
-        rewrite: &str,
-        allowed: &[&str],
-    ) -> bool {
-        let original_len = original.chars().count();
-        let rewrite_len = rewrite.chars().count();
-        if rewrite_len > original_len.saturating_mul(2).saturating_add(20) {
-            return false;
-        }
-        let original_tokens = original
-            .split_whitespace()
-            .map(Self::normalize_floor_token)
-            .filter(|token| !token.is_empty())
-            .collect::<HashSet<_>>();
-        let allowed_tokens = allowed
-            .iter()
-            .flat_map(|value| value.split_whitespace())
-            .map(Self::normalize_floor_token)
-            .filter(|token| !token.is_empty())
-            .collect::<HashSet<_>>();
-        rewrite
-            .split_whitespace()
-            .filter_map(|raw| {
-                let token = Self::normalize_floor_token(raw);
-                (!token.is_empty()).then_some((raw, token))
-            })
-            .all(|(raw, token)| {
-                let present = original_tokens.contains(&token) || allowed_tokens.contains(&token);
-                let has_number = token.chars().any(char::is_numeric);
-                let has_url_or_path = token.starts_with("http://")
-                    || token.starts_with("https://")
-                    || token.starts_with("www.")
-                    || token.contains('/')
-                    || token.contains('\\')
-                    || token.contains('_');
-                let raw = raw.trim_matches(|character: char| !character.is_alphanumeric());
-                let has_new_capitalized_name = raw
-                    .chars()
-                    .next()
-                    .is_some_and(|character| character.is_uppercase())
-                    && raw.chars().any(|character| character.is_lowercase())
-                    && !present
-                    && !Self::is_floor_lead_in(&token);
-                present || (!has_number && !has_url_or_path && !has_new_capitalized_name)
-            })
-    }
-
-    fn is_floor_lead_in(token: &str) -> bool {
-        matches!(
-            token,
-            "a" | "an"
-                | "also"
-                | "and"
-                | "but"
-                | "by"
-                | "for"
-                | "from"
-                | "here"
-                | "i"
-                | "just"
-                | "now"
-                | "one"
-                | "so"
-                | "the"
-                | "this"
-                | "there"
-                | "update"
-                | "well"
-                | "with"
-        )
-    }
-
-    fn normalize_floor_token(token: &str) -> String {
-        token
-            .trim_matches(|character: char| {
-                !character.is_alphanumeric() && !"/_\\:._-".contains(character)
-            })
-            .to_ascii_lowercase()
     }
 
     async fn handle_operator_ctx(&mut self, context: &TransferContext) -> Reply {

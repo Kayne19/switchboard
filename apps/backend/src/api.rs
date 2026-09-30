@@ -738,16 +738,23 @@ fn spawn_floor_worker(state: AppState) {
                     let mut board = state.0.switchboard.lock().await;
                     board.floor_rewrite_session().await.map_err(|_| ())?
                 };
+                let project = input.project.clone();
                 let operation = async {
                     Switchboard::rewrite_floor_with_session(&session, &input)
                         .await
-                        .map_err(|_| ())?
+                        .map_err(|error| {
+                            tracing::warn!(%project, %error, "floor rewrite failed; speaking the original");
+                        })?
                         .filter(|text| !text.trim().is_empty())
-                        .ok_or(())
+                        .ok_or_else(|| {
+                            tracing::warn!(%project, "floor rewrite gave no text; speaking the original");
+                        })
                 };
                 tokio::time::timeout(floor::REWRITE_TIMEOUT, operation)
                     .await
-                    .map_err(|_| ())?
+                    .map_err(|_| {
+                        tracing::warn!(project = %input.project, "floor rewrite timed out; speaking the original");
+                    })?
             }) as floor::RewriteFuture
         }),
         release: Arc::new(
