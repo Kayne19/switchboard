@@ -133,6 +133,7 @@ fn question_set_has_fixed_actions_and_named_summary_fields() {
                 thinking: "medium".into(),
                 task: "task".into(),
                 pending_request_to_speak: false,
+                display_ready: false,
             },
         )]
         .into_iter()
@@ -310,6 +311,159 @@ fn utility_route_regression_becomes_single_target_second_opinion() {
             target: Some("atlas".into()),
             mode: ConversationMode::Continue,
             confident: true,
+        })
+    );
+}
+
+fn summary_on(current: &str) -> CallSummary {
+    let mut agents = BTreeMap::new();
+    agents.insert(
+        current.to_owned(),
+        AgentSummary {
+            state: "busy".into(),
+            model: String::new(),
+            thinking: String::new(),
+            task: "draw the Jev diagram".into(),
+            pending_request_to_speak: false,
+            display_ready: false,
+        },
+    );
+    CallSummary::new(
+        current,
+        agents,
+        vec![],
+        vec![
+            ConversationTurn {
+                speaker: "caller".into(),
+                text: "show me the chart and the commit".into(),
+            },
+            ConversationTurn {
+                speaker: "grape".into(),
+                text: "The chart is ready to show.".into(),
+            },
+        ],
+        json!({}),
+        "pull it up",
+        vec![],
+    )
+}
+
+#[test]
+fn background_agents_join_the_summary_with_their_live_state() {
+    let mut summary = summary_on("switchboard");
+    summary.merge_live_agents(&[
+        LiveAgent {
+            project: "switchboard".into(),
+            state: "idle".into(),
+            pending_request: false,
+            display_ready: false,
+        },
+        LiveAgent {
+            project: "grape".into(),
+            state: "idle".into(),
+            pending_request: false,
+            display_ready: true,
+        },
+        LiveAgent {
+            project: "old".into(),
+            state: "finished".into(),
+            pending_request: false,
+            display_ready: false,
+        },
+    ]);
+
+    assert_eq!(summary.agents["switchboard"].state, "idle");
+    assert_eq!(summary.agents["switchboard"].task, "draw the Jev diagram");
+    assert!(summary.agents["grape"].display_ready);
+    assert!(!summary.agents.contains_key("old"));
+    assert_eq!(summary.single_waiting_agent().as_deref(), Some("grape"));
+    let state = serde_json::to_value(&summary).unwrap();
+    assert_eq!(state["agents"]["grape"]["display_ready"], json!(true));
+    assert!(state["agents"]["switchboard"]
+        .get("display_ready")
+        .is_none());
+}
+
+#[test]
+fn several_waiting_agents_do_not_pick_one() {
+    let mut summary = summary_on("switchboard");
+    summary.merge_live_agents(&[
+        LiveAgent {
+            project: "grape".into(),
+            state: "waiting".into(),
+            pending_request: true,
+            display_ready: false,
+        },
+        LiveAgent {
+            project: "homelab".into(),
+            state: "idle".into(),
+            pending_request: false,
+            display_ready: true,
+        },
+    ]);
+    assert_eq!(summary.single_waiting_agent(), None);
+}
+
+#[test]
+fn the_llm_call_state_names_foreground_background_and_ready_work() {
+    let mut summary = summary_on("switchboard");
+    summary.merge_live_agents(&[LiveAgent {
+        project: "grape".into(),
+        state: "idle".into(),
+        pending_request: false,
+        display_ready: true,
+    }]);
+    let text = summary.render_for_llm();
+    assert!(
+        text.contains("The caller is talking to: switchboard."),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "- grape: idle, in the background, has a display ready that the caller has not seen"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "- switchboard: busy, in the foreground; last asked: \"draw the Jev diagram\""
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("grape: The chart is ready to show."),
+        "{text}"
+    );
+}
+
+#[test]
+fn the_queued_update_is_its_own_field() {
+    let mut summary = summary_on("switchboard");
+    let without = serde_json::to_value(&summary).unwrap();
+    assert!(without.get("queued_update").is_none());
+    summary.queued_update = Some(QueuedUpdate {
+        from_agent: "grape".into(),
+        message: "The chart is ready.".into(),
+    });
+    let with = serde_json::to_value(&summary).unwrap();
+    assert_eq!(with["caller_just_said"], json!("pull it up"));
+    assert_eq!(with["queued_update"]["from_agent"], json!("grape"));
+}
+
+#[test]
+fn an_omitted_mode_continues_and_an_omitted_confidence_is_not_confident() {
+    let opinion = crate::pi_client::Signal {
+        name: "second_opinion".into(),
+        args: serde_json::from_value(json!({"target": "atlas"})).unwrap(),
+        tool_call_id: None,
+        successful_end: true,
+    };
+    assert_eq!(
+        utility_decision(&[opinion]),
+        Some(UtilityDecision::SecondOpinion {
+            target: Some("atlas".into()),
+            mode: ConversationMode::Continue,
+            confident: false,
         })
     );
 }

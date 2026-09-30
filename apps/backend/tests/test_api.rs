@@ -998,7 +998,7 @@ async fn a_stale_queued_turn_removes_its_retained_jev_decision() {
         .routed_decisions
         .lock()
         .await
-        .insert("stale".into(), Decision::fallback("test"));
+        .insert("stale".into(), Decision::fallback("test").into());
     let old_generation = state.0.coordinator.generation();
     state.0.coordinator.begin_rescue("test rescue");
     state.0.queued_turns.store(1, Ordering::Release);
@@ -3397,7 +3397,7 @@ async fn both_routing_authorities_down_emit_a_page_error_without_audio() {
     let generation = state.0.coordinator.generation();
     state.0.routed_decisions.lock().await.insert(
         "down".into(),
-        crate::router::Decision::fallback("Jev unavailable: test"),
+        crate::router::Decision::fallback("Jev unavailable: test").into(),
     );
     state.0.queued_turns.store(1, Ordering::Release);
     let worker = tokio::spawn(process_turns(state.clone()));
@@ -3536,7 +3536,8 @@ async fn takeover_desk_listing_does_not_hold_the_pbx_lock() {
             unsure: false,
             confirm: false,
             reason: "test".into(),
-        },
+        }
+        .into(),
     );
     let generation = state.0.coordinator.generation();
     state.0.queued_turns.store(1, Ordering::Release);
@@ -5197,7 +5198,8 @@ async fn process_turns_settlement_preserves_a_waiting_request() {
             unsure: false,
             confirm: false,
             reason: "test".into(),
-        },
+        }
+        .into(),
     );
     state.0.queued_turns.store(1, Ordering::Release);
     let worker = tokio::spawn(process_turns(state.clone()));
@@ -5280,7 +5282,8 @@ async fn process_turns_settles_foreground_idle_once() {
             unsure: false,
             confirm: false,
             reason: "test".into(),
-        },
+        }
+        .into(),
     );
     state.0.queued_turns.store(1, Ordering::Release);
     let worker = tokio::spawn(process_turns(state.clone()));
@@ -5382,4 +5385,35 @@ async fn agents_state_publishes_idle_after_turn_and_finished_after_hangup() {
     }));
     state.0.switchboard.lock().await.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn floor_rewrite_context_names_who_spoke() {
+    let entries = vec![
+        crate::history::TranscriptEntry {
+            role: crate::history::CALLER.into(),
+            text: "show me the chart".into(),
+            route: "switchboard".into(),
+            ts: 1.0,
+            id: None,
+        },
+        crate::history::TranscriptEntry {
+            role: crate::history::AGENT.into(),
+            text: "Here is the diagram.".into(),
+            route: "switchboard".into(),
+            ts: 2.0,
+            id: None,
+        },
+        crate::history::TranscriptEntry {
+            role: crate::history::AGENT.into(),
+            text: "The chart is ready.".into(),
+            route: "grape".into(),
+            ts: 3.0,
+            id: None,
+        },
+    ];
+    assert_eq!(
+        recent_floor_context(&entries),
+        "caller: show me the chart\nswitchboard: Here is the diagram.\ngrape: The chart is ready."
+    );
 }

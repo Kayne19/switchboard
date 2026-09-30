@@ -331,7 +331,7 @@ pub struct AppInner {
     /// Decisions made before a queued turn reaches the PBX lock. Keeping the
     /// decision with the clip prevents a second Jev request while preserving
     /// steering for a turn that was already active.
-    routed_decisions: Mutex<HashMap<String, Decision>>,
+    routed_decisions: Mutex<HashMap<String, RoutedDecision>>,
     shutdown: watch::Sender<bool>,
     audio: Mutex<AudioQueue>,
     speech_deadline: std::time::Duration,
@@ -682,17 +682,26 @@ fn spawn_floor_worker(state: AppState) {
                 // Floor admission only asks whether a background agent may
                 // speak. Desk discovery is for caller routing and would make
                 // this gate wait on every host link for no decision benefit.
+                // `caller_just_said` keeps its meaning: the caller's last
+                // words. The update being judged is its own named field.
+                let caller_last = entries
+                    .iter()
+                    .rev()
+                    .find(|entry| entry.role == crate::history::CALLER)
+                    .map(|entry| entry.text.clone())
+                    .unwrap_or_default();
                 let (router, mut summary) = {
                     let board = state.0.switchboard.lock().await;
                     (
                         board.router(),
-                        board.call_summary(&entries, screen, request.message.clone()),
+                        board.call_summary(&entries, screen, caller_last),
                     )
                 };
-                // The queued message is the item being judged, not a new
-                // caller utterance. Keeping it in the named field makes
-                // the Jev prompt useful without adding another contract.
-                summary.caller_just_said = request.message;
+                summary.merge_live_agents(&live_agents(&state));
+                summary.queued_update = Some(crate::router::QueuedUpdate {
+                    from_agent: request.project.clone(),
+                    message: request.message,
+                });
                 router.good_moment(&summary).await.map_err(|_| ())
             }) as floor::GateFuture
         }),
@@ -1114,6 +1123,7 @@ async fn call_summary_without_pbx_lock(
         board.call_summary(entries, screen, utterance)
     };
     summary.live_desk_sessions = live_desk_sessions;
+    summary.merge_live_agents(&live_agents(state));
     let router = state.0.switchboard.lock().await.router();
     (router, summary)
 }
@@ -1136,14 +1146,48 @@ async fn prepare_takeover_lookup(
     Some(Switchboard::desk_session_for_takeover_from(hosts, registry, target).await)
 }
 
+/// Every agent the presentation side knows on this call, with its live
+/// state, waiting request and held display.
+fn live_agents(state: &AppState) -> Vec<crate::router::LiveAgent> {
+    state
+        .0
+        .projection
+        .snapshot()
+        .into_iter()
+        .map(|agent| crate::router::LiveAgent {
+            display_ready: state.0.projection.has_held_display(&agent.project),
+            pending_request: agent.pending_request.is_some(),
+            project: agent.project,
+            state: agent.state,
+        })
+        .collect()
+}
+
+/// Jev's decision for one utterance, and the call as Jev saw it in plain
+/// text for the operator and the routing utility.
+#[derive(Clone, Debug)]
+struct RoutedDecision {
+    decision: Decision,
+    call_state: String,
+}
+
+impl From<Decision> for RoutedDecision {
+    fn from(decision: Decision) -> Self {
+        Self {
+            decision,
+            call_state: String::new(),
+        }
+    }
+}
+
 /// Build a summary and ask Jev once for this utterance. The operator path is
 /// the only fallback for a timeout, malformed response, or missing key.
-async fn route_transcript(state: &AppState, transcript: &str) -> Decision {
+async fn route_transcript(state: &AppState, transcript: &str) -> RoutedDecision {
     let entries = state.0.transcript_log.lock().await.entries();
     let screen = state.0.screen_state.lock().await.clone();
     let (router, summary) =
         call_summary_without_pbx_lock(state, &entries, screen, transcript.to_owned()).await;
-    match router.route(&summary).await {
+    let mut decision = match router.route(&summary).await {
         Ok(decision) => decision,
         Err(error) => {
             let decision = router.fallback(&error);
@@ -1156,6 +1200,19 @@ async fn route_transcript(state: &AppState, transcript: &str) -> Decision {
             );
             decision
         }
+    };
+    // "Answer waiting" names the agent that is waiting. When Jev leaves the
+    // target out and exactly one agent has something for the caller, that
+    // agent is the target; otherwise the operator asks.
+    if matches!(decision.action, Action::AnswerWaiting) && decision.target.is_none() {
+        if let Some(agent) = summary.single_waiting_agent() {
+            tracing::info!(target = %agent, "answer_waiting without a target; using the one waiting agent");
+            decision.target = Some(agent);
+        }
+    }
+    RoutedDecision {
+        decision,
+        call_state: summary.render_for_llm(),
     }
 }
 
@@ -1179,7 +1236,8 @@ async fn dispatch_routed_transcript(
     generation: u64,
     transcript: String,
 ) {
-    let decision = route_transcript(state, &transcript).await;
+    let routed = route_transcript(state, &transcript).await;
+    let decision = &routed.decision;
     let can_steer = matches!(decision.action, Action::Continue) && !decision.sends_to_operator();
     // Routing itself can span a rescue. Do not let a fallback decision queue
     // words for the leg that was current when Jev started.
@@ -1254,7 +1312,7 @@ async fn dispatch_routed_transcript(
         .routed_decisions
         .lock()
         .await
-        .insert(id.to_owned(), decision.clone());
+        .insert(id.to_owned(), routed.clone());
     if !can_steer {
         tracing::info!(
             clip = id,
@@ -1397,8 +1455,11 @@ async fn process_turns(state: AppState) {
             emit_stale_clip(&state, &id);
             continue;
         }
-        let decision = if let Some(decision) = routed_decision {
-            decision
+        let RoutedDecision {
+            decision,
+            call_state,
+        } = if let Some(routed) = routed_decision {
+            routed
         } else {
             route_transcript(&state, &transcript).await
         };
@@ -1433,6 +1494,7 @@ async fn process_turns(state: AppState) {
         let turn = tracing::info_span!("turn", clip = %id);
         let handle_turn = async move {
             let mut board = turn_state.0.switchboard.lock().await;
+            board.set_call_state(call_state);
             board
                 .handle_decision_with_takeover(&transcript, &decision, takeover)
                 .await
@@ -2166,7 +2228,17 @@ fn recent_floor_context(entries: &[crate::history::TranscriptEntry]) -> String {
         .rev()
         .take(6)
         .rev()
-        .map(|entry| format!("{}: {}", entry.role, entry.text))
+        .map(|entry| {
+            // Name who spoke: the caller, the operator, or the project agent.
+            let speaker = if entry.role == crate::history::CALLER {
+                "caller"
+            } else if entry.route.is_empty() {
+                entry.role.as_str()
+            } else {
+                entry.route.as_str()
+            };
+            format!("{speaker}: {}", entry.text)
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }

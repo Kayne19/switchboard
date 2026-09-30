@@ -8,7 +8,7 @@ use crate::protocol::Status;
 use crate::registry::Registry;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 pub const MAX_STATE_TOKENS: usize = 32_000;
@@ -19,6 +19,38 @@ pub struct AgentSummary {
     pub thinking: String,
     pub task: String,
     pub pending_request_to_speak: bool,
+    /// The agent holds a display the caller has not seen yet. It appears when
+    /// the caller brings that agent forward.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub display_ready: bool,
+}
+
+/// A background agent's queued spoken update, judged by the floor gate. It is
+/// its own field so `caller_just_said` always means the caller's words.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct QueuedUpdate {
+    pub from_agent: String,
+    pub message: String,
+}
+
+/// What the presentation side knows about one agent on the call.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiveAgent {
+    pub project: String,
+    /// `busy`, `idle`, `waiting`, or `finished`.
+    pub state: String,
+    pub pending_request: bool,
+    pub display_ready: bool,
+}
+
+/// Longest task text kept per agent in the routing summary.
+const MAX_TASK_CHARS: usize = 400;
+
+fn task_text(tasks: &HashMap<String, String>, project: &str) -> String {
+    tasks
+        .get(project)
+        .map(|task| task.chars().take(MAX_TASK_CHARS).collect())
+        .unwrap_or_default()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -52,6 +84,8 @@ pub struct CallSummary {
     pub screen: Value,
     pub caller_just_said: String,
     pub registered_projects: Vec<RegisteredProject>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_update: Option<QueuedUpdate>,
 }
 
 impl CallSummary {
@@ -72,6 +106,7 @@ impl CallSummary {
             screen,
             caller_just_said: caller_just_said.into(),
             registered_projects,
+            queued_update: None,
         }
     }
 
@@ -84,6 +119,8 @@ impl CallSummary {
         transcript: &[TranscriptEntry],
         screen: Value,
         utterance: impl Into<String>,
+        background: &[String],
+        tasks: &HashMap<String, String>,
     ) -> Self {
         let mut agents = BTreeMap::new();
         let active_route = status.route.clone();
@@ -108,6 +145,7 @@ impl CallSummary {
                 },
                 task: String::new(),
                 pending_request_to_speak: false,
+                display_ready: false,
             },
         );
         if active_route != "operator" {
@@ -117,10 +155,30 @@ impl CallSummary {
                     state: "busy".into(),
                     model: status.model.clone(),
                     thinking: status.thinking.clone(),
-                    task: String::new(),
+                    task: task_text(tasks, &active_route),
                     pending_request_to_speak: false,
+                    display_ready: false,
                 },
             );
+        }
+        // Background agents are on the call too. Their live state (busy,
+        // idle, waiting) is owned by the presentation side and merged by
+        // `merge_live_agents`; list every known one here so a resident is
+        // never invisible to routing.
+        for project in background
+            .iter()
+            .filter(|project| **project != active_route)
+        {
+            agents
+                .entry(project.clone())
+                .or_insert_with(|| AgentSummary {
+                    state: "busy".into(),
+                    model: String::new(),
+                    thinking: String::new(),
+                    task: task_text(tasks, project),
+                    pending_request_to_speak: false,
+                    display_ready: false,
+                });
         }
         let recent_conversation = transcript
             .iter()
@@ -156,6 +214,107 @@ impl CallSummary {
                 })
                 .collect(),
         )
+    }
+
+    /// Merge the presentation side's live agent states: busy, idle, waiting
+    /// to speak, and held displays. Finished agents are not on the call.
+    pub fn merge_live_agents(&mut self, live: &[LiveAgent]) {
+        for agent in live {
+            if agent.state == "finished" {
+                if agent.project != self.caller_is_talking_to {
+                    self.agents.remove(&agent.project);
+                }
+                continue;
+            }
+            let entry = self
+                .agents
+                .entry(agent.project.clone())
+                .or_insert_with(|| AgentSummary {
+                    state: String::new(),
+                    model: String::new(),
+                    thinking: String::new(),
+                    task: String::new(),
+                    pending_request_to_speak: false,
+                    display_ready: false,
+                });
+            entry.state = agent.state.clone();
+            entry.pending_request_to_speak = agent.pending_request;
+            entry.display_ready = agent.display_ready;
+        }
+    }
+
+    /// The one agent with something for the caller: a queued request to
+    /// speak or a display the caller has not seen. `None` when there is no
+    /// such agent or more than one.
+    pub fn single_waiting_agent(&self) -> Option<String> {
+        let mut waiting = self.agents.iter().filter(|(name, agent)| {
+            name.as_str() != "operator" && (agent.pending_request_to_speak || agent.display_ready)
+        });
+        let first = waiting.next()?;
+        waiting.next().is_none().then(|| first.0.clone())
+    }
+
+    /// A short plain-text view of the call for the operator and the routing
+    /// utility, so their decisions use the same facts Jev saw.
+    pub fn render_for_llm(&self) -> String {
+        let mut lines = vec![format!(
+            "The caller is talking to: {}.",
+            self.caller_is_talking_to
+        )];
+        let agents = self
+            .agents
+            .iter()
+            .filter(|(name, _)| name.as_str() != "operator")
+            .collect::<Vec<_>>();
+        if agents.is_empty() {
+            lines.push("No project agents are on the call.".into());
+        } else {
+            lines.push("Project agents on the call:".into());
+            for (name, agent) in agents {
+                let mut facts = vec![agent.state.clone()];
+                if name.as_str() == self.caller_is_talking_to {
+                    facts.push("in the foreground".into());
+                } else {
+                    facts.push("in the background".into());
+                }
+                if agent.pending_request_to_speak {
+                    facts.push("has a message waiting for the caller".into());
+                }
+                if agent.display_ready {
+                    facts.push("has a display ready that the caller has not seen".into());
+                }
+                let task = if agent.task.is_empty() {
+                    String::new()
+                } else {
+                    format!("; last asked: {:?}", agent.task)
+                };
+                lines.push(format!("- {name}: {}{task}", facts.join(", ")));
+            }
+        }
+        if !self.live_desk_sessions.is_empty() {
+            let desk = self
+                .live_desk_sessions
+                .iter()
+                .map(|session| format!("{} ({})", session.project, session.state))
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(format!(
+                "Live desk sessions that can be taken over: {desk}."
+            ));
+        }
+        let recent = self
+            .recent_conversation
+            .iter()
+            .rev()
+            .take(6)
+            .rev()
+            .map(|turn| format!("{}: {}", turn.speaker, turn.text))
+            .collect::<Vec<_>>();
+        if !recent.is_empty() {
+            lines.push("Recent conversation:".into());
+            lines.extend(recent);
+        }
+        lines.join("\n")
     }
 
     /// Return the state after enforcing the summary budget. Turns are removed
@@ -273,8 +432,10 @@ pub fn utility_decision(signals: &[Signal]) -> Option<UtilityDecision> {
             .filter(|target| !target.trim().is_empty())
             .map(str::to_owned);
         let mode = match signal.args.get("mode").and_then(Value::as_str) {
-            Some("continue") => ConversationMode::Continue,
-            Some("fresh") | None => ConversationMode::Fresh,
+            // A missing mode never replaces a live agent: continue is the
+            // safe reading, and fresh must be asked for.
+            Some("continue") | None => ConversationMode::Continue,
+            Some("fresh") => ConversationMode::Fresh,
             Some(_) => return None,
         };
         let confident = signal
@@ -288,6 +449,7 @@ pub fn utility_decision(signals: &[Signal]) -> Option<UtilityDecision> {
                     .and_then(Value::as_f64)
                     .map(|value| value >= 0.5)
             })
+            // `route` has no confidence flag; naming one target is its claim.
             .unwrap_or(target.is_some());
         return Some(UtilityDecision::SecondOpinion {
             target,
@@ -308,8 +470,10 @@ pub fn utility_decision(signals: &[Signal]) -> Option<UtilityDecision> {
             .filter(|target| !target.trim().is_empty())
             .map(str::to_owned);
         let mode = match signal.args.get("mode").and_then(Value::as_str) {
-            Some("continue") => ConversationMode::Continue,
-            Some("fresh") | None => ConversationMode::Fresh,
+            // A missing mode never replaces a live agent: continue is the
+            // safe reading, and fresh must be asked for.
+            Some("continue") | None => ConversationMode::Continue,
+            Some("fresh") => ConversationMode::Fresh,
             Some(_) => return None,
         };
         let confident = signal
@@ -323,7 +487,8 @@ pub fn utility_decision(signals: &[Signal]) -> Option<UtilityDecision> {
                     .and_then(Value::as_f64)
                     .map(|value| value >= 0.5)
             })
-            .unwrap_or(target.is_some());
+            // An omitted flag is not a claim of confidence.
+            .unwrap_or(false);
         return Some(UtilityDecision::SecondOpinion {
             target,
             mode,
@@ -485,7 +650,7 @@ impl Router {
             "good_moment".into(),
             Question::new(
                 "choice",
-                "Is this a good moment to briefly announce one queued background-agent update to the caller?",
+                "Is this a good moment to briefly announce the queued_update from a background agent to the caller?",
                 [
                     ("yes", "The caller is quiet or the update should be heard now."),
                     ("no", "The caller is speaking, listening to another response, or should not be interrupted now."),

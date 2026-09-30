@@ -2776,7 +2776,7 @@ async fn a_dead_background_resident_is_removed_before_a_later_split_part() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn busy_background_split_part_is_refused_and_fresh_start_is_rejected() {
+async fn busy_background_split_part_is_refused_and_fresh_brings_the_live_agent_forward() {
     let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
     let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
     let log = serve(
@@ -2830,12 +2830,27 @@ async fn busy_background_split_part_is_refused_and_fresh_start_is_rejected() {
         )
         .await;
     assert_eq!(log.named("create_session").len(), creates);
-    let refusal = board
-        .route_project_part("fresh beta", "beta", crate::router::ConversationMode::Fresh)
-        .await;
-    assert_eq!(refusal.error.as_deref(), Some("project is busy"));
-    assert_eq!(refusal.route, "alpha");
-    board.shutdown().await;
+    // Fresh for an agent already on this call brings it forward instead of
+    // refusing or starting a second session: the caller's words reach beta.
+    let forward =
+        board.route_project_part("fresh beta", "beta", crate::router::ConversationMode::Fresh);
+    tokio::pin!(forward);
+    loop {
+        tokio::select! {
+            reply = &mut forward => {
+                assert_eq!(reply.error, None);
+                assert_eq!(reply.route, "beta");
+                break;
+            }
+            Some((session, message)) = prompt_rx.recv() => {
+                if message.contains("fresh beta") {
+                    assert_eq!(session, "s2");
+                    break;
+                }
+            }
+        }
+    }
+    assert_eq!(log.named("create_session").len(), creates);
 }
 
 #[cfg(unix)]
@@ -3698,4 +3713,192 @@ async fn host_loss_closes_a_taken_over_session_without_killing_the_desk_process(
     assert!(!session.alive());
     session.close();
     assert!(!log.names().contains(&"kill".into()));
+}
+
+fn decision(
+    action: crate::router::Action,
+    target: Option<&str>,
+    mode: Option<crate::router::ConversationMode>,
+) -> Decision {
+    Decision {
+        action,
+        target: target.map(str::to_owned),
+        continue_or_fresh: mode,
+        confidence: 0.9,
+        for_current_agent: 0.1,
+        multi_target: false,
+        unsure: false,
+        confirm: false,
+        reason: "test".into(),
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_operator_gets_the_call_state_once_per_utterance() {
+    let root = scratch_dir("operator-call-state");
+    let seen = root.join("operator-input");
+    let binary = root.join("fake-operator");
+    crate::pi_client::write_executable_script(
+        &binary,
+        &format!(
+            r#"while IFS= read -r line; do
+  printf '%s\n' "$line" >> '{seen}'
+  printf '%s\n' '{{"type":"message_update","assistantMessageEvent":{{"type":"text_end","content":"Operator here."}}}}'
+  printf '%s\n' '{{"type":"agent_settled"}}'
+done
+"#,
+            seen = seen.display()
+        ),
+    );
+    let mut board = board_on(
+        vec![project("alpha", "Alpha project")],
+        &[("SWITCHBOARD_PI_BINARY", &binary.to_string_lossy())],
+        two_model_catalog(),
+    );
+    let general = decision(crate::router::Action::General, None, None);
+
+    board.set_call_state("The caller is talking to: the operator.\n- alpha: idle, in the background, has a display ready that the caller has not seen".into());
+    let first = board.handle_decision("what is ready?", &general).await;
+    assert_eq!(first.text, "Operator here.");
+    let second = board.handle_decision("thanks", &general).await;
+    assert_eq!(second.text, "Operator here.");
+
+    let input = std::fs::read_to_string(&seen).unwrap();
+    let lines = input.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2, "{input}");
+    assert!(lines[0].contains("[CALL STATE]"), "{}", lines[0]);
+    assert!(lines[0].contains("has a display ready"), "{}", lines[0]);
+    assert!(lines[0].contains("what is ready?"), "{}", lines[0]);
+    // The state belongs to one utterance; a later turn without a fresh
+    // state must not repeat stale facts.
+    assert!(!lines[1].contains("[CALL STATE]"), "{}", lines[1]);
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_routing_utility_request_carries_the_call_state() {
+    let board = board_with(vec![project("alpha", "Alpha project")], false);
+    let mut board = board;
+    board.set_call_state(
+        "- alpha: waiting, in the background, has a message waiting for the caller".into(),
+    );
+    let request = board.utility_routing_request(
+        "pull it up",
+        &decision(crate::router::Action::Continue, Some("alpha"), None),
+        false,
+    );
+    assert!(request.contains("[CALL STATE]"), "{request}");
+    assert!(
+        request.contains("has a message waiting for the caller"),
+        "{request}"
+    );
+    assert!(request.contains("pull it up"), "{request}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_route_to_an_unregistered_project_keeps_the_caller_on_the_line() {
+    let (mut board, log) = on_alpha(&[], Box::new(|_, _| says("handled"))).await;
+    let creates = log.named("create_session").len();
+
+    let reply = board
+        .route_project_part(
+            "show me",
+            "ghost",
+            crate::router::ConversationMode::Continue,
+        )
+        .await;
+
+    assert_eq!(reply.route, "alpha");
+    assert_eq!(reply.error.as_deref(), Some("unknown project \"ghost\""));
+    assert_eq!(board.coordinator.route(), "alpha");
+    assert_eq!(log.named("create_session").len(), creates);
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn go_to_project_with_fresh_brings_a_live_background_agent_forward() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+    let log = serve(
+        &board,
+        Box::new(move |session, message| {
+            let _ = prompt_tx.send((session.to_owned(), message.to_owned()));
+            says("handled")
+        }),
+    );
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .dispatch_parts(
+            "both",
+            vec![
+                crate::router::DispatchPart {
+                    agent: "alpha".into(),
+                    text: "alpha part".into(),
+                },
+                crate::router::DispatchPart {
+                    agent: "beta".into(),
+                    text: "beta chart".into(),
+                },
+            ],
+        )
+        .await;
+    while let Some((_, message)) = prompt_rx.recv().await {
+        if message.contains("beta chart") {
+            break;
+        }
+    }
+    let creates = log.named("create_session").len();
+
+    let reply = board
+        .handle_decision(
+            "pull that beta thing up",
+            &decision(
+                crate::router::Action::GoToProject,
+                Some("beta"),
+                Some(crate::router::ConversationMode::Fresh),
+            ),
+        )
+        .await;
+
+    assert_eq!(reply.error, None, "{reply:?}");
+    assert_eq!(reply.route, "beta");
+    assert_eq!(log.named("create_session").len(), creates);
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_split_part_for_an_unregistered_project_is_dropped() {
+    let (mut board, log) = on_alpha(&[], Box::new(|_, _| says("handled"))).await;
+    let creates = log.named("create_session").len();
+
+    let reply = board
+        .dispatch_parts(
+            "both",
+            vec![
+                crate::router::DispatchPart {
+                    agent: "ghost".into(),
+                    text: "ghost part".into(),
+                },
+                crate::router::DispatchPart {
+                    agent: "alpha".into(),
+                    text: "alpha part".into(),
+                },
+            ],
+        )
+        .await;
+
+    assert_eq!(reply.route, "alpha");
+    assert_eq!(log.named("create_session").len(), creates);
+    assert!(!prompts(&log)
+        .iter()
+        .any(|prompt| prompt.contains("ghost part")));
+    board.shutdown().await;
 }

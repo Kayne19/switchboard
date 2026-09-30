@@ -29,13 +29,13 @@ export default function operatorSwitchboard(pi: ExtensionAPI) {
 				description: "The exact registered project id. Never invent one.",
 			}),
 			mode: Type.Optional(Type.String({
-				description: "continue for an existing conversation, or fresh for a new conversation.",
+				description: "continue (the default) to bring back an agent already on the call or its conversation; fresh only when the caller asks to start over.",
 			})),
 		}),
 		async execute(_toolCallId, params) {
 			return {
 				content: [{ type: "text", text: `Connecting the caller to ${params.target}. Transfer is silent; say nothing further.` }],
-				details: { target: params.target, mode: params.mode ?? "fresh" },
+				details: { target: params.target, mode: params.mode ?? "continue" },
 			};
 		},
 	});
@@ -50,11 +50,11 @@ export default function operatorSwitchboard(pi: ExtensionAPI) {
 				description: "The exact registered project id, or omit when unclear.",
 			})),
 			mode: Type.Optional(Type.String({
-				description: "continue when this belongs to the existing conversation, or fresh for a new project conversation.",
+				description: "continue (the default) for an agent already on the call or its conversation; fresh only when the caller asks to start over.",
 			})),
-			confident: Type.Optional(Type.Boolean({
+			confident: Type.Boolean({
 				description: "True only when the target and intent are clear enough to act without asking.",
-			})),
+			}),
 			reason: Type.Optional(Type.String({
 				description: "A short internal reason for the routing choice.",
 			})),

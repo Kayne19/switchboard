@@ -99,6 +99,26 @@ The state is what the switchboard knows at the moment the caller speaks.
 
 Host names, working directories and secrets are not sent.
 
+On a live call the service sends the same named fields, built from what it
+knows (`CallSummary` in `apps/backend/src/router.rs`):
+
+- `agents` lists every agent on the call: the operator, the agent on the line,
+  and every background agent. `state` is busy, idle or waiting;
+  `pending_request_to_speak` is true while a queued message waits; and
+  `display_ready` is true while the agent holds a display the caller has not
+  seen. `task` is the last request the agent was given on this call.
+- The floor gate keeps `caller_just_said` as the caller's last words and puts
+  the update it judges in `queued_update` (`from_agent`, `message`).
+
+The operator and the routing utility get the same facts as a short
+`[CALL STATE]` block with their prompt, once per utterance. When Jev chooses
+`answer_waiting` without a target and exactly one agent has something waiting,
+that agent is the target. A route to an id that is not registered is refused
+without moving the caller. A missing `mode` means continue, and an agent that
+is already on the call is brought forward, never refused or replaced; stopping
+it is the way to start over. A `second_opinion` without `confident` is not
+confident.
+
 Context matters more than wording. Three versions were run on the same 328
 cases:
 
