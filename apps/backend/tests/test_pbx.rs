@@ -2776,7 +2776,7 @@ async fn a_dead_background_resident_is_removed_before_a_later_split_part() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn busy_background_split_part_is_refused_and_fresh_start_is_rejected() {
+async fn busy_background_split_part_is_refused_and_fresh_brings_the_live_agent_forward() {
     let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
     let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
     let log = serve(
@@ -2830,12 +2830,27 @@ async fn busy_background_split_part_is_refused_and_fresh_start_is_rejected() {
         )
         .await;
     assert_eq!(log.named("create_session").len(), creates);
-    let refusal = board
-        .route_project_part("fresh beta", "beta", crate::router::ConversationMode::Fresh)
-        .await;
-    assert_eq!(refusal.error.as_deref(), Some("project is busy"));
-    assert_eq!(refusal.route, "alpha");
-    board.shutdown().await;
+    // Fresh for an agent already on this call brings it forward instead of
+    // refusing or starting a second session: the caller's words reach beta.
+    let forward =
+        board.route_project_part("fresh beta", "beta", crate::router::ConversationMode::Fresh);
+    tokio::pin!(forward);
+    loop {
+        tokio::select! {
+            reply = &mut forward => {
+                assert_eq!(reply.error, None);
+                assert_eq!(reply.route, "beta");
+                break;
+            }
+            Some((session, message)) = prompt_rx.recv() => {
+                if message.contains("fresh beta") {
+                    assert_eq!(session, "s2");
+                    break;
+                }
+            }
+        }
+    }
+    assert_eq!(log.named("create_session").len(), creates);
 }
 
 #[cfg(unix)]
@@ -3781,4 +3796,58 @@ async fn the_routing_utility_request_carries_the_call_state() {
         "{request}"
     );
     assert!(request.contains("pull it up"), "{request}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn go_to_project_with_fresh_brings_a_live_background_agent_forward() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+    let log = serve(
+        &board,
+        Box::new(move |session, message| {
+            let _ = prompt_tx.send((session.to_owned(), message.to_owned()));
+            says("handled")
+        }),
+    );
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .dispatch_parts(
+            "both",
+            vec![
+                crate::router::DispatchPart {
+                    agent: "alpha".into(),
+                    text: "alpha part".into(),
+                },
+                crate::router::DispatchPart {
+                    agent: "beta".into(),
+                    text: "beta chart".into(),
+                },
+            ],
+        )
+        .await;
+    while let Some((_, message)) = prompt_rx.recv().await {
+        if message.contains("beta chart") {
+            break;
+        }
+    }
+    let creates = log.named("create_session").len();
+
+    let reply = board
+        .handle_decision(
+            "pull that beta thing up",
+            &decision(
+                crate::router::Action::GoToProject,
+                Some("beta"),
+                Some(crate::router::ConversationMode::Fresh),
+            ),
+        )
+        .await;
+
+    assert_eq!(reply.error, None, "{reply:?}");
+    assert_eq!(reply.route, "beta");
+    assert_eq!(log.named("create_session").len(), creates);
+    board.shutdown().await;
 }

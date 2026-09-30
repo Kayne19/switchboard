@@ -432,8 +432,10 @@ pub fn utility_decision(signals: &[Signal]) -> Option<UtilityDecision> {
             .filter(|target| !target.trim().is_empty())
             .map(str::to_owned);
         let mode = match signal.args.get("mode").and_then(Value::as_str) {
-            Some("continue") => ConversationMode::Continue,
-            Some("fresh") | None => ConversationMode::Fresh,
+            // A missing mode never replaces a live agent: continue is the
+            // safe reading, and fresh must be asked for.
+            Some("continue") | None => ConversationMode::Continue,
+            Some("fresh") => ConversationMode::Fresh,
             Some(_) => return None,
         };
         let confident = signal
@@ -468,8 +470,10 @@ pub fn utility_decision(signals: &[Signal]) -> Option<UtilityDecision> {
             .filter(|target| !target.trim().is_empty())
             .map(str::to_owned);
         let mode = match signal.args.get("mode").and_then(Value::as_str) {
-            Some("continue") => ConversationMode::Continue,
-            Some("fresh") | None => ConversationMode::Fresh,
+            // A missing mode never replaces a live agent: continue is the
+            // safe reading, and fresh must be asked for.
+            Some("continue") | None => ConversationMode::Continue,
+            Some("fresh") => ConversationMode::Fresh,
             Some(_) => return None,
         };
         let confident = signal

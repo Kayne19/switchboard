@@ -1081,13 +1081,15 @@ impl Switchboard {
             && !decision.sends_to_operator()
         {
             if let Some(target) = decision.target.as_deref() {
-                let context = TransferContext {
-                    exact_caller_transcript: text.to_owned(),
-                    // Jev's reason is an internal routing record, not caller
-                    // intent. Do not leak it into the target's prompt.
-                    derived_intent: String::new(),
-                };
-                return self.transfer_ctx(&context, target, "", "").await;
+                // Jev's reason is an internal routing record, not caller
+                // intent, so only the caller's words go to the target. The
+                // shared path validates the id, brings a live agent on this
+                // call forward, and starts one otherwise.
+                let mode = decision
+                    .continue_or_fresh
+                    .clone()
+                    .unwrap_or(crate::router::ConversationMode::Continue);
+                return self.route_project_part(text, target, mode).await;
             }
         }
         if matches!(decision.action, crate::router::Action::Continue)
@@ -1121,28 +1123,18 @@ impl Switchboard {
         if target != OPERATOR {
             self.agent_tasks.insert(target.to_owned(), text.to_owned());
         }
-        if target != OPERATOR
-            && self.coordinator.route() == target
-            && matches!(mode, crate::router::ConversationMode::Fresh)
+        // An agent already on this call (on the line or in the background)
+        // is brought forward whatever the mode: a live agent is never
+        // refused or silently replaced. Stopping it is the way to start over.
+        if matches!(mode, crate::router::ConversationMode::Fresh)
+            && target != OPERATOR
+            && (self.coordinator.route() == target || self.background_agents.contains_key(target))
         {
-            return self.reply_transfer_error(
-                format!("{target} is already running. Say continue to use it, or stop it first."),
-                Some("project is busy".into()),
-            );
+            tracing::info!(%target, "fresh was asked for a live agent on this call; bringing it forward");
         }
         if target != OPERATOR && self.coordinator.route() != target {
             if self.remove_dead_background(target).await {
                 self.announce_agent_state(target, "finished").await;
-            }
-            if matches!(mode, crate::router::ConversationMode::Fresh)
-                && self.background_agents.contains_key(target)
-            {
-                return self.reply_transfer_error(
-                    format!(
-                        "{target} is already running. Say continue to use it, or stop it first."
-                    ),
-                    Some("project is busy".into()),
-                );
             }
             if self.background_agents.contains_key(target) {
                 let session = self
@@ -1163,9 +1155,7 @@ impl Switchboard {
             }
             return Box::pin(self.handle_operator_ctx(&context)).await;
         }
-        if self.coordinator.route() == target
-            && matches!(mode, crate::router::ConversationMode::Continue)
-        {
+        if self.coordinator.route() == target {
             // The utility's opinion can confirm that an unsure utterance is
             // for the project already on the line. Box this back-edge because
             // a missing project session may legitimately fall through to the
@@ -2953,8 +2943,9 @@ fn arg_first(signal: &Signal, names: &[&str]) -> String {
 
 fn conversation_mode(signal: &Signal) -> crate::router::ConversationMode {
     match arg(signal, "mode").as_str() {
-        "continue" => crate::router::ConversationMode::Continue,
-        _ => crate::router::ConversationMode::Fresh,
+        "fresh" => crate::router::ConversationMode::Fresh,
+        // Omitted or unknown: never treat it as a request to start over.
+        _ => crate::router::ConversationMode::Continue,
     }
 }
 pub(crate) fn uuid_like() -> String {
