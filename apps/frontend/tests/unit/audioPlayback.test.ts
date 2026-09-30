@@ -98,6 +98,7 @@ describe("AudioPlayback replay ownership", () => {
       idleText: "idle",
       onStatus: () => {},
       onChange: () => {},
+      gapMs: 0,
     });
     const clickHandler = (event?: { target: unknown }) =>
       playback.handleGesture((event?.target ?? null) as EventTarget | null);
@@ -354,6 +355,7 @@ describe("AudioPlayback replay ownership", () => {
       idleText: "idle",
       onStatus: (text, error) => statuses.push([text, error]),
       onChange: () => {},
+      gapMs: 0,
     });
     playback.audioQueue.push(new Blob(["reply"]));
     playback.playNext();
@@ -427,6 +429,7 @@ describe("AudioPlayback streaming", () => {
       idleText: "idle",
       onStatus: () => {},
       onChange: () => {},
+      gapMs: 0,
     });
     playback.setStreamingEnabled(true);
     return { player, urls, playback };
@@ -526,5 +529,77 @@ describe("AudioPlayback streaming", () => {
     expect(urls.size, "stale audio creates no source").toBe(createdBefore);
     expect(player.playCalls.length).toBe(0);
     expect(playback.isDrained()).toBe(true);
+  });
+});
+
+describe("AudioPlayback pause between messages", () => {
+  it("waits the gap before the next message and none after the last", async () => {
+    vi.useFakeTimers();
+    try {
+      const player = fakePlayer();
+      const { urls } = stubObjectUrls();
+      const playback = new AudioPlayback({
+        player: player as unknown as HTMLAudioElement,
+        idleText: "idle",
+        onStatus: () => {},
+        onChange: () => {},
+        gapMs: 350,
+      });
+      const first = new Blob(["first"]);
+      const second = new Blob(["second"]);
+      playback.audioQueue.push(first, second);
+      playback.playNext();
+      expect(urls.get(player.src)).toBe(first);
+      player.playPromises[0].resolve();
+      await Promise.resolve();
+
+      player.ended = true;
+      player.emit("ended");
+      // The first message is over; the second waits for the pause.
+      expect(player.playCalls.length).toBe(1);
+      expect(playback.isDrained()).toBe(false);
+      // A click during the pause does not skip it.
+      playback.handleGesture(null);
+      expect(player.playCalls.length).toBe(1);
+      vi.advanceTimersByTime(349);
+      expect(player.playCalls.length).toBe(1);
+      vi.advanceTimersByTime(1);
+      expect(urls.get(player.src)).toBe(second);
+      expect(player.playCalls.length).toBe(2);
+      player.playPromises[1].resolve();
+      await Promise.resolve();
+
+      player.ended = true;
+      player.emit("ended");
+      // Nothing is left, so there is no pause to wait for.
+      expect(playback.isDrained()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a new leg cancels a pending pause", () => {
+    vi.useFakeTimers();
+    try {
+      const player = fakePlayer();
+      stubObjectUrls();
+      const playback = new AudioPlayback({
+        player: player as unknown as HTMLAudioElement,
+        idleText: "idle",
+        onStatus: () => {},
+        onChange: () => {},
+        gapMs: 350,
+      });
+      playback.audioQueue.push(new Blob(["first"]), new Blob(["second"]));
+      playback.playNext();
+      player.ended = true;
+      player.emit("ended");
+      playback.resetForGeneration(7);
+      vi.advanceTimersByTime(1000);
+      expect(player.playCalls.length).toBe(1);
+      expect(playback.isDrained()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
