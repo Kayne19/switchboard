@@ -12,6 +12,12 @@ import { errorName } from "./errors";
 
 export const MAX_AUDIO_UTTERANCE = 32 * 1024 * 1024;
 export const MAX_AUDIO_REPLAY = 64 * 1024 * 1024;
+/**
+ * A short pause between two spoken messages, the way a person pauses before
+ * starting a new thought. Speech inside one message keeps the voice's own
+ * timing; only the step from one message to the next waits.
+ */
+export const INTER_UTTERANCE_GAP_MS = 350;
 
 interface PlaybackOwner {
   blob: Blob;
@@ -52,6 +58,8 @@ export interface AudioPlaybackOptions {
   onStatus: (text: string, error?: boolean) => void;
   /** Called whenever what is playing, or waiting to play, changes. */
   onChange: () => void;
+  /** The pause between two messages. Defaults to `INTER_UTTERANCE_GAP_MS`. */
+  gapMs?: number;
 }
 
 export class AudioPlayback {
@@ -69,10 +77,32 @@ export class AudioPlayback {
   private mseActive: MseUtterance | null = null;
   private msePending: MseUtterance | null = null;
   private mseReplayBytes = 0;
+  /** The pause before the next message; nothing starts while it runs. */
+  private gapTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: AudioPlaybackOptions) {
     this.options = options;
     this.player = options.player ?? new Audio();
+  }
+
+  /** Run `next` after the pause between messages. */
+  private afterGap(next: () => void): void {
+    const gap = this.options.gapMs ?? INTER_UTTERANCE_GAP_MS;
+    this.clearGap();
+    if (gap <= 0) {
+      next();
+      return;
+    }
+    this.gapTimer = setTimeout(() => {
+      this.gapTimer = null;
+      next();
+      this.notifyPlaybackChange();
+    }, gap);
+  }
+
+  private clearGap(): void {
+    if (this.gapTimer !== null) clearTimeout(this.gapTimer);
+    this.gapTimer = null;
   }
 
   get isPlaying(): boolean {
@@ -91,7 +121,8 @@ export class AudioPlayback {
       !this.playing &&
       this.mseActive === null &&
       this.mseQueue.length === 0 &&
-      this.msePending === null
+      this.msePending === null &&
+      this.gapTimer === null
     );
   }
 
@@ -106,6 +137,7 @@ export class AudioPlayback {
    * with an older generation is ignored from here on.
    */
   resetForGeneration(generation: number): void {
+    this.clearGap();
     this.audioEpoch = generation;
     this.audioQueue.length = 0;
     this.clearMsePlayback();
@@ -129,6 +161,7 @@ export class AudioPlayback {
 
   /** Stops playback for good; used when the runtime is torn down. */
   dispose(): void {
+    this.clearGap();
     this.audioQueue.length = 0;
     this.clearMsePlayback();
     if (this.playbackOwner) this.cleanupOwner(this.playbackOwner);
@@ -139,7 +172,7 @@ export class AudioPlayback {
   // audio. This is that gesture path, so blocked audio does not wait for a
   // later clip to arrive.
   handleGesture(target?: EventTarget | null): void {
-    if (target === this.player) return;
+    if (target === this.player || this.gapTimer !== null) return;
     const owner = this.playbackOwner;
     if (!owner) {
       if (this.mseActive && !this.playing) this.msePlay();
@@ -308,7 +341,8 @@ export class AudioPlayback {
       this.queueMseFallback(utterance);
       if (this.mseActive === utterance) this.mseActive = null;
       this.msePending = null;
-      if (!this.playing && !this.playbackOwner) this.playNext();
+      if (!this.playing && !this.playbackOwner && this.gapTimer === null)
+        this.playNext();
       this.notifyPlaybackChange();
       return;
     }
@@ -341,7 +375,13 @@ export class AudioPlayback {
     if (this.playbackOwner !== owner || owner.consumed) return;
     owner.consumed = true;
     this.cleanupOwner(owner);
-    this.playNext();
+    if (this.audioQueue.length === 0) {
+      this.playNext();
+      return;
+    }
+    this.afterGap(() => {
+      if (!this.playing && !this.playbackOwner) this.playNext();
+    });
   }
 
   private playFailed(
@@ -509,7 +549,8 @@ export class AudioPlayback {
     if (utterance.done && this.mseActive === utterance) {
       this.queueMseFallback(utterance);
       this.mseActive = null;
-      if (!this.playing && !this.playbackOwner) this.playNext();
+      if (!this.playing && !this.playbackOwner && this.gapTimer === null)
+        this.playNext();
     }
     this.notifyPlaybackChange();
   }
@@ -529,7 +570,13 @@ export class AudioPlayback {
   }
 
   private mseStartNext(): void {
-    if (!this.mseEnabled || this.mseActive || !this.mseQueue.length) return;
+    if (
+      !this.mseEnabled ||
+      this.mseActive ||
+      !this.mseQueue.length ||
+      this.gapTimer !== null
+    )
+      return;
     const utterance = this.mseQueue.shift()!;
     const player = this.player;
     this.mseActive = utterance;
@@ -542,7 +589,7 @@ export class AudioPlayback {
       this.playing = false;
       this.notifyPlaybackChange();
       if (utterance.url) URL.revokeObjectURL(utterance.url);
-      this.mseStartNext();
+      if (this.mseQueue.length) this.afterGap(() => this.mseStartNext());
       this.notifyPlaybackChange();
     };
     player.addEventListener("ended", utterance.endedHandler);
@@ -555,6 +602,7 @@ export class AudioPlayback {
   }
 
   private clearMsePlayback(): void {
+    this.clearGap();
     const player = this.player;
     for (const utterance of [this.mseActive, ...this.mseQueue].filter(
       Boolean,
