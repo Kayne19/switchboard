@@ -1693,11 +1693,17 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
                     .map(str::trim)
                     .filter(|text| !text.is_empty())
                     .filter(|text| {
-                        Self::faithful_floor_rewrite_with_allowlist(
+                        match Self::unfaithful_floor_token(
                             &input.message,
                             text,
                             &[input.project.as_str()],
-                        )
+                        ) {
+                            None => true,
+                            Some(token) => {
+                                tracing::warn!(project = %input.project, %token, "floor rewrite rejected as a possible new fact; speaking the original");
+                                false
+                            }
+                        }
                     })
                     .map(str::to_owned)
             }))
@@ -1705,18 +1711,18 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
 
     #[cfg(test)]
     fn faithful_floor_rewrite(original: &str, rewrite: &str) -> bool {
-        Self::faithful_floor_rewrite_with_allowlist(original, rewrite, &[])
+        Self::unfaithful_floor_token(original, rewrite, &[]).is_none()
     }
 
-    fn faithful_floor_rewrite_with_allowlist(
-        original: &str,
-        rewrite: &str,
-        allowed: &[&str],
-    ) -> bool {
+    /// The first word of a rewrite that could be a new fact, or `None` when the
+    /// rewrite only rephrases. New numbers, links, paths and new names are
+    /// facts. A capital letter that only starts a sentence is not a name, and
+    /// the parts of an allowed value (a project id's words) may be spoken.
+    fn unfaithful_floor_token(original: &str, rewrite: &str, allowed: &[&str]) -> Option<String> {
         let original_len = original.chars().count();
         let rewrite_len = rewrite.chars().count();
         if rewrite_len > original_len.saturating_mul(2).saturating_add(20) {
-            return false;
+            return Some(format!("(too long: {rewrite_len} characters)"));
         }
         let original_tokens = original
             .split_whitespace()
@@ -1725,35 +1731,46 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
             .collect::<HashSet<_>>();
         let allowed_tokens = allowed
             .iter()
-            .flat_map(|value| value.split_whitespace())
+            .flat_map(|value| {
+                value
+                    .split_whitespace()
+                    .chain(value.split(|character: char| "-_ ".contains(character)))
+            })
             .map(Self::normalize_floor_token)
             .filter(|token| !token.is_empty())
             .collect::<HashSet<_>>();
-        rewrite
-            .split_whitespace()
-            .filter_map(|raw| {
-                let token = Self::normalize_floor_token(raw);
-                (!token.is_empty()).then_some((raw, token))
-            })
-            .all(|(raw, token)| {
-                let present = original_tokens.contains(&token) || allowed_tokens.contains(&token);
-                let has_number = token.chars().any(char::is_numeric);
-                let has_url_or_path = token.starts_with("http://")
-                    || token.starts_with("https://")
-                    || token.starts_with("www.")
-                    || token.contains('/')
-                    || token.contains('\\')
-                    || token.contains('_');
-                let raw = raw.trim_matches(|character: char| !character.is_alphanumeric());
-                let has_new_capitalized_name = raw
+        let mut sentence_start = true;
+        for raw in rewrite.split_whitespace() {
+            let starts_sentence = sentence_start;
+            sentence_start = raw.ends_with(['.', '!', '?', ':']);
+            let token = Self::normalize_floor_token(raw);
+            if token.is_empty() {
+                continue;
+            }
+            let present = original_tokens.contains(&token) || allowed_tokens.contains(&token);
+            if present {
+                continue;
+            }
+            let has_number = token.chars().any(char::is_numeric);
+            let has_url_or_path = token.starts_with("http://")
+                || token.starts_with("https://")
+                || token.starts_with("www.")
+                || token.contains('/')
+                || token.contains('\\')
+                || token.contains('_');
+            let bare = raw.trim_matches(|character: char| !character.is_alphanumeric());
+            let has_new_capitalized_name = !starts_sentence
+                && bare
                     .chars()
                     .next()
                     .is_some_and(|character| character.is_uppercase())
-                    && raw.chars().any(|character| character.is_lowercase())
-                    && !present
-                    && !Self::is_floor_lead_in(&token);
-                present || (!has_number && !has_url_or_path && !has_new_capitalized_name)
-            })
+                && bare.chars().any(|character| character.is_lowercase())
+                && !Self::is_floor_lead_in(&token);
+            if has_number || has_url_or_path || has_new_capitalized_name {
+                return Some(raw.to_owned());
+            }
+        }
+        None
     }
 
     fn is_floor_lead_in(token: &str) -> bool {
@@ -1786,6 +1803,9 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
             .trim_matches(|character: char| {
                 !character.is_alphanumeric() && !"/_\\:._-".contains(character)
             })
+            // Sentence punctuation after a word or number is not part of it:
+            // "0.869." is the number 0.869.
+            .trim_end_matches(['.', ',', ':', ';', '-'])
             .to_ascii_lowercase()
     }
 

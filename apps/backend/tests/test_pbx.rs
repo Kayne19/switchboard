@@ -3022,6 +3022,28 @@ fn floor_rewrite_guard_accepts_plain_rephrasing_and_rejects_new_facts() {
     ));
 }
 
+#[test]
+fn floor_rewrite_guard_allows_sentence_starts_trailing_punctuation_and_project_words() {
+    let original = "The complete Dice comparison is ready to show. On the calibrated gallery, the latest four-branch HRNet reaches 0.873 complete Dice, compared with 0.869 for the HRNet that keeps the one-sixteenth branch.";
+    let rewrite = "Whenever you want it, the grape segmentation chart is ready to show. The latest four-branch HRNet reaches 0.873 complete Dice, against 0.869.";
+    assert_eq!(
+        Switchboard::unfaithful_floor_token(original, rewrite, &["grape-segmentation"]),
+        None
+    );
+    // A new number is still a new fact, even at the end of a sentence.
+    assert_eq!(
+        Switchboard::unfaithful_floor_token(original, "It reaches 0.901.", &["grape-segmentation"])
+            .as_deref(),
+        Some("0.901.")
+    );
+    // A new name in the middle of a sentence is still refused.
+    assert_eq!(
+        Switchboard::unfaithful_floor_token(original, "The chart is ready for Kubernetes.", &[])
+            .as_deref(),
+        Some("Kubernetes.")
+    );
+}
+
 #[tokio::test]
 async fn desk_session_hosts_are_listed_concurrently() {
     let alpha = project("alpha", "Alpha");
