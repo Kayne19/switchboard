@@ -48,22 +48,8 @@ target or thinking level, or a value JSON cannot carry). Values with
   model and route controls), `theater` (the current visual takes the whole
   screen) or `auto` (the screen's default). The caller's own choice wins
   until they dismiss it.
-- `return_to_operator(summary=None)`: hand the caller back to the operator
-  when they are done here or ask for another project. Not just because you
-  finished a task. Put anything unfinished in `summary`; the operator hears
-  it. Say a short goodbye and nothing else after it.
-- `transfer_to_project(project, intent=None, model=None, thinking=None)`: put
-  the caller straight through to another project you were told exists. The
-  transfer is silent: say nothing alongside it. Pass what they want done as
-  `intent`. If you are not sure the project exists, use
-  `return_to_operator` instead.
-- `set_model(model=None, thinking=None, keep_context=True, intent=None)`:
-  switch this session to another model (provider first when known, e.g.
-  `"anthropic/claude-opus-5"`) or thinking level (`off`, `minimal`, `low`,
-  `medium`, `high`, `xhigh`, `max`), because the caller asked. The session
-  and its context stay. Say nothing alongside it. Pass `keep_context=False`
-  only when the caller wants a clean slate: that ends this session and starts
-  a new one.
+- Routing, transfers and model changes belong to the switchboard. This
+  module has no tools for them: answer the caller, or say what you finished.
 
 ## Display
 
