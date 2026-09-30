@@ -3699,3 +3699,86 @@ async fn host_loss_closes_a_taken_over_session_without_killing_the_desk_process(
     session.close();
     assert!(!log.names().contains(&"kill".into()));
 }
+
+fn decision(
+    action: crate::router::Action,
+    target: Option<&str>,
+    mode: Option<crate::router::ConversationMode>,
+) -> Decision {
+    Decision {
+        action,
+        target: target.map(str::to_owned),
+        continue_or_fresh: mode,
+        confidence: 0.9,
+        for_current_agent: 0.1,
+        multi_target: false,
+        unsure: false,
+        confirm: false,
+        reason: "test".into(),
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_operator_gets_the_call_state_once_per_utterance() {
+    let root = scratch_dir("operator-call-state");
+    let seen = root.join("operator-input");
+    let binary = root.join("fake-operator");
+    crate::pi_client::write_executable_script(
+        &binary,
+        &format!(
+            r#"while IFS= read -r line; do
+  printf '%s\n' "$line" >> '{seen}'
+  printf '%s\n' '{{"type":"message_update","assistantMessageEvent":{{"type":"text_end","content":"Operator here."}}}}'
+  printf '%s\n' '{{"type":"agent_settled"}}'
+done
+"#,
+            seen = seen.display()
+        ),
+    );
+    let mut board = board_on(
+        vec![project("alpha", "Alpha project")],
+        &[("SWITCHBOARD_PI_BINARY", &binary.to_string_lossy())],
+        two_model_catalog(),
+    );
+    let general = decision(crate::router::Action::General, None, None);
+
+    board.set_call_state("The caller is talking to: the operator.\n- alpha: idle, in the background, has a display ready that the caller has not seen".into());
+    let first = board.handle_decision("what is ready?", &general).await;
+    assert_eq!(first.text, "Operator here.");
+    let second = board.handle_decision("thanks", &general).await;
+    assert_eq!(second.text, "Operator here.");
+
+    let input = std::fs::read_to_string(&seen).unwrap();
+    let lines = input.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2, "{input}");
+    assert!(lines[0].contains("[CALL STATE]"), "{}", lines[0]);
+    assert!(lines[0].contains("has a display ready"), "{}", lines[0]);
+    assert!(lines[0].contains("what is ready?"), "{}", lines[0]);
+    // The state belongs to one utterance; a later turn without a fresh
+    // state must not repeat stale facts.
+    assert!(!lines[1].contains("[CALL STATE]"), "{}", lines[1]);
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_routing_utility_request_carries_the_call_state() {
+    let board = board_with(vec![project("alpha", "Alpha project")], false);
+    let mut board = board;
+    board.set_call_state(
+        "- alpha: waiting, in the background, has a message waiting for the caller".into(),
+    );
+    let request = board.utility_routing_request(
+        "pull it up",
+        &decision(crate::router::Action::Continue, Some("alpha"), None),
+        false,
+    );
+    assert!(request.contains("[CALL STATE]"), "{request}");
+    assert!(
+        request.contains("has a message waiting for the caller"),
+        "{request}"
+    );
+    assert!(request.contains("pull it up"), "{request}");
+}

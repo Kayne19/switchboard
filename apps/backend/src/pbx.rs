@@ -390,6 +390,18 @@ impl BackgroundRegistry {
             .collect()
     }
 
+    fn projects(&self) -> Vec<String> {
+        let mut projects = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        projects.sort();
+        projects
+    }
+
     fn contains_key(&self, project: &str) -> bool {
         self.sessions
             .lock()
@@ -542,6 +554,12 @@ pub struct Switchboard {
     /// Resident project sessions and their guarded background prompts.
     background_agents: BackgroundRegistry,
     operator_note: Option<String>,
+    /// The last request each project agent was given on this call. Routing
+    /// shows it as the agent's task.
+    agent_tasks: HashMap<String, String>,
+    /// The call as Jev saw it for the utterance being handled, in plain text.
+    /// The operator and the routing utility get the same facts.
+    call_state: String,
     /// Project awaiting a caller confirmation before it is stopped.
     pending_stop: Option<String>,
     /// Projects explicitly stopped by the caller must start fresh once.
@@ -637,6 +655,8 @@ impl Switchboard {
             agent: None,
             background_agents: BackgroundRegistry::default(),
             operator_note: None,
+            agent_tasks: HashMap::new(),
+            call_state: String::new(),
             pending_stop: None,
             resume_blocked: HashSet::new(),
             coordinator,
@@ -806,12 +826,15 @@ impl Switchboard {
         screen: Value,
         utterance: impl Into<String>,
     ) -> CallSummary {
+        let background = self.background_agents.projects();
         CallSummary::from_runtime(
             &self.coordinator.status(),
             &self.registry,
             transcript,
             screen,
             utterance,
+            &background,
+            &self.agent_tasks,
         )
     }
 
@@ -894,6 +917,12 @@ impl Switchboard {
         result
     }
 
+    /// The call as Jev saw it for the utterance about to be handled. The
+    /// operator and the routing utility get it with their prompt.
+    pub fn set_call_state(&mut self, call_state: String) {
+        self.call_state = call_state;
+    }
+
     /// Dispatch an utterance after Jev has made the routing decision. An
     /// unsure or unsupported action deliberately goes through the existing
     /// operator LLM path; project agents never mutate the route themselves.
@@ -916,6 +945,20 @@ impl Switchboard {
     /// The API worker uses this entry point so the PBX mutex is not held while
     /// `list_sessions` waits on a host link.
     pub(crate) async fn handle_decision_with_takeover(
+        &mut self,
+        text: &str,
+        decision: &Decision,
+        takeover: Option<Result<Option<Value>, String>>,
+    ) -> Reply {
+        let reply = self
+            .handle_decision_for_state(text, decision, takeover)
+            .await;
+        // The call state belongs to this utterance only.
+        self.call_state.clear();
+        reply
+    }
+
+    async fn handle_decision_for_state(
         &mut self,
         text: &str,
         decision: &Decision,
@@ -1075,6 +1118,9 @@ impl Switchboard {
             exact_caller_transcript: text.to_owned(),
             derived_intent: String::new(),
         };
+        if target != OPERATOR {
+            self.agent_tasks.insert(target.to_owned(), text.to_owned());
+        }
         if target != OPERATOR
             && self.coordinator.route() == target
             && matches!(mode, crate::router::ConversationMode::Fresh)
@@ -1315,6 +1361,7 @@ impl Switchboard {
             crate::registry::ResolveResult::Exact(project) => project.clone(),
             _ => return Err(format!("unknown project {target}")),
         };
+        self.agent_tasks.insert(project.id.clone(), text.to_owned());
         if self
             .agent
             .as_ref()
@@ -1495,19 +1542,25 @@ impl Switchboard {
         } else {
             "When the caller asks for things from two or more registered projects, call dispatch_parts with one part per project and preserve the exact caller wording for each part. If it names only one project, call second_opinion. Never invent projects."
         };
+        let call_state = if self.call_state.is_empty() {
+            String::new()
+        } else {
+            format!("[CALL STATE]\n{}\n", self.call_state)
+        };
         format!(
             "[ROUTING REQUEST]
 Jev found: action={}, target={}, multi_target={}, unsure={}.
 {}
-[CALLER WORDING]
+{}[CALLER WORDING]
 {}
 [INSTRUCTION]
-{}",
+{} If the caller asks to see or hear something an agent on the call has waiting or ready, that agent is the target. Use mode fresh only when the caller asks to start over.",
             decision.action.as_str(),
             target,
             decision.multi_target,
             decision.unsure,
             projects.trim_end(),
+            call_state,
             text,
             instruction,
         )
@@ -1691,6 +1744,14 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
                 )
             },
         );
+        // The operator keeps a conversation, but the call changes under it:
+        // give it the same current facts Jev saw, once per turn.
+        let call_state = std::mem::take(&mut self.call_state);
+        let message = if call_state.is_empty() {
+            message
+        } else {
+            format!("[CALL STATE]\n{call_state}\n[END CALL STATE]\n\n{message}")
+        };
         let turn = match session.prompt(&message).await {
             Ok(turn) => turn,
             Err(error) => {
@@ -1738,6 +1799,10 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
         if !self.coordinator.project_is_background(session.label()) {
             self.announce_agent_state(session.label(), "busy").await;
         }
+        self.agent_tasks.insert(
+            session.label().to_owned(),
+            context.exact_caller_transcript.clone(),
+        );
         let turn = match session.prompt(&context.exact_caller_transcript).await {
             Ok(t) => t,
             Err(error) => {
