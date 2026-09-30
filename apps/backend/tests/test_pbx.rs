@@ -3902,3 +3902,47 @@ async fn a_split_part_for_an_unregistered_project_is_dropped() {
         .any(|prompt| prompt.contains("ghost part")));
     board.shutdown().await;
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failed_move_to_the_background_closes_the_previous_agent() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let notices = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let notices_for_callback = notices.clone();
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        let notices = notices_for_callback.clone();
+        Box::pin(async move {
+            notices
+                .lock()
+                .unwrap()
+                .push(format!("{}:{}", notice.project, notice.state));
+        })
+    })));
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| says("handled")));
+    fake.on_command = Some(Box::new(|name, args| {
+        (name == "set_mode" && args.get("mode").and_then(Value::as_str) == Some("background"))
+            .then(|| Some(Err(("mode_failed".into(), "cannot switch mode".into()))))
+    }));
+    fake.serve(board.hosts().connect_fake(HOST));
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    let alpha = board.agent.clone().expect("alpha on the line");
+
+    let reply = board
+        .route_project_part(
+            "beta please",
+            "beta",
+            crate::router::ConversationMode::Continue,
+        )
+        .await;
+
+    assert_eq!(reply.route, "beta", "{reply:?}");
+    assert!(!board.background_agents.contains_key("alpha"));
+    assert!(!alpha.alive());
+    assert!(notices
+        .lock()
+        .unwrap()
+        .contains(&"alpha:finished".to_owned()));
+    board.shutdown().await;
+}

@@ -1275,7 +1275,13 @@ impl Switchboard {
             return;
         }
         if let Err(error) = previous.set_mode("background").await {
-            tracing::warn!(project = %previous_label, %error, "could not mark previous foreground agent background");
+            // The host still treats it as foreground, so its speech and
+            // displays would not follow background rules. Do not keep a
+            // resident whose host and service disagree about its mode.
+            tracing::warn!(project = %previous_label, %error, "could not move the previous agent to the background; closing it");
+            previous.close();
+            self.announce_agent_state(&previous_label, "finished").await;
+            return;
         }
         if previous.busy() {
             let _ = previous
