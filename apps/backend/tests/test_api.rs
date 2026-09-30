@@ -4613,7 +4613,7 @@ case "$line" in
     if [ "$rewrite_count" -eq 1 ]; then
       printf '%s\n' '{"type":"tool_execution_start","toolName":"rewrite","args":{"text":"the ablation numbers are ready"}}'
     else
-      printf '%s\n' '{"type":"tool_execution_start","toolName":"rewrite","args":{"text":"invented 99"}}'
+      printf '%s\n' '{"type":"tool_execution_start","toolName":"rewrite","args":{"text":"   "}}'
     fi
     ;;
   *)
