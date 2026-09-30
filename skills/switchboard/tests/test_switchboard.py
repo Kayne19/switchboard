@@ -241,6 +241,24 @@ class CallsTest(ModuleTestCase):
         self.assertEqual(line, "switchboard.view: Showing a diff titled 'Code changes' on the caller's screen.")
         self.assertEqual(result.data, {"screen": screen})
 
+    def test_display_describes_held_and_shown_results(self):
+        mode = {"held": True}
+        host = self.host(
+            reply=lambda request: {
+                "status": "accepted" if mode["held"] else "delivered",
+                "reason": None,
+                "result": {"held": mode["held"]} if mode["held"] else {"rendered": True},
+            }
+        )
+        _, held_line = self.run_call(switchboard.display, op="clear")
+        self.assertIn("held", held_line.lower())
+        self.assertIn("not on screen yet", held_line)
+        self.assertIn("brings this agent forward", held_line)
+
+        mode["held"] = False
+        _, shown_line = self.run_call(switchboard.display, op="clear")
+        self.assertEqual(shown_line, "switchboard.display: On screen.")
+
     def test_display_rejection_carries_the_service_reason(self):
         self.host(reply=lambda request: {"status": "refused", "reason": "metric value must be a string"})
         result, line = self.run_call(switchboard.display, op="show", id="m", type="metric", data={"label": "L", "value": 3})

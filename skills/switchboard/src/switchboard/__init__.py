@@ -262,6 +262,8 @@ def display(action=None, **fields):
     def describe(result):
         data = result.data if isinstance(result.data, dict) else {}
         if result.delivered or result.accepted:
+            if data.get("held") is True:
+                return "Held, not on screen yet. It will appear when the caller brings this agent forward; say it is ready, not that it is on screen."
             if data.get("rendered") is False:
                 return "Sent, but the caller's screen has not confirmed it; it may not be visible yet."
             return "On screen."
