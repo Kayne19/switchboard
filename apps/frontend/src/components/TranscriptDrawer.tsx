@@ -45,6 +45,15 @@ export function TranscriptDrawer({ open, lines, onClose, onSend }: TranscriptDra
   );
 }
 
+// A project agent's line is labelled with that agent, so the caller can tell
+// who answered. The operator and older lines keep the switchboard's name.
+export function transcriptSpeaker(line: TranscriptLine): string {
+  if (line.speaker === 'DAMOCLES' && line.agent && line.agent !== 'operator') {
+    return line.agent.toUpperCase();
+  }
+  return line.speaker;
+}
+
 function TranscriptBody({ lines }: { lines: TranscriptLine[] }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   // The newest turn is the one the caller opened the history to see, and a
@@ -58,7 +67,7 @@ function TranscriptBody({ lines }: { lines: TranscriptLine[] }) {
     <div className="transcript__body" ref={bodyRef}>
       {lines.map((line, index) => (
         <div className={`transcript-line${line.speaker === 'DAMOCLES' ? ' transcript-line--ai' : ''}`} key={`${index}-${line.speaker}`}>
-          <span className="transcript-line__speaker tech micro">{line.speaker}</span>
+          <span className="transcript-line__speaker tech micro">{transcriptSpeaker(line)}</span>
           <div className="transcript-line__text"><RichText segments={[{ text: line.text }]} /></div>
         </div>
       ))}

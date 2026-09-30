@@ -21,6 +21,8 @@ interface TranscriptLine {
   speaker: string;
   text: string;
   id?: string;
+  /** The route that spoke: `operator` or a project id. */
+  agent?: string;
 }
 
 function normalizeHistory(entries: TranscriptEntry[]): TranscriptLine[] {
@@ -31,6 +33,7 @@ function normalizeHistory(entries: TranscriptEntry[]): TranscriptLine[] {
             speaker: entry.role === "caller" ? "CALLER" : "DAMOCLES",
             text: entry.text,
             id: entry.id || undefined,
+            agent: entry.role === "caller" ? undefined : entry.route || undefined,
           },
         ]
       : [],
@@ -181,6 +184,7 @@ export function RuntimeIntegration() {
             speaker: "DAMOCLES",
             text: body,
             id: message.entry.id || undefined,
+            agent: message.entry.route || undefined,
           });
           currentResponseRef.current = body;
           showConversation(body);
@@ -196,7 +200,11 @@ export function RuntimeIntegration() {
           // should an end have gone missing.
           dispatch({ op: "runtime_activity", activity: null, at: Date.now() });
           const body = message.text || "(No spoken response.)";
-          appendTranscript({ speaker: "DAMOCLES", text: body });
+          appendTranscript({
+            speaker: "DAMOCLES",
+            text: body,
+            agent: message.route || undefined,
+          });
           currentResponseRef.current = body;
           showConversation(body);
           dispatch({

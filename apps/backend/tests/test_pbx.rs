@@ -3902,3 +3902,156 @@ async fn a_split_part_for_an_unregistered_project_is_dropped() {
         .any(|prompt| prompt.contains("ghost part")));
     board.shutdown().await;
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failed_move_to_the_background_closes_the_previous_agent() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let notices = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let notices_for_callback = notices.clone();
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        let notices = notices_for_callback.clone();
+        Box::pin(async move {
+            notices
+                .lock()
+                .unwrap()
+                .push(format!("{}:{}", notice.project, notice.state));
+        })
+    })));
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| says("handled")));
+    fake.on_command = Some(Box::new(|name, args| {
+        (name == "set_mode" && args.get("mode").and_then(Value::as_str) == Some("background"))
+            .then(|| Some(Err(("mode_failed".into(), "cannot switch mode".into()))))
+    }));
+    fake.serve(board.hosts().connect_fake(HOST));
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    let alpha = board.agent.clone().expect("alpha on the line");
+
+    let reply = board
+        .route_project_part(
+            "beta please",
+            "beta",
+            crate::router::ConversationMode::Continue,
+        )
+        .await;
+
+    assert_eq!(reply.route, "beta", "{reply:?}");
+    assert!(!board.background_agents.contains_key("alpha"));
+    assert!(!alpha.alive());
+    assert!(notices
+        .lock()
+        .unwrap()
+        .contains(&"alpha:finished".to_owned()));
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_promoted_agent_is_told_it_is_in_the_foreground() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+    let _log = serve(
+        &board,
+        Box::new(move |session, message| {
+            let _ = prompt_tx.send((session.to_owned(), message.to_owned()));
+            says("handled")
+        }),
+    );
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .start_background_part("beta", "beta chart")
+        .await
+        .expect("beta resident");
+    while let Some((_, message)) = prompt_rx.recv().await {
+        if message.contains("beta chart") {
+            break;
+        }
+    }
+
+    let reply = board
+        .route_project_part(
+            "show me beta",
+            "beta",
+            crate::router::ConversationMode::Continue,
+        )
+        .await;
+
+    assert_eq!(reply.route, "beta", "{reply:?}");
+    let promoted = loop {
+        let (_, message) = prompt_rx.recv().await.expect("promotion prompt");
+        if message.contains("show me beta") {
+            break message;
+        }
+    };
+    assert!(
+        promoted.contains("you are in the foreground now"),
+        "{promoted}"
+    );
+    assert!(promoted.ends_with("show me beta"), "{promoted}");
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_closed_agent_on_the_line_is_retired_to_the_operator() {
+    let (mut board, _log) = on_alpha(&[], Box::new(|_, _| says("handled"))).await;
+    let alpha = board.agent.clone().expect("alpha on the line");
+
+    assert!(
+        !board
+            .retire_closed_foreground("alpha", alpha.session_id(), alpha.instance_id() + 1)
+            .await,
+        "another instance of the session is not the one on the line"
+    );
+    assert_eq!(board.coordinator.route(), "alpha");
+
+    assert!(
+        board
+            .retire_closed_foreground("alpha", alpha.session_id(), alpha.instance_id())
+            .await
+    );
+    assert_eq!(board.coordinator.route(), OPERATOR);
+    assert!(board.agent.is_none());
+    assert!(board
+        .operator_note
+        .as_deref()
+        .is_some_and(|note| note.contains("alpha")));
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_closed_session_that_is_not_resident_is_reported_for_the_line() {
+    let (mut board, _log) = on_alpha(&[], Box::new(|_, _| says("handled"))).await;
+    let reported = Arc::new(StdMutex::new(Vec::<(String, String, u64)>::new()));
+    let reported_for_callback = reported.clone();
+    board.set_foreground_closed_callback(Some(Arc::new(move |project, session, instance| {
+        reported_for_callback
+            .lock()
+            .unwrap()
+            .push((project, session, instance));
+        Box::pin(async {})
+    })));
+    let alpha = board.agent.clone().expect("alpha on the line");
+
+    board.session_closed_callback()(
+        "alpha".into(),
+        alpha.session_id().into(),
+        alpha.instance_id(),
+    )
+    .await;
+
+    assert_eq!(
+        reported.lock().unwrap().as_slice(),
+        &[(
+            "alpha".to_owned(),
+            alpha.session_id().to_owned(),
+            alpha.instance_id()
+        )]
+    );
+    board.shutdown().await;
+}

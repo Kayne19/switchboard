@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
@@ -119,6 +120,11 @@ class BackgroundSurfaceTest(unittest.TestCase):
         self.assertEqual(set(switchboard.__all__), {"speak", "request_to_speak", "display", "view"})
         self.assertNotIn("transfer_to_project", dir(switchboard))
         self.assertNotIn("return_to_operator", dir(switchboard))
+
+    def test_the_skill_guide_documents_only_the_four_calls(self):
+        guide = (Path(__file__).resolve().parents[1] / "SKILL.md").read_text()
+        for removed in ("return_to_operator(", "transfer_to_project(", "set_model("):
+            self.assertNotIn(removed, guide)
 
 
 class IdentityTest(ModuleTestCase):

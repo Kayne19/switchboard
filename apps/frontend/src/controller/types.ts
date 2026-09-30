@@ -103,7 +103,8 @@ export interface MessageData {
   caption?: string;
   segments: RichSegment[];
   channel?: { name: string; mode: string };
-  transcript?: Array<{ speaker: string; text: string }>;
+  /** `agent` names the project agent that spoke, when one did. */
+  transcript?: Array<{ speaker: string; text: string; agent?: string }>;
 }
 
 export interface NoteData {

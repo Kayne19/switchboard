@@ -50,6 +50,10 @@ pub struct AgentStateNotice {
     pub project: String,
     pub state: String,
 }
+/// Told when a session that is not a background resident closes on its host:
+/// project, session id and instance. The API retires it from the line.
+pub type ForegroundClosedCallback =
+    Arc<dyn Fn(String, String, u64) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 pub type AgentStateCallback =
     Arc<dyn Fn(AgentStateNotice) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
@@ -60,6 +64,10 @@ const AGENT_BRIEF_HEADER: &str = "[SWITCHBOARD VOICE BRIEF]\nYou are on a voice 
 const AGENT_BRIEF_TOOLS: &str = "- switchboard.speak(text): say a sentence or two of plain speech. Use it to answer, and before and during long work. No code, paths or lists.\n- switchboard.request_to_speak(message, reason): queue exactly what the caller should hear from you. For finished, message is the actual result in one to three short spoken sentences; for needs_decision, it is the question and options; for problem, it is what went wrong and what you need. The service lightly smooths it and speaks it at a good moment; do not send a teaser.\n- switchboard.display(...) shows things on their screen; switchboard.view() tells you what they see.\nWhile you are in the background, displays are held until the caller brings you forward; never say a display is on screen.\n- Routing is handled by the switchboard before your turn. Do not try to transfer, return, or change models; answer the caller or explain what you completed.\n";
 const AGENT_BRIEF_SWAPS: &str = "";
 const AGENT_BRIEF_END: &str = "[END OF VOICE BRIEF]";
+
+/// Sent with the first caller words after a background agent is brought
+/// forward, so its background instructions stop applying.
+const FOREGROUND_NOTICE: &str = "[switchboard] The caller brought you forward: you are in the foreground now. speak() is heard directly, display() shows on the caller's screen, and any display you held is on screen now. The caller's words follow.";
 /// Instructions for the separate, stateless process. This is code-owned so
 /// deploying the utility never requires another environment setting.
 const UTILITY_SYSTEM_PROMPT: &str = r#"You are the switchboard's stateless utility process. You never speak to the caller and you never answer general questions. For routing prompts, call exactly one routing tool: second_opinion for one target, dispatch_parts for several targets. When the caller asks for things from two or more registered projects, call dispatch_parts with one part per project and preserve the caller's exact wording in each part. When the request names only one project, call second_opinion. Never invent projects, never emit a prose answer, and never call more than one tool. For a floor rewrite prompt, call rewrite with a natural short spoken version of the supplied message. Speak as one person continuing the conversation. Vary the phrasing, mention the project only when needed for clarity, and keep it short. If the caller has been quiet longer than the floor threshold, a brief natural lead-in may make the project clear. Keep every fact from the agent's message and add none: no new names, numbers, paths, promises, or requests."#;
@@ -544,6 +552,7 @@ pub struct Switchboard {
     activity_callback: Option<ActivityCallback>,
     route_callback: Option<RouteCallback>,
     agent_state_callback: Option<AgentStateCallback>,
+    foreground_closed_callback: Option<ForegroundClosedCallback>,
     module_callback: Option<ModuleCallback>,
     active_session: Arc<Mutex<Option<LegSession>>>,
     operator: Option<PiSession>,
@@ -648,6 +657,7 @@ impl Switchboard {
             activity_callback: None,
             route_callback: None,
             agent_state_callback: None,
+            foreground_closed_callback: None,
             module_callback: None,
             active_session: Arc::new(Mutex::new(None)),
             operator: None,
@@ -730,14 +740,24 @@ impl Switchboard {
         let registry = self.background_agents.clone();
         let coordinator = self.coordinator.clone();
         let state_callback = self.agent_state_callback.clone();
+        let foreground_closed = self.foreground_closed_callback.clone();
         Arc::new(
             move |project: String, session_id: String, instance_id: u64| {
                 let registry = registry.clone();
                 let coordinator = coordinator.clone();
                 let state_callback = state_callback.clone();
+                let foreground_closed = foreground_closed.clone();
                 Box::pin(async move {
-                    if let Some(session) =
-                        registry.remove_closed(&project, &session_id, instance_id)
+                    let Some(session) = registry.remove_closed(&project, &session_id, instance_id)
+                    else {
+                        // Not a resident: it may be the agent on the line or
+                        // a taken-over desk session. The PBX checks and
+                        // retires it under its own lock.
+                        if let Some(callback) = foreground_closed {
+                            callback(project, session_id, instance_id).await;
+                        }
+                        return;
+                    };
                     {
                         // Retire the call token before releasing the shared
                         // resident handle, so no request/display can pass the
@@ -754,6 +774,35 @@ impl Switchboard {
                 })
             },
         )
+    }
+
+    pub fn set_foreground_closed_callback(&mut self, callback: Option<ForegroundClosedCallback>) {
+        self.foreground_closed_callback = callback;
+    }
+
+    /// Retire the agent on the line when its host session has closed, so the
+    /// route, status and routing state stop naming a dead agent before the
+    /// caller speaks again. Only the exact closed session is retired.
+    pub async fn retire_closed_foreground(
+        &mut self,
+        project: &str,
+        session_id: &str,
+        instance_id: u64,
+    ) -> bool {
+        let matches = self.agent.as_ref().is_some_and(|session| {
+            session.label() == project
+                && session.session_id() == session_id
+                && session.instance_id() == instance_id
+        });
+        if !matches {
+            return false;
+        }
+        tracing::warn!(%project, "the agent on the line closed on its host; returning to the operator");
+        self.drop_agent().await;
+        self.operator_note = Some(format!(
+            "The call to {project} ended: its session closed on the host."
+        ));
+        true
     }
 
     /// What answers a project session's `speak`, `display` and `view`.
@@ -1275,7 +1324,13 @@ impl Switchboard {
             return;
         }
         if let Err(error) = previous.set_mode("background").await {
-            tracing::warn!(project = %previous_label, %error, "could not mark previous foreground agent background");
+            // The host still treats it as foreground, so its speech and
+            // displays would not follow background rules. Do not keep a
+            // resident whose host and service disagree about its mode.
+            tracing::warn!(project = %previous_label, %error, "could not move the previous agent to the background; closing it");
+            previous.close();
+            self.announce_agent_state(&previous_label, "finished").await;
+            return;
         }
         if previous.busy() {
             let _ = previous
@@ -2124,7 +2179,10 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
                 Some(error.to_string()),
             );
         }
-        let turn = match session.prompt(&context.exact_caller_transcript).await {
+        // The agent was told background rules when it was shelved. Tell it
+        // they no longer apply before it answers the caller.
+        let prompt = format!("{FOREGROUND_NOTICE}\n\n{}", context.exact_caller_transcript);
+        let turn = match session.prompt(&prompt).await {
             Ok(turn) => turn,
             Err(error) => Turn {
                 text: String::new(),
