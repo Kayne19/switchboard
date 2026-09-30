@@ -2129,6 +2129,10 @@ async fn display_reports_rendered_only_after_the_browser_confirms() {
         .unwrap();
     assert_eq!(code, StatusCode::OK);
     assert_eq!(body.get("rendered").and_then(Value::as_bool), Some(true));
+    assert!(
+        body.get("held").is_none(),
+        "foreground result must stay unchanged"
+    );
 }
 
 #[tokio::test]
@@ -3608,6 +3612,7 @@ async fn floor_good_moment_gate_does_not_query_desk_hosts() {
             context: "caller: previous line".into(),
             message: "alpha finished".into(),
             reason: "finished".into(),
+            held_display: false,
         })
         .await;
     state.0.floor.force_quiet_for_test().await;
@@ -4858,10 +4863,17 @@ done
         .0
         .coordinator
         .register_background("grapes", "grapes-token");
+    state
+        .0
+        .projection
+        .hold_display("grapes".into(), json!({"op":"show","id":"doc"}));
     let rewrite_started = std::sync::Arc::new(tokio::sync::Notify::new());
     let rewrite_notice = rewrite_started.clone();
+    let rewrite_prompt = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let rewrite_prompt_seen = rewrite_prompt.clone();
     crate::pi_client::set_prompt_hook_for_test(Some(std::sync::Arc::new(move |message| {
         if message.contains("[FLOOR REWRITE]") {
+            *rewrite_prompt_seen.lock().unwrap() = message.to_owned();
             rewrite_notice.notify_one();
         }
     })));
@@ -4877,6 +4889,10 @@ done
     timeout(Duration::from_secs(1), rewrite_started.notified())
         .await
         .expect("rewrite reached the utility");
+    let prompt = rewrite_prompt.lock().unwrap().clone();
+    assert!(prompt.contains("Held display not yet seen by caller: yes"));
+    assert!(prompt.contains("Never claim anything is on screen"));
+    assert!(prompt.contains("ready to show when the caller wants it"));
     crate::pi_client::set_prompt_hook_for_test(None);
 
     // The foreground turn path can acquire the PBX lock while the utility is
@@ -4909,6 +4925,7 @@ async fn stale_floor_request_is_dropped_before_audio_reservation() {
             context: "caller: previous line".into(),
             message: "stale update".into(),
             reason: "finished".into(),
+            held_display: false,
         },
         "stale update".into(),
         false,
@@ -4945,7 +4962,12 @@ async fn background_speak_is_refused_and_latest_display_is_released_on_promotion
     .await;
     assert_eq!(code, StatusCode::OK);
     assert_eq!(held["accepted"], true);
+    assert_eq!(held["held"], true);
     assert_eq!(held["reason"], "caller_away");
+    assert!(held["detail"]
+        .as_str()
+        .unwrap()
+        .contains("not on screen yet"));
     assert!(state
         .0
         .projection

@@ -132,6 +132,13 @@ impl AgentProjection {
             .insert(project, action);
     }
 
+    fn has_held_display(&self, project: &str) -> bool {
+        self.displays
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains_key(project)
+    }
+
     fn take_display(&self, project: &str) -> Option<Value> {
         self.displays
             .lock()
@@ -2049,7 +2056,7 @@ async fn speak(state: AppState, req: Speak) -> Response {
     }
     if state.0.coordinator.is_background(&req.token) {
         tracing::info!("not spoken: caller is away from background agent");
-        return Json(json!({"delivered":false,"reason":"caller_away","detail":"the caller is listening to another session; use request_to_speak with the actual words they should hear"})).into_response();
+        return Json(json!({"delivered":false,"reason":"caller_away","detail":"the caller is listening to another session; use request_to_speak with the actual words they should hear. While in the background, displays are held until the caller brings you forward; never say a display is on screen."})).into_response();
     }
     promote_candidate_for_token(&state, &req.token).await;
     if let Err(error) = state.0.coordinator.accept_side_effect(&req.token) {
@@ -2198,11 +2205,14 @@ async fn request_to_speak(state: AppState, token: &str, raw: Value) -> Response 
     };
     let generation = state.0.coordinator.generation();
     let context = recent_floor_context(&state.0.transcript_log.lock().await.entries());
-    let Some((project, agents)) = state.0.coordinator.with_background(token, |project| {
-        let project = project.to_owned();
-        let agents = state.0.projection.waiting(project.clone(), request.clone());
-        (project, agents)
-    }) else {
+    let Some((project, agents, held_display)) =
+        state.0.coordinator.with_background(token, |project| {
+            let project = project.to_owned();
+            let held_display = state.0.projection.has_held_display(&project);
+            let agents = state.0.projection.waiting(project.clone(), request.clone());
+            (project, agents, held_display)
+        })
+    else {
         return (
             axum::http::StatusCode::CONFLICT,
             Json(json!({"delivered":false,"reason":"not_on_call","detail":"this session is not a background call"})),
@@ -2220,6 +2230,7 @@ async fn request_to_speak(state: AppState, token: &str, raw: Value) -> Response 
             context,
             message: request.message,
             reason: request.reason,
+            held_display,
         })
         .await;
     Json(json!({"delivered":false,"accepted":true,"reason":null})).into_response()
@@ -2303,8 +2314,14 @@ async fn display(state: AppState, token: &str, raw: Value) -> Response {
         })
         .is_some()
     {
-        return Json(json!({"delivered":false,"accepted":true,"reason":"caller_away"}))
-            .into_response();
+        return Json(json!({
+            "delivered": false,
+            "accepted": true,
+            "held": true,
+            "reason": "caller_away",
+            "detail": "the display is held, not on screen yet; it will appear when the caller brings this agent forward. Say it is ready, not that it is on screen"
+        }))
+        .into_response();
     }
     promote_candidate_for_token(&state, token).await;
     if let Err(error) = state.0.coordinator.accept_side_effect(token) {

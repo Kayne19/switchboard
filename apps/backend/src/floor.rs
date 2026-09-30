@@ -26,6 +26,8 @@ pub(crate) struct FloorRequest {
     pub context: String,
     pub message: String,
     pub reason: String,
+    /// Whether this agent has a display buffered that the caller has not seen.
+    pub held_display: bool,
 }
 
 /// All information the floor rewrite model needs. The caller's recent context
@@ -37,6 +39,8 @@ pub(crate) struct FloorRewriteInput {
     pub quiet: bool,
     pub message: String,
     pub reason: String,
+    /// Whether this agent has a display buffered that the caller has not seen.
+    pub held_display: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -161,6 +165,7 @@ impl Floor {
                 quiet: announce,
                 message: entry.request.message.clone(),
                 reason: entry.request.reason.clone(),
+                held_display: entry.request.held_display,
             };
             let rewritten = (hooks.rewrite)(input).await.unwrap_or_else(|_| {
                 format!("{}: {}", entry.request.project, entry.request.message)
