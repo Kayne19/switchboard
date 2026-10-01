@@ -147,6 +147,30 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("CallRuntime speaking state", () => {
+  it("shows the presence while an agent audio clip is playing", async () => {
+    const { runtime, latestState } = makeRuntime();
+    const socket = await connectAt(runtime, 0);
+    socket.receive({
+      type: "audio_start",
+      generation: 0,
+      sequence: 1,
+      mime: "audio/mpeg",
+      format: "mp3",
+    });
+    socket.onmessage?.({ data: new TextEncoder().encode("speech").buffer } as MessageEvent);
+    socket.receive({
+      type: "audio_done",
+      generation: 0,
+      sequence: 1,
+      done: true,
+    });
+    await settle();
+    expect(latestState().speaking).toBe(true);
+    runtime.dispose();
+  });
+});
+
 describe("CallRuntime connection", () => {
   it("says hello on open and publishes the connected state once", async () => {
     const { runtime, states, latestState } = makeRuntime();
