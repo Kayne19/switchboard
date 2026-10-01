@@ -1,34 +1,68 @@
-// A deliberately small Markdown reader for spoken and explanatory text.
+// A deliberately small, safe Markdown reader for conversation text.
 //
-// Agents write their replies in Markdown, and the page used to show the raw
-// markers. This reads the subset that shows up in conversation -- strong,
-// emphasis, code spans, paragraphs, lists, and headings -- into a tree that
-// RichText renders as React elements. It never produces HTML, so model text
-// cannot inject markup, and a link shows as its label only: this screen is
-// not a browser, and nothing on it should navigate away.
+// This is not an HTML renderer. It turns the Markdown subset used in agent
+// replies into data for RichText to render as React elements. Model-provided
+// HTML therefore remains ordinary text, and only explicitly allowed URL
+// schemes become links.
 
 export type Inline =
   | { kind: 'text'; text: string }
   | { kind: 'strong'; children: Inline[] }
   | { kind: 'em'; children: Inline[] }
   | { kind: 'code'; text: string }
+  | { kind: 'link'; href: string; children: Inline[] }
   | { kind: 'break' };
 
 export type Block =
   | { kind: 'paragraph'; inlines: Inline[] }
-  | { kind: 'list'; ordered: boolean; items: Inline[][] };
+  | { kind: 'list'; ordered: boolean; items: Inline[][] }
+  | { kind: 'code'; text: string };
 
-const LINK = /^\[([^\]\n]+)\]\(([^)\s]*)\)/;
 const HEADING = /^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$/;
 const BULLET = /^\s{0,3}[-*+•]\s+(.*)$/;
 const NUMBERED = /^\s{0,3}\d{1,9}[.)]\s+(.*)$/;
+const FENCE = /^\s{0,3}```(?:[^`]*)\s*$/;
 
 const isWhitespace = (char: string | undefined) => char === undefined || /\s/.test(char);
 const isWordChar = (char: string | undefined) => char !== undefined && /[\p{L}\p{N}]/u.test(char);
 
+// Only these schemes are navigable. Relative URLs and javascript:, data:, and
+// similar values are deliberately represented as their label only.
+function isSafeHref(href: string): boolean {
+  return /^(?:https?:|mailto:)/i.test(href) && !/[\u0000-\u001f\u007f\s]/.test(href);
+}
+
+interface ParsedLink {
+  end: number;
+  label: string;
+  href: string;
+}
+
+function linkAt(text: string, start: number): ParsedLink | null {
+  if (text[start] !== '[') return null;
+  const labelEnd = text.indexOf(']', start + 1);
+  if (labelEnd <= start + 1 || text[labelEnd + 1] !== '(') return null;
+
+  // Markdown destinations may contain balanced parentheses. Keep malformed
+  // input literal instead of guessing where the destination ends.
+  let depth = 1;
+  let index = labelEnd + 2;
+  for (; index < text.length; index += 1) {
+    if (text[index] === '(') depth += 1;
+    if (text[index] === ')') {
+      depth -= 1;
+      if (depth === 0) break;
+    }
+  }
+  if (depth !== 0) return null;
+  const href = text.slice(labelEnd + 2, index).trim();
+  if (!href || /[\u0000-\u001f\u007f\s]/.test(href)) return null;
+  return { end: index + 1, label: text.slice(start + 1, labelEnd), href };
+}
+
 // A delimiter opens emphasis only when text follows it directly, and an
-// underscore never opens or closes inside a word. That is what keeps
-// "2 * 3 * 4" and snake_case identifiers literal.
+// underscore never opens or closes inside a word. That keeps snake_case and
+// ordinary arithmetic literal.
 function canOpen(text: string, index: number, delimiter: string): boolean {
   const after = text[index + delimiter.length];
   if (isWhitespace(after)) return false;
@@ -61,6 +95,12 @@ export function parseInline(text: string): Inline[] {
   while (index < text.length) {
     const char = text[index];
 
+    if (char === '\\' && /[\\`*_[\]()]/.test(text[index + 1] ?? '')) {
+      buffer += text[index + 1];
+      index += 2;
+      continue;
+    }
+
     if (char === '`') {
       const close = text.indexOf('`', index + 1);
       if (close > index + 1) {
@@ -72,11 +112,15 @@ export function parseInline(text: string): Inline[] {
     }
 
     if (char === '[') {
-      const link = LINK.exec(text.slice(index));
+      const link = linkAt(text, index);
       if (link) {
         flush();
-        result.push({ kind: 'text', text: link[1] });
-        index += link[0].length;
+        if (isSafeHref(link.href)) {
+          result.push({ kind: 'link', href: link.href, children: parseInline(link.label) });
+        } else {
+          result.push(...parseInline(link.label));
+        }
+        index = link.end;
         continue;
       }
     }
@@ -113,11 +157,33 @@ export function parseBlocks(text: string): Block[] {
     if (current) blocks.push(current);
     current = null;
   };
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
 
-  for (const line of text.replace(/\r\n?/g, '\n').split('\n')) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
     if (!line.trim()) {
       close();
       continue;
+    }
+
+    if (FENCE.test(line)) {
+      const codeLines: string[] = [];
+      let closingIndex = -1;
+      for (let candidate = index + 1; candidate < lines.length; candidate += 1) {
+        if (/^\s{0,3}```\s*$/.test(lines[candidate])) {
+          closingIndex = candidate;
+          break;
+        }
+        codeLines.push(lines[candidate]);
+      }
+      // An unclosed fence is not a reason to lose the message. Treat it as
+      // ordinary paragraph text so the markers remain readable.
+      if (closingIndex !== -1) {
+        close();
+        blocks.push({ kind: 'code', text: codeLines.join('\n') });
+        index = closingIndex;
+        continue;
+      }
     }
 
     const heading = HEADING.exec(line);

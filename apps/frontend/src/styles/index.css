@@ -762,6 +762,23 @@ button {
   overflow-x: hidden;
   overflow-wrap: anywhere;
 }
+.rich-text a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: rgba(var(--orange-rgb), 0.68);
+  text-underline-offset: 0.14em;
+}
+.rich-text__code-block {
+  margin: 0 0 0.55em;
+  padding: 0.65em 0.8em;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: rgba(232, 230, 223, 0.08);
+  color: var(--paper);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.86em;
+}
 .rich-text__code {
   padding: 0.05em 0.3em;
   background: rgba(232, 230, 223, 0.08);
