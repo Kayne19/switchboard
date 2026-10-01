@@ -205,13 +205,10 @@ export function RuntimeIntegration() {
             text: body,
             agent: message.route || undefined,
           });
-          currentResponseRef.current = body;
-          showConversation(body);
-          dispatch({
-            op: "runtime_say",
-            target: RUNTIME_CONVERSATION_ID,
-            text: body,
-          });
+          // Written replies belong in the transcript drawer. Keep the live
+          // response on the last line that was actually spoken; an agent can
+          // finish a turn without speaking at all.
+          showConversation();
           break;
         }
         case "thinking":
