@@ -147,63 +147,6 @@ async fn first_text_delta_reports_agent_life_before_the_turn_settles() {
     session.close().await;
 }
 
-#[tokio::test]
-async fn speak_requires_matching_successful_tool_end() {
-    let script = "read line; printf '%s\\n' '{\"type\":\"tool_execution_start\",\"toolName\":\"speak\",\"toolCallId\":\"call-1\",\"args\":{\"text\":\"hello\"}}' '{\"type\":\"tool_execution_end\",\"toolName\":\"speak\",\"toolCallId\":\"call-other\",\"isError\":false}' '{\"type\":\"agent_settled\"}'";
-    let session = PiSession::start(
-        vec!["sh".into(), "-c".into(), script.into()],
-        "test",
-        "test-leg",
-        None,
-        None,
-        Duration::from_secs(1),
-        None,
-    )
-    .await
-    .unwrap();
-    let turn = session.prompt("hello").await.unwrap();
-    assert!(!turn.agent_spoke());
-    session.close().await;
-}
-
-#[tokio::test]
-async fn speak_tool_end_without_is_error_is_successful() {
-    let script = "read line; printf '%s\\n' '{\"type\":\"tool_execution_start\",\"toolName\":\"speak\",\"toolCallId\":\"call-1\",\"args\":{\"text\":\"hello\"}}' '{\"type\":\"tool_execution_end\",\"toolName\":\"speak\",\"toolCallId\":\"call-1\"}' '{\"type\":\"agent_settled\"}'";
-    let session = PiSession::start(
-        vec!["sh".into(), "-c".into(), script.into()],
-        "test",
-        "test-leg",
-        None,
-        None,
-        Duration::from_secs(1),
-        None,
-    )
-    .await
-    .unwrap();
-    let turn = session.prompt("hello").await.unwrap();
-    assert!(turn.agent_spoke());
-    session.close().await;
-}
-
-#[tokio::test]
-async fn speak_tool_end_with_is_error_true_is_unsuccessful() {
-    let script = "read line; printf '%s\\n' '{\"type\":\"tool_execution_start\",\"toolName\":\"speak\",\"toolCallId\":\"call-1\",\"args\":{\"text\":\"hello\"}}' '{\"type\":\"tool_execution_end\",\"toolName\":\"speak\",\"toolCallId\":\"call-1\",\"isError\":true}' '{\"type\":\"agent_settled\"}'";
-    let session = PiSession::start(
-        vec!["sh".into(), "-c".into(), script.into()],
-        "test",
-        "test-leg",
-        None,
-        None,
-        Duration::from_secs(1),
-        None,
-    )
-    .await
-    .unwrap();
-    let turn = session.prompt("hello").await.unwrap();
-    assert!(!turn.agent_spoke());
-    session.close().await;
-}
-
 // A process that fails says why on stderr on its way out, and a drain task
 // reads stderr while the turn reads stdout. A failure report must wait for
 // the drain rather than read whatever it has reached, and must prefer what

@@ -50,7 +50,6 @@ pub struct Signal {
     pub name: String,
     pub args: Map<String, Value>,
     pub tool_call_id: Option<String>,
-    pub successful_end: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -59,13 +58,6 @@ pub struct Turn {
     pub signals: Vec<Signal>,
     pub failed: bool,
     pub error: String,
-}
-impl Turn {
-    pub fn agent_spoke(&self) -> bool {
-        self.signals
-            .iter()
-            .any(|signal| signal.name == SPEAK_TOOL && signal.successful_end)
-    }
 }
 
 #[derive(Debug)]
@@ -545,7 +537,6 @@ impl PiSession {
                                 .get("toolCallId")
                                 .and_then(Value::as_str)
                                 .map(str::to_owned),
-                            successful_end: false,
                         });
                     }
                     self.report_activity("start", name, activity_detail(event.get("args")))
@@ -553,19 +544,6 @@ impl PiSession {
                 }
                 Some("tool_execution_end") => {
                     let name = event.get("toolName").and_then(Value::as_str).unwrap_or("");
-                    let call_id = event.get("toolCallId").and_then(Value::as_str);
-                    if name == SPEAK_TOOL {
-                        if let Some(signal) = signals.iter_mut().rev().find(|signal| {
-                            call_id.is_some()
-                                && signal.name == SPEAK_TOOL
-                                && signal.tool_call_id.as_deref() == call_id
-                        }) {
-                            signal.successful_end = !event
-                                .get("isError")
-                                .and_then(Value::as_bool)
-                                .unwrap_or(false);
-                        }
-                    }
                     self.report_activity("end", name, String::new()).await
                 }
                 Some("extension_error") => {
@@ -1405,7 +1383,6 @@ async fn answer_module_call(inner: Arc<ProjectInner>, call: crate::hosts::Module
                     name: SPEAK_TOOL.into(),
                     args: Map::new(),
                     tool_call_id: None,
-                    successful_end: true,
                 }));
             }
             call.answer(reply);

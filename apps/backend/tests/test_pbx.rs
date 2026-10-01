@@ -366,7 +366,7 @@ fn transfer_model_requests_obey_the_swap_gate_and_pin_defaults() {
 }
 
 #[test]
-fn transfer_handoff_is_silent_but_model_notes_and_failures_are_spoken() {
+fn project_written_replies_stay_silent_but_switchboard_errors_are_spoken() {
     let board = board_with(vec![], true);
     let reply = board.reply_with_turn(Turn {
         text: "Ready.".into(),
@@ -374,7 +374,8 @@ fn transfer_handoff_is_silent_but_model_notes_and_failures_are_spoken() {
         failed: false,
         error: String::new(),
     });
-    assert_eq!(reply.to_speak, ["Ready."]);
+    assert_eq!(reply.text, "Ready.");
+    assert!(reply.to_speak.is_empty());
 
     let failed =
         board.reply_transfer_error("The project did not answer.".into(), Some("failed".into()));

@@ -2790,7 +2790,6 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
     }
 
     fn reply_with_turn(&self, turn: Turn) -> Reply {
-        let spoke = turn.agent_spoke();
         let failed = turn.failed;
         let error = turn.error;
         let status = self.coordinator.status();
@@ -2799,7 +2798,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
             &status.label,
             vec![Utterance {
                 text: turn.text,
-                synthesize: !spoke,
+                synthesize: false,
             }],
             failed.then_some(error),
         );
