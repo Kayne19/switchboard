@@ -1525,7 +1525,7 @@ async fn process_turns(state: AppState) {
         // PiSession yet. Caller prompts wait behind an autonomous operation;
         // the notification is created before the serialized admission check so
         // a fast autonomous turn cannot make the waiter miss its wakeup.
-        let operation = loop {
+        let operation = 'admit: loop {
             let operation_notify = state.0.coordinator.operation_changed();
             let changed = operation_notify.notified();
             let admission = {
@@ -1556,11 +1556,12 @@ async fn process_turns(state: AppState) {
             match admission {
                 Some(Ok(operation)) => break Some(operation),
                 None => changed.await,
-                Some(Err(())) => {
-                    state.0.turn_in_flight.store(false, Ordering::Release);
-                    continue;
-                }
+                Some(Err(())) => break 'admit None,
             }
+        };
+        let Some(operation) = operation else {
+            state.0.turn_in_flight.store(false, Ordering::Release);
+            continue;
         };
         state.0.turn_in_flight.store(true, Ordering::Release);
         let route = state.0.coordinator.route();
@@ -1583,9 +1584,7 @@ async fn process_turns(state: AppState) {
         else {
             tracing::info!(clip = %id, stamped = generation, "dropping turn because rescue occurred before registration");
             emit_stale_clip(&state, &id);
-            if let Some(operation) = &operation {
-                state.0.coordinator.finish_operation(operation);
-            }
+            state.0.coordinator.finish_operation(&operation);
             state.0.turn_in_flight.store(false, Ordering::Release);
             continue;
         };
@@ -1594,9 +1593,7 @@ async fn process_turns(state: AppState) {
             Err(error) if error.is_cancelled() => {
                 tracing::info!(clip = %id, elapsed = ?started.elapsed(), "the turn was cancelled by a page rescue");
                 clear_active_operation(&state, task_id).await;
-                if let Some(operation) = &operation {
-                    state.0.coordinator.finish_operation(operation);
-                }
+                state.0.coordinator.finish_operation(&operation);
                 state.0.turn_in_flight.store(false, Ordering::Release);
                 continue;
             }
@@ -1605,9 +1602,7 @@ async fn process_turns(state: AppState) {
                 // caller hears a generic apology and the journal holds nothing.
                 tracing::error!(clip = %id, %error, elapsed = ?started.elapsed(), "the turn worker failed");
                 clear_active_operation(&state, task_id).await;
-                if let Some(operation) = &operation {
-                    state.0.coordinator.finish_operation(operation);
-                }
+                state.0.coordinator.finish_operation(&operation);
                 state.0.turn_in_flight.store(false, Ordering::Release);
                 emit_message(
                     &state,
@@ -1617,9 +1612,7 @@ async fn process_turns(state: AppState) {
             }
         };
         clear_active_operation(&state, task_id).await;
-        if let Some(operation) = &operation {
-            state.0.coordinator.finish_operation(operation);
-        }
+        state.0.coordinator.finish_operation(&operation);
         if let Some(error) = &reply.error {
             // The caller was answered and recovered, so this is not an error
             // level — but a turn that carried a failure is worth an audit trail.
@@ -2075,12 +2068,7 @@ async fn handle_project_turn(state: &AppState, turn: ProjectTurn) {
         };
         // A late end from an older host turn must not settle a replacement
         // operation on the same resident instance.
-        if operation
-            .turn_id
-            .as_deref()
-            .zip(turn.turn_id.as_deref())
-            .is_some_and(|(expected, actual)| expected != actual)
-        {
+        if operation.turn_id.as_deref() != turn.turn_id.as_deref() {
             return;
         }
         let operation = operations
@@ -2133,14 +2121,21 @@ async fn handle_project_turn(state: &AppState, turn: ProjectTurn) {
     if !matches!(turn.cause.as_str(), "autonomous" | "unknown") {
         return;
     }
-    // A host that cannot report a turn id receives a synthetic server-side
-    // authority. Calls from that old host remain fail-closed instead of being
-    // mistaken for the caller operation.
-    let authority = turn
-        .turn_id
-        .clone()
-        .unwrap_or_else(|| format!("legacy-host-{}-{}", turn.instance_id, current.generation));
-    match state.0.coordinator.begin_autonomous(&current, authority) {
+    // An old host or a reconnect snapshot has no delivery authority. Do not
+    // fabricate one: its module calls remain refused and its written text is
+    // not attached to the caller's transcript.
+    let Some(turn_id) = turn.turn_id else {
+        tracing::info!(instance = turn.instance_id, cause = %turn.cause, "autonomous turn has no delivery authority");
+        return;
+    };
+    if turn.cause == "unknown" {
+        tracing::info!(
+            instance = turn.instance_id,
+            "unknown reconnect turn remains fail-closed"
+        );
+        return;
+    }
+    match state.0.coordinator.begin_autonomous(&current, turn_id) {
         Ok(operation) => {
             state
                 .0

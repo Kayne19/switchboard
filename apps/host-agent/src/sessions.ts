@@ -524,9 +524,11 @@ export class SessionManager {
 
 	#openTurn(t: Tracked, cause: TurnCause): void {
 		t.turnOpen = true;
-		t.turnId = `turn-${randomBytes(8).toString("hex")}`;
+		// A reconnect snapshot has no reliable cause or authority. Keep its
+		// turn id absent so the service can refuse self-wake side effects.
+		t.turnId = cause === "unknown" ? null : `turn-${randomBytes(8).toString("hex")}`;
 		t.turnCause = cause;
-		this.#emit(t.handle, { kind: "turn_start", cause, turn_id: t.turnId });
+		this.#emit(t.handle, { kind: "turn_start", cause, ...(t.turnId ? { turn_id: t.turnId } : {}) });
 	}
 
 	/** Send wait_for_idle after the latest input; settle only if it is still the latest. */

@@ -164,9 +164,9 @@ Host-reported project turns are admitted here through the coordinator. A
 host's `turn_id`; caller prompts wait behind it. Module calls must carry the
 same authority, and a stale or authority-less self-wake call is refused rather
 than attached to whichever caller operation won the race. An old host may omit
-these additive fields for ordinary caller turns, but its self-wake side effects
-fail closed. Written autonomous replies use the existing `Reply` event and do
-not enter the speech worker.
+these additive fields for ordinary caller turns, but its self-wake effects
+and written autonomous output fail closed. Written autonomous replies from
+new hosts use the existing `Reply` event and do not enter the speech worker.
 
 ### 4. Audio is an adapter boundary
 

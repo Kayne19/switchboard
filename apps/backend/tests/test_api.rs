@@ -5173,6 +5173,270 @@ async fn an_idle_notice_does_not_clear_a_background_speak_request() {
 }
 
 #[cfg(unix)]
+async fn foreground_alpha_turn(state: &AppState) -> (String, u64) {
+    let mut board = state.0.switchboard.lock().await;
+    let reply = board
+        .transfer_ctx(
+            &crate::pbx::TransferContext {
+                exact_caller_transcript: "put me through to alpha".into(),
+                ..Default::default()
+            },
+            "alpha",
+            "",
+            "",
+        )
+        .await;
+    assert_eq!(reply.route, "alpha");
+    drop(board);
+    let token = state.0.coordinator.current_identity().token;
+    let instance = state
+        .0
+        .active_session
+        .lock()
+        .await
+        .as_ref()
+        .expect("foreground project session")
+        .instance_id();
+    (token, instance)
+}
+
+#[cfg(unix)]
+fn autonomous_turn(token: String, instance_id: u64, turn_id: Option<&str>) -> ProjectTurn {
+    ProjectTurn {
+        instance_id,
+        token,
+        turn_id: turn_id.map(str::to_owned),
+        cause: "autonomous".into(),
+        ended: false,
+        text: String::new(),
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn caller_turn_waits_behind_an_autonomous_project_turn() {
+    let root = scratch_root("autonomous-waits");
+    let state = state_with_agents(&root);
+    let (token, instance_id) = foreground_alpha_turn(&state).await;
+    handle_project_turn(
+        &state,
+        autonomous_turn(token.clone(), instance_id, Some("auto-1")),
+    )
+    .await;
+    let mut events = state.0.events.subscribe();
+    while events.try_recv().is_ok() {}
+    let generation = state.0.coordinator.generation();
+    state.0.routed_decisions.lock().await.insert(
+        "caller-waits".into(),
+        crate::router::Decision {
+            action: crate::router::Action::Continue,
+            target: Some("alpha".into()),
+            continue_or_fresh: Some(crate::router::ConversationMode::Continue),
+            confidence: 1.0,
+            for_current_agent: 1.0,
+            multi_target: false,
+            unsure: false,
+            confirm: false,
+            reason: "test".into(),
+        }
+        .into(),
+    );
+    state.0.queued_turns.store(1, Ordering::Release);
+    let worker = tokio::spawn(process_turns(state.clone()));
+    state
+        .0
+        .turns
+        .send(("caller-waits".into(), "continue alpha".into(), generation))
+        .await
+        .unwrap();
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert!(!state.0.turn_in_flight.load(Ordering::Acquire));
+    assert!(state
+        .0
+        .autonomous_operations
+        .lock()
+        .await
+        .contains_key(&instance_id));
+    assert!(
+        events.try_recv().is_err(),
+        "caller turn started before autonomous end"
+    );
+
+    handle_project_turn(
+        &state,
+        ProjectTurn {
+            instance_id,
+            token,
+            turn_id: Some("auto-1".into()),
+            cause: "autonomous".into(),
+            ended: true,
+            text: String::new(),
+        },
+    )
+    .await;
+    assert!(next_event_of(&mut events, "thinking").await["type"] == "thinking");
+    worker.abort();
+    let _ = worker.await;
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn autonomous_turn_loses_to_caller_operation_and_its_side_effects_are_refused() {
+    let root = scratch_root("autonomous-loses");
+    let state = state_with_agents(&root);
+    let (token, instance_id) = foreground_alpha_turn(&state).await;
+    let operation = state
+        .0
+        .coordinator
+        .begin_prompt(&state.0.coordinator.current_identity())
+        .unwrap();
+    handle_project_turn(
+        &state,
+        autonomous_turn(token.clone(), instance_id, Some("auto-loses")),
+    )
+    .await;
+    let speak = module_call(
+        &state,
+        AgentCall {
+            call: "speak".into(),
+            token: token.clone(),
+            turn_id: Some("auto-loses".into()),
+            cause: Some("autonomous".into()),
+            args: json!({"text":"must not speak"}),
+        },
+    )
+    .await;
+    assert_eq!(speak["status"], "refused");
+    assert!(speak["reason"]
+        .as_str()
+        .unwrap()
+        .contains("no switchboard turn"));
+    let display = module_call(
+        &state,
+        AgentCall {
+            call: "display".into(),
+            token: token.clone(),
+            turn_id: Some("auto-loses".into()),
+            cause: Some("autonomous".into()),
+            args: diagram_show(),
+        },
+    )
+    .await;
+    assert_eq!(display["status"], "refused");
+    assert!(display["reason"]
+        .as_str()
+        .unwrap()
+        .contains("no switchboard turn"));
+    assert!(state
+        .0
+        .coordinator
+        .accept_side_effect(&token, None, None)
+        .is_ok());
+    assert!(state.0.coordinator.finish_operation(&operation));
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn delayed_old_autonomous_call_is_refused_after_a_new_caller_operation() {
+    let root = scratch_root("autonomous-stale-call");
+    let state = state_with_agents(&root);
+    let (token, instance_id) = foreground_alpha_turn(&state).await;
+    handle_project_turn(
+        &state,
+        autonomous_turn(token.clone(), instance_id, Some("auto-old")),
+    )
+    .await;
+    handle_project_turn(
+        &state,
+        ProjectTurn {
+            instance_id,
+            token: token.clone(),
+            turn_id: Some("auto-old".into()),
+            cause: "autonomous".into(),
+            ended: true,
+            text: String::new(),
+        },
+    )
+    .await;
+    let operation = state
+        .0
+        .coordinator
+        .begin_prompt(&state.0.coordinator.current_identity())
+        .unwrap();
+    let stale = module_call(
+        &state,
+        AgentCall {
+            call: "speak".into(),
+            token,
+            turn_id: Some("auto-old".into()),
+            cause: Some("autonomous".into()),
+            args: json!({"text":"late"}),
+        },
+    )
+    .await;
+    assert_eq!(stale["status"], "refused");
+    assert!(stale["reason"]
+        .as_str()
+        .unwrap()
+        .contains("no switchboard turn"));
+    assert!(state.0.transcript_log.lock().await.entries().is_empty());
+    assert!(state.0.coordinator.finish_operation(&operation));
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn old_host_self_wake_is_refused_but_legacy_caller_calls_still_work() {
+    let root = scratch_root("autonomous-legacy-host");
+    let state = state_with_agents(&root);
+    let (token, instance_id) = foreground_alpha_turn(&state).await;
+    handle_project_turn(&state, autonomous_turn(token.clone(), instance_id, None)).await;
+    let operation = state
+        .0
+        .coordinator
+        .begin_prompt(&state.0.coordinator.current_identity())
+        .unwrap();
+    let stale = module_call(
+        &state,
+        AgentCall {
+            call: "speak".into(),
+            token: token.clone(),
+            turn_id: None,
+            cause: Some("autonomous".into()),
+            args: json!({"text":"legacy self wake"}),
+        },
+    )
+    .await;
+    assert_eq!(stale["status"], "refused");
+    assert!(stale["reason"]
+        .as_str()
+        .unwrap()
+        .contains("no switchboard turn"));
+    let legacy_display = module_call(
+        &state,
+        AgentCall {
+            call: "display".into(),
+            token,
+            turn_id: None,
+            cause: None,
+            args: diagram_show(),
+        },
+    )
+    .await;
+    assert_eq!(legacy_display["status"], "accepted");
+    assert!(state.0.coordinator.finish_operation(&operation));
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn process_turns_settlement_preserves_a_waiting_request() {
     let root = scratch_root("process-turn-waiting");

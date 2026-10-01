@@ -725,7 +725,7 @@ impl ProjectInner {
         let Ok(mut turn) = self.autonomous_turn.lock() else {
             return false;
         };
-        if turn.is_some() {
+        if turn.is_some() || self.has_turn_collector() {
             return false;
         }
         *turn = Some(AutonomousTurn {
@@ -737,13 +737,19 @@ impl ProjectInner {
         true
     }
 
-    fn append_autonomous_text(&self, text: &str) -> bool {
+    fn append_autonomous_text(&self, turn_id: Option<&str>, text: &str) -> bool {
         let Ok(mut turn) = self.autonomous_turn.lock() else {
             return false;
         };
         let Some(turn) = turn.as_mut() else {
             return false;
         };
+        // Modern hosts stamp every text event. A mismatched or missing id is
+        // stale once this turn has an authority; legacy turns have no
+        // authority and are refused by the API callback instead.
+        if turn.turn_id.as_deref() != turn_id {
+            return false;
+        }
         let collected = turn.text.iter().map(String::len).sum::<usize>();
         if collected.saturating_add(text.len()) <= STREAM_LIMIT {
             turn.text.push(text.to_owned());
@@ -756,12 +762,7 @@ impl ProjectInner {
             return None;
         };
         let current = turn.as_ref()?;
-        if current
-            .turn_id
-            .as_deref()
-            .zip(turn_id)
-            .is_some_and(|(expected, actual)| expected != actual)
-        {
+        if current.turn_id.as_deref() != turn_id {
             return None;
         }
         let current = turn.take()?;
@@ -1424,6 +1425,13 @@ async fn pump(
                     let cause = event["cause"].as_str().unwrap_or("unknown").to_owned();
                     let turn_id = event["turn_id"].as_str().map(str::to_owned);
                     if matches!(cause.as_str(), "autonomous" | "unknown") {
+                        if inner.has_turn_collector() {
+                            // A daemon may report a nested autonomous run while
+                            // the caller's turn is still being collected. Keep
+                            // the existing collector authoritative.
+                            inner.to_turn(TurnFrame::Event { seq, event });
+                            continue;
+                        }
                         if inner.start_autonomous(turn_id.clone(), cause.clone()) {
                             inner.clear_ignored_autonomous();
                             inner
@@ -1479,8 +1487,10 @@ async fn pump(
                         inner.report_activity("life", "").await;
                         let event_turn_id = event["turn_id"].as_str();
                         if inner.ignored_autonomous(event_turn_id)
-                            || inner
-                                .append_autonomous_text(event["text"].as_str().unwrap_or_default())
+                            || inner.append_autonomous_text(
+                                event["turn_id"].as_str(),
+                                event["text"].as_str().unwrap_or_default(),
+                            )
                         {
                             continue;
                         }
@@ -1637,6 +1647,12 @@ impl LegSession {
         match self {
             Self::Operator(session) => session.label(),
             Self::Project(session) => session.label(),
+        }
+    }
+    pub fn instance_id(&self) -> u64 {
+        match self {
+            Self::Operator(_) => 0,
+            Self::Project(session) => session.instance_id(),
         }
     }
     pub fn busy(&self) -> bool {

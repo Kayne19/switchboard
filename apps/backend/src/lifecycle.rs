@@ -835,7 +835,10 @@ impl Coordinator {
             // not report a cause, so their ordinary caller calls retain the
             // old token-only behavior.
             if turn_cause.is_some_and(|cause| cause == "autonomous" || cause == "unknown") {
-                if operation.turn_id.as_deref() != turn_id {
+                let Some(turn_id) = turn_id else {
+                    return Err(LifecycleError::StaleLeg);
+                };
+                if operation.turn_id.as_deref() != Some(turn_id) {
                     return Err(LifecycleError::StaleLeg);
                 }
             } else if let Some(expected) = operation.turn_id.as_deref() {
