@@ -1418,8 +1418,12 @@ async fn complete_speech_request(
             );
             if delivered {
                 if log_spoken {
-                    if let Some(entry) =
-                        state.0.transcript_log.lock().await.add(AGENT, &text, route)
+                    if let Some(entry) = state
+                        .0
+                        .transcript_log
+                        .lock()
+                        .await
+                        .add_voiced(AGENT, &text, route)
                     {
                         emit_message(state, ServerMessage::Spoken { entry });
                     }
