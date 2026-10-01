@@ -373,6 +373,92 @@ describe("AudioPlayback replay ownership", () => {
   });
 });
 
+describe("AudioPlayback analyser safety", () => {
+  it("does not attach a source while AudioContext is suspended", () => {
+    const player = fakePlayer();
+    let attached = 0;
+    class SuspendedContext {
+      state = "suspended";
+      destination = {} as AudioNode;
+      createMediaElementSource() {
+        attached += 1;
+        throw new Error("must not attach while suspended");
+      }
+      resume() { return Promise.resolve(); }
+    }
+    vi.stubGlobal("AudioContext", SuspendedContext);
+    stubObjectUrls();
+    const playback = new AudioPlayback({
+      player: player as unknown as HTMLAudioElement,
+      idleText: "idle",
+      onStatus: () => {},
+      onChange: () => {},
+      onAudioLevel: () => {},
+      gapMs: 0,
+    });
+    playback.audioQueue.push(new Blob(["speech"]));
+    playback.playNext();
+    expect(attached, "native playback stays attached").toBe(0);
+    expect(player.playCalls).toHaveLength(1);
+  });
+
+  it("keeps native playback when graph attachment fails", () => {
+    const player = fakePlayer();
+    class BrokenContext {
+      state = "running";
+      destination = {} as AudioNode;
+      createMediaElementSource() {
+        throw new Error("unsupported graph");
+      }
+      close() { return Promise.resolve(); }
+    }
+    vi.stubGlobal("AudioContext", BrokenContext);
+    stubObjectUrls();
+    const playback = new AudioPlayback({
+      player: player as unknown as HTMLAudioElement,
+      idleText: "idle",
+      onStatus: () => {},
+      onChange: () => {},
+      onAudioLevel: () => {},
+      gapMs: 0,
+    });
+    playback.audioQueue.push(new Blob(["speech"]));
+    playback.playNext();
+    expect(player.playCalls).toHaveLength(1);
+  });
+
+  it("connects directly to the destination when analyser setup fails", () => {
+    const player = fakePlayer();
+    const connections: AudioNode[] = [];
+    const destination = {} as AudioNode;
+    const source = {
+      connect(node: AudioNode) { connections.push(node); },
+      disconnect() {},
+    } as unknown as MediaElementAudioSourceNode;
+    class BrokenAnalyserContext {
+      state = "running";
+      destination = destination;
+      createMediaElementSource() { return source; }
+      createAnalyser() { throw new Error("analyser unavailable"); }
+      close() { throw new Error("captured context must stay open"); }
+    }
+    vi.stubGlobal("AudioContext", BrokenAnalyserContext);
+    stubObjectUrls();
+    const playback = new AudioPlayback({
+      player: player as unknown as HTMLAudioElement,
+      idleText: "idle",
+      onStatus: () => {},
+      onChange: () => {},
+      onAudioLevel: () => {},
+      gapMs: 0,
+    });
+    playback.audioQueue.push(new Blob(["speech"]));
+    playback.playNext();
+    expect(connections).toEqual([destination]);
+    expect(player.playCalls).toHaveLength(1);
+  });
+});
+
 describe("AudioPlayback streaming", () => {
   class FakeSourceBuffer {
     listeners = new Map<string, Set<Handler>>();

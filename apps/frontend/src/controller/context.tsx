@@ -22,6 +22,8 @@ export interface VoiceRuntime {
   // Send a typed turn to the agent on the line. False means it was not put
   // on the wire (the line is down) and the caller should keep the text.
   sendText: (text: string) => boolean;
+  /** Current microphone or playback RMS, sampled by the indicator's RAF. */
+  getVoiceLevel?: () => number | null;
 }
 
 interface ControllerContextValue {

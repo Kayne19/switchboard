@@ -184,7 +184,7 @@ The running client architecture:
 - `apps/frontend/src/App.tsx`: V17 presentation and semantic scene rendering
 - `apps/frontend/src/controller/`: semantic state machine, reducer, and validation boundary
 - `apps/frontend/src/integration/runtime.tsx`: connects the call runtime to the controller and reports screen state
-- `apps/frontend/src/runtime/`: backend WebSocket, push-to-talk, playback, and hands-free wiring
+- `apps/frontend/src/runtime/`: backend WebSocket, push-to-talk, playback, and hands-free wiring; audio levels feed the presence indicator through requestAnimationFrame without React state updates
 - `apps/frontend/src/protocol.ts`: the WebSocket protocol in both directions; `apps/backend/src/protocol.rs` is the service's half of the messages it sends
 - `skills/switchboard/`: agent-facing `display` and `view` tools (the `switchboard` skill module)
 - `apps/backend/src/api.rs`: WebSocket state, page controls, and the handlers for the agent's module calls

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Clip } from "../../src/runtime/outbox";
 import { PushToTalk, type PushToTalkOptions } from "../../src/runtime/pushToTalk";
 
@@ -39,6 +39,24 @@ function fakeStream() {
     getTracks: () => [{ stop: () => (stops += 1) }],
     stops: () => stops,
   };
+}
+
+
+class FakeMeterAnalyser {
+  fftSize = 0;
+  connect() {}
+  disconnect() {}
+  getByteTimeDomainData(values: Uint8Array) { values.fill(200); }
+}
+
+class FakeMeterContext {
+  state = "running";
+  destination = {} as AudioNode;
+  createMediaStreamSource() { return { connect() {}, disconnect() {} } as unknown as MediaStreamAudioSourceNode; }
+  createGain() { return { gain: { value: 1 }, connect() {}, disconnect() {} } as unknown as GainNode; }
+  createAnalyser() { return new FakeMeterAnalyser() as unknown as AnalyserNode; }
+  resume() { return Promise.resolve(); }
+  close() { return Promise.resolve(); }
 }
 
 function harness(overrides: Partial<PushToTalkOptions> = {}) {
@@ -85,6 +103,8 @@ function harness(overrides: Partial<PushToTalkOptions> = {}) {
     rejectMedia: (error: unknown) => rejectMedia(error),
   };
 }
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("PushToTalk", () => {
   it("keeps one stream, releases the microphone, and keeps late recorders separate", async () => {
@@ -216,4 +236,18 @@ describe("PushToTalk", () => {
     expect(h.outbox[0].sent, "a streamed clip is already on the wire").toBe(true);
     expect(h.outbox[0].transmitted, "and keeps the stamp it went out with").toBe(true);
   });
+
+  it("feeds the microphone analyser level while recording", async () => {
+    const levels: number[] = [];
+    vi.stubGlobal("AudioContext", FakeMeterContext);
+    vi.stubGlobal("requestAnimationFrame", () => 0);
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const h = harness({ onAudioLevel: (level) => levels.push(level) });
+    const start = h.ptt.start();
+    h.resolveMedia(fakeStream());
+    await start;
+    expect(levels.at(-1)).toBeGreaterThan(0);
+    h.ptt.stop(false);
+  });
+
 });

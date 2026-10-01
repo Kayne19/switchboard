@@ -14,6 +14,7 @@ import {
 } from "../protocol";
 import { errorName } from "./errors";
 import type { Clip } from "./outbox";
+import { AudioLevelMonitor } from "./audioLevel";
 
 const STREAMING_MIME = "audio/webm;codecs=opus";
 const STREAMING_TIMESLICE_MS = 200;
@@ -31,6 +32,8 @@ export interface PushToTalkOptions {
   idleText: string;
   getUserMedia?: (constraints: MediaStreamConstraints) => Promise<MediaStream>;
   createRecorder?: (stream: MediaStream) => MediaRecorder;
+  createAudioContext?: () => AudioContext;
+  onAudioLevel?: (level: number) => void;
   newClipId: () => string;
   context: () => RecordingContext;
   /** The socket to stream on, or null when it is not open. */
@@ -54,6 +57,9 @@ interface ActiveRecording {
   chunks: Blob[];
   sequence: number;
   transferEra: string | null;
+  levelMonitor?: AudioLevelMonitor;
+  levelSink?: GainNode;
+  levelContext?: AudioContext;
 }
 
 function defaultCreateRecorder(stream: MediaStream): MediaRecorder {
@@ -67,6 +73,9 @@ export class PushToTalk {
   private readonly getUserMedia: NonNullable<PushToTalkOptions["getUserMedia"]>;
   private readonly createRecorder: NonNullable<
     PushToTalkOptions["createRecorder"]
+  >;
+  private readonly createAudioContext: NonNullable<
+    PushToTalkOptions["createAudioContext"]
   >;
   private mediaRecorder: MediaRecorder | null = null;
   private activeRecording: ActiveRecording | null = null;
@@ -84,6 +93,8 @@ export class PushToTalk {
       options.getUserMedia ??
       ((constraints) => navigator.mediaDevices.getUserMedia(constraints));
     this.createRecorder = options.createRecorder ?? defaultCreateRecorder;
+    this.createAudioContext =
+      options.createAudioContext ?? (() => new AudioContext());
   }
 
   isRecording(): boolean {
@@ -111,11 +122,25 @@ export class PushToTalk {
     this.options.pauseHandsFree();
     this.starting = true;
     this.startCancelled = false;
+    // Start/resume the context inside the press handler. The stream arrives
+    // after the permission promise, which may no longer retain user gesture
+    // activation in some browsers.
+    let levelContext: AudioContext | undefined;
+    if (this.options.onAudioLevel && typeof AudioContext !== "undefined") {
+      try {
+        levelContext = this.createAudioContext();
+        if (levelContext.state === "suspended")
+          void levelContext.resume().catch(() => undefined);
+      } catch {
+        levelContext = undefined;
+      }
+    }
     let stream: MediaStream;
     try {
       stream = await this.getUserMedia({ audio: true });
     } catch (err) {
       this.starting = false;
+      if (levelContext) void levelContext.close().catch(() => undefined);
       this.options.resumeHandsFree();
       onStatus("Microphone unavailable (" + errorName(err) + ").", true);
       return;
@@ -124,11 +149,37 @@ export class PushToTalk {
     // starting a recording the caller already cancelled.
     if (this.startCancelled) {
       this.starting = false;
+      if (levelContext) void levelContext.close().catch(() => undefined);
       stream.getTracks().forEach((t) => t.stop());
       this.options.resumeHandsFree();
       onStatus(this.options.idleText);
       this.options.onRecordingChange(false);
       return;
+    }
+    let levelMonitor: AudioLevelMonitor | undefined;
+    const onAudioLevel = this.options.onAudioLevel;
+    let levelSink: GainNode | undefined;
+    if (levelContext && onAudioLevel) {
+      try {
+        if (levelContext.state === "suspended") await levelContext.resume();
+        const source = levelContext.createMediaStreamSource(stream);
+        levelSink = levelContext.createGain();
+        levelSink.gain.value = 0;
+        levelSink.connect(levelContext.destination);
+        levelMonitor = new AudioLevelMonitor(
+          levelContext,
+          source,
+          onAudioLevel,
+          levelSink,
+        );
+        levelMonitor.start();
+      } catch {
+        levelMonitor?.disconnect();
+        levelSink?.disconnect();
+        levelMonitor = undefined;
+        if (levelContext) void levelContext.close().catch(() => undefined);
+        levelContext = undefined;
+      }
     }
     let recorder: MediaRecorder;
     try {
@@ -140,6 +191,9 @@ export class PushToTalk {
       this.mediaRecorder = recorder;
     } catch (err) {
       this.starting = false;
+      levelMonitor?.disconnect();
+      levelSink?.disconnect();
+      if (levelContext) void levelContext.close().catch(() => undefined);
       stream.getTracks().forEach((t) => t.stop());
       this.options.resumeHandsFree();
       this.options.onRecordingChange(false);
@@ -176,6 +230,9 @@ export class PushToTalk {
       chunks,
       sequence: 0,
       transferEra: recordingTransferEra,
+      levelMonitor,
+      levelSink,
+      levelContext,
     };
     this.activeRecording = recording;
     recorder.ondataavailable = (e) => {
@@ -213,6 +270,10 @@ export class PushToTalk {
       }
     }
     recorder.onstop = () => {
+      recording.levelMonitor?.disconnect();
+      recording.levelSink?.disconnect();
+      if (recording.levelContext)
+        void recording.levelContext.close().catch(() => undefined);
       releaseStream();
       this.options.resumeHandsFree();
       if (this.activeRecording?.recorder === recorder)
@@ -258,6 +319,10 @@ export class PushToTalk {
         this.activeRecording = null;
       if (this.mediaRecorder === recorder) this.mediaRecorder = null;
       this.starting = false;
+      recording.levelMonitor?.disconnect();
+      recording.levelSink?.disconnect();
+      if (recording.levelContext)
+        void recording.levelContext.close().catch(() => undefined);
       releaseStream();
       this.options.resumeHandsFree();
       this.options.onRecordingChange(false);
@@ -274,6 +339,9 @@ export class PushToTalk {
       recorderFailed = true;
       if (this.activeRecording?.recorder === recorder)
         this.activeRecording = null;
+      levelMonitor?.disconnect();
+      levelSink?.disconnect();
+      if (levelContext) void levelContext.close().catch(() => undefined);
       releaseStream();
       this.options.resumeHandsFree();
       this.mediaRecorder = null;

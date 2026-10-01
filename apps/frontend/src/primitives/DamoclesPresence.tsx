@@ -11,6 +11,7 @@ export type PresenceSize = 'idle' | 'conversation' | 'rail' | 'compact';
 export function DamoclesPresence({
   listening,
   onToggleListening,
+  voiceLevel,
   context = 'GENERAL',
   size = 'rail',
   showCaption = true,
@@ -19,6 +20,8 @@ export function DamoclesPresence({
   activity = null,
 }: {
   listening: boolean;
+  /** Sampled on animation frames, so level changes do not rerender the scene. */
+  voiceLevel?: () => number | null;
   onToggleListening?: () => void;
   context?: string;
   size?: PresenceSize;
@@ -38,7 +41,7 @@ export function DamoclesPresence({
       <div className="damocles-presence__signal">
         <AnimatePresence mode="wait" initial={false}>
           {listening ? (
-            <VoiceIndicator key="voice" compact={size === 'compact' || size === 'rail'} />
+            <VoiceIndicator key="voice" compact={size === 'compact' || size === 'rail'} getLevel={voiceLevel} />
           ) : showCaption ? (
             <motion.div key="caption" className="damocles-presence__caption tech micro" title={shownActivity?.detail || undefined} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.16 }}>
               {shownActivity ? `WORKING / ${activitySummary(shownActivity).title}` : 'VOICE / ACTIVE'}<br/><span className="muted">CONTEXT / {context}</span>

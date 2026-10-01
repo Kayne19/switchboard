@@ -30,6 +30,7 @@ import {
 } from "../protocol";
 import type { ScreenStateReport } from "../controller/types";
 import { AudioPlayback } from "./audioPlayback";
+import { selectVoiceLevel } from "./audioLevel";
 import { errorText } from "./errors";
 import {
   lineStateFromStatus,
@@ -58,6 +59,8 @@ const RECONNECT_DELAY_MS = 1_500;
 export interface RuntimeState {
   connected: boolean;
   recording: boolean;
+  speaking: boolean;
+  voiceLevelAvailable: boolean;
   status: string;
   statusError: boolean;
   handsFree: boolean;
@@ -80,6 +83,8 @@ export interface RuntimeState {
 export const INITIAL_RUNTIME_STATE: RuntimeState = {
   connected: false,
   recording: false,
+  speaking: false,
+  voiceLevelAvailable: false,
   status: "Connecting…",
   statusError: false,
   handsFree: false,
@@ -113,6 +118,7 @@ export interface CallRuntimeOptions {
   player?: HTMLAudioElement;
   getUserMedia?: PushToTalkOptions["getUserMedia"];
   createRecorder?: PushToTalkOptions["createRecorder"];
+  createAudioContext?: PushToTalkOptions["createAudioContext"];
   /** Loads the local wake-word detector the first time hands-free starts. */
   loadWakeDetector?: () => Promise<WakeDetector>;
   createHandsFree?: (options: HandsFreeControllerOptions) => HandsFreeController;
@@ -171,6 +177,10 @@ export class CallRuntime {
   private hangupPending = false;
 
   private handsFree: HandsFreeController | null = null;
+  private callerVoiceLevel = 0;
+  private agentVoiceLevel = 0;
+  private callerLevelAvailable = false;
+  private agentLevelAvailable = false;
   private handsFreeStartup: Promise<void> | null = null;
   private pendingResponseBarrier: {
     responseId: string;
@@ -199,12 +209,30 @@ export class CallRuntime {
       player: options.player,
       idleText: IDLE_TEXT,
       onStatus: (text, error) => this.setStatus(text, error),
-      onChange: () => this.maybeCompleteResponseBarrier(),
+      onAudioLevel: (level) => {
+        this.agentVoiceLevel = level;
+        if (!this.agentLevelAvailable) {
+          this.agentLevelAvailable = true;
+          this.update({ voiceLevelAvailable: true });
+        }
+      },
+      onChange: () => {
+        this.update({ speaking: this.playback.isPlaying });
+        this.maybeCompleteResponseBarrier();
+      },
     });
     this.pushToTalk = new PushToTalk({
       idleText: IDLE_TEXT,
       getUserMedia: options.getUserMedia,
       createRecorder: options.createRecorder,
+      createAudioContext: options.createAudioContext,
+      onAudioLevel: (level) => {
+        this.callerVoiceLevel = level;
+        if (!this.callerLevelAvailable) {
+          this.callerLevelAvailable = true;
+          this.update({ voiceLevelAvailable: true });
+        }
+      },
       newClipId: () => this.newClipId(),
       context: () => ({
         epoch: this.turnEpoch,
@@ -224,6 +252,16 @@ export class CallRuntime {
 
   get currentState(): RuntimeState {
     return { ...this.state };
+  }
+
+  get currentVoiceLevel(): number | null {
+    if (this.state.speaking && !this.agentLevelAvailable) return null;
+    if (!this.state.speaking && !this.callerLevelAvailable) return null;
+    return selectVoiceLevel(
+      this.callerVoiceLevel,
+      this.agentVoiceLevel,
+      this.state.speaking,
+    );
   }
 
   start(): void {
@@ -586,6 +624,13 @@ export class CallRuntime {
           isPttActive: () => this.pushToTalk.isActive,
           onClip: (audio, mime, epoch) =>
             this.submitHandsFreeClip(audio, mime, epoch),
+          onAudioLevel: (level) => {
+            this.callerVoiceLevel = level;
+            if (!this.callerLevelAvailable) {
+              this.callerLevelAvailable = true;
+              this.update({ voiceLevelAvailable: true });
+            }
+          },
           onState: (detail) => this.renderHandsFreeState(detail),
         };
         this.handsFree = this.options.createHandsFree

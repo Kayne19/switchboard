@@ -44,6 +44,7 @@ function frameText(data: unknown, field: 'title' | 'subject' | 'label' | 'subtit
 interface SceneProps {
   state: ControllerState;
   onToggleListening: () => void;
+  voiceLevel?: () => number | null;
   onFocus: (id: string | null) => void;
   /** Opens the conversation history drawer; absent while there is no conversation. */
   onOpenHistory?: () => void;
@@ -218,17 +219,18 @@ function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux') {
   }
 }
 
-type IdleSceneProps = Pick<SceneProps, 'state' | 'onToggleListening'> & Partial<Pick<SceneProps, 'setTranscriptOpen'>>;
+type IdleSceneProps = Pick<SceneProps, 'state' | 'onToggleListening' | 'voiceLevel'> & Partial<Pick<SceneProps, 'setTranscriptOpen'>>;
 
 // With an opener, the idle stage keeps the transcript toggle in its
 // conversation-page place, hidden until the pointer reaches the bottom band,
 // so the typed line is reachable before anyone has spoken.
-export function IdleScene({ state, onToggleListening, setTranscriptOpen }: IdleSceneProps) {
+export function IdleScene({ state, onToggleListening, voiceLevel, setTranscriptOpen }: IdleSceneProps) {
   const isPresent = useIsPresent();
   return (
     <motion.section className="scene scene--idle" data-scene="idle" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
       <DamoclesPresence
         listening={state.listening}
+        voiceLevel={voiceLevel}
         onToggleListening={onToggleListening}
         size="idle"
         showCaption={false}
@@ -238,7 +240,7 @@ export function IdleScene({ state, onToggleListening, setTranscriptOpen }: IdleS
   );
 }
 
-export function ConversationScene({ state, onToggleListening, setTranscriptOpen }: SceneProps) {
+export function ConversationScene({ state, onToggleListening, voiceLevel, setTranscriptOpen }: SceneProps) {
   const comp = buildCompositionModel(state);
   const object =
     comp.runtimeConversation ??
@@ -262,6 +264,7 @@ export function ConversationScene({ state, onToggleListening, setTranscriptOpen 
       <div className="conversation-presence-band">
         <DamoclesPresence
           listening={state.listening}
+          voiceLevel={voiceLevel}
           onToggleListening={onToggleListening}
           context={message.context ?? 'CONVERSATION'}
           size="conversation"
@@ -311,12 +314,12 @@ function chartNotesByPanel(
   return byPanel;
 }
 
-export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory }: SceneProps) {
+export function TrainingScene({ state, onToggleListening, voiceLevel, onFocus, onOpenHistory }: SceneProps) {
   const charts = objectsOfType<ChartData>(state, 'chart');
   const metrics = objectsOfType<MetricData>(state, 'metric');
   const [progress, ...railProgress] = objectsOfType<ProgressData>(state, 'progress');
   const primary = charts.find((chart) => chart.role === 'primary') ?? charts[0];
-  if (!primary) return <IdleScene state={state} onToggleListening={onToggleListening} />;
+  if (!primary) return <IdleScene state={state} onToggleListening={onToggleListening} voiceLevel={voiceLevel} />;
   // The notes lie over the panel of the chart they annotate rather than in a
   // band that shrinks it; the layer keeps them clear of one another, of the
   // points they name, and of the traces wherever the panel has the room.
@@ -366,6 +369,7 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
         <motion.aside className="content-rail" layout>
           <DamoclesPresence
             listening={state.listening}
+            voiceLevel={voiceLevel}
             onToggleListening={onToggleListening}
             context={primary.data.context ?? 'TRAINING RUN'}
             size="rail"
@@ -380,10 +384,10 @@ export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory
   );
 }
 
-export function ArchitectureScene({ state, onToggleListening, onFocus, onOpenHistory }: SceneProps) {
+export function ArchitectureScene({ state, onToggleListening, voiceLevel, onFocus, onOpenHistory }: SceneProps) {
   const [calloutPlaced, setCalloutPlaced] = useState(false);
   const primaryObjectValue = primaryObject(state);
-  if (!primaryObjectValue) return <IdleScene state={state} onToggleListening={onToggleListening} />;
+  if (!primaryObjectValue) return <IdleScene state={state} onToggleListening={onToggleListening} voiceLevel={voiceLevel} />;
   const diagram = cast.diagram(primaryObjectValue);
   const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), diagram.id);
   const note = annotationForScene(state, noteObject, liveChatMessage(state));
@@ -408,7 +412,7 @@ export function ArchitectureScene({ state, onToggleListening, onFocus, onOpenHis
           </ObjectSurface>
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
-          <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={diagram.data.context ?? 'SYSTEM MAP'} size="rail" activity={state.activity} />
+          <DamoclesPresence listening={state.listening} voiceLevel={voiceLevel} onToggleListening={onToggleListening} context={diagram.data.context ?? 'SYSTEM MAP'} size="rail" activity={state.activity} />
           <RailDetails state={state} metrics={metrics} note={railNote} noteObject={calloutPlaced ? undefined : noteObject} progressList={progressList} onFocus={onFocus} onOpenHistory={onOpenHistory} />
         </motion.aside>
       </div>
@@ -417,9 +421,9 @@ export function ArchitectureScene({ state, onToggleListening, onFocus, onOpenHis
   );
 }
 
-export function DocumentScene({ state, onToggleListening, onFocus, onOpenHistory }: SceneProps) {
+export function DocumentScene({ state, onToggleListening, voiceLevel, onFocus, onOpenHistory }: SceneProps) {
   const primaryObjectValue = primaryObject(state);
-  if (!primaryObjectValue) return <IdleScene state={state} onToggleListening={onToggleListening} />;
+  if (!primaryObjectValue) return <IdleScene state={state} onToggleListening={onToggleListening} voiceLevel={voiceLevel} />;
   const document = cast.document(primaryObjectValue);
   const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), document.id);
   const note = annotationForScene(state, noteObject, liveChatMessage(state));
@@ -441,7 +445,7 @@ export function DocumentScene({ state, onToggleListening, onFocus, onOpenHistory
           </ObjectSurface>
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
-          <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={document.data.context ?? 'DOCUMENT'} size="rail" activity={state.activity} />
+          <DamoclesPresence listening={state.listening} voiceLevel={voiceLevel} onToggleListening={onToggleListening} context={document.data.context ?? 'DOCUMENT'} size="rail" activity={state.activity} />
           <RailDetails state={state} metrics={metrics} note={note} noteObject={noteObject} progressList={progressList} onFocus={onFocus} onOpenHistory={onOpenHistory} />
         </motion.aside>
       </div>
@@ -450,9 +454,9 @@ export function DocumentScene({ state, onToggleListening, onFocus, onOpenHistory
   );
 }
 
-export function CodeScene({ state, onToggleListening, onFocus, onOpenHistory }: SceneProps) {
+export function CodeScene({ state, onToggleListening, voiceLevel, onFocus, onOpenHistory }: SceneProps) {
   const primaryObjectValue = primaryObject(state);
-  if (!primaryObjectValue) return <IdleScene state={state} onToggleListening={onToggleListening} />;
+  if (!primaryObjectValue) return <IdleScene state={state} onToggleListening={onToggleListening} voiceLevel={voiceLevel} />;
   const code = cast.code(primaryObjectValue);
   const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), code.id);
   const note = annotationForScene(state, noteObject, liveChatMessage(state));
@@ -474,7 +478,7 @@ export function CodeScene({ state, onToggleListening, onFocus, onOpenHistory }: 
           </ObjectSurface>
         </ObjectMotion>
         <motion.aside className="content-rail" layout>
-          <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={code.data.context ?? 'SOURCE'} size="rail" activity={state.activity} />
+          <DamoclesPresence listening={state.listening} voiceLevel={voiceLevel} onToggleListening={onToggleListening} context={code.data.context ?? 'SOURCE'} size="rail" activity={state.activity} />
           <RailDetails state={state} metrics={metrics} note={note} noteObject={noteObject} progressList={progressList} onFocus={onFocus} onOpenHistory={onOpenHistory} />
         </motion.aside>
       </div>
@@ -485,10 +489,10 @@ export function CodeScene({ state, onToggleListening, onFocus, onOpenHistory }: 
 
 const AUX_VISUAL_TYPES = new Set(['chart', 'diagram', 'document', 'code']);
 
-export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory }: SceneProps) {
+export function ComposedScene({ state, onToggleListening, voiceLevel, onFocus, onOpenHistory }: SceneProps) {
   const comp = buildCompositionModel(state);
   const primary = comp.primary;
-  if (!primary) return <IdleScene state={state} onToggleListening={onToggleListening} />;
+  if (!primary) return <IdleScene state={state} onToggleListening={onToggleListening} voiceLevel={voiceLevel} />;
 
   const primaryMetrics = comp.primaryMetrics;
   const isMetricPrimary = primary.type === 'metric' || primaryMetrics.length > 0;
