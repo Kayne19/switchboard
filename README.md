@@ -58,21 +58,17 @@ heard, so the switchboard synthesizes its reply directly. No mismatch to fix.
 
 A **project agent** speaks for itself, with the `speak` tool. This is the part
 worth understanding: a coding agent writes for a reader — markdown, paths,
-diffs — and reading that aloud is the wrong output in the wrong place. Worse,
-the switchboard cannot voice a written reply until the turn *settles*, so a
-two-minute stretch of tool calls is two minutes of silence, which on a phone
-call is indistinguishable from a dropped connection.
+diffs — and reading that aloud is the wrong output in the wrong place. A
+written reply is kept for the transcript and screen when the turn *settles*;
+it is not synthesized, so a two-minute stretch of tool calls is simply a
+silent stretch on the phone call.
 
 So the agent decides what to say and when, mid-turn, and its written output
 stays written. `switchboard.speak` (the Python skill module) sends the line
 through the host agent to this service as a `module_call` on the host link,
 and the service pushes audio straight to the browser without waiting for
-anything.
-
-The fallback matters too: if an agent finishes a turn having never called
-`speak`, the switchboard voices its written reply rather than leaving the caller
-in silence. It knows which happened because every `speak` reaches it as a
-module call during the turn.
+anything. If the agent does not call `speak`, its written reply stays in the
+transcript and on screen without being synthesized.
 
 `speak` is deliberately **not** MCP. Pi has no built-in MCP because tool
 definitions are expensive context; an adapter would add a config file, a
@@ -208,8 +204,8 @@ distinct from the session's id. Module calls carry it, and a stale one is
 refused, so speech or a display from a leg the caller has left since is not
 taken as the current leg's; it is a correlation value, not authentication (the
 host link's token is). A failed speech delivery is returned to
-the agent as a `refused` or `failed` result, so the written reply remains
-eligible for fallback synthesis.
+the agent as a `refused` or `failed` result. The agent can try again when the
+leg is live; its written reply remains in the transcript and on screen.
 
 ## Connecting without the operator
 

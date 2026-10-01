@@ -255,8 +255,6 @@ fn utility_signals_accept_second_opinions_and_split_parts() {
             "confident": true,
         }))
         .unwrap(),
-        tool_call_id: None,
-        successful_end: true,
     };
     assert_eq!(
         utility_decision(&[opinion]),
@@ -275,8 +273,6 @@ fn utility_signals_accept_second_opinions_and_split_parts() {
             ],
         }))
         .unwrap(),
-        tool_call_id: None,
-        successful_end: true,
     };
     assert_eq!(
         utility_decision(&[split]),
@@ -302,8 +298,6 @@ fn utility_route_regression_becomes_single_target_second_opinion() {
             "mode": "continue",
         }))
         .unwrap(),
-        tool_call_id: None,
-        successful_end: true,
     };
     assert_eq!(
         utility_decision(&[route]),
@@ -455,8 +449,6 @@ fn an_omitted_mode_continues_and_an_omitted_confidence_is_not_confident() {
     let opinion = crate::pi_client::Signal {
         name: "second_opinion".into(),
         args: serde_json::from_value(json!({"target": "atlas"})).unwrap(),
-        tool_call_id: None,
-        successful_end: true,
     };
     assert_eq!(
         utility_decision(&[opinion]),

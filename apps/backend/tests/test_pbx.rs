@@ -366,7 +366,7 @@ fn transfer_model_requests_obey_the_swap_gate_and_pin_defaults() {
 }
 
 #[test]
-fn transfer_handoff_is_silent_but_model_notes_and_failures_are_spoken() {
+fn project_written_replies_stay_silent_but_switchboard_errors_are_spoken() {
     let board = board_with(vec![], true);
     let reply = board.reply_with_turn(Turn {
         text: "Ready.".into(),
@@ -374,7 +374,8 @@ fn transfer_handoff_is_silent_but_model_notes_and_failures_are_spoken() {
         failed: false,
         error: String::new(),
     });
-    assert_eq!(reply.to_speak, ["Ready."]);
+    assert_eq!(reply.text, "Ready.");
+    assert!(reply.to_speak.is_empty());
 
     let failed =
         board.reply_transfer_error("The project did not answer.".into(), Some("failed".into()));
@@ -1091,7 +1092,7 @@ async fn an_agent_to_agent_transfer_ends_the_old_session_after_the_new_one_is_up
     let r2 = board.handle("please hand off to beta").await;
     assert_eq!(r2.route, "alpha");
     assert_eq!(r2.text, "Alpha transferring to Beta.");
-    assert_eq!(r2.to_speak, vec!["Alpha transferring to Beta."]);
+    assert!(r2.to_speak.is_empty());
     // The stale host's transfer signal is refused, so beta is never started.
     assert_eq!(log.named("create_session").len(), 1);
     assert!(log.named("kill").is_empty());
@@ -1334,7 +1335,7 @@ async fn a_module_call_with_a_stale_call_token_is_refused() {
 }
 
 #[tokio::test]
-async fn a_delivered_speak_counts_as_the_agent_having_spoken() {
+async fn a_delivered_speak_keeps_the_written_turn_reply_silent() {
     let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
     let calls = Arc::new(StdMutex::new(Vec::new()));
     let seen = Arc::clone(&calls);
@@ -1360,7 +1361,12 @@ async fn a_delivered_speak_counts_as_the_agent_having_spoken() {
 
     assert_eq!(reply.route, "alpha");
     assert_eq!(reply.text, "Written detail.");
-    assert!(reply.to_speak.is_empty(), "spoken twice: {reply:?}");
+    // The direct speak call already delivered its own audio. The settled
+    // written reply remains transcript-only and must not repeat it.
+    assert!(
+        reply.to_speak.is_empty(),
+        "written reply was synthesized: {reply:?}"
+    );
     let calls = calls.lock().unwrap().clone();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].0, "speak");

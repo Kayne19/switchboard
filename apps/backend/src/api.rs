@@ -2159,7 +2159,7 @@ async fn speak(state: AppState, req: Speak) -> Response {
         let (code, detail) = match error {
             crate::lifecycle::LifecycleError::CandidateSideEffect => (
                 axum::http::StatusCode::CONFLICT,
-                "the line is not live until this transfer completes: put it in your written reply instead and the switchboard will read it out",
+                "the line is not live until this transfer completes: do not retry from this turn; the caller can see your written reply on screen",
             ),
             _ => (
                 axum::http::StatusCode::CONFLICT,
