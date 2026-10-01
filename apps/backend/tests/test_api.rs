@@ -466,6 +466,7 @@ async fn final_response_barrier_is_emitted_once_after_a_settled_turn() {
         route_label: "Operator".into(),
         error: None,
         to_speak: Vec::new(),
+        voiced: false,
         delivery_generation: None,
     };
 
@@ -500,6 +501,7 @@ async fn stale_final_response_does_not_emit_a_barrier() {
         route_label: "Operator".into(),
         error: None,
         to_speak: Vec::new(),
+        voiced: false,
         delivery_generation: None,
     };
 
@@ -836,6 +838,7 @@ async fn superseded_reply_is_not_logged_or_broadcast() {
         route_label: "Operator".into(),
         error: None,
         to_speak: Vec::new(),
+        voiced: false,
         delivery_generation: None,
     };
 
@@ -2681,6 +2684,7 @@ fn operator_reply() -> crate::pbx::Reply {
         route_label: "Operator".into(),
         error: None,
         to_speak: Vec::new(),
+        voiced: false,
         delivery_generation: None,
     }
 }
@@ -3118,7 +3122,7 @@ async fn a_connection_gets_epoch_status_history_and_scene_before_any_live_event(
         .transcript_log
         .lock()
         .await
-        .add(CALLER, "put me through", OPERATOR);
+        .add_with_id(CALLER, "put me through", OPERATOR, None);
     let mut show = diagram_show();
     show["token"] = json!(state.0.coordinator.current_identity().token);
     let (code, _) = agent_call_json(&state, "/display", show).await;
@@ -3291,7 +3295,7 @@ async fn a_connection_that_falls_a_queue_behind_is_dropped_and_a_reconnect_is_wh
         .transcript_log
         .lock()
         .await
-        .add(CALLER, "still here", OPERATOR);
+        .add_with_id(CALLER, "still here", OPERATOR, None);
     let served = Served::start(&state).await;
 
     // Holding the transcript keeps the connection's writer on its snapshot,
@@ -5396,6 +5400,7 @@ fn floor_rewrite_context_names_who_spoke() {
             route: "switchboard".into(),
             ts: 1.0,
             id: None,
+            voiced: false,
         },
         crate::history::TranscriptEntry {
             role: crate::history::AGENT.into(),
@@ -5403,6 +5408,7 @@ fn floor_rewrite_context_names_who_spoke() {
             route: "switchboard".into(),
             ts: 2.0,
             id: None,
+            voiced: true,
         },
         crate::history::TranscriptEntry {
             role: crate::history::AGENT.into(),
@@ -5410,6 +5416,7 @@ fn floor_rewrite_context_names_who_spoke() {
             route: "grape".into(),
             ts: 3.0,
             id: None,
+            voiced: true,
         },
     ];
     assert_eq!(

@@ -1363,6 +1363,7 @@ async fn a_delivered_speak_keeps_the_written_turn_reply_silent() {
     assert_eq!(reply.text, "Written detail.");
     // The direct speak call already delivered its own audio. The settled
     // written reply remains transcript-only and must not repeat it.
+    assert!(!reply.voiced, "the written reply was voiced: {reply:?}");
     assert!(
         reply.to_speak.is_empty(),
         "written reply was synthesized: {reply:?}"
@@ -1957,6 +1958,10 @@ async fn hanging_up_the_operator_discards_its_process_and_the_next_turn_starts_a
     assert_eq!(board.operator_note, None);
     let reply = board.handle("are you there?").await;
     assert_eq!(reply.text, "Operator here.");
+    assert!(
+        reply.voiced,
+        "the operator reply should be voiced: {reply:?}"
+    );
     let second = board.operator.as_ref().expect("a fresh operator");
     assert!(!second.same_session(&first));
     board.shutdown().await;

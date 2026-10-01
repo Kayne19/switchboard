@@ -86,8 +86,13 @@ pub enum ServerMessage {
         detail: String,
         label: String,
     },
-    /// A turn settled with this written reply.
-    Reply { text: String, route: String },
+    /// A turn settled with this reply; `voiced` says whether its text was
+    /// synthesized for the caller.
+    Reply {
+        text: String,
+        route: String,
+        voiced: bool,
+    },
     /// A line was spoken to the caller and kept in the transcript.
     Spoken { entry: TranscriptEntry },
     /// The transcript so far, in every connection's snapshot.

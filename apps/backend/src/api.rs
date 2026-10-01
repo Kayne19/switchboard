@@ -1014,8 +1014,12 @@ async fn process_speech(state: AppState) {
             Ok((bytes, delivered)) => {
                 tracing::info!(chars = text.chars().count(), bytes, elapsed = ?started.elapsed(), "synthesized a mid-turn line");
                 if delivered {
-                    if let Some(entry) =
-                        state.0.transcript_log.lock().await.add(AGENT, &text, route)
+                    if let Some(entry) = state
+                        .0
+                        .transcript_log
+                        .lock()
+                        .await
+                        .add_voiced(AGENT, &text, route)
                     {
                         emit_message(&state, ServerMessage::Spoken { entry });
                     }
@@ -1851,7 +1855,7 @@ async fn hangup(State(state): State<AppState>) -> impl IntoResponse {
                 .transcript_log
                 .lock()
                 .await
-                .add(AGENT, line, state.0.coordinator.route())
+                .add_voiced(AGENT, line, state.0.coordinator.route())
         {
             emit_message(&state, ServerMessage::Spoken { entry });
         }
@@ -2836,7 +2840,7 @@ async fn deliver_page_reply_if_current(
                 .transcript_log
                 .lock()
                 .await
-                .add(AGENT, &reply.text, reply.route.clone())
+                .add_voiced(AGENT, &reply.text, reply.route.clone())
         {
             emit_message(state, ServerMessage::Spoken { entry });
         }
@@ -2874,18 +2878,20 @@ async fn deliver_turn_if_current(
         return true;
     }
     if !reply.text.is_empty() {
-        state
-            .0
-            .transcript_log
-            .lock()
-            .await
-            .add(AGENT, &reply.text, reply.route.clone());
+        state.0.transcript_log.lock().await.add_with_id_and_voiced(
+            AGENT,
+            &reply.text,
+            reply.route.clone(),
+            None,
+            reply.voiced,
+        );
     }
     emit_message(
         state,
         ServerMessage::Reply {
             text: reply.text.clone(),
             route: reply.route.clone(),
+            voiced: reply.voiced,
         },
     );
     publish_status(state);

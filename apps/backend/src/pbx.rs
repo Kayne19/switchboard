@@ -83,6 +83,8 @@ pub struct Reply {
     pub route_label: String,
     pub error: Option<String>,
     pub to_speak: Vec<String>,
+    /// Whether this reply contains text synthesized for the caller.
+    pub voiced: bool,
     #[serde(skip)]
     pub(crate) delivery_generation: Option<u64>,
 }
@@ -98,13 +100,15 @@ impl Reply {
             .iter()
             .filter(|u| u.synthesize && !u.text.is_empty())
             .map(|u| u.text.clone())
-            .collect();
+            .collect::<Vec<_>>();
+        let voiced = !to_speak.is_empty();
         Self {
             text,
             route: route.into(),
             route_label: label.into(),
             error,
             to_speak,
+            voiced,
             delivery_generation: None,
         }
     }

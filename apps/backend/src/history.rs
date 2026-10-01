@@ -13,6 +13,9 @@ pub struct TranscriptEntry {
     pub ts: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// Whether this agent line was voiced to the caller.
+    #[serde(default)]
+    pub voiced: bool,
 }
 
 #[derive(Debug)]
@@ -29,13 +32,13 @@ impl TranscriptLog {
         }
     }
 
-    pub fn add(
+    pub fn add_voiced(
         &mut self,
         role: impl Into<String>,
         text: &str,
         route: impl Into<String>,
     ) -> Option<TranscriptEntry> {
-        self.add_with_id(role, text, route, None)
+        self.add_with_id_and_voiced(role, text, route, None, true)
     }
 
     pub fn add_with_id(
@@ -44,6 +47,17 @@ impl TranscriptLog {
         text: &str,
         route: impl Into<String>,
         id: Option<String>,
+    ) -> Option<TranscriptEntry> {
+        self.add_with_id_and_voiced(role, text, route, id, false)
+    }
+
+    pub fn add_with_id_and_voiced(
+        &mut self,
+        role: impl Into<String>,
+        text: &str,
+        route: impl Into<String>,
+        id: Option<String>,
+        voiced: bool,
     ) -> Option<TranscriptEntry> {
         let text = text.trim();
         if text.is_empty() || self.limit == 0 {
@@ -58,6 +72,7 @@ impl TranscriptLog {
                 .unwrap_or_default()
                 .as_secs_f64(),
             id,
+            voiced,
         };
         if self.entries.len() == self.limit {
             self.entries.pop_front();

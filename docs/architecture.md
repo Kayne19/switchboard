@@ -386,6 +386,7 @@ capture
   -> current-generation turn dispatch
   -> Pi session and tool loop
   -> speak/display signal (or a written reply with no audio)
+  -> reply/History voiced metadata for the live conversation surface
   -> TTS transport
   -> ordered audio events
   -> browser playback

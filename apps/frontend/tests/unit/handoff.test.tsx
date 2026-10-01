@@ -117,8 +117,10 @@ async function callTheOperator() {
 
   await receive({ type: 'transcript', id: 'c1', text: 'Put me through to switchboard.' });
   await receive({
-    type: 'spoken',
-    entry: transcriptEntry({ id: 'a1', role: 'agent', text: 'Putting you through to switchboard.' }),
+    type: 'reply',
+    text: 'Putting you through to switchboard.',
+    route: 'operator',
+    voiced: true,
   });
   expect(sceneKind(latest)).toBe('conversation');
   scenes = ['conversation'];
@@ -183,7 +185,7 @@ describe('operator-to-project handoff', () => {
       type: 'spoken',
       entry: transcriptEntry({ id: 'a2', role: 'agent', text: 'The project line is ready.' }),
     });
-    await receive({ type: 'reply', text: 'Switchboard here. What do you need?', route: 'switchboard' });
+    await receive({ type: 'reply', text: 'Switchboard here. What do you need?', route: 'switchboard', voiced: false });
 
     // The written reply is still in the full transcript, but the live box
     // stays on the line the agent actually spoke.
@@ -206,7 +208,7 @@ describe('operator-to-project handoff', () => {
     expect(sceneKind(latest)).toBe('architecture');
 
     await receive(projectStatus);
-    await receive({ type: 'reply', text: 'That is the call path.', route: 'switchboard' });
+    await receive({ type: 'reply', text: 'That is the call path.', route: 'switchboard', voiced: false });
 
     expect(sceneKind(latest)).toBe('architecture');
     expect(latest.agentOrder).toEqual(['call-path']);
@@ -248,6 +250,18 @@ describe('operator-to-project handoff', () => {
 
     expect(conversation().segments).toEqual([]);
     expect(conversation().transcript?.at(-1)?.text).toBe('The written status is complete.');
+  });
+
+  it('restores a voiced reply from history after reconnect', async () => {
+    await callTheOperator();
+    await receive({ type: 'history', entries: [
+      transcriptEntry({ role: 'caller', text: 'Continue the work.' }),
+      transcriptEntry({ role: 'agent', text: 'Written status only.', voiced: false }),
+      transcriptEntry({ role: 'agent', text: 'The operator is back.', voiced: true }),
+    ] });
+
+    expect(conversation().segments[0].text).toBe('The operator is back.');
+    expect(conversation().transcript?.at(-1)?.text).toBe('The operator is back.');
   });
 
   it('clears the conversation when a reconnect finds the server has none', async () => {

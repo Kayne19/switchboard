@@ -21,6 +21,8 @@ interface TranscriptLine {
   speaker: string;
   text: string;
   id?: string;
+  /** Whether this agent line was voiced to the caller. */
+  voiced?: boolean;
   /** The route that spoke: `operator` or a project id. */
   agent?: string;
 }
@@ -33,6 +35,7 @@ function normalizeHistory(entries: TranscriptEntry[]): TranscriptLine[] {
             speaker: entry.role === "caller" ? "CALLER" : "DAMOCLES",
             text: entry.text,
             id: entry.id || undefined,
+            voiced: entry.voiced,
             agent: entry.role === "caller" ? undefined : entry.route || undefined,
           },
         ]
@@ -154,11 +157,10 @@ export function RuntimeIntegration() {
         }
         case "history": {
           transcriptRef.current = normalizeHistory(message.entries);
-          // History has one transcript shape for written replies and spoken
-          // lines. Do not guess that an agent line was spoken: after a
-          // reconnect, keep the live box empty rather than putting written
-          // text on it. New `spoken` messages will populate it again.
-          currentResponseRef.current = "";
+          const latestVoiced = [...transcriptRef.current]
+            .reverse()
+            .find((entry) => entry.voiced);
+          currentResponseRef.current = latestVoiced?.text ?? "";
           if (transcriptRef.current.length > 0) {
             showConversation();
           } else {
@@ -185,6 +187,7 @@ export function RuntimeIntegration() {
             speaker: "DAMOCLES",
             text: body,
             id: message.entry.id || undefined,
+            voiced: true,
             agent: message.entry.route || undefined,
           });
           currentResponseRef.current = body;
@@ -204,12 +207,22 @@ export function RuntimeIntegration() {
           appendTranscript({
             speaker: "DAMOCLES",
             text: body,
+            voiced: message.voiced,
             agent: message.route || undefined,
           });
-          // Written replies belong in the transcript drawer. Keep the live
-          // response on the last line that was actually spoken; an agent can
-          // finish a turn without speaking at all.
-          showConversation();
+          if (message.voiced) {
+            currentResponseRef.current = body;
+            showConversation(body);
+            dispatch({
+              op: "runtime_say",
+              target: RUNTIME_CONVERSATION_ID,
+              text: body,
+            });
+          } else {
+            // Unvoiced written replies belong in the transcript drawer. Keep
+            // the live response on the last line that was actually spoken.
+            showConversation();
+          }
           break;
         }
         case "thinking":

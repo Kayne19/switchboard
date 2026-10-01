@@ -190,7 +190,7 @@ test.describe("call runtime", () => {
         },
       });
       fixtureServer.broadcast(projectStatus);
-      fixtureServer.broadcast({ type: "reply", text: "That is the call path.", route: "switchboard" });
+      fixtureServer.broadcast({ type: "reply", text: "That is the call path.", route: "switchboard", voiced: false });
 
       await expect(page.locator('main.stage[data-scene-kind="architecture"]')).toBeVisible();
       await expect(page.locator('[data-testid="diagram"]')).toContainText("AGENT");
