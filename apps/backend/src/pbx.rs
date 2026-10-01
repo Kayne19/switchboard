@@ -545,6 +545,57 @@ impl BackgroundRegistry {
     }
 }
 
+/// What routing reads about the call, without the PBX lock. The turn worker
+/// holds that lock for a whole prompt; a caller utterance that arrives during
+/// the prompt must still be routed while it runs, or it can never be steered
+/// into it (#108). Every field is shared with the switchboard, not copied.
+#[derive(Clone)]
+pub struct RoutingView {
+    hosts: Hosts,
+    registry: Arc<Registry>,
+    router: Router,
+    coordinator: Coordinator,
+    background_agents: BackgroundRegistry,
+    agent_tasks: Arc<StdMutex<HashMap<String, String>>>,
+}
+
+impl RoutingView {
+    pub fn hosts(&self) -> Hosts {
+        self.hosts.clone()
+    }
+
+    pub fn registry(&self) -> Arc<Registry> {
+        Arc::clone(&self.registry)
+    }
+
+    pub fn router(&self) -> Router {
+        self.router.clone()
+    }
+
+    pub fn call_summary(
+        &self,
+        transcript: &[TranscriptEntry],
+        screen: Value,
+        utterance: impl Into<String>,
+    ) -> CallSummary {
+        let background = self.background_agents.projects();
+        let agent_tasks = self
+            .agent_tasks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        CallSummary::from_runtime(
+            &self.coordinator.status(),
+            &self.registry,
+            transcript,
+            screen,
+            utterance,
+            &background,
+            &agent_tasks,
+        )
+    }
+}
+
 pub struct Switchboard {
     pub registry: Arc<Registry>,
     pi_binary: String,
@@ -570,8 +621,9 @@ pub struct Switchboard {
     background_agents: BackgroundRegistry,
     operator_note: Option<String>,
     /// The last request each project agent was given on this call. Routing
-    /// shows it as the agent's task.
-    agent_tasks: HashMap<String, String>,
+    /// shows it as the agent's task. Shared with `RoutingView`, which reads it
+    /// without the PBX lock.
+    agent_tasks: Arc<StdMutex<HashMap<String, String>>>,
     /// The call as Jev saw it for the utterance being handled, in plain text.
     /// The operator and the routing utility get the same facts.
     call_state: String,
@@ -672,7 +724,7 @@ impl Switchboard {
             agent: None,
             background_agents: BackgroundRegistry::default(),
             operator_note: None,
-            agent_tasks: HashMap::new(),
+            agent_tasks: Arc::new(StdMutex::new(HashMap::new())),
             call_state: String::new(),
             pending_stop: None,
             resume_blocked: HashSet::new(),
@@ -881,22 +933,33 @@ impl Switchboard {
         self.router.clone()
     }
 
+    /// What routing reads about this call, readable without the PBX lock.
+    pub fn routing_view(&self) -> RoutingView {
+        RoutingView {
+            hosts: self.hosts.clone(),
+            registry: Arc::clone(&self.registry),
+            router: self.router.clone(),
+            coordinator: self.coordinator.clone(),
+            background_agents: self.background_agents.clone(),
+            agent_tasks: Arc::clone(&self.agent_tasks),
+        }
+    }
+
     pub fn call_summary(
         &self,
         transcript: &[TranscriptEntry],
         screen: Value,
         utterance: impl Into<String>,
     ) -> CallSummary {
-        let background = self.background_agents.projects();
-        CallSummary::from_runtime(
-            &self.coordinator.status(),
-            &self.registry,
-            transcript,
-            screen,
-            utterance,
-            &background,
-            &self.agent_tasks,
-        )
+        self.routing_view()
+            .call_summary(transcript, screen, utterance)
+    }
+
+    fn set_agent_task(&self, project: &str, text: &str) {
+        self.agent_tasks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(project.to_owned(), text.to_owned());
     }
 
     /// List foreign live sessions in registered project folders. The service
@@ -1194,7 +1257,7 @@ impl Switchboard {
             );
         }
         if target != OPERATOR {
-            self.agent_tasks.insert(target.to_owned(), text.to_owned());
+            self.set_agent_task(target, text);
         }
         // An agent already on this call (on the line or in the background)
         // is brought forward whatever the mode: a live agent is never
@@ -1436,7 +1499,7 @@ impl Switchboard {
             crate::registry::ResolveResult::Exact(project) => project.clone(),
             _ => return Err(format!("unknown project {target}")),
         };
-        self.agent_tasks.insert(project.id.clone(), text.to_owned());
+        self.set_agent_task(&project.id, text);
         if self
             .agent
             .as_ref()
@@ -1781,10 +1844,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
         if !self.coordinator.project_is_background(session.label()) {
             self.announce_agent_state(session.label(), "busy").await;
         }
-        self.agent_tasks.insert(
-            session.label().to_owned(),
-            context.exact_caller_transcript.clone(),
-        );
+        self.set_agent_task(session.label(), &context.exact_caller_transcript);
         let turn = match session.prompt(&context.exact_caller_transcript).await {
             Ok(t) => t,
             Err(error) => {

@@ -12,7 +12,7 @@ use crate::hosts::Hosts;
 use crate::lifecycle::{ActivityDisposition, Coordinator, LifecycleError, OperationIdentity};
 use crate::pbx::{
     AgentStateCallback, AgentStateNotice, Redial, RedialPlan, RedialPlanner, RouteCallback,
-    Switchboard,
+    RoutingView, Switchboard,
 };
 use crate::pi_client::{
     Activity, ActivityCallback, AgentCall, LegSession, ModuleCallback, ProjectTurn, TurnCallback,
@@ -445,6 +445,10 @@ pub struct AppInner {
     pub switchboard: Mutex<Switchboard>,
     /// The project hosts' links (`/host`).
     hosts: Hosts,
+    /// What routing reads about the call. Routing must never wait on the PBX
+    /// lock: the turn worker holds it for a whole prompt, and an utterance
+    /// routed only after the prompt ends can no longer steer it.
+    routing: RoutingView,
     delivery: DeliveryState,
     pub transcript_log: Mutex<TranscriptLog>,
     pub speaker: Speaker,
@@ -736,6 +740,7 @@ impl AppState {
         let active_session = switchboard.session_control();
         let redials = switchboard.redial_planner();
         let hosts = switchboard.hosts();
+        let routing = switchboard.routing_view();
         let mut switchboard = switchboard;
         switchboard.set_activity_callback(Some(activity_callback));
         switchboard.set_route_callback(Some(route_callback));
@@ -802,6 +807,7 @@ impl AppState {
             AppInner {
                 switchboard: Mutex::new(switchboard),
                 hosts,
+                routing,
                 delivery,
                 transcript_log: Mutex::new(transcript_log),
                 speaker,
@@ -1724,28 +1730,24 @@ async fn route_final_transcript(state: &AppState, id: &str, generation: u64, tra
     dispatch_routed_transcript(state, id, generation, transcript).await;
 }
 
-/// Fetch host-owned desk sessions without holding the PBX lock. The summary
-/// is rebuilt under that lock after the bounded host queries, so route state is
-/// current at the point Jev sees it.
+/// Build Jev's view of the call without the PBX lock. The turn worker holds
+/// that lock for a whole prompt, so an utterance that waited on it would be
+/// routed only after the turn ended, too late to steer it. The summary is
+/// built after the bounded host queries, so route state is current at the
+/// point Jev sees it.
 async fn call_summary_without_pbx_lock(
     state: &AppState,
     entries: &[crate::history::TranscriptEntry],
     screen: Value,
     utterance: String,
 ) -> (crate::router::Router, CallSummary) {
-    let (hosts, registry) = {
-        let board = state.0.switchboard.lock().await;
-        (board.hosts(), Arc::clone(&board.registry))
-    };
-    let live_desk_sessions = Switchboard::live_desk_sessions_from(hosts, registry).await;
-    let mut summary = {
-        let board = state.0.switchboard.lock().await;
-        board.call_summary(entries, screen, utterance)
-    };
+    let routing = &state.0.routing;
+    let live_desk_sessions =
+        Switchboard::live_desk_sessions_from(routing.hosts(), routing.registry()).await;
+    let mut summary = routing.call_summary(entries, screen, utterance);
     summary.live_desk_sessions = live_desk_sessions;
     summary.merge_live_agents(&live_agents(state));
-    let router = state.0.switchboard.lock().await.router();
-    (router, summary)
+    (routing.router(), summary)
 }
 
 /// Prepare host-owned takeover discovery before the PBX mutex is acquired by
@@ -1759,11 +1761,11 @@ async fn prepare_takeover_lookup(
         .target
         .as_deref()
         .filter(|_| matches!(decision.action, Action::TakeOver))?;
-    let (hosts, registry) = {
-        let board = state.0.switchboard.lock().await;
-        (board.hosts(), Arc::clone(&board.registry))
-    };
-    Some(Switchboard::desk_session_for_takeover_from(hosts, registry, target).await)
+    let routing = &state.0.routing;
+    Some(
+        Switchboard::desk_session_for_takeover_from(routing.hosts(), routing.registry(), target)
+            .await,
+    )
 }
 
 /// Every agent the presentation side knows on this call, with its live
