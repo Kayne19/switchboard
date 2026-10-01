@@ -1341,9 +1341,12 @@ async fn process_speech(state: AppState) {
                 ContinuationScope::ContinueAfterForeground
             }
         };
-        if matches!(scope, ContinuationScope::FreshTurn) {
+        if matches!(scope, ContinuationScope::FreshTurn)
+            && generation == state.0.coordinator.generation()
+        {
             // A fresh group must invalidate any older in-flight drain before
-            // its stream can become the next continuation.
+            // its stream can become the next continuation. Never let a stale
+            // queued request rewrite the newer lifecycle record.
             state.0.clear_continuity_for(generation, &model);
         }
         let (continuity, epoch) = continuity_for_request(&state, scope, generation, &model);
