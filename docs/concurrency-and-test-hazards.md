@@ -378,3 +378,15 @@ links. Its exit status (zero, nonzero, or timeout) is a terminal report
 snapshot; nonzero or timed-out prepare outputs remain launchable and are never
 retried. Only a prepare cut off by a lost link runs again, on the next link
 (`run_prepare_job` in `apps/backend/src/prewarm.rs`).
+
+
+## Speech worker startup and provider drains
+
+Speech admissions go through the one `process_speech` worker. Production starts it
+from `spawn_workers` before the HTTP listener accepts requests. Tests that call
+reply delivery or module calls directly must start that same worker through the
+shared test setup helper; otherwise a bounded speech-channel `reserve()` has no
+receiver and waits forever. Provider response bodies drain in tracked tasks, so
+the next ordered request may use pending `previous_text`, while a request id is
+committed only after the body reaches EOF. Lifecycle resets reject late drain
+commits.
