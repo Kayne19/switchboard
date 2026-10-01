@@ -60,16 +60,83 @@ struct TtsRequest {
 }
 
 type TtsByteStream = Pin<Box<dyn Stream<Item = Result<Vec<u8>, AudioError>> + Send>>;
-type TtsStreamFuture = Pin<
-    Box<
-        dyn Future<Output = Result<(StatusCode, Option<u64>, TtsByteStream), AudioError>>
-            + Send
-            + 'static,
-    >,
->;
+
+/// The response metadata needed by the continuity owner.  `request_id` is
+/// deliberately separate from the stream: ElevenLabs only permits it to be
+/// used after the complete response body has been read.
+struct TtsResponse {
+    status: StatusCode,
+    content_length: Option<u64>,
+    request_id: Option<String>,
+    stream: TtsByteStream,
+}
+
+type TtsStreamFuture =
+    Pin<Box<dyn Future<Output = Result<TtsResponse, AudioError>> + Send + 'static>>;
 
 trait TtsTransport: Send + Sync {
     fn send_stream(&self, request: TtsRequest) -> TtsStreamFuture;
+}
+
+/// Context for a continuation request.  The request body always contains
+/// exactly one of `previous_request_ids` and `previous_text`; the text kept
+/// alongside ids is only the deterministic fallback for an expired/rejected
+/// id request.
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum TtsContinuity {
+    #[default]
+    Fresh,
+    PreviousText(String),
+    PreviousRequestIds {
+        ids: Vec<String>,
+        fallback_text: Option<String>,
+    },
+}
+
+#[allow(dead_code)]
+impl TtsContinuity {
+    pub(crate) fn previous_request_ids<I, S>(ids: I, fallback_text: Option<String>) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let mut ids = ids.into_iter().map(Into::into).collect::<Vec<_>>();
+        if ids.len() > 3 {
+            ids.drain(..ids.len() - 3);
+        }
+        if ids.is_empty() {
+            fallback_text.map_or(Self::Fresh, Self::PreviousText)
+        } else {
+            Self::PreviousRequestIds { ids, fallback_text }
+        }
+    }
+
+    fn body_fields(&self) -> Option<(&'static str, serde_json::Value)> {
+        match self {
+            Self::Fresh => None,
+            Self::PreviousText(text) => {
+                Some(("previous_text", serde_json::Value::String(text.clone())))
+            }
+            Self::PreviousRequestIds { ids, .. } => Some((
+                "previous_request_ids",
+                serde_json::Value::Array(
+                    ids.iter().cloned().map(serde_json::Value::String).collect(),
+                ),
+            )),
+        }
+    }
+
+    fn fallback_text(&self) -> Option<&str> {
+        match self {
+            Self::PreviousRequestIds { fallback_text, .. } => fallback_text.as_deref(),
+            _ => None,
+        }
+    }
+
+    fn has_request_ids(&self) -> bool {
+        matches!(self, Self::PreviousRequestIds { ids, .. } if !ids.is_empty())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -108,6 +175,11 @@ impl TtsTransport for HttpTtsTransport {
             .map_err(|error| AudioError::Tts(format!("could not reach ElevenLabs: {error}")))?;
             let status = response.status();
             let length = response.content_length();
+            let request_id = response
+                .headers()
+                .get("request-id")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
             if let Some(length) = length.filter(|length| *length > TTS_RESPONSE_LIMIT as u64) {
                 tracing::warn!(
                     %status,
@@ -135,14 +207,15 @@ impl TtsTransport for HttpTtsTransport {
                     }
                 }
             });
-            Ok((
+            Ok(TtsResponse {
                 status,
-                length,
-                Box::pin(ChunkReceiverStream {
+                content_length: length,
+                request_id,
+                stream: Box::pin(ChunkReceiverStream {
                     receiver,
                     task: Some(task),
                 }) as TtsByteStream,
-            ))
+            })
         })
     }
 }
@@ -171,12 +244,36 @@ impl Stream for ChunkReceiverStream {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TtsResponseMetadata {
+    pub(crate) request_id: Option<String>,
+    pub(crate) content_length: Option<u64>,
+}
+
 pub struct TtsChunkStream {
     inner: TtsByteStream,
     deadline: Instant,
     deadline_wake: Pin<Box<tokio::time::Sleep>>,
     bytes: usize,
     finished: bool,
+    metadata: TtsResponseMetadata,
+}
+
+#[allow(dead_code)]
+impl TtsChunkStream {
+    pub(crate) fn metadata(&self) -> &TtsResponseMetadata {
+        &self.metadata
+    }
+
+    /// Consume and fully read a response.  The returned request id is safe to
+    /// commit only after this future succeeds, which is the provider's stream
+    /// stitching requirement.
+    pub(crate) async fn drain(mut self) -> Result<TtsResponseMetadata, AudioError> {
+        while let Some(chunk) = self.next().await {
+            chunk?;
+        }
+        Ok(self.metadata)
+    }
 }
 
 impl Stream for TtsChunkStream {
@@ -891,6 +988,24 @@ impl Speaker {
         text: &str,
         deadline: Instant,
     ) -> Result<TtsChunkStream, AudioError> {
+        self.stream_until_with_continuity(text, deadline, TtsContinuity::Fresh)
+            .await
+    }
+
+    /// Start a streamed request with optional ElevenLabs stitching context.
+    ///
+    /// A request-id response is metadata on the returned stream.  Callers must
+    /// keep consuming the stream to completion before committing that id for a
+    /// later request.  If an id-bearing request receives a 4xx response and a
+    /// fallback text was supplied, it is retried exactly once with
+    /// `previous_text`; timeouts, transport errors, and 5xx responses are not
+    /// retried.
+    pub(crate) async fn stream_until_with_continuity(
+        &self,
+        text: &str,
+        deadline: Instant,
+        continuity: TtsContinuity,
+    ) -> Result<TtsChunkStream, AudioError> {
         if deadline <= Instant::now() {
             return Err(AudioError::Deadline);
         }
@@ -904,14 +1019,37 @@ impl Speaker {
             style: f32,
             speed: f32,
         }
-        let body = serde_json::json!({"text": text, "model_id": self.model_id, "voice_settings": Settings { stability: self.stability, similarity_boost: self.similarity_boost, style: self.style, speed: self.speed }});
+
+        // eleven_v3 is explicitly fresh-only.  Keep the capability policy at
+        // this boundary so all callers get the same safe fallback.
+        let continuity = if self.model_id == "eleven_v3" {
+            TtsContinuity::Fresh
+        } else {
+            continuity
+        };
+        let base_body = || {
+            let mut body = serde_json::json!({
+                "text": text,
+                "model_id": self.model_id,
+                "voice_settings": Settings {
+                    stability: self.stability,
+                    similarity_boost: self.similarity_boost,
+                    style: self.style,
+                    speed: self.speed,
+                }
+            });
+            if let Some((name, value)) = continuity.body_fields() {
+                body[name] = value;
+            }
+            body
+        };
         let request = TtsRequest {
             url: format!(
                 "{}/stream?output_format=mp3_44100_128",
                 ELEVENLABS_TTS_URL.replace("{voice_id}", &self.voice_id)
             ),
             api_key: self.api_key.clone(),
-            body,
+            body: base_body(),
             deadline,
         };
         // The request is logged by what identifies it, never by its key or
@@ -924,7 +1062,7 @@ impl Speaker {
             chars,
             "requesting speech from ElevenLabs"
         );
-        let (status, length, stream) = match self.transport.send_stream(request).await {
+        let mut response = match self.transport.send_stream(request.clone()).await {
             Ok(response) => response,
             Err(error) => {
                 tracing::warn!(
@@ -938,27 +1076,47 @@ impl Speaker {
                 return Err(error);
             }
         };
+        let retry = response.status.is_client_error()
+            && continuity.has_request_ids()
+            && continuity.fallback_text().is_some();
+        if retry {
+            // Consume the refusal body before retrying.  This keeps the
+            // transport lifecycle deterministic and prevents a response task
+            // from retaining the connection while the fallback is admitted.
+            let _ = collect_error_body(&mut response.stream).await?;
+            let mut retry_body = base_body();
+            retry_body
+                .as_object_mut()
+                .expect("JSON object body")
+                .remove("previous_request_ids");
+            retry_body["previous_text"] = serde_json::Value::String(
+                continuity
+                    .fallback_text()
+                    .expect("retry text checked above")
+                    .to_owned(),
+            );
+            response = self
+                .transport
+                .send_stream(TtsRequest {
+                    body: retry_body,
+                    ..request
+                })
+                .await?;
+        }
         let elapsed = started.elapsed();
-        if status != StatusCode::OK {
+        if response.status != StatusCode::OK {
             tracing::warn!(
                 voice = %self.voice_id,
                 model = %self.model_id,
                 chars,
-                %status,
+                status = %response.status,
                 ?elapsed,
                 "ElevenLabs refused the request"
             );
-            let mut body = Vec::new();
-            let mut stream = stream;
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk?;
-                if body.len().saturating_add(chunk.len()) > 4096 {
-                    break;
-                }
-                body.extend_from_slice(&chunk);
-            }
+            let body = collect_error_body(&mut response.stream).await?;
             return Err(AudioError::Tts(format!(
-                "ElevenLabs TTS failed ({status}): {}",
+                "ElevenLabs TTS failed ({}): {}",
+                response.status,
                 String::from_utf8_lossy(&body)
                     .chars()
                     .take(500)
@@ -969,19 +1127,36 @@ impl Speaker {
             voice = %self.voice_id,
             model = %self.model_id,
             chars,
-            %status,
+            status = %response.status,
             ?elapsed,
-            content_length = ?length,
+            content_length = ?response.content_length,
+            request_id = ?response.request_id,
             "ElevenLabs answered; streaming speech"
         );
         Ok(TtsChunkStream {
-            inner: stream,
+            inner: response.stream,
             deadline,
             deadline_wake: Box::pin(tokio::time::sleep_until(TokioInstant::from_std(deadline))),
             bytes: 0,
             finished: false,
+            metadata: TtsResponseMetadata {
+                request_id: response.request_id,
+                content_length: response.content_length,
+            },
         })
     }
+}
+
+async fn collect_error_body(stream: &mut TtsByteStream) -> Result<Vec<u8>, AudioError> {
+    let mut body = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        if body.len().saturating_add(chunk.len()) > 4096 {
+            break;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 /// Refuses every request without leaving the process, the way ElevenLabs
@@ -999,7 +1174,12 @@ impl TtsTransport for ImmediateTtsTransport {
         Box::pin(async {
             let stream =
                 futures_util::stream::once(async { Ok::<Vec<u8>, AudioError>(vec![1, 2, 3]) });
-            Ok((StatusCode::OK, Some(3), Box::pin(stream) as TtsByteStream))
+            Ok(TtsResponse {
+                status: StatusCode::OK,
+                content_length: Some(3),
+                request_id: Some("test-request-id".into()),
+                stream: Box::pin(stream) as TtsByteStream,
+            })
         })
     }
 }
