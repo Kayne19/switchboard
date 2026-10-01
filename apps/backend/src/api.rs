@@ -1,5 +1,5 @@
 //! HTTP, WebSocket and application workers.
-use crate::audio::{Speaker, StreamResult, SttAdapter, SttStreamAdapter};
+use crate::audio::{Speaker, StreamResult, SttAdapter, SttStreamAdapter, TtsContinuity};
 use crate::delivery::{AudioQueue, DeliveryConnection, DeliveryFrame, DeliveryState, Event};
 use crate::display::{
     is_display_event, stamp_display_seq, ConfirmState, DisplayGateState, DisplayProjection,
@@ -156,6 +156,138 @@ impl AgentProjection {
     }
 }
 
+/// The call-scoped continuity context for the next ElevenLabs request.
+///
+/// A request id is safe to reuse only after its response stream has drained.
+/// `pending_text` covers the handoff window while that drain is still in
+/// progress. The epoch, generation, and model together identify the lifecycle
+/// that admitted the request; a late drain must not poison a later call leg.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SpeechContinuity {
+    pub(crate) last_request_id: Option<String>,
+    pub(crate) last_text: Option<String>,
+    pub(crate) pending_text: Option<String>,
+    pub(crate) pending_sequence: Option<u64>,
+    pub(crate) generation: u64,
+    pub(crate) model: String,
+    pub(crate) epoch: u64,
+    pub(crate) last_sequence: Option<u64>,
+}
+
+#[allow(dead_code)]
+impl SpeechContinuity {
+    pub(crate) fn clear(&mut self, generation: u64, model: &str) {
+        self.last_request_id = None;
+        self.last_text = None;
+        self.pending_text = None;
+        self.pending_sequence = None;
+        self.generation = generation;
+        self.model = model.to_owned();
+        self.epoch = self.epoch.saturating_add(1);
+        self.last_sequence = None;
+    }
+
+    pub(crate) fn mark_pending(&mut self, generation: u64, model: &str, text: String) -> bool {
+        self.mark_pending_ordered(generation, model, None, text)
+    }
+
+    pub(crate) fn mark_pending_ordered(
+        &mut self,
+        generation: u64,
+        model: &str,
+        sequence: Option<u64>,
+        text: String,
+    ) -> bool {
+        if self.generation != generation {
+            return false;
+        }
+        // Tests and startup can create the record before a TTS model snapshot
+        // is available. Adopt the first model only while the record is empty;
+        // never cross-condition an existing clip between models.
+        if self.model != model {
+            if self.last_request_id.is_none()
+                && self.last_text.is_none()
+                && self.pending_text.is_none()
+            {
+                self.model = model.to_owned();
+            } else {
+                return false;
+            }
+        }
+        self.pending_text = Some(text);
+        self.pending_sequence = sequence;
+        true
+    }
+
+    pub(crate) fn clear_pending_if_matching(
+        &mut self,
+        generation: u64,
+        model: &str,
+        epoch: u64,
+        sequence: Option<u64>,
+        text: &str,
+    ) -> bool {
+        if self.generation == generation
+            && self.model == model
+            && self.epoch == epoch
+            && self.pending_sequence == sequence
+            && self.pending_text.as_deref() == Some(text)
+        {
+            self.pending_text = None;
+            self.pending_sequence = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Commit only a fully drained response from the lifecycle that admitted it.
+    /// A newer pending clip is retained when an older drain completes later.
+    pub(crate) fn commit(
+        &mut self,
+        generation: u64,
+        model: &str,
+        epoch: u64,
+        request_id: Option<String>,
+        text: String,
+    ) -> bool {
+        self.commit_ordered(generation, model, epoch, None, request_id, text)
+    }
+
+    /// Commit a drained clip only when it is newer than the clip already
+    /// committed. Drains run independently, so body completion order is not
+    /// enough to establish continuity order.
+    pub(crate) fn commit_ordered(
+        &mut self,
+        generation: u64,
+        model: &str,
+        epoch: u64,
+        sequence: Option<u64>,
+        request_id: Option<String>,
+        text: String,
+    ) -> bool {
+        if self.generation != generation || self.model != model || self.epoch != epoch {
+            return false;
+        }
+        if let (Some(sequence), Some(last_sequence)) = (sequence, self.last_sequence) {
+            if sequence <= last_sequence {
+                return false;
+            }
+        }
+        self.last_request_id = request_id;
+        self.last_text = Some(text.clone());
+        if let Some(sequence) = sequence {
+            self.last_sequence = Some(sequence);
+        }
+        if self.pending_text.as_deref() == Some(text.as_str()) && self.pending_sequence == sequence
+        {
+            self.pending_text = None;
+            self.pending_sequence = None;
+        }
+        true
+    }
+}
+
 /// Tells the browser the call has moved to a new leg.
 ///
 /// A transfer is announced from two places: candidate promotion, when the
@@ -172,6 +304,9 @@ struct LegAnnouncer {
     display_confirm: watch::Sender<ConfirmState>,
     last_display: Arc<Mutex<Option<Value>>>,
     projection: AgentProjection,
+    continuity: Arc<StdMutex<SpeechContinuity>>,
+    active_speech_group: Arc<StdMutex<Option<SpeechGroup>>>,
+    foreground_audio_generation: Arc<StdMutex<Option<u64>>>,
 }
 
 impl LegAnnouncer {
@@ -256,6 +391,19 @@ impl LegAnnouncer {
             return;
         }
         tracing::info!(route = %leg.route, generation = leg.generation, "the caller's screen moves to a new leg");
+        let model = self.coordinator.status().model;
+        self.continuity
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear(leg.generation, &model);
+        *self
+            .active_speech_group
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        *self
+            .foreground_audio_generation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
         gate.projection.clear();
         gate.screen_state["stale"] = json!(true);
         gate.report_epoch = None;
@@ -300,6 +448,16 @@ pub struct AppInner {
     delivery: DeliveryState,
     pub transcript_log: Mutex<TranscriptLog>,
     pub speaker: Speaker,
+    /// Call-scoped TTS stitching state. The synchronous lock keeps lifecycle
+    /// clear/commit linearization short and lets the leg announcer share it.
+    pub(crate) continuity: Arc<StdMutex<SpeechContinuity>>,
+    /// The active model-turn group lets several `/speak` calls share one
+    /// continuity chain without carrying that state in the host protocol.
+    active_speech_group: Arc<StdMutex<Option<SpeechGroup>>>,
+    next_speech_group: AtomicU64,
+    /// Set after foreground audio is admitted. A floor release consumes it so
+    /// only an immediate same-generation update can continue that clip.
+    foreground_audio_generation: Arc<StdMutex<Option<u64>>>,
     pub stt: SttAdapter,
     pub stt_stream: SttStreamAdapter,
     pub events: broadcast::Sender<Event>,
@@ -308,6 +466,7 @@ pub struct AppInner {
     redials: RedialPlanner,
     speech: mpsc::Sender<SpeechRequest>,
     speech_rx: Mutex<Option<mpsc::Receiver<SpeechRequest>>>,
+    speech_worker_started: AtomicBool,
     clips: mpsc::Sender<Clip>,
     clip_rx: Mutex<Option<mpsc::Receiver<Clip>>>,
     pub turns: mpsc::Sender<(String, String, u64)>,
@@ -397,6 +556,19 @@ enum StreamClipState {
     Finalized,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ContinuationScope {
+    /// The first utterance after caller speech or an unrelated speech group.
+    FreshTurn,
+    /// Another utterance from the same active model turn.
+    ContinueCurrentTurn,
+    /// A floor update that follows foreground audio in this generation.
+    ContinueAfterForeground,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SpeechGroup(u64);
+
 struct SpeechRequest {
     text: String,
     /// Transcript route for floor speech; ordinary agent speech uses the live
@@ -405,6 +577,14 @@ struct SpeechRequest {
     generation: u64,
     sequence: u64,
     deadline: std::time::Instant,
+    scope: ContinuationScope,
+    group: SpeechGroup,
+    /// The active model snapshot captured when this request was admitted.
+    /// A model swap invalidates the call's continuity chain.
+    model: String,
+    /// Mid-turn and floor speech are written to the spoken transcript. Settled
+    /// replies already have their own Reply event and must not be duplicated.
+    log_spoken: bool,
     result: oneshot::Sender<Result<(), String>>,
     /// The `/speak` request it answers; the synthesis logs under it although
     /// the speech worker runs it.
@@ -501,6 +681,13 @@ impl AppState {
             watermark: 0,
         }));
         let (display_confirm_tx, _) = watch::channel(ConfirmState::default());
+        let continuity = Arc::new(StdMutex::new(SpeechContinuity {
+            generation: coordinator.generation(),
+            model: coordinator.status().model.clone(),
+            ..SpeechContinuity::default()
+        }));
+        let active_speech_group = Arc::new(StdMutex::new(None));
+        let foreground_audio_generation = Arc::new(StdMutex::new(None));
         let leg_announcer = LegAnnouncer {
             coordinator: coordinator.clone(),
             events: events.clone(),
@@ -509,6 +696,9 @@ impl AppState {
             display_confirm: display_confirm_tx.clone(),
             last_display: last_display.clone(),
             projection: projection.clone(),
+            continuity: continuity.clone(),
+            active_speech_group: active_speech_group.clone(),
+            foreground_audio_generation: foreground_audio_generation.clone(),
         };
         let activity_announcer = leg_announcer.clone();
         let activity_callback: ActivityCallback = Arc::new(move |activity: Activity| {
@@ -615,6 +805,10 @@ impl AppState {
                 delivery,
                 transcript_log: Mutex::new(transcript_log),
                 speaker,
+                continuity,
+                active_speech_group,
+                next_speech_group: AtomicU64::new(1),
+                foreground_audio_generation,
                 stt,
                 stt_stream,
                 events,
@@ -622,6 +816,7 @@ impl AppState {
                 redials,
                 speech,
                 speech_rx: Mutex::new(Some(speech_rx)),
+                speech_worker_started: AtomicBool::new(false),
                 clips,
                 clip_rx: Mutex::new(Some(clip_rx)),
                 turns,
@@ -677,14 +872,189 @@ impl AppState {
     }
 }
 
+#[allow(dead_code)]
+impl AppInner {
+    pub(crate) fn continuity_snapshot(&self) -> SpeechContinuity {
+        self.continuity
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    pub(crate) fn clear_continuity(&self) {
+        let generation = self.coordinator.generation();
+        let model = self.coordinator.status().model;
+        self.clear_continuity_for(generation, &model);
+        *self
+            .active_speech_group
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        *self
+            .foreground_audio_generation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+
+    pub(crate) fn clear_continuity_if_current(&self, generation: u64) -> bool {
+        if generation != self.coordinator.generation() {
+            return false;
+        }
+        let model = self.coordinator.status().model;
+        self.clear_continuity_for(generation, &model);
+        *self
+            .active_speech_group
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        *self
+            .foreground_audio_generation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        true
+    }
+
+    pub(crate) fn clear_continuity_for(&self, generation: u64, model: &str) {
+        self.continuity
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear(generation, model);
+    }
+
+    pub(crate) fn mark_continuity_pending(
+        &self,
+        generation: u64,
+        model: &str,
+        text: String,
+    ) -> bool {
+        self.continuity
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .mark_pending(generation, model, text)
+    }
+
+    pub(crate) fn mark_continuity_pending_ordered(
+        &self,
+        generation: u64,
+        model: &str,
+        sequence: u64,
+        text: String,
+    ) -> bool {
+        self.continuity
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .mark_pending_ordered(generation, model, Some(sequence), text)
+    }
+
+    pub(crate) fn clear_pending_continuity_if_matching(
+        &self,
+        generation: u64,
+        model: &str,
+        epoch: u64,
+        sequence: Option<u64>,
+        text: &str,
+    ) -> bool {
+        self.continuity
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear_pending_if_matching(generation, model, epoch, sequence, text)
+    }
+
+    pub(crate) fn commit_continuity(
+        &self,
+        generation: u64,
+        model: &str,
+        epoch: u64,
+        request_id: Option<String>,
+        text: String,
+    ) -> bool {
+        self.continuity
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .commit(generation, model, epoch, request_id, text)
+    }
+
+    pub(crate) fn commit_continuity_ordered(
+        &self,
+        generation: u64,
+        model: &str,
+        epoch: u64,
+        sequence: u64,
+        request_id: Option<String>,
+        text: String,
+    ) -> bool {
+        self.continuity
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .commit_ordered(generation, model, epoch, Some(sequence), request_id, text)
+    }
+
+    fn new_speech_group(&self) -> SpeechGroup {
+        SpeechGroup(self.next_speech_group.fetch_add(1, Ordering::Relaxed))
+    }
+
+    fn set_active_speech_group(&self, group: SpeechGroup) {
+        *self
+            .active_speech_group
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(group);
+    }
+
+    fn active_speech_group(&self) -> Option<SpeechGroup> {
+        *self
+            .active_speech_group
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn clear_active_speech_group(&self, group: SpeechGroup) {
+        let mut active = self
+            .active_speech_group
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *active == Some(group) {
+            *active = None;
+        }
+    }
+
+    fn mark_foreground_audio(&self, generation: u64) {
+        *self
+            .foreground_audio_generation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(generation);
+    }
+
+    fn take_foreground_audio(&self, generation: u64) -> bool {
+        let mut foreground = self
+            .foreground_audio_generation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *foreground == Some(generation) {
+            *foreground = None;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+fn ensure_speech_worker(state: &AppState) {
+    if state
+        .0
+        .speech_worker_started
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        let speech_state = state.clone();
+        tokio::spawn(async move {
+            process_speech(speech_state).await;
+        });
+    }
+}
+
 pub fn spawn_workers(state: AppState) {
+    ensure_speech_worker(&state);
     let stream_state = state.clone();
     tokio::spawn(async move {
         process_stream_results(stream_state).await;
-    });
-    let speech_state = state.clone();
-    tokio::spawn(async move {
-        process_speech(speech_state).await;
     });
     let clip_state = state.clone();
     tokio::spawn(async move {
@@ -790,6 +1160,7 @@ pub async fn shutdown(state: &AppState) {
     if !state.0.coordinator.begin_shutdown() {
         return;
     }
+    state.0.clear_continuity();
     interrupt_active_turn(state).await;
     // Ends the legs first: a project session is ended by a command on its
     // host's link, which has to be queued before the links close.
@@ -945,30 +1316,132 @@ async fn finish_audio(state: &AppState, sequence: u64, generation: u64, bytes: V
     publish_audio_events(state, events).await && current
 }
 
-async fn synthesize_audio_stream(
+fn continuity_for_request(
     state: &AppState,
-    text: &str,
+    scope: ContinuationScope,
+    generation: u64,
+    model: &str,
+) -> (TtsContinuity, u64) {
+    let snapshot = state.0.continuity_snapshot();
+    if matches!(scope, ContinuationScope::FreshTurn)
+        || snapshot.generation != generation
+        || snapshot.model != model
+    {
+        return (TtsContinuity::Fresh, snapshot.epoch);
+    }
+    if let Some(text) = snapshot.pending_text {
+        return (TtsContinuity::PreviousText(text), snapshot.epoch);
+    }
+    if let Some(request_id) = snapshot.last_request_id {
+        return (
+            TtsContinuity::previous_request_ids([request_id], snapshot.last_text),
+            snapshot.epoch,
+        );
+    }
+    snapshot
+        .last_text
+        .map_or((TtsContinuity::Fresh, snapshot.epoch), |text| {
+            (TtsContinuity::PreviousText(text), snapshot.epoch)
+        })
+}
+
+async fn drain_speech_stream(
+    state: AppState,
+    mut stream: crate::audio::TtsChunkStream,
+    text: String,
     sequence: u64,
     generation: u64,
-    deadline: std::time::Instant,
+    model: String,
+    epoch: u64,
 ) -> Result<(usize, bool), crate::audio::AudioError> {
-    let mut delivered = start_audio(state, sequence, generation).await;
+    let request_id = stream.metadata().request_id.clone();
+    let mut delivered = start_audio(&state, sequence, generation).await;
     let mut bytes = 0usize;
-    let mut stream = state.0.speaker.stream_until(text, deadline).await?;
     while let Some(chunk) = stream.next().await {
         if generation != state.0.coordinator.generation() {
+            state.0.clear_pending_continuity_if_matching(
+                generation,
+                &model,
+                epoch,
+                Some(sequence),
+                &text,
+            );
+            finish_audio(&state, sequence, generation, Vec::new()).await;
             return Err(crate::audio::AudioError::Tts(
                 "speech generation was superseded".into(),
             ));
         }
-        let chunk = chunk?;
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(error) => {
+                state.0.clear_pending_continuity_if_matching(
+                    generation,
+                    &model,
+                    epoch,
+                    Some(sequence),
+                    &text,
+                );
+                finish_audio(&state, sequence, generation, Vec::new()).await;
+                return Err(error);
+            }
+        };
         bytes = bytes.saturating_add(chunk.len());
         for part in chunk.chunks(32 * 1024) {
-            delivered |= append_audio(state, sequence, generation, part.to_vec()).await;
+            delivered |= append_audio(&state, sequence, generation, part.to_vec()).await;
         }
     }
-    delivered |= finish_audio(state, sequence, generation, Vec::new()).await;
+    delivered |= finish_audio(&state, sequence, generation, Vec::new()).await;
+    // A request id is useful only after the complete body has been consumed.
+    // The epoch/model/generation checks reject a late drain after a reset.
+    state
+        .0
+        .commit_continuity_ordered(generation, &model, epoch, sequence, request_id, text);
     Ok((bytes, delivered))
+}
+
+async fn complete_speech_request(
+    state: &AppState,
+    text: String,
+    route: String,
+    result: oneshot::Sender<Result<(), String>>,
+    synthesized: Result<(usize, bool), crate::audio::AudioError>,
+    started: std::time::Instant,
+    log_spoken: bool,
+) {
+    match synthesized {
+        Ok((bytes, delivered)) => {
+            tracing::info!(
+                chars = text.chars().count(),
+                bytes,
+                elapsed = ?started.elapsed(),
+                "synthesized a speech line"
+            );
+            if delivered {
+                if log_spoken {
+                    if let Some(entry) = state
+                        .0
+                        .transcript_log
+                        .lock()
+                        .await
+                        .add_voiced(AGENT, &text, route)
+                    {
+                        emit_message(state, ServerMessage::Spoken { entry });
+                    }
+                }
+                let _ = result.send(Ok(()));
+            } else {
+                let _ = result.send(Err(
+                    "no browser connected or the writer rejected audio".into()
+                ));
+            }
+        }
+        Err(error) => {
+            let detail = error.to_string();
+            let _ = result.send(Err(detail.clone()));
+            tracing::error!(%error, chars = text.chars().count(), "speech synthesis failed");
+            emit_message(state, ServerMessage::error(detail));
+        }
+    }
 }
 
 async fn process_speech(state: AppState) {
@@ -979,6 +1452,7 @@ async fn process_speech(state: AppState) {
         .await
         .take()
         .expect("speech worker started once");
+    let mut current_group = None;
     while let Some(request) = receiver.recv().await {
         let SpeechRequest {
             text,
@@ -986,32 +1460,59 @@ async fn process_speech(state: AppState) {
             generation,
             sequence,
             deadline,
+            scope,
+            group,
+            model,
+            log_spoken,
             result,
             span,
         } = request;
         let started = std::time::Instant::now();
-        let operation_state = state.clone();
-        let operation_text = text.clone();
-        let operation = async move {
-            synthesize_audio_stream(
-                &operation_state,
-                &operation_text,
-                sequence,
-                generation,
-                deadline,
-            )
-            .await
+        let scope = match scope {
+            ContinuationScope::FreshTurn => {
+                current_group = Some(group);
+                ContinuationScope::FreshTurn
+            }
+            ContinuationScope::ContinueCurrentTurn if current_group == Some(group) => {
+                ContinuationScope::ContinueCurrentTurn
+            }
+            ContinuationScope::ContinueCurrentTurn => {
+                current_group = Some(group);
+                ContinuationScope::FreshTurn
+            }
+            ContinuationScope::ContinueAfterForeground => {
+                current_group = Some(group);
+                ContinuationScope::ContinueAfterForeground
+            }
         };
-        let synthesized = match spawn_registered_operation(
+        if matches!(scope, ContinuationScope::FreshTurn)
+            && generation == state.0.coordinator.generation()
+        {
+            // A fresh group must invalidate any older in-flight drain before
+            // its stream can become the next continuation. Never let a stale
+            // queued request rewrite the newer lifecycle record.
+            state.0.clear_continuity_for(generation, &model);
+        }
+        let (continuity, epoch) = continuity_for_request(&state, scope, generation, &model);
+        let admission_state = state.clone();
+        let admission_text = text.clone();
+        let admission = async move {
+            admission_state
+                .0
+                .speaker
+                .stream_until_with_continuity(&admission_text, deadline, continuity)
+                .await
+        };
+        let stream = match spawn_registered_operation(
             &state,
             generation,
-            operation.instrument(span),
+            admission.instrument(span.clone()),
         )
         .await
         {
-            Some((task, id)) => {
-                let result = match task.await {
-                    Ok(result) => result,
+            Some((task, task_id)) => {
+                let stream = match task.await {
+                    Ok(stream) => stream,
                     Err(error) if error.is_cancelled() => {
                         Err(crate::audio::AudioError::Tts("speech was cancelled".into()))
                     }
@@ -1019,40 +1520,105 @@ async fn process_speech(state: AppState) {
                         "speech worker failed: {error}"
                     ))),
                 };
-                clear_active_operation(&state, id).await;
-                result
+                clear_active_operation(&state, task_id).await;
+                stream
             }
             None => Err(crate::audio::AudioError::Tts(
                 "speech generation was superseded".into(),
             )),
         };
-        match synthesized {
-            Ok((bytes, delivered)) => {
-                tracing::info!(chars = text.chars().count(), bytes, elapsed = ?started.elapsed(), "synthesized a mid-turn line");
-                if delivered {
-                    if let Some(entry) = state
-                        .0
-                        .transcript_log
-                        .lock()
-                        .await
-                        .add_voiced(AGENT, &text, route)
-                    {
-                        emit_message(&state, ServerMessage::Spoken { entry });
-                    }
-                    let _ = result.send(Ok(()));
-                } else {
-                    let _ = result.send(Err(
-                        "no browser connected or the writer rejected audio".into()
-                    ));
-                }
-            }
+        let stream = match stream {
+            Ok(stream) => stream,
             Err(error) => {
                 finish_audio(&state, sequence, generation, Vec::new()).await;
-                let _ = result.send(Err(error.to_string()));
-                tracing::error!(%error, chars = text.chars().count(), "synthesis failed for an agent-spoken line");
-                emit_message(&state, ServerMessage::error(error.to_string()));
+                complete_speech_request(
+                    &state,
+                    text,
+                    route,
+                    result,
+                    Err(error),
+                    started,
+                    log_spoken,
+                )
+                .await;
+                continue;
             }
-        }
+        };
+        // The text is visible as a fallback while the provider body drains.
+        // Do this before handing the stream to the task so a concurrent next
+        // request cannot accidentally reuse an undrained request id.
+        state
+            .0
+            .mark_continuity_pending_ordered(generation, &model, sequence, text.clone());
+        let operation_state = state.clone();
+        let operation_text = text.clone();
+        let operation_model = model.clone();
+        let operation = async move {
+            drain_speech_stream(
+                operation_state,
+                stream,
+                operation_text,
+                sequence,
+                generation,
+                operation_model,
+                epoch,
+            )
+            .await
+        };
+        let Some((task, task_id)) =
+            spawn_registered_operation(&state, generation, operation.instrument(span)).await
+        else {
+            finish_audio(&state, sequence, generation, Vec::new()).await;
+            complete_speech_request(
+                &state,
+                text,
+                route,
+                result,
+                Err(crate::audio::AudioError::Tts(
+                    "speech generation was superseded".into(),
+                )),
+                started,
+                log_spoken,
+            )
+            .await;
+            continue;
+        };
+        // The worker is intentionally free to admit the next request while
+        // this ordered drain task is still consuming the provider body.
+        let completion_state = state.clone();
+        let completion_text = text.clone();
+        let completion_model = model.clone();
+        tokio::spawn(async move {
+            let synthesized = match task.await {
+                Ok(result) => result,
+                Err(error) if error.is_cancelled() => {
+                    Err(crate::audio::AudioError::Tts("speech was cancelled".into()))
+                }
+                Err(error) => Err(crate::audio::AudioError::Tts(format!(
+                    "speech worker failed: {error}"
+                ))),
+            };
+            clear_active_operation(&completion_state, task_id).await;
+            if synthesized.is_err() {
+                completion_state.0.clear_pending_continuity_if_matching(
+                    generation,
+                    &completion_model,
+                    epoch,
+                    Some(sequence),
+                    &completion_text,
+                );
+            }
+            complete_speech_request(
+                &completion_state,
+                text,
+                route,
+                result,
+                synthesized,
+                started,
+                log_spoken,
+            )
+            .await;
+        });
     }
     tracing::warn!("the speech worker stopped; agent-spoken lines will not be voiced");
 }
@@ -1139,6 +1705,7 @@ async fn route_final_transcript(state: &AppState, id: &str, generation: u64, tra
         );
         return;
     }
+    state.0.clear_continuity_if_current(generation);
     state.0.floor.caller_spoke().await;
     let _transition = state.0.operation_transition.lock().await;
     if generation != state.0.coordinator.generation() {
@@ -1444,6 +2011,7 @@ async fn process_clips(state: AppState) {
             );
             continue;
         }
+        state.0.clear_continuity_if_current(clip.generation);
         state.0.floor.caller_spoke().await;
         let _transition = state.0.operation_transition.lock().await;
         if clip.generation != state.0.coordinator.generation() {
@@ -1519,6 +2087,7 @@ async fn process_turns(state: AppState) {
         let takeover = prepare_takeover_lookup(&state, &decision).await;
 
         let turn_state = state.clone();
+        let speech_group = state.0.new_speech_group();
         let started = std::time::Instant::now();
         // Register the abort handle before awaiting the task. Page-level rescue
         // endpoints can now cancel work even while transfer setup has no
@@ -1564,6 +2133,7 @@ async fn process_turns(state: AppState) {
             continue;
         };
         state.0.turn_in_flight.store(true, Ordering::Release);
+        state.0.set_active_speech_group(speech_group);
         let route = state.0.coordinator.route();
         let waiting = state.0.queued_turns.load(Ordering::Acquire);
         tracing::info!(clip = %id, %route, waiting, "dispatching a turn");
@@ -1585,6 +2155,7 @@ async fn process_turns(state: AppState) {
             tracing::info!(clip = %id, stamped = generation, "dropping turn because rescue occurred before registration");
             emit_stale_clip(&state, &id);
             state.0.coordinator.finish_operation(&operation);
+            state.0.clear_active_speech_group(speech_group);
             state.0.turn_in_flight.store(false, Ordering::Release);
             continue;
         };
@@ -1594,6 +2165,7 @@ async fn process_turns(state: AppState) {
                 tracing::info!(clip = %id, elapsed = ?started.elapsed(), "the turn was cancelled by a page rescue");
                 clear_active_operation(&state, task_id).await;
                 state.0.coordinator.finish_operation(&operation);
+                state.0.clear_active_speech_group(speech_group);
                 state.0.turn_in_flight.store(false, Ordering::Release);
                 continue;
             }
@@ -1603,6 +2175,7 @@ async fn process_turns(state: AppState) {
                 tracing::error!(clip = %id, %error, elapsed = ?started.elapsed(), "the turn worker failed");
                 clear_active_operation(&state, task_id).await;
                 state.0.coordinator.finish_operation(&operation);
+                state.0.clear_active_speech_group(speech_group);
                 state.0.turn_in_flight.store(false, Ordering::Release);
                 emit_message(
                     &state,
@@ -1637,6 +2210,7 @@ async fn process_turns(state: AppState) {
             )
             .await;
         }
+        state.0.clear_active_speech_group(speech_group);
         state.0.turn_in_flight.store(false, Ordering::Release);
     }
     tracing::warn!("the turn worker stopped; no further turns will be dispatched");
@@ -1681,6 +2255,7 @@ async fn release_rescued_work(
     generation: u64,
     keep_session: bool,
 ) -> Option<String> {
+    state.0.clear_continuity();
     state.0.audio.lock().await.clear();
     // Tell the browser at once, so speech it starts recording after this point
     // is stamped with the new epoch rather than the one being retired.
@@ -2238,12 +2813,21 @@ async fn release_floor(
         return ReleaseOutcome::Drop;
     }
     let (result_tx, result_rx) = oneshot::channel();
+    let scope = if state.0.take_foreground_audio(generation) {
+        ContinuationScope::ContinueAfterForeground
+    } else {
+        ContinuationScope::FreshTurn
+    };
     permit.send(SpeechRequest {
         text: spoken,
         route: request.project.clone(),
         generation,
         sequence,
         deadline: std::time::Instant::now() + state.0.speech_deadline,
+        scope,
+        group: state.0.new_speech_group(),
+        model: state.0.coordinator.status().model,
+        log_spoken: true,
         result: result_tx,
         span: tracing::Span::current(),
     });
@@ -2376,17 +2960,27 @@ async fn speak(state: AppState, req: Speak) -> Response {
             }
         };
         let (result_tx, result_rx) = oneshot::channel();
+        let group = state.0.active_speech_group();
         permit.send(SpeechRequest {
             text: spoken,
             route: state.0.coordinator.route(),
             generation,
             sequence,
             deadline: std::time::Instant::now() + state.0.speech_deadline,
+            scope: if group.is_some() {
+                ContinuationScope::ContinueCurrentTurn
+            } else {
+                ContinuationScope::FreshTurn
+            },
+            group: group.unwrap_or_else(|| state.0.new_speech_group()),
+            model: state.0.coordinator.status().model,
+            log_spoken: true,
             result: result_tx,
             span: tracing::Span::current(),
         });
         match result_rx.await {
             Ok(Ok(())) => {
+                state.0.mark_foreground_audio(generation);
                 tracing::info!(generation, sequence, elapsed = ?started.elapsed(), "spoken");
                 return Json(delivery_response(true)).into_response();
             }
@@ -3129,38 +3723,99 @@ async fn deliver_turn_if_current(
     success
 }
 
+struct SpeechAdmission {
+    text: String,
+    route: String,
+    generation: u64,
+    deadline: std::time::Instant,
+    scope: ContinuationScope,
+    group: SpeechGroup,
+    log_spoken: bool,
+}
+
+async fn queue_speech(state: &AppState, admission: SpeechAdmission) -> Result<(), String> {
+    let SpeechAdmission {
+        text,
+        route,
+        generation,
+        deadline,
+        scope,
+        group,
+        log_spoken,
+    } = admission;
+    let permit = state
+        .0
+        .speech
+        .reserve()
+        .await
+        .map_err(|_| "speech worker is unavailable or busy".to_owned())?;
+    let sequence = reserve_audio(state, generation)
+        .await
+        .ok_or_else(|| "speech generation was superseded".to_owned())?;
+    let (result_tx, result_rx) = oneshot::channel();
+    permit.send(SpeechRequest {
+        text,
+        route,
+        generation,
+        sequence,
+        deadline,
+        scope,
+        group,
+        model: state.0.coordinator.status().model,
+        log_spoken,
+        result: result_tx,
+        span: tracing::Span::current(),
+    });
+    result_rx
+        .await
+        .map_err(|_| "speech worker stopped".to_owned())?
+}
+
 async fn synthesize_reply_if_current(
     state: &AppState,
     utterances: &[String],
     generation: u64,
     deadline: std::time::Instant,
 ) -> bool {
+    let group = state.0.new_speech_group();
+    let mut first_spoken = true;
     let mut success = true;
     for text in utterances {
         let spoken = state.0.speaker.clip_for_speech(text);
         if spoken.is_empty() {
             continue;
         }
-        let Some(sequence) = reserve_audio(state, generation).await else {
+        let scope = if first_spoken {
+            first_spoken = false;
+            ContinuationScope::FreshTurn
+        } else {
+            ContinuationScope::ContinueCurrentTurn
+        };
+        if let Err(error) = queue_speech(
+            state,
+            SpeechAdmission {
+                text: spoken.clone(),
+                route: state.0.coordinator.route(),
+                generation,
+                deadline,
+                scope,
+                group,
+                log_spoken: false,
+            },
+        )
+        .await
+        {
+            tracing::error!(%error, chars = spoken.chars().count(), "synthesis failed; the caller hears nothing for this reply");
             success = false;
             break;
-        };
-        let started = std::time::Instant::now();
-        let synthesized =
-            synthesize_audio_stream(state, &spoken, sequence, generation, deadline).await;
-        match synthesized {
-            Ok((bytes, _delivered)) => {
-                tracing::info!(chars = spoken.chars().count(), bytes, elapsed = ?started.elapsed(), "synthesized a reply");
-            }
-            Err(error) => {
-                finish_audio(state, sequence, generation, Vec::new()).await;
-                tracing::error!(%error, chars = spoken.chars().count(), "synthesis failed; the caller hears nothing for this reply");
-                emit_message(state, ServerMessage::error(error.to_string()));
-                success = false;
-            }
         }
     }
-    success && generation == state.0.coordinator.generation()
+    if success && generation == state.0.coordinator.generation() {
+        state.0.mark_foreground_audio(generation);
+        true
+    } else {
+        false
+    }
 }
 
 /// A project host's link; `hosts.rs` owns it.

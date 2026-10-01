@@ -1,4 +1,5 @@
 use super::*;
+use crate::audio::TestTtsGate;
 use crate::delivery::DELIVERY_QUEUE;
 use crate::hosts::{FakeHostAgent, FakeLog, Step};
 use crate::pbx::OPERATOR;
@@ -83,7 +84,13 @@ fn state_with_stream(stt: Option<String>, stream: Option<String>) -> AppState {
 
 /// The application around `board`, with no speech-to-text configured.
 fn state_on(board: Switchboard) -> AppState {
-    state_on_with_stream(board, None, None)
+    let state = state_on_with_stream(board, None, None);
+    // Most API tests exercise direct delivery rather than the production
+    // bootstrap. Keep the one worker lifecycle in the shared setup helper.
+    if tokio::runtime::Handle::try_current().is_ok() {
+        start_speech_worker_for_test(&state);
+    }
+    state
 }
 
 fn state_on_with_stream(
@@ -100,11 +107,246 @@ fn state_on_with_stream(
     )
 }
 
+#[test]
+fn continuity_commit_is_scoped_to_generation_epoch_and_model() {
+    let state = state();
+    let generation = state.0.coordinator.generation();
+    let model = state.0.coordinator.status().model;
+    let initial = state.0.continuity_snapshot();
+
+    assert!(state
+        .0
+        .mark_continuity_pending(generation, &model, "first line".into()));
+    let pending = state.0.continuity_snapshot();
+    assert_eq!(pending.pending_text.as_deref(), Some("first line"));
+    assert!(!state.0.commit_continuity(
+        generation,
+        &model,
+        initial.epoch + 1,
+        Some("late".into()),
+        "late line".into(),
+    ));
+    assert!(state.0.commit_continuity(
+        generation,
+        &model,
+        pending.epoch,
+        Some("request-1".into()),
+        "first line".into(),
+    ));
+    let committed = state.0.continuity_snapshot();
+    assert_eq!(committed.last_request_id.as_deref(), Some("request-1"));
+    assert_eq!(committed.last_text.as_deref(), Some("first line"));
+    assert!(committed.pending_text.is_none());
+
+    state.0.clear_continuity_for(generation + 1, "next-model");
+    let cleared = state.0.continuity_snapshot();
+    assert!(cleared.epoch > committed.epoch);
+    assert_eq!(cleared.generation, generation + 1);
+    assert_eq!(cleared.model, "next-model");
+    assert!(cleared.last_request_id.is_none());
+    assert!(cleared.last_text.is_none());
+}
+
+#[test]
+fn continuity_early_handoff_uses_pending_text_and_keeps_newer_drain() {
+    let state = state();
+    let generation = state.0.coordinator.generation();
+    let model = state.0.coordinator.status().model;
+    let epoch = state.0.continuity_snapshot().epoch;
+
+    assert!(state
+        .0
+        .mark_continuity_pending_ordered(generation, &model, 10, "first line".into()));
+    assert!(state
+        .0
+        .mark_continuity_pending_ordered(generation, &model, 11, "second line".into()));
+    let (continuity, _) = continuity_for_request(
+        &state,
+        ContinuationScope::ContinueCurrentTurn,
+        generation,
+        &model,
+    );
+    assert_eq!(
+        continuity,
+        TtsContinuity::PreviousText("second line".into())
+    );
+    assert!(!state.0.clear_pending_continuity_if_matching(
+        generation,
+        &model,
+        epoch,
+        Some(10),
+        "first line",
+    ));
+    assert!(state.0.clear_pending_continuity_if_matching(
+        generation,
+        &model,
+        epoch,
+        Some(11),
+        "second line",
+    ));
+    // Restore the newer pending clip for the reverse-order drain assertion.
+    assert!(state
+        .0
+        .mark_continuity_pending_ordered(generation, &model, 11, "second line".into()));
+
+    // The newer body can finish first. Its sequence wins, and the older body
+    // must not overwrite the request id/text that the next line will use.
+    assert!(state.0.commit_continuity_ordered(
+        generation,
+        &model,
+        epoch,
+        11,
+        Some("second-id".into()),
+        "second line".into(),
+    ));
+    assert!(!state.0.commit_continuity_ordered(
+        generation,
+        &model,
+        epoch,
+        10,
+        Some("first-id".into()),
+        "first line".into(),
+    ));
+    let committed = state.0.continuity_snapshot();
+    assert_eq!(committed.last_request_id.as_deref(), Some("second-id"));
+    assert_eq!(committed.last_text.as_deref(), Some("second line"));
+}
+
+#[tokio::test]
+async fn continuity_lifecycle_hooks_clear_caller_rescue_and_leg_boundaries() {
+    let state = state();
+    let generation = state.0.coordinator.generation();
+    let model = state.0.coordinator.status().model;
+
+    // The real final-transcript route clears before it dispatches the caller
+    // turn, so a later worker cannot inherit the previous clip.
+    state
+        .0
+        .mark_continuity_pending(generation, &model, "before caller".into());
+    route_final_transcript(&state, "caller-boundary", generation, "hello".into()).await;
+    assert!(state.0.continuity_snapshot().last_text.is_none());
+    assert!(state.0.continuity_snapshot().pending_text.is_none());
+
+    state.0.mark_continuity_pending(
+        state.0.coordinator.generation(),
+        &model,
+        "before rescue".into(),
+    );
+    cancel_active_operations(&state).await;
+    assert!(state.0.continuity_snapshot().last_text.is_none());
+    assert!(state.0.continuity_snapshot().pending_text.is_none());
+
+    let next_generation = state.0.coordinator.generation() + 1;
+    state.0.mark_continuity_pending(
+        state.0.coordinator.generation(),
+        &model,
+        "before leg".into(),
+    );
+    let mut gate = state.0.display_gate.lock().await;
+    state
+        .0
+        .leg_announcer
+        .begin_scene(
+            &mut gate,
+            crate::display::SceneLeg {
+                route: "next-project".into(),
+                generation: next_generation,
+            },
+        )
+        .await;
+    let cleared = state.0.continuity_snapshot();
+    assert!(cleared.last_text.is_none());
+    assert!(cleared.pending_text.is_none());
+}
+
+#[tokio::test]
+async fn speech_worker_stitches_same_group_and_resets_unrelated_group() {
+    let config = crate::Config::for_tests(&[]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    let state = AppState::new(
+        Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
+        TranscriptLog::new(10),
+        Speaker::test_success(100, Duration::from_millis(25_000)),
+        SttAdapter::from_command(None),
+        SttStreamAdapter::from_command(None),
+    );
+    let (_connection, _, _) = state.register_connection().await;
+    start_speech_worker_for_test(&state);
+    let generation = state.0.coordinator.generation();
+    let group = state.0.new_speech_group();
+
+    queue_speech(
+        &state,
+        SpeechAdmission {
+            text: "first line".into(),
+            route: OPERATOR.into(),
+            generation,
+            deadline: std::time::Instant::now() + Duration::from_secs(1),
+            scope: ContinuationScope::FreshTurn,
+            group,
+            log_spoken: false,
+        },
+    )
+    .await
+    .expect("first line should be spoken");
+    let first = state.0.continuity_snapshot();
+    assert_eq!(first.last_text.as_deref(), Some("first line"));
+    assert!(first.last_request_id.is_some());
+
+    queue_speech(
+        &state,
+        SpeechAdmission {
+            text: "second line".into(),
+            route: OPERATOR.into(),
+            generation,
+            deadline: std::time::Instant::now() + Duration::from_secs(1),
+            scope: ContinuationScope::ContinueCurrentTurn,
+            group,
+            log_spoken: false,
+        },
+    )
+    .await
+    .expect("same-group continuation should be spoken");
+    assert_eq!(
+        state.0.continuity_snapshot().last_text.as_deref(),
+        Some("second line")
+    );
+
+    let unrelated = state.0.new_speech_group();
+    queue_speech(
+        &state,
+        SpeechAdmission {
+            text: "fresh line".into(),
+            route: OPERATOR.into(),
+            generation,
+            deadline: std::time::Instant::now() + Duration::from_secs(1),
+            scope: ContinuationScope::ContinueCurrentTurn,
+            group: unrelated,
+            log_spoken: false,
+        },
+    )
+    .await
+    .expect("unrelated line should start fresh");
+    assert_eq!(
+        state.0.continuity_snapshot().last_text.as_deref(),
+        Some("fresh line")
+    );
+}
+
 async fn next_delivery(connection: &mut DeliveryConnection) -> Value {
     let Some(DeliveryFrame::Message(Message::Text(text))) = connection.receiver.recv().await else {
         panic!("expected a websocket response");
     };
     serde_json::from_str(&text).unwrap()
+}
+
+fn start_speech_worker_for_test(state: &AppState) {
+    ensure_speech_worker(state);
 }
 
 async fn request_json(
@@ -113,6 +355,10 @@ async fn request_json(
     path: &str,
     body: Option<Value>,
 ) -> (StatusCode, Value) {
+    // Delivery tests call the router without the production worker bootstrap.
+    // Start only the shared speech worker here so settled replies use the same
+    // ordered path as production without a second lifecycle implementation.
+    start_speech_worker_for_test(state);
     let mut request = Request::builder().method(method).uri(path);
     let body = match body {
         Some(value) => {
@@ -137,6 +383,7 @@ async fn request_json(
 /// application answers it: `path` names the call the way the agent callback
 /// routes once did, and a `token` in `body` is the call token it carries.
 async fn agent_call_json(state: &AppState, path: &str, body: Value) -> (StatusCode, Value) {
+    start_speech_worker_for_test(state);
     let mut args = body;
     let token = args
         .as_object_mut()
@@ -167,6 +414,67 @@ async fn post_display_in_task(
 fn diagram_show() -> Value {
     json!({"action":{"op":"show","id":"d1","type":"diagram","data":{
         "mode":"graph","nodes":[{"id":"a","label":"A"}],"edges":[]}}})
+}
+
+#[tokio::test]
+async fn speech_worker_duplicate_text_failure_keeps_newer_pending_drain() {
+    let config = crate::Config::for_tests(&[]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    let gate = TestTtsGate::new();
+    gate.fail_first();
+    let state = AppState::new(
+        Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
+        TranscriptLog::new(10),
+        Speaker::test_gated(100, Duration::from_millis(25_000), gate.clone()),
+        SttAdapter::from_command(None),
+        SttStreamAdapter::from_command(None),
+    );
+    let (_connection, _, _) = state.register_connection().await;
+    start_speech_worker_for_test(&state);
+    let generation = state.0.coordinator.generation();
+    let group = state.0.new_speech_group();
+    let admission = |scope| SpeechAdmission {
+        text: "same line".into(),
+        route: OPERATOR.into(),
+        generation,
+        deadline: std::time::Instant::now() + Duration::from_secs(1),
+        scope,
+        group,
+        log_spoken: false,
+    };
+    let first = tokio::spawn({
+        let state = state.clone();
+        let admission = admission(ContinuationScope::FreshTurn);
+        async move { queue_speech(&state, admission).await }
+    });
+    timeout(Duration::from_secs(1), gate.wait_started())
+        .await
+        .expect("first gated drain started");
+    let second = tokio::spawn({
+        let state = state.clone();
+        let admission = admission(ContinuationScope::ContinueCurrentTurn);
+        async move { queue_speech(&state, admission).await }
+    });
+    timeout(Duration::from_secs(1), gate.wait_started())
+        .await
+        .expect("second gated drain started");
+
+    let pending = state.0.continuity_snapshot();
+    assert_eq!(pending.pending_text.as_deref(), Some("same line"));
+    assert!(pending.pending_sequence.is_some());
+    gate.release();
+    gate.release();
+    assert!(first.await.unwrap().is_err());
+    assert!(second.await.unwrap().is_ok());
+    let settled = state.0.continuity_snapshot();
+    assert_eq!(settled.last_text.as_deref(), Some("same line"));
+    assert!(settled.pending_text.is_none());
+    assert!(settled.pending_sequence.is_none());
 }
 
 #[tokio::test]
@@ -3436,6 +3744,25 @@ async fn both_routing_authorities_down_emit_a_page_error_without_audio() {
 /// every prompt "Alpha here.".
 #[cfg(unix)]
 fn state_with_agents(root: &std::path::Path) -> AppState {
+    state_with_agents_speaker(
+        root,
+        Speaker::offline(100, std::time::Duration::from_millis(25_000)),
+    )
+}
+
+fn state_with_agents_speaker(root: &std::path::Path, speaker: Speaker) -> AppState {
+    state_with_agents_options(root, speaker, false)
+}
+
+fn state_with_agents_spoken_speaker(root: &std::path::Path, speaker: Speaker) -> AppState {
+    state_with_agents_options(root, speaker, true)
+}
+
+fn state_with_agents_options(
+    root: &std::path::Path,
+    speaker: Speaker,
+    speaks_during_turn: bool,
+) -> AppState {
     let operator = answering_agent(root, "fake-operator", "Operator here.");
     let config =
         crate::Config::for_tests(&[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())]);
@@ -3456,15 +3783,26 @@ fn state_with_agents(root: &std::path::Path) -> AppState {
         diagnostic: None,
     };
     let prewarm = crate::prewarm::Prewarm::settled(&config, &registry, catalog);
-    FakeHostAgent::new(Box::new(|_, _| {
-        vec![Step::Event(json!({"kind":"text","text":"Alpha here."}))]
+    FakeHostAgent::new(Box::new(move |_, _| {
+        let mut steps = Vec::new();
+        if speaks_during_turn {
+            steps.push(Step::Call("speak", json!({"text":"Foreground answer"})));
+        }
+        steps.push(Step::Event(json!({"kind":"text","text":"Alpha here."})));
+        steps
     }))
     .serve(prewarm.hosts().connect_fake("scriptorium"));
-    state_on(Switchboard::new(
-        &config,
-        registry,
-        std::sync::Arc::new(prewarm),
-    ))
+    let state = AppState::new(
+        Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
+        TranscriptLog::new(10),
+        speaker,
+        SttAdapter::from_command(None),
+        SttStreamAdapter::from_command(None),
+    );
+    if tokio::runtime::Handle::try_current().is_ok() {
+        start_speech_worker_for_test(&state);
+    }
+    state
 }
 
 #[tokio::test]
@@ -5536,7 +5874,11 @@ async fn process_turns_settlement_preserves_a_waiting_request() {
 #[tokio::test]
 async fn process_turns_settles_foreground_idle_once() {
     let root = scratch_root("process-turn-idle-once");
-    let state = state_with_agents(&root);
+    let gate = TestTtsGate::new();
+    let state = state_with_agents_spoken_speaker(
+        &root,
+        Speaker::test_gated(100, Duration::from_millis(25_000), gate.clone()),
+    );
     {
         let mut board = state.0.switchboard.lock().await;
         let reply = board
@@ -5552,6 +5894,7 @@ async fn process_turns_settles_foreground_idle_once() {
             .await;
         assert_eq!(reply.route, "alpha");
     }
+    let (_connection, _, _) = state.register_connection().await;
     let mut events = state.0.events.subscribe();
     while events.try_recv().is_ok() {}
     let id = "settled-idle-once";
@@ -5579,6 +5922,10 @@ async fn process_turns_settles_foreground_idle_once() {
         .send((id.into(), "continue alpha".into(), generation))
         .await
         .unwrap();
+    timeout(Duration::from_secs(1), gate.wait_started())
+        .await
+        .expect("speech worker reached the gated drain");
+    gate.release();
     let busy = next_event_of(&mut events, "agents_state").await;
     assert!(busy["agents"].as_array().is_some_and(|agents| {
         agents
@@ -5613,6 +5960,36 @@ async fn process_turns_settles_foreground_idle_once() {
         1,
         "idle must settle through one owner: {idle_events:#?}"
     );
+
+    assert!(state.0.active_speech_group().is_none());
+    assert_eq!(
+        *state
+            .0
+            .foreground_audio_generation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        Some(generation)
+    );
+    let next_generation = generation + 1;
+    let mut scene_gate = state.0.display_gate.lock().await;
+    state
+        .0
+        .leg_announcer
+        .begin_scene(
+            &mut scene_gate,
+            crate::display::SceneLeg {
+                route: "next-project".into(),
+                generation: next_generation,
+            },
+        )
+        .await;
+    drop(scene_gate);
+    assert!(state
+        .0
+        .foreground_audio_generation
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .is_none());
 
     worker.abort();
     let _ = worker.await;
