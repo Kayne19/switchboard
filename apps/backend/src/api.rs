@@ -206,6 +206,25 @@ impl SpeechContinuity {
         true
     }
 
+    pub(crate) fn clear_pending_if_matching(
+        &mut self,
+        generation: u64,
+        model: &str,
+        epoch: u64,
+        text: &str,
+    ) -> bool {
+        if self.generation == generation
+            && self.model == model
+            && self.epoch == epoch
+            && self.pending_text.as_deref() == Some(text)
+        {
+            self.pending_text = None;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Commit only a fully drained response from the lifecycle that admitted it.
     /// A newer pending clip is retained when an older drain completes later.
     pub(crate) fn commit(
@@ -268,6 +287,8 @@ struct LegAnnouncer {
     last_display: Arc<Mutex<Option<Value>>>,
     projection: AgentProjection,
     continuity: Arc<StdMutex<SpeechContinuity>>,
+    active_speech_group: Arc<StdMutex<Option<SpeechGroup>>>,
+    foreground_audio_generation: Arc<StdMutex<Option<u64>>>,
 }
 
 impl LegAnnouncer {
@@ -357,6 +378,14 @@ impl LegAnnouncer {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear(leg.generation, &model);
+        *self
+            .active_speech_group
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        *self
+            .foreground_audio_generation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
         gate.projection.clear();
         gate.screen_state["stale"] = json!(true);
         gate.report_epoch = None;
@@ -650,6 +679,8 @@ impl AppState {
             last_display: last_display.clone(),
             projection: projection.clone(),
             continuity: continuity.clone(),
+            active_speech_group: active_speech_group.clone(),
+            foreground_audio_generation: foreground_audio_generation.clone(),
         };
         let activity_announcer = leg_announcer.clone();
         let activity_callback: ActivityCallback = Arc::new(move |activity: Activity| {
@@ -880,6 +911,19 @@ impl AppInner {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .mark_pending(generation, model, text)
+    }
+
+    pub(crate) fn clear_pending_continuity_if_matching(
+        &self,
+        generation: u64,
+        model: &str,
+        epoch: u64,
+        text: &str,
+    ) -> bool {
+        self.continuity
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear_pending_if_matching(generation, model, epoch, text)
     }
 
     pub(crate) fn commit_continuity(
@@ -1283,6 +1327,9 @@ async fn drain_speech_stream(
     let mut bytes = 0usize;
     while let Some(chunk) = stream.next().await {
         if generation != state.0.coordinator.generation() {
+            state
+                .0
+                .clear_pending_continuity_if_matching(generation, &model, epoch, &text);
             finish_audio(&state, sequence, generation, Vec::new()).await;
             return Err(crate::audio::AudioError::Tts(
                 "speech generation was superseded".into(),
@@ -1291,6 +1338,9 @@ async fn drain_speech_stream(
         let chunk = match chunk {
             Ok(chunk) => chunk,
             Err(error) => {
+                state
+                    .0
+                    .clear_pending_continuity_if_matching(generation, &model, epoch, &text);
                 finish_audio(&state, sequence, generation, Vec::new()).await;
                 return Err(error);
             }
@@ -1492,6 +1542,8 @@ async fn process_speech(state: AppState) {
         // The worker is intentionally free to admit the next request while
         // this ordered drain task is still consuming the provider body.
         let completion_state = state.clone();
+        let completion_text = text.clone();
+        let completion_model = model.clone();
         tokio::spawn(async move {
             let synthesized = match task.await {
                 Ok(result) => result,
@@ -1503,6 +1555,14 @@ async fn process_speech(state: AppState) {
                 ))),
             };
             clear_active_operation(&completion_state, task_id).await;
+            if synthesized.is_err() {
+                completion_state.0.clear_pending_continuity_if_matching(
+                    generation,
+                    &completion_model,
+                    epoch,
+                    &completion_text,
+                );
+            }
             complete_speech_request(
                 &completion_state,
                 text,
@@ -2050,6 +2110,7 @@ async fn process_turns(state: AppState) {
             tracing::info!(clip = %id, stamped = generation, "dropping turn because rescue occurred before registration");
             emit_stale_clip(&state, &id);
             state.0.coordinator.finish_operation(&operation);
+            state.0.clear_active_speech_group(speech_group);
             state.0.turn_in_flight.store(false, Ordering::Release);
             continue;
         };
@@ -2059,6 +2120,7 @@ async fn process_turns(state: AppState) {
                 tracing::info!(clip = %id, elapsed = ?started.elapsed(), "the turn was cancelled by a page rescue");
                 clear_active_operation(&state, task_id).await;
                 state.0.coordinator.finish_operation(&operation);
+                state.0.clear_active_speech_group(speech_group);
                 state.0.turn_in_flight.store(false, Ordering::Release);
                 continue;
             }
@@ -2068,6 +2130,7 @@ async fn process_turns(state: AppState) {
                 tracing::error!(clip = %id, %error, elapsed = ?started.elapsed(), "the turn worker failed");
                 clear_active_operation(&state, task_id).await;
                 state.0.coordinator.finish_operation(&operation);
+                state.0.clear_active_speech_group(speech_group);
                 state.0.turn_in_flight.store(false, Ordering::Release);
                 emit_message(
                     &state,
@@ -3670,13 +3733,15 @@ async fn synthesize_reply_if_current(
     deadline: std::time::Instant,
 ) -> bool {
     let group = state.0.new_speech_group();
+    let mut first_spoken = true;
     let mut success = true;
-    for (index, text) in utterances.iter().enumerate() {
+    for text in utterances {
         let spoken = state.0.speaker.clip_for_speech(text);
         if spoken.is_empty() {
             continue;
         }
-        let scope = if index == 0 {
+        let scope = if first_spoken {
+            first_spoken = false;
             ContinuationScope::FreshTurn
         } else {
             ContinuationScope::ContinueCurrentTurn

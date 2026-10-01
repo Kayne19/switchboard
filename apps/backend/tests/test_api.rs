@@ -169,6 +169,16 @@ fn continuity_early_handoff_uses_pending_text_and_keeps_newer_drain() {
         continuity,
         TtsContinuity::PreviousText("second line".into())
     );
+    assert!(!state
+        .0
+        .clear_pending_continuity_if_matching(generation, &model, epoch, "first line",));
+    assert!(state
+        .0
+        .clear_pending_continuity_if_matching(generation, &model, epoch, "second line",));
+    // Restore the newer pending clip for the reverse-order drain assertion.
+    assert!(state
+        .0
+        .mark_continuity_pending(generation, &model, "second line".into()));
 
     // The newer body can finish first. Its sequence wins, and the older body
     // must not overwrite the request id/text that the next line will use.
@@ -191,6 +201,53 @@ fn continuity_early_handoff_uses_pending_text_and_keeps_newer_drain() {
     let committed = state.0.continuity_snapshot();
     assert_eq!(committed.last_request_id.as_deref(), Some("second-id"));
     assert_eq!(committed.last_text.as_deref(), Some("second line"));
+}
+
+#[tokio::test]
+async fn continuity_lifecycle_hooks_clear_caller_rescue_and_leg_boundaries() {
+    let state = state();
+    let generation = state.0.coordinator.generation();
+    let model = state.0.coordinator.status().model;
+
+    // The real final-transcript route clears before it dispatches the caller
+    // turn, so a later worker cannot inherit the previous clip.
+    state
+        .0
+        .mark_continuity_pending(generation, &model, "before caller".into());
+    route_final_transcript(&state, "caller-boundary", generation, "hello".into()).await;
+    assert!(state.0.continuity_snapshot().last_text.is_none());
+    assert!(state.0.continuity_snapshot().pending_text.is_none());
+
+    state.0.mark_continuity_pending(
+        state.0.coordinator.generation(),
+        &model,
+        "before rescue".into(),
+    );
+    cancel_active_operations(&state).await;
+    assert!(state.0.continuity_snapshot().last_text.is_none());
+    assert!(state.0.continuity_snapshot().pending_text.is_none());
+
+    let next_generation = state.0.coordinator.generation() + 1;
+    state.0.mark_continuity_pending(
+        state.0.coordinator.generation(),
+        &model,
+        "before leg".into(),
+    );
+    let mut gate = state.0.display_gate.lock().await;
+    state
+        .0
+        .leg_announcer
+        .begin_scene(
+            &mut gate,
+            crate::display::SceneLeg {
+                route: "next-project".into(),
+                generation: next_generation,
+            },
+        )
+        .await;
+    let cleared = state.0.continuity_snapshot();
+    assert!(cleared.last_text.is_none());
+    assert!(cleared.pending_text.is_none());
 }
 
 #[tokio::test]
