@@ -1092,7 +1092,7 @@ async fn an_agent_to_agent_transfer_ends_the_old_session_after_the_new_one_is_up
     let r2 = board.handle("please hand off to beta").await;
     assert_eq!(r2.route, "alpha");
     assert_eq!(r2.text, "Alpha transferring to Beta.");
-    assert_eq!(r2.to_speak, vec!["Alpha transferring to Beta."]);
+    assert!(r2.to_speak.is_empty());
     // The stale host's transfer signal is refused, so beta is never started.
     assert_eq!(log.named("create_session").len(), 1);
     assert!(log.named("kill").is_empty());
