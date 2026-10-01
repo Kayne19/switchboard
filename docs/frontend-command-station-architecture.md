@@ -119,6 +119,15 @@ without making voice navigation unreliable.
 Layouts should respond to content and intent, not merely shrink a fixed
 three-column dashboard.
 
+### Transcript text
+
+The full transcript renders the conversation Markdown subset used by agents:
+strong and emphasis, inline and fenced code, paragraphs, headings, lists, and
+safe links. Links are limited to `http`, `https`, and `mailto`; they open in a
+new tab with `noopener noreferrer`. Unsafe or malformed links show their label,
+and model-provided HTML remains text. The live and spoken response surfaces
+keep their existing non-navigable link behavior.
+
 ## Shared screen-state contract
 
 The browser reports the state it actually rendered over the existing WebSocket:

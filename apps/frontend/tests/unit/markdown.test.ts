@@ -44,11 +44,31 @@ describe('inline markdown', () => {
     ]);
   });
 
-  it('shows a link as its label and never as a navigable target', () => {
+  it('keeps an allowed link destination for the safe renderer', () => {
     expect(parseInline('see [the docs](https://example.com) here')).toEqual([
       { kind: 'text', text: 'see ' },
-      { kind: 'text', text: 'the docs' },
+      { kind: 'link', href: 'https://example.com', children: [{ kind: 'text', text: 'the docs' }] },
       { kind: 'text', text: ' here' },
+    ]);
+  });
+
+  it('renders unsafe links as their readable label', () => {
+    expect(parseInline('[run it](javascript:alert(1)) and [data](data:text/html,x)')).toEqual([
+      { kind: 'text', text: 'run it' },
+      { kind: 'text', text: ' and ' },
+      { kind: 'text', text: 'data' },
+    ]);
+  });
+
+  it('leaves raw HTML and malformed links as text', () => {
+    expect(parseInline('<b>raw</b> [missing](https://example.com')).toEqual([
+      { kind: 'text', text: '<b>raw</b> [missing](https://example.com' },
+    ]);
+  });
+
+  it('rejects nested link labels as malformed syntax', () => {
+    expect(parseInline('[outer [inner](https://example.com)')).toEqual([
+      { kind: 'text', text: '[outer [inner](https://example.com)' },
     ]);
   });
 });
@@ -91,6 +111,14 @@ describe('block markdown', () => {
     expect(parseBlocks('## Result\nIt passed.')).toEqual([
       { kind: 'paragraph', inlines: [{ kind: 'strong', children: [{ kind: 'text', text: 'Result' }] }] },
       { kind: 'paragraph', inlines: [{ kind: 'text', text: 'It passed.' }] },
+    ]);
+  });
+
+  it('reads fenced code blocks without parsing their contents', () => {
+    expect(parseBlocks('before\n\n```ts\nconst value = **literal**;\n\n```\n\nafter')).toEqual([
+      { kind: 'paragraph', inlines: [{ kind: 'text', text: 'before' }] },
+      { kind: 'code', text: 'const value = **literal**;\n' },
+      { kind: 'paragraph', inlines: [{ kind: 'text', text: 'after' }] },
     ]);
   });
 

@@ -68,7 +68,7 @@ function TranscriptBody({ lines }: { lines: TranscriptLine[] }) {
       {lines.map((line, index) => (
         <div className={`transcript-line${line.speaker === 'DAMOCLES' ? ' transcript-line--ai' : ''}`} key={`${index}-${line.speaker}`}>
           <span className="transcript-line__speaker tech micro">{transcriptSpeaker(line)}</span>
-          <div className="transcript-line__text"><RichText segments={[{ text: line.text }]} /></div>
+          <div className="transcript-line__text"><RichText segments={[{ text: line.text }]} allowLinks /></div>
         </div>
       ))}
     </div>
