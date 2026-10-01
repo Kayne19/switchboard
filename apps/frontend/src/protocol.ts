@@ -22,6 +22,8 @@ export interface TranscriptEntry {
 	ts: number;
 	/** The clip or typed turn a caller line came from. */
 	id?: string;
+	/** Whether this agent line was voiced to the caller. */
+	voiced: boolean;
 }
 
 /// A model the leg's host can run, from its catalog.
@@ -167,11 +169,13 @@ export interface ActivityMessage {
 	label: string;
 }
 
-/// A turn settled with this written reply.
+/// A turn settled with this reply; voiced says whether its text was
+/// synthesized for the caller.
 export interface ReplyMessage {
 	type: "reply";
 	text: string;
 	route: string;
+	voiced: boolean;
 }
 
 /// A line was spoken to the caller and kept in the transcript.
@@ -348,6 +352,7 @@ const transcriptEntry = object<TranscriptEntry>({
 	route: string,
 	ts: number,
 	id: optional(string),
+	voiced: boolean,
 });
 
 const modelEntry = object<ModelEntry>({
@@ -404,7 +409,7 @@ const MESSAGE_FIELDS: { [Type in MessageType]: MessageFields<Type> } = {
 	routing_unavailable: { message: string },
 	thinking: { route: string, waiting: number },
 	activity: { state: string, tool: string, detail: string, label: string },
-	reply: { text: string, route: string },
+	reply: { text: string, route: string, voiced: boolean },
 	spoken: { entry: transcriptEntry },
 	history: { entries: list(transcriptEntry) },
 	audio_start: {

@@ -259,7 +259,17 @@
       "message": {
         "type": "reply",
         "text": "The tests pass.",
-        "route": "alpha"
+        "route": "alpha",
+        "voiced": false
+      }
+    },
+    {
+      "name": "reply_voiced",
+      "message": {
+        "type": "reply",
+        "text": "Back with the operator.",
+        "route": "operator",
+        "voiced": true
       }
     },
     {
@@ -270,7 +280,8 @@
           "role": "agent",
           "text": "Running the tests now.",
           "route": "alpha",
-          "ts": 1758844800.25
+          "ts": 1758844800.25,
+          "voiced": true
         }
       }
     },
@@ -291,13 +302,15 @@
             "text": "Put me through to alpha.",
             "route": "operator",
             "ts": 1758844790.5,
-            "id": "clip-1"
+            "id": "clip-1",
+            "voiced": false
           },
           {
             "role": "agent",
             "text": "Alpha here.",
             "route": "alpha",
-            "ts": 1758844795.0
+            "ts": 1758844795.0,
+            "voiced": true
           }
         ]
       }

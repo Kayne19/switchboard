@@ -47,5 +47,5 @@ export function statusMessage(fields: Partial<StatusMessage> = {}): StatusMessag
 export function transcriptEntry(
   fields: Pick<TranscriptEntry, "role" | "text"> & Partial<TranscriptEntry>,
 ): TranscriptEntry {
-  return { route: "operator", ts: 1758844800, ...fields };
+  return { route: "operator", ts: 1758844800, voiced: false, ...fields };
 }
