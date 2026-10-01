@@ -156,6 +156,63 @@ impl AgentProjection {
     }
 }
 
+/// The call-scoped continuity context for the next ElevenLabs request.
+///
+/// A request id is safe to reuse only after its response stream has drained.
+/// `pending_text` covers the handoff window while that drain is still in
+/// progress. The epoch, generation, and model together identify the lifecycle
+/// that admitted the request; a late drain must not poison a later call leg.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SpeechContinuity {
+    pub(crate) last_request_id: Option<String>,
+    pub(crate) last_text: Option<String>,
+    pub(crate) pending_text: Option<String>,
+    pub(crate) generation: u64,
+    pub(crate) model: String,
+    pub(crate) epoch: u64,
+}
+
+#[allow(dead_code)]
+impl SpeechContinuity {
+    pub(crate) fn clear(&mut self, generation: u64, model: &str) {
+        self.last_request_id = None;
+        self.last_text = None;
+        self.pending_text = None;
+        self.generation = generation;
+        self.model = model.to_owned();
+        self.epoch = self.epoch.saturating_add(1);
+    }
+
+    pub(crate) fn mark_pending(&mut self, generation: u64, model: &str, text: String) -> bool {
+        if self.generation != generation || self.model != model {
+            return false;
+        }
+        self.pending_text = Some(text);
+        true
+    }
+
+    /// Commit only a fully drained response from the lifecycle that admitted it.
+    /// A newer pending clip is retained when an older drain completes later.
+    pub(crate) fn commit(
+        &mut self,
+        generation: u64,
+        model: &str,
+        epoch: u64,
+        request_id: Option<String>,
+        text: String,
+    ) -> bool {
+        if self.generation != generation || self.model != model || self.epoch != epoch {
+            return false;
+        }
+        self.last_request_id = request_id;
+        self.last_text = Some(text.clone());
+        if self.pending_text.as_deref() == Some(text.as_str()) {
+            self.pending_text = None;
+        }
+        true
+    }
+}
+
 /// Tells the browser the call has moved to a new leg.
 ///
 /// A transfer is announced from two places: candidate promotion, when the
@@ -172,6 +229,7 @@ struct LegAnnouncer {
     display_confirm: watch::Sender<ConfirmState>,
     last_display: Arc<Mutex<Option<Value>>>,
     projection: AgentProjection,
+    continuity: Arc<StdMutex<SpeechContinuity>>,
 }
 
 impl LegAnnouncer {
@@ -256,6 +314,11 @@ impl LegAnnouncer {
             return;
         }
         tracing::info!(route = %leg.route, generation = leg.generation, "the caller's screen moves to a new leg");
+        let model = self.coordinator.status().model;
+        self.continuity
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear(leg.generation, &model);
         gate.projection.clear();
         gate.screen_state["stale"] = json!(true);
         gate.report_epoch = None;
@@ -300,6 +363,9 @@ pub struct AppInner {
     delivery: DeliveryState,
     pub transcript_log: Mutex<TranscriptLog>,
     pub speaker: Speaker,
+    /// Call-scoped TTS stitching state. The synchronous lock keeps lifecycle
+    /// clear/commit linearization short and lets the leg announcer share it.
+    pub(crate) continuity: Arc<StdMutex<SpeechContinuity>>,
     pub stt: SttAdapter,
     pub stt_stream: SttStreamAdapter,
     pub events: broadcast::Sender<Event>,
@@ -501,6 +567,11 @@ impl AppState {
             watermark: 0,
         }));
         let (display_confirm_tx, _) = watch::channel(ConfirmState::default());
+        let continuity = Arc::new(StdMutex::new(SpeechContinuity {
+            generation: coordinator.generation(),
+            model: coordinator.status().model,
+            ..SpeechContinuity::default()
+        }));
         let leg_announcer = LegAnnouncer {
             coordinator: coordinator.clone(),
             events: events.clone(),
@@ -509,6 +580,7 @@ impl AppState {
             display_confirm: display_confirm_tx.clone(),
             last_display: last_display.clone(),
             projection: projection.clone(),
+            continuity: continuity.clone(),
         };
         let activity_announcer = leg_announcer.clone();
         let activity_callback: ActivityCallback = Arc::new(move |activity: Activity| {
@@ -615,6 +687,7 @@ impl AppState {
                 delivery,
                 transcript_log: Mutex::new(transcript_log),
                 speaker,
+                continuity,
                 stt,
                 stt_stream,
                 events,
@@ -674,6 +747,64 @@ impl AppState {
         } else {
             router
         }
+    }
+}
+
+#[allow(dead_code)]
+impl AppInner {
+    pub(crate) fn continuity_snapshot(&self) -> SpeechContinuity {
+        self.continuity
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    pub(crate) fn clear_continuity(&self) {
+        let generation = self.coordinator.generation();
+        let model = self.coordinator.status().model;
+        self.clear_continuity_for(generation, &model);
+    }
+
+    pub(crate) fn clear_continuity_if_current(&self, generation: u64) -> bool {
+        if generation != self.coordinator.generation() {
+            return false;
+        }
+        let model = self.coordinator.status().model;
+        self.clear_continuity_for(generation, &model);
+        true
+    }
+
+    pub(crate) fn clear_continuity_for(&self, generation: u64, model: &str) {
+        self.continuity
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear(generation, model);
+    }
+
+    pub(crate) fn mark_continuity_pending(
+        &self,
+        generation: u64,
+        model: &str,
+        text: String,
+    ) -> bool {
+        self.continuity
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .mark_pending(generation, model, text)
+    }
+
+    pub(crate) fn commit_continuity(
+        &self,
+        generation: u64,
+        model: &str,
+        epoch: u64,
+        request_id: Option<String>,
+        text: String,
+    ) -> bool {
+        self.continuity
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .commit(generation, model, epoch, request_id, text)
     }
 }
 
@@ -790,6 +921,7 @@ pub async fn shutdown(state: &AppState) {
     if !state.0.coordinator.begin_shutdown() {
         return;
     }
+    state.0.clear_continuity();
     interrupt_active_turn(state).await;
     // Ends the legs first: a project session is ended by a command on its
     // host's link, which has to be queued before the links close.
@@ -1139,6 +1271,7 @@ async fn route_final_transcript(state: &AppState, id: &str, generation: u64, tra
         );
         return;
     }
+    state.0.clear_continuity_if_current(generation);
     state.0.floor.caller_spoke().await;
     let _transition = state.0.operation_transition.lock().await;
     if generation != state.0.coordinator.generation() {
@@ -1444,6 +1577,7 @@ async fn process_clips(state: AppState) {
             );
             continue;
         }
+        state.0.clear_continuity_if_current(clip.generation);
         state.0.floor.caller_spoke().await;
         let _transition = state.0.operation_transition.lock().await;
         if clip.generation != state.0.coordinator.generation() {
@@ -1681,6 +1815,7 @@ async fn release_rescued_work(
     generation: u64,
     keep_session: bool,
 ) -> Option<String> {
+    state.0.clear_continuity();
     state.0.audio.lock().await.clear();
     // Tell the browser at once, so speech it starts recording after this point
     // is stamped with the new epoch rather than the one being retired.

@@ -100,6 +100,46 @@ fn state_on_with_stream(
     )
 }
 
+#[test]
+fn continuity_commit_is_scoped_to_generation_epoch_and_model() {
+    let state = state();
+    let generation = state.0.coordinator.generation();
+    let model = state.0.coordinator.status().model;
+    let initial = state.0.continuity_snapshot();
+
+    assert!(state
+        .0
+        .mark_continuity_pending(generation, &model, "first line".into()));
+    let pending = state.0.continuity_snapshot();
+    assert_eq!(pending.pending_text.as_deref(), Some("first line"));
+    assert!(!state.0.commit_continuity(
+        generation,
+        &model,
+        initial.epoch + 1,
+        Some("late".into()),
+        "late line".into(),
+    ));
+    assert!(state.0.commit_continuity(
+        generation,
+        &model,
+        pending.epoch,
+        Some("request-1".into()),
+        "first line".into(),
+    ));
+    let committed = state.0.continuity_snapshot();
+    assert_eq!(committed.last_request_id.as_deref(), Some("request-1"));
+    assert_eq!(committed.last_text.as_deref(), Some("first line"));
+    assert!(committed.pending_text.is_none());
+
+    state.0.clear_continuity_for(generation + 1, "next-model");
+    let cleared = state.0.continuity_snapshot();
+    assert!(cleared.epoch > committed.epoch);
+    assert_eq!(cleared.generation, generation + 1);
+    assert_eq!(cleared.model, "next-model");
+    assert!(cleared.last_request_id.is_none());
+    assert!(cleared.last_text.is_none());
+}
+
 async fn next_delivery(connection: &mut DeliveryConnection) -> Value {
     let Some(DeliveryFrame::Message(Message::Text(text))) = connection.receiver.recv().await else {
         panic!("expected a websocket response");
