@@ -299,7 +299,9 @@ export function RuntimeIntegration() {
       setRuntime(runtimeState);
       dispatch({
         op: "listen",
-        on: Boolean(runtimeState.recording || runtimeState.handsFree),
+        on: Boolean(
+          runtimeState.recording || runtimeState.handsFree || runtimeState.speaking,
+        ),
       });
     };
   }, [dispatch, handleScreenStateAck, showConversation]);
@@ -376,6 +378,7 @@ export function RuntimeIntegration() {
     registerVoiceRuntime({
       toggleTurn,
       sendText: (text) => callRuntime.sendText(text),
+      getVoiceLevel: () => callRuntime.currentVoiceLevel,
     });
     return () => registerVoiceRuntime(null);
   }, [callRuntime, registerVoiceRuntime, runtime.connected, runtime.recording]);

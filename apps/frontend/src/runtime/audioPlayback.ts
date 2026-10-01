@@ -9,6 +9,7 @@
 
 import type { AudioDoneMessage, AudioStartMessage } from "../protocol";
 import { errorName } from "./errors";
+import { AudioLevelMonitor } from "./audioLevel";
 
 export const MAX_AUDIO_UTTERANCE = 32 * 1024 * 1024;
 export const MAX_AUDIO_REPLAY = 64 * 1024 * 1024;
@@ -60,6 +61,8 @@ export interface AudioPlaybackOptions {
   onChange: () => void;
   /** The pause between two messages. Defaults to `INTER_UTTERANCE_GAP_MS`. */
   gapMs?: number;
+  /** Receives the live output level without entering React state. */
+  onAudioLevel?: (level: number) => void;
 }
 
 export class AudioPlayback {
@@ -79,6 +82,10 @@ export class AudioPlayback {
   private mseReplayBytes = 0;
   /** The pause before the next message; nothing starts while it runs. */
   private gapTimer: ReturnType<typeof setTimeout> | null = null;
+  private audioContext: AudioContext | null = null;
+  private audioSource: MediaElementAudioSourceNode | null = null;
+  private levelMonitor: AudioLevelMonitor | null = null;
+  private audioGraphAttempted = false;
 
   constructor(options: AudioPlaybackOptions) {
     this.options = options;
@@ -165,6 +172,12 @@ export class AudioPlayback {
     this.audioQueue.length = 0;
     this.clearMsePlayback();
     if (this.playbackOwner) this.cleanupOwner(this.playbackOwner);
+    this.levelMonitor?.disconnect();
+    this.levelMonitor = null;
+    this.audioSource?.disconnect();
+    this.audioSource = null;
+    if (this.audioContext) void this.audioContext.close().catch(() => undefined);
+    this.audioContext = null;
     this.playing = false;
   }
 
@@ -173,6 +186,7 @@ export class AudioPlayback {
   // later clip to arrive.
   handleGesture(target?: EventTarget | null): void {
     if (target === this.player || this.gapTimer !== null) return;
+    this.resumeAudioGraph();
     const owner = this.playbackOwner;
     if (!owner) {
       if (this.mseActive && !this.playing) this.msePlay();
@@ -226,6 +240,7 @@ export class AudioPlayback {
       )
         return;
       owner.paused = true;
+      this.levelMonitor?.stop();
       owner.awaitingEnded = owner.seeked && this.terminalSeek();
       this.playing = false;
       this.notifyPlaybackChange();
@@ -351,6 +366,40 @@ export class AudioPlayback {
     this.notifyPlaybackChange();
   }
 
+  private ensureAudioGraph(): void {
+    if (this.audioGraphAttempted) return;
+    this.audioGraphAttempted = true;
+    if (!this.options.onAudioLevel || typeof AudioContext === "undefined") return;
+    try {
+      const context = new AudioContext();
+      const source = context.createMediaElementSource(this.player);
+      const monitor = new AudioLevelMonitor(
+        context,
+        source,
+        this.options.onAudioLevel,
+        context.destination,
+      );
+      this.audioContext = context;
+      this.audioSource = source;
+      this.levelMonitor = monitor;
+      if (context.state === "suspended") void context.resume().catch(() => undefined);
+    } catch {
+      // A browser may reject a graph for this element. Playback remains on the
+      // element's normal path and the indicator falls back to its still state.
+      this.levelMonitor?.disconnect();
+      this.levelMonitor = null;
+      this.audioSource = null;
+      if (this.audioContext) void this.audioContext.close().catch(() => undefined);
+      this.audioContext = null;
+    }
+  }
+
+  private resumeAudioGraph(): void {
+    this.ensureAudioGraph();
+    if (this.audioContext?.state === "suspended")
+      void this.audioContext.resume().catch(() => undefined);
+  }
+
   private notifyPlaybackChange(): void {
     this.options.onChange();
   }
@@ -363,6 +412,7 @@ export class AudioPlayback {
       player.removeEventListener(name, handler);
     }
     owner.handlers = [];
+    this.levelMonitor?.stop();
     player.pause();
     player.removeAttribute("src");
     player.load();
@@ -419,6 +469,8 @@ export class AudioPlayback {
       return;
     owner.paused = false;
     owner.seeked = false;
+    this.resumeAudioGraph();
+    this.levelMonitor?.start();
     this.playing = true;
     this.notifyPlaybackChange();
     const attempt = ++this.playAttemptToken;
@@ -472,9 +524,12 @@ export class AudioPlayback {
 
   private msePlay(): void {
     if (!this.mseActive || this.mseActive.failed || this.playing) return;
+    this.resumeAudioGraph();
+    this.levelMonitor?.start();
     this.playing = true;
     this.notifyPlaybackChange();
     Promise.resolve(this.player.play()).catch((error) => {
+      this.levelMonitor?.stop();
       this.playing = false;
       this.notifyPlaybackChange();
       this.options.onStatus(
@@ -529,6 +584,7 @@ export class AudioPlayback {
     utterance.failed = true;
     const player = this.player;
     if (this.mseActive === utterance) {
+      this.levelMonitor?.stop();
       this.playing = false;
       this.notifyPlaybackChange();
       if (utterance.endedHandler)
@@ -586,6 +642,7 @@ export class AudioPlayback {
       if (this.mseActive !== utterance) return;
       player.removeEventListener("ended", utterance.endedHandler!);
       this.mseActive = null;
+      this.levelMonitor?.stop();
       this.playing = false;
       this.notifyPlaybackChange();
       if (utterance.url) URL.revokeObjectURL(utterance.url);
@@ -615,6 +672,7 @@ export class AudioPlayback {
     this.mseQueue = [];
     this.msePending = null;
     this.mseReplayBytes = 0;
+    this.levelMonitor?.stop();
     this.playing = false;
     this.notifyPlaybackChange();
     player.pause();

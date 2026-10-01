@@ -1,3 +1,7 @@
+function normalizeAudioEnergy(energy: number): number {
+	return Number.isFinite(energy) ? Math.max(0, Math.min(1, energy * 8)) : 0;
+}
+
 export const WAKE_PHRASE = "Hey Jarvis";
 export const WAKE_SAMPLE_RATE = 16_000;
 export const WAKE_FRAME_SAMPLES = 1_280;
@@ -53,6 +57,7 @@ export interface HandsFreeControllerOptions {
 	currentEpoch: () => number;
 	isPttActive: () => boolean;
 	onClip: (audio: Blob, mime: string, epoch: number) => void;
+	onAudioLevel?: (level: number) => void;
 	onState: (detail: HandsFreeStateDetail) => void;
 }
 
@@ -329,6 +334,7 @@ export class HandsFreeController {
 		};
 		if (message.type === "energy") {
 			if (typeof message.energy !== "number") return;
+			this.options.onAudioLevel?.(normalizeAudioEnergy(message.energy));
 			return;
 		}
 		if (message.type === "audio") {
@@ -533,6 +539,7 @@ export class HandsFreeController {
 		this.source = null;
 		this.sink = null;
 		this.releaseStream();
+		this.options.onAudioLevel?.(0);
 		const context = this.context;
 		this.context = null;
 		if (context) void context.close().catch(() => undefined);

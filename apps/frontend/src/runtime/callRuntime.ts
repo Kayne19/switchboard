@@ -58,6 +58,7 @@ const RECONNECT_DELAY_MS = 1_500;
 export interface RuntimeState {
   connected: boolean;
   recording: boolean;
+  speaking: boolean;
   status: string;
   statusError: boolean;
   handsFree: boolean;
@@ -80,6 +81,7 @@ export interface RuntimeState {
 export const INITIAL_RUNTIME_STATE: RuntimeState = {
   connected: false,
   recording: false,
+  speaking: false,
   status: "Connecting…",
   statusError: false,
   handsFree: false,
@@ -113,6 +115,7 @@ export interface CallRuntimeOptions {
   player?: HTMLAudioElement;
   getUserMedia?: PushToTalkOptions["getUserMedia"];
   createRecorder?: PushToTalkOptions["createRecorder"];
+  createAudioContext?: PushToTalkOptions["createAudioContext"];
   /** Loads the local wake-word detector the first time hands-free starts. */
   loadWakeDetector?: () => Promise<WakeDetector>;
   createHandsFree?: (options: HandsFreeControllerOptions) => HandsFreeController;
@@ -171,6 +174,7 @@ export class CallRuntime {
   private hangupPending = false;
 
   private handsFree: HandsFreeController | null = null;
+  private voiceLevel = 0;
   private handsFreeStartup: Promise<void> | null = null;
   private pendingResponseBarrier: {
     responseId: string;
@@ -199,12 +203,22 @@ export class CallRuntime {
       player: options.player,
       idleText: IDLE_TEXT,
       onStatus: (text, error) => this.setStatus(text, error),
-      onChange: () => this.maybeCompleteResponseBarrier(),
+      onAudioLevel: (level) => {
+        this.voiceLevel = level;
+      },
+      onChange: () => {
+        this.update({ speaking: this.playback.isPlaying });
+        this.maybeCompleteResponseBarrier();
+      },
     });
     this.pushToTalk = new PushToTalk({
       idleText: IDLE_TEXT,
       getUserMedia: options.getUserMedia,
       createRecorder: options.createRecorder,
+      createAudioContext: options.createAudioContext,
+      onAudioLevel: (level) => {
+        this.voiceLevel = level;
+      },
       newClipId: () => this.newClipId(),
       context: () => ({
         epoch: this.turnEpoch,
@@ -224,6 +238,10 @@ export class CallRuntime {
 
   get currentState(): RuntimeState {
     return { ...this.state };
+  }
+
+  get currentVoiceLevel(): number {
+    return this.voiceLevel;
   }
 
   start(): void {
@@ -586,6 +604,9 @@ export class CallRuntime {
           isPttActive: () => this.pushToTalk.isActive,
           onClip: (audio, mime, epoch) =>
             this.submitHandsFreeClip(audio, mime, epoch),
+          onAudioLevel: (level) => {
+            this.voiceLevel = level;
+          },
           onState: (detail) => this.renderHandsFreeState(detail),
         };
         this.handsFree = this.options.createHandsFree
