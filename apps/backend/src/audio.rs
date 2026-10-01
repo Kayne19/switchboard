@@ -19,6 +19,8 @@ use std::sync::{
 use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
+#[cfg(test)]
+use tokio::sync::Notify;
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, timeout, Duration, Instant as TokioInstant};
 
@@ -1167,6 +1169,60 @@ async fn collect_error_body(stream: &mut TtsByteStream) -> Result<Vec<u8>, Audio
 struct OfflineTtsTransport;
 
 #[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct TestTtsGate {
+    started: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+#[cfg(test)]
+impl TestTtsGate {
+    pub(crate) fn new() -> Self {
+        Self {
+            started: Arc::new(Notify::new()),
+            release: Arc::new(Notify::new()),
+        }
+    }
+
+    pub(crate) async fn wait_started(&self) {
+        self.started.notified().await;
+    }
+
+    pub(crate) fn release(&self) {
+        self.release.notify_one();
+    }
+}
+
+#[cfg(test)]
+struct GatedTtsTransport {
+    gate: TestTtsGate,
+}
+
+#[cfg(test)]
+impl TtsTransport for GatedTtsTransport {
+    fn send_stream(&self, _request: TtsRequest) -> TtsStreamFuture {
+        let gate = self.gate.clone();
+        Box::pin(async move {
+            let (sender, receiver) = mpsc::channel(1);
+            tokio::spawn(async move {
+                gate.started.notify_one();
+                gate.release.notified().await;
+                let _ = sender.send(Ok(vec![1, 2, 3])).await;
+            });
+            Ok(TtsResponse {
+                status: StatusCode::OK,
+                content_length: Some(3),
+                request_id: Some("gated-request-id".into()),
+                stream: Box::pin(ChunkReceiverStream {
+                    receiver,
+                    task: None,
+                }) as TtsByteStream,
+            })
+        })
+    }
+}
+
+#[cfg(test)]
 struct ImmediateTtsTransport;
 
 #[cfg(test)]
@@ -1208,6 +1264,17 @@ impl Speaker {
         let values = HashMap::from([("ELEVENLABS_API_KEY".into(), "offline-test-key".into())]);
         let mut speaker = Self::from_values(max_chars, speech_deadline, &values);
         speaker.transport = Arc::new(ImmediateTtsTransport);
+        speaker
+    }
+
+    pub(crate) fn test_gated(
+        max_chars: usize,
+        speech_deadline: Duration,
+        gate: TestTtsGate,
+    ) -> Self {
+        let values = HashMap::from([("ELEVENLABS_API_KEY".into(), "offline-test-key".into())]);
+        let mut speaker = Self::from_values(max_chars, speech_deadline, &values);
+        speaker.transport = Arc::new(GatedTtsTransport { gate });
         speaker
     }
 }

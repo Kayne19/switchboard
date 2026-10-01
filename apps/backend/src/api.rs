@@ -167,6 +167,7 @@ pub(crate) struct SpeechContinuity {
     pub(crate) last_request_id: Option<String>,
     pub(crate) last_text: Option<String>,
     pub(crate) pending_text: Option<String>,
+    pub(crate) pending_sequence: Option<u64>,
     pub(crate) generation: u64,
     pub(crate) model: String,
     pub(crate) epoch: u64,
@@ -179,6 +180,7 @@ impl SpeechContinuity {
         self.last_request_id = None;
         self.last_text = None;
         self.pending_text = None;
+        self.pending_sequence = None;
         self.generation = generation;
         self.model = model.to_owned();
         self.epoch = self.epoch.saturating_add(1);
@@ -186,6 +188,16 @@ impl SpeechContinuity {
     }
 
     pub(crate) fn mark_pending(&mut self, generation: u64, model: &str, text: String) -> bool {
+        self.mark_pending_ordered(generation, model, None, text)
+    }
+
+    pub(crate) fn mark_pending_ordered(
+        &mut self,
+        generation: u64,
+        model: &str,
+        sequence: Option<u64>,
+        text: String,
+    ) -> bool {
         if self.generation != generation {
             return false;
         }
@@ -203,6 +215,7 @@ impl SpeechContinuity {
             }
         }
         self.pending_text = Some(text);
+        self.pending_sequence = sequence;
         true
     }
 
@@ -211,14 +224,17 @@ impl SpeechContinuity {
         generation: u64,
         model: &str,
         epoch: u64,
+        sequence: Option<u64>,
         text: &str,
     ) -> bool {
         if self.generation == generation
             && self.model == model
             && self.epoch == epoch
+            && self.pending_sequence == sequence
             && self.pending_text.as_deref() == Some(text)
         {
             self.pending_text = None;
+            self.pending_sequence = None;
             true
         } else {
             false
@@ -263,8 +279,10 @@ impl SpeechContinuity {
         if let Some(sequence) = sequence {
             self.last_sequence = Some(sequence);
         }
-        if self.pending_text.as_deref() == Some(text.as_str()) {
+        if self.pending_text.as_deref() == Some(text.as_str()) && self.pending_sequence == sequence
+        {
             self.pending_text = None;
+            self.pending_sequence = None;
         }
         true
     }
@@ -913,17 +931,31 @@ impl AppInner {
             .mark_pending(generation, model, text)
     }
 
+    pub(crate) fn mark_continuity_pending_ordered(
+        &self,
+        generation: u64,
+        model: &str,
+        sequence: u64,
+        text: String,
+    ) -> bool {
+        self.continuity
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .mark_pending_ordered(generation, model, Some(sequence), text)
+    }
+
     pub(crate) fn clear_pending_continuity_if_matching(
         &self,
         generation: u64,
         model: &str,
         epoch: u64,
+        sequence: Option<u64>,
         text: &str,
     ) -> bool {
         self.continuity
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clear_pending_if_matching(generation, model, epoch, text)
+            .clear_pending_if_matching(generation, model, epoch, sequence, text)
     }
 
     pub(crate) fn commit_continuity(
@@ -1327,9 +1359,13 @@ async fn drain_speech_stream(
     let mut bytes = 0usize;
     while let Some(chunk) = stream.next().await {
         if generation != state.0.coordinator.generation() {
-            state
-                .0
-                .clear_pending_continuity_if_matching(generation, &model, epoch, &text);
+            state.0.clear_pending_continuity_if_matching(
+                generation,
+                &model,
+                epoch,
+                Some(sequence),
+                &text,
+            );
             finish_audio(&state, sequence, generation, Vec::new()).await;
             return Err(crate::audio::AudioError::Tts(
                 "speech generation was superseded".into(),
@@ -1338,9 +1374,13 @@ async fn drain_speech_stream(
         let chunk = match chunk {
             Ok(chunk) => chunk,
             Err(error) => {
-                state
-                    .0
-                    .clear_pending_continuity_if_matching(generation, &model, epoch, &text);
+                state.0.clear_pending_continuity_if_matching(
+                    generation,
+                    &model,
+                    epoch,
+                    Some(sequence),
+                    &text,
+                );
                 finish_audio(&state, sequence, generation, Vec::new()).await;
                 return Err(error);
             }
@@ -1505,7 +1545,7 @@ async fn process_speech(state: AppState) {
         // request cannot accidentally reuse an undrained request id.
         state
             .0
-            .mark_continuity_pending(generation, &model, text.clone());
+            .mark_continuity_pending_ordered(generation, &model, sequence, text.clone());
         let operation_state = state.clone();
         let operation_text = text.clone();
         let operation_model = model.clone();
@@ -1560,6 +1600,7 @@ async fn process_speech(state: AppState) {
                     generation,
                     &completion_model,
                     epoch,
+                    Some(sequence),
                     &completion_text,
                 );
             }

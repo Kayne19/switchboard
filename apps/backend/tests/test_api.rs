@@ -1,4 +1,5 @@
 use super::*;
+use crate::audio::TestTtsGate;
 use crate::delivery::DELIVERY_QUEUE;
 use crate::hosts::{FakeHostAgent, FakeLog, Step};
 use crate::pbx::OPERATOR;
@@ -155,10 +156,10 @@ fn continuity_early_handoff_uses_pending_text_and_keeps_newer_drain() {
 
     assert!(state
         .0
-        .mark_continuity_pending(generation, &model, "first line".into()));
+        .mark_continuity_pending_ordered(generation, &model, 10, "first line".into()));
     assert!(state
         .0
-        .mark_continuity_pending(generation, &model, "second line".into()));
+        .mark_continuity_pending_ordered(generation, &model, 11, "second line".into()));
     let (continuity, _) = continuity_for_request(
         &state,
         ContinuationScope::ContinueCurrentTurn,
@@ -169,16 +170,24 @@ fn continuity_early_handoff_uses_pending_text_and_keeps_newer_drain() {
         continuity,
         TtsContinuity::PreviousText("second line".into())
     );
-    assert!(!state
-        .0
-        .clear_pending_continuity_if_matching(generation, &model, epoch, "first line",));
-    assert!(state
-        .0
-        .clear_pending_continuity_if_matching(generation, &model, epoch, "second line",));
+    assert!(!state.0.clear_pending_continuity_if_matching(
+        generation,
+        &model,
+        epoch,
+        Some(10),
+        "first line",
+    ));
+    assert!(state.0.clear_pending_continuity_if_matching(
+        generation,
+        &model,
+        epoch,
+        Some(11),
+        "second line",
+    ));
     // Restore the newer pending clip for the reverse-order drain assertion.
     assert!(state
         .0
-        .mark_continuity_pending(generation, &model, "second line".into()));
+        .mark_continuity_pending_ordered(generation, &model, 11, "second line".into()));
 
     // The newer body can finish first. Its sequence wins, and the older body
     // must not overwrite the request id/text that the next line will use.
@@ -3674,6 +3683,25 @@ async fn both_routing_authorities_down_emit_a_page_error_without_audio() {
 /// every prompt "Alpha here.".
 #[cfg(unix)]
 fn state_with_agents(root: &std::path::Path) -> AppState {
+    state_with_agents_speaker(
+        root,
+        Speaker::offline(100, std::time::Duration::from_millis(25_000)),
+    )
+}
+
+fn state_with_agents_speaker(root: &std::path::Path, speaker: Speaker) -> AppState {
+    state_with_agents_options(root, speaker, false)
+}
+
+fn state_with_agents_spoken_speaker(root: &std::path::Path, speaker: Speaker) -> AppState {
+    state_with_agents_options(root, speaker, true)
+}
+
+fn state_with_agents_options(
+    root: &std::path::Path,
+    speaker: Speaker,
+    speaks_during_turn: bool,
+) -> AppState {
     let operator = answering_agent(root, "fake-operator", "Operator here.");
     let config =
         crate::Config::for_tests(&[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())]);
@@ -3694,15 +3722,26 @@ fn state_with_agents(root: &std::path::Path) -> AppState {
         diagnostic: None,
     };
     let prewarm = crate::prewarm::Prewarm::settled(&config, &registry, catalog);
-    FakeHostAgent::new(Box::new(|_, _| {
-        vec![Step::Event(json!({"kind":"text","text":"Alpha here."}))]
+    FakeHostAgent::new(Box::new(move |_, _| {
+        let mut steps = Vec::new();
+        if speaks_during_turn {
+            steps.push(Step::Call("speak", json!({"text":"Foreground answer"})));
+        }
+        steps.push(Step::Event(json!({"kind":"text","text":"Alpha here."})));
+        steps
     }))
     .serve(prewarm.hosts().connect_fake("scriptorium"));
-    state_on(Switchboard::new(
-        &config,
-        registry,
-        std::sync::Arc::new(prewarm),
-    ))
+    let state = AppState::new(
+        Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
+        TranscriptLog::new(10),
+        speaker,
+        SttAdapter::from_command(None),
+        SttStreamAdapter::from_command(None),
+    );
+    if tokio::runtime::Handle::try_current().is_ok() {
+        start_speech_worker_for_test(&state);
+    }
+    state
 }
 
 #[tokio::test]
@@ -5774,7 +5813,11 @@ async fn process_turns_settlement_preserves_a_waiting_request() {
 #[tokio::test]
 async fn process_turns_settles_foreground_idle_once() {
     let root = scratch_root("process-turn-idle-once");
-    let state = state_with_agents(&root);
+    let gate = TestTtsGate::new();
+    let state = state_with_agents_spoken_speaker(
+        &root,
+        Speaker::test_gated(100, Duration::from_millis(25_000), gate.clone()),
+    );
     {
         let mut board = state.0.switchboard.lock().await;
         let reply = board
@@ -5790,6 +5833,7 @@ async fn process_turns_settles_foreground_idle_once() {
             .await;
         assert_eq!(reply.route, "alpha");
     }
+    let (_connection, _, _) = state.register_connection().await;
     let mut events = state.0.events.subscribe();
     while events.try_recv().is_ok() {}
     let id = "settled-idle-once";
@@ -5817,6 +5861,10 @@ async fn process_turns_settles_foreground_idle_once() {
         .send((id.into(), "continue alpha".into(), generation))
         .await
         .unwrap();
+    timeout(Duration::from_secs(1), gate.wait_started())
+        .await
+        .expect("speech worker reached the gated drain");
+    gate.release();
     let busy = next_event_of(&mut events, "agents_state").await;
     assert!(busy["agents"].as_array().is_some_and(|agents| {
         agents
@@ -5851,6 +5899,36 @@ async fn process_turns_settles_foreground_idle_once() {
         1,
         "idle must settle through one owner: {idle_events:#?}"
     );
+
+    assert!(state.0.active_speech_group().is_none());
+    assert_eq!(
+        *state
+            .0
+            .foreground_audio_generation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        Some(generation)
+    );
+    let next_generation = generation + 1;
+    let mut scene_gate = state.0.display_gate.lock().await;
+    state
+        .0
+        .leg_announcer
+        .begin_scene(
+            &mut scene_gate,
+            crate::display::SceneLeg {
+                route: "next-project".into(),
+                generation: next_generation,
+            },
+        )
+        .await;
+    drop(scene_gate);
+    assert!(state
+        .0
+        .foreground_audio_generation
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .is_none());
 
     worker.abort();
     let _ = worker.await;
