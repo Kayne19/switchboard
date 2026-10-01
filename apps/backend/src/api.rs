@@ -2094,6 +2094,7 @@ async fn process_turns(state: AppState) {
         // PiSession yet. Caller prompts wait behind an autonomous operation;
         // the notification is created before the serialized admission check so
         // a fast autonomous turn cannot make the waiter miss its wakeup.
+        let mut logged_wait = false;
         let operation = 'admit: loop {
             let operation_notify = state.0.coordinator.operation_changed();
             let changed = operation_notify.notified();
@@ -2124,7 +2125,15 @@ async fn process_turns(state: AppState) {
             };
             match admission {
                 Some(Ok(operation)) => break Some(operation),
-                None => changed.await,
+                None => {
+                    // Without this line a turn stuck behind an operation that
+                    // never finishes leaves nothing in the journal.
+                    if !logged_wait {
+                        logged_wait = true;
+                        tracing::info!(clip = %id, "queued turn waiting for the running operation to finish");
+                    }
+                    changed.await
+                }
                 Some(Err(())) => break 'admit None,
             }
         };
