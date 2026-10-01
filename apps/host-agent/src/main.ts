@@ -128,7 +128,7 @@ export async function main(argv: string[]): Promise<void> {
 	const socket = new SkillSocket({
 		socketPath: config.skillSocket,
 		lookup: (sessionId) => manager.bySessionId(sessionId),
-		relay: (handle, callToken, call, args, timeoutMs) => link.relayModuleCall(handle, callToken, call, args, timeoutMs),
+		relay: (handle, callToken, call, args, timeoutMs, turnId, turnCause) => link.relayModuleCall(handle, callToken, call, args, timeoutMs, turnId, turnCause),
 	});
 	await socket.listen();
 	link.start();

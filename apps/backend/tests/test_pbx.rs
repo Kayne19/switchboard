@@ -1246,6 +1246,7 @@ async fn a_turn_ends_only_on_the_settled_turn_end() {
                     turn_timeout: Duration::from_secs(10),
                     on_activity: None,
                     on_module: None,
+                    on_turn: None,
                     on_closed: None,
                 },
             )
@@ -2437,6 +2438,7 @@ async fn dead_background_handle_is_evicted_after_registration_recheck() {
         turn_timeout: Duration::from_secs(10),
         on_activity: None,
         on_module: None,
+        on_turn: None,
         on_closed: None,
     };
     let session = ProjectSession::create(&board.hosts(), launch)
@@ -2489,6 +2491,7 @@ async fn stale_host_loss_callback_after_resume_keeps_the_replacement_resident() 
         turn_timeout: Duration::from_secs(10),
         on_activity: None,
         on_module: None,
+        on_turn: None,
         on_closed: None,
     };
     let old = ProjectSession::create(&board.hosts(), launch())
@@ -3684,6 +3687,7 @@ async fn host_loss_closes_a_taken_over_session_without_killing_the_desk_process(
         turn_timeout: Duration::from_secs(1),
         on_activity: None,
         on_module: None,
+        on_turn: None,
         on_closed: Some(Arc::new(move |_, _, _| {
             let callback_tx = callback_tx.clone();
             Box::pin(async move {

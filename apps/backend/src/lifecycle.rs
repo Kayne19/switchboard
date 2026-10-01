@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+use tokio::sync::Notify;
 
 const OPERATOR: &str = "operator";
 
@@ -64,6 +65,9 @@ pub enum Phase {
 pub struct OperationIdentity {
     pub id: u64,
     pub leg: LegIdentity,
+    /// The host-agent turn that owns project side effects, when known. Older
+    /// hosts omit it for ordinary caller turns; autonomous turns require it.
+    pub turn_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -354,6 +358,9 @@ pub struct Coordinator {
     config: Arc<StatusConfig>,
     projection: Arc<RwLock<Arc<Status>>>,
     next_operation: Arc<AtomicU64>,
+    /// Wakes queued caller turns when a lifecycle operation or candidate
+    /// settles. The coordinator remains synchronous; API workers await it.
+    operation_changed: Arc<Notify>,
     on_candidate: Arc<Mutex<Option<CandidateCallback>>>,
     /// Serializes a background-token check with the projection mutation that
     /// follows it. Promotion/removal takes this same owner lock.
@@ -371,6 +378,7 @@ impl Coordinator {
             config: Arc::new(config),
             projection,
             next_operation: Arc::new(AtomicU64::new(1)),
+            operation_changed: Arc::new(Notify::new()),
             on_candidate: Arc::new(Mutex::new(None)),
             background_owner: Arc::new(std::sync::Mutex::new(())),
         }
@@ -458,6 +466,12 @@ impl Coordinator {
         self.current_identity().generation
     }
 
+    /// Notifications for API workers waiting behind a live operation or
+    /// candidate. The coordinator itself remains synchronous.
+    pub fn operation_changed(&self) -> Arc<Notify> {
+        Arc::clone(&self.operation_changed)
+    }
+
     /// Applies a synchronous projection mutation only while the stamped leg
     /// generation is still current. The lifecycle lock covers both the check
     /// and mutation, so a rescue/adoption cannot land between them.
@@ -490,11 +504,68 @@ impl Coordinator {
             let operation = OperationIdentity {
                 id,
                 leg: leg.clone(),
+                turn_id: None,
             };
             state.operation = Some(operation.clone());
             state.phase = Phase::TurnRunning;
             self.refresh_locked(state);
+            self.operation_changed.notify_waiters();
             Ok(operation)
+        })
+    }
+
+    /// Opens the operation for a self-woken project turn. Unlike an ordinary
+    /// caller prompt, its host turn id is known before any module call arrives.
+    pub fn begin_autonomous(
+        &self,
+        leg: &LegIdentity,
+        turn_id: impl Into<String>,
+    ) -> Result<OperationIdentity, LifecycleError> {
+        let id = self.next_operation.fetch_add(1, Ordering::Relaxed);
+        let turn_id = turn_id.into();
+        self.linearize(|state| {
+            if state.leg != *leg {
+                return Err(LifecycleError::StaleLeg);
+            }
+            if state.phase != Phase::Active {
+                return Err(if state.phase == Phase::Starting {
+                    LifecycleError::CandidateActive
+                } else {
+                    LifecycleError::WrongPhase
+                });
+            }
+            if state.operation.is_some() {
+                return Err(LifecycleError::OperationActive);
+            }
+            let operation = OperationIdentity {
+                id,
+                leg: leg.clone(),
+                turn_id: Some(turn_id),
+            };
+            state.operation = Some(operation.clone());
+            state.phase = Phase::TurnRunning;
+            self.refresh_locked(state);
+            self.operation_changed.notify_waiters();
+            Ok(operation)
+        })
+    }
+
+    /// Binds the host's turn id to an operation opened for a caller prompt.
+    /// Older hosts do not report a turn id and keep the legacy token check.
+    pub fn bind_turn(&self, token: &str, turn_id: &str) -> Result<(), LifecycleError> {
+        self.linearize(|state| {
+            if state.leg.token != token || state.operation.is_none() {
+                return Err(LifecycleError::StaleLeg);
+            }
+            let operation = state.operation.as_mut().expect("checked above");
+            match operation.turn_id.as_deref() {
+                Some(current) if current != turn_id => Err(LifecycleError::StaleLeg),
+                Some(_) => Ok(()),
+                None => {
+                    operation.turn_id = Some(turn_id.to_owned());
+                    Ok(())
+                }
+            }
         })
     }
 
@@ -523,6 +594,7 @@ impl Coordinator {
                 state.phase = state.resting_phase();
             }
             self.refresh_locked(state);
+            self.operation_changed.notify_waiters();
             true
         })
     }
@@ -567,6 +639,7 @@ impl Coordinator {
             state.terminal_reason = Some(reason);
         }
         self.refresh_locked(state);
+        self.operation_changed.notify_waiters();
         Rescue {
             abandoned_candidate,
             next: state.leg.clone(),
@@ -671,6 +744,7 @@ impl Coordinator {
                 generation: state.leg.generation,
                 ended: None,
             });
+            self.operation_changed.notify_waiters();
             Ok(())
         })
     }
@@ -725,7 +799,12 @@ impl Coordinator {
         self.linearize(|state| state.background_tokens.contains_key(token))
     }
 
-    pub fn accept_side_effect(&self, token: &str) -> Result<(), LifecycleError> {
+    pub fn accept_side_effect(
+        &self,
+        token: &str,
+        turn_id: Option<&str>,
+        turn_cause: Option<&str>,
+    ) -> Result<(), LifecycleError> {
         self.linearize(|state| {
             if state.background_tokens.contains_key(token) {
                 return Ok(());
@@ -745,8 +824,27 @@ impl Coordinator {
                 }
                 return Err(LifecycleError::StaleLeg);
             }
-            if token.is_empty() || state.leg.token != token || state.operation.is_none() {
+            if token.is_empty() || state.leg.token != token {
                 return Err(LifecycleError::StaleLeg);
+            }
+            let Some(operation) = state.operation.as_ref() else {
+                return Err(LifecycleError::StaleLeg);
+            };
+            // A self-woken call without a host turn authority must never use a
+            // caller operation that happened to win the race. Older hosts do
+            // not report a cause, so their ordinary caller calls retain the
+            // old token-only behavior.
+            if turn_cause.is_some_and(|cause| cause == "autonomous" || cause == "unknown") {
+                let Some(turn_id) = turn_id else {
+                    return Err(LifecycleError::StaleLeg);
+                };
+                if operation.turn_id.as_deref() != Some(turn_id) {
+                    return Err(LifecycleError::StaleLeg);
+                }
+            } else if let Some(expected) = operation.turn_id.as_deref() {
+                if turn_id != Some(expected) {
+                    return Err(LifecycleError::StaleLeg);
+                }
             }
             Ok(())
         })
@@ -869,6 +967,7 @@ impl Coordinator {
             state.operation = Some(OperationIdentity {
                 id: self.next_operation.fetch_add(1, Ordering::Relaxed),
                 leg: identity.clone(),
+                turn_id: None,
             });
             state.terminal_reason = None;
             state.catalog = candidate.catalog;
@@ -879,6 +978,7 @@ impl Coordinator {
                 ended: Some(CandidateEnd::Adopted),
             });
             self.refresh_locked(state);
+            self.operation_changed.notify_waiters();
             Ok(identity)
         })
     }
@@ -892,6 +992,7 @@ impl Coordinator {
             state.phase = Phase::Active;
             state.startup_rollback = None;
             self.refresh_locked(state);
+            self.operation_changed.notify_waiters();
             true
         })
     }

@@ -109,9 +109,38 @@ fn prompt_and_steer_share_one_operation_identity() {
     let leg = coordinator.current_identity();
     let operation = coordinator.begin_prompt(&leg).unwrap();
     assert_eq!(coordinator.attach_steer(&leg).unwrap(), operation);
-    assert_eq!(coordinator.accept_side_effect(&leg.token), Ok(()));
+    assert_eq!(
+        coordinator.accept_side_effect(&leg.token, None, None),
+        Ok(())
+    );
     assert!(coordinator.finish_operation(&operation));
     assert!(!coordinator.finish_operation(&operation));
+}
+
+#[test]
+fn autonomous_operations_require_turn_authority_and_reject_stale_calls() {
+    let coordinator = coordinator();
+    coordinator.begin_candidate(alpha_candidate()).unwrap();
+    coordinator.adopt_candidate("cand").unwrap();
+    let intro = coordinator
+        .linearize(|state| state.operation.clone())
+        .expect("candidate intro");
+    assert!(coordinator.finish_operation(&intro));
+    let leg = coordinator.current_identity();
+    let operation = coordinator.begin_autonomous(&leg, "turn-7").unwrap();
+    assert_eq!(
+        coordinator.accept_side_effect("cand", None, Some("autonomous")),
+        Err(LifecycleError::StaleLeg)
+    );
+    assert_eq!(
+        coordinator.accept_side_effect("cand", Some("turn-old"), Some("autonomous")),
+        Err(LifecycleError::StaleLeg)
+    );
+    assert_eq!(
+        coordinator.accept_side_effect("cand", Some("turn-7"), Some("autonomous")),
+        Ok(())
+    );
+    assert!(coordinator.finish_operation(&operation));
 }
 
 #[test]
@@ -241,7 +270,7 @@ fn candidate_failure_rolls_back_private_state_and_side_effects_are_rejected() {
         ))
         .unwrap();
     assert_eq!(
-        coordinator.accept_side_effect("candidate"),
+        coordinator.accept_side_effect("candidate", None, None),
         Err(LifecycleError::CandidateSideEffect)
     );
     assert_eq!(
@@ -268,20 +297,24 @@ fn callbacks_require_the_current_leg_token_and_stale_work_is_rejected() {
         Err(LifecycleError::StaleLeg)
     );
     coordinator.adopt_candidate("candidate").unwrap();
-    assert!(coordinator.accept_side_effect("candidate").is_ok());
+    assert!(coordinator
+        .accept_side_effect("candidate", None, None)
+        .is_ok());
     assert_eq!(
-        coordinator.accept_side_effect("candidate-old"),
+        coordinator.accept_side_effect("candidate-old", None, None),
         Err(LifecycleError::StaleLeg)
     );
     assert!(coordinator.finish_intro());
     assert_eq!(
-        coordinator.accept_side_effect("candidate"),
+        coordinator.accept_side_effect("candidate", None, None),
         Err(LifecycleError::StaleLeg)
     );
     let operation = coordinator
         .begin_prompt(&coordinator.current_identity())
         .unwrap();
-    assert!(coordinator.accept_side_effect("candidate").is_ok());
+    assert!(coordinator
+        .accept_side_effect("candidate", None, None)
+        .is_ok());
     coordinator.finish_operation(&operation);
     assert_eq!(
         coordinator.accept_thinking_callback("candidate", "high"),
@@ -476,7 +509,7 @@ fn a_return_to_the_operator_retires_the_project_legs_token() {
     let operator = call.current_identity();
     assert_eq!(operator, LegIdentity::new("operator", project.generation));
     assert_eq!(
-        call.accept_side_effect("cand"),
+        call.accept_side_effect("cand", None, None),
         Err(LifecycleError::StaleLeg),
         "the project leg's token no longer speaks for the line"
     );
@@ -484,8 +517,8 @@ fn a_return_to_the_operator_retires_the_project_legs_token() {
         call.accept_thinking_callback("cand", "high"),
         Err(LifecycleError::StaleLeg)
     );
-    assert_eq!(call.accept_side_effect(""), Ok(()));
-    assert_eq!(call.accept_side_effect("operator"), Ok(()));
+    assert_eq!(call.accept_side_effect("", None, None), Ok(()));
+    assert_eq!(call.accept_side_effect("operator", None, None), Ok(()));
     // The turn that brought the caller back still ends as its own.
     assert!(call.finish_operation(&operation));
 
@@ -494,10 +527,10 @@ fn a_return_to_the_operator_retires_the_project_legs_token() {
     call.begin_rescue("page rescue");
     call.settle();
     assert_eq!(
-        call.accept_side_effect("cand"),
+        call.accept_side_effect("cand", None, None),
         Err(LifecycleError::StaleLeg)
     );
-    assert_eq!(call.accept_side_effect(""), Ok(()));
+    assert_eq!(call.accept_side_effect("", None, None), Ok(()));
 }
 
 #[test]

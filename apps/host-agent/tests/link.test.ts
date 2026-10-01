@@ -259,6 +259,12 @@ test("module calls are relayed to the service; no reply in time means failed", a
 		assert.deepEqual(call.args, { text: "hi" });
 		l.send({ type: "module_reply", id: call.id, status: "delivered", reason: null });
 		assert.deepEqual(await pending, { status: "delivered", reason: null });
+		const autonomous = link.relayModuleCall("a1", "tok", "display", {}, 2000, "turn-1", "autonomous");
+		const autonomousCall = await l.next((m) => m.type === "module_call");
+		assert.equal(autonomousCall.turn_id, "turn-1");
+		assert.equal(autonomousCall.cause, "autonomous");
+		l.send({ type: "module_reply", id: autonomousCall.id, status: "refused", reason: "stale" });
+		assert.deepEqual(await autonomous, { status: "refused", reason: "stale" });
 		const late = link.relayModuleCall("a1", "tok", "view", {}, 50);
 		assert.deepEqual(await late, { status: "failed", reason: "failed" });
 	} finally {

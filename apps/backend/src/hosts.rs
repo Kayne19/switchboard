@@ -190,6 +190,8 @@ pub enum SessionFrame {
 #[derive(Debug)]
 pub struct ModuleCall {
     pub token: String,
+    pub turn_id: Option<String>,
+    pub cause: Option<String>,
     pub call: String,
     pub args: Value,
     reply: Option<oneshot::Sender<Value>>,
@@ -751,6 +753,8 @@ impl Hosts {
                     return Answer::Nothing;
                 };
                 let session = frame["session"].as_str().unwrap_or_default();
+                let turn_id = frame["turn_id"].as_str().map(str::to_owned);
+                let cause = frame["cause"].as_str().map(str::to_owned);
                 let call = frame["call"].as_str().unwrap_or_default().to_owned();
                 let Some(subscriber) = state.subscribers.get(session) else {
                     tracing::info!(%host, %call, "module call from a session not on a call refused");
@@ -763,6 +767,8 @@ impl Hosts {
                 let (reply, answer) = oneshot::channel();
                 let delivered = subscriber.send(SessionFrame::ModuleCall(ModuleCall {
                     token: frame["token"].as_str().unwrap_or_default().to_owned(),
+                    turn_id,
+                    cause,
                     call,
                     args: frame["args"].clone(),
                     reply: Some(reply),

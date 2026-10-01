@@ -192,6 +192,8 @@ A session description (`info`) as returned by `create_session`,
   "provenance": "created",
   "busy": false,
   "turn_open": false,
+  "turn_id": null,
+  "cause": null,
   "model": "anthropic/claude-sonnet-5",
   "thinking": "high",
   "call_mode": null,
@@ -290,16 +292,16 @@ model does not have). `call_mode` is `null` when the session is not on a call.
 The host agent sends every session event with its cursor:
 
 ```json
-{ "type": "event", "session": "a1b2", "cursor": "5c2e9a0b41d7:43", "event": { "kind": "turn_start", "cause": "input" } }
+{ "type": "event", "session": "a1b2", "cursor": "5c2e9a0b41d7:43", "event": { "kind": "turn_start", "cause": "input", "turn_id": "turn-7" } }
 ```
 
 | `event.kind` | Fields | Meaning |
 |---|---|---|
-| `turn_start` | `cause`: `input` \| `autonomous` | A turn opened: after an input, or an `agent_start` nobody caused (a subagent finished, a schedule, a heartbeat). |
-| `turn_end` | `error?` | The turn settled: `wait_for_idle`, sent after the last input, resolved. `error` is set when that wait failed. |
+| `turn_start` | `cause`: `input` \| `autonomous` \| `unknown`, `turn_id?` | A turn opened: after an input, or an `agent_start` nobody caused (a subagent finished, a schedule, a heartbeat). `turn_id` is stable for the turn. A busy snapshot rebuilt after a host-agent restart uses `unknown` and has no delivery authority. |
+| `turn_end` | `error?`, `turn_id?` | The turn settled: `wait_for_idle`, sent after the last input, resolved. `error` is set when that wait failed. |
 | `tool_start` | `tool`, `call_id` | A tool call started. |
 | `tool_end` | `tool`, `call_id`, `error` | A tool call ended. |
-| `text` | `text` | An assistant message ended with this text. |
+| `text` | `text`, `turn_id?` | An assistant message ended with this text. New hosts stamp the owning turn id. |
 | `error` | `message` | A model error, or retries exhausted. |
 | `compaction` | `phase`: `start` \| `end`, `reason` | The daemon compacted the context. The service resends the voice brief on the next routed line after `end`. |
 | `state` | `model`, `thinking` | Model and effective thinking level after `set_model` or `set_thinking`. |
@@ -329,7 +331,7 @@ When the skill module makes a call that needs the service (see "Delivery"),
 the host agent relays it:
 
 ```json
-{ "type": "module_call", "id": "m5", "session": "a1b2", "token": "<call token>", "call": "speak", "args": { "text": "Done, the tests pass." } }
+{ "type": "module_call", "id": "m5", "session": "a1b2", "token": "<call token>", "turn_id": "turn-7", "cause": "autonomous", "call": "speak", "args": { "text": "Done, the tests pass." } }
 ```
 
 The service answers:
@@ -339,9 +341,12 @@ The service answers:
 { "type": "module_reply", "id": "m6", "status": "delivered", "reason": null, "result": { "visible": ["..."] } }
 ```
 
-`status` is `delivered`, `accepted`, `refused` or `failed`. The service
-checks the token against the session's current call and discards a stale
-one. If no reply arrives in time (the speech deadline for `speak`, 30 s
+`status` is `delivered`, `accepted`, `refused` or `failed`. `turn_id`,
+`cause`, and the `turn_id` fields on events are additive; an older host
+may omit them. The service checks the token against the session's current call
+and, when present, the turn authority. A self-woken call without an authority
+is refused, while an old host's ordinary caller turn keeps the existing token
+behavior. If no reply arrives in time (the speech deadline for `speak`, 30 s
 otherwise), or the link is down, the module gets `failed`.
 
 ## Skill socket

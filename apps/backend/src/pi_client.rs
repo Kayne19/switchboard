@@ -590,10 +590,26 @@ impl PiSession {
 pub struct AgentCall {
     pub call: String,
     pub token: String,
+    pub turn_id: Option<String>,
+    pub cause: Option<String>,
     pub args: Value,
 }
 pub type ModuleCallback =
     Arc<dyn Fn(AgentCall) -> Pin<Box<dyn Future<Output = Value> + Send>> + Send + Sync>;
+
+/// A project session turn boundary reported by the host agent. The callback
+/// runs in the session pump, so a start is admitted before its module calls.
+#[derive(Clone, Debug)]
+pub struct ProjectTurn {
+    pub instance_id: u64,
+    pub token: String,
+    pub turn_id: Option<String>,
+    pub cause: String,
+    pub ended: bool,
+    pub text: String,
+}
+pub type TurnCallback =
+    Arc<dyn Fn(ProjectTurn) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 /// Called once when the host reports that a project session closed. The PBX
 /// uses this to evict a background resident without waiting for another call.
 pub type SessionClosedCallback =
@@ -616,6 +632,7 @@ pub struct ProjectLaunch {
     pub turn_timeout: Duration,
     pub on_activity: Option<ActivityCallback>,
     pub on_module: Option<ModuleCallback>,
+    pub on_turn: Option<TurnCallback>,
     pub on_closed: Option<SessionClosedCallback>,
 }
 
@@ -644,6 +661,12 @@ enum TurnFrame {
     Snapshot { seq: u64, info: Value },
 }
 
+struct AutonomousTurn {
+    turn_id: Option<String>,
+    cause: String,
+    text: Vec<String>,
+}
+
 struct ProjectInner {
     hosts: crate::hosts::Hosts,
     host: String,
@@ -662,6 +685,7 @@ struct ProjectInner {
     turn_timeout: Duration,
     on_activity: Option<ActivityCallback>,
     on_module: Option<ModuleCallback>,
+    on_turn: Option<TurnCallback>,
     on_closed: Option<SessionClosedCallback>,
     turn_lock: Mutex<()>,
     busy: AtomicBool,
@@ -669,8 +693,15 @@ struct ProjectInner {
     released: AtomicBool,
     brief: String,
     brief_due: AtomicBool,
-    /// Where the events of the turn being collected go.
+    /// Where the events of the caller turn being collected go.
     turn: StdMutex<Option<tokio::sync::mpsc::UnboundedSender<TurnFrame>>>,
+    /// An autonomous turn has no prompt collector, so keep its text and
+    /// authority until the host reports turn_end.
+    autonomous_turn: StdMutex<Option<AutonomousTurn>>,
+    /// Turn id (empty for legacy hosts) of an autonomous turn refused because
+    /// a caller operation already owned the leg. Its events must not enter the
+    /// caller's collector.
+    ignored_autonomous: StdMutex<Option<String>>,
 }
 
 impl ProjectInner {
@@ -688,6 +719,100 @@ impl ProjectInner {
             .ok()
             .and_then(|turn| turn.as_ref().map(|turn| turn.send(frame).is_ok()))
             .unwrap_or(false)
+    }
+
+    fn start_autonomous(&self, turn_id: Option<String>, cause: String) -> bool {
+        let Ok(mut turn) = self.autonomous_turn.lock() else {
+            return false;
+        };
+        if turn.is_some() || self.has_turn_collector() {
+            return false;
+        }
+        *turn = Some(AutonomousTurn {
+            turn_id,
+            cause,
+            text: Vec::new(),
+        });
+        self.busy.store(true, Ordering::Release);
+        true
+    }
+
+    fn append_autonomous_text(&self, turn_id: Option<&str>, text: &str) -> bool {
+        let Ok(mut turn) = self.autonomous_turn.lock() else {
+            return false;
+        };
+        let Some(turn) = turn.as_mut() else {
+            return false;
+        };
+        // Modern hosts stamp every text event. A mismatched or missing id is
+        // stale once this turn has an authority; legacy turns have no
+        // authority and are refused by the API callback instead.
+        if turn.turn_id.as_deref() != turn_id {
+            return false;
+        }
+        let collected = turn.text.iter().map(String::len).sum::<usize>();
+        if collected.saturating_add(text.len()) <= STREAM_LIMIT {
+            turn.text.push(text.to_owned());
+        }
+        true
+    }
+
+    fn finish_autonomous(&self, turn_id: Option<&str>) -> Option<(Option<String>, String, String)> {
+        let Ok(mut turn) = self.autonomous_turn.lock() else {
+            return None;
+        };
+        let current = turn.as_ref()?;
+        if current.turn_id.as_deref() != turn_id {
+            return None;
+        }
+        let current = turn.take()?;
+        self.busy.store(false, Ordering::Release);
+        Some((
+            current.turn_id,
+            current.cause,
+            current.text.join("\n").trim().to_owned(),
+        ))
+    }
+
+    fn autonomous_authority(&self) -> Option<(Option<String>, String)> {
+        self.autonomous_turn.lock().ok().and_then(|turn| {
+            turn.as_ref()
+                .map(|turn| (turn.turn_id.clone(), turn.cause.clone()))
+        })
+    }
+
+    fn has_turn_collector(&self) -> bool {
+        self.turn.lock().ok().is_some_and(|turn| turn.is_some())
+    }
+
+    fn ignore_autonomous(&self, turn_id: Option<&str>) {
+        if let Ok(mut ignored) = self.ignored_autonomous.lock() {
+            *ignored = Some(turn_id.unwrap_or_default().to_owned());
+        }
+    }
+
+    fn ignored_autonomous(&self, turn_id: Option<&str>) -> bool {
+        self.ignored_autonomous
+            .lock()
+            .ok()
+            .and_then(|ignored| ignored.clone())
+            .is_some_and(|ignored| ignored == turn_id.unwrap_or_default())
+    }
+
+    fn clear_ignored_autonomous(&self) {
+        if let Ok(mut ignored) = self.ignored_autonomous.lock() {
+            *ignored = None;
+        }
+    }
+
+    async fn report_turn(&self, event: ProjectTurn) {
+        let Some(callback) = &self.on_turn else {
+            return;
+        };
+        let callback = Arc::clone(callback);
+        if let Err(panic) = AssertUnwindSafe(callback(event)).catch_unwind().await {
+            tracing::error!(label = %self.label, panic = %panic_message(&panic), "turn callback panicked");
+        }
     }
 
     /// Queues release for this session exactly once. A session taken over from
@@ -960,6 +1085,7 @@ impl ProjectSession {
             turn_timeout: launch.turn_timeout,
             on_activity: launch.on_activity,
             on_module: launch.on_module,
+            on_turn: launch.on_turn,
             on_closed: launch.on_closed,
             turn_lock: Mutex::new(()),
             busy: AtomicBool::new(false),
@@ -968,6 +1094,8 @@ impl ProjectSession {
             brief: launch.brief,
             brief_due: AtomicBool::new(true),
             turn: StdMutex::new(None),
+            autonomous_turn: StdMutex::new(None),
+            ignored_autonomous: StdMutex::new(None),
         });
         tokio::spawn(pump(Arc::downgrade(&inner), frames));
         tracing::info!(label = %inner.label, host = %inner.host, name = reply.result["name"].as_str().unwrap_or_default(), %verb, "project session ready");
@@ -1292,35 +1420,158 @@ async fn pump(
         };
         match frame {
             SessionFrame::Event { seq, event } => {
-                match event["kind"].as_str() {
-                    Some("compaction") if event["phase"] == "end" => {
+                let kind = event["kind"].as_str().unwrap_or_default();
+                if kind == "turn_start" {
+                    let cause = event["cause"].as_str().unwrap_or("unknown").to_owned();
+                    let turn_id = event["turn_id"].as_str().map(str::to_owned);
+                    if matches!(cause.as_str(), "autonomous" | "unknown") {
+                        if inner.has_turn_collector() {
+                            // A daemon may report a nested autonomous run while
+                            // the caller's turn is still being collected. Keep
+                            // the existing collector authoritative.
+                            inner.to_turn(TurnFrame::Event { seq, event });
+                            continue;
+                        }
+                        if inner.start_autonomous(turn_id.clone(), cause.clone()) {
+                            inner.clear_ignored_autonomous();
+                            inner
+                                .report_turn(ProjectTurn {
+                                    instance_id: inner.instance_id,
+                                    token: inner.token(),
+                                    turn_id,
+                                    cause,
+                                    ended: false,
+                                    text: String::new(),
+                                })
+                                .await;
+                        } else {
+                            inner.ignore_autonomous(turn_id.as_deref());
+                        }
+                        // Whether admitted or refused, an autonomous start is
+                        // never part of a caller prompt collector.
+                        continue;
+                    } else {
+                        inner.clear_ignored_autonomous();
+                        inner
+                            .report_turn(ProjectTurn {
+                                instance_id: inner.instance_id,
+                                token: inner.token(),
+                                turn_id,
+                                cause,
+                                ended: false,
+                                text: String::new(),
+                            })
+                            .await;
+                    }
+                }
+                match kind {
+                    "compaction" if event["phase"] == "end" => {
                         tracing::info!(label = %inner.label, "the project session compacted; the brief goes out again");
                         inner.brief_due.store(true, Ordering::Release);
                     }
-                    Some("session_closed") => {
+                    "session_closed" => {
                         inner.mark_closed().await;
                     }
-                    Some("tool_start") => {
+                    "tool_start" => {
                         inner.report_activity("life", "").await;
                         inner
                             .report_activity("start", event["tool"].as_str().unwrap_or_default())
                             .await;
                     }
-                    Some("tool_end") => {
+                    "tool_end" => {
                         inner
                             .report_activity("end", event["tool"].as_str().unwrap_or_default())
                             .await;
                     }
-                    Some("text") => inner.report_activity("life", "").await,
+                    "text" => {
+                        inner.report_activity("life", "").await;
+                        let event_turn_id = event["turn_id"].as_str();
+                        if inner.ignored_autonomous(event_turn_id)
+                            || inner.append_autonomous_text(
+                                event["turn_id"].as_str(),
+                                event["text"].as_str().unwrap_or_default(),
+                            )
+                        {
+                            continue;
+                        }
+                    }
+                    "turn_end" => {
+                        let event_turn_id = event["turn_id"].as_str();
+                        if inner.ignored_autonomous(event_turn_id) {
+                            inner.clear_ignored_autonomous();
+                            continue;
+                        }
+                        if let Some((turn_id, cause, text)) = inner.finish_autonomous(event_turn_id)
+                        {
+                            inner
+                                .report_turn(ProjectTurn {
+                                    instance_id: inner.instance_id,
+                                    token: inner.token(),
+                                    turn_id,
+                                    cause,
+                                    ended: true,
+                                    text,
+                                })
+                                .await;
+                            continue;
+                        }
+                    }
                     _ => {}
+                }
+                if inner.autonomous_authority().is_some() {
+                    continue;
                 }
                 inner.to_turn(TurnFrame::Event { seq, event });
             }
             SessionFrame::Snapshot { seq, info } => {
+                if inner.autonomous_authority().is_some() && info["turn_open"] == false {
+                    if let Some((turn_id, cause, text)) =
+                        inner.finish_autonomous(info["turn_id"].as_str())
+                    {
+                        inner
+                            .report_turn(ProjectTurn {
+                                instance_id: inner.instance_id,
+                                token: inner.token(),
+                                turn_id,
+                                cause,
+                                ended: true,
+                                text: if text.is_empty() {
+                                    info["last_text"].as_str().unwrap_or_default().to_owned()
+                                } else {
+                                    text
+                                },
+                            })
+                            .await;
+                        continue;
+                    }
+                }
+                if !inner.has_turn_collector()
+                    && inner.autonomous_authority().is_none()
+                    && info["turn_open"] == true
+                {
+                    let cause = info["cause"].as_str().unwrap_or("unknown").to_owned();
+                    let turn_id = info["turn_id"].as_str().map(str::to_owned);
+                    if inner.start_autonomous(turn_id.clone(), cause.clone()) {
+                        inner
+                            .report_turn(ProjectTurn {
+                                instance_id: inner.instance_id,
+                                token: inner.token(),
+                                turn_id,
+                                cause,
+                                ended: false,
+                                text: String::new(),
+                            })
+                            .await;
+                        continue;
+                    }
+                }
                 inner.to_turn(TurnFrame::Snapshot { seq, info });
             }
             SessionFrame::ModuleCall(call) => {
-                tokio::spawn(answer_module_call(inner, call));
+                // Keep side effects before the matching turn_end. The daemon
+                // waits for this response, so awaiting here preserves turn
+                // authority without introducing another lifecycle owner.
+                answer_module_call(inner, call).await;
             }
         }
     }
@@ -1355,9 +1606,19 @@ async fn answer_module_call(inner: Arc<ProjectInner>, call: crate::hosts::Module
                     object.insert("_project".into(), Value::String(label.clone()));
                 }
             }
+            let (turn_id, cause) = match (call.turn_id.clone(), call.cause.clone()) {
+                (Some(turn_id), cause) => (Some(turn_id), cause),
+                (None, Some(cause)) => (None, Some(cause)),
+                (None, None) => inner
+                    .autonomous_authority()
+                    .map(|(_, cause)| (None, Some(cause)))
+                    .unwrap_or((None, None)),
+            };
             let request = AgentCall {
                 call: call.call.clone(),
                 token: call.token.clone(),
+                turn_id,
+                cause,
                 args,
             };
             let reply = match AssertUnwindSafe(callback(request)).catch_unwind().await {
@@ -1386,6 +1647,13 @@ impl LegSession {
         match self {
             Self::Operator(session) => session.label(),
             Self::Project(session) => session.label(),
+        }
+    }
+    #[cfg(test)]
+    pub fn instance_id(&self) -> u64 {
+        match self {
+            Self::Operator(_) => 0,
+            Self::Project(session) => session.instance_id(),
         }
     }
     pub fn busy(&self) -> bool {
