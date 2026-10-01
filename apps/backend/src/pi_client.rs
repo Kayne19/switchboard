@@ -1649,6 +1649,7 @@ impl LegSession {
             Self::Project(session) => session.label(),
         }
     }
+    #[cfg(test)]
     pub fn instance_id(&self) -> u64 {
         match self {
             Self::Operator(_) => 0,
