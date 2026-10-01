@@ -269,6 +269,7 @@ async fn releasing_a_closed_taken_over_session_still_aborts_before_detaching() {
         turn_timeout: Duration::from_secs(1),
         on_activity: None,
         on_module: None,
+        on_turn: None,
         on_closed: None,
         turn_lock: Mutex::new(()),
         busy: AtomicBool::new(true),
@@ -277,6 +278,8 @@ async fn releasing_a_closed_taken_over_session_still_aborts_before_detaching() {
         brief: String::new(),
         brief_due: AtomicBool::new(false),
         turn: StdMutex::new(None),
+        autonomous_turn: StdMutex::new(None),
+        ignored_autonomous: StdMutex::new(None),
     });
     inner.mark_closed().await;
     ProjectSession { inner }.close();
@@ -313,6 +316,7 @@ async fn malformed_successful_takeover_is_detached() {
         turn_timeout: Duration::from_secs(1),
         on_activity: None,
         on_module: None,
+        on_turn: None,
         on_closed: None,
     };
     let error = match ProjectSession::attach(&hosts, launch, "desk-alpha").await {
@@ -357,6 +361,7 @@ async fn takeover_reply_cannot_make_release_kill_a_desk_session() {
         turn_timeout: Duration::from_secs(1),
         on_activity: None,
         on_module: None,
+        on_turn: None,
         on_closed: None,
     };
     let (session, _) = ProjectSession::attach(&hosts, launch, "desk-alpha")

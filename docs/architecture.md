@@ -159,6 +159,15 @@ Important application behavior must remain visible through named operations,
 events, or state transitions. Do not hide a route change, persistence action,
 or cancellation side effect inside an unrelated helper.
 
+Host-reported project turns are admitted here through the coordinator. A
+`turn_start` with `cause: autonomous` opens a server-owned operation with the
+host's `turn_id`; caller prompts wait behind it. Module calls must carry the
+same authority, and a stale or authority-less self-wake call is refused rather
+than attached to whichever caller operation won the race. An old host may omit
+these additive fields for ordinary caller turns, but its self-wake side effects
+fail closed. Written autonomous replies use the existing `Reply` event and do
+not enter the speech worker.
+
 ### 4. Audio is an adapter boundary
 
 `apps/backend/src/audio.rs` owns speech transport and worker mechanics:

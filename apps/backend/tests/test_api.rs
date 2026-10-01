@@ -146,6 +146,8 @@ async fn agent_call_json(state: &AppState, path: &str, body: Value) -> (StatusCo
     let call = AgentCall {
         call: path.trim_start_matches('/').to_owned(),
         token,
+        turn_id: None,
+        cause: None,
         args,
     };
     let response = agent_call(state, &call).await;
@@ -658,6 +660,8 @@ async fn a_view_call_with_an_unknown_field_is_refused_with_the_reason() {
         AgentCall {
             call: "view".into(),
             token: String::new(),
+            turn_id: None,
+            cause: None,
             args: json!({"colour":"red"}),
         },
     )
@@ -3658,7 +3662,7 @@ async fn hanging_up_with_nothing_on_the_line_says_so() {
     assert_eq!(frames[1]["route"], OPERATOR);
     // Settled: the operator's callbacks and turns are taken again.
     let coordinator = &state.0.coordinator;
-    assert_eq!(coordinator.accept_side_effect(""), Ok(()));
+    assert_eq!(coordinator.accept_side_effect("", None, None), Ok(()));
     assert!(coordinator
         .begin_prompt(&coordinator.current_identity())
         .is_ok());
@@ -4520,6 +4524,8 @@ async fn module_calls_are_answered_by_the_callback_logic_with_a_reply_status() {
         AgentCall {
             call: "speak".into(),
             token: String::new(),
+            turn_id: None,
+            cause: None,
             args: json!({"text": "Hello."}),
         },
     )
@@ -4534,6 +4540,8 @@ async fn module_calls_are_answered_by_the_callback_logic_with_a_reply_status() {
         AgentCall {
             call: "display".into(),
             token: String::new(),
+            turn_id: None,
+            cause: None,
             args: diagram_show(),
         },
     )
@@ -4545,6 +4553,8 @@ async fn module_calls_are_answered_by_the_callback_logic_with_a_reply_status() {
         AgentCall {
             call: "display".into(),
             token: String::new(),
+            turn_id: None,
+            cause: None,
             args: json!({"action": {"op": "show", "id": "x", "type": "bogus", "data": {}}}),
         },
     )
@@ -4559,6 +4569,8 @@ async fn module_calls_are_answered_by_the_callback_logic_with_a_reply_status() {
         AgentCall {
             call: "view".into(),
             token: String::new(),
+            turn_id: None,
+            cause: None,
             args: json!({}),
         },
     )
@@ -4578,6 +4590,8 @@ async fn a_module_call_carrying_a_retired_token_is_refused() {
         AgentCall {
             call: "display".into(),
             token: "an-earlier-leg".into(),
+            turn_id: None,
+            cause: None,
             args: diagram_show(),
         },
     )
@@ -5016,6 +5030,8 @@ async fn stopping_a_background_agent_discards_its_held_display() {
         AgentCall {
             call: "display".into(),
             token: "background-token".into(),
+            turn_id: None,
+            cause: None,
             args: diagram_show(),
         },
     )
@@ -5060,6 +5076,8 @@ async fn failed_promotion_finished_notice_clears_the_held_display_projection() {
         AgentCall {
             call: "display".into(),
             token: "background-token".into(),
+            turn_id: None,
+            cause: None,
             args: diagram_show(),
         },
     )

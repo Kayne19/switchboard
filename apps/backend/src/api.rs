@@ -9,12 +9,14 @@ use crate::floor;
 use crate::floor::{Floor, FloorHooks, FloorRequest, FloorRewriteInput, ReleaseOutcome};
 use crate::history::{TranscriptLog, AGENT, CALLER};
 use crate::hosts::Hosts;
-use crate::lifecycle::{ActivityDisposition, Coordinator};
+use crate::lifecycle::{ActivityDisposition, Coordinator, LifecycleError, OperationIdentity};
 use crate::pbx::{
     AgentStateCallback, AgentStateNotice, Redial, RedialPlan, RedialPlanner, RouteCallback,
     Switchboard,
 };
-use crate::pi_client::{Activity, ActivityCallback, AgentCall, LegSession, ModuleCallback};
+use crate::pi_client::{
+    Activity, ActivityCallback, AgentCall, LegSession, ModuleCallback, ProjectTurn, TurnCallback,
+};
 use crate::protocol::{AgentRequest, AgentState, CandidateEnd, ErrorCode, ServerMessage, Status};
 use crate::router::{Action, CallSummary, Decision};
 use axum::extract::ws::{Message, WebSocket};
@@ -326,6 +328,9 @@ pub struct AppInner {
     leg_announcer: LegAnnouncer,
     operation_transition: Mutex<()>,
     active_operations: Mutex<HashMap<TaskId, AbortHandle>>,
+    /// Autonomous host turns admitted by the lifecycle, keyed by resident
+    /// instance so a stale turn_end cannot finish a newer operation.
+    autonomous_operations: Mutex<HashMap<u64, OperationIdentity>>,
     pub queued_turns: AtomicU64,
     pub turn_in_flight: AtomicBool,
     /// Decisions made before a queued turn reaches the PBX lock. Keeping the
@@ -581,6 +586,16 @@ impl AppState {
                 },
             );
             switchboard.set_foreground_closed_callback(Some(foreground_closed));
+            let turn_app = app.clone();
+            let turn_callback: TurnCallback = Arc::new(move |turn: ProjectTurn| {
+                let app = turn_app.upgrade();
+                Box::pin(async move {
+                    if let Some(app) = app {
+                        handle_project_turn(&AppState(app), turn).await;
+                    }
+                })
+            });
+            switchboard.set_turn_callback(Some(turn_callback));
             // A project session's `speak`, `display` and `view` are answered
             // here, by the same code for every one of them.
             let app = app.clone();
@@ -633,6 +648,7 @@ impl AppState {
                 leg_announcer,
                 operation_transition: Mutex::new(()),
                 active_operations: Mutex::new(HashMap::new()),
+                autonomous_operations: Mutex::new(HashMap::new()),
                 queued_turns: AtomicU64::new(0),
                 turn_in_flight: AtomicBool::new(false),
                 routed_decisions: Mutex::new(HashMap::new()),
@@ -1506,26 +1522,51 @@ async fn process_turns(state: AppState) {
         let started = std::time::Instant::now();
         // Register the abort handle before awaiting the task. Page-level rescue
         // endpoints can now cancel work even while transfer setup has no
-        // PiSession yet.
-        let operation = {
-            let _transition = state.0.operation_transition.lock().await;
-            let current = state.0.coordinator.generation();
-            if generation != current {
-                tracing::info!(clip = %id, stamped = generation, %current, "dropping a queued turn from before a page rescue");
-                emit_stale_clip(&state, &id);
-                continue;
+        // PiSession yet. Caller prompts wait behind an autonomous operation;
+        // the notification is created before the serialized admission check so
+        // a fast autonomous turn cannot make the waiter miss its wakeup.
+        let operation = loop {
+            let operation_notify = state.0.coordinator.operation_changed();
+            let changed = operation_notify.notified();
+            let admission = {
+                let _transition = state.0.operation_transition.lock().await;
+                let current = state.0.coordinator.generation();
+                if generation != current {
+                    tracing::info!(clip = %id, stamped = generation, %current, "dropping a queued turn from before a page rescue");
+                    emit_stale_clip(&state, &id);
+                    Some(Err(()))
+                } else {
+                    match state
+                        .0
+                        .coordinator
+                        .begin_prompt(&state.0.coordinator.current_identity())
+                    {
+                        Ok(operation) => Some(Ok(operation)),
+                        Err(LifecycleError::OperationActive | LifecycleError::CandidateActive) => {
+                            None
+                        }
+                        Err(error) => {
+                            tracing::info!(clip = %id, %error, "dropping queued turn during lifecycle transition");
+                            emit_stale_clip(&state, &id);
+                            Some(Err(()))
+                        }
+                    }
+                }
+            };
+            match admission {
+                Some(Ok(operation)) => break Some(operation),
+                None => changed.await,
+                Some(Err(())) => {
+                    state.0.turn_in_flight.store(false, Ordering::Release);
+                    continue;
+                }
             }
-            state.0.turn_in_flight.store(true, Ordering::Release);
-            let route = state.0.coordinator.route();
-            let waiting = state.0.queued_turns.load(Ordering::Acquire);
-            tracing::info!(clip = %id, %route, waiting, "dispatching a turn");
-            emit_message(&state, ServerMessage::Thinking { route, waiting });
-            state
-                .0
-                .coordinator
-                .begin_prompt(&state.0.coordinator.current_identity())
-                .ok()
         };
+        state.0.turn_in_flight.store(true, Ordering::Release);
+        let route = state.0.coordinator.route();
+        let waiting = state.0.queued_turns.load(Ordering::Acquire);
+        tracing::info!(clip = %id, %route, waiting, "dispatching a turn");
+        emit_message(&state, ServerMessage::Thinking { route, waiting });
         // The PBX, the agent, and the reply's synthesis all log under the
         // clip that started the turn.
         let turn = tracing::info_span!("turn", clip = %id);
@@ -2019,6 +2060,107 @@ async fn update_agent_state(state: &AppState, notice: AgentStateNotice) {
     emit_message(state, ServerMessage::AgentsState { agents });
 }
 
+/// Admit and settle host-reported autonomous turns through the one lifecycle
+/// owner. Written self-wake replies are transcript-only: `Reply` updates the
+/// caller's view without entering the speech worker.
+async fn handle_project_turn(state: &AppState, turn: ProjectTurn) {
+    // Admission, settlement, and the transcript reply share the same turn
+    // gate as caller prompt admission. This prevents a queued caller from
+    // entering between autonomous finish and its written reply.
+    let _transition = state.0.operation_transition.lock().await;
+    if turn.ended {
+        let mut operations = state.0.autonomous_operations.lock().await;
+        let Some(operation) = operations.get(&turn.instance_id).cloned() else {
+            return;
+        };
+        // A late end from an older host turn must not settle a replacement
+        // operation on the same resident instance.
+        if operation
+            .turn_id
+            .as_deref()
+            .zip(turn.turn_id.as_deref())
+            .is_some_and(|(expected, actual)| expected != actual)
+        {
+            return;
+        }
+        let operation = operations
+            .remove(&turn.instance_id)
+            .expect("operation was checked above");
+        drop(operations);
+        if !state.0.coordinator.finish_operation(&operation) {
+            tracing::info!(
+                instance = turn.instance_id,
+                "ignoring autonomous turn end from a stale leg"
+            );
+            return;
+        }
+        if !turn.text.trim().is_empty() {
+            let route = state.0.coordinator.route();
+            state
+                .0
+                .transcript_log
+                .lock()
+                .await
+                .add(AGENT, &turn.text, route.clone());
+            emit_message(
+                state,
+                ServerMessage::Reply {
+                    text: turn.text,
+                    route,
+                },
+            );
+        }
+        return;
+    }
+
+    let current = state.0.coordinator.current_identity();
+    if current.token != turn.token {
+        tracing::info!(
+            instance = turn.instance_id,
+            token = %turn.token,
+            "ignoring turn start from a leg that is no longer on the call"
+        );
+        return;
+    }
+    if turn.cause == "input" {
+        if let Some(turn_id) = turn.turn_id.as_deref() {
+            if let Err(error) = state.0.coordinator.bind_turn(&turn.token, turn_id) {
+                tracing::info!(%error, "caller turn authority was stale");
+            }
+        }
+        return;
+    }
+    if !matches!(turn.cause.as_str(), "autonomous" | "unknown") {
+        return;
+    }
+    // A host that cannot report a turn id receives a synthetic server-side
+    // authority. Calls from that old host remain fail-closed instead of being
+    // mistaken for the caller operation.
+    let authority = turn
+        .turn_id
+        .clone()
+        .unwrap_or_else(|| format!("legacy-host-{}-{}", turn.instance_id, current.generation));
+    match state.0.coordinator.begin_autonomous(&current, authority) {
+        Ok(operation) => {
+            state
+                .0
+                .autonomous_operations
+                .lock()
+                .await
+                .insert(turn.instance_id, operation);
+        }
+        Err(LifecycleError::OperationActive | LifecycleError::CandidateActive) => {
+            tracing::info!(
+                instance = turn.instance_id,
+                "caller operation won the autonomous-turn race"
+            );
+        }
+        Err(error) => {
+            tracing::info!(instance = turn.instance_id, %error, "autonomous turn was not admitted");
+        }
+    }
+}
+
 /// Settles a turn only if its stamped generation still owns the lifecycle.
 /// The coordinator owns the check and projection mutation together; stale
 /// replies cannot mark a replacement resident idle.
@@ -2139,6 +2281,8 @@ async fn release_floor(
 struct Speak {
     text: String,
     token: String,
+    turn_id: Option<String>,
+    cause: Option<String>,
 }
 #[tracing::instrument(name = "module_call", skip_all, fields(call = "speak"))]
 async fn speak(state: AppState, req: Speak) -> Response {
@@ -2158,12 +2302,23 @@ async fn speak(state: AppState, req: Speak) -> Response {
         return Json(json!({"delivered":false,"reason":"caller_away","detail":"the caller is listening to another session; use request_to_speak with the actual words they should hear. While in the background, displays are held until the caller brings you forward; never say a display is on screen."})).into_response();
     }
     promote_candidate_for_token(&state, &req.token).await;
-    if let Err(error) = state.0.coordinator.accept_side_effect(&req.token) {
+    if let Err(error) = state.0.coordinator.accept_side_effect(
+        &req.token,
+        req.turn_id.as_deref(),
+        req.cause.as_deref(),
+    ) {
         tracing::info!(reason = %error, "refused: the leg is not live on the call");
         let (code, detail) = match error {
             crate::lifecycle::LifecycleError::CandidateSideEffect => (
                 axum::http::StatusCode::CONFLICT,
                 "the line is not live until this transfer completes: do not retry from this turn; the caller can see your written reply on screen",
+            ),
+            crate::lifecycle::LifecycleError::StaleLeg
+                if req.cause.as_deref().is_some_and(|cause| {
+                    cause == "autonomous" || cause == "unknown"
+                }) => (
+                axum::http::StatusCode::CONFLICT,
+                "no switchboard turn is running for this leg; this self-woken call has no delivery authority, so put the result in the written reply instead",
             ),
             _ => (
                 axum::http::StatusCode::CONFLICT,
@@ -2355,7 +2510,13 @@ async fn request_to_speak(state: AppState, token: &str, raw: Value) -> Response 
         id = tracing::field::Empty,
     )
 )]
-async fn display(state: AppState, token: &str, raw: Value) -> Response {
+async fn display(
+    state: AppState,
+    token: &str,
+    turn_id: Option<&str>,
+    cause: Option<&str>,
+    raw: Value,
+) -> Response {
     let started = std::time::Instant::now();
     // Logged by size and, once it validates, by what it does and to which
     // object; the content is the caller's screen, not the journal's.
@@ -2433,11 +2594,19 @@ async fn display(state: AppState, token: &str, raw: Value) -> Response {
         .into_response();
     }
     promote_candidate_for_token(&state, token).await;
-    if let Err(error) = state.0.coordinator.accept_side_effect(token) {
+    if let Err(error) = state
+        .0
+        .coordinator
+        .accept_side_effect(token, turn_id, cause)
+    {
         tracing::info!(reason = %error, "refused: the leg is not live on the call");
         let detail = match error {
             crate::lifecycle::LifecycleError::CandidateSideEffect => {
                 "the caller's screen is not live until this transfer completes: draw it again on your next turn"
+            }
+            crate::lifecycle::LifecycleError::StaleLeg
+                if cause.is_some_and(|cause| cause == "autonomous" || cause == "unknown") => {
+                "no switchboard turn is running for this leg; this self-woken call has no delivery authority, so put the result in the written reply instead"
             }
             _ => "this leg is no longer on the call: stop retrying, nothing you send reaches the caller",
         };
@@ -2451,7 +2620,11 @@ async fn display(state: AppState, token: &str, raw: Value) -> Response {
 
     let mut gate = state.0.display_gate.lock().await;
     if state.0.coordinator.generation() != permit_generation
-        || state.0.coordinator.accept_side_effect(token).is_err()
+        || state
+            .0
+            .coordinator
+            .accept_side_effect(token, turn_id, cause)
+            .is_err()
     {
         tracing::info!(
             generation = permit_generation,
@@ -2568,7 +2741,13 @@ struct ViewRequest {
 }
 
 #[tracing::instrument(name = "module_call", skip_all, fields(call = "view"))]
-async fn view(state: AppState, token: &str, args: Value) -> Response {
+async fn view(
+    state: AppState,
+    token: &str,
+    turn_id: Option<&str>,
+    cause: Option<&str>,
+    args: Value,
+) -> Response {
     let req = match serde_json::from_value::<ViewRequest>(args) {
         Ok(req) => req,
         Err(error) => {
@@ -2587,11 +2766,19 @@ async fn view(state: AppState, token: &str, args: Value) -> Response {
         "an agent asked about the caller's view"
     );
     promote_candidate_for_token(&state, token).await;
-    if let Err(error) = state.0.coordinator.accept_side_effect(token) {
+    if let Err(error) = state
+        .0
+        .coordinator
+        .accept_side_effect(token, turn_id, cause)
+    {
         tracing::info!(reason = %error, "refused: the leg is not live on the call");
         let detail = match error {
             crate::lifecycle::LifecycleError::CandidateSideEffect => {
                 "the caller's screen is not live until this transfer completes: switch view again on your next turn"
+            }
+            crate::lifecycle::LifecycleError::StaleLeg
+                if cause.is_some_and(|cause| cause == "autonomous" || cause == "unknown") => {
+                "no switchboard turn is running for this leg; this self-woken call has no delivery authority, so put the result in the written reply instead"
             }
             _ => "this leg is no longer on the call: stop retrying, nothing you send reaches the caller",
         };
@@ -2606,7 +2793,11 @@ async fn view(state: AppState, token: &str, args: Value) -> Response {
 
     let gate = state.0.display_gate.lock().await;
     if state.0.coordinator.generation() != permit_generation
-        || state.0.coordinator.accept_side_effect(token).is_err()
+        || state
+            .0
+            .coordinator
+            .accept_side_effect(token, turn_id, cause)
+            .is_err()
     {
         tracing::info!(
             generation = permit_generation,
@@ -2741,19 +2932,37 @@ async fn agent_call(state: &AppState, call: &AgentCall) -> Response {
                 Speak {
                     text: text.to_owned(),
                     token: call.token.clone(),
+                    turn_id: call.turn_id.clone(),
+                    cause: call.cause.clone(),
                 },
             )
             .await
         }
         "request_to_speak" => request_to_speak(state.clone(), &call.token, call.args.clone()).await,
-        "display" => display(state.clone(), &call.token, call.args.clone()).await,
+        "display" => {
+            display(
+                state.clone(),
+                &call.token,
+                call.turn_id.as_deref(),
+                call.cause.as_deref(),
+                call.args.clone(),
+            )
+            .await
+        }
         "view" => {
             let args = if call.args.is_null() {
                 json!({})
             } else {
                 call.args.clone()
             };
-            view(state.clone(), &call.token, args).await
+            view(
+                state.clone(),
+                &call.token,
+                call.turn_id.as_deref(),
+                call.cause.as_deref(),
+                args,
+            )
+            .await
         }
         _ => (
             axum::http::StatusCode::BAD_REQUEST,

@@ -15,7 +15,8 @@ use crate::lifecycle::{CandidateLeg, Coordinator, LifecycleError, ProjectLeg, St
 use crate::models::{normalize_thinking, parse_spec, pin_thinking, ModelCatalog};
 use crate::pi_client::{
     local_argv, ActivityCallback, LegSession, ModuleCallback, PiSession, PiSessionError,
-    ProjectLaunch, ProjectSession, SessionClosedCallback, SessionState, Signal, Turn, ROUTE_TOOL,
+    ProjectLaunch, ProjectSession, SessionClosedCallback, SessionState, Signal, Turn, TurnCallback,
+    ROUTE_TOOL,
 };
 use crate::prewarm::{LaunchPlan, Prewarm};
 use crate::registry::{Project, Registry};
@@ -558,6 +559,7 @@ pub struct Switchboard {
     agent_state_callback: Option<AgentStateCallback>,
     foreground_closed_callback: Option<ForegroundClosedCallback>,
     module_callback: Option<ModuleCallback>,
+    turn_callback: Option<TurnCallback>,
     active_session: Arc<Mutex<Option<LegSession>>>,
     operator: Option<PiSession>,
     /// A separate process for second opinions and split dispatch. It must not
@@ -663,6 +665,7 @@ impl Switchboard {
             agent_state_callback: None,
             foreground_closed_callback: None,
             module_callback: None,
+            turn_callback: None,
             active_session: Arc::new(Mutex::new(None)),
             operator: None,
             utility: None,
@@ -807,6 +810,11 @@ impl Switchboard {
             "The call to {project} ended: its session closed on the host."
         ));
         true
+    }
+
+    /// Receives project turn boundaries from host agents.
+    pub fn set_turn_callback(&mut self, callback: Option<TurnCallback>) {
+        self.turn_callback = callback;
     }
 
     /// What answers a project session's `speak`, `display` and `view`.
@@ -2299,6 +2307,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
             turn_timeout: self.project_turn_timeout,
             on_activity: self.activity_callback.clone(),
             on_module: self.module_callback.clone(),
+            on_turn: self.turn_callback.clone(),
             on_closed: Some(self.session_closed_callback()),
         };
         let session = match ProjectSession::attach(&self.hosts, launch, session_handle).await {
@@ -2409,6 +2418,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
             turn_timeout: self.project_turn_timeout,
             on_activity: self.activity_callback.clone(),
             on_module: self.module_callback.clone(),
+            on_turn: self.turn_callback.clone(),
             on_closed: Some(self.session_closed_callback()),
         };
         // A host-agent restart keeps resident sessions alive. Prefer the
