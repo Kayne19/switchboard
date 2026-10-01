@@ -179,9 +179,21 @@ describe('operator-to-project handoff', () => {
 
     // The PBX settles the transfer: it restates the status, not the epoch.
     await receive(projectStatus);
+    await receive({
+      type: 'spoken',
+      entry: transcriptEntry({ id: 'a2', role: 'agent', text: 'The project line is ready.' }),
+    });
     await receive({ type: 'reply', text: 'Switchboard here. What do you need?', route: 'switchboard' });
 
-    expect(conversation().segments[0].text).toBe('Switchboard here. What do you need?');
+    // The written reply is still in the full transcript, but the live box
+    // stays on the line the agent actually spoke.
+    expect(conversation().segments[0].text).toBe('The project line is ready.');
+    expect(conversation().transcript?.map((line) => line.text)).toEqual([
+      'Put me through to switchboard.',
+      'Putting you through to switchboard.',
+      'The project line is ready.',
+      'Switchboard here. What do you need?',
+    ]);
     expect(scenes).toEqual(['conversation']);
   });
 
@@ -197,7 +209,8 @@ describe('operator-to-project handoff', () => {
 
     expect(sceneKind(latest)).toBe('architecture');
     expect(latest.agentOrder).toEqual(['call-path']);
-    expect(conversation().segments[0].text).toBe('That is the call path.');
+    expect(conversation().segments[0].text).toBe('Putting you through to switchboard.');
+    expect(conversation().transcript?.at(-1)?.text).toBe('That is the call path.');
     expect(scenes).toEqual(['conversation', 'architecture']);
 
     // The agent can confirm it: the page reports the drawing under the new
