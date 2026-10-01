@@ -49,7 +49,6 @@ const ACTIVITY_ARG_ORDER: [&str; 11] = [
 pub struct Signal {
     pub name: String,
     pub args: Map<String, Value>,
-    pub tool_call_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -533,10 +532,6 @@ impl PiSession {
                         signals.push(Signal {
                             name: name.into(),
                             args,
-                            tool_call_id: event
-                                .get("toolCallId")
-                                .and_then(Value::as_str)
-                                .map(str::to_owned),
                         });
                     }
                     self.report_activity("start", name, activity_detail(event.get("args")))
@@ -1382,7 +1377,6 @@ async fn answer_module_call(inner: Arc<ProjectInner>, call: crate::hosts::Module
                 inner.to_turn(TurnFrame::Signal(Signal {
                     name: SPEAK_TOOL.into(),
                     args: Map::new(),
-                    tool_call_id: None,
                 }));
             }
             call.answer(reply);
