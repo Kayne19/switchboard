@@ -512,7 +512,6 @@ impl PiSession {
                         SECOND_OPINION_TOOL,
                         DISPATCH_PARTS_TOOL,
                         REWRITE_TOOL,
-                        SPEAK_TOOL,
                     ]
                     .contains(&name)
                     {
@@ -643,7 +642,6 @@ impl SessionState {
 enum TurnFrame {
     Event { seq: u64, event: Value },
     Snapshot { seq: u64, info: Value },
-    Signal(Signal),
 }
 
 struct ProjectInner {
@@ -1187,7 +1185,7 @@ impl ProjectSession {
     ) -> Turn {
         let label = &self.inner.label;
         let mut texts: Vec<String> = Vec::new();
-        let mut signals = Vec::new();
+        let signals = Vec::new();
         let mut error = String::new();
         loop {
             let frame = match timeout(self.inner.turn_timeout, frames.recv()).await {
@@ -1204,10 +1202,6 @@ impl ProjectSession {
                 }
             };
             let (seq, event) = match frame {
-                TurnFrame::Signal(signal) => {
-                    signals.push(signal);
-                    continue;
-                }
                 TurnFrame::Snapshot { seq, info } => {
                     // A host that lost track of the turn settles it here: a
                     // snapshot of an idle session is a turn that has ended.
@@ -1373,12 +1367,6 @@ async fn answer_module_call(inner: Arc<ProjectInner>, call: crate::hosts::Module
                     json!({"status": "failed", "reason": "failed"})
                 }
             };
-            if call.call == SPEAK_TOOL && reply["status"] == "delivered" {
-                inner.to_turn(TurnFrame::Signal(Signal {
-                    name: SPEAK_TOOL.into(),
-                    args: Map::new(),
-                }));
-            }
             call.answer(reply);
         }
         _ => call.answer(json!({"status": "refused", "reason": "unknown_call"})),
