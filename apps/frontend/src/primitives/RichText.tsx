@@ -16,7 +16,7 @@ function renderInlines(inlines: Inline[], keyBase: string, allowLinks = false): 
         return <code className="rich-text__code" key={key}>{node.text}</code>;
       case 'link':
         return allowLinks
-          ? <a href={node.href} target="_blank" rel="noopener noreferrer" key={key}>{renderInlines(node.children, key, allowLinks)}</a>
+          ? <a className="rich-text__link" href={node.href} target="_blank" rel="noopener noreferrer" key={key}>{renderInlines(node.children, key, allowLinks)}</a>
           : renderInlines(node.children, key, allowLinks);
       case 'break':
         return <br key={key} />;

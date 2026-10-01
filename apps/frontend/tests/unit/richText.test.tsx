@@ -16,11 +16,11 @@ afterEach(() => {
   host.remove();
 });
 
-function render(text: string) {
+function render(text: string, allowLinks = true) {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  act(() => root.render(<RichText allowLinks segments={[{ text }]} />));
+  act(() => root.render(<RichText allowLinks={allowLinks} segments={[{ text }]} />));
 }
 
 describe('RichText links and HTML safety', () => {
@@ -39,5 +39,12 @@ describe('RichText links and HTML safety', () => {
     expect(host.querySelector('a')).toBeNull();
     expect(host.querySelector('img')).toBeNull();
     expect(host.textContent).toContain('run <img src=x onerror=alert(1)>');
+  });
+
+
+  it('keeps links non-navigable by default for live and spoken surfaces', () => {
+    render('[docs](https://example.com)', false);
+    expect(host.querySelector('a')).toBeNull();
+    expect(host.textContent).toBe('docs');
   });
 });

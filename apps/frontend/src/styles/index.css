@@ -762,7 +762,7 @@ button {
   overflow-x: hidden;
   overflow-wrap: anywhere;
 }
-.rich-text a {
+.rich-text__link {
   color: inherit;
   text-decoration: underline;
   text-decoration-color: rgba(var(--orange-rgb), 0.68);

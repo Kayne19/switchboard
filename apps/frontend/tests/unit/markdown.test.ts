@@ -65,6 +65,12 @@ describe('inline markdown', () => {
       { kind: 'text', text: '<b>raw</b> [missing](https://example.com' },
     ]);
   });
+
+  it('rejects nested link labels as malformed syntax', () => {
+    expect(parseInline('[outer [inner](https://example.com)')).toEqual([
+      { kind: 'text', text: '[outer [inner](https://example.com)' },
+    ]);
+  });
 });
 
 describe('block markdown', () => {

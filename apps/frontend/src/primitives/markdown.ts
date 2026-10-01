@@ -38,10 +38,25 @@ interface ParsedLink {
   href: string;
 }
 
+function malformedNestedLinkEnd(text: string, start: number): number | null {
+  const labelEnd = text.indexOf('](', start + 1);
+  if (labelEnd === -1 || !text.slice(start + 1, labelEnd).includes('[')) return null;
+  let depth = 1;
+  for (let index = labelEnd + 2; index < text.length; index += 1) {
+    if (text[index] === '(') depth += 1;
+    if (text[index] === ')' && --depth === 0) return index + 1;
+  }
+  return null;
+}
+
 function linkAt(text: string, start: number): ParsedLink | null {
   if (text[start] !== '[') return null;
   const labelEnd = text.indexOf(']', start + 1);
   if (labelEnd <= start + 1 || text[labelEnd + 1] !== '(') return null;
+  // This reader does not implement nested link labels. Reject them as a whole
+  // so malformed input stays readable instead of silently dropping its tail.
+  const label = text.slice(start + 1, labelEnd);
+  if (/[\[\]]/.test(label)) return null;
 
   // Markdown destinations may contain balanced parentheses. Keep malformed
   // input literal instead of guessing where the destination ends.
@@ -57,7 +72,7 @@ function linkAt(text: string, start: number): ParsedLink | null {
   if (depth !== 0) return null;
   const href = text.slice(labelEnd + 2, index).trim();
   if (!href || /[\u0000-\u001f\u007f\s]/.test(href)) return null;
-  return { end: index + 1, label: text.slice(start + 1, labelEnd), href };
+  return { end: index + 1, label, href };
 }
 
 // A delimiter opens emphasis only when text follows it directly, and an
@@ -121,6 +136,12 @@ export function parseInline(text: string): Inline[] {
           result.push(...parseInline(link.label));
         }
         index = link.end;
+        continue;
+      }
+      const malformedEnd = malformedNestedLinkEnd(text, index);
+      if (malformedEnd !== null) {
+        buffer += text.slice(index, malformedEnd);
+        index = malformedEnd;
         continue;
       }
     }
