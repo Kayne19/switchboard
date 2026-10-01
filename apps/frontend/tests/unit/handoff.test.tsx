@@ -188,6 +188,7 @@ describe('operator-to-project handoff', () => {
     // The written reply is still in the full transcript, but the live box
     // stays on the line the agent actually spoke.
     expect(conversation().segments[0].text).toBe('The project line is ready.');
+    expect(latest.runtimeSpeech?.text).toBe('The project line is ready.');
     expect(conversation().transcript?.map((line) => line.text)).toEqual([
       'Put me through to switchboard.',
       'Putting you through to switchboard.',
