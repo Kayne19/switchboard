@@ -1347,12 +1347,39 @@ async fn process_speech(state: AppState) {
             state.0.clear_continuity_for(generation, &model);
         }
         let (continuity, epoch) = continuity_for_request(&state, scope, generation, &model);
-        let stream = state
-            .0
-            .speaker
-            .stream_until_with_continuity(&text, deadline, continuity)
-            .instrument(span.clone())
-            .await;
+        let admission_state = state.clone();
+        let admission_text = text.clone();
+        let admission = async move {
+            admission_state
+                .0
+                .speaker
+                .stream_until_with_continuity(&admission_text, deadline, continuity)
+                .await
+        };
+        let stream = match spawn_registered_operation(
+            &state,
+            generation,
+            admission.instrument(span.clone()),
+        )
+        .await
+        {
+            Some((task, task_id)) => {
+                let stream = match task.await {
+                    Ok(stream) => stream,
+                    Err(error) if error.is_cancelled() => {
+                        Err(crate::audio::AudioError::Tts("speech was cancelled".into()))
+                    }
+                    Err(error) => Err(crate::audio::AudioError::Tts(format!(
+                        "speech worker failed: {error}"
+                    ))),
+                };
+                clear_active_operation(&state, task_id).await;
+                stream
+            }
+            None => Err(crate::audio::AudioError::Tts(
+                "speech generation was superseded".into(),
+            )),
+        };
         let stream = match stream {
             Ok(stream) => stream,
             Err(error) => {
