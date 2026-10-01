@@ -168,7 +168,7 @@ export class HostLink {
 	}
 
 	/** Relay a module call to the service and wait for its reply, bounded. */
-	relayModuleCall(handle: string, token: string, call: string, args: Record<string, unknown>, timeoutMs: number): Promise<ModuleReply> {
+	relayModuleCall(handle: string, token: string, call: string, args: Record<string, unknown>, timeoutMs: number, turnId?: string | null, turnCause?: string | null): Promise<ModuleReply> {
 		if (this.#epoch === null) return Promise.resolve({ status: "failed", reason: "failed" });
 		const id = `m${++this.#moduleSeq}`;
 		return new Promise((resolve) => {
@@ -177,7 +177,16 @@ export class HostLink {
 				resolve({ status: "failed", reason: "failed" });
 			}, timeoutMs);
 			this.#pendingModule.set(id, { resolve, timer });
-			this.#send({ type: "module_call", id, session: handle, token, call, args });
+			this.#send({
+				type: "module_call",
+				id,
+				session: handle,
+				token,
+				call,
+				args,
+				...(turnId ? { turn_id: turnId } : {}),
+				...(turnCause ? { cause: turnCause } : {}),
+			});
 		});
 	}
 

@@ -199,7 +199,9 @@ test("an agent_start nobody caused opens a turn that settles the same way", asyn
 	const s = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
 	daemon.emit(s, { type: "agent_start" });
 	await flush();
-	assert.deepEqual(events.at(-1)?.event, { kind: "turn_start", cause: "autonomous" });
+	assert.equal((events.at(-1)?.event as Record<string, unknown>).kind, "turn_start");
+	assert.equal((events.at(-1)?.event as Record<string, unknown>).cause, "autonomous");
+	assert.match(String((events.at(-1)?.event as Record<string, unknown>).turn_id), /^turn-[0-9a-f]{16}$/);
 	assert.equal(daemon.pendingIdle(s), 1);
 	daemon.emit(s, { type: "agent_start" }); // a second run inside the same turn
 	daemon.idle(s);

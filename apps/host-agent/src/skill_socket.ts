@@ -12,7 +12,7 @@ import net from "node:net";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import type { ModuleReply } from "./link.ts";
-import type { CallMode, CallState } from "./sessions.ts";
+import type { CallMode, CallState, TurnCause } from "./sessions.ts";
 
 /** Calls exposed by the installed switchboard skill. */
 export const MODULE_CALLS: readonly string[] = ["speak", "request_to_speak", "display", "view"];
@@ -22,9 +22,9 @@ const MAX_LINE_BYTES = 1024 * 1024;
 
 export interface SkillSocketOptions {
 	socketPath: string;
-	/** The call state of the tracked session with this persisted id. */
-	lookup: (sessionId: string) => { handle: string; call: CallState | null } | null;
-	relay: (handle: string, token: string, call: string, args: Record<string, unknown>, timeoutMs: number) => Promise<ModuleReply>;
+	/** The call and turn state of the tracked session with this persisted id. */
+	lookup: (sessionId: string) => { handle: string; call: CallState | null; turnId: string | null; turnCause: TurnCause | null } | null;
+	relay: (handle: string, token: string, call: string, args: Record<string, unknown>, timeoutMs: number, turnId: string | null, turnCause: TurnCause | null) => Promise<ModuleReply>;
 	/** Relay timeout for calls other than speak (speak uses the speech deadline). */
 	relayTimeoutMs?: number;
 }
@@ -120,7 +120,7 @@ export class SkillSocket {
 		const args = request.args && typeof request.args === "object" ? (request.args as Record<string, unknown>) : {};
 		const timeoutMs = name === "speak" ? call.speechDeadlineMs : (this.#o.relayTimeoutMs ?? 30_000);
 		try {
-			const reply = await this.#o.relay(session.handle, call.token, name, args, timeoutMs);
+			const reply = await this.#o.relay(session.handle, call.token, name, args, timeoutMs, session.turnId, session.turnCause);
 			return { ...reply };
 		} catch {
 			return { status: "failed", reason: "failed" };

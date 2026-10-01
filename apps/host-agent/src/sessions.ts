@@ -19,6 +19,7 @@ import { DaemonCommandError, type DaemonEvent, type DaemonPort, type DaemonSessi
 
 export type Provenance = "created" | "taken_over";
 export type CallMode = "foreground" | "background" | "active";
+export type TurnCause = "input" | "autonomous" | "unknown";
 export const CALL_MODES: readonly CallMode[] = ["foreground", "background", "active"];
 export const SESSION_NAME_PREFIX = "sb-";
 
@@ -54,6 +55,9 @@ interface Tracked {
 	inputs: number;
 	/** Inputs in flight, so an agent_start they cause is not taken as autonomous. */
 	pending: number;
+	/** Stable while this host-agent process tracks one daemon turn. */
+	turnId: string | null;
+	turnCause: TurnCause | null;
 	call: CallState | null;
 	last: DaemonSession | null;
 }
@@ -129,8 +133,10 @@ export class SessionManager {
 	}
 
 	/** The tracked session whose persisted id is `sessionId` (the skill socket's key). */
-	bySessionId(sessionId: string): { handle: string; call: CallState | null } | null {
-		for (const t of this.#tracked.values()) if (t.sessionId === sessionId) return { handle: t.handle, call: t.call };
+	bySessionId(sessionId: string): { handle: string; call: CallState | null; turnId: string | null; turnCause: TurnCause | null } | null {
+		for (const t of this.#tracked.values()) {
+			if (t.sessionId === sessionId) return { handle: t.handle, call: t.call, turnId: t.turnId, turnCause: t.turnCause };
+		}
 		return null;
 	}
 
@@ -165,13 +171,16 @@ export class SessionManager {
 				turnOpen: false,
 				inputs: 0,
 				pending: 0,
+				turnId: null,
+				turnCause: null,
 				call: null,
 				last: null,
 			};
 			t.last = snapshot;
 			this.#tracked.set(rec.handle, t);
-			// Rebuilt from the daemon snapshot: a busy session has an open turn.
-			if (snapshot.busy && !t.turnOpen) this.#openTurn(t, "autonomous");
+			// A busy session rebuilt from a snapshot has no reliable cause. Keep
+			// its module calls fail-closed until a fresh turn opens.
+			if (snapshot.busy && !t.turnOpen) this.#openTurn(t, "unknown");
 			if (t.turnOpen) this.#settle(t);
 			kept.push(rec.handle);
 		}
@@ -204,6 +213,8 @@ export class SessionManager {
 			provenance: t.provenance,
 			busy: t.turnOpen || (t.last?.busy ?? false),
 			turn_open: t.turnOpen,
+			turn_id: t.turnId,
+			cause: t.turnCause,
 			model: modelLabel(t.last),
 			thinking: t.last?.thinking ?? null,
 			call_mode: t.call?.mode ?? null,
@@ -339,6 +350,8 @@ export class SessionManager {
 			turnOpen: false,
 			inputs: 0,
 			pending: 0,
+			turnId: null,
+			turnCause: null,
 			call: null,
 			last: { ...session, lastText: snapshot.lastText ?? null },
 		};
@@ -509,9 +522,11 @@ export class SessionManager {
 
 	// -- turns and events --------------------------------------------------
 
-	#openTurn(t: Tracked, cause: "input" | "autonomous"): void {
+	#openTurn(t: Tracked, cause: TurnCause): void {
 		t.turnOpen = true;
-		this.#emit(t.handle, { kind: "turn_start", cause });
+		t.turnId = `turn-${randomBytes(8).toString("hex")}`;
+		t.turnCause = cause;
+		this.#emit(t.handle, { kind: "turn_start", cause, turn_id: t.turnId });
 	}
 
 	/** Send wait_for_idle after the latest input; settle only if it is still the latest. */
@@ -520,14 +535,20 @@ export class SessionManager {
 		this.#port.waitForIdle(t.handle).then(
 			() => {
 				if (this.#tracked.get(t.handle) !== t || t.inputs !== mark || !t.turnOpen) return;
+				const turnId = t.turnId;
 				t.turnOpen = false;
+				t.turnId = null;
+				t.turnCause = null;
 				if (t.last) t.last = { ...t.last, busy: false };
-				this.#emit(t.handle, { kind: "turn_end" });
+				this.#emit(t.handle, { kind: "turn_end", ...(turnId ? { turn_id: turnId } : {}) });
 			},
 			(error: unknown) => {
 				if (this.#tracked.get(t.handle) !== t || t.inputs !== mark || !t.turnOpen) return;
+				const turnId = t.turnId;
 				t.turnOpen = false;
-				this.#emit(t.handle, { kind: "turn_end", error: error instanceof Error ? error.message : String(error) });
+				t.turnId = null;
+				t.turnCause = null;
+				this.#emit(t.handle, { kind: "turn_end", ...(turnId ? { turn_id: turnId } : {}), error: error instanceof Error ? error.message : String(error) });
 			},
 		);
 	}
@@ -553,7 +574,7 @@ export class SessionManager {
 				if (message.role !== "assistant") return;
 				const text = textOf(message);
 				if (text) {
-					this.#emit(handle, { kind: "text", text });
+					this.#emit(handle, { kind: "text", text, ...(t.turnId ? { turn_id: t.turnId } : {}) });
 					if (t.last) t.last = { ...t.last, lastText: text };
 				}
 				if (message.stopReason === "error") this.#emit(handle, { kind: "error", message: String(message.errorMessage ?? "model error") });
