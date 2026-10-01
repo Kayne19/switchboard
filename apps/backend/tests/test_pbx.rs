@@ -1335,7 +1335,7 @@ async fn a_module_call_with_a_stale_call_token_is_refused() {
 }
 
 #[tokio::test]
-async fn a_delivered_speak_counts_as_the_agent_having_spoken() {
+async fn a_delivered_speak_keeps_the_written_turn_reply_silent() {
     let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
     let calls = Arc::new(StdMutex::new(Vec::new()));
     let seen = Arc::clone(&calls);
@@ -1361,7 +1361,12 @@ async fn a_delivered_speak_counts_as_the_agent_having_spoken() {
 
     assert_eq!(reply.route, "alpha");
     assert_eq!(reply.text, "Written detail.");
-    assert!(reply.to_speak.is_empty(), "spoken twice: {reply:?}");
+    // The direct speak call already delivered its own audio. The settled
+    // written reply remains transcript-only and must not repeat it.
+    assert!(
+        reply.to_speak.is_empty(),
+        "written reply was synthesized: {reply:?}"
+    );
     let calls = calls.lock().unwrap().clone();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].0, "speak");
