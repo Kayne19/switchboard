@@ -586,7 +586,14 @@ impl Coordinator {
 
     pub fn finish_operation(&self, operation: &OperationIdentity) -> bool {
         self.linearize(|state| {
-            if state.operation.as_ref() != Some(operation) {
+            // Match on the operation's id and leg, not the whole value:
+            // `bind_turn` stamps the host turn id onto the live operation after
+            // the owner took its copy, and that must not orphan the operation.
+            let owns = state
+                .operation
+                .as_ref()
+                .is_some_and(|current| current.id == operation.id && current.leg == operation.leg);
+            if !owns {
                 return false;
             }
             state.operation = None;

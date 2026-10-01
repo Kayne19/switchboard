@@ -14,11 +14,12 @@ import { AudioLevelMonitor } from "./audioLevel";
 export const MAX_AUDIO_UTTERANCE = 32 * 1024 * 1024;
 export const MAX_AUDIO_REPLAY = 64 * 1024 * 1024;
 /**
- * A short pause between two spoken messages, the way a person pauses before
- * starting a new thought. Speech inside one message keeps the voice's own
- * timing; only the step from one message to the next waits.
+ * The pause between two spoken messages. It is off (0): messages play back to
+ * back. The gap code stays in place; set this to a positive value (350 was the
+ * previous setting) to pause between messages again. Speech inside one message
+ * always keeps the voice's own timing.
  */
-export const INTER_UTTERANCE_GAP_MS = 350;
+export const INTER_UTTERANCE_GAP_MS = 0;
 
 interface PlaybackOwner {
   blob: Blob;

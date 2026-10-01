@@ -801,3 +801,24 @@ fn a_rescue_of_a_named_leg_happens_only_while_that_leg_is_on_the_line() {
     let leg = call.project_leg().unwrap();
     refused(&call, &leg);
 }
+
+#[test]
+fn a_caller_operation_bound_to_a_host_turn_still_finishes() {
+    // The worker keeps the operation it began; the host then reports the
+    // caller turn's id, which `bind_turn` stamps onto the live operation.
+    // Finishing with the worker's copy must still close it, or every later
+    // prompt waits forever behind an operation nobody owns.
+    let coordinator = coordinator();
+    coordinator.begin_candidate(alpha_candidate()).unwrap();
+    coordinator.adopt_candidate("cand").unwrap();
+    let intro = coordinator
+        .linearize(|state| state.operation.clone())
+        .expect("candidate intro");
+    assert!(coordinator.finish_operation(&intro));
+    let leg = coordinator.current_identity();
+    let operation = coordinator.begin_prompt(&leg).unwrap();
+    assert_eq!(coordinator.bind_turn("cand", "turn-1"), Ok(()));
+    assert!(coordinator.finish_operation(&operation));
+    assert_eq!(phase(&coordinator), Phase::Active);
+    assert!(coordinator.begin_prompt(&leg).is_ok());
+}
