@@ -1396,6 +1396,63 @@ async fn steer_rechecks_generation_under_the_active_session_guard() {
 }
 
 #[tokio::test]
+async fn an_utterance_steers_a_turn_that_holds_the_pbx_lock() {
+    // The turn worker holds the PBX lock for a whole prompt. Routing must not
+    // wait on it, or the utterance is routed only after the turn ends and is
+    // queued instead of steered.
+    let (client, _requests, _responded) = fake_jev_client();
+    let state = state_with_jev(client, Registry::new(vec![]));
+    let mut events = state.0.events.subscribe();
+    let session = PiSession::start(
+        vec!["sh".into(), "-c".into(), "sleep 60".into()],
+        OPERATOR,
+        OPERATOR,
+        None,
+        None,
+        Duration::from_secs(60),
+        None,
+    )
+    .await
+    .expect("session");
+    let prompt = {
+        let session = session.clone();
+        tokio::spawn(async move { session.prompt("hold this turn").await })
+    };
+    timeout(Duration::from_secs(1), async {
+        while !session.busy() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("session is busy");
+    *state.0.active_session.lock().await = Some(LegSession::Operator(session.clone()));
+    let generation = state.0.coordinator.generation();
+    state
+        .0
+        .coordinator
+        .begin_prompt(&state.0.coordinator.current_identity())
+        .expect("active operation");
+    let board = state.0.switchboard.lock().await;
+
+    timeout(
+        Duration::from_secs(5),
+        dispatch_routed_transcript(&state, "steer-busy", generation, "also this".into()),
+    )
+    .await
+    .expect("routing does not wait on the PBX lock");
+
+    let queued = next_event_of(&mut events, "queued").await;
+    assert_eq!(queued["id"], "steer-busy");
+    assert_eq!(queued["steered"], true);
+    assert_eq!(state.0.queued_turns.load(Ordering::Acquire), 0);
+
+    drop(board);
+    prompt.abort();
+    let _ = prompt.await;
+    session.close().await;
+}
+
+#[tokio::test]
 async fn typed_turn_from_a_retired_epoch_is_dropped() {
     let state = state();
     let mut events = state.0.events.subscribe();

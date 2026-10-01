@@ -39,6 +39,14 @@ Two properties are load-bearing and easy to break by accident:
   already closed and the clip falls through to the queue path, where the epoch
   check discards it.
 
+- **Routing never takes the PBX lock.** The turn worker holds that lock for a
+  whole prompt, so anything on the steer path that waits for it runs only after
+  the turn has ended, when there is nothing left to steer: the utterance is
+  queued every time (#108). Jev's call summary, the router and the host links
+  come from `RoutingView`, which shares its state with the switchboard instead
+  of borrowing it. `an_utterance_steers_a_turn_that_holds_the_pbx_lock` holds
+  the lock and expects a steer.
+
 The turn worker re-checks the epoch again before dispatching. That is deliberate
 redundancy, not duplication. It first waits for the PBX lock, for the reason
 given under "A clip on the wire when the leg is adopted" below.
