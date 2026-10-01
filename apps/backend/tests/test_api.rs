@@ -146,6 +146,53 @@ fn continuity_commit_is_scoped_to_generation_epoch_and_model() {
     assert!(cleared.last_text.is_none());
 }
 
+#[test]
+fn continuity_early_handoff_uses_pending_text_and_keeps_newer_drain() {
+    let state = state();
+    let generation = state.0.coordinator.generation();
+    let model = state.0.coordinator.status().model;
+    let epoch = state.0.continuity_snapshot().epoch;
+
+    assert!(state
+        .0
+        .mark_continuity_pending(generation, &model, "first line".into()));
+    assert!(state
+        .0
+        .mark_continuity_pending(generation, &model, "second line".into()));
+    let (continuity, _) = continuity_for_request(
+        &state,
+        ContinuationScope::ContinueCurrentTurn,
+        generation,
+        &model,
+    );
+    assert_eq!(
+        continuity,
+        TtsContinuity::PreviousText("second line".into())
+    );
+
+    // The newer body can finish first. Its sequence wins, and the older body
+    // must not overwrite the request id/text that the next line will use.
+    assert!(state.0.commit_continuity_ordered(
+        generation,
+        &model,
+        epoch,
+        11,
+        Some("second-id".into()),
+        "second line".into(),
+    ));
+    assert!(!state.0.commit_continuity_ordered(
+        generation,
+        &model,
+        epoch,
+        10,
+        Some("first-id".into()),
+        "first line".into(),
+    ));
+    let committed = state.0.continuity_snapshot();
+    assert_eq!(committed.last_request_id.as_deref(), Some("second-id"));
+    assert_eq!(committed.last_text.as_deref(), Some("second line"));
+}
+
 #[tokio::test]
 async fn speech_worker_stitches_same_group_and_resets_unrelated_group() {
     let config = crate::Config::for_tests(&[]);

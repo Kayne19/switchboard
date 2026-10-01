@@ -170,6 +170,7 @@ pub(crate) struct SpeechContinuity {
     pub(crate) generation: u64,
     pub(crate) model: String,
     pub(crate) epoch: u64,
+    pub(crate) last_sequence: Option<u64>,
 }
 
 #[allow(dead_code)]
@@ -181,6 +182,7 @@ impl SpeechContinuity {
         self.generation = generation;
         self.model = model.to_owned();
         self.epoch = self.epoch.saturating_add(1);
+        self.last_sequence = None;
     }
 
     pub(crate) fn mark_pending(&mut self, generation: u64, model: &str, text: String) -> bool {
@@ -214,11 +216,34 @@ impl SpeechContinuity {
         request_id: Option<String>,
         text: String,
     ) -> bool {
+        self.commit_ordered(generation, model, epoch, None, request_id, text)
+    }
+
+    /// Commit a drained clip only when it is newer than the clip already
+    /// committed. Drains run independently, so body completion order is not
+    /// enough to establish continuity order.
+    pub(crate) fn commit_ordered(
+        &mut self,
+        generation: u64,
+        model: &str,
+        epoch: u64,
+        sequence: Option<u64>,
+        request_id: Option<String>,
+        text: String,
+    ) -> bool {
         if self.generation != generation || self.model != model || self.epoch != epoch {
             return false;
         }
+        if let (Some(sequence), Some(last_sequence)) = (sequence, self.last_sequence) {
+            if sequence <= last_sequence {
+                return false;
+            }
+        }
         self.last_request_id = request_id;
         self.last_text = Some(text.clone());
+        if let Some(sequence) = sequence {
+            self.last_sequence = Some(sequence);
+        }
         if self.pending_text.as_deref() == Some(text.as_str()) {
             self.pending_text = None;
         }
@@ -871,6 +896,21 @@ impl AppInner {
             .commit(generation, model, epoch, request_id, text)
     }
 
+    pub(crate) fn commit_continuity_ordered(
+        &self,
+        generation: u64,
+        model: &str,
+        epoch: u64,
+        sequence: u64,
+        request_id: Option<String>,
+        text: String,
+    ) -> bool {
+        self.continuity
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .commit_ordered(generation, model, epoch, Some(sequence), request_id, text)
+    }
+
     fn new_speech_group(&self) -> SpeechGroup {
         SpeechGroup(self.next_speech_group.fetch_add(1, Ordering::Relaxed))
     }
@@ -887,6 +927,16 @@ impl AppInner {
             .active_speech_group
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn clear_active_speech_group(&self, group: SpeechGroup) {
+        let mut active = self
+            .active_speech_group
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *active == Some(group) {
+            *active = None;
+        }
     }
 
     fn mark_foreground_audio(&self, generation: u64) {
@@ -1255,7 +1305,7 @@ async fn drain_speech_stream(
     // The epoch/model/generation checks reject a late drain after a reset.
     state
         .0
-        .commit_continuity(generation, &model, epoch, request_id, text);
+        .commit_continuity_ordered(generation, &model, epoch, sequence, request_id, text);
     Ok((bytes, delivered))
 }
 
@@ -1932,6 +1982,7 @@ async fn process_turns(state: AppState) {
         let takeover = prepare_takeover_lookup(&state, &decision).await;
 
         let turn_state = state.clone();
+        let speech_group = state.0.new_speech_group();
         let started = std::time::Instant::now();
         // Register the abort handle before awaiting the task. Page-level rescue
         // endpoints can now cancel work even while transfer setup has no
@@ -1977,7 +2028,7 @@ async fn process_turns(state: AppState) {
             continue;
         };
         state.0.turn_in_flight.store(true, Ordering::Release);
-        state.0.set_active_speech_group(state.0.new_speech_group());
+        state.0.set_active_speech_group(speech_group);
         let route = state.0.coordinator.route();
         let waiting = state.0.queued_turns.load(Ordering::Acquire);
         tracing::info!(clip = %id, %route, waiting, "dispatching a turn");
@@ -2051,6 +2102,7 @@ async fn process_turns(state: AppState) {
             )
             .await;
         }
+        state.0.clear_active_speech_group(speech_group);
         state.0.turn_in_flight.store(false, Ordering::Release);
     }
     tracing::warn!("the turn worker stopped; no further turns will be dispatched");
