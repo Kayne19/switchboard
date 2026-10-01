@@ -1173,6 +1173,7 @@ struct OfflineTtsTransport;
 pub(crate) struct TestTtsGate {
     started: Arc<Notify>,
     release: Arc<Notify>,
+    fail_first: Arc<AtomicBool>,
 }
 
 #[cfg(test)]
@@ -1181,7 +1182,12 @@ impl TestTtsGate {
         Self {
             started: Arc::new(Notify::new()),
             release: Arc::new(Notify::new()),
+            fail_first: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub(crate) fn fail_first(&self) {
+        self.fail_first.store(true, Ordering::Release);
     }
 
     pub(crate) async fn wait_started(&self) {
@@ -1203,11 +1209,17 @@ impl TtsTransport for GatedTtsTransport {
     fn send_stream(&self, _request: TtsRequest) -> TtsStreamFuture {
         let gate = self.gate.clone();
         Box::pin(async move {
+            let fail = gate.fail_first.swap(false, Ordering::AcqRel);
             let (sender, receiver) = mpsc::channel(1);
             tokio::spawn(async move {
                 gate.started.notify_one();
                 gate.release.notified().await;
-                let _ = sender.send(Ok(vec![1, 2, 3])).await;
+                let item = if fail {
+                    Err(AudioError::Tts("gated test failure".into()))
+                } else {
+                    Ok(vec![1, 2, 3])
+                };
+                let _ = sender.send(item).await;
             });
             Ok(TtsResponse {
                 status: StatusCode::OK,

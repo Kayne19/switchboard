@@ -417,6 +417,67 @@ fn diagram_show() -> Value {
 }
 
 #[tokio::test]
+async fn speech_worker_duplicate_text_failure_keeps_newer_pending_drain() {
+    let config = crate::Config::for_tests(&[]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    let gate = TestTtsGate::new();
+    gate.fail_first();
+    let state = AppState::new(
+        Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
+        TranscriptLog::new(10),
+        Speaker::test_gated(100, Duration::from_millis(25_000), gate.clone()),
+        SttAdapter::from_command(None),
+        SttStreamAdapter::from_command(None),
+    );
+    let (_connection, _, _) = state.register_connection().await;
+    start_speech_worker_for_test(&state);
+    let generation = state.0.coordinator.generation();
+    let group = state.0.new_speech_group();
+    let admission = |scope| SpeechAdmission {
+        text: "same line".into(),
+        route: OPERATOR.into(),
+        generation,
+        deadline: std::time::Instant::now() + Duration::from_secs(1),
+        scope,
+        group,
+        log_spoken: false,
+    };
+    let first = tokio::spawn({
+        let state = state.clone();
+        let admission = admission(ContinuationScope::FreshTurn);
+        async move { queue_speech(&state, admission).await }
+    });
+    timeout(Duration::from_secs(1), gate.wait_started())
+        .await
+        .expect("first gated drain started");
+    let second = tokio::spawn({
+        let state = state.clone();
+        let admission = admission(ContinuationScope::ContinueCurrentTurn);
+        async move { queue_speech(&state, admission).await }
+    });
+    timeout(Duration::from_secs(1), gate.wait_started())
+        .await
+        .expect("second gated drain started");
+
+    let pending = state.0.continuity_snapshot();
+    assert_eq!(pending.pending_text.as_deref(), Some("same line"));
+    assert!(pending.pending_sequence.is_some());
+    gate.release();
+    gate.release();
+    assert!(first.await.unwrap().is_err());
+    assert!(second.await.unwrap().is_ok());
+    let settled = state.0.continuity_snapshot();
+    assert_eq!(settled.last_text.as_deref(), Some("same line"));
+    assert!(settled.pending_text.is_none());
+    assert!(settled.pending_sequence.is_none());
+}
+
+#[tokio::test]
 async fn healthz_reports_the_commit_the_binary_was_stamped_with() {
     // A deploy is checked with one request, so the stamp build.rs chose has to
     // reach /healthz verbatim, beside the fields existing consumers read.
