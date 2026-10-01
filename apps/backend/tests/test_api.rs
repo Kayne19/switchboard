@@ -83,7 +83,13 @@ fn state_with_stream(stt: Option<String>, stream: Option<String>) -> AppState {
 
 /// The application around `board`, with no speech-to-text configured.
 fn state_on(board: Switchboard) -> AppState {
-    state_on_with_stream(board, None, None)
+    let state = state_on_with_stream(board, None, None);
+    // Most API tests exercise direct delivery rather than the production
+    // bootstrap. Keep the one worker lifecycle in the shared setup helper.
+    if tokio::runtime::Handle::try_current().is_ok() {
+        start_speech_worker_for_test(&state);
+    }
+    state
 }
 
 fn state_on_with_stream(
@@ -140,11 +146,94 @@ fn continuity_commit_is_scoped_to_generation_epoch_and_model() {
     assert!(cleared.last_text.is_none());
 }
 
+#[tokio::test]
+async fn speech_worker_stitches_same_group_and_resets_unrelated_group() {
+    let config = crate::Config::for_tests(&[]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    let state = AppState::new(
+        Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
+        TranscriptLog::new(10),
+        Speaker::test_success(100, Duration::from_millis(25_000)),
+        SttAdapter::from_command(None),
+        SttStreamAdapter::from_command(None),
+    );
+    let (_connection, _, _) = state.register_connection().await;
+    start_speech_worker_for_test(&state);
+    let generation = state.0.coordinator.generation();
+    let group = state.0.new_speech_group();
+
+    queue_speech(
+        &state,
+        SpeechAdmission {
+            text: "first line".into(),
+            route: OPERATOR.into(),
+            generation,
+            deadline: std::time::Instant::now() + Duration::from_secs(1),
+            scope: ContinuationScope::FreshTurn,
+            group,
+            log_spoken: false,
+        },
+    )
+    .await
+    .expect("first line should be spoken");
+    let first = state.0.continuity_snapshot();
+    assert_eq!(first.last_text.as_deref(), Some("first line"));
+    assert!(first.last_request_id.is_some());
+
+    queue_speech(
+        &state,
+        SpeechAdmission {
+            text: "second line".into(),
+            route: OPERATOR.into(),
+            generation,
+            deadline: std::time::Instant::now() + Duration::from_secs(1),
+            scope: ContinuationScope::ContinueCurrentTurn,
+            group,
+            log_spoken: false,
+        },
+    )
+    .await
+    .expect("same-group continuation should be spoken");
+    assert_eq!(
+        state.0.continuity_snapshot().last_text.as_deref(),
+        Some("second line")
+    );
+
+    let unrelated = state.0.new_speech_group();
+    queue_speech(
+        &state,
+        SpeechAdmission {
+            text: "fresh line".into(),
+            route: OPERATOR.into(),
+            generation,
+            deadline: std::time::Instant::now() + Duration::from_secs(1),
+            scope: ContinuationScope::ContinueCurrentTurn,
+            group: unrelated,
+            log_spoken: false,
+        },
+    )
+    .await
+    .expect("unrelated line should start fresh");
+    assert_eq!(
+        state.0.continuity_snapshot().last_text.as_deref(),
+        Some("fresh line")
+    );
+}
+
 async fn next_delivery(connection: &mut DeliveryConnection) -> Value {
     let Some(DeliveryFrame::Message(Message::Text(text))) = connection.receiver.recv().await else {
         panic!("expected a websocket response");
     };
     serde_json::from_str(&text).unwrap()
+}
+
+fn start_speech_worker_for_test(state: &AppState) {
+    ensure_speech_worker(state);
 }
 
 async fn request_json(
@@ -153,6 +242,10 @@ async fn request_json(
     path: &str,
     body: Option<Value>,
 ) -> (StatusCode, Value) {
+    // Delivery tests call the router without the production worker bootstrap.
+    // Start only the shared speech worker here so settled replies use the same
+    // ordered path as production without a second lifecycle implementation.
+    start_speech_worker_for_test(state);
     let mut request = Request::builder().method(method).uri(path);
     let body = match body {
         Some(value) => {
@@ -177,6 +270,7 @@ async fn request_json(
 /// application answers it: `path` names the call the way the agent callback
 /// routes once did, and a `token` in `body` is the call token it carries.
 async fn agent_call_json(state: &AppState, path: &str, body: Value) -> (StatusCode, Value) {
+    start_speech_worker_for_test(state);
     let mut args = body;
     let token = args
         .as_object_mut()

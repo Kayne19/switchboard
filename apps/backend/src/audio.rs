@@ -983,6 +983,7 @@ impl Speaker {
         format!("{} — there's more on screen.", clipped.trim_end())
     }
 
+    #[allow(dead_code)]
     pub async fn stream_until(
         &self,
         text: &str,
