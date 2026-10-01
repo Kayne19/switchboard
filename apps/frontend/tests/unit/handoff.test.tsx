@@ -239,6 +239,17 @@ describe('operator-to-project handoff', () => {
     expect(scenes).not.toContain('idle');
   });
 
+  it('does not promote an agent history line into the live box', async () => {
+    await callTheOperator();
+    await receive({ type: 'history', entries: [
+      transcriptEntry({ role: 'caller', text: 'Continue the work.' }),
+      transcriptEntry({ role: 'agent', text: 'The written status is complete.' }),
+    ] });
+
+    expect(conversation().segments).toEqual([]);
+    expect(conversation().transcript?.at(-1)?.text).toBe('The written status is complete.');
+  });
+
   it('clears the conversation when a reconnect finds the server has none', async () => {
     await callTheOperator();
     await receive({ type: 'epoch', generation: 1 });

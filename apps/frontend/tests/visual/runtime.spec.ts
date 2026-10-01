@@ -38,8 +38,10 @@ test("production adapter maps backend traffic into semantic scenes", async ({
       ],
     });
     await expect(page.locator('[data-scene="conversation"]')).toBeVisible();
+    // History does not distinguish written replies from spoken lines, so it
+    // must not guess that this agent entry belongs in the live box.
     await expect(page.locator(".conversation-answer")).toContainText(
-      "I have the route on screen.",
+      "Line open. Speak when ready.",
     );
 
     fixtureServer.broadcast({

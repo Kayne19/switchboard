@@ -154,10 +154,11 @@ export function RuntimeIntegration() {
         }
         case "history": {
           transcriptRef.current = normalizeHistory(message.entries);
-          const latest = [...transcriptRef.current]
-            .reverse()
-            .find((entry) => entry.speaker === "DAMOCLES");
-          currentResponseRef.current = latest?.text ?? "";
+          // History has one transcript shape for written replies and spoken
+          // lines. Do not guess that an agent line was spoken: after a
+          // reconnect, keep the live box empty rather than putting written
+          // text on it. New `spoken` messages will populate it again.
+          currentResponseRef.current = "";
           if (transcriptRef.current.length > 0) {
             showConversation();
           } else {
