@@ -2084,17 +2084,19 @@ async fn handle_project_turn(state: &AppState, turn: ProjectTurn) {
         }
         if !turn.text.trim().is_empty() {
             let route = state.0.coordinator.route();
-            state
-                .0
-                .transcript_log
-                .lock()
-                .await
-                .add(AGENT, &turn.text, route.clone());
+            state.0.transcript_log.lock().await.add_with_id_and_voiced(
+                AGENT,
+                &turn.text,
+                route.clone(),
+                None,
+                false,
+            );
             emit_message(
                 state,
                 ServerMessage::Reply {
                     text: turn.text,
                     route,
+                    voiced: false,
                 },
             );
         }
