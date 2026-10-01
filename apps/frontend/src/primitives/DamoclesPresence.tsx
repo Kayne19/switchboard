@@ -21,7 +21,7 @@ export function DamoclesPresence({
 }: {
   listening: boolean;
   /** Sampled on animation frames, so level changes do not rerender the scene. */
-  voiceLevel?: () => number;
+  voiceLevel?: () => number | null;
   onToggleListening?: () => void;
   context?: string;
   size?: PresenceSize;

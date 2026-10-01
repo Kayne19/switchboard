@@ -30,6 +30,7 @@ import {
 } from "../protocol";
 import type { ScreenStateReport } from "../controller/types";
 import { AudioPlayback } from "./audioPlayback";
+import { selectVoiceLevel } from "./audioLevel";
 import { errorText } from "./errors";
 import {
   lineStateFromStatus,
@@ -59,6 +60,7 @@ export interface RuntimeState {
   connected: boolean;
   recording: boolean;
   speaking: boolean;
+  voiceLevelAvailable: boolean;
   status: string;
   statusError: boolean;
   handsFree: boolean;
@@ -82,6 +84,7 @@ export const INITIAL_RUNTIME_STATE: RuntimeState = {
   connected: false,
   recording: false,
   speaking: false,
+  voiceLevelAvailable: false,
   status: "Connecting…",
   statusError: false,
   handsFree: false,
@@ -174,7 +177,10 @@ export class CallRuntime {
   private hangupPending = false;
 
   private handsFree: HandsFreeController | null = null;
-  private voiceLevel = 0;
+  private callerVoiceLevel = 0;
+  private agentVoiceLevel = 0;
+  private callerLevelAvailable = false;
+  private agentLevelAvailable = false;
   private handsFreeStartup: Promise<void> | null = null;
   private pendingResponseBarrier: {
     responseId: string;
@@ -204,7 +210,11 @@ export class CallRuntime {
       idleText: IDLE_TEXT,
       onStatus: (text, error) => this.setStatus(text, error),
       onAudioLevel: (level) => {
-        this.voiceLevel = level;
+        this.agentVoiceLevel = level;
+        if (!this.agentLevelAvailable) {
+          this.agentLevelAvailable = true;
+          this.update({ voiceLevelAvailable: true });
+        }
       },
       onChange: () => {
         this.update({ speaking: this.playback.isPlaying });
@@ -217,7 +227,11 @@ export class CallRuntime {
       createRecorder: options.createRecorder,
       createAudioContext: options.createAudioContext,
       onAudioLevel: (level) => {
-        this.voiceLevel = level;
+        this.callerVoiceLevel = level;
+        if (!this.callerLevelAvailable) {
+          this.callerLevelAvailable = true;
+          this.update({ voiceLevelAvailable: true });
+        }
       },
       newClipId: () => this.newClipId(),
       context: () => ({
@@ -240,8 +254,14 @@ export class CallRuntime {
     return { ...this.state };
   }
 
-  get currentVoiceLevel(): number {
-    return this.voiceLevel;
+  get currentVoiceLevel(): number | null {
+    if (this.state.speaking && !this.agentLevelAvailable) return null;
+    if (!this.state.speaking && !this.callerLevelAvailable) return null;
+    return selectVoiceLevel(
+      this.callerVoiceLevel,
+      this.agentVoiceLevel,
+      this.state.speaking,
+    );
   }
 
   start(): void {
@@ -605,7 +625,11 @@ export class CallRuntime {
           onClip: (audio, mime, epoch) =>
             this.submitHandsFreeClip(audio, mime, epoch),
           onAudioLevel: (level) => {
-            this.voiceLevel = level;
+            this.callerVoiceLevel = level;
+            if (!this.callerLevelAvailable) {
+              this.callerLevelAvailable = true;
+              this.update({ voiceLevelAvailable: true });
+            }
           },
           onState: (detail) => this.renderHandsFreeState(detail),
         };

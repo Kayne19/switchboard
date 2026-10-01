@@ -22,7 +22,7 @@ interface SceneContentProps {
   transcriptOpen: boolean;
   setTranscriptOpen: (open: boolean) => void;
   voiceRuntime: ReturnType<typeof useController>["voiceRuntime"];
-  voiceLevel?: () => number;
+  voiceLevel?: () => number | null;
   onToggleListening: () => void;
 }
 
@@ -60,6 +60,7 @@ function SceneContent({
             <IdleScene
               key="idle"
               state={state}
+              voiceLevel={voiceLevel}
               onToggleListening={shared.onToggleListening}
               setTranscriptOpen={setTranscriptOpen}
             />
@@ -133,6 +134,7 @@ export function SceneRenderer() {
       fallback={
         <UnavailableStage
           state={state}
+          voiceLevel={voiceLevel}
           onToggleListening={onToggleListening}
         />
       }

@@ -9,6 +9,14 @@ export function normalizeAudioEnergy(energy: number): number {
 }
 
 /** Smooth attacks quickly and let silence settle without flicker. */
+export function selectVoiceLevel(
+  caller: number,
+  agent: number,
+  agentSpeaking: boolean,
+): number {
+  return clampAudioLevel(agentSpeaking ? agent : caller);
+}
+
 export function smoothAudioLevel(previous: number, next: number): number {
   const target = clampAudioLevel(next);
   const factor = target > previous ? 0.42 : 0.18;

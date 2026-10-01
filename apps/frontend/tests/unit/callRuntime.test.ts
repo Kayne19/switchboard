@@ -145,6 +145,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("CallRuntime speaking state", () => {
@@ -167,6 +168,42 @@ describe("CallRuntime speaking state", () => {
     });
     await settle();
     expect(latestState().speaking).toBe(true);
+    runtime.dispose();
+  });
+});
+
+describe("CallRuntime audio levels", () => {
+  it("publishes the playback analyser level through currentVoiceLevel", async () => {
+    class FakeAnalyser {
+      fftSize = 0;
+      connect() {}
+      disconnect() {}
+      getByteTimeDomainData(values: Uint8Array) {
+        values.fill(200);
+      }
+    }
+    class FakeAudioContext {
+      state = "running";
+      destination = {} as AudioNode;
+      createMediaElementSource() {
+        return { connect() {}, disconnect() {} } as unknown as MediaElementAudioSourceNode;
+      }
+      createAnalyser() {
+        return new FakeAnalyser() as unknown as AnalyserNode;
+      }
+      resume() { return Promise.resolve(); }
+      close() { return Promise.resolve(); }
+    }
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("requestAnimationFrame", () => 0);
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const { runtime } = makeRuntime();
+    const socket = await connectAt(runtime, 0);
+    socket.receive({ type: "audio_start", generation: 0, sequence: 1, mime: "audio/mpeg", format: "mp3" });
+    socket.onmessage?.({ data: new TextEncoder().encode("speech").buffer } as MessageEvent);
+    socket.receive({ type: "audio_done", generation: 0, sequence: 1, done: true });
+    await settle();
+    expect(runtime.currentVoiceLevel).toBeGreaterThan(0);
     runtime.dispose();
   });
 });

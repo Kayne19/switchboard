@@ -366,38 +366,83 @@ export class AudioPlayback {
     this.notifyPlaybackChange();
   }
 
-  private ensureAudioGraph(): void {
-    if (this.audioGraphAttempted) return;
-    this.audioGraphAttempted = true;
-    if (!this.options.onAudioLevel || typeof AudioContext === "undefined") return;
+  private ensureAudioGraph(): boolean {
+    if (this.audioGraphAttempted) {
+      return this.audioContext?.state === "running" && this.levelMonitor !== null;
+    }
+    if (!this.options.onAudioLevel || typeof AudioContext === "undefined") {
+      this.audioGraphAttempted = true;
+      return false;
+    }
+    if (isWebKitMediaElementAudioSource()) {
+      // WebKit still has an open MSE -> MediaElementAudioSourceNode bug. Do
+      // not reroute the element there; native playback is more important than
+      // an analyser level.
+      this.audioGraphAttempted = true;
+      return false;
+    }
+    let context = this.audioContext;
+    if (!context) {
+      try {
+        context = new AudioContext();
+        this.audioContext = context;
+      } catch {
+        this.audioGraphAttempted = true;
+        return false;
+      }
+    }
+    // A suspended context has not yet been granted a user gesture. Attaching
+    // the source now would permanently reroute a working media element into
+    // a graph that may never run.
+    if (context.state !== "running") return false;
+    let source: MediaElementAudioSourceNode | null = null;
     try {
-      const context = new AudioContext();
-      const source = context.createMediaElementSource(this.player);
+      source = context.createMediaElementSource(this.player);
       const monitor = new AudioLevelMonitor(
         context,
         source,
         this.options.onAudioLevel,
         context.destination,
       );
-      this.audioContext = context;
       this.audioSource = source;
       this.levelMonitor = monitor;
-      if (context.state === "suspended") void context.resume().catch(() => undefined);
+      this.audioGraphAttempted = true;
+      if (this.playing) monitor.start();
+      return true;
     } catch {
-      // A browser may reject a graph for this element. Playback remains on the
-      // element's normal path and the indicator falls back to its still state.
+      if (source) {
+        // createMediaElementSource permanently reroutes the element. If the
+        // analyser cannot be built, keep the context and make the safe direct
+        // connection instead of closing it and leaving playback silent.
+        this.audioSource = source;
+        try {
+          source.connect(context.destination);
+        } catch {
+          // There is no safe second graph to try. Keep the source/context
+          // alive; a later native fallback cannot undo the one-time binding.
+        }
+        this.audioGraphAttempted = true;
+        return false;
+      }
+      // The source was never created, so this context has not captured the
+      // element and can be closed without changing playback routing.
       this.levelMonitor?.disconnect();
       this.levelMonitor = null;
       this.audioSource = null;
-      if (this.audioContext) void this.audioContext.close().catch(() => undefined);
+      void context.close().catch(() => undefined);
       this.audioContext = null;
+      this.audioGraphAttempted = true;
+      return false;
     }
   }
 
   private resumeAudioGraph(): void {
-    this.ensureAudioGraph();
-    if (this.audioContext?.state === "suspended")
-      void this.audioContext.resume().catch(() => undefined);
+    if (this.ensureAudioGraph()) return;
+    const context = this.audioContext;
+    if (!context || context.state === "running") return;
+    void context.resume().then(() => {
+      if (context.state === "running") this.ensureAudioGraph();
+    }).catch(() => undefined);
   }
 
   private notifyPlaybackChange(): void {
@@ -687,4 +732,15 @@ function mseRuntimeSupported(): boolean {
     typeof MediaSource !== "undefined" &&
     MediaSource.isTypeSupported("audio/mpeg")
   );
+}
+
+
+function isWebKitMediaElementAudioSource(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const userAgent = navigator.userAgent;
+  if (!/AppleWebKit/i.test(userAgent)) return false;
+  // Chrome/Edge/Opera on desktop use Blink despite the historical token. All
+  // iOS browser shells retain WebKit and therefore stay on native playback.
+  return !/(Chrome|Chromium|Edg|OPR)/i.test(userAgent) ||
+    /(CriOS|FxiOS|EdgiOS|OPiOS)/i.test(userAgent);
 }

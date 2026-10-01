@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeAudioEnergy, smoothAudioLevel } from "../../src/runtime/audioLevel";
+import { normalizeAudioEnergy, selectVoiceLevel, smoothAudioLevel } from "../../src/runtime/audioLevel";
 import { mapVoiceLevelToBar } from "../../src/primitives/VoiceIndicator";
 
 describe("voice level mapping", () => {
@@ -7,6 +7,12 @@ describe("voice level mapping", () => {
     expect(normalizeAudioEnergy(0)).toBe(0);
     expect(normalizeAudioEnergy(0.05)).toBeCloseTo(0.4);
     expect(normalizeAudioEnergy(1)).toBe(1);
+  });
+
+  it("prioritizes the agent level while playback is speaking", () => {
+    expect(selectVoiceLevel(0.8, 0.2, true)).toBe(0.2);
+    expect(selectVoiceLevel(0.2, 0.9, true)).toBe(0.9);
+    expect(selectVoiceLevel(0.8, 0.2, false)).toBe(0.8);
   });
 
   it("attacks faster than it releases", () => {

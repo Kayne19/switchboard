@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { clampAudioLevel, smoothAudioLevel } from '../runtime/audioLevel';
 
@@ -8,18 +8,27 @@ const barProfiles = [0.55, 0.82, 1, 0.68, 1, 0.76, 0.58, 0.92, 0.72, 0.55, 0.88,
 /** Map one live RMS value to a stable, slightly varied bar scale. */
 export function mapVoiceLevelToBar(level: number, index: number): number {
   const profile = barProfiles[index % barProfiles.length];
-  return 0.2 + clampAudioLevel(level) * (0.45 + profile * 0.55);
+  return clampAudioLevel(0.2 + clampAudioLevel(level) * (0.45 + profile * 0.55));
 }
 
-export function VoiceIndicator({ compact = false, getLevel }: { compact?: boolean; getLevel?: () => number }) {
+export function VoiceIndicator({ compact = false, getLevel }: { compact?: boolean; getLevel?: () => number | null }) {
+  const liveAtMount = getLevel?.() ?? null;
+  const [levelReady, setLevelReady] = useState(liveAtMount !== null);
   const barsRef = useRef<Array<HTMLElement | null>>([]);
 
   useEffect(() => {
     if (!getLevel) return;
+    if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
     let frame: number | null = null;
     let smoothed = 0;
     const update = () => {
-      smoothed = smoothAudioLevel(smoothed, getLevel());
+      const level = getLevel();
+      if (level === null) {
+        frame = requestAnimationFrame(update);
+        return;
+      }
+      if (!levelReady) setLevelReady(true);
+      smoothed = smoothAudioLevel(smoothed, level);
       barsRef.current.forEach((bar, index) => {
         if (!bar) return;
         const scale = mapVoiceLevelToBar(smoothed, index);
@@ -32,7 +41,7 @@ export function VoiceIndicator({ compact = false, getLevel }: { compact?: boolea
     return () => {
       if (frame !== null) cancelAnimationFrame(frame);
     };
-  }, [getLevel]);
+  }, [getLevel, levelReady]);
 
   return (
     <motion.div
@@ -49,8 +58,8 @@ export function VoiceIndicator({ compact = false, getLevel }: { compact?: boolea
             key={index}
             ref={(element) => { barsRef.current[index] = element; }}
             style={{ height }}
-            animate={getLevel ? undefined : { scaleY: [0.3,1,0.48,0.78,0.3], opacity: [0.35,0.95,0.58,0.78,0.35] }}
-            transition={getLevel ? undefined : { duration: 1.05, ease: 'easeInOut', repeat: Infinity, delay: -((index * 0.13) % 0.9) }}
+            animate={levelReady ? undefined : { scaleY: [0.3,1,0.48,0.78,0.3], opacity: [0.35,0.95,0.58,0.78,0.35] }}
+            transition={levelReady ? undefined : { duration: 1.05, ease: 'easeInOut', repeat: Infinity, delay: -((index * 0.13) % 0.9) }}
           />
         ))}
       </div>

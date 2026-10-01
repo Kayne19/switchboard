@@ -23,7 +23,7 @@ export interface VoiceRuntime {
   // on the wire (the line is down) and the caller should keep the text.
   sendText: (text: string) => boolean;
   /** Current microphone or playback RMS, sampled by the indicator's RAF. */
-  getVoiceLevel?: () => number;
+  getVoiceLevel?: () => number | null;
 }
 
 interface ControllerContextValue {

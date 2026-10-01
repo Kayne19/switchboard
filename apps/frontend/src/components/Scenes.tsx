@@ -44,7 +44,7 @@ function frameText(data: unknown, field: 'title' | 'subject' | 'label' | 'subtit
 interface SceneProps {
   state: ControllerState;
   onToggleListening: () => void;
-  voiceLevel?: () => number;
+  voiceLevel?: () => number | null;
   onFocus: (id: string | null) => void;
   /** Opens the conversation history drawer; absent while there is no conversation. */
   onOpenHistory?: () => void;
@@ -264,6 +264,7 @@ export function ConversationScene({ state, onToggleListening, voiceLevel, setTra
       <div className="conversation-presence-band">
         <DamoclesPresence
           listening={state.listening}
+          voiceLevel={voiceLevel}
           onToggleListening={onToggleListening}
           context={message.context ?? 'CONVERSATION'}
           size="conversation"
@@ -368,6 +369,7 @@ export function TrainingScene({ state, onToggleListening, voiceLevel, onFocus, o
         <motion.aside className="content-rail" layout>
           <DamoclesPresence
             listening={state.listening}
+            voiceLevel={voiceLevel}
             onToggleListening={onToggleListening}
             context={primary.data.context ?? 'TRAINING RUN'}
             size="rail"

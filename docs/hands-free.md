@@ -37,7 +37,10 @@ heuristic fallback.
 After permission, microphone samples flow only into the browser's
 `AudioWorklet` and local ONNX inference. The worklet transfers 16-kHz PCM frames
 to the main-thread detector and separately posts energy and speech boundary
-features. `MediaRecorder` is created only after the real model detects Hey
+features. The energy messages also drive the live voice indicator while the
+caller is listening. Push-to-talk uses a short-lived `AnalyserNode` on its
+microphone stream for the same indicator; neither level path sends samples to
+the server. `MediaRecorder` is created only after the real model detects Hey
 Jarvis followed by speech, or while the browser-local follow-up lease is
 active. Only that completed clip enters the existing outbox and WebSocket
 framing; detector PCM and model inputs never enter the server path.
