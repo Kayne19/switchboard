@@ -385,7 +385,7 @@ capture
   -> final transcript claim
   -> current-generation turn dispatch
   -> Pi session and tool loop
-  -> speak/display signal or completed-reply fallback
+  -> speak/display signal (or a written reply with no audio)
   -> TTS transport
   -> ordered audio events
   -> browser playback
@@ -436,7 +436,7 @@ Failure ownership should be obvious:
 - browser capture failure: browser reports it and releases the mic
 - STT worker failure: audio adapter reports it; application decides fallback
 - Pi or host-link failure: PBX returns the caller to the operator
-- TTS failure: application reports it and preserves written-reply fallback
+- TTS failure: application reports it; the written reply remains in the transcript
 - stale result: generation gate discards it without side effects
 - deployment mismatch: configuration/health surface names the missing contract
 
