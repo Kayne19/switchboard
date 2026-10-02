@@ -68,7 +68,9 @@ stays written. `switchboard.speak` (the Python skill module) sends the line
 through the host agent to this service as a `module_call` on the host link,
 and the service pushes audio straight to the browser without waiting for
 anything. If the agent does not call `speak`, its written reply stays in the
-transcript and on screen without being synthesized. A history snapshot does not
+transcript and on screen without being synthesized. A spoken line reaches the
+live box when its audio starts to play, not when its text arrives: each spoken
+line names the audio utterance that voices it. A history snapshot does not
 guess which agent lines were spoken, so the live box waits for the next spoken
 line after a reconnect. Reply and history frames carry the same voiced flag, so
 a reconnect restores the last voiced line without putting written text on the
