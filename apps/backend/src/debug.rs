@@ -101,6 +101,9 @@ pub(crate) enum DebugEvent {
         turn_id: Option<String>,
         text: String,
         source: String,
+        /// The caller line this input carries, when routing sent one here.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        utterance_id: Option<String>,
     },
     AgentText {
         agent: String,
@@ -547,6 +550,7 @@ mod tests {
                     turn_id: Some("turn-8".into()),
                     text: "The caller asked to inspect the build.".into(),
                     source: "caller".into(),
+                    utterance_id: Some("clip-42".into()),
                 },
             ),
             (

@@ -55,7 +55,7 @@ Rust `DebugEvent` in `apps/backend/src/debug.rs` is the source of truth. The
 - `operator_hop`: `utterance_id`, `text`, `outcome`
 - `operator_route_tool`: `utterance_id`, `target`, `mode`, `action`
 - `routed`: `utterance_id`, `to_agent`, `text_part`, `mode`, `via` (`jev`, `utility`, `operator`, or `pbx`); multiple events represent fan-out from `dispatch_parts`
-- `agent_input`: `agent`, optional `turn_id`, `text`, `source`
+- `agent_input`: `agent`, optional `turn_id`, `text`, `source`, optional `utterance_id` (the caller line this input carries, when routing sent one here)
 - `agent_text`: `agent`, optional `turn_id`, `text`, `final`
 - `tool_start`: `agent`, optional `call_id`, `tool`, optional `args`
 - `tool_end`: `agent`, optional `call_id`, `tool`, optional `result`, optional `error`
