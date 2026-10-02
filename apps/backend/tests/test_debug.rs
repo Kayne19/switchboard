@@ -1009,3 +1009,38 @@ fn an_off_bus_records_nothing_until_it_is_enabled() {
     assert_eq!(snapshot.events.len(), 1);
     assert_eq!(snapshot.config, Some(config));
 }
+
+#[test]
+fn a_ring_evicts_the_oldest_records_past_its_byte_budget() {
+    let mut ring = Ring::new(10, 100);
+    for n in 0..5 {
+        ring.push(30, Arc::new(n));
+    }
+    // Three records of 30 fit in 100 bytes; the oldest went first.
+    assert_eq!(ring.records(), [2, 3, 4].map(Arc::new).to_vec());
+    assert_eq!(ring.bytes, 90);
+    // A record over the whole budget is kept alone, and evicts the rest.
+    ring.push(500, Arc::new(9));
+    assert_eq!((ring.records(), ring.bytes), (vec![Arc::new(9)], 500));
+    ring.push(1, Arc::new(10));
+    assert_eq!((ring.records(), ring.bytes), (vec![Arc::new(10)], 1));
+    let mut by_count = Ring::new(2, usize::MAX);
+    for n in 0..3 {
+        by_count.push(1, Arc::new(n));
+    }
+    assert_eq!(by_count.records(), [1, 2].map(Arc::new).to_vec());
+}
+
+#[test]
+fn a_record_size_estimate_counts_what_it_keeps() {
+    let mut small = Clip::new();
+    small.name(&mut "alpha".to_owned());
+    assert_eq!(small.bytes(), RECORD_OVERHEAD_BYTES + 5);
+    let mut large = Clip::new();
+    large.json(&mut json!(vec!["x".repeat(MAX_FIELD_BYTES * 8); 8]));
+    assert!(large.bytes() > MAX_RECORD_BYTES);
+    assert!(large.bytes() < MAX_RECORD_BYTES + RECORD_OVERHEAD_BYTES + 256);
+    // The rings' budgets hold far more than one record each.
+    const { assert!(EVENT_BUDGET_BYTES > 1000 * (MAX_RECORD_BYTES + RECORD_OVERHEAD_BYTES)) };
+    const { assert!(LOG_BUDGET_BYTES > 256 * (MAX_RECORD_BYTES + RECORD_OVERHEAD_BYTES)) };
+}

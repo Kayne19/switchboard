@@ -106,6 +106,13 @@ const MAX_JSON_ITEMS: usize = 64;
 const MAX_NAME_BYTES: usize = 256;
 /// How far past a cut `Clip` still scrubs (`scrub_window`).
 const SCRUB_MARGIN: usize = 1024;
+/// What a record costs in a ring beyond its text: seq, timestamp, kind,
+/// numbers and the `Arc`.
+const RECORD_OVERHEAD_BYTES: usize = 256;
+/// Each ring's total size bound, from the records' estimated sizes. The
+/// oldest records go first past it, as past the ring's capacity.
+const EVENT_BUDGET_BYTES: usize = 32 << 20;
+const LOG_BUDGET_BYTES: usize = 8 << 20;
 const CLIP_MARKER: &str = "…[clipped]";
 /// A debug client that does not take a frame within this time is dropped; it
 /// can reconnect and get a fresh snapshot.
@@ -363,6 +370,8 @@ fn is_false(value: &bool) -> bool {
 /// publish raw values.
 struct Clip {
     remaining: usize,
+    /// Bytes kept so far, cut markers included: the record's size estimate.
+    used: usize,
     clipped: bool,
 }
 
@@ -390,11 +399,18 @@ impl Clip {
     fn new() -> Self {
         Self {
             remaining: MAX_RECORD_BYTES,
+            used: 0,
             clipped: false,
         }
     }
 
+    /// The record's estimated size in a ring, for the byte budget.
+    fn bytes(&self) -> usize {
+        self.used + RECORD_OVERHEAD_BYTES
+    }
+
     fn spend(&mut self, bytes: usize) {
+        self.used += bytes;
         self.remaining = self.remaining.saturating_sub(bytes.max(1));
     }
 
@@ -892,9 +908,45 @@ impl Snapshot {
 
 struct Rings {
     last_seq: u64,
-    events: VecDeque<Arc<DebugRecord>>,
-    logs: VecDeque<Arc<DebugLog>>,
+    events: Ring<DebugRecord>,
+    logs: Ring<DebugLog>,
     config: Option<DebugConfig>,
+}
+
+/// A bounded history: at most `capacity` records and `budget` estimated
+/// bytes. The oldest go first.
+struct Ring<T> {
+    items: VecDeque<(usize, Arc<T>)>,
+    bytes: usize,
+    capacity: usize,
+    budget: usize,
+}
+
+impl<T> Ring<T> {
+    fn new(capacity: usize, budget: usize) -> Self {
+        Self {
+            items: VecDeque::new(),
+            bytes: 0,
+            capacity,
+            budget,
+        }
+    }
+
+    fn push(&mut self, bytes: usize, item: Arc<T>) {
+        while !self.items.is_empty()
+            && (self.items.len() >= self.capacity || self.bytes + bytes > self.budget)
+        {
+            if let Some((evicted, _)) = self.items.pop_front() {
+                self.bytes -= evicted;
+            }
+        }
+        self.bytes += bytes;
+        self.items.push_back((bytes, item));
+    }
+
+    fn records(&self) -> Vec<Arc<T>> {
+        self.items.iter().map(|(_, item)| item.clone()).collect()
+    }
 }
 
 struct DebugInner {
@@ -929,8 +981,8 @@ impl DebugBus {
             enabled: AtomicBool::new(false),
             rings: Mutex::new(Rings {
                 last_seq: 0,
-                events: VecDeque::new(),
-                logs: VecDeque::new(),
+                events: Ring::new(EVENT_CAPACITY, EVENT_BUDGET_BYTES),
+                logs: Ring::new(LOG_CAPACITY, LOG_BUDGET_BYTES),
                 config: None,
             }),
             live,
@@ -986,7 +1038,7 @@ impl DebugBus {
                 clipped: clip.clipped,
                 event,
             });
-            push_bounded(&mut rings.events, record.clone(), EVENT_CAPACITY);
+            rings.events.push(clip.bytes(), record.clone());
             let _ = self.0.live.send(LiveFrame::Event(record));
             rings.last_seq
         })
@@ -994,8 +1046,8 @@ impl DebugBus {
 
     pub(crate) fn publish_log(
         &self,
-        level: String,
-        target: String,
+        mut level: String,
+        mut target: String,
         mut message: String,
         mut fields: Value,
     ) -> u64 {
@@ -1004,6 +1056,8 @@ impl DebugBus {
         }
         let timestamp_ms = now_ms();
         let mut clip = Clip::new();
+        clip.name(&mut level);
+        clip.name(&mut target);
         clip.text(&mut message);
         clip.json(&mut fields);
         self.locked(|rings| {
@@ -1017,7 +1071,7 @@ impl DebugBus {
                 fields,
                 clipped: clip.clipped,
             });
-            push_bounded(&mut rings.logs, log.clone(), LOG_CAPACITY);
+            rings.logs.push(clip.bytes(), log.clone());
             let _ = self.0.live.send(LiveFrame::Log(log));
             rings.last_seq
         })
@@ -1055,17 +1109,10 @@ impl DebugBus {
 fn take_snapshot(rings: &Rings) -> Snapshot {
     Snapshot {
         last_seq: rings.last_seq,
-        events: rings.events.iter().cloned().collect(),
-        logs: rings.logs.iter().cloned().collect(),
+        events: rings.events.records(),
+        logs: rings.logs.records(),
         config: rings.config.clone(),
     }
-}
-
-fn push_bounded<T>(ring: &mut VecDeque<T>, item: T, capacity: usize) {
-    if ring.len() == capacity {
-        ring.pop_front();
-    }
-    ring.push_back(item);
 }
 
 /// What a debug client is sent next.
