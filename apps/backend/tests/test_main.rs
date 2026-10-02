@@ -99,3 +99,17 @@ async fn a_debug_bind_failure_leaves_the_debug_listener_off() {
     assert!(bind_debug_listener(Some("not an address")).await.is_none());
     assert!(bind_debug_listener(Some("127.0.0.1:0")).await.is_some());
 }
+
+#[test]
+fn the_debug_listener_is_off_unless_an_address_is_set() {
+    let off = Config::from_values(&HashMap::new(), PathBuf::from("/tmp/env"));
+    assert_eq!(off.debug_bind, None);
+    for blank in ["", "   "] {
+        let values = HashMap::from([("SWITCHBOARD_DEBUG_BIND".into(), blank.into())]);
+        let config = Config::from_values(&values, PathBuf::from("/tmp/env"));
+        assert_eq!(config.debug_bind, None, "{blank:?}");
+    }
+    let values = HashMap::from([("SWITCHBOARD_DEBUG_BIND".into(), " 0.0.0.0:8766 ".into())]);
+    let config = Config::from_values(&values, PathBuf::from("/tmp/env"));
+    assert_eq!(config.debug_bind.as_deref(), Some("0.0.0.0:8766"));
+}
