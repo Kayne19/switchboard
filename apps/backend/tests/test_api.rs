@@ -4207,6 +4207,7 @@ async fn floor_good_moment_gate_does_not_query_desk_hosts() {
         .0
         .floor
         .enqueue(crate::floor::FloorRequest {
+            floor_id: 0,
             project: "alpha".into(),
             token: "alpha-token".into(),
             generation: state.0.coordinator.generation(),
@@ -5537,6 +5538,7 @@ async fn stale_floor_request_is_dropped_before_audio_reservation() {
     let outcome = release_floor(
         &state,
         FloorRequest {
+            floor_id: 0,
             project: "grapes".into(),
             token: "grapes-token".into(),
             generation,

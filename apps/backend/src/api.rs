@@ -759,7 +759,7 @@ impl AppState {
             let announcer = route_announcer.clone();
             Box::pin(async move { announcer.announce_route().await })
         });
-        let floor = Floor::new(switchboard.floor_quiet_threshold());
+        let floor = Floor::new(switchboard.floor_quiet_threshold()).with_debug(debug.clone());
         let active_session = switchboard.session_control();
         let redials = switchboard.redial_planner();
         let hosts = switchboard.hosts();
@@ -3242,6 +3242,7 @@ async fn request_to_speak(state: AppState, token: &str, raw: Value) -> Response 
         .0
         .floor
         .enqueue(FloorRequest {
+            floor_id: 0,
             project,
             token: token.to_owned(),
             generation,
