@@ -1543,8 +1543,16 @@ button {
   scrollbar-width: thin;
   scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
 }
-.document-viewport__body p {
+/* Paragraphs are read as Markdown (MarkdownBlocks). Lists and code blocks
+   keep the reader's paragraph rhythm, and a long path or hash wraps inside
+   the column instead of scrolling it sideways. */
+.document-viewport__body p,
+.document-viewport__body .rich-text__list,
+.document-viewport__body .rich-text__code-block {
   margin: 0 0 1.05em;
+}
+.document-viewport__body {
+  overflow-wrap: anywhere;
 }
 
 /* Code */
