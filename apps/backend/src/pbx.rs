@@ -1685,13 +1685,14 @@ impl Switchboard {
         )
     }
 
-    /// The utility's system prompt: its standing rules and the catalog, once.
+    /// The utility's system prompt: its standing rules, then the voice block
+    /// and the catalog in the same order the operator gets them.
     /// Requests carry only data.
     fn utility_system_prompt(&self) -> String {
         format!(
             "{UTILITY_SYSTEM_PROMPT}\n\n{}\n\n{}",
-            self.registry.prompt_catalog(),
-            self.voice_block()
+            self.voice_block(),
+            self.registry.prompt_catalog()
         )
     }
 

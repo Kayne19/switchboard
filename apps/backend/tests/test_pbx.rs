@@ -838,6 +838,11 @@ fn the_utility_system_prompt_holds_the_rules_and_the_catalog_once() {
     assert!(prompt.contains("- grape-segmentation - Grape"), "{prompt}");
     assert!(prompt.contains("- switchboard - Switchboard"), "{prompt}");
     assert_eq!(prompt.matches("Registered projects").count(), 1, "{prompt}");
+    // Voice block, then catalog: the same order the operator gets.
+    assert!(
+        prompt.find("[HOW YOU TALK ON THE CALL]") < prompt.find("Registered projects"),
+        "{prompt}"
+    );
 }
 
 #[cfg(unix)]
