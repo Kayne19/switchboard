@@ -669,6 +669,8 @@ pub struct Switchboard {
     /// silent leg without waiting ten minutes.
     project_turn_timeout: Duration,
     floor_quiet_threshold: Duration,
+    /// Read-only debug observer; never part of call control.
+    debug: crate::debug::DebugBus,
 }
 impl Switchboard {
     pub fn new(config: &crate::Config, registry: Registry, prewarm: Arc<Prewarm>) -> Self {
@@ -756,11 +758,15 @@ impl Switchboard {
             router,
             project_turn_timeout: PROJECT_TURN_TIMEOUT,
             floor_quiet_threshold: Duration::from_millis(config.floor_quiet_threshold_ms),
+            debug: crate::debug::DebugBus::new(),
         }
     }
 
     pub fn floor_quiet_threshold(&self) -> Duration {
         self.floor_quiet_threshold
+    }
+    pub fn set_debug_bus(&mut self, bus: crate::debug::DebugBus) {
+        self.debug = bus;
     }
     /// The project hosts' links; the application serves them on `/host`.
     pub fn hosts(&self) -> Hosts {

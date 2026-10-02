@@ -767,6 +767,7 @@ impl AppState {
         let mut switchboard = switchboard;
         switchboard.set_activity_callback(Some(activity_callback));
         switchboard.set_route_callback(Some(route_callback));
+        switchboard.set_debug_bus(debug.clone());
         Self(Arc::new_cyclic(|app: &std::sync::Weak<AppInner>| {
             let state_app = app.clone();
             let state_callback: AgentStateCallback = Arc::new(move |notice: AgentStateNotice| {
