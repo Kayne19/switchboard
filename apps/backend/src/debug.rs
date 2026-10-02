@@ -5,6 +5,10 @@
 //! `broadcast::Sender::send`, so a slow browser can never hold up a call.
 use crate::protocol::AgentState;
 use axum::{
+    extract::{
+        ws::{Message, WebSocket},
+        State, WebSocketUpgrade,
+    },
     http::header,
     response::{IntoResponse, Response},
     routing::get,
@@ -20,7 +24,10 @@ use std::{
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::{SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::broadcast;
+use tokio::{
+    sync::{broadcast, watch},
+    time::{timeout, Duration},
+};
 use tracing_subscriber::{layer::Context, registry::LookupSpan, Layer};
 
 /// The compiled debug page. It is embedded at build time so it is served only
@@ -30,8 +37,31 @@ pub(crate) const INDEX_HTML: &str = include_str!("../../../static-debug/index.ht
 pub(crate) const DEBUG_JS: &str = include_str!("../../../static-debug/debug.js");
 pub(crate) const DEBUG_CSS: &str = include_str!("../../../static-debug/debug.css");
 
+/// What the debug listener's routes share.
+#[derive(Clone)]
+struct Site {
+    bus: DebugBus,
+    agents: Arc<dyn Fn() -> Vec<AgentState> + Send + Sync>,
+    shutdown: watch::Receiver<bool>,
+}
+
+/// The debug listener's whole router: the embedded page and the read-only
+/// WebSocket. `agents` reads the current agent projection for snapshots;
+/// `shutdown` is the service's shutdown signal.
+pub(crate) fn router(
+    bus: DebugBus,
+    agents: impl Fn() -> Vec<AgentState> + Send + Sync + 'static,
+    shutdown: watch::Receiver<bool>,
+) -> Router {
+    asset_routes().route("/ws", get(ws)).with_state(Site {
+        bus,
+        agents: Arc::new(agents),
+        shutdown,
+    })
+}
+
 /// The debug page's asset routes. Anything else is a 404.
-pub(crate) fn asset_routes<S>() -> Router<S>
+fn asset_routes<S>() -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
@@ -69,6 +99,9 @@ const MAX_FIELD_BYTES: usize = 4 * 1024;
 const MAX_RECORD_BYTES: usize = 16 * 1024;
 const MAX_JSON_ITEMS: usize = 64;
 const CLIP_MARKER: &str = "…[clipped]";
+/// A debug client that does not take a frame within this time is dropped; it
+/// can reconnect and get a fresh snapshot.
+const SEND_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// One event in the debug page's immutable event stream. This is the schema
 /// shared with `apps/frontend/src/debug/protocol.ts` and its fixture.
@@ -611,6 +644,12 @@ impl DebugBus {
         })
     }
 
+    /// A bare live receiver, unpaired with a snapshot.
+    #[cfg(test)]
+    pub(crate) fn subscribe_for_test(&self) -> broadcast::Receiver<LiveFrame> {
+        self.0.live.subscribe()
+    }
+
     /// The rings now. Records after `last_seq` arrive only live.
     #[cfg(test)]
     pub(crate) fn snapshot(&self) -> Snapshot {
@@ -638,6 +677,111 @@ fn push_bounded<T>(ring: &mut VecDeque<T>, item: T, capacity: usize) {
         ring.pop_front();
     }
     ring.push_back(item);
+}
+
+/// What a debug client is sent next.
+pub(crate) enum Outgoing {
+    Snapshot(Snapshot),
+    Live(LiveFrame),
+}
+
+/// One client's view of the bus: live frames after the last snapshot, and a
+/// fresh snapshot in place of anything it fell behind on.
+pub(crate) struct Feed {
+    bus: DebugBus,
+    receiver: broadcast::Receiver<LiveFrame>,
+    last_seq: u64,
+}
+
+impl Feed {
+    pub(crate) fn attach(bus: DebugBus) -> (Self, Snapshot) {
+        let (receiver, snapshot) = bus.attach();
+        let feed = Self {
+            bus,
+            receiver,
+            last_seq: snapshot.last_seq,
+        };
+        (feed, snapshot)
+    }
+
+    /// The next frame, or `None` once the bus is gone. Cancel-safe.
+    pub(crate) async fn next(&mut self) -> Option<Outgoing> {
+        loop {
+            match self.receiver.recv().await {
+                // Already in the snapshot the client holds.
+                Ok(frame) if frame.seq() <= self.last_seq => continue,
+                Ok(frame) => {
+                    self.last_seq = frame.seq();
+                    return Some(Outgoing::Live(frame));
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    // Skip the stale backlog: a fresh receiver starts at the
+                    // tail, and the snapshot taken with it covers the rest.
+                    let (receiver, snapshot) = self.bus.attach();
+                    self.receiver = receiver;
+                    self.last_seq = snapshot.last_seq;
+                    return Some(Outgoing::Snapshot(snapshot));
+                }
+                Err(broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    }
+}
+
+async fn ws(State(site): State<Site>, upgrade: WebSocketUpgrade) -> Response {
+    upgrade.on_upgrade(move |socket| serve_socket(socket, site))
+}
+
+async fn send_text(socket: &mut WebSocket, text: String) -> Result<(), ()> {
+    match timeout(SEND_TIMEOUT, socket.send(Message::Text(text.into()))).await {
+        Ok(Ok(())) => Ok(()),
+        _ => Err(()),
+    }
+}
+
+/// Serializes a snapshot on the blocking pool: it can be megabytes, and the
+/// runtime workers also carry audio and turns.
+async fn send_snapshot(socket: &mut WebSocket, site: &Site, snapshot: Snapshot) -> Result<(), ()> {
+    let agents = (site.agents)();
+    let text = tokio::task::spawn_blocking(move || snapshot.to_json(&agents))
+        .await
+        .map_err(|_| ())?;
+    send_text(socket, text).await
+}
+
+async fn serve_socket(mut socket: WebSocket, site: Site) {
+    let mut shutdown = site.shutdown.clone();
+    if *shutdown.borrow_and_update() {
+        return;
+    }
+    let (mut feed, snapshot) = Feed::attach(site.bus.clone());
+    if send_snapshot(&mut socket, &site, snapshot).await.is_err() {
+        return;
+    }
+    loop {
+        let outgoing = tokio::select! {
+            outgoing = feed.next() => outgoing,
+            incoming = socket.recv() => match incoming {
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return,
+                Some(Ok(_)) => continue,
+            },
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    let _ = timeout(SEND_TIMEOUT, socket.send(Message::Close(None))).await;
+                    return;
+                }
+                continue;
+            }
+        };
+        let sent = match outgoing {
+            Some(Outgoing::Live(frame)) => send_text(&mut socket, frame.to_json()).await,
+            Some(Outgoing::Snapshot(snapshot)) => send_snapshot(&mut socket, &site, snapshot).await,
+            None => return,
+        };
+        if sent.is_err() {
+            return;
+        }
+    }
 }
 
 fn now_ms() -> u64 {

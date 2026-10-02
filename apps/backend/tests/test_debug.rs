@@ -435,3 +435,146 @@ fn one_record_cannot_exceed_the_size_bounds() {
     assert!(snapshot.logs[0].clipped);
     assert!(snapshot.logs[0].message.ends_with(CLIP_MARKER));
 }
+
+fn live_seq(outgoing: Option<Outgoing>) -> u64 {
+    match outgoing {
+        Some(Outgoing::Live(frame)) => frame.seq(),
+        Some(Outgoing::Snapshot(snapshot)) => panic!("snapshot at {}", snapshot.last_seq),
+        None => panic!("feed closed"),
+    }
+}
+
+#[tokio::test]
+async fn a_feed_skips_live_frames_its_snapshot_already_holds() {
+    // A receiver subscribed before the snapshot was taken holds frames the
+    // snapshot also has; each record must reach the client exactly once.
+    let bus = DebugBus::new();
+    let receiver = bus.subscribe_for_test();
+    bus.publish(host_link(1));
+    bus.publish(host_link(2));
+    let snapshot = bus.snapshot();
+    assert_eq!(snapshot.events.len(), 2);
+    bus.publish(host_link(3));
+    let mut feed = Feed {
+        bus: bus.clone(),
+        receiver,
+        last_seq: snapshot.last_seq,
+    };
+    assert_eq!(live_seq(feed.next().await), 3);
+    bus.publish(host_link(4));
+    assert_eq!(live_seq(feed.next().await), 4);
+}
+
+#[tokio::test]
+async fn an_attached_feed_starts_exactly_after_its_snapshot() {
+    let bus = DebugBus::new();
+    bus.publish(host_link(1));
+    let (mut feed, snapshot) = Feed::attach(bus.clone());
+    assert_eq!(snapshot.last_seq, 1);
+    bus.publish(host_link(2));
+    assert_eq!(live_seq(feed.next().await), 2);
+}
+
+#[tokio::test]
+async fn a_lagging_feed_resyncs_with_one_fresh_snapshot_and_no_stale_replay() {
+    let bus = DebugBus::new();
+    let (mut feed, _) = Feed::attach(bus.clone());
+    let total = (LIVE_CAPACITY + 10) as u64;
+    for n in 0..total as usize {
+        bus.publish(host_link(n));
+    }
+    let Some(Outgoing::Snapshot(snapshot)) = feed.next().await else {
+        panic!("expected a resync snapshot")
+    };
+    assert_eq!(snapshot.last_seq, total);
+    assert_eq!(snapshot.events.len(), total as usize);
+    bus.publish(host_link(0));
+    assert_eq!(live_seq(feed.next().await), total + 1);
+}
+
+mod wire {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message as Wire;
+
+    async fn next_json(
+        socket: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    ) -> Value {
+        loop {
+            let message = timeout(Duration::from_secs(5), socket.next())
+                .await
+                .expect("frame in time")
+                .expect("open socket")
+                .expect("frame");
+            if let Wire::Text(text) = message {
+                return serde_json::from_str(&text).unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_debug_socket_sends_a_snapshot_then_live_frames_then_closes_on_shutdown() {
+        let bus = DebugBus::new();
+        bus.publish(host_link(1));
+        bus.publish_log("INFO".into(), "t".into(), "before".into(), json!({}));
+        let (shutdown, shutdown_rx) = watch::channel(false);
+        let agents = || {
+            vec![AgentState {
+                project: "alpha".into(),
+                state: "idle".into(),
+                pending_request: None,
+            }]
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = router(bus.clone(), agents, shutdown_rx);
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+            .await
+            .unwrap();
+        let snapshot = next_json(&mut socket).await;
+        assert_eq!(snapshot["type"], "snapshot");
+        assert_eq!(snapshot["last_seq"], 2);
+        assert_eq!(snapshot["events"][0]["kind"], "host_link");
+        assert_eq!(snapshot["logs"][0]["message"], "before");
+        assert_eq!(snapshot["agents"][0]["project"], "alpha");
+
+        bus.publish(host_link(3));
+        bus.publish_log("INFO".into(), "t".into(), "after".into(), json!({}));
+        let event = next_json(&mut socket).await;
+        assert_eq!(
+            (event["type"].clone(), event["seq"].clone()),
+            (json!("event"), json!(3))
+        );
+        assert_eq!(event["host"], "host-3");
+        let log = next_json(&mut socket).await;
+        assert_eq!(
+            (log["type"].clone(), log["seq"].clone()),
+            (json!("log"), json!(4))
+        );
+
+        // Writes from the page are ignored; the socket is read-only.
+        socket
+            .send(Wire::Text("{\"type\":\"hangup\"}".into()))
+            .await
+            .unwrap();
+        bus.publish(host_link(5));
+        assert_eq!(next_json(&mut socket).await["seq"], 5);
+
+        shutdown.send_replace(true);
+        let closed = timeout(Duration::from_secs(5), async {
+            loop {
+                match socket.next().await {
+                    Some(Ok(Wire::Close(_))) | None | Some(Err(_)) => return,
+                    Some(Ok(_)) => {}
+                }
+            }
+        })
+        .await;
+        assert!(closed.is_ok(), "the debug socket closes on shutdown");
+        server.abort();
+    }
+}

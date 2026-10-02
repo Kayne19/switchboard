@@ -904,9 +904,12 @@ impl AppState {
     /// The optional read-only listener. It has no call controls and serves
     /// only the embedded debug page and its WebSocket.
     pub fn debug_router(&self) -> Router {
-        crate::debug::asset_routes()
-            .route("/ws", get(debug_ws))
-            .with_state(self.clone())
+        let state = self.clone();
+        crate::debug::router(
+            self.0.debug.clone(),
+            move || state.0.projection.snapshot(),
+            self.0.shutdown.subscribe(),
+        )
     }
 
     /// Wait for the same idempotent shutdown signal used by the main server.
@@ -916,55 +919,6 @@ impl AppState {
             return;
         }
         let _ = shutdown.changed().await;
-    }
-}
-
-async fn debug_ws(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> Response {
-    upgrade
-        .on_upgrade(move |socket| debug_socket(socket, state))
-        .into_response()
-}
-
-async fn debug_socket(mut socket: WebSocket, state: AppState) {
-    async fn send(socket: &mut WebSocket, text: String) -> Result<(), ()> {
-        socket
-            .send(Message::Text(text.into()))
-            .await
-            .map_err(|_| ())
-    }
-
-    let (mut receiver, snapshot) = state.0.debug.attach();
-    let mut last_seq = snapshot.last_seq;
-    let text = snapshot.to_json(&state.0.projection.snapshot());
-    if send(&mut socket, text).await.is_err() {
-        return;
-    }
-    loop {
-        tokio::select! {
-            frame = receiver.recv() => {
-                let text = match frame {
-                    Ok(frame) if frame.seq() <= last_seq => continue,
-                    Ok(frame) => frame.to_json(),
-                    Err(broadcast::error::RecvError::Lagged(_)) => {
-                        let (fresh, snapshot) = state.0.debug.attach();
-                        receiver = fresh;
-                        last_seq = snapshot.last_seq;
-                        snapshot.to_json(&state.0.projection.snapshot())
-                    }
-                    Err(broadcast::error::RecvError::Closed) => return,
-                };
-                if send(&mut socket, text).await.is_err() {
-                    return;
-                }
-            }
-            incoming = socket.next() => {
-                match incoming {
-                    Some(Ok(Message::Close(_))) | None => return,
-                    Some(Ok(_)) => {}
-                    Some(Err(_)) => return,
-                }
-            }
-        }
     }
 }
 
