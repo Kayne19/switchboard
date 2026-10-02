@@ -25,7 +25,9 @@ node apps/host-agent/src/main.ts [--config <file>]
 
 ### Config file
 
-One JSON file; `main.ts` is its only reader. `~/` is expanded.
+One JSON file; `main.ts` is its only reader at run time. The installer
+(`apps/host-agent/install.mjs`) writes it and reads it back on a rerun.
+`~/` is expanded.
 
 ```json
 {
@@ -33,6 +35,7 @@ One JSON file; `main.ts` is its only reader. `~/` is expanded.
   "service_url": "wss://switchboard.home.arpa/host",
   "token_file": "~/.config/switchboard/host-token",
   "git_sha": "d95f029...",
+  "prime_agent": "~/.local/npm-global/bin/prime-agent",
   "prime_agent_package": "~/.local/npm-global/lib/node_modules/prime-agent",
   "daemon_socket": "/tmp/prime-agent-1000/daemon.sock",
   "state_dir": "~/.local/state/switchboard/host-agent",
@@ -46,6 +49,7 @@ One JSON file; `main.ts` is its only reader. `~/` is expanded.
 | `service_url` | yes | `ws://` or `wss://` URL of the service's `/host` endpoint. |
 | `token_file` | yes | File holding the per-host bearer token (surrounding whitespace is trimmed). The token is never logged. |
 | `prime_agent_package` | yes | Directory of the installed `prime-agent` npm package; `dist/index.js` is loaded at runtime. |
+| `prime_agent` | no | The `prime-agent` binary the daemon unit runs. Only the installer reads it, on a rerun; the host agent ignores it. |
 | `git_sha` | no (`unknown`) | Commit the host agent was installed from; reported in the hello. |
 | `daemon_socket` | no | Default `$TMPDIR/prime-agent-<uid>/daemon.sock` (the daemon's default). |
 | `state_dir` | no | Default `~/.local/state/switchboard/host-agent`. Holds `sessions.json`. |

@@ -50,7 +50,9 @@ function parseArgs(argv) {
 
 const USAGE = `usage: node apps/host-agent/install.mjs --host-id <id> --token-file <path>
        [--service-url <url>] [--ca-file <root.crt>] [--prime-agent <bin>] [--prime-agent-package <dir>]
-On a rerun, --host-id, --token-file, --service-url and --ca-file default to what is installed.`;
+On a rerun, every flag defaults to what is installed; --prime-agent and --prime-agent-package
+only while the installed one is still there (for the package: still has dist/index.js).
+With --prime-agent alone, the package next to that binary comes before the installed one.`;
 
 function checkNode() {
 	const [major, minor] = process.versions.node.split(".").map(Number);
@@ -267,11 +269,22 @@ function install(argv) {
 	}
 	const useCa = caSource !== undefined || fs.existsSync(L.caFile);
 
-	const primeLink = args["prime-agent"] ?? which("prime-agent");
+	// prime-agent: the flag, then the installed one while it is still there,
+	// then the one on PATH and the npm package next to it.
+	const installed = (p, probe) => (typeof p === "string" && p !== "" && fs.existsSync(path.join(p, probe)) ? p : undefined);
+	const primeLink = args["prime-agent"] ?? installed(previous.prime_agent, "") ?? which("prime-agent");
 	if (!primeLink) stop("prime-agent is not on PATH; pass --prime-agent <absolute path>");
 	const primeAgent = path.resolve(primeLink);
 	if (!fs.existsSync(primeAgent)) stop(`prime-agent binary ${primeAgent} does not exist`);
-	const primePackage = path.resolve(args["prime-agent-package"] ?? path.join(path.dirname(path.dirname(primeAgent)), "lib", "node_modules", "prime-agent"));
+	// An explicit --prime-agent prefers the package next to it over the installed one.
+	const indexJs = path.join("dist", "index.js");
+	const derivedPackage = path.join(path.dirname(path.dirname(primeAgent)), "lib", "node_modules", "prime-agent");
+	const installedPackage = installed(previous.prime_agent_package, indexJs);
+	const primePackage = path.resolve(
+		args["prime-agent-package"] ??
+			(args["prime-agent"] ? (installed(derivedPackage, indexJs) ?? installedPackage) : installedPackage) ??
+			derivedPackage,
+	);
 	if (!fs.existsSync(path.join(primePackage, "dist", "index.js"))) {
 		stop(`no prime-agent npm package at ${primePackage} (dist/index.js missing); pass --prime-agent-package <dir>`);
 	}
@@ -326,6 +339,7 @@ function install(argv) {
 		service_url: serviceUrl,
 		token_file: L.tokenFile,
 		git_sha: gitSha,
+		prime_agent: primeAgent,
 		prime_agent_package: primePackage,
 		daemon_socket: L.daemonSocket,
 		state_dir: L.stateDir,
