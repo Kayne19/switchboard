@@ -5,7 +5,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ControllerAction, ControllerState, MetricData, SceneObject } from '../../src/controller/types';
 import { controllerReducer, createInitialState } from '../../src/controller/reducer';
 import { MetricsPrimitive } from '../../src/primitives/MetricsPrimitive';
-import { ComposedScene } from '../../src/components/Scenes';
+import { SceneShell } from '../../src/components/Scenes';
 import { ControllerProvider } from '../../src/controller/context';
 
 function reduceActions(state: ControllerState, actions: ControllerAction[]): ControllerState {
@@ -125,7 +125,7 @@ describe('primary metric cluster rendering', () => {
     expect(onFocus).toHaveBeenCalledWith('m2');
   });
 
-  it('renders ComposedScene with primary cluster in main and non-primary metrics in rail', () => {
+  it('renders the composed scene with primary cluster in main and non-primary metrics in rail', () => {
     const actions: ControllerAction[] = [
       { op: 'show', id: 'm1', type: 'metric', role: 'primary', data: { label: 'CPU', value: '45%' } },
       { op: 'show', id: 'm2', type: 'metric', role: 'primary', data: { label: 'MEM', value: '62%' } },
@@ -140,7 +140,8 @@ describe('primary metric cluster rendering', () => {
     act(() => {
       root.render(
         <ControllerProvider>
-          <ComposedScene
+          <SceneShell
+            kind="composed"
             state={state}
             onToggleListening={() => {}}
             onFocus={() => {}}
@@ -180,7 +181,7 @@ describe('primary metric cluster rendering', () => {
     act(() => {
       root.render(
         <ControllerProvider>
-          <ComposedScene state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} />
+          <SceneShell kind="composed" state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} />
         </ControllerProvider>,
       );
     });

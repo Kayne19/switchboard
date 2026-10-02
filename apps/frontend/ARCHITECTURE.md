@@ -54,6 +54,26 @@ The renderer does not load bespoke route pages. It derives a broad composition f
 
 Additional metrics, progress, notes, comparisons, and speech modify that composition incrementally.
 
+## Scene shell
+
+Every composition is drawn by one `SceneShell` (`src/components/Scenes.tsx`).
+The shell owns what every page has: the frame and heading, the Damocles
+presence, the rail (metrics, live response, note, progress, tool activity),
+the footer and corner text, and the transcript entry point. A composition
+only fills the main slot and names what its rail carries. A feature that
+crosses compositions is added to the shell once; it is never wired into a
+composition by hand. The presence reads the voice level from the registered
+voice runtime, so no page can leave it out.
+
+Two exceptions are deliberate (decided 2026-10-02; see #121 and #124). Review them
+in a later refactor or audit instead of folding them in by habit:
+
+- `UnavailableStage` (`src/components/SceneRenderer.tsx`), the fallback page
+  shown when the display cannot render, is drawn outside the shell. It draws its
+  own presence. The fallback must still work when the shell is what failed, so it
+  depends on as little as possible.
+- The idle page shows no tool activity panel. Idle stays idle.
+
 ## Layout
 
 The stage is a CSS size container. Layout rules use container-relative units and aspect-ratio container queries. The implementation intentionally avoids phone, tablet, iPad, laptop, and ultrawide branches.

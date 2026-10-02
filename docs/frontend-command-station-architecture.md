@@ -206,6 +206,7 @@ The running client architecture:
 
 - `static/index.html`: the built V17 shell and the wake-word import map
 - `apps/frontend/src/App.tsx`: V17 presentation and semantic scene rendering
+- `apps/frontend/src/components/Scenes.tsx`: the one scene shell every page is drawn in, and the main slot each composition fills
 - `apps/frontend/src/controller/`: semantic state machine, reducer, and validation boundary
 - `apps/frontend/src/integration/runtime.tsx`: connects the call runtime to the controller and reports screen state
 - `apps/frontend/src/runtime/`: backend WebSocket, push-to-talk, playback, and hands-free wiring; audio levels feed the presence indicator through requestAnimationFrame without React state updates

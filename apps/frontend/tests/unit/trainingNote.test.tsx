@@ -7,7 +7,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { TrainingScene } from '../../src/components/Scenes';
+import { SceneShell } from '../../src/components/Scenes';
 import { ControllerProvider } from '../../src/controller/context';
 import { createInitialState, reduceActions } from '../../src/controller/reducer';
 import type { ControllerAction, ControllerState } from '../../src/controller/types';
@@ -78,7 +78,7 @@ function render(state: ControllerState) {
   act(() =>
     root.render(
       <ControllerProvider>
-        <TrainingScene state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} />
+        <SceneShell kind="training" state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} />
       </ControllerProvider>,
     ),
   );

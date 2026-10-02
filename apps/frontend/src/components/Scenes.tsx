@@ -13,7 +13,7 @@ import type {
   SceneObject,
 } from '../controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
-import { buildCompositionModel, cast, objectsOfType, primaryObject } from '../app/sceneModel';
+import { buildCompositionModel, cast, objectsOfType, primaryObject, type SceneKind } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { CodeViewport } from '../primitives/CodeViewport';
@@ -41,7 +41,9 @@ function frameText(data: unknown, field: 'title' | 'subject' | 'label' | 'subtit
   return typeof value === 'string' ? value : undefined;
 }
 
-interface SceneProps {
+export interface SceneProps {
+  /** The composition to draw; the shell keeps one page for every kind. */
+  kind: SceneKind;
   state: ControllerState;
   onToggleListening: () => void;
   onFocus: (id: string | null) => void;
@@ -218,75 +220,6 @@ function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux') {
   }
 }
 
-type IdleSceneProps = Pick<SceneProps, 'state' | 'onToggleListening'> & Partial<Pick<SceneProps, 'setTranscriptOpen'>>;
-
-// With an opener, the idle stage keeps the transcript toggle in its
-// conversation-page place, hidden until the pointer reaches the bottom band,
-// so the typed line is reachable before anyone has spoken.
-export function IdleScene({ state, onToggleListening, setTranscriptOpen }: IdleSceneProps) {
-  const isPresent = useIsPresent();
-  return (
-    <motion.section className="scene scene--idle" data-scene="idle" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <DamoclesPresence
-        listening={state.listening}
-        onToggleListening={onToggleListening}
-        size="idle"
-        showCaption={false}
-      />
-      {setTranscriptOpen && isPresent ? <TranscriptToggle reveal="hover" onOpen={() => setTranscriptOpen(true)} /> : null}
-    </motion.section>
-  );
-}
-
-export function ConversationScene({ state, onToggleListening, setTranscriptOpen }: SceneProps) {
-  const comp = buildCompositionModel(state);
-  const object =
-    comp.runtimeConversation ??
-    (comp.primary?.type === 'message' ? comp.primary : null);
-  const fallbackMessage: MessageData = {
-    context: 'OPERATOR LINE',
-    tag: 'CURRENT RESPONSE / LIVE',
-    segments: [{ text: 'Line open. Speak when ready.' }],
-    channel: { name: 'VOICE', mode: 'PUSH-TO-TALK' },
-    transcript: [],
-  };
-  const message = object ? cast.message(object).data : fallbackMessage;
-  // Status/activity speech is rendered as an annotation elsewhere; it must not
-  // replace the conversation's latest committed response. Before the first
-  // response the line carries no text, and this scene alone says it is open.
-  const segments = message.segments.length > 0 ? message.segments : fallbackMessage.segments;
-
-  return (
-    <motion.section className="scene scene--conversation" data-scene="conversation" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <ConversationCorners />
-      <div className="conversation-presence-band">
-        <DamoclesPresence
-          listening={state.listening}
-          onToggleListening={onToggleListening}
-          context={message.context ?? 'CONVERSATION'}
-          size="conversation"
-          showCaption={false}
-        />
-      </div>
-
-      <ObjectMotion objectId={object?.id ?? "conversation"} className="conversation-answer">
-        <TechFrame variant="answer" />
-        <SurfaceBoundary surfaceId={object?.id ?? 'conversation'} resetKey={object ?? message}>
-          <div className="conversation-answer__tag tech micro">{message.tag ?? 'CURRENT RESPONSE / 01'}</div>
-          <SpokenLog message={{ ...message, segments }} className="conversation-answer__text" innerClassName="conversation-answer__text-inner" />
-          <div className="conversation-answer__index tech micro">{message.caption ?? `${message.channel?.name ?? 'VOICE'} / LIVE`}</div>
-        </SurfaceBoundary>
-      </ObjectMotion>
-
-      <div className="conversation-channel tech micro">
-        CHANNEL / {message.channel?.name ?? 'VOICE'}<br />MODE / {message.channel?.mode ?? 'HANDS-FREE'}
-      </div>
-      <TranscriptToggle onOpen={() => setTranscriptOpen(true)} />
-      <ToolActivity activity={state.activity} placement="conversation" />
-    </motion.section>
-  );
-}
-
 // Which chart panel each note is shown on: the chart it names, a compare
 // chart's included, and otherwise the primary. Every note is shown -- a
 // second note on the chart is annotated beside the first, not dropped --
@@ -311,198 +244,164 @@ function chartNotesByPanel(
   return byPanel;
 }
 
-export function TrainingScene({ state, onToggleListening, onFocus, onOpenHistory }: SceneProps) {
+// What a content scene fills the shell with: the text of its frame, its main
+// slot, and the objects the rail carries for it. The shell draws the rest.
+interface SceneContent {
+  title: string;
+  subtitle: string;
+  context: string;
+  footer: string;
+  caption: string;
+  main: ReactNode;
+  metrics: Array<SceneObject<MetricData>>;
+  note: NoteData | null;
+  noteObject?: SceneObject<NoteData>;
+  progressList: Array<SceneObject<ProgressData>>;
+}
+
+function trainingContent({ state, onFocus, onOpenHistory }: SceneProps): SceneContent | null {
   const charts = objectsOfType<ChartData>(state, 'chart');
-  const metrics = objectsOfType<MetricData>(state, 'metric');
   const [progress, ...railProgress] = objectsOfType<ProgressData>(state, 'progress');
   const primary = charts.find((chart) => chart.role === 'primary') ?? charts[0];
-  if (!primary) return <IdleScene state={state} onToggleListening={onToggleListening} />;
+  if (!primary) return null;
   // The notes lie over the panel of the chart they annotate rather than in a
   // band that shrinks it; the layer keeps them clear of one another, of the
   // points they name, and of the traces wherever the panel has the room.
   const notesByPanel = chartNotesByPanel(state, charts, primary);
-
-  return (
-    <motion.section className="scene scene--content scene--training" data-scene="training" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <div className="scene-heading">
-        <div className="scene-heading__title tech">{primary.data.title ?? 'TRAINING / RUN'}</div>
-        <div className="scene-heading__sub tech micro">{primary.data.subtitle ?? 'LOSS TRACE / LIVE'}</div>
-      </div>
-
-      <div className="content-grid">
-        <motion.div className="content-main training-main" layout>
-          <div className={`training-charts${charts.length > 1 ? ' training-charts--compare' : ''}`}>
-            <AnimatePresence mode="popLayout" initial={false}>
-              {charts.map((chart) => {
-                const notes = notesByPanel.get(chart.id) ?? [];
-                return (
-                  <ObjectMotion key={chart.id} objectId={chart.id} className="chart-object" data-chart-id={chart.id}>
-                    <TechFrame variant="panel" />
-                    <ObjectSurface object={chart}>
-                      <FocusableSurface onActivate={() => onFocus(chart.id)} ariaLabel={`Expand ${chart.data.title ?? 'chart'}`}>
-                        <ChartPrimitive data={chart.data} />
-                      </FocusableSurface>
-                    </ObjectSurface>
-                    {notes.length > 0 ? (
-                      <ChartNotes chart={chart} notes={notes} onFocus={onFocus} onOpenHistory={onOpenHistory} />
-                    ) : null}
-                    {chart.role === 'compare' ? <div className="compare-label tech micro">COMPARE / {chart.data.compareLabel ?? 'RUN'}</div> : null}
-                  </ObjectMotion>
-                );
-              })}
-            </AnimatePresence>
-          </div>
-          {progress ? (
-            <ObjectMotion objectId={progress.id} className="training-progress">
-              <ObjectSurface object={progress}>
-                <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
-                  <ProgressPrimitive data={progress.data} />
-                </FocusableSurface>
-              </ObjectSurface>
-            </ObjectMotion>
-          ) : null}
-        </motion.div>
-
-        <motion.aside className="content-rail" layout>
-          <DamoclesPresence
-            listening={state.listening}
-            onToggleListening={onToggleListening}
-            context={primary.data.context ?? 'TRAINING RUN'}
-            size="rail"
-            activity={state.activity}
-          />
-          {/* The notes sit on the charts here, so the rail carries none. */}
-          <RailDetails state={state} metrics={metrics} note={null} progressList={railProgress} onFocus={onFocus} onOpenHistory={onOpenHistory} />
-        </motion.aside>
-      </div>
-      <SceneFooter left="DISPLAY / COMPOSED" right={sceneCaption(primary, 'PRIMARY / LOSS TRACE')} />
-    </motion.section>
-  );
+  return {
+    title: primary.data.title ?? 'TRAINING / RUN',
+    subtitle: primary.data.subtitle ?? 'LOSS TRACE / LIVE',
+    context: primary.data.context ?? 'TRAINING RUN',
+    footer: 'DISPLAY / COMPOSED',
+    caption: sceneCaption(primary, 'PRIMARY / LOSS TRACE'),
+    metrics: objectsOfType<MetricData>(state, 'metric'),
+    // The notes sit on the charts here, so the rail carries none.
+    note: null,
+    progressList: railProgress,
+    main: (
+      <motion.div className="content-main training-main" layout>
+        <div className={`training-charts${charts.length > 1 ? ' training-charts--compare' : ''}`}>
+          <AnimatePresence mode="popLayout" initial={false}>
+            {charts.map((chart) => {
+              const notes = notesByPanel.get(chart.id) ?? [];
+              return (
+                <ObjectMotion key={chart.id} objectId={chart.id} className="chart-object" data-chart-id={chart.id}>
+                  <TechFrame variant="panel" />
+                  <ObjectSurface object={chart}>
+                    <FocusableSurface onActivate={() => onFocus(chart.id)} ariaLabel={`Expand ${chart.data.title ?? 'chart'}`}>
+                      <ChartPrimitive data={chart.data} />
+                    </FocusableSurface>
+                  </ObjectSurface>
+                  {notes.length > 0 ? (
+                    <ChartNotes chart={chart} notes={notes} onFocus={onFocus} onOpenHistory={onOpenHistory} />
+                  ) : null}
+                  {chart.role === 'compare' ? <div className="compare-label tech micro">COMPARE / {chart.data.compareLabel ?? 'RUN'}</div> : null}
+                </ObjectMotion>
+              );
+            })}
+          </AnimatePresence>
+        </div>
+        {progress ? (
+          <ObjectMotion objectId={progress.id} className="training-progress">
+            <ObjectSurface object={progress}>
+              <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
+                <ProgressPrimitive data={progress.data} />
+              </FocusableSurface>
+            </ObjectSurface>
+          </ObjectMotion>
+        ) : null}
+      </motion.div>
+    ),
+  };
 }
 
-export function ArchitectureScene({ state, onToggleListening, onFocus, onOpenHistory }: SceneProps) {
-  const [calloutPlaced, setCalloutPlaced] = useState(false);
-  const primaryObjectValue = primaryObject(state);
-  if (!primaryObjectValue) return <IdleScene state={state} onToggleListening={onToggleListening} />;
-  const diagram = cast.diagram(primaryObjectValue);
-  const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), diagram.id);
+// A diagram, document, or code object fills the main slot alone, its note
+// in the rail -- unless the diagram places the note as its own callout.
+function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed: boolean) => void): SceneContent | null {
+  const primary = primaryObject(state);
+  if (!primary) return null;
+  const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), primary.id);
   const note = annotationForScene(state, noteObject, liveChatMessage(state));
-  const metrics = objectsOfType<MetricData>(state, 'metric');
-  const progressList = objectsOfType<ProgressData>(state, 'progress');
-
-  const railNote = calloutPlaced ? null : note;
-
-  return (
-    <motion.section className="scene scene--content scene--architecture" data-scene="architecture" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <div className="scene-heading">
-        <div className="scene-heading__title tech">{diagram.data.title ?? 'SYSTEM / DIAGRAM'}</div>
-        <div className="scene-heading__sub tech micro">{diagram.data.subtitle ?? 'GRAPH / COMPOSED'}</div>
-      </div>
-      <div className="content-grid">
-        <ObjectMotion objectId={diagram.id} className="content-main diagram-object">
-          <TechFrame variant="rails" />
-          <ObjectSurface object={diagram}>
-            <FocusableSurface onActivate={() => onFocus(diagram.id)} ariaLabel="Expand diagram">
-              <DiagramPrimitive data={diagram.data} id={diagram.id} note={note} onCalloutChange={setCalloutPlaced} />
-            </FocusableSurface>
-          </ObjectSurface>
-        </ObjectMotion>
-        <motion.aside className="content-rail" layout>
-          <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={diagram.data.context ?? 'SYSTEM MAP'} size="rail" activity={state.activity} />
-          <RailDetails state={state} metrics={metrics} note={railNote} noteObject={calloutPlaced ? undefined : noteObject} progressList={progressList} onFocus={onFocus} onOpenHistory={onOpenHistory} />
-        </motion.aside>
-      </div>
-      <SceneFooter left="DISPLAY / SYSTEM MAP" right={sceneCaption(diagram, 'TRACE / ACTIVE ROUTE')} />
-    </motion.section>
+  const rail = {
+    metrics: objectsOfType<MetricData>(state, 'metric'),
+    note,
+    noteObject,
+    progressList: objectsOfType<ProgressData>(state, 'progress'),
+  };
+  const slot = (className: string, body: ReactNode, frame: ReactNode = null) => (
+    <ObjectMotion objectId={primary.id} className={`content-main ${className}`}>
+      {frame}
+      <ObjectSurface object={primary}>
+        <FocusableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
+          {body}
+        </FocusableSurface>
+      </ObjectSurface>
+    </ObjectMotion>
   );
-}
-
-export function DocumentScene({ state, onToggleListening, onFocus, onOpenHistory }: SceneProps) {
-  const primaryObjectValue = primaryObject(state);
-  if (!primaryObjectValue) return <IdleScene state={state} onToggleListening={onToggleListening} />;
-  const document = cast.document(primaryObjectValue);
-  const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), document.id);
-  const note = annotationForScene(state, noteObject, liveChatMessage(state));
-  const metrics = objectsOfType<MetricData>(state, 'metric');
-  const progressList = objectsOfType<ProgressData>(state, 'progress');
-
-  return (
-    <motion.section className="scene scene--content scene--document" data-scene="document" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <div className="scene-heading">
-        <div className="scene-heading__title tech">DOCUMENT / {document.data.kind?.toUpperCase() ?? 'CONTENT'}</div>
-        <div className="scene-heading__sub tech micro">CONTENT / ORIGINAL</div>
-      </div>
-      <div className="content-grid">
-        <ObjectMotion objectId={document.id} className="content-main document-object">
-          <ObjectSurface object={document}>
-            <FocusableSurface onActivate={() => onFocus(document.id)} ariaLabel="Expand document">
-              <DocumentViewport data={document.data} />
-            </FocusableSurface>
-          </ObjectSurface>
-        </ObjectMotion>
-        <motion.aside className="content-rail" layout>
-          <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={document.data.context ?? 'DOCUMENT'} size="rail" activity={state.activity} />
-          <RailDetails state={state} metrics={metrics} note={note} noteObject={noteObject} progressList={progressList} onFocus={onFocus} onOpenHistory={onOpenHistory} />
-        </motion.aside>
-      </div>
-      <SceneFooter left="CONTENT / ORIGINAL EMAIL" right={sceneCaption(document, 'CHROME / SWITCHBOARD')} />
-    </motion.section>
-  );
-}
-
-export function CodeScene({ state, onToggleListening, onFocus, onOpenHistory }: SceneProps) {
-  const primaryObjectValue = primaryObject(state);
-  if (!primaryObjectValue) return <IdleScene state={state} onToggleListening={onToggleListening} />;
-  const code = cast.code(primaryObjectValue);
-  const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), code.id);
-  const note = annotationForScene(state, noteObject, liveChatMessage(state));
-  const metrics = objectsOfType<MetricData>(state, 'metric');
-  const progressList = objectsOfType<ProgressData>(state, 'progress');
-
-  return (
-    <motion.section className="scene scene--content scene--code" data-scene="code" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <div className="scene-heading">
-        <div className="scene-heading__title tech">{code.data.title ?? 'SOURCE / LIVE'}</div>
-        <div className="scene-heading__sub tech micro">{code.data.file ?? 'SOURCE'}</div>
-      </div>
-      <div className="content-grid">
-        <ObjectMotion objectId={code.id} className="content-main code-object">
-          <ObjectSurface object={code}>
-            <FocusableSurface onActivate={() => onFocus(code.id)} ariaLabel="Expand code">
-              <CodeViewport data={code.data} />
-            </FocusableSurface>
-          </ObjectSurface>
-        </ObjectMotion>
-        <motion.aside className="content-rail" layout>
-          <DamoclesPresence listening={state.listening} onToggleListening={onToggleListening} context={code.data.context ?? 'SOURCE'} size="rail" activity={state.activity} />
-          <RailDetails state={state} metrics={metrics} note={note} noteObject={noteObject} progressList={progressList} onFocus={onFocus} onOpenHistory={onOpenHistory} />
-        </motion.aside>
-      </div>
-      <SceneFooter left="FRAME / INTERRUPTED RAILS" right={sceneCaption(code, 'DISPLAY / SOURCE')} />
-    </motion.section>
-  );
+  switch (primary.type) {
+    case 'diagram': {
+      const { data } = cast.diagram(primary);
+      return {
+        ...rail,
+        title: data.title ?? 'SYSTEM / DIAGRAM',
+        subtitle: data.subtitle ?? 'GRAPH / COMPOSED',
+        context: data.context ?? 'SYSTEM MAP',
+        footer: 'DISPLAY / SYSTEM MAP',
+        caption: sceneCaption(primary, 'TRACE / ACTIVE ROUTE'),
+        main: slot(
+          'diagram-object',
+          <DiagramPrimitive data={data} id={primary.id} note={note} onCalloutChange={onCalloutChange} />,
+          <TechFrame variant="rails" />,
+        ),
+      };
+    }
+    case 'document': {
+      const { data } = cast.document(primary);
+      return {
+        ...rail,
+        title: `DOCUMENT / ${data.kind?.toUpperCase() ?? 'CONTENT'}`,
+        subtitle: 'CONTENT / ORIGINAL',
+        context: data.context ?? 'DOCUMENT',
+        footer: 'CONTENT / ORIGINAL EMAIL',
+        caption: sceneCaption(primary, 'CHROME / SWITCHBOARD'),
+        main: slot('document-object', <DocumentViewport data={data} />),
+      };
+    }
+    case 'code': {
+      const { data } = cast.code(primary);
+      return {
+        ...rail,
+        title: data.title ?? 'SOURCE / LIVE',
+        subtitle: data.file ?? 'SOURCE',
+        context: data.context ?? 'SOURCE',
+        footer: 'FRAME / INTERRUPTED RAILS',
+        caption: sceneCaption(primary, 'DISPLAY / SOURCE'),
+        main: slot('code-object', <CodeViewport data={data} />),
+      };
+    }
+    default:
+      return null;
+  }
 }
 
 const AUX_VISUAL_TYPES = new Set(['chart', 'diagram', 'document', 'code']);
 
-export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory }: SceneProps) {
+// Any mix of objects: the primary, or a cluster of primary metrics, over an
+// aux row of everything the rail does not carry.
+function composedContent({ state, onFocus }: SceneProps): SceneContent | null {
   const comp = buildCompositionModel(state);
   const primary = comp.primary;
-  if (!primary) return <IdleScene state={state} onToggleListening={onToggleListening} />;
+  if (!primary) return null;
 
   const primaryMetrics = comp.primaryMetrics;
   const isMetricPrimary = primary.type === 'metric' || primaryMetrics.length > 0;
 
   const noteObjects = comp.allAgentObjects.filter((object) => object.type === 'note') as Array<SceneObject<NoteData>>;
   const noteObject = noteForTarget(noteObjects, primary.id);
-  const note = annotationForScene(state, noteObject, liveChatMessage(state));
+  const noteIsPrimary = noteObject?.id === primary.id;
   const metrics = comp.allAgentObjects.filter((o) => o.type === 'metric') as Array<SceneObject<MetricData>>;
   const progressList = comp.allAgentObjects.filter((o) => o.type === 'progress') as Array<SceneObject<ProgressData>>;
   const primaryMetricIds = new Set(primaryMetrics.map((m) => m.id));
-  const railMetrics = isMetricPrimary
-    ? metrics.filter((metric) => !primaryMetricIds.has(metric.id))
-    : metrics;
-  const railNote = noteObject?.id === primary.id ? null : note;
   // Everything the rail does not carry shares one visible aux row below the
   // primary -- compare objects, secondary visuals, and progress -- so an
   // accepted object is never lost to the layout. Metrics and the note stay
@@ -513,89 +412,197 @@ export function ComposedScene({ state, onToggleListening, onFocus, onOpenHistory
     ...progressList.filter((p) => p.id !== primary.id && !comp.compare.some((c) => c.id === p.id)),
   ];
 
-  // The same precedence the backend's view summary reports to the agent.
-  const title = frameText(primary.data, 'title') ?? frameText(primary.data, 'subject') ?? frameText(primary.data, 'label') ?? 'COMPOSED WORKSPACE';
-  const subtitle = frameText(primary.data, 'subtitle') ?? 'STRUCTURED SCENE';
-
-  return (
-    <motion.section className="scene scene--content scene--composed" data-scene="composed" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <div className="scene-heading">
-        <div className="scene-heading__title tech">{title}</div>
-        <div className="scene-heading__sub tech micro">{subtitle}</div>
-      </div>
-      <div className="content-grid">
-        <motion.div className={`content-main composed-main${isMetricPrimary ? ' composed-main--metric-primary' : ''}`} layout>
-          <ObjectMotion
-            objectId={primaryMetrics.length > 1 ? 'primary-metric-cluster' : primary.id}
-            layoutId={primaryMetrics.length > 1 ? 'switchboard-primary-metric-cluster' : undefined}
-            className={`composed-primary-object composed-primary-object--${primary.type}${primaryMetrics.length > 1 ? ' composed-primary-object--cluster' : ''}`}
-          >
-            <TechFrame variant="panel" />
-            {primaryMetrics.length > 1 ? (
-              <SurfaceBoundary surfaceId="primary-metric-cluster" resetKey={state.agentObjects}>
-                <div className="focusable-content">
+  return {
+    // The same precedence the backend's view summary reports to the agent.
+    title: frameText(primary.data, 'title') ?? frameText(primary.data, 'subject') ?? frameText(primary.data, 'label') ?? 'COMPOSED WORKSPACE',
+    subtitle: frameText(primary.data, 'subtitle') ?? 'STRUCTURED SCENE',
+    context: frameText(primary.data, 'context') ?? 'COMPOSED',
+    footer: 'DISPLAY / COMPOSED',
+    caption: sceneCaption(primary, 'SYSTEM / ACTIVE'),
+    metrics: isMetricPrimary ? metrics.filter((metric) => !primaryMetricIds.has(metric.id)) : metrics,
+    note: noteIsPrimary ? null : annotationForScene(state, noteObject, liveChatMessage(state)),
+    noteObject: noteIsPrimary ? undefined : noteObject,
+    progressList: [],
+    main: (
+      <motion.div className={`content-main composed-main${isMetricPrimary ? ' composed-main--metric-primary' : ''}`} layout>
+        <ObjectMotion
+          objectId={primaryMetrics.length > 1 ? 'primary-metric-cluster' : primary.id}
+          layoutId={primaryMetrics.length > 1 ? 'switchboard-primary-metric-cluster' : undefined}
+          className={`composed-primary-object composed-primary-object--${primary.type}${primaryMetrics.length > 1 ? ' composed-primary-object--cluster' : ''}`}
+        >
+          <TechFrame variant="panel" />
+          {primaryMetrics.length > 1 ? (
+            <SurfaceBoundary surfaceId="primary-metric-cluster" resetKey={state.agentObjects}>
+              <div className="focusable-content">
+                <MetricsPrimitive
+                  metrics={primaryMetrics}
+                  variant="primary"
+                  onFocus={onFocus}
+                />
+              </div>
+            </SurfaceBoundary>
+          ) : (
+            <ObjectSurface object={primary}>
+              <FocusableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
+                {isMetricPrimary ? (
                   <MetricsPrimitive
-                    metrics={primaryMetrics}
+                    metrics={primaryMetrics.length > 0 ? primaryMetrics : [primary as SceneObject<MetricData>]}
                     variant="primary"
                     onFocus={onFocus}
                   />
-                </div>
-              </SurfaceBoundary>
-            ) : (
-              <ObjectSurface object={primary}>
-                <FocusableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
-                  {isMetricPrimary ? (
-                    <MetricsPrimitive
-                      metrics={primaryMetrics.length > 0 ? primaryMetrics : [primary as SceneObject<MetricData>]}
-                      variant="primary"
-                      onFocus={onFocus}
-                    />
-                  ) : (
-                    composedPrimitive(primary, 'primary')
-                  )}
-                </FocusableSurface>
-              </ObjectSurface>
-            )}
-          </ObjectMotion>
-          {auxObjects.length > 0 ? (
-            <div className="composed-aux">
-              {auxObjects.map((object) => (
-                <ObjectMotion
-                  key={object.id}
-                  objectId={object.id}
-                  className={`composed-aux-object composed-aux-object--${object.type}`}
-                >
-                  <TechFrame variant="panel" />
-                  <ObjectSurface object={object}>
-                    <FocusableSurface onActivate={() => onFocus(object.id)} ariaLabel={`Expand ${object.type}`}>
-                      {composedPrimitive(object, 'aux')}
-                    </FocusableSurface>
-                  </ObjectSurface>
-                </ObjectMotion>
-              ))}
-            </div>
-          ) : null}
-        </motion.div>
-        <motion.aside className="content-rail" layout>
-          <DamoclesPresence
-            listening={state.listening}
-            onToggleListening={onToggleListening}
-            context={frameText(primary.data, 'context') ?? 'COMPOSED'}
-            size="rail"
-            activity={state.activity}
-          />
-          <RailDetails
-            state={state}
-            metrics={railMetrics}
-            note={railNote}
-            noteObject={noteObject?.id === primary.id ? undefined : noteObject}
-            progressList={[]}
-            onFocus={onFocus}
-            onOpenHistory={onOpenHistory}
-          />
-        </motion.aside>
+                ) : (
+                  composedPrimitive(primary, 'primary')
+                )}
+              </FocusableSurface>
+            </ObjectSurface>
+          )}
+        </ObjectMotion>
+        {auxObjects.length > 0 ? (
+          <div className="composed-aux">
+            {auxObjects.map((object) => (
+              <ObjectMotion
+                key={object.id}
+                objectId={object.id}
+                className={`composed-aux-object composed-aux-object--${object.type}`}
+              >
+                <TechFrame variant="panel" />
+                <ObjectSurface object={object}>
+                  <FocusableSurface onActivate={() => onFocus(object.id)} ariaLabel={`Expand ${object.type}`}>
+                    {composedPrimitive(object, 'aux')}
+                  </FocusableSurface>
+                </ObjectSurface>
+              </ObjectMotion>
+            ))}
+          </div>
+        ) : null}
+      </motion.div>
+    ),
+  };
+}
+
+const FALLBACK_MESSAGE: MessageData = {
+  context: 'OPERATOR LINE',
+  tag: 'CURRENT RESPONSE / LIVE',
+  segments: [{ text: 'Line open. Speak when ready.' }],
+  channel: { name: 'VOICE', mode: 'PUSH-TO-TALK' },
+  transcript: [],
+};
+
+// The conversation page's live box: the runtime conversation, or an agent
+// message on stage. Status/activity speech is rendered as an annotation
+// elsewhere; it must not replace the conversation's latest committed
+// response. Before the first response the line carries no text, and this
+// page alone says it is open.
+function ConversationAnswer({ state }: { state: ControllerState }) {
+  const comp = buildCompositionModel(state);
+  const object = comp.runtimeConversation ?? (comp.primary?.type === 'message' ? comp.primary : null);
+  const message = object ? cast.message(object).data : FALLBACK_MESSAGE;
+  const segments = message.segments.length > 0 ? message.segments : FALLBACK_MESSAGE.segments;
+  return (
+    <>
+      <ObjectMotion objectId={object?.id ?? 'conversation'} className="conversation-answer">
+        <TechFrame variant="answer" />
+        <SurfaceBoundary surfaceId={object?.id ?? 'conversation'} resetKey={object ?? message}>
+          <div className="conversation-answer__tag tech micro">{message.tag ?? 'CURRENT RESPONSE / 01'}</div>
+          <SpokenLog message={{ ...message, segments }} className="conversation-answer__text" innerClassName="conversation-answer__text-inner" />
+          <div className="conversation-answer__index tech micro">{message.caption ?? `${message.channel?.name ?? 'VOICE'} / LIVE`}</div>
+        </SurfaceBoundary>
+      </ObjectMotion>
+      <div className="conversation-channel tech micro">
+        CHANNEL / {message.channel?.name ?? 'VOICE'}<br />MODE / {message.channel?.mode ?? 'HANDS-FREE'}
       </div>
-      <SceneFooter left="DISPLAY / COMPOSED" right={sceneCaption(primary, 'SYSTEM / ACTIVE')} />
+    </>
+  );
+}
+
+function sceneContent(props: SceneProps, onCalloutChange: (placed: boolean) => void): SceneContent | null {
+  switch (props.kind) {
+    case 'idle':
+    case 'conversation':
+      return null;
+    case 'training':
+      return trainingContent(props);
+    case 'composed':
+      return composedContent(props);
+    default:
+      return objectContent(props, onCalloutChange);
+  }
+}
+
+/**
+ * The page every scene shares (#121). It owns the frame, the Damocles
+ * presence, the rail with its live box and tool activity, the corner text,
+ * and the transcript entry point, so a feature that crosses scenes is added
+ * here once. A scene only fills the main slot, chosen by the kind of its
+ * primary object; a content kind with nothing to show draws the idle page.
+ */
+export function SceneShell(props: SceneProps) {
+  const { kind, state, onToggleListening, onFocus, onOpenHistory, setTranscriptOpen } = props;
+  const isPresent = useIsPresent();
+  // A diagram can place its note as a callout beside the node it names; the
+  // rail then leaves it out.
+  const [calloutPlaced, setCalloutPlaced] = useState(false);
+  const content = sceneContent(props, setCalloutPlaced);
+  const layout = content ? 'content' : kind === 'conversation' ? 'conversation' : 'idle';
+  const presence = (
+    <DamoclesPresence
+      listening={state.listening}
+      onToggleListening={onToggleListening}
+      context={content?.context}
+      size={content ? 'rail' : layout === 'conversation' ? 'conversation' : 'idle'}
+      showCaption={content !== null}
+      activity={state.activity}
+    />
+  );
+
+  return (
+    <motion.section
+      className={`scene scene--${layout}${content ? ` scene--${kind}` : ''}`}
+      data-scene={content ? kind : layout}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+    >
+      {content ? (
+        <>
+          <div className="scene-heading">
+            <div className="scene-heading__title tech">{content.title}</div>
+            <div className="scene-heading__sub tech micro">{content.subtitle}</div>
+          </div>
+          <div className="content-grid">
+            {content.main}
+            <motion.aside className="content-rail" layout>
+              {presence}
+              <RailDetails
+                state={state}
+                metrics={content.metrics}
+                note={calloutPlaced ? null : content.note}
+                noteObject={calloutPlaced ? undefined : content.noteObject}
+                progressList={content.progressList}
+                onFocus={onFocus}
+                onOpenHistory={onOpenHistory}
+              />
+            </motion.aside>
+          </div>
+          <SceneFooter left={content.footer} right={content.caption} />
+        </>
+      ) : layout === 'conversation' ? (
+        <>
+          <ConversationCorners />
+          <div className="conversation-presence-band">{presence}</div>
+          <ConversationAnswer state={state} />
+          <TranscriptToggle onOpen={() => setTranscriptOpen(true)} />
+          <ToolActivity activity={state.activity} placement="conversation" />
+        </>
+      ) : (
+        <>
+          {presence}
+          {/* The idle stage keeps the transcript toggle in its conversation-page
+              place, hidden until the pointer reaches the bottom band, so the
+              typed line is reachable before anyone has spoken. */}
+          {isPresent ? <TranscriptToggle reveal="hover" onOpen={() => setTranscriptOpen(true)} /> : null}
+        </>
+      )}
     </motion.section>
   );
 }
