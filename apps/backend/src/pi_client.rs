@@ -584,6 +584,7 @@ impl PiSession {
                             .map(str::to_owned),
                         tool: name.into(),
                         args: event.get("args").cloned().map(clip_value),
+                        turn_id: Some(turn_id.to_owned()),
                     });
                     if [
                         ROUTE_TOOL,
@@ -627,6 +628,7 @@ impl PiSession {
                         result: result.cloned().map(clip_value),
                         error: (event.get("isError") == Some(&Value::Bool(true)))
                             .then(|| tool_error_text(result)),
+                        turn_id: Some(turn_id.to_owned()),
                     });
                     self.report_activity("end", name, String::new()).await
                 }
@@ -1017,6 +1019,7 @@ impl ProjectInner {
     fn mirror_event(&self, event: &Value) {
         let call_id = || event["call_id"].as_str().map(str::to_owned);
         let tool = || event["tool"].as_str().unwrap_or_default().to_owned();
+        let turn_id = || event["turn_id"].as_str().map(str::to_owned);
         match event["kind"].as_str() {
             Some("tool_start") => self.publish(DebugEvent::ToolStart {
                 agent: self.label.clone(),
@@ -1027,6 +1030,7 @@ impl ProjectInner {
                     .filter(|v| !v.is_null())
                     .cloned()
                     .map(clip_value),
+                turn_id: turn_id(),
             }),
             Some("tool_end") => {
                 let result = event.get("result").filter(|value| !value.is_null());
@@ -1036,6 +1040,7 @@ impl ProjectInner {
                     tool: tool(),
                     result: result.cloned().map(clip_value),
                     error: (event["error"] == true).then(|| tool_error_text(result)),
+                    turn_id: turn_id(),
                 });
             }
             Some("text") => {
@@ -1045,7 +1050,7 @@ impl ProjectInner {
                 {
                     self.publish(DebugEvent::AgentText {
                         agent: self.label.clone(),
-                        turn_id: event["turn_id"].as_str().map(str::to_owned),
+                        turn_id: turn_id(),
                         text: clip_text(text),
                         final_: false,
                     });
@@ -1852,6 +1857,7 @@ async fn answer_module_call(inner: Arc<ProjectInner>, call: crate::hosts::Module
         call_id: call.id.clone(),
         name: call.call.clone(),
         args: clip_value(call.args.clone()),
+        turn_id: call.turn_id.clone(),
     });
     let reply = module_reply(&inner, &call).await;
     inner.publish(DebugEvent::ModuleResult {

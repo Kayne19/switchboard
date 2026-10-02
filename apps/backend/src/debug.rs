@@ -120,6 +120,8 @@ pub(crate) enum DebugEvent {
         tool: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         args: Option<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
     },
     ToolEnd {
         agent: String,
@@ -130,12 +132,16 @@ pub(crate) enum DebugEvent {
         result: Option<Value>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
     },
     ModuleCall {
         agent: String,
         call_id: String,
         name: String,
         args: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
     },
     ModuleResult {
         agent: String,
@@ -747,6 +753,7 @@ mod tests {
                     call_id: Some("call-3".into()),
                     tool: "bash".into(),
                     args: Some(json!({"command":"cargo test"})),
+                    turn_id: Some("turn-8".into()),
                 },
             ),
             (
@@ -757,6 +764,7 @@ mod tests {
                     tool: "bash".into(),
                     result: Some(json!({"exit_code":0})),
                     error: None,
+                    turn_id: Some("turn-8".into()),
                 },
             ),
             (
@@ -766,6 +774,7 @@ mod tests {
                     call_id: "call-4".into(),
                     name: "speak".into(),
                     args: json!({"text":"The build passes."}),
+                    turn_id: Some("turn-8".into()),
                 },
             ),
             (

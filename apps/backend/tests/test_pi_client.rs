@@ -434,6 +434,7 @@ async fn operator_conversation_is_mirrored_to_the_debug_bus() {
                 call_id: Some("c1".into()),
                 tool: "route".into(),
                 args: Some(json!({"target": "alpha", "api_key": "[redacted]"})),
+                turn_id: turn_id.clone(),
             },
             DebugEvent::ToolEnd {
                 agent: "operator".into(),
@@ -441,6 +442,7 @@ async fn operator_conversation_is_mirrored_to_the_debug_bus() {
                 tool: "route".into(),
                 result: Some(json!({"content": [{"type": "text", "text": "no such project"}]})),
                 error: Some("no such project".into()),
+                turn_id: turn_id.clone(),
             },
             DebugEvent::AgentText {
                 agent: "operator".into(),
@@ -610,10 +612,10 @@ async fn project_conversation_is_mirrored_to_the_debug_bus() {
         }
         vec![
             Step::Event(
-                json!({"kind": "tool_start", "tool": "bash", "call_id": "t1", "args": {"command": "cargo test", "token": "abc"}}),
+                json!({"kind": "tool_start", "tool": "bash", "call_id": "t1", "args": {"command": "cargo test", "token": "abc"}, "turn_id": "turn-1"}),
             ),
             Step::Event(
-                json!({"kind": "tool_end", "tool": "bash", "call_id": "t1", "error": true, "result": {"content": [{"type": "text", "text": "1 failed"}]}}),
+                json!({"kind": "tool_end", "tool": "bash", "call_id": "t1", "error": true, "result": {"content": [{"type": "text", "text": "1 failed"}]}, "turn_id": "turn-1"}),
             ),
             Step::Event(json!({"kind": "text", "text": "Done.", "turn_id": "turn-1"})),
         ]
@@ -654,6 +656,7 @@ async fn project_conversation_is_mirrored_to_the_debug_bus() {
                 call_id: Some("t1".into()),
                 tool: "bash".into(),
                 args: Some(json!({"command": "cargo test", "token": "[redacted]"})),
+                turn_id: Some("turn-1".into()),
             },
             DebugEvent::ToolEnd {
                 agent: agent(),
@@ -661,6 +664,7 @@ async fn project_conversation_is_mirrored_to_the_debug_bus() {
                 tool: "bash".into(),
                 result: Some(json!({"content": [{"type": "text", "text": "1 failed"}]})),
                 error: Some("1 failed".into()),
+                turn_id: Some("turn-1".into()),
             },
             DebugEvent::AgentText {
                 agent: agent(),
@@ -686,6 +690,7 @@ async fn project_conversation_is_mirrored_to_the_debug_bus() {
                 call_id: Some("t2".into()),
                 tool: "read".into(),
                 args: None,
+                turn_id: None,
             },
             DebugEvent::ToolEnd {
                 agent: agent(),
@@ -693,6 +698,7 @@ async fn project_conversation_is_mirrored_to_the_debug_bus() {
                 tool: "read".into(),
                 result: None,
                 error: None,
+                turn_id: None,
             },
         ]
     );
@@ -739,6 +745,7 @@ async fn module_calls_and_their_answers_are_mirrored_without_the_token() {
                 call_id: "m1".into(),
                 name: "speak".into(),
                 args: json!({"text": "The build passes."}),
+                turn_id: None,
             },
             DebugEvent::ModuleResult {
                 agent: "alpha".into(),
@@ -751,6 +758,7 @@ async fn module_calls_and_their_answers_are_mirrored_without_the_token() {
                 call_id: "m2".into(),
                 name: "speak".into(),
                 args: json!({"text": "stale"}),
+                turn_id: None,
             },
             DebugEvent::ModuleResult {
                 agent: "alpha".into(),

@@ -57,9 +57,9 @@ Rust `DebugEvent` in `apps/backend/src/debug.rs` is the source of truth. The
 - `routed`: `utterance_id`, `to_agent`, `text_part`, `mode`, `via` (`jev`, `utility`, `operator`, or `pbx`); multiple events represent fan-out from `dispatch_parts`
 - `agent_input`: `agent`, optional `turn_id`, `text`, `source`, optional `utterance_id` (the caller line this input carries, when routing sent one here)
 - `agent_text`: `agent`, optional `turn_id`, `text`, `final`
-- `tool_start`: `agent`, optional `call_id`, `tool`, optional `args`
-- `tool_end`: `agent`, optional `call_id`, `tool`, optional `result`, optional `error`
-- `module_call`: `agent`, `call_id`, `name`, `args`
+- `tool_start`: `agent`, optional `call_id`, `tool`, optional `args`, optional `turn_id`
+- `tool_end`: `agent`, optional `call_id`, `tool`, optional `result`, optional `error`, optional `turn_id`
+- `module_call`: `agent`, `call_id`, `name`, `args`, optional `turn_id`
 - `module_result`: `agent`, `call_id`, `ok`, `detail`
 - `turn_start` and `turn_end`: `agent`, `turn_id`, `generation`
 - `rescue`: `generation`, `reason`, optional `leg`
