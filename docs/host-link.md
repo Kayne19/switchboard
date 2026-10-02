@@ -303,8 +303,8 @@ The host agent sends every session event with its cursor:
 |---|---|---|
 | `turn_start` | `cause`: `input` \| `autonomous` \| `unknown`, `turn_id?` | A turn opened: after an input, or an `agent_start` nobody caused (a subagent finished, a schedule, a heartbeat). `turn_id` is stable for the turn. A busy snapshot rebuilt after a host-agent restart uses `unknown` and has no delivery authority. |
 | `turn_end` | `error?`, `turn_id?` | The turn settled: `wait_for_idle`, sent after the last input, resolved. `error` is set when that wait failed. |
-| `tool_start` | `tool`, `call_id` | A tool call started. |
-| `tool_end` | `tool`, `call_id`, `error` | A tool call ended. |
+| `tool_start` | `tool`, `call_id`, `args?`, `turn_id?` | A tool call started. `args` is the call's arguments. |
+| `tool_end` | `tool`, `call_id`, `error`, `result?`, `turn_id?` | A tool call ended. `error` is true when the tool failed; `result` is what the tool returned. |
 | `text` | `text`, `turn_id?` | An assistant message ended with this text. New hosts stamp the owning turn id. |
 | `error` | `message` | A model error, or retries exhausted. |
 | `compaction` | `phase`: `start` \| `end`, `reason` | The daemon compacted the context. The service resends the voice brief on the next routed line after `end`. |
@@ -313,6 +313,15 @@ The host agent sends every session event with its cursor:
 
 A turn is not ended by `agent_end`: the daemon repeats it within one turn.
 Only `turn_end` means settled.
+
+`args`, `result` and the `turn_id` on tool events are additive and optional.
+They feed the service's debug page (`docs/debug-page.md`) and nothing else; an
+older host omits them and the service shows the tool name only. A value whose
+JSON is over 4 KB is sent as `{"clipped": true, "bytes": <full size>,
+"preview": "<start of the JSON>"}` instead. The host sends assistant text once
+per message (`text`), not as streamed deltas: one delta per token would fill
+the per-session replay buffer of 1000 events and make a reconnect lose its
+replay.
 
 ### Snapshots
 
