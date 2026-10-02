@@ -797,19 +797,46 @@ struct FieldsVisitor {
     message: Option<String>,
 }
 
+/// Field names whose values never reach the debug page. The page is
+/// unauthenticated; the journal keeps whatever the log line carried.
+const SECRET_FIELD_WORDS: [&str; 6] = [
+    "token",
+    "key",
+    "secret",
+    "authorization",
+    "password",
+    "bearer",
+];
+const REDACTED: &str = "[redacted]";
+
+/// True when a log field's name suggests a credential. Matching is by
+/// substring, case-insensitive, so `call_token` and `api_key` match too.
+fn is_secret_field(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    SECRET_FIELD_WORDS.iter().any(|word| name.contains(word))
+}
+
 impl tracing::field::Visit for FieldsVisitor {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() != "message" && is_secret_field(field.name()) {
+            self.record(field.name(), Value::String(REDACTED.to_owned()));
+            return;
+        }
         let value = format!("{value:?}");
         self.record(field.name(), Value::String(value));
     }
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
         self.record(field.name(), Value::String(value.to_owned()));
     }
+    // Numbers and booleans cannot carry a credential (`*_token_budget`,
+    // `*_key_configured`), so they are kept even under a secret-like name.
     fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
-        self.record(field.name(), Value::from(value));
+        self.fields
+            .insert(field.name().to_owned(), Value::from(value));
     }
     fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
-        self.record(field.name(), Value::from(value));
+        self.fields
+            .insert(field.name().to_owned(), Value::from(value));
     }
     fn record_i128(&mut self, field: &tracing::field::Field, value: i128) {
         self.record(field.name(), Value::String(value.to_string()));
@@ -818,7 +845,8 @@ impl tracing::field::Visit for FieldsVisitor {
         self.record(field.name(), Value::String(value.to_string()));
     }
     fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
-        self.record(field.name(), Value::Bool(value));
+        self.fields
+            .insert(field.name().to_owned(), Value::Bool(value));
     }
 }
 
@@ -826,6 +854,9 @@ impl FieldsVisitor {
     fn record(&mut self, name: &str, value: Value) {
         if name == "message" {
             self.message = value.as_str().map(ToOwned::to_owned);
+        } else if is_secret_field(name) {
+            self.fields
+                .insert(name.to_owned(), Value::String(REDACTED.to_owned()));
         } else {
             self.fields.insert(name.to_owned(), value);
         }

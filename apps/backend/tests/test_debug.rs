@@ -578,3 +578,50 @@ mod wire {
         server.abort();
     }
 }
+
+#[test]
+fn the_log_layer_respects_the_filter_and_redacts_secret_fields() {
+    use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
+    let bus = DebugBus::new();
+    let subscriber = tracing_subscriber::registry()
+        .with(EnvFilter::new("switchboard=info"))
+        .with(DebugLogLayer::new(bus.clone()));
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::info!(
+            token = "abc",
+            call_token = %"def",
+            api_key = ?"ghi",
+            Authorization = "Bearer jkl",
+            password = "mno",
+            client_secret = "pqr",
+            jev_summary_token_budget = 300u64,
+            elevenlabs_key_configured = true,
+            project = "alpha",
+            "kept"
+        );
+        tracing::debug!("below the filter");
+        tracing::info!(target: "elsewhere", "outside the filter");
+    });
+    let snapshot = bus.snapshot();
+    assert_eq!(snapshot.logs.len(), 1, "{:?}", snapshot.logs);
+    let log = &snapshot.logs[0];
+    assert_eq!((log.level.as_str(), log.message.as_str()), ("INFO", "kept"));
+    assert!(log.target.starts_with("switchboard::"));
+    for field in [
+        "token",
+        "call_token",
+        "api_key",
+        "Authorization",
+        "password",
+        "client_secret",
+    ] {
+        assert_eq!(log.fields[field], REDACTED, "{field}");
+    }
+    assert_eq!(log.fields["jev_summary_token_budget"], 300);
+    assert_eq!(log.fields["elevenlabs_key_configured"], true);
+    assert_eq!(log.fields["project"], "alpha");
+    let wire = LiveFrame::Log(log.clone()).to_json();
+    for secret in ["abc", "def", "ghi", "jkl", "mno", "pqr"] {
+        assert!(!wire.contains(secret), "{secret} leaked: {wire}");
+    }
+}

@@ -2780,9 +2780,10 @@ async fn handle_project_turn(state: &AppState, turn: ProjectTurn) -> bool {
 
     let current = state.0.coordinator.current_identity();
     if current.token != turn.token {
+        // The leg's call token stays out of the log: the debug page copies
+        // log lines to an unauthenticated listener.
         tracing::info!(
             instance = turn.instance_id,
-            token = %turn.token,
             "ignoring turn start from a leg that is no longer on the call"
         );
         return false;
