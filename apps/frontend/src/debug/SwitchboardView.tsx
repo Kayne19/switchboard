@@ -1,8 +1,8 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { TechFrame } from '../primitives/TechFrame';
 import { AgentPane, type PaneSelect } from './AgentPane';
-import { agentColor, STAGE_COLORS } from './colors';
 import { clockTime, decisionSummary, formatMs } from './explain';
-import { chain, clampToClip, leftMid, rightMid, wire, wireMid, type Box, type Point } from './geometry';
+import { clampToClip, leftMid, rightMid, wire, wireMid, type Box, type Point } from './geometry';
 import type { CallerItem, DebugState, FloorTrace, RouteTrace, Stage } from './reducer';
 import { newestTraceId, routePath } from './reducer';
 
@@ -13,6 +13,25 @@ const DRAWN_FLOORS = 8;
 const CALLER_PAGE = 200;
 
 // --- Caller lane -------------------------------------------------------------
+
+/** The hops a trace took, as one line: `jev / utility → alpha / beta`. */
+export function RoutePathLine({ trace }: { trace: RouteTrace }) {
+  const path = routePath(trace);
+  return (
+    <div className="ci-path tech micro">
+      <span className="ci-hops">{['caller', ...path.stages].join(' / ')}</span>
+      {path.destinations.length > 0 && (
+        <span className="ci-dest">→ {path.destinations.map((destination) => destination.agent).join(' / ')}</span>
+      )}
+      {path.pending && <span className="ci-pending">routing…</span>}
+      {path.ended && (
+        <span className="ci-ended" title={path.ended.reason}>
+          ✕ {path.ended.label}
+        </span>
+      )}
+    </div>
+  );
+}
 
 const CallerEntry = memo(function CallerEntry({
   item,
@@ -37,30 +56,13 @@ const CallerEntry = memo(function CallerEntry({
         data-anchor={`utt-${trace.id}`}
         onClick={() => select.trace(trace.id)}
       >
-        <div className="ci-meta">
-          <time>{clockTime(trace.firstTs)}</time>
-          <span className="muted">→ {trace.talkingTo ?? '?'}</span>
+        <div className="ci-meta tech micro">
+          <span>to {trace.talkingTo ?? '?'}</span>
           <span className="ci-id">{trace.id}</span>
+          <time>{clockTime(trace.firstTs)}</time>
         </div>
         <div className="ci-text">{trace.text ?? <span className="muted">(no transcript)</span>}</div>
-        <div className="ci-path">
-          {path.stages.map((stage) => (
-            <span key={stage} className={`chip chip-${stage}`}>
-              {stage}
-            </span>
-          ))}
-          {path.destinations.map((destination, index) => (
-            <span key={`${destination.agent}-${index}`} className="chip chip-dest">
-              ⇢ {destination.agent}
-            </span>
-          ))}
-          {path.pending && <span className="chip chip-pending">routing…</span>}
-          {path.ended && (
-            <span className="chip chip-ended" title={path.ended.reason}>
-              ✕ {path.ended.label}
-            </span>
-          )}
-        </div>
+        <RoutePathLine trace={trace} />
       </button>
     );
   }
@@ -81,10 +83,10 @@ const CallerEntry = memo(function CallerEntry({
         data-anchor={`floor-dst-${floor.id}`}
         onClick={() => select.floor(floor.id)}
       >
-        <div className="ci-meta">
+        <div className="ci-meta tech micro">
+          <span className="ci-floor-tag">floor / {floor.agent}</span>
+          <span>{status}</span>
           <time>{clockTime(floor.firstTs)}</time>
-          <span className="tag tag-floor">⇠ {floor.agent}</span>
-          <span className="muted">{status}</span>
         </div>
         <div className="ci-text">{text}</div>
       </button>
@@ -92,18 +94,20 @@ const CallerEntry = memo(function CallerEntry({
   }
   if (item.type === 'call') {
     return (
-      <div className={`ci ci-call call-${item.phase}`}>
-        ☎ call {item.phase} · {item.callId}
-        {item.reason ? ` · ${item.reason}` : ''} · {clockTime(item.ts)}
+      <div className={`ci ci-call call-${item.phase} tech micro`}>
+        call {item.phase} / {item.callId}
+        {item.reason ? ` / ${item.reason}` : ''} / {clockTime(item.ts)}
       </div>
     );
   }
   return (
     <div className={`ci ci-speech${item.delivered ? '' : ' undelivered'}`}>
-      <div className="ci-meta">
+      <div className="ci-meta tech micro">
+        <span>{item.agent}</span>
+        <span className={item.delivered ? '' : 'semantic-red'}>
+          {item.delivered ? 'spoken' : `not spoken${item.reason ? `: ${item.reason}` : ''}`}
+        </span>
         <time>{clockTime(item.ts)}</time>
-        <span className="muted">⇠ {item.agent}</span>
-        <span className="muted">{item.delivered ? 'spoken' : `not spoken${item.reason ? `: ${item.reason}` : ''}`}</span>
       </div>
       <div className="ci-text">{item.text}</div>
     </div>
@@ -115,16 +119,19 @@ function CallerLane({ state, selection, select }: { state: DebugState; selection
   const pinned = useRef(true);
   const [limit, setLimit] = useState(CALLER_PAGE);
   const items = state.callerLane.length > limit ? state.callerLane.slice(state.callerLane.length - limit) : state.callerLane;
+  const newest = newestTraceId(state);
+  const talkingTo = newest ? state.traces[newest]?.talkingTo : undefined;
   useLayoutEffect(() => {
     if (body.current && pinned.current) body.current.scrollTop = body.current.scrollHeight;
   }, [state.callerLane]);
   return (
-    <section className="lane">
-      <header className="col-head">
-        <span className="col-num">00</span> CALLER
+    <section className="card lane">
+      <header className="card-head">
+        <span className="card-title tech">Caller</span>
+        {talkingTo && <span className="card-index tech micro">on {talkingTo}</span>}
       </header>
       <div
-        className="lane-body"
+        className="card-body lane-body"
         ref={body}
         data-clip="caller"
         onScroll={(event) => {
@@ -133,11 +140,11 @@ function CallerLane({ state, selection, select }: { state: DebugState; selection
         }}
       >
         {state.callerLane.length > items.length && (
-          <button type="button" className="earlier" onClick={() => setLimit(limit + CALLER_PAGE)}>
+          <button type="button" className="earlier tech micro" onClick={() => setLimit(limit + CALLER_PAGE)}>
             show earlier
           </button>
         )}
-        {items.length === 0 && <div className="empty">waiting for the caller</div>}
+        {items.length === 0 && <div className="empty tech micro">waiting for the caller</div>}
         {items.map((item) => {
           const trace = item.type === 'utterance' ? state.traces[item.traceId] : undefined;
           const floor = item.type === 'floor' ? state.floors[item.floorId] : undefined;
@@ -153,125 +160,97 @@ function CallerLane({ state, selection, select }: { state: DebugState; selection
 
 // --- Stage nodes ---------------------------------------------------------------
 
-function StageNode({
-  id,
-  title,
-  num,
-  color,
-  active,
-  children,
-}: {
-  id: string;
-  title: string;
-  num: string;
-  color: string;
-  active: boolean;
-  children: React.ReactNode;
-}) {
+function StageNode({ id, title, active, children }: { id: string; title: string; active: boolean; children: ReactNode }) {
   return (
-    <div className={`node${active ? ' active' : ''}`} data-anchor={`node-${id}`} style={{ ['--node' as string]: color }}>
-      <div className="node-title">
-        <span className="node-num">{num}</span>
-        {title}
-      </div>
-      <div className="node-body">{children}</div>
+    <div className={`node${active ? ' active' : ''}`} data-anchor={`node-${id}`}>
+      <TechFrame variant="panel" />
+      <div className="node-title tech">{title}</div>
+      <div className="node-body tech micro">{children}</div>
     </div>
   );
 }
 
-function StageColumns({ state, focus, floorFocus }: { state: DebugState; focus?: RouteTrace; floorFocus?: FloorTrace }) {
+function Stages({ state, focus, floorFocus }: { state: DebugState; focus?: RouteTrace; floorFocus?: FloorTrace }) {
   const path = focus ? routePath(focus) : null;
   const visited = (stage: Stage) => path?.stages.includes(stage) ?? false;
-  const jevCalls = state.traceOrder.length;
   const openFloors = state.floorOrder.filter((id) => !state.floors[id]?.released).length;
   const lastGate = floorFocus?.gates[floorFocus.gates.length - 1];
   return (
-    <>
-      <section className="stage-col stage-first">
-        <header className="col-head">
-          <span className="col-num">01</span> JEV
-        </header>
-        <div className="band band-route">
-          <StageNode id="jev" title="Jev router" num="R1" color={STAGE_COLORS.jev} active={visited('jev')}>
+    <section className="stages">
+      <div className="band band-route">
+        <div className="band-label tech micro">
+          <span>Route</span>
+          <span className="muted">{focus ? focus.id : 'no utterance yet'}</span>
+        </div>
+        <div className="band-nodes">
+          <StageNode id="jev" title="Jev" active={visited('jev')}>
             {focus?.jevResponse ? (
               <>
-                <div className={`kv ${focus.jevResponse.outcome === 'ok' ? '' : 'err'}`}>
-                  {focus.jevResponse.outcome} · {formatMs(focus.jevResponse.latency_ms)}
+                <div className={focus.jevResponse.outcome === 'ok' ? '' : 'semantic-red'}>
+                  {focus.jevResponse.outcome} / {formatMs(focus.jevResponse.latency_ms)}
                 </div>
-                {focus.decision && <div className="kv">{focus.decision.action}</div>}
-                {focus.decision && <div className="kv dim">{focus.decision.rule}</div>}
+                {focus.decision && <div className="node-value">{focus.decision.action}</div>}
+                {focus.decision && <div className="muted">{focus.decision.rule}</div>}
               </>
             ) : focus?.jevRequest && path?.ended ? (
-              <div className="kv dim">no answer · {path.ended.label}</div>
+              <div className="muted">no answer / {path.ended.label}</div>
             ) : focus?.jevRequest ? (
-              <div className="kv blink">asking…</div>
+              <div className="semantic-orange">asking…</div>
             ) : (
-              <div className="kv dim">idle</div>
+              <div className="muted">idle</div>
             )}
-            <div className="kv dim">{jevCalls} routed</div>
           </StageNode>
-        </div>
-        <div className="band band-floor">
-          <StageNode id="rewrite" title="Rewrite" num="F3" color={STAGE_COLORS.floor} active={Boolean(floorFocus?.rewrite)}>
-            {floorFocus?.rewrite ? <div className="kv">{formatMs(floorFocus.rewrite.latency_ms)}</div> : <div className="kv dim">—</div>}
-            <div className="kv dim">utility</div>
-          </StageNode>
-        </div>
-      </section>
-      <section className="stage-col">
-        <header className="col-head">
-          <span className="col-num">02</span> UTILITY
-        </header>
-        <div className="band band-route">
-          <StageNode id="utility" title="Utility LLM" num="R2" color={STAGE_COLORS.utility} active={visited('utility')}>
+          <StageNode id="utility" title="Utility" active={visited('utility')}>
             {focus && focus.utility.length > 0 ? (
               focus.utility.map((attempt, index) => (
-                <div key={index} className="kv">
-                  <span className="dim">{attempt.attempt}</span> {attempt.decision ? decisionSummary(attempt.decision.decision).split(' ')[0] : '…'}
+                <div key={index}>
+                  <span className="muted">{attempt.attempt}</span>{' '}
+                  <span className="node-value">{attempt.decision ? decisionSummary(attempt.decision.decision).split(' ')[0] : '…'}</span>
                 </div>
               ))
             ) : (
-              <div className="kv dim">not asked</div>
+              <div className="muted">not asked</div>
             )}
           </StageNode>
-        </div>
-        <div className="band band-floor">
-          <StageNode id="gate" title="Good moment" num="F2" color={STAGE_COLORS.floor} active={Boolean(lastGate)}>
-            {floorFocus && floorFocus.gates.length > 0 ? (
-              floorFocus.gates.slice(-3).map((gate) => (
-                <div key={gate.seq} className={`kv gate-${gate.answer}`}>
-                  {gate.answer} · {formatMs(gate.latency_ms)}
-                </div>
-              ))
-            ) : (
-              <div className="kv dim">—</div>
-            )}
-            <div className="kv dim">jev gate</div>
-          </StageNode>
-        </div>
-      </section>
-      <section className="stage-col">
-        <header className="col-head">
-          <span className="col-num">03</span> OPERATOR
-        </header>
-        <div className="band band-route">
-          <StageNode id="operator" title="Operator" num="R3" color={STAGE_COLORS.operator} active={visited('operator')}>
-            {focus?.operatorHop ? <div className="kv">{focus.operatorHop.outcome}</div> : <div className="kv dim">not used</div>}
+          <StageNode id="operator" title="Operator" active={visited('operator')}>
+            {focus?.operatorHop ? <div className="node-value">{focus.operatorHop.outcome}</div> : <div className="muted">not used</div>}
             {focus?.operatorTool && (
-              <div className="kv">
-                route → {focus.operatorTool.target} · {focus.operatorTool.mode}
+              <div>
+                route → {focus.operatorTool.target} / {focus.operatorTool.mode}
               </div>
             )}
           </StageNode>
         </div>
-        <div className="band band-floor">
-          <StageNode id="hold" title="Floor hold" num="F1" color={STAGE_COLORS.floor} active={openFloors > 0}>
-            <div className="kv">{openFloors} waiting</div>
-            {floorFocus && <div className="kv dim">{floorFocus.agent}</div>}
+      </div>
+      <div className="band band-floor">
+        <div className="band-label tech micro">
+          <span>Floor</span>
+          <span className="muted">{openFloors} waiting</span>
+        </div>
+        <div className="band-nodes">
+          <StageNode id="rewrite" title="Rewrite" active={Boolean(floorFocus?.rewrite)}>
+            {floorFocus?.rewrite ? <div className="node-value">{formatMs(floorFocus.rewrite.latency_ms)}</div> : <div className="muted">—</div>}
+            <div className="muted">utility</div>
+          </StageNode>
+          <StageNode id="gate" title="Good moment" active={Boolean(lastGate)}>
+            {floorFocus && floorFocus.gates.length > 0 ? (
+              floorFocus.gates.slice(-3).map((gate) => (
+                <div key={gate.seq} className={`gate-${gate.answer}`}>
+                  {gate.answer} / {formatMs(gate.latency_ms)}
+                </div>
+              ))
+            ) : (
+              <div className="muted">—</div>
+            )}
+            <div className="muted">jev gate</div>
+          </StageNode>
+          <StageNode id="hold" title="Hold" active={openFloors > 0}>
+            <div className="node-value">{openFloors} waiting</div>
+            {floorFocus && <div className="muted">{floorFocus.agent}</div>}
           </StageNode>
         </div>
-      </section>
-    </>
+      </div>
+    </section>
   );
 }
 
@@ -335,27 +314,25 @@ function useGeometry(container: RefObject<HTMLElement | null>, version: unknown)
 interface Wire {
   key: string;
   d: string;
-  color: string;
   label?: { at: Point; text: string };
-  dashed?: boolean;
+  /** The far end lies outside the visible panes: drawn dashed. */
+  clipped?: boolean;
 }
 
 interface DrawnRoute {
   id: string;
   kind: 'trace' | 'floor';
   wires: Wire[];
-  motion: string[];
+  /** Where the route stops while it is still in flight, or where it ended. */
   end?: Point;
+  /** Each destination pane the route reached. */
+  arrivals: Point[];
   pending: boolean;
   /** A trace the service ended with no destination: drawn with a stop mark. */
   ended?: string;
 }
 
-function stageColor(stage: 'caller' | Stage): string {
-  return STAGE_COLORS[stage];
-}
-
-function traceRoute(trace: RouteTrace, g: Geometry, lane: number, order: readonly string[]): DrawnRoute | null {
+function traceRoute(trace: RouteTrace, g: Geometry, lane: number): DrawnRoute | null {
   const start = g.anchors.get(`utt-${trace.id}`);
   if (!start) return null;
   const path = routePath(trace);
@@ -368,60 +345,58 @@ function traceRoute(trace: RouteTrace, g: Geometry, lane: number, order: readonl
     if (node) ports.set(stage, { in: leftMid(node, dy), out: rightMid(node, dy) });
   }
   const wires: Wire[] = [];
-  const spine: Point[] = [origin];
+  let last = origin;
   for (const segment of path.segments) {
     const from = ports.get(segment.from);
     const to = ports.get(segment.to);
     if (!from || !to) continue;
+    // Between two nodes the gap is narrower than a label, so the label sits
+    // above the gap, clear of both nodes.
+    const node = g.anchors.get(`node-${segment.to}`);
+    const labelAt =
+      segment.from === 'caller' ? { x: to.in.x - 40, y: to.in.y - 12 } : node ? { x: (from.out.x + to.in.x) / 2, y: node.y - 12 } : wireMid(from.out, to.in);
     wires.push({
       key: `${segment.from}-${segment.to}`,
       d: wire(from.out, to.in),
-      color: stageColor(segment.to),
-      label: segment.label
-        ? { at: segment.from === 'caller' ? { x: to.in.x - 30, y: to.in.y - 14 } : wireMid(from.out, to.in), text: segment.label }
-        : undefined,
+      label: segment.label ? { at: labelAt, text: segment.label } : undefined,
     });
-    spine.push(to.in, to.out);
+    last = to.in;
   }
-  const motion: string[] = [];
+  const arrivals: Point[] = [];
   for (const [index, destination] of path.destinations.entries()) {
     const from = ports.get(destination.from) ?? ports.get('caller')!;
-    const jack = busJack(g, `jack-in-${destination.agent}`, dy);
-    if (!jack) continue;
-    const color = agentColor(destination.agent, order);
-    const d = `${wire(from.out, jack.entry)} L${jack.end.x.toFixed(1)},${jack.end.y.toFixed(1)}`;
-    wires.push({ key: `dest-${index}`, d, color, dashed: jack.clipped, label: { at: { x: jack.end.x - 64, y: jack.end.y }, text: destination.label } });
-    const reached = spine.indexOf(from.out);
-    motion.push(`${chain(reached >= 0 ? spine.slice(0, reached + 1) : [origin, from.out])} ${d.replace(/^M/, 'L')}`);
+    const port = paneEntry(g, `port-in-${destination.agent}`, dy);
+    if (!port) continue;
+    const d = `${wire(from.out, port.entry)} H${port.end.x.toFixed(1)}`;
+    wires.push({ key: `dest-${index}`, d, clipped: port.clipped, label: { at: { x: port.end.x - 70, y: port.end.y }, text: destination.label } });
+    arrivals.push(port.end);
   }
-  const last = spine[spine.length - 1];
-  if (path.pending) motion.push(chain(spine));
-  return { id: trace.id, kind: 'trace', wires, motion, end: path.pending || path.ended ? last : undefined, pending: path.pending, ended: path.ended?.label };
+  return { id: trace.id, kind: 'trace', wires, arrivals, end: path.pending || path.ended ? last : undefined, pending: path.pending, ended: path.ended?.label };
 }
 
 /**
- * Where a wire meets a pane: it enters the patch bus at the left edge of the
- * pane row and runs along it to the pane's jack, so a route to the fourth
- * pane never crosses the first three.
+ * Where a line meets a pane: it enters the strip above (or below) the pane
+ * row at its left edge and runs along it to the pane, so a route to the
+ * fourth pane never crosses the first three.
  */
-function busJack(g: Geometry, anchor: string, dy: number): { entry: Point; end: Point; clipped: boolean } | null {
-  const jack = g.anchors.get(anchor);
+function paneEntry(g: Geometry, anchor: string, dy: number): { entry: Point; end: Point; clipped: boolean } | null {
+  const port = g.anchors.get(anchor);
   const panes = g.clips.get('panes');
-  if (!jack || !panes) return null;
-  const y = jack.y + jack.h / 2 + dy;
+  if (!port || !panes) return null;
+  const y = port.y + port.h / 2 + dy;
   const left = panes.x;
   const right = panes.x + panes.w - 8;
-  const x = Math.min(right, Math.max(left + 8, jack.x));
-  return { entry: { x: left, y }, end: { x, y }, clipped: x !== jack.x };
+  const x = Math.min(right, Math.max(left + 8, port.x));
+  return { entry: { x: left, y }, end: { x, y }, clipped: x !== port.x };
 }
 
 function floorRoute(floor: FloorTrace, g: Geometry, lane: number): DrawnRoute | null {
-  const jack = busJack(g, `jack-out-${floor.agent}`, ((lane % 5) - 2) * 3);
-  if (!jack) return null;
-  const points: { at: Point; out: Point; label: string }[] = [];
+  const port = paneEntry(g, `port-out-${floor.agent}`, ((lane % 5) - 2) * 3);
+  if (!port) return null;
+  const points: { at: Point; out: Point; box: Box; label: string }[] = [];
   const hop = (id: string, label: string) => {
     const node = g.anchors.get(`node-${id}`);
-    if (node) points.push({ at: rightMid(node), out: leftMid(node), label });
+    if (node) points.push({ at: rightMid(node), out: leftMid(node), box: node, label });
   };
   hop('hold', floor.heldTs !== undefined ? 'held' : 'requested');
   if (floor.gates.length > 0) {
@@ -430,48 +405,58 @@ function floorRoute(floor: FloorTrace, g: Geometry, lane: number): DrawnRoute | 
   }
   if (floor.rewrite) hop('rewrite', `rewrite ${formatMs(floor.rewrite.latency_ms)}`);
   const wires: Wire[] = [];
-  const start = { x: jack.end.x + 5, y: jack.end.y };
   wires.push({
-    key: 'f-bus',
-    d: `M${start.x.toFixed(1)},${start.y.toFixed(1)} L${jack.entry.x.toFixed(1)},${jack.entry.y.toFixed(1)}`,
-    color: STAGE_COLORS.floor,
-    dashed: jack.clipped,
-    label: { at: { x: start.x - 56, y: start.y }, text: floor.agent },
+    key: 'f-out',
+    d: `M${port.end.x.toFixed(1)},${port.end.y.toFixed(1)} H${port.entry.x.toFixed(1)}`,
+    clipped: port.clipped,
+    label: { at: { x: port.end.x - 56, y: port.end.y }, text: floor.agent },
   });
-  const spine: Point[] = [start, jack.entry];
-  let from = jack.entry;
+  let from = port.entry;
   for (const [index, point] of points.entries()) {
     wires.push({
       key: `f-${index}`,
       d: wire(from, point.at),
-      color: STAGE_COLORS.floor,
-      label: index === 0 ? undefined : { at: wireMid(from, point.at), text: points[index - 1].label },
+      // Above the gap between the two nodes, clear of both.
+      label: index === 0 ? undefined : { at: { x: (from.x + point.at.x) / 2, y: point.box.y - 12 }, text: points[index - 1].label },
     });
-    spine.push(point.at, point.out);
     from = point.out;
   }
   const target = g.anchors.get(`floor-dst-${floor.id}`);
+  const arrivals: Point[] = [];
   if (floor.released && target) {
     const end = clampToClip(rightMid(target), g.clips.get('caller')).point;
-    const label = points.length ? `${points[points.length - 1].label} · ${floor.released.how}` : floor.released.how;
-    wires.push({ key: 'f-end', d: wire(from, end), color: STAGE_COLORS.floor, label: { at: wireMid(from, end), text: label } });
-    spine.push(end);
+    const lastHop = points[points.length - 1];
+    const label = lastHop ? `${lastHop.label} · ${floor.released.how}` : floor.released.how;
+    // On the line's vertical run, below the last node.
+    const at = lastHop ? { x: (from.x + end.x) / 2, y: lastHop.box.y + lastHop.box.h + 14 } : wireMid(from, end);
+    wires.push({ key: 'f-end', d: wire(from, end), label: { at, text: label } });
+    arrivals.push(end);
   }
-  const motion = `M${start.x.toFixed(1)},${start.y.toFixed(1)} L${jack.entry.x.toFixed(1)},${jack.entry.y.toFixed(1)} ${chain(spine.slice(1)).replace(/^M/, 'L')}`;
-  return { id: floor.id, kind: 'floor', wires, motion: [motion], end: floor.released ? undefined : from, pending: !floor.released };
+  return { id: floor.id, kind: 'floor', wires, arrivals, end: floor.released ? undefined : from, pending: !floor.released };
+}
+
+/** An edge label as the main page's diagram draws one: mono text on a black backing. */
+function WireLabel({ at, text }: { at: Point; text: string }) {
+  const width = text.length * 7.3 + 12;
+  return (
+    <g className="wire-label diagram-edge-label-group" transform={`translate(${at.x.toFixed(1)},${at.y.toFixed(1)})`}>
+      <rect className="diagram-edge-label__backing" x={-width / 2} y={-9} width={width} height={18} />
+      <text className="diagram-edge-label" textAnchor="middle" dy={4}>
+        {text}
+      </text>
+    </g>
+  );
 }
 
 function RouteOverlay({
   state,
   geometry,
   highlight,
-  animate,
   select,
 }: {
   state: DebugState;
   geometry: Geometry | null;
   highlight: Set<string>;
-  animate: Set<string>;
   select: PaneSelect;
 }) {
   const routes = useMemo(() => {
@@ -480,7 +465,7 @@ function RouteOverlay({
     const traceIds = state.traceOrder.slice(-DRAWN_TRACES);
     for (const [lane, id] of traceIds.entries()) {
       const trace = state.traces[id];
-      const route = trace && traceRoute(trace, geometry, lane, state.paneOrder);
+      const route = trace && traceRoute(trace, geometry, lane);
       if (route) drawn.push(route);
     }
     for (const [lane, id] of state.floorOrder.slice(-DRAWN_FLOORS).entries()) {
@@ -490,94 +475,55 @@ function RouteOverlay({
     }
     for (const id of highlight) {
       if (drawn.some((route) => route.id === id)) continue;
-      const route = state.traces[id]
-        ? traceRoute(state.traces[id], geometry, 3, state.paneOrder)
-        : state.floors[id]
-          ? floorRoute(state.floors[id], geometry, 2)
-          : null;
+      const route = state.traces[id] ? traceRoute(state.traces[id], geometry, 3) : state.floors[id] ? floorRoute(state.floors[id], geometry, 2) : null;
       if (route) drawn.push(route);
     }
     // Highlighted routes draw last, on top.
     return drawn.sort((a, b) => Number(highlight.has(a.id)) - Number(highlight.has(b.id)));
-  }, [geometry, state.traceOrder, state.traces, state.floorOrder, state.floors, state.paneOrder, highlight]);
+  }, [geometry, state.traceOrder, state.traces, state.floorOrder, state.floors, highlight]);
 
   if (!geometry) return null;
-  // Wires run under the nodes and panes; their labels sit above everything.
-  const labels = (
-    <svg className="overlay overlay-labels" width={geometry.width} height={geometry.height} viewBox={`0 0 ${geometry.width} ${geometry.height}`}>
-      {routes
-        .filter((route) => highlight.has(route.id))
-        .map((route) => (
-          <g key={`${route.kind}-${route.id}`}>
-            {route.wires.map((segment) =>
-              segment.label ? (
-                <g
-                  key={`${segment.key}-label`}
-                  className="wire-label"
-                  transform={`translate(${segment.label.at.x.toFixed(1)},${segment.label.at.y.toFixed(1)})`}
-                >
-                  <rect
-                    x={-(segment.label.text.length * 3.3 + 6)}
-                    y={-8}
-                    width={segment.label.text.length * 6.6 + 12}
-                    height={16}
-                    rx={2}
-                    stroke={segment.color}
-                  />
-                  <text textAnchor="middle" dy={4} fill={segment.color}>
-                    {segment.label.text}
-                  </text>
-                </g>
-              ) : null,
-            )}
-          </g>
-        ))}
-    </svg>
-  );
+  const viewBox = `0 0 ${geometry.width} ${geometry.height}`;
+  // Lines run under the nodes and panes; their labels sit above everything.
   return (
     <>
-      <svg className="overlay" width={geometry.width} height={geometry.height} viewBox={`0 0 ${geometry.width} ${geometry.height}`}>
-        <defs>
-          <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="2.4" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-        </defs>
+      <svg className="overlay" width={geometry.width} height={geometry.height} viewBox={viewBox}>
         {routes.map((route) => {
           const lit = highlight.has(route.id);
-          const live = animate.has(route.id);
           const open = () => (route.kind === 'trace' ? select.trace(route.id) : select.floor(route.id));
           return (
-            <g key={`${route.kind}-${route.id}`} className={`route${lit ? ' lit' : ''}${live ? ' live' : ''} route-${route.kind}`} onClick={open}>
+            <g
+              key={`${route.kind}-${route.id}`}
+              className={`route route-${route.kind}${lit ? ' lit' : ''}${lit && route.pending ? ' in-flight' : ''}`}
+              onClick={open}
+            >
               {route.wires.map((segment) => (
                 <g key={segment.key}>
                   <path className="hit" d={segment.d} />
-                  <path className={`wire${segment.dashed ? ' dashed' : ''}`} d={segment.d} stroke={segment.color} filter={lit ? 'url(#glow)' : undefined} />
+                  <path className={`wire${segment.clipped ? ' clipped' : ''}`} d={segment.d} />
                 </g>
               ))}
-              {live &&
-                route.motion.map((motion, index) =>
-                  motion ? (
-                    <circle key={index} r={3.5} className="pulse-dot">
-                      <animateMotion dur="1.6s" repeatCount="indefinite" path={motion} />
-                    </circle>
-                  ) : null,
-                )}
-              {route.pending && route.end && <circle className="pending-ring" cx={route.end.x} cy={route.end.y} r={6} />}
+              {lit && route.arrivals.map((point, index) => <circle key={index} className="arrival" cx={point.x} cy={point.y} r={2.5} />)}
+              {route.pending && route.end && <circle className="pending-mark" cx={route.end.x} cy={route.end.y} r={4} />}
               {route.ended && route.end && (
                 <g className="end-mark" transform={`translate(${route.end.x.toFixed(1)},${route.end.y.toFixed(1)})`}>
                   <title>{route.ended}</title>
-                  <path d="M-5,-5 L5,5 M5,-5 L-5,5" />
+                  <path d="M-4,-4 L4,4 M4,-4 L-4,4" />
                 </g>
               )}
             </g>
           );
         })}
       </svg>
-      {labels}
+      <svg className="overlay overlay-labels" width={geometry.width} height={geometry.height} viewBox={viewBox}>
+        {routes
+          .filter((route) => highlight.has(route.id))
+          .map((route) => (
+            <g key={`${route.kind}-${route.id}`} className={`route-${route.kind}`}>
+              {route.wires.map((segment) => (segment.label ? <WireLabel key={`${segment.key}-label`} {...segment.label} /> : null))}
+            </g>
+          ))}
+      </svg>
     </>
   );
 }
@@ -610,27 +556,18 @@ export function SwitchboardView({ state, selection, select }: { state: DebugStat
     else for (const id of [newest, lastRouted, liveFloor]) if (id) set.add(id);
     return set;
   }, [selection, newest, lastRouted, liveFloor]);
-  const animate = useMemo(() => {
-    const set = new Set<string>();
-    for (const id of [newest, lastRouted, liveFloor, selection?.id]) if (id) set.add(id);
-    return set;
-  }, [newest, lastRouted, liveFloor, selection]);
 
   const agentStates = useMemo(() => new Map(state.agents.map((agent) => [agent.project, agent.state])), [state.agents]);
 
   return (
     <div className="board" ref={container}>
-      <RouteOverlay state={state} geometry={geometry} highlight={highlight} animate={animate} select={select} />
+      <RouteOverlay state={state} geometry={geometry} highlight={highlight} select={select} />
       <CallerLane state={state} selection={selection} select={select} />
-      <StageColumns state={state} focus={focus} floorFocus={floorFocus} />
+      <Stages state={state} focus={focus} floorFocus={floorFocus} />
       <div className="panes" data-clip="panes">
-        <div className="bus-label bus-top">PATCH ▶</div>
-        <div className="bus-label bus-bottom">◀ FLOOR</div>
         {state.paneOrder.map((agent) => {
           const pane = state.panes[agent];
-          return pane ? (
-            <AgentPane key={agent} pane={pane} color={agentColor(agent, state.paneOrder)} state={agentStates.get(agent)} select={select} lit={highlight} />
-          ) : null;
+          return pane ? <AgentPane key={agent} pane={pane} state={agentStates.get(agent)} select={select} lit={highlight} /> : null;
         })}
       </div>
     </div>
