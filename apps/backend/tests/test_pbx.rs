@@ -4333,7 +4333,6 @@ async fn the_operator_route_tool_is_traced_as_its_own_hop() {
         route_trace(&board),
         vec![
             "utterance:branch:operator",
-            "utterance:routed:operator:continue:jev",
             "utterance:operator_hop:route_tool",
             "utterance:route_tool:alpha:fresh:transfer",
             "utterance:routed:alpha:fresh:operator",
@@ -4385,7 +4384,9 @@ async fn jev_branches_are_traced_and_work_outside_a_decision_is_not() {
             "utterance:branch:continue_current",
             "utterance:routed:alpha:continue:jev",
             "utterance:branch:stop_asked",
+            "utterance:routed:operator:continue:pbx",
             "utterance:branch:stop_confirmed",
+            "utterance:routed:operator:continue:pbx",
             "utterance:branch:go_to_project",
             "utterance:routed:alpha:fresh:jev",
         ]
@@ -4401,4 +4402,50 @@ async fn a_cancelled_decision_leaves_no_utterance_behind() {
         assert_eq!(board.current_utterance().as_deref(), Some("clip-9"));
     }
     assert_eq!(board.current_utterance(), None);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_operator_answer_ends_the_trace_at_the_operator() {
+    let root = scratch_dir("trace-operator-answer");
+    let binary = fake_routing_process(
+        &root,
+        r#"{"type":"tool_execution_start","toolName":"second_opinion","args":{"target":"operator","mode":"continue","confident":true}}"#,
+        Some(
+            r#"{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Operator here."}}"#,
+        ),
+    );
+    let mut board = board_on(
+        vec![project("alpha", "Alpha")],
+        &[("SWITCHBOARD_PI_BINARY", &binary.to_string_lossy())],
+        two_model_catalog(),
+    );
+    let reply = board
+        .handle_decision(
+            "what time is it",
+            &decision(crate::router::Action::General, None, None),
+        )
+        .await;
+    assert_eq!(reply.text, "Operator here.");
+    // The utility can name the operator too; the operator's answer is still
+    // the one destination.
+    let mut unsure = decision(crate::router::Action::General, None, None);
+    unsure.unsure = true;
+    board.handle_decision("and the date", &unsure).await;
+
+    assert_eq!(
+        route_trace(&board),
+        vec![
+            "utterance:branch:operator",
+            "utterance:operator_hop:answered",
+            "utterance:routed:operator:continue:operator",
+            "utterance:branch:utility",
+            "utterance:utility_request:first",
+            "utterance:utility_decision:first:second_opinion",
+            "utterance:operator_hop:answered",
+            "utterance:routed:operator:continue:operator",
+        ]
+    );
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
 }

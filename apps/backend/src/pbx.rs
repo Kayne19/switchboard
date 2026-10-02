@@ -1190,6 +1190,7 @@ impl Switchboard {
                     "stop_confirmed",
                     format!("the caller confirmed stopping {target}"),
                 );
+                self.trace_routed(OPERATOR, text, "continue", "pbx");
                 return self.stop_project(&target).await;
             }
             note = format!("the pending stop of {target} was not confirmed, so it was dropped; ");
@@ -1203,6 +1204,7 @@ impl Switchboard {
                     "stop_asked",
                     format!("{note}Jev chose stop, but nothing is running to stop"),
                 );
+                self.trace_routed(OPERATOR, text, "continue", "pbx");
                 return self.reply(["Nothing is running to stop."], None);
             };
             self.trace_branch(
@@ -1211,6 +1213,7 @@ impl Switchboard {
                     "{note}Jev chose stop for {target}; a stop always asks the caller to confirm"
                 ),
             );
+            self.trace_routed(OPERATOR, text, "continue", "pbx");
             self.pending_stop = Some(target.clone());
             return self.reply(
                 [format!(
@@ -1239,6 +1242,7 @@ impl Switchboard {
                 "take_over",
                 format!("{note}Jev chose take_over without a target, so the caller is asked which"),
             );
+            self.trace_routed(OPERATOR, text, "continue", "pbx");
             return self.reply(
                 ["Tell me which project you want to take over."],
                 Some("takeover target missing".into()),
@@ -1317,7 +1321,10 @@ impl Switchboard {
                         mode,
                         confident: true,
                     })) => {
-                        self.trace_routed(&target, text, mode.as_str(), "utility");
+                        // The operator records its own destination when it answers.
+                        if target != OPERATOR {
+                            self.trace_routed(&target, text, mode.as_str(), "utility");
+                        }
                         return self.route_project_part(text, &target, mode).await;
                     }
                     Ok(_) => {}
@@ -1336,7 +1343,6 @@ impl Switchboard {
                 "multi_unresolved",
                 "the routing utility could not split a multi-target utterance, so the operator asks the caller".into(),
             );
-            self.trace_routed(OPERATOR, text, "continue", "pbx");
             let context = TransferContext {
                 exact_caller_transcript: text.to_owned(),
                 derived_intent: String::new(),
@@ -1400,12 +1406,6 @@ impl Switchboard {
                     decision.reason
                 )
             },
-        );
-        self.trace_routed(
-            OPERATOR,
-            text,
-            "continue",
-            if utility_required { "pbx" } else { "jev" },
         );
         let context = TransferContext {
             exact_caller_transcript: text.to_owned(),
@@ -1504,9 +1504,6 @@ impl Switchboard {
         // One utterance fans out to every part's agent.
         for part in &parts {
             self.trace_routed(&part.agent, &part.text, "continue", "utility");
-        }
-        if parts.is_empty() {
-            self.trace_routed(OPERATOR, original, "continue", "pbx");
         }
         let current = self.coordinator.route();
         let foreground_index = parts
@@ -1987,7 +1984,7 @@ impl Switchboard {
             Err(e) => {
                 tracing::error!(error = %e, "operator unavailable");
                 tracing::error!(error = %e, "operator unavailable for routing");
-                self.trace_operator_hop(&context.exact_caller_transcript, "unavailable");
+                self.trace_operator_hop(context, &context.exact_caller_transcript, "unavailable");
                 return self.routing_unavailable();
             }
         };
@@ -2013,7 +2010,7 @@ impl Switchboard {
             Ok(turn) => turn,
             Err(error) => {
                 tracing::warn!(%error, "the operator leg failed mid-prompt");
-                self.trace_operator_hop(&operator_text, "failed");
+                self.trace_operator_hop(context, &operator_text, "failed");
                 return self.recover_operator(error.to_string()).await;
             }
         };
@@ -2028,17 +2025,17 @@ impl Switchboard {
             } else {
                 turn.error
             };
-            self.trace_operator_hop(&operator_text, "failed");
+            self.trace_operator_hop(context, &operator_text, "failed");
             return self.recover_operator(error).await;
         }
         if let Some(signal) = turn.signals.iter().find(|s| s.name == ROUTE_TOOL) {
             let target = arg_first(signal, &["target", "project"]);
             let mode = conversation_mode(signal);
             if target.is_empty() {
-                self.trace_operator_hop(&operator_text, "route_tool_without_target");
+                self.trace_operator_hop(context, &operator_text, "route_tool_without_target");
                 return self.reply([turn.text], None);
             }
-            self.trace_operator_hop(&operator_text, "route_tool");
+            self.trace_operator_hop(context, &operator_text, "route_tool");
             let action = if target == OPERATOR {
                 "return_to_operator"
             } else if target == self.coordinator.route() {
@@ -2052,26 +2049,39 @@ impl Switchboard {
                 mode: mode.as_str().into(),
                 action: action.into(),
             });
-            self.trace_routed(
-                &target,
-                &context.exact_caller_transcript,
-                mode.as_str(),
-                "operator",
-            );
+            if target != OPERATOR {
+                self.trace_routed(
+                    &target,
+                    &context.exact_caller_transcript,
+                    mode.as_str(),
+                    "operator",
+                );
+            }
             return self
                 .route_project_part(&context.exact_caller_transcript, &target, mode)
                 .await;
         }
-        self.trace_operator_hop(&operator_text, "answered");
+        self.trace_operator_hop(context, &operator_text, "answered");
         self.reply([turn.text], None)
     }
 
-    fn trace_operator_hop(&self, text: &str, outcome: &str) {
+    /// The operator's part in an utterance's trace. Unless it handed the
+    /// caller on with its route tool, the operator is the destination: it
+    /// answered (or its recovery did), so the trace ends in a `routed` to it.
+    fn trace_operator_hop(&self, context: &TransferContext, text: &str, outcome: &str) {
         self.trace(|utterance_id| crate::debug::DebugEvent::OperatorHop {
             utterance_id,
             text: text.to_owned(),
             outcome: outcome.to_owned(),
         });
+        if outcome != "route_tool" {
+            self.trace_routed(
+                OPERATOR,
+                &context.exact_caller_transcript,
+                "continue",
+                "operator",
+            );
+        }
     }
 
     async fn handle_agent_ctx(&mut self, context: &TransferContext) -> Reply {
