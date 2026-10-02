@@ -449,6 +449,9 @@ pub struct AppInner {
     hosts: Hosts,
     /// Read-only, bounded observability. It never participates in call control.
     pub(crate) debug: DebugBus,
+    /// The call the debug page groups events under, while a page is on it.
+    debug_call: std::sync::Mutex<Option<String>>,
+    next_debug_call: AtomicU64,
     /// What routing reads about the call. Routing must never wait on the PBX
     /// lock: the turn worker holds it for a whole prompt, and an utterance
     /// routed only after the prompt ends can no longer steer it.
@@ -622,6 +625,7 @@ impl AppState {
         gate.active_epoch = Some(epoch);
         gate.screen_state["stale"] = json!(true);
         self.0.floor.set_page_connected(true).await;
+        self.start_debug_call();
         *self.0.screen_state.lock().await = gate.screen_state.clone();
         let snapshot_actions = gate.projection.snapshot_actions();
         let watermark = gate.watermark;
@@ -638,10 +642,50 @@ impl AppState {
             }
         }
         self.0.delivery.retire(epoch);
-        self.0
-            .floor
-            .set_page_connected(self.0.delivery.connected())
-            .await;
+        let connected = self.0.delivery.connected();
+        self.0.floor.set_page_connected(connected).await;
+        if !connected {
+            self.end_debug_call("page_closed");
+        }
+    }
+
+    /// Opens the debug page's call when a caller page connects to none.
+    fn start_debug_call(&self) {
+        let mut call = self
+            .0
+            .debug_call
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if call.is_some() {
+            return;
+        }
+        let call_id = format!(
+            "call-{}",
+            self.0.next_debug_call.fetch_add(1, Ordering::Relaxed)
+        );
+        *call = Some(call_id.clone());
+        self.0.debug.publish(DebugEvent::CallBoundary {
+            phase: "started".into(),
+            call_id,
+            reason: None,
+        });
+    }
+
+    /// Closes the debug page's call, if one is open.
+    fn end_debug_call(&self, reason: &str) {
+        let ended = self
+            .0
+            .debug_call
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(call_id) = ended {
+            self.0.debug.publish(DebugEvent::CallBoundary {
+                phase: "ended".into(),
+                call_id,
+                reason: Some(reason.to_owned()),
+            });
+        }
     }
 
     #[cfg(test)]
@@ -834,6 +878,8 @@ impl AppState {
                 switchboard: Mutex::new(switchboard),
                 hosts,
                 debug,
+                debug_call: std::sync::Mutex::new(None),
+                next_debug_call: AtomicU64::new(1),
                 routing,
                 delivery,
                 transcript_log: Mutex::new(transcript_log),
@@ -1294,6 +1340,7 @@ pub async fn shutdown(state: &AppState) {
     // shutdown waits for upgraded connections, so merely stopping the listener
     // can otherwise leave systemd waiting on a browser tab indefinitely.
     state.0.shutdown.send_replace(true);
+    state.end_debug_call("shutdown");
     state.0.coordinator.finish_shutdown();
 }
 fn emit(state: &AppState, event: Event) -> bool {
@@ -2726,6 +2773,14 @@ async fn hangup(State(state): State<AppState>) -> impl IntoResponse {
     let closed = interrupt_active_turn(&state).await;
     let dropped = state.0.switchboard.lock().await.force_hangup().await;
     let hung_up = hangup_outcome(dropped, closed);
+    // A hangup ends the call on the debug page; a page still connected is on
+    // a new one with the operator.
+    if hung_up.is_some() {
+        state.end_debug_call("hangup");
+        if state.0.delivery.connected() {
+            state.start_debug_call();
+        }
+    }
     if let Some((_, line)) = &hung_up {
         if let Some(entry) =
             state

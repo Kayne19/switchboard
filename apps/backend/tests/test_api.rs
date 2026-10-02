@@ -6804,6 +6804,46 @@ async fn a_stale_routed_utterance_ends_its_trace() {
 }
 
 #[tokio::test]
+async fn a_rescue_and_the_call_boundaries_are_traced() {
+    use crate::debug::DebugEvent;
+    let state = state();
+    let (connection, _, _) = state.register_connection().await;
+    cancel_active_operations(&state).await;
+    let generation = state.0.coordinator.generation();
+    state.retire_connection(connection.epoch).await;
+
+    let events: Vec<_> = debug_events(&state)
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event,
+                DebugEvent::CallBoundary { .. } | DebugEvent::Rescue { .. }
+            )
+        })
+        .collect();
+    assert_eq!(
+        events,
+        vec![
+            DebugEvent::CallBoundary {
+                phase: "started".into(),
+                call_id: "call-1".into(),
+                reason: None,
+            },
+            DebugEvent::Rescue {
+                generation,
+                reason: "operation interrupted".into(),
+                leg: None,
+            },
+            DebugEvent::CallBoundary {
+                phase: "ended".into(),
+                call_id: "call-1".into(),
+                reason: Some("page_closed".into()),
+            },
+        ]
+    );
+}
+
+#[tokio::test]
 async fn a_stale_reply_is_traced_as_speech_not_delivered() {
     let state = state();
     let generation = state.0.coordinator.generation();
