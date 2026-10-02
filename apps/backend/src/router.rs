@@ -531,6 +531,31 @@ pub fn utility_decision(signals: &[Signal]) -> Option<UtilityDecision> {
     (!parsed.is_empty()).then_some(UtilityDecision::DispatchParts(parsed))
 }
 
+impl UtilityDecision {
+    /// The decision as the debug page shows it: `kind` and its fields.
+    pub fn debug_value(&self) -> Value {
+        match self {
+            Self::SecondOpinion {
+                target,
+                mode,
+                confident,
+            } => serde_json::json!({
+                "kind": "second_opinion",
+                "target": target,
+                "mode": mode,
+                "confident": confident,
+            }),
+            Self::DispatchParts(parts) => serde_json::json!({
+                "kind": "dispatch_parts",
+                "parts": parts
+                    .iter()
+                    .map(|part| serde_json::json!({"project": part.agent, "text": part.text}))
+                    .collect::<Vec<_>>(),
+            }),
+        }
+    }
+}
+
 const SECOND_OPINION_TOOL: &str = "second_opinion";
 const DISPATCH_PARTS_TOOL: &str = "dispatch_parts";
 

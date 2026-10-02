@@ -2025,6 +2025,18 @@ fn jev_response_event(
     }
 }
 
+/// Ends an utterance's routing trace when a newer generation discards it.
+fn trace_stale_utterance(state: &AppState, id: &str, stamped: u64) {
+    state.0.debug.publish(DebugEvent::PbxBranch {
+        utterance_id: id.to_owned(),
+        branch: "dropped_stale".into(),
+        reason: format!(
+            "the line changed before this was acted on (stamped generation {stamped}, now {}); it was discarded",
+            state.0.coordinator.generation()
+        ),
+    });
+}
+
 fn emit_transcript_verdict(state: &AppState, id: &str, transcript: &str) {
     emit_clip_verdict(
         state,
@@ -2057,12 +2069,14 @@ async fn dispatch_routed_transcript(
     // Routing itself can span a rescue. Do not let a fallback decision queue
     // words for the leg that was current when Jev started.
     if generation != state.0.coordinator.generation() {
+        trace_stale_utterance(state, id, generation);
         emit_stale_clip(state, id);
         return;
     }
     let steered = if can_steer {
         let _transition = state.0.operation_transition.lock().await;
         if generation != state.0.coordinator.generation() {
+            trace_stale_utterance(state, id, generation);
             emit_stale_clip(state, id);
             return;
         }
@@ -2074,6 +2088,7 @@ async fn dispatch_routed_transcript(
         let active = state.0.active_session.lock().await;
         if generation != state.0.coordinator.generation() {
             drop(active);
+            trace_stale_utterance(state, id, generation);
             emit_stale_clip(state, id);
             return;
         }
@@ -2101,6 +2116,7 @@ async fn dispatch_routed_transcript(
         let active = state.0.active_session.lock().await;
         if generation != state.0.coordinator.generation() {
             drop(active);
+            trace_stale_utterance(state, id, generation);
             emit_stale_clip(state, id);
             return;
         }
@@ -2108,6 +2124,14 @@ async fn dispatch_routed_transcript(
         false
     };
     if steered {
+        // Steering is this utterance's destination: the live turn on the line.
+        state.0.debug.publish(DebugEvent::Routed {
+            utterance_id: id.to_owned(),
+            to_agent: state.0.coordinator.route(),
+            text_part: transcript,
+            mode: "steer".into(),
+            via: "jev".into(),
+        });
         emit_message(
             state,
             ServerMessage::Queued {
@@ -2268,6 +2292,7 @@ async fn process_turns(state: AppState) {
         let routed_decision = state.0.routed_decisions.lock().await.remove(&id);
         if generation != state.0.coordinator.generation() {
             tracing::info!(clip = %id, stamped = generation, current = state.0.coordinator.generation(), "dropping a queued turn before Jev routing");
+            trace_stale_utterance(&state, &id, generation);
             emit_stale_clip(&state, &id);
             continue;
         }
@@ -2298,6 +2323,7 @@ async fn process_turns(state: AppState) {
                 let current = state.0.coordinator.generation();
                 if generation != current {
                     tracing::info!(clip = %id, stamped = generation, %current, "dropping a queued turn from before a page rescue");
+                    trace_stale_utterance(&state, &id, generation);
                     emit_stale_clip(&state, &id);
                     Some(Err(()))
                 } else {
@@ -2312,6 +2338,7 @@ async fn process_turns(state: AppState) {
                         }
                         Err(error) => {
                             tracing::info!(clip = %id, %error, "dropping queued turn during lifecycle transition");
+                            trace_stale_utterance(&state, &id, generation);
                             emit_stale_clip(&state, &id);
                             Some(Err(()))
                         }
@@ -2341,15 +2368,35 @@ async fn process_turns(state: AppState) {
         let route = state.0.coordinator.route();
         let waiting = state.0.queued_turns.load(Ordering::Acquire);
         tracing::info!(clip = %id, %route, waiting, "dispatching a turn");
+        let trace_turn_end = {
+            let debug = state.0.debug.clone();
+            let agent = route.clone();
+            let id = id.clone();
+            move || {
+                debug.publish(DebugEvent::TurnEnd {
+                    agent,
+                    turn_id: id.clone(),
+                    generation,
+                    utterance_id: Some(id),
+                });
+            }
+        };
+        state.0.debug.publish(DebugEvent::TurnStart {
+            agent: route.clone(),
+            turn_id: id.clone(),
+            generation,
+            utterance_id: Some(id.clone()),
+        });
         emit_message(&state, ServerMessage::Thinking { route, waiting });
         // The PBX, the agent, and the reply's synthesis all log under the
         // clip that started the turn.
         let turn = tracing::info_span!("turn", clip = %id);
+        let turn_id = id.clone();
         let handle_turn = async move {
             let mut board = turn_state.0.switchboard.lock().await;
             board.set_call_state(call_state);
             board
-                .handle_decision_with_takeover(&transcript, &decision, takeover)
+                .handle_decision_with_takeover(&turn_id, &transcript, &decision, takeover)
                 .await
         };
         let Some((task, task_id)) =
@@ -2357,6 +2404,8 @@ async fn process_turns(state: AppState) {
                 .await
         else {
             tracing::info!(clip = %id, stamped = generation, "dropping turn because rescue occurred before registration");
+            trace_turn_end();
+            trace_stale_utterance(&state, &id, generation);
             emit_stale_clip(&state, &id);
             state.0.coordinator.finish_operation(&operation);
             state.0.clear_active_speech_group(speech_group);
@@ -2367,6 +2416,7 @@ async fn process_turns(state: AppState) {
             Ok(result) => result,
             Err(error) if error.is_cancelled() => {
                 tracing::info!(clip = %id, elapsed = ?started.elapsed(), "the turn was cancelled by a page rescue");
+                trace_turn_end();
                 clear_active_operation(&state, task_id).await;
                 state.0.coordinator.finish_operation(&operation);
                 state.0.clear_active_speech_group(speech_group);
@@ -2377,6 +2427,7 @@ async fn process_turns(state: AppState) {
                 // A panic inside `handle()` arrives here. Without this line the
                 // caller hears a generic apology and the journal holds nothing.
                 tracing::error!(clip = %id, %error, elapsed = ?started.elapsed(), "the turn worker failed");
+                trace_turn_end();
                 clear_active_operation(&state, task_id).await;
                 state.0.coordinator.finish_operation(&operation);
                 state.0.clear_active_speech_group(speech_group);
@@ -2396,6 +2447,7 @@ async fn process_turns(state: AppState) {
             tracing::warn!(clip = %id, route = %reply.route, %error, "the turn reported a failure");
         }
         tracing::info!(clip = %id, route = %reply.route, elapsed = ?started.elapsed(), "turn settled");
+        trace_turn_end();
         let delivery_generation = reply.delivery_generation.unwrap_or(generation);
         let _delivered = deliver_turn_if_current(&state, &reply, delivery_generation, &id)
             .instrument(turn)
@@ -2889,6 +2941,14 @@ async fn handle_project_turn(state: &AppState, turn: ProjectTurn) -> bool {
             );
             return false;
         }
+        if let Some(turn_id) = operation.turn_id.clone() {
+            state.0.debug.publish(DebugEvent::TurnEnd {
+                agent: state.0.coordinator.route(),
+                turn_id,
+                generation: operation.leg.generation,
+                utterance_id: None,
+            });
+        }
         if !turn.text.trim().is_empty() {
             let route = state.0.coordinator.route();
             state.0.transcript_log.lock().await.add_with_id_and_voiced(
@@ -2945,8 +3005,19 @@ async fn handle_project_turn(state: &AppState, turn: ProjectTurn) -> bool {
         );
         return false;
     }
-    match state.0.coordinator.begin_autonomous(&current, turn_id) {
+    match state
+        .0
+        .coordinator
+        .begin_autonomous(&current, turn_id.clone())
+    {
         Ok(operation) => {
+            // A self-woken turn answers no caller line.
+            state.0.debug.publish(DebugEvent::TurnStart {
+                agent: state.0.coordinator.route(),
+                turn_id,
+                generation: current.generation,
+                utterance_id: None,
+            });
             state
                 .0
                 .autonomous_operations

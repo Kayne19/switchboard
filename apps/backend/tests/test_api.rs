@@ -6659,6 +6659,99 @@ async fn until_debug(
 }
 
 #[tokio::test]
+async fn a_routed_utterance_is_traced_from_jev_to_its_turn() {
+    use crate::debug::DebugEvent;
+    let (client, _requests, _responded) = fake_jev_client();
+    let state = state_with_jev(client, Registry::new(vec![]));
+    let generation = state.0.coordinator.generation();
+
+    dispatch_routed_transcript(&state, "clip-7", generation, "hello".into()).await;
+
+    let events = debug_events(&state);
+    assert!(matches!(
+        &events[0],
+        DebugEvent::CallerUtterance { utterance_id, text, .. } if utterance_id == "clip-7" && text == "hello"
+    ));
+    assert!(matches!(
+        &events[1],
+        DebugEvent::JevRequest { utterance_id: Some(id), purpose, state, floor_id: None }
+            if id == "clip-7" && purpose == "route" && state["caller_just_said"] == "hello"
+    ));
+    let DebugEvent::JevResponse {
+        utterance_id,
+        purpose,
+        outcome,
+        answers,
+        error,
+        ..
+    } = &events[2]
+    else {
+        panic!("jev_response: {:?}", events[2]);
+    };
+    assert_eq!(
+        (utterance_id.as_deref(), purpose.as_str(), outcome.as_str()),
+        (Some("clip-7"), "route", "ok")
+    );
+    assert_eq!(answers["action"]["choice"], "continue");
+    assert_eq!(answers["action"]["probabilities"]["continue"], 1.0);
+    assert!(error.is_none());
+    let DebugEvent::RouteDecision {
+        utterance_id,
+        rule,
+        reason,
+        action,
+        target,
+        mode,
+        decided_by,
+    } = &events[3]
+    else {
+        panic!("route_decision: {:?}", events[3]);
+    };
+    assert_eq!(utterance_id, "clip-7");
+    assert_eq!(rule, "jev_action");
+    assert!(
+        reason.contains("action_conf=1.000 >= threshold 0.600"),
+        "{reason}"
+    );
+    assert_eq!(
+        (action.as_str(), target, mode.as_str(), decided_by.as_str()),
+        ("continue", &None, "not_applicable", "jev")
+    );
+
+    // The queued turn starts and ends under the same utterance, and the PBX
+    // records the branch it took.
+    let worker = tokio::spawn(process_turns(state.clone()));
+    let started = until_debug(&state, |event| {
+        matches!(event, DebugEvent::TurnStart { .. })
+    })
+    .await;
+    assert_eq!(
+        started,
+        DebugEvent::TurnStart {
+            agent: OPERATOR.into(),
+            turn_id: "clip-7".into(),
+            generation,
+            utterance_id: Some("clip-7".into()),
+        }
+    );
+    let branch = until_debug(&state, |event| {
+        matches!(event, DebugEvent::PbxBranch { .. })
+    })
+    .await;
+    assert!(matches!(
+        branch,
+        DebugEvent::PbxBranch { ref utterance_id, ref branch, .. }
+            if utterance_id == "clip-7" && branch == "operator"
+    ));
+    until_debug(&state, |event| {
+        matches!(event, DebugEvent::TurnEnd { turn_id, utterance_id: Some(id), .. } if turn_id == "clip-7" && id == "clip-7")
+    })
+    .await;
+    worker.abort();
+    let _ = worker.await;
+}
+
+#[tokio::test]
 async fn an_unavailable_jev_is_traced_as_the_fallback_rule() {
     use crate::debug::DebugEvent;
     let client = crate::jev::JevClient::new(
@@ -6688,4 +6781,76 @@ async fn an_unavailable_jev_is_traced_as_the_fallback_rule() {
         DebugEvent::RouteDecision { rule, decided_by, reason, .. }
             if rule == "jev_unavailable" && decided_by == "fallback" && reason.contains("Jev unavailable")
     ));
+}
+
+#[tokio::test]
+async fn a_stale_routed_utterance_ends_its_trace() {
+    let (client, _requests, _responded) = fake_jev_client();
+    let state = state_with_jev(client, Registry::new(vec![]));
+    let stamped = state.0.coordinator.generation();
+    state.0.coordinator.begin_rescue("test rescue");
+
+    dispatch_routed_transcript(&state, "clip-9", stamped, "hello".into()).await;
+
+    let last = debug_events(&state).pop().expect("events");
+    assert!(
+        matches!(
+        last,
+        crate::debug::DebugEvent::PbxBranch { ref utterance_id, ref branch, ref reason }
+            if utterance_id == "clip-9" && branch == "dropped_stale" && reason.contains(&format!("stamped generation {stamped}"))
+        ),
+        "{last:?}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_autonomous_project_turn_is_traced_with_its_host_turn_id() {
+    use crate::debug::DebugEvent;
+    let root = scratch_root("autonomous-traced");
+    let state = state_with_agents(&root);
+    let (token, instance_id) = foreground_alpha_turn(&state).await;
+    let generation = state.0.coordinator.generation();
+    handle_project_turn(
+        &state,
+        autonomous_turn(token.clone(), instance_id, Some("auto-7")),
+    )
+    .await;
+    handle_project_turn(
+        &state,
+        ProjectTurn {
+            ended: true,
+            ..autonomous_turn(token, instance_id, Some("auto-7"))
+        },
+    )
+    .await;
+
+    let turns: Vec<_> = debug_events(&state)
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event,
+                DebugEvent::TurnStart { .. } | DebugEvent::TurnEnd { .. }
+            )
+        })
+        .collect();
+    assert_eq!(
+        turns,
+        vec![
+            DebugEvent::TurnStart {
+                agent: "alpha".into(),
+                turn_id: "auto-7".into(),
+                generation,
+                utterance_id: None,
+            },
+            DebugEvent::TurnEnd {
+                agent: "alpha".into(),
+                turn_id: "auto-7".into(),
+                generation,
+                utterance_id: None,
+            },
+        ]
+    );
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
 }

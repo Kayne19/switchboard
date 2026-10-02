@@ -539,3 +539,24 @@ async fn a_routing_call_keeps_the_raw_answers_and_its_latency() {
         "invalid"
     );
 }
+
+#[test]
+fn utility_decisions_render_for_the_debug_page() {
+    let opinion = UtilityDecision::SecondOpinion {
+        target: Some("atlas".into()),
+        mode: ConversationMode::Fresh,
+        confident: true,
+    };
+    assert_eq!(
+        opinion.debug_value(),
+        json!({"kind":"second_opinion","target":"atlas","mode":"fresh","confident":true})
+    );
+    let split = UtilityDecision::DispatchParts(vec![DispatchPart {
+        agent: "atlas".into(),
+        text: "plan it".into(),
+    }]);
+    assert_eq!(
+        split.debug_value(),
+        json!({"kind":"dispatch_parts","parts":[{"project":"atlas","text":"plan it"}]})
+    );
+}
