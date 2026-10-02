@@ -521,7 +521,11 @@ async fn an_unobserved_process_publishes_nothing_and_a_second_observe_is_ignored
     session.observe(first.clone());
     session.observe(second.clone());
     session.prompt("after").await.unwrap();
-    assert_eq!(debug_events(&first).len(), 2, "input and final reply");
+    assert_eq!(
+        debug_events(&first).len(),
+        1,
+        "the input; an empty reply is not shown"
+    );
     assert!(debug_events(&second).is_empty());
     session.close().await;
 }
@@ -562,4 +566,135 @@ fn tool_errors_and_prompt_sources_for_the_debug_page() {
         local_prompt_source("utility", "anything"),
         "routing_request"
     );
+}
+
+fn debug_hosts() -> crate::hosts::Hosts {
+    crate::hosts::Hosts::new(
+        std::collections::HashMap::from([("scriptorium".to_owned(), "token".to_owned())]),
+        crate::hosts::Heartbeat {
+            interval: Duration::from_secs(60),
+            missed_pong_limit: 3,
+        },
+    )
+}
+
+fn debug_launch(bus: &crate::debug::DebugBus, on_module: Option<ModuleCallback>) -> ProjectLaunch {
+    ProjectLaunch {
+        host: "scriptorium".into(),
+        project: "alpha".into(),
+        cwd: "/srv/alpha".into(),
+        spec: "anthropic/current".into(),
+        brief: "BRIEF".into(),
+        turn_timeout: Duration::from_secs(5),
+        on_activity: None,
+        on_module,
+        on_turn: None,
+        on_closed: None,
+        debug: Some(bus.clone()),
+    }
+}
+
+#[tokio::test]
+async fn project_conversation_is_mirrored_to_the_debug_bus() {
+    use crate::hosts::Step;
+    let hosts = debug_hosts();
+    let mut fake = crate::hosts::FakeHostAgent::new(Box::new(|_, message| {
+        if message.contains("second") {
+            // An older host: tool events without args or results.
+            return vec![
+                Step::Event(json!({"kind": "tool_start", "tool": "read", "call_id": "t2"})),
+                Step::Event(
+                    json!({"kind": "tool_end", "tool": "read", "call_id": "t2", "error": false}),
+                ),
+            ];
+        }
+        vec![
+            Step::Event(
+                json!({"kind": "tool_start", "tool": "bash", "call_id": "t1", "args": {"command": "cargo test", "token": "abc"}}),
+            ),
+            Step::Event(
+                json!({"kind": "tool_end", "tool": "bash", "call_id": "t1", "error": true, "result": {"content": [{"type": "text", "text": "1 failed"}]}}),
+            ),
+            Step::Event(json!({"kind": "text", "text": "Done.", "turn_id": "turn-1"})),
+        ]
+    }));
+    fake.turn_ids = true;
+    let _log = fake.serve(hosts.connect_fake("scriptorium"));
+    let bus = crate::debug::DebugBus::new();
+    let (session, _) = ProjectSession::create(&hosts, debug_launch(&bus, None))
+        .await
+        .unwrap();
+    session.join_call("call-token", "", 1000).await.unwrap();
+    let turn = session
+        .prompt_as("first", "intro", Some("clip-9"))
+        .await
+        .unwrap();
+    assert_eq!(turn.text, "Done.");
+    session.prompt("second").await.unwrap();
+    let agent = || "alpha".to_owned();
+    assert_eq!(
+        debug_events(&bus),
+        vec![
+            DebugEvent::AgentInput {
+                agent: agent(),
+                turn_id: None,
+                text: "BRIEF".into(),
+                source: "brief".into(),
+                utterance_id: None,
+            },
+            DebugEvent::AgentInput {
+                agent: agent(),
+                turn_id: None,
+                text: "first".into(),
+                source: "intro".into(),
+                utterance_id: Some("clip-9".into()),
+            },
+            DebugEvent::ToolStart {
+                agent: agent(),
+                call_id: Some("t1".into()),
+                tool: "bash".into(),
+                args: Some(json!({"command": "cargo test", "token": "[redacted]"})),
+            },
+            DebugEvent::ToolEnd {
+                agent: agent(),
+                call_id: Some("t1".into()),
+                tool: "bash".into(),
+                result: Some(json!({"content": [{"type": "text", "text": "1 failed"}]})),
+                error: Some("1 failed".into()),
+            },
+            DebugEvent::AgentText {
+                agent: agent(),
+                turn_id: Some("turn-1".into()),
+                text: "Done.".into(),
+                final_: false,
+            },
+            DebugEvent::AgentText {
+                agent: agent(),
+                turn_id: Some("turn-1".into()),
+                text: "Done.".into(),
+                final_: true,
+            },
+            DebugEvent::AgentInput {
+                agent: agent(),
+                turn_id: None,
+                text: "second".into(),
+                source: "caller".into(),
+                utterance_id: None,
+            },
+            DebugEvent::ToolStart {
+                agent: agent(),
+                call_id: Some("t2".into()),
+                tool: "read".into(),
+                args: None,
+            },
+            DebugEvent::ToolEnd {
+                agent: agent(),
+                call_id: Some("t2".into()),
+                tool: "read".into(),
+                result: None,
+                error: None,
+            },
+        ]
+    );
+    session.close();
 }

@@ -643,12 +643,14 @@ impl PiSession {
         }
         self.publish_delta(turn_id, deltas.take());
         let text = chunks.join("\n").trim().to_owned();
-        self.publish(DebugEvent::AgentText {
-            agent: self.inner.leg.clone(),
-            turn_id: Some(turn_id.to_owned()),
-            text: clip_text(&text),
-            final_: true,
-        });
+        if !text.is_empty() {
+            self.publish(DebugEvent::AgentText {
+                agent: self.inner.leg.clone(),
+                turn_id: Some(turn_id.to_owned()),
+                text: clip_text(&text),
+                final_: true,
+            });
+        }
         Ok(Turn {
             text,
             signals,
@@ -1001,6 +1003,79 @@ impl ProjectInner {
         if !self.closed.swap(true, Ordering::AcqRel) {
             self.report_closed().await;
         }
+    }
+
+    fn publish(&self, event: DebugEvent) {
+        if let Some(bus) = &self.debug {
+            bus.publish(event);
+        }
+    }
+
+    /// Mirrors a host event to the debug page: tool calls with the
+    /// arguments and results new hosts send, and each assistant message.
+    /// Every event is mirrored, whichever turn it belongs to.
+    fn mirror_event(&self, event: &Value) {
+        let call_id = || event["call_id"].as_str().map(str::to_owned);
+        let tool = || event["tool"].as_str().unwrap_or_default().to_owned();
+        match event["kind"].as_str() {
+            Some("tool_start") => self.publish(DebugEvent::ToolStart {
+                agent: self.label.clone(),
+                call_id: call_id(),
+                tool: tool(),
+                args: event
+                    .get("args")
+                    .filter(|v| !v.is_null())
+                    .cloned()
+                    .map(clip_value),
+            }),
+            Some("tool_end") => {
+                let result = event.get("result").filter(|value| !value.is_null());
+                self.publish(DebugEvent::ToolEnd {
+                    agent: self.label.clone(),
+                    call_id: call_id(),
+                    tool: tool(),
+                    result: result.cloned().map(clip_value),
+                    error: (event["error"] == true).then(|| tool_error_text(result)),
+                });
+            }
+            Some("text") => {
+                if let Some(text) = event["text"]
+                    .as_str()
+                    .filter(|text| !text.trim().is_empty())
+                {
+                    self.publish(DebugEvent::AgentText {
+                        agent: self.label.clone(),
+                        turn_id: event["turn_id"].as_str().map(str::to_owned),
+                        text: clip_text(text),
+                        final_: false,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The whole reply of a settled turn, for the debug page.
+    fn publish_final(&self, turn_id: Option<String>, text: &str) {
+        if !text.trim().is_empty() {
+            self.publish(DebugEvent::AgentText {
+                agent: self.label.clone(),
+                turn_id,
+                text: clip_text(text),
+                final_: true,
+            });
+        }
+    }
+
+    /// What the service sent the session, for the debug page.
+    fn publish_input(&self, text: &str, source: &str, utterance_id: Option<&str>) {
+        self.publish(DebugEvent::AgentInput {
+            agent: self.label.clone(),
+            turn_id: None,
+            text: clip_text(text),
+            source: source.into(),
+            utterance_id: utterance_id.map(str::to_owned),
+        });
     }
 
     async fn report_activity(&self, state: &str, tool: &str) {
@@ -1392,7 +1467,8 @@ impl ProjectSession {
             .map(|_| ());
         match &result {
             Ok(()) => {
-                tracing::info!(label = %self.inner.label, chars = message.chars().count(), "steered the running turn")
+                tracing::info!(label = %self.inner.label, chars = message.chars().count(), "steered the running turn");
+                self.inner.publish_input(message, "steer", None);
             }
             Err(error) => {
                 tracing::info!(label = %self.inner.label, %error, "could not steer the running turn")
@@ -1405,6 +1481,18 @@ impl ProjectSession {
     /// settled. The voice brief goes first when it is due: on the first
     /// prompt, and on the first after a compaction.
     pub async fn prompt(&self, message: &str) -> Result<Turn, PiSessionError> {
+        self.prompt_as(message, "caller", None).await
+    }
+
+    /// `prompt`, saying for the debug page what the message is (`source`:
+    /// `caller`, `intro`, `foreground`, `model_change`) and which caller line
+    /// it carries (`utterance_id`), if any.
+    pub async fn prompt_as(
+        &self,
+        message: &str,
+        source: &str,
+        utterance_id: Option<&str>,
+    ) -> Result<Turn, PiSessionError> {
         let _turn = self.inner.turn_lock.lock().await;
         if !self.alive() {
             return Err(PiSessionError("the project session has ended".into()));
@@ -1416,6 +1504,13 @@ impl ProjectSession {
         self.inner.busy.store(true, Ordering::Release);
         let _collecting = Collecting(&self.inner);
         let briefed = self.inner.brief_due.swap(false, Ordering::AcqRel);
+        // Published as the prompt goes out: the host's first events can be
+        // read before its reply to the prompt is. The page shows the brief as
+        // an input of its own, so the pane can fold it away.
+        if briefed {
+            self.inner.publish_input(&self.inner.brief, "brief", None);
+        }
+        self.inner.publish_input(message, source, utterance_id);
         let message = if briefed {
             format!("{}\n\n{message}", self.inner.brief)
         } else {
@@ -1445,6 +1540,7 @@ impl ProjectSession {
         let mut texts: Vec<String> = Vec::new();
         let signals = Vec::new();
         let mut error = String::new();
+        let mut settled_turn = None;
         loop {
             let frame = match timeout(self.inner.turn_timeout, frames.recv()).await {
                 Ok(Some(frame)) => frame,
@@ -1513,6 +1609,7 @@ impl ProjectSession {
                             error = spoken_error(Some(failure));
                         }
                     }
+                    settled_turn = event["turn_id"].as_str().map(str::to_owned);
                     break;
                 }
                 Some("session_closed") => {
@@ -1527,8 +1624,10 @@ impl ProjectSession {
                 _ => {}
             }
         }
+        let text = texts.join("\n").trim().to_owned();
+        self.inner.publish_final(settled_turn, &text);
         Turn {
-            text: texts.join("\n").trim().to_owned(),
+            text,
             signals,
             failed: !error.is_empty(),
             error,
@@ -1550,6 +1649,7 @@ async fn pump(
         };
         match frame {
             SessionFrame::Event { seq, event } => {
+                inner.mirror_event(&event);
                 let kind = event["kind"].as_str().unwrap_or_default();
                 if kind == "turn_start" {
                     let cause = event["cause"].as_str().unwrap_or("unknown").to_owned();
@@ -1647,6 +1747,7 @@ async fn pump(
                         }
                         if let Some((turn_id, cause, text)) = inner.finish_autonomous(event_turn_id)
                         {
+                            inner.publish_final(turn_id.clone(), &text);
                             inner
                                 .report_turn(ProjectTurn {
                                     instance_id: inner.instance_id,
@@ -1690,6 +1791,12 @@ async fn pump(
                     if let Some((turn_id, cause, text)) =
                         inner.finish_autonomous(info["turn_id"].as_str())
                     {
+                        let text = if text.is_empty() {
+                            info["last_text"].as_str().unwrap_or_default().to_owned()
+                        } else {
+                            text
+                        };
+                        inner.publish_final(turn_id.clone(), &text);
                         inner
                             .report_turn(ProjectTurn {
                                 instance_id: inner.instance_id,
@@ -1697,11 +1804,7 @@ async fn pump(
                                 turn_id,
                                 cause,
                                 ended: true,
-                                text: if text.is_empty() {
-                                    info["last_text"].as_str().unwrap_or_default().to_owned()
-                                } else {
-                                    text
-                                },
+                                text,
                             })
                             .await;
                         continue;

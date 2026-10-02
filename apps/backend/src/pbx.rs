@@ -1872,7 +1872,11 @@ impl Switchboard {
             self.announce_agent_state(session.label(), "busy").await;
         }
         self.set_agent_task(session.label(), &context.exact_caller_transcript);
-        let turn = match session.prompt(&context.exact_caller_transcript).await {
+        // s2: self.current_utterance().as_deref()
+        let turn = match session
+            .prompt_as(&context.exact_caller_transcript, "caller", None)
+            .await
+        {
             Ok(t) => t,
             Err(error) => {
                 let detail = error.to_string();
@@ -2058,7 +2062,8 @@ impl Switchboard {
         let intro_prompt = build_intro_prompt(context, &project, plan.prepare_report.as_ref());
 
         self.announce_agent_state(&project.id, "busy").await;
-        let turn = match session.prompt(&intro_prompt).await {
+        // s2: self.current_utterance().as_deref()
+        let turn = match session.prompt_as(&intro_prompt, "intro", None).await {
             Ok(t) => t,
             Err(e) => {
                 tracing::warn!(project = %project.id, error = %e, "intro prompt to project failed");
@@ -2157,7 +2162,8 @@ impl Switchboard {
         // The agent was told background rules when it was shelved. Tell it
         // they no longer apply before it answers the caller.
         let prompt = format!("{FOREGROUND_NOTICE}\n\n{}", context.exact_caller_transcript);
-        let turn = match session.prompt(&prompt).await {
+        // s2: self.current_utterance().as_deref()
+        let turn = match session.prompt_as(&prompt, "foreground", None).await {
             Ok(turn) => turn,
             Err(error) => Turn {
                 text: String::new(),
@@ -2378,7 +2384,8 @@ impl Switchboard {
         self.set_active_session(Some(LegSession::Project(session.clone())))
             .await;
         self.announce_agent_state(&project.id, "busy").await;
-        let turn = match session.prompt(text).await {
+        // s2: self.current_utterance().as_deref()
+        let turn = match session.prompt_as(text, "caller", None).await {
             Ok(turn) => turn,
             Err(error) => Turn {
                 text: String::new(),
@@ -2657,7 +2664,7 @@ impl Switchboard {
                 },
                 intent.trim().trim_end_matches('.')
             );
-            let turn = match session.prompt(&prompt).await {
+            let turn = match session.prompt_as(&prompt, "model_change", None).await {
                 Ok(turn) => turn,
                 Err(error) => Turn {
                     text: String::new(),
