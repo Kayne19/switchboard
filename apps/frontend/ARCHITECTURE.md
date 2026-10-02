@@ -54,6 +54,17 @@ The renderer does not load bespoke route pages. It derives a broad composition f
 
 Additional metrics, progress, notes, comparisons, and speech modify that composition incrementally.
 
+## Scene shell
+
+Every composition is drawn by one `SceneShell` (`src/components/Scenes.tsx`).
+The shell owns what every page has: the frame and heading, the Damocles
+presence, the rail (metrics, live response, note, progress, tool activity),
+the footer and corner text, and the transcript entry point. A composition
+only fills the main slot and names what its rail carries. A feature that
+crosses compositions is added to the shell once; it is never wired into a
+composition by hand. The presence reads the voice level from the registered
+voice runtime, so no page can leave it out.
+
 ## Layout
 
 The stage is a CSS size container. Layout rules use container-relative units and aspect-ratio container queries. The implementation intentionally avoids phone, tablet, iPad, laptop, and ultrawide branches.
