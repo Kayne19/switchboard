@@ -546,7 +546,9 @@ function applyEvent(draft: Draft, record: DebugRecord): void {
         }
         return;
       }
-      const trace = ensureTrace(draft, record);
+      // A route call always names its utterance; one without is malformed.
+      if (record.utterance_id === undefined) return;
+      const trace = ensureTrace(draft, { ...record, utterance_id: record.utterance_id });
       draft.own(trace, 'records').push(record);
       if (record.kind === 'jev_request') trace.jevRequest = record;
       else trace.jevResponse = record;

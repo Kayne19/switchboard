@@ -4169,3 +4169,282 @@ async fn a_closed_session_that_is_not_resident_is_reported_for_the_line() {
     );
     board.shutdown().await;
 }
+
+/// The debug events published so far, oldest first.
+fn debug_events(board: &Switchboard) -> Vec<crate::debug::DebugEvent> {
+    board.debug.events_for_test()
+}
+
+/// The routing trace of `board`: each hop as `kind:detail`.
+fn route_trace(board: &Switchboard) -> Vec<String> {
+    use crate::debug::DebugEvent;
+    debug_events(board)
+        .into_iter()
+        .filter_map(|event| match event {
+            DebugEvent::PbxBranch {
+                utterance_id,
+                branch,
+                ..
+            } => Some(format!("{utterance_id}:branch:{branch}")),
+            DebugEvent::UtilityRequest {
+                utterance_id,
+                attempt,
+                ..
+            } => Some(format!("{utterance_id}:utility_request:{attempt}")),
+            DebugEvent::UtilityDecision {
+                utterance_id,
+                attempt,
+                decision,
+                ..
+            } => Some(format!(
+                "{utterance_id}:utility_decision:{attempt}:{}",
+                decision["kind"].as_str().unwrap()
+            )),
+            DebugEvent::OperatorHop {
+                utterance_id,
+                outcome,
+                ..
+            } => Some(format!("{utterance_id}:operator_hop:{outcome}")),
+            DebugEvent::OperatorRouteTool {
+                utterance_id,
+                target,
+                mode,
+                action,
+            } => Some(format!(
+                "{utterance_id}:route_tool:{target}:{mode}:{action}"
+            )),
+            DebugEvent::Routed {
+                utterance_id,
+                to_agent,
+                mode,
+                via,
+                ..
+            } => Some(format!("{utterance_id}:routed:{to_agent}:{mode}:{via}")),
+            _ => None,
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unsure_utterance_traces_the_utility_second_opinion_to_its_destination() {
+    let root = scratch_dir("trace-second-opinion");
+    let binary = fake_routing_process(
+        &root,
+        r#"{"type":"tool_execution_start","toolName":"second_opinion","args":{"target":"alpha","mode":"fresh","confident":true}}"#,
+        None,
+    );
+    let mut board = board_on(
+        vec![project("alpha", "Alpha project")],
+        &[("SWITCHBOARD_PI_BINARY", &binary.to_string_lossy())],
+        two_model_catalog(),
+    );
+    let _log = serve(&board, Box::new(|_, _| says("Alpha handled it.")));
+    let mut unsure = decision(crate::router::Action::General, None, None);
+    unsure.unsure = true;
+
+    let reply = board.handle_decision("inspect alpha", &unsure).await;
+
+    assert_eq!(reply.route, "alpha");
+    assert_eq!(
+        route_trace(&board),
+        vec![
+            "utterance:branch:utility",
+            "utterance:utility_request:first",
+            "utterance:utility_decision:first:second_opinion",
+            "utterance:routed:alpha:fresh:utility",
+        ]
+    );
+    let request = debug_events(&board)
+        .into_iter()
+        .find_map(|event| match event {
+            crate::debug::DebugEvent::UtilityRequest { prompt, .. } => Some(prompt),
+            _ => None,
+        })
+        .expect("utility request");
+    assert!(request.contains("inspect alpha"), "{request}");
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_split_retry_traces_both_attempts_and_fans_out_to_every_part() {
+    let root = scratch_dir("trace-split-retry");
+    let (binary, _calls) = fake_routing_process_sequence(
+        &root,
+        &[
+            r#"{"type":"tool_execution_start","toolName":"second_opinion","args":{"target":"alpha","mode":"continue","confident":true}}"#,
+            r#"{"type":"tool_execution_start","toolName":"dispatch_parts","args":{"parts":[{"agent":"alpha","text":"alpha work"},{"agent":"beta","text":"beta work"}]}}"#,
+        ],
+        r#"{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Operator asked."}}"#,
+    );
+    let mut board = board_on(
+        vec![project("alpha", "Alpha"), project("beta", "Beta")],
+        &[("SWITCHBOARD_PI_BINARY", &binary.to_string_lossy())],
+        two_model_catalog(),
+    );
+    let _log = serve(&board, Box::new(|_, _| says("on it")));
+    let mut multi = decision(crate::router::Action::GoToProject, Some("alpha"), None);
+    multi.multi_target = true;
+
+    board
+        .handle_decision("alpha work and beta work", &multi)
+        .await;
+
+    assert_eq!(
+        route_trace(&board),
+        vec![
+            "utterance:branch:utility",
+            "utterance:utility_request:first",
+            "utterance:utility_decision:first:second_opinion",
+            "utterance:utility_request:split_retry",
+            "utterance:utility_decision:split_retry:dispatch_parts",
+            "utterance:routed:alpha:continue:utility",
+            "utterance:routed:beta:continue:utility",
+        ]
+    );
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_operator_route_tool_is_traced_as_its_own_hop() {
+    let root = scratch_dir("trace-operator-route");
+    let operator = fake_operator(&root);
+    let mut board = board_on(
+        vec![project("alpha", "Alpha")],
+        &[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())],
+        two_model_catalog(),
+    );
+    let _log = serve(&board, Box::new(|_, _| says("Alpha here.")));
+
+    let reply = board
+        .handle_decision(
+            "get me alpha",
+            &decision(crate::router::Action::General, None, None),
+        )
+        .await;
+
+    assert_eq!(reply.route, "alpha");
+    assert_eq!(
+        route_trace(&board),
+        vec![
+            "utterance:branch:operator",
+            "utterance:operator_hop:route_tool",
+            "utterance:route_tool:alpha:fresh:transfer",
+            "utterance:routed:alpha:fresh:operator",
+        ]
+    );
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn jev_branches_are_traced_and_work_outside_a_decision_is_not() {
+    let mut board = board_on(vec![project("alpha", "Alpha")], &[], two_model_catalog());
+    let _log = serve(&board, Box::new(|_, _| says("Alpha here.")));
+    // A direct transfer is not a caller utterance: nothing is traced.
+    board
+        .transfer_ctx(&transcript("connect alpha"), "alpha", "", "")
+        .await;
+    assert!(route_trace(&board).is_empty());
+
+    board
+        .handle_decision(
+            "keep going",
+            &decision(crate::router::Action::Continue, None, None),
+        )
+        .await;
+    board
+        .handle_decision(
+            "stop alpha",
+            &decision(crate::router::Action::Stop, Some("alpha"), None),
+        )
+        .await;
+    board
+        .handle_decision("yes", &decision(crate::router::Action::General, None, None))
+        .await;
+    board
+        .handle_decision(
+            "back to alpha",
+            &decision(
+                crate::router::Action::GoToProject,
+                Some("alpha"),
+                Some(ConversationMode::Fresh),
+            ),
+        )
+        .await;
+
+    assert_eq!(
+        route_trace(&board),
+        vec![
+            "utterance:branch:continue_current",
+            "utterance:routed:alpha:continue:jev",
+            "utterance:branch:stop_asked",
+            "utterance:routed:operator:continue:pbx",
+            "utterance:branch:stop_confirmed",
+            "utterance:routed:operator:continue:pbx",
+            "utterance:branch:go_to_project",
+            "utterance:routed:alpha:fresh:jev",
+        ]
+    );
+    board.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_cancelled_decision_leaves_no_utterance_behind() {
+    let board = board_on(vec![], &[], two_model_catalog());
+    {
+        let _scope = UtteranceScope::enter(&board.trace_utterance, "clip-9");
+        assert_eq!(board.current_utterance().as_deref(), Some("clip-9"));
+    }
+    assert_eq!(board.current_utterance(), None);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_operator_answer_ends_the_trace_at_the_operator() {
+    let root = scratch_dir("trace-operator-answer");
+    let binary = fake_routing_process(
+        &root,
+        r#"{"type":"tool_execution_start","toolName":"second_opinion","args":{"target":"operator","mode":"continue","confident":true}}"#,
+        Some(
+            r#"{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Operator here."}}"#,
+        ),
+    );
+    let mut board = board_on(
+        vec![project("alpha", "Alpha")],
+        &[("SWITCHBOARD_PI_BINARY", &binary.to_string_lossy())],
+        two_model_catalog(),
+    );
+    let reply = board
+        .handle_decision(
+            "what time is it",
+            &decision(crate::router::Action::General, None, None),
+        )
+        .await;
+    assert_eq!(reply.text, "Operator here.");
+    // The utility can name the operator too; the operator's answer is still
+    // the one destination.
+    let mut unsure = decision(crate::router::Action::General, None, None);
+    unsure.unsure = true;
+    board.handle_decision("and the date", &unsure).await;
+
+    assert_eq!(
+        route_trace(&board),
+        vec![
+            "utterance:branch:operator",
+            "utterance:operator_hop:answered",
+            "utterance:routed:operator:continue:operator",
+            "utterance:branch:utility",
+            "utterance:utility_request:first",
+            "utterance:utility_decision:first:second_opinion",
+            "utterance:operator_hop:answered",
+            "utterance:routed:operator:continue:operator",
+        ]
+    );
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}

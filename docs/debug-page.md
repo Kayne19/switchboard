@@ -134,31 +134,36 @@ Rust `DebugEvent` in `apps/backend/src/debug.rs` is the source of truth. The
 `kind` values are:
 
 - `caller_utterance`: `utterance_id`, `text`, `talking_to`
-- `jev_request`: `utterance_id`, `purpose` (`route` or `good_moment`), `state`
-- `jev_response`: `utterance_id`, `purpose`, `latency_ms`, `outcome`, `answers`, optional `error`
-- `route_decision`: `utterance_id`, `rule`, `reason`, `action`, optional `target`, `mode`, `decided_by`
-- `pbx_branch`: `utterance_id`, `branch`, `reason`; records the branch taken after Jev
+- `jev_request`: optional `utterance_id` (`route` purpose), `purpose` (`route` or `good_moment`), `state` (the call summary sent to Jev), optional `floor_id` (`good_moment` purpose)
+- `jev_response`: optional `utterance_id`, `purpose`, `latency_ms`, `outcome` (`ok`, `invalid`, `timeout`, or `error`), `answers`, optional `error`, optional `floor_id`. `answers` is Jev's raw answer per question: `{"<question>": {"type", "choice", "probabilities", "confidence", "noul"}}`, with `null` for what Jev left out; it is `{}` when Jev gave no answer. `invalid` means Jev answered but the answer could not be used.
+- `route_decision`: `utterance_id`, `rule`, `reason`, `action`, optional `target`, `mode` (`continue`, `fresh`, or `not_applicable`), `decided_by` (`jev`, or `fallback` when Jev was unavailable). `rule` is the threshold rule that fired: `jev_action` (action confidence met the threshold), `action_below_threshold`, `stayed_with_current` (on a project, `for_current_agent` reached the upper threshold), `current_agent_unsure` (on a project, `for_current_agent` between the thresholds), `stop_confirms`, or `jev_unavailable`. `reason` says it in plain words with the numbers and thresholds.
+- `pbx_branch`: `utterance_id`, `branch`, `reason`; records the branch taken after Jev. `branch` is `stop_confirmed`, `stop_asked`, `take_over`, `answer_waiting`, `utility`, `multi_unresolved`, `go_to_project`, `continue_current`, `operator`, or `dropped_stale` (a newer generation discarded the utterance; this ends its trace). An utterance can have two: `utility`, then `multi_unresolved` or `operator` when the utility gave no usable answer.
 - `utility_request`: `utterance_id`, `attempt` (`first` or `split_retry`), `prompt`
-- `utility_decision`: `utterance_id`, `attempt`, `decision`, `latency_ms`; `decision` is a serialized object with `kind` `second_opinion`, `dispatch_parts`, `none`, or `error`
-- `operator_hop`: `utterance_id`, `text`, `outcome`
-- `operator_route_tool`: `utterance_id`, `target`, `mode`, `action`
-- `routed`: `utterance_id`, `to_agent`, `text_part`, `mode`, `via` (`jev`, `utility`, `operator`, or `pbx`); multiple events represent fan-out from `dispatch_parts`
+- `utility_decision`: `utterance_id`, `attempt`, `decision`, `latency_ms`; `decision` is an object with `kind` `second_opinion` (`target`, `mode`, `confident`), `dispatch_parts` (`parts`: `[{project, text}]`), `none`, or `error` (`error`)
+- `operator_hop`: `utterance_id`, `text`, `outcome` (`answered`, `route_tool`, `route_tool_without_target`, `failed`, or `unavailable`)
+- `operator_route_tool`: `utterance_id`, `target`, `mode`, `action` (`transfer`, `continue`, or `return_to_operator`). The route tool is read from the operator turn that answers the utterance, so it carries that utterance's id.
+- `routed`: `utterance_id`, `to_agent`, `text_part`, `mode` (`continue`, `fresh`, `take_over`, or `steer` for words steered into a running turn), `via` (`jev`, `utility`, `operator`, or `pbx`); multiple events represent fan-out from `dispatch_parts`. A caller line handled by the operator has an `operator_hop`; when the operator answers by itself (or its recovery does) the trace ends in a `routed` to `operator` via `operator`, and when it uses its route tool, in `operator_route_tool` and a `routed` to the target via `operator`. A line the switchboard answers itself (a stop question or confirmation, a takeover with no target) ends in a `routed` to `operator` via `pbx`. Every caller line's trace ends in at least one `routed`, unless a `pbx_branch` `dropped_stale` ends it
 - `agent_input`: `agent`, optional `turn_id`, `text`, `source`, optional `utterance_id` (the caller line this input carries, when routing sent one here)
 - `agent_text`: `agent`, optional `turn_id`, `text`, `final`
 - `tool_start`: `agent`, optional `call_id`, `tool`, optional `args`, optional `turn_id`
 - `tool_end`: `agent`, optional `call_id`, `tool`, optional `result`, optional `error`, optional `turn_id`
 - `module_call`: `agent`, `call_id`, `name`, `args`, optional `turn_id`
 - `module_result`: `agent`, `call_id`, `ok`, `detail`
-- `turn_start` and `turn_end`: `agent`, `turn_id`, `generation`
+- `turn_start` and `turn_end`: `agent`, `turn_id`, `generation`, optional `utterance_id`. A caller turn uses the utterance id as `turn_id` and `agent` is the route it started on; a self-woken project turn uses the host's turn id and has no `utterance_id`.
 - `rescue`: `generation`, `reason`, optional `leg`
-- `speech`: `agent`, `text`, `delivered`, optional `reason`
-- `floor_request`: `agent`, `message`; the agent's `request_to_speak` request
-- `floor_held`: `agent`, `message`
-- `floor_gate`: `agent`, `answer` (`yes`, `no`, or `failed`), `latency_ms`
-- `floor_rewrite`: `agent`, `original`, `rewritten`, `latency_ms`; the utility's floor rewrite
-- `floor_released`: `agent`, `how`
+- `speech`: `agent`, `text`, `delivered`, optional `reason` (why it was not delivered, for example `stale_generation`), optional `floor_id` (speech released from the floor)
+- `floor_request`: `agent`, `message`, optional `floor_id`; the agent's `request_to_speak` request
+- `floor_held`: `agent`, `message`, optional `floor_id`
+- `floor_gate`: `agent`, `answer` (`yes`, `no`, or `failed`), `latency_ms`, optional `floor_id`
+- `floor_rewrite`: `agent`, `original`, `rewritten`, `latency_ms`, optional `floor_id`; the utility's floor rewrite. `rewritten` equals `original` when the rewrite failed or timed out.
+- `floor_released`: `agent`, `how` (`gate_yes`, `quiet_after_hold`, or `dropped_agent_gone`), optional `floor_id`
 - `agents_state`: `agents` (the existing `AgentsState` projection)
-- `host_link`: `host`, `connected`
+- `host_link`: `host`, `connected`; a fenced link closing while its newer link is up is not reported
+- `call_boundary`: `phase` (`started` or `ended`), `call_id` (opaque, minted by the service), optional `reason` for `ended` (`page_closed`, `hangup`, or `shutdown`). A call starts when a caller page connects to no open call. A hangup ends it and, while the page stays connected, starts the next one.
+
+`floor_id` (for example `floor-7`) links one background message from
+`floor_request` through the good-moment Jev call, the gate, the rewrite, the
+release and its `speech`.
 
 Routing events form an ordered multi-hop trace per `utterance_id`: Jev, the PBX
 branch, each utility attempt, the operator and its route tool when used, then

@@ -149,7 +149,7 @@ impl JevClient {
         if let Some(responder) = &self.test_responder {
             return match tokio::time::timeout(self.timeout, responder(request)).await {
                 Ok(response) => response,
-                Err(_) => Err(JevError::Transport("request timed out".into())),
+                Err(_) => Err(JevError::Transport(TIMED_OUT.into())),
             };
         }
         let key = std::fs::read_to_string(&self.key_file).map_err(|error| {
@@ -168,12 +168,9 @@ impl JevClient {
             .timeout(self.timeout)
             .send()
             .await
-            .map_err(|error| JevError::Transport(redact(&error.to_string())))?;
+            .map_err(transport_error)?;
         let status = response.status();
-        let body = response
-            .text()
-            .await
-            .map_err(|error| JevError::Transport(redact(&error.to_string())))?;
+        let body = response.text().await.map_err(transport_error)?;
         if !status.is_success() {
             return Err(JevError::Http {
                 status: status.as_u16(),
@@ -207,6 +204,26 @@ impl std::fmt::Display for JevError {
     }
 }
 impl std::error::Error for JevError {}
+
+/// The prefix of every timeout, so callers can tell a slow Jev from a broken one.
+const TIMED_OUT: &str = "request timed out";
+
+impl JevError {
+    /// Whether Jev did not answer in time, as opposed to answering badly.
+    pub fn is_timeout(&self) -> bool {
+        matches!(self, Self::Transport(message) if message.starts_with(TIMED_OUT))
+    }
+}
+
+/// reqwest's message for a timeout does not say so; keep that fact.
+fn transport_error(error: reqwest::Error) -> JevError {
+    let message = redact(&error.to_string());
+    JevError::Transport(if error.is_timeout() {
+        format!("{TIMED_OUT}: {message}")
+    } else {
+        message
+    })
+}
 
 fn truncate(value: &str, limit: usize) -> String {
     value.chars().take(limit).collect()

@@ -566,6 +566,28 @@ impl BackgroundRegistry {
     }
 }
 
+/// Marks the caller line a decision is handling, for the debug trace, and
+/// clears it when dropped: at the end of the decision or when a rescue
+/// aborts it.
+struct UtteranceScope(Arc<StdMutex<Option<String>>>);
+
+impl UtteranceScope {
+    fn enter(slot: &Arc<StdMutex<Option<String>>>, utterance_id: &str) -> Self {
+        *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some(utterance_id.to_owned());
+        Self(Arc::clone(slot))
+    }
+}
+
+impl Drop for UtteranceScope {
+    fn drop(&mut self) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+}
+
 /// What routing reads about the call, without the PBX lock. The turn worker
 /// holds that lock for a whole prompt; a caller utterance that arrives during
 /// the prompt must still be routed while it runs, or it can never be steered
@@ -648,6 +670,10 @@ pub struct Switchboard {
     /// The call as Jev saw it for the utterance being handled, in plain text.
     /// The operator and the routing utility get the same facts.
     call_state: String,
+    /// The caller line being handled, for the debug trace only. Set for one
+    /// decision by `handle_decision_with_takeover`, and cleared when that
+    /// decision ends or is cancelled; routing never reads it.
+    trace_utterance: Arc<StdMutex<Option<String>>>,
     /// Project awaiting a caller confirmation before it is stopped.
     pending_stop: Option<String>,
     /// Projects explicitly stopped by the caller must start fresh once.
@@ -749,6 +775,7 @@ impl Switchboard {
             operator_note: None,
             agent_tasks: Arc::new(StdMutex::new(HashMap::new())),
             call_state: String::new(),
+            trace_utterance: Arc::new(StdMutex::new(None)),
             pending_stop: None,
             resume_blocked: HashSet::new(),
             coordinator,
@@ -1088,7 +1115,7 @@ impl Switchboard {
             (true, Some(target)) => Some(self.desk_session_for_takeover_target(target).await),
             _ => None,
         };
-        self.handle_decision_with_takeover(text, decision, takeover)
+        self.handle_decision_with_takeover("utterance", text, decision, takeover)
             .await
     }
 
@@ -1097,16 +1124,54 @@ impl Switchboard {
     /// `list_sessions` waits on a host link.
     pub(crate) async fn handle_decision_with_takeover(
         &mut self,
+        utterance_id: &str,
         text: &str,
         decision: &Decision,
         takeover: Option<Result<Option<Value>, String>>,
     ) -> Reply {
+        // Dropped when the decision ends or a rescue aborts it part way, so
+        // a cancelled utterance's id never labels later work.
+        let _scope = UtteranceScope::enter(&self.trace_utterance, utterance_id);
         let reply = self
             .handle_decision_for_state(text, decision, takeover)
             .await;
         // The call state belongs to this utterance only.
         self.call_state.clear();
         reply
+    }
+
+    /// The caller line this decision is handling; `None` outside one.
+    fn current_utterance(&self) -> Option<String> {
+        self.trace_utterance
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// Publish one hop of the current utterance's routing trace. Outside a
+    /// caller decision there is no utterance, and nothing is published.
+    fn trace(&self, event: impl FnOnce(String) -> crate::debug::DebugEvent) {
+        if let Some(utterance_id) = self.current_utterance() {
+            self.debug.publish(event(utterance_id));
+        }
+    }
+
+    fn trace_branch(&self, branch: &str, reason: String) {
+        self.trace(|utterance_id| crate::debug::DebugEvent::PbxBranch {
+            utterance_id,
+            branch: branch.to_owned(),
+            reason,
+        });
+    }
+
+    fn trace_routed(&self, to_agent: &str, text_part: &str, mode: &str, via: &str) {
+        self.trace(|utterance_id| crate::debug::DebugEvent::Routed {
+            utterance_id,
+            to_agent: to_agent.to_owned(),
+            text_part: text_part.to_owned(),
+            mode: mode.to_owned(),
+            via: via.to_owned(),
+        });
     }
 
     async fn handle_decision_for_state(
@@ -1118,18 +1183,37 @@ impl Switchboard {
         // These actions are owned by the PBX, not by an agent. A stop decision
         // is deliberately confirmation-only here; the next utterance must
         // confirm before a resident session is closed.
+        let mut note = String::new();
         if let Some(target) = self.pending_stop.take() {
             if is_confirmation(text) {
+                self.trace_branch(
+                    "stop_confirmed",
+                    format!("the caller confirmed stopping {target}"),
+                );
+                self.trace_routed(OPERATOR, text, "continue", "pbx");
                 return self.stop_project(&target).await;
             }
+            note = format!("the pending stop of {target} was not confirmed, so it was dropped; ");
         }
         if matches!(decision.action, crate::router::Action::Stop) {
             let target = decision.target.clone().or_else(|| {
                 (self.coordinator.route() != OPERATOR).then(|| self.coordinator.route())
             });
             let Some(target) = target else {
+                self.trace_branch(
+                    "stop_asked",
+                    format!("{note}Jev chose stop, but nothing is running to stop"),
+                );
+                self.trace_routed(OPERATOR, text, "continue", "pbx");
                 return self.reply(["Nothing is running to stop."], None);
             };
+            self.trace_branch(
+                "stop_asked",
+                format!(
+                    "{note}Jev chose stop for {target}; a stop always asks the caller to confirm"
+                ),
+            );
+            self.trace_routed(OPERATOR, text, "continue", "pbx");
             self.pending_stop = Some(target.clone());
             return self.reply(
                 [format!(
@@ -1140,6 +1224,11 @@ impl Switchboard {
         }
         if matches!(decision.action, crate::router::Action::TakeOver) {
             if let Some(target) = decision.target.as_deref() {
+                self.trace_branch(
+                    "take_over",
+                    format!("{note}Jev chose take_over of the desk session for {target}"),
+                );
+                self.trace_routed(target, text, "take_over", "jev");
                 let Some(takeover) = takeover else {
                     return self.reply_failure(
                         "I couldn't check what's open at your desk, so I didn't take it over."
@@ -1149,6 +1238,11 @@ impl Switchboard {
                 };
                 return self.take_over(text, target, takeover).await;
             }
+            self.trace_branch(
+                "take_over",
+                format!("{note}Jev chose take_over without a target, so the caller is asked which"),
+            );
+            self.trace_routed(OPERATOR, text, "continue", "pbx");
             return self.reply(
                 ["Tell me which project you want to take over."],
                 Some("takeover target missing".into()),
@@ -1156,6 +1250,11 @@ impl Switchboard {
         }
         if matches!(decision.action, crate::router::Action::AnswerWaiting) {
             if let Some(target) = decision.target.as_deref() {
+                self.trace_branch(
+                    "answer_waiting",
+                    format!("{note}the caller answered {target}, which is waiting to speak"),
+                );
+                self.trace_routed(target, text, "continue", "jev");
                 return self
                     .route_project_part(text, target, crate::router::ConversationMode::Continue)
                     .await;
@@ -1169,8 +1268,19 @@ impl Switchboard {
         // this is only a second routing opinion from the stateless utility.
         let utility_required = decision.multi_target || decision.unsure;
         if utility_required {
+            self.trace_branch(
+                "utility",
+                if decision.multi_target {
+                    format!("{note}Jev found several targets (multi_target), so the routing utility splits the utterance")
+                } else {
+                    format!(
+                        "{note}Jev was unsure, so the routing utility gives a second opinion ({})",
+                        decision.reason
+                    )
+                },
+            );
             let request = self.utility_routing_request(text, decision, false);
-            let first = self.utility_decision(&request).await;
+            let first = self.utility_decision(&request, "first").await;
             if decision.multi_target {
                 match first {
                     Ok(Some(UtilityDecision::DispatchParts(parts))) => {
@@ -1182,7 +1292,10 @@ impl Switchboard {
                         // utterance to the current agent, so ask once with an
                         // explicit split instruction.
                         let retry = self
-                            .utility_decision(&self.utility_routing_request(text, decision, true))
+                            .utility_decision(
+                                &self.utility_routing_request(text, decision, true),
+                                "split_retry",
+                            )
                             .await;
                         match retry {
                             Ok(Some(UtilityDecision::DispatchParts(parts))) => {
@@ -1208,6 +1321,10 @@ impl Switchboard {
                         mode,
                         confident: true,
                     })) => {
+                        // The operator records its own destination when it answers.
+                        if target != OPERATOR {
+                            self.trace_routed(&target, text, mode.as_str(), "utility");
+                        }
                         return self.route_project_part(text, &target, mode).await;
                     }
                     Ok(_) => {}
@@ -1222,6 +1339,10 @@ impl Switchboard {
         // never fall through to the current project with the whole utterance.
         // Let the conversational operator ask the caller instead.
         if decision.multi_target {
+            self.trace_branch(
+                "multi_unresolved",
+                "the routing utility could not split a multi-target utterance, so the operator asks the caller".into(),
+            );
             let context = TransferContext {
                 exact_caller_transcript: text.to_owned(),
                 derived_intent: String::new(),
@@ -1241,6 +1362,15 @@ impl Switchboard {
                     .continue_or_fresh
                     .clone()
                     .unwrap_or(crate::router::ConversationMode::Continue);
+                self.trace_branch(
+                    "go_to_project",
+                    format!(
+                        "{note}Jev chose go_to_project to {target} ({}): {}",
+                        mode.as_str(),
+                        decision.reason
+                    ),
+                );
+                self.trace_routed(target, text, mode.as_str(), "jev");
                 return self.route_project_part(text, target, mode).await;
             }
         }
@@ -1248,6 +1378,15 @@ impl Switchboard {
             && !decision.sends_to_operator()
             && self.coordinator.route() != OPERATOR
         {
+            let route = self.coordinator.route();
+            self.trace_branch(
+                "continue_current",
+                format!(
+                    "{note}Jev chose continue, so {route} keeps the line: {}",
+                    decision.reason
+                ),
+            );
+            self.trace_routed(&route, text, "continue", "jev");
             return self
                 .handle_agent_ctx(&TransferContext {
                     exact_caller_transcript: text.to_owned(),
@@ -1255,6 +1394,19 @@ impl Switchboard {
                 })
                 .await;
         }
+        self.trace_branch(
+            "operator",
+            if utility_required {
+                format!("{note}the routing utility gave no confident destination, so the operator handles it")
+            } else {
+                format!(
+                    "{note}Jev chose {} on {}, which the operator handles: {}",
+                    decision.action.as_str(),
+                    self.coordinator.route(),
+                    decision.reason
+                )
+            },
+        );
         let context = TransferContext {
             exact_caller_transcript: text.to_owned(),
             derived_intent: String::new(),
@@ -1348,6 +1500,10 @@ impl Switchboard {
             .partition(|part| self.registry.get(&part.agent).is_some());
         for part in &unknown {
             tracing::warn!(project = %part.agent, "dropping a split part for an unregistered project");
+        }
+        // One utterance fans out to every part's agent.
+        for part in &parts {
+            self.trace_routed(&part.agent, &part.text, "continue", "utility");
         }
         let current = self.coordinator.route();
         let foreground_index = parts
@@ -1736,6 +1892,32 @@ impl Switchboard {
     async fn utility_decision(
         &mut self,
         request: &str,
+        attempt: &str,
+    ) -> Result<Option<UtilityDecision>, PiSessionError> {
+        self.trace(|utterance_id| crate::debug::DebugEvent::UtilityRequest {
+            utterance_id,
+            attempt: attempt.to_owned(),
+            prompt: request.to_owned(),
+        });
+        let started = std::time::Instant::now();
+        let decision = self.ask_utility(request).await;
+        let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.trace(|utterance_id| crate::debug::DebugEvent::UtilityDecision {
+            utterance_id,
+            attempt: attempt.to_owned(),
+            decision: match &decision {
+                Ok(Some(decision)) => decision.debug_value(),
+                Ok(None) => json!({"kind": "none"}),
+                Err(error) => json!({"kind": "error", "error": error.to_string()}),
+            },
+            latency_ms,
+        });
+        decision
+    }
+
+    async fn ask_utility(
+        &mut self,
+        request: &str,
     ) -> Result<Option<UtilityDecision>, PiSessionError> {
         let session = self.ensure_utility().await?.clone();
         let turn = session.prompt(request).await?;
@@ -1804,6 +1986,7 @@ impl Switchboard {
             Err(e) => {
                 tracing::error!(error = %e, "operator unavailable");
                 tracing::error!(error = %e, "operator unavailable for routing");
+                self.trace_operator_hop(context, &context.exact_caller_transcript, "unavailable");
                 return self.routing_unavailable();
             }
         };
@@ -1818,6 +2001,7 @@ impl Switchboard {
         );
         // The operator keeps a conversation, but the call changes under it:
         // give it the same current facts Jev saw, once per turn.
+        let operator_text = message.clone();
         let call_state = std::mem::take(&mut self.call_state);
         let message = if call_state.is_empty() {
             message
@@ -1829,6 +2013,7 @@ impl Switchboard {
             Ok(turn) => turn,
             Err(error) => {
                 tracing::warn!(%error, "the operator leg failed mid-prompt");
+                self.trace_operator_hop(context, &operator_text, "failed");
                 return self.recover_operator(error.to_string()).await;
             }
         };
@@ -1843,19 +2028,63 @@ impl Switchboard {
             } else {
                 turn.error
             };
+            self.trace_operator_hop(context, &operator_text, "failed");
             return self.recover_operator(error).await;
         }
         if let Some(signal) = turn.signals.iter().find(|s| s.name == ROUTE_TOOL) {
             let target = arg_first(signal, &["target", "project"]);
             let mode = conversation_mode(signal);
             if target.is_empty() {
+                self.trace_operator_hop(context, &operator_text, "route_tool_without_target");
                 return self.reply([turn.text], None);
+            }
+            self.trace_operator_hop(context, &operator_text, "route_tool");
+            let action = if target == OPERATOR {
+                "return_to_operator"
+            } else if target == self.coordinator.route() {
+                "continue"
+            } else {
+                "transfer"
+            };
+            self.trace(|utterance_id| crate::debug::DebugEvent::OperatorRouteTool {
+                utterance_id,
+                target: target.clone(),
+                mode: mode.as_str().into(),
+                action: action.into(),
+            });
+            if target != OPERATOR {
+                self.trace_routed(
+                    &target,
+                    &context.exact_caller_transcript,
+                    mode.as_str(),
+                    "operator",
+                );
             }
             return self
                 .route_project_part(&context.exact_caller_transcript, &target, mode)
                 .await;
         }
+        self.trace_operator_hop(context, &operator_text, "answered");
         self.reply([turn.text], None)
+    }
+
+    /// The operator's part in an utterance's trace. Unless it handed the
+    /// caller on with its route tool, the operator is the destination: it
+    /// answered (or its recovery did), so the trace ends in a `routed` to it.
+    fn trace_operator_hop(&self, context: &TransferContext, text: &str, outcome: &str) {
+        self.trace(|utterance_id| crate::debug::DebugEvent::OperatorHop {
+            utterance_id,
+            text: text.to_owned(),
+            outcome: outcome.to_owned(),
+        });
+        if outcome != "route_tool" {
+            self.trace_routed(
+                OPERATOR,
+                &context.exact_caller_transcript,
+                "continue",
+                "operator",
+            );
+        }
     }
 
     async fn handle_agent_ctx(&mut self, context: &TransferContext) -> Reply {

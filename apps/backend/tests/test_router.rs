@@ -452,3 +452,111 @@ fn an_omitted_mode_continues_and_an_omitted_confidence_is_not_confident() {
         })
     );
 }
+
+#[test]
+fn every_threshold_rule_is_named_with_its_numbers() {
+    let on_operator = router(0.3, 0.7, 0.6);
+    let on_project = project_router(0.3, 0.7, 0.6);
+    let rule = |router: &Router, action: &str, confidence: f64, current: f64| {
+        router
+            .map_response_with_rule(&answers(action, confidence, current))
+            .expect("decision")
+    };
+
+    let (_, stop) = rule(&on_operator, "stop", 0.9, 0.0);
+    assert_eq!(stop.as_str(), "stop_confirms");
+    let (_, confident) = rule(&on_operator, "general", 0.9, 0.0);
+    assert_eq!(confident.as_str(), "jev_action");
+    let (below, rule_below) = rule(&on_operator, "general", 0.5, 0.0);
+    assert_eq!(rule_below.as_str(), "action_below_threshold");
+    assert!(
+        below.reason.contains("action_conf=0.500 < threshold 0.600"),
+        "{}",
+        below.reason
+    );
+    let (stayed, rule_stayed) = rule(&on_project, "general", 0.9, 0.8);
+    assert_eq!(rule_stayed.as_str(), "stayed_with_current");
+    assert!(
+        stayed
+            .reason
+            .contains("for_current_agent=0.800 >= upper 0.700"),
+        "{}",
+        stayed.reason
+    );
+    let (unsure, rule_unsure) = rule(&on_project, "general", 0.9, 0.5);
+    assert_eq!(rule_unsure.as_str(), "current_agent_unsure");
+    assert!(
+        unsure
+            .reason
+            .contains("between lower 0.300 and upper 0.700"),
+        "{}",
+        unsure.reason
+    );
+}
+
+#[tokio::test]
+async fn a_routing_call_keeps_the_raw_answers_and_its_latency() {
+    let raw = answers("general", 0.9, 0.0);
+    let response = raw.clone();
+    let client = crate::jev::JevClient::new(
+        "http://unused.invalid/v1/systemone",
+        "/nonexistent/typesafe-api-key",
+        std::time::Duration::from_secs(1),
+    )
+    .expect("client")
+    .with_test_responder(move |_| {
+        let response = response.clone();
+        async move { Ok(response) }
+    });
+    let router = Router::new(
+        client,
+        Arc::new(Registry::new(vec![])),
+        Coordinator::new(crate::lifecycle::StatusConfig::default(), "medium"),
+        8_000,
+        0.3,
+        0.7,
+        0.6,
+    );
+    let summary = summary_on("operator");
+    let trace = router.route_request(router.build_request(&summary)).await;
+    assert_eq!(trace.response, Some(raw));
+    let (decision, rule) = trace.result.expect("decision");
+    assert_eq!(decision.action, Action::General);
+    assert_eq!(rule, RouteRule::JevAction);
+    assert_eq!(
+        crate::router::jev_outcome(trace.response.as_ref(), None),
+        "ok"
+    );
+
+    let gate = router
+        .good_moment(router.good_moment_request(&summary))
+        .await;
+    // The canned routing answers carry no good_moment answer.
+    assert!(gate.response.is_some());
+    let error = gate.result.expect_err("missing good_moment");
+    assert_eq!(
+        crate::router::jev_outcome(gate.response.as_ref(), Some(&error)),
+        "invalid"
+    );
+}
+
+#[test]
+fn utility_decisions_render_for_the_debug_page() {
+    let opinion = UtilityDecision::SecondOpinion {
+        target: Some("atlas".into()),
+        mode: ConversationMode::Fresh,
+        confident: true,
+    };
+    assert_eq!(
+        opinion.debug_value(),
+        json!({"kind":"second_opinion","target":"atlas","mode":"fresh","confident":true})
+    );
+    let split = UtilityDecision::DispatchParts(vec![DispatchPart {
+        agent: "atlas".into(),
+        text: "plan it".into(),
+    }]);
+    assert_eq!(
+        split.debug_value(),
+        json!({"kind":"dispatch_parts","parts":[{"project":"atlas","text":"plan it"}]})
+    );
+}

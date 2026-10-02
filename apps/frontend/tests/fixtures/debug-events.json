@@ -31,14 +31,32 @@
         "outcome": "ok",
         "answers": {
           "action": {
-            "selected": "transfer",
+            "type": "choice",
+            "choice": "go_to_project",
             "probabilities": {
-              "transfer": 0.92
-            }
+              "go_to_project": 0.92,
+              "continue": 0.05,
+              "general": 0.03
+            },
+            "confidence": 0.92,
+            "noul": null
+          },
+          "for_current_agent": {
+            "type": "noul",
+            "choice": null,
+            "probabilities": null,
+            "confidence": null,
+            "noul": 0.08
           },
           "target": {
-            "selected": "alpha",
-            "confidence": 0.97
+            "type": "choice",
+            "choice": "alpha",
+            "probabilities": {
+              "alpha": 0.97,
+              "none": 0.03
+            },
+            "confidence": 0.97,
+            "noul": null
           }
         }
       }
@@ -197,7 +215,8 @@
         "kind": "turn_start",
         "agent": "alpha",
         "turn_id": "turn-8",
-        "generation": 3
+        "generation": 3,
+        "utterance_id": "clip-42"
       }
     },
     {
@@ -206,7 +225,8 @@
         "kind": "turn_end",
         "agent": "alpha",
         "turn_id": "turn-8",
-        "generation": 3
+        "generation": 3,
+        "utterance_id": "clip-42"
       }
     },
     {
@@ -224,7 +244,8 @@
         "kind": "speech",
         "agent": "alpha",
         "text": "The build passes.",
-        "delivered": true
+        "delivered": true,
+        "floor_id": "floor-7"
       }
     },
     {
@@ -232,7 +253,8 @@
       "event": {
         "kind": "floor_request",
         "agent": "alpha",
-        "message": "The build passes."
+        "message": "The build passes.",
+        "floor_id": "floor-7"
       }
     },
     {
@@ -240,7 +262,8 @@
       "event": {
         "kind": "floor_held",
         "agent": "alpha",
-        "message": "The build passes."
+        "message": "The build passes.",
+        "floor_id": "floor-7"
       }
     },
     {
@@ -249,7 +272,8 @@
         "kind": "floor_gate",
         "agent": "alpha",
         "answer": "yes",
-        "latency_ms": 41
+        "latency_ms": 41,
+        "floor_id": "floor-7"
       }
     },
     {
@@ -259,7 +283,8 @@
         "agent": "alpha",
         "original": "The build passes.",
         "rewritten": "I have good news: the build passes.",
-        "latency_ms": 127
+        "latency_ms": 127,
+        "floor_id": "floor-7"
       }
     },
     {
@@ -267,7 +292,8 @@
       "event": {
         "kind": "floor_released",
         "agent": "alpha",
-        "how": "quiet"
+        "how": "quiet",
+        "floor_id": "floor-7"
       }
     },
     {
@@ -288,6 +314,37 @@
         "kind": "host_link",
         "host": "builder-1",
         "connected": true
+      }
+    },
+    {
+      "name": "jev_request_good_moment",
+      "event": {
+        "kind": "jev_request",
+        "purpose": "good_moment",
+        "state": {
+          "queued_update": {
+            "from_agent": "alpha",
+            "message": "The build passes."
+          }
+        },
+        "floor_id": "floor-7"
+      }
+    },
+    {
+      "name": "call_boundary",
+      "event": {
+        "kind": "call_boundary",
+        "phase": "started",
+        "call_id": "call-1"
+      }
+    },
+    {
+      "name": "call_boundary_ended",
+      "event": {
+        "kind": "call_boundary",
+        "phase": "ended",
+        "call_id": "call-1",
+        "reason": "page_closed"
       }
     }
   ],

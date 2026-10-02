@@ -14,20 +14,26 @@ fn examples() -> Vec<(&'static str, DebugEvent)> {
         (
             "jev_request",
             DebugEvent::JevRequest {
-                utterance_id: "clip-42".into(),
+                utterance_id: Some("clip-42".into()),
                 purpose: "route".into(),
                 state: json!({"caller_just_said":"Please send me to alpha."}),
+                floor_id: None,
             },
         ),
         (
             "jev_response",
             DebugEvent::JevResponse {
-                utterance_id: "clip-42".into(),
+                utterance_id: Some("clip-42".into()),
                 purpose: "route".into(),
                 latency_ms: 83,
                 outcome: "ok".into(),
-                answers: json!({"action":{"selected":"transfer","probabilities":{"transfer":0.92}},"target":{"selected":"alpha","confidence":0.97}}),
+                answers: json!({
+                    "action": {"type":"choice","choice":"go_to_project","probabilities":{"go_to_project":0.92,"continue":0.05,"general":0.03},"confidence":0.92,"noul":null},
+                    "for_current_agent": {"type":"noul","choice":null,"probabilities":null,"confidence":null,"noul":0.08},
+                    "target": {"type":"choice","choice":"alpha","probabilities":{"alpha":0.97,"none":0.03},"confidence":0.97,"noul":null}
+                }),
                 error: None,
+                floor_id: None,
             },
         ),
         (
@@ -159,6 +165,7 @@ fn examples() -> Vec<(&'static str, DebugEvent)> {
                 agent: "alpha".into(),
                 turn_id: "turn-8".into(),
                 generation: 3,
+                utterance_id: Some("clip-42".into()),
             },
         ),
         (
@@ -167,6 +174,7 @@ fn examples() -> Vec<(&'static str, DebugEvent)> {
                 agent: "alpha".into(),
                 turn_id: "turn-8".into(),
                 generation: 3,
+                utterance_id: Some("clip-42".into()),
             },
         ),
         (
@@ -184,6 +192,7 @@ fn examples() -> Vec<(&'static str, DebugEvent)> {
                 text: "The build passes.".into(),
                 delivered: true,
                 reason: None,
+                floor_id: Some("floor-7".into()),
             },
         ),
         (
@@ -191,6 +200,7 @@ fn examples() -> Vec<(&'static str, DebugEvent)> {
             DebugEvent::FloorRequest {
                 agent: "alpha".into(),
                 message: "The build passes.".into(),
+                floor_id: Some("floor-7".into()),
             },
         ),
         (
@@ -198,6 +208,7 @@ fn examples() -> Vec<(&'static str, DebugEvent)> {
             DebugEvent::FloorHeld {
                 agent: "alpha".into(),
                 message: "The build passes.".into(),
+                floor_id: Some("floor-7".into()),
             },
         ),
         (
@@ -206,6 +217,7 @@ fn examples() -> Vec<(&'static str, DebugEvent)> {
                 agent: "alpha".into(),
                 answer: "yes".into(),
                 latency_ms: 41,
+                floor_id: Some("floor-7".into()),
             },
         ),
         (
@@ -215,6 +227,7 @@ fn examples() -> Vec<(&'static str, DebugEvent)> {
                 original: "The build passes.".into(),
                 rewritten: "I have good news: the build passes.".into(),
                 latency_ms: 127,
+                floor_id: Some("floor-7".into()),
             },
         ),
         (
@@ -222,6 +235,7 @@ fn examples() -> Vec<(&'static str, DebugEvent)> {
             DebugEvent::FloorReleased {
                 agent: "alpha".into(),
                 how: "quiet".into(),
+                floor_id: Some("floor-7".into()),
             },
         ),
         (
@@ -239,6 +253,31 @@ fn examples() -> Vec<(&'static str, DebugEvent)> {
             DebugEvent::HostLink {
                 host: "builder-1".into(),
                 connected: true,
+            },
+        ),
+        (
+            "jev_request_good_moment",
+            DebugEvent::JevRequest {
+                utterance_id: None,
+                purpose: "good_moment".into(),
+                state: json!({"queued_update":{"from_agent":"alpha","message":"The build passes."}}),
+                floor_id: Some("floor-7".into()),
+            },
+        ),
+        (
+            "call_boundary",
+            DebugEvent::CallBoundary {
+                phase: "started".into(),
+                call_id: "call-1".into(),
+                reason: None,
+            },
+        ),
+        (
+            "call_boundary_ended",
+            DebugEvent::CallBoundary {
+                phase: "ended".into(),
+                call_id: "call-1".into(),
+                reason: Some("page_closed".into()),
             },
         ),
     ]

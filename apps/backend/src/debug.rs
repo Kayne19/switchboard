@@ -119,18 +119,24 @@ pub(crate) enum DebugEvent {
         talking_to: String,
     },
     JevRequest {
-        utterance_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        utterance_id: Option<String>,
         purpose: String,
         state: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        floor_id: Option<String>,
     },
     JevResponse {
-        utterance_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        utterance_id: Option<String>,
         purpose: String,
         latency_ms: u64,
         outcome: String,
         answers: Value,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        floor_id: Option<String>,
     },
     RouteDecision {
         utterance_id: String,
@@ -234,11 +240,15 @@ pub(crate) enum DebugEvent {
         agent: String,
         turn_id: String,
         generation: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        utterance_id: Option<String>,
     },
     TurnEnd {
         agent: String,
         turn_id: String,
         generation: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        utterance_id: Option<String>,
     },
     Rescue {
         generation: u64,
@@ -252,29 +262,41 @@ pub(crate) enum DebugEvent {
         delivered: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        floor_id: Option<String>,
     },
     FloorRequest {
         agent: String,
         message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        floor_id: Option<String>,
     },
     FloorHeld {
         agent: String,
         message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        floor_id: Option<String>,
     },
     FloorGate {
         agent: String,
         answer: String,
         latency_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        floor_id: Option<String>,
     },
     FloorRewrite {
         agent: String,
         original: String,
         rewritten: String,
         latency_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        floor_id: Option<String>,
     },
     FloorReleased {
         agent: String,
         how: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        floor_id: Option<String>,
     },
     AgentsState {
         agents: Vec<AgentState>,
@@ -282,6 +304,14 @@ pub(crate) enum DebugEvent {
     HostLink {
         host: String,
         connected: bool,
+    },
+    /// One call's start or end. Every event between a `started` and the
+    /// `ended` with the same `call_id` belongs to that call.
+    CallBoundary {
+        phase: String,
+        call_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
     },
 }
 
@@ -443,6 +473,7 @@ impl Clip {
             DebugEvent::ModuleCall { args, .. } => self.json(args),
             DebugEvent::ModuleResult { detail, .. } => self.json(detail),
             DebugEvent::Rescue { reason, .. } => self.text(reason),
+            DebugEvent::CallBoundary { reason, .. } => self.opt_text(reason),
             DebugEvent::Speech { text, reason, .. } => {
                 self.opt_text(reason);
                 self.text(text);
@@ -674,6 +705,16 @@ impl DebugBus {
     #[cfg(test)]
     pub(crate) fn snapshot(&self) -> Snapshot {
         self.locked(|rings| take_snapshot(rings))
+    }
+
+    /// The events in the ring now, oldest first, without their records.
+    #[cfg(test)]
+    pub(crate) fn events_for_test(&self) -> Vec<DebugEvent> {
+        self.snapshot()
+            .events
+            .iter()
+            .map(|record| record.event.clone())
+            .collect()
     }
 
     /// Subscribes to the live stream and takes a snapshot in one critical

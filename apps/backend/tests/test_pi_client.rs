@@ -378,11 +378,7 @@ async fn takeover_reply_cannot_make_release_kill_a_desk_session() {
 }
 
 fn debug_events(bus: &crate::debug::DebugBus) -> Vec<DebugEvent> {
-    bus.snapshot()
-        .events
-        .iter()
-        .map(|record| record.event.clone())
-        .collect()
+    bus.events_for_test()
 }
 
 #[tokio::test]

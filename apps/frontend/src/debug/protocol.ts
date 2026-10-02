@@ -30,14 +30,16 @@ export interface CallerUtteranceEvent {
 }
 export interface JevRequestEvent {
   kind: 'jev_request';
-  utterance_id: string;
+  /** Absent for a `good_moment` request, which is keyed by `floor_id`. */
+  utterance_id?: string;
   purpose: string;
   state: JsonValue;
   floor_id?: string;
 }
 export interface JevResponseEvent {
   kind: 'jev_response';
-  utterance_id: string;
+  /** Absent for a `good_moment` request, which is keyed by `floor_id`. */
+  utterance_id?: string;
   purpose: string;
   latency_ms: number;
   outcome: string;
@@ -303,8 +305,8 @@ type FieldSpec = Record<string, FieldType | `${FieldType}?`>;
 /** Every event kind and its fields, as the Rust enum serializes them. */
 export const EVENT_FIELDS: Record<DebugEventKind, FieldSpec> = {
   caller_utterance: { utterance_id: 'string', text: 'string', talking_to: 'string' },
-  jev_request: { utterance_id: 'string', purpose: 'string', state: 'json', floor_id: 'string?' },
-  jev_response: { utterance_id: 'string', purpose: 'string', latency_ms: 'number', outcome: 'string', answers: 'json', error: 'string?', floor_id: 'string?' },
+  jev_request: { utterance_id: 'string?', purpose: 'string', state: 'json', floor_id: 'string?' },
+  jev_response: { utterance_id: 'string?', purpose: 'string', latency_ms: 'number', outcome: 'string', answers: 'json', error: 'string?', floor_id: 'string?' },
   route_decision: { utterance_id: 'string', rule: 'string', reason: 'string', action: 'string', target: 'string?', mode: 'string', decided_by: 'string' },
   pbx_branch: { utterance_id: 'string', branch: 'string', reason: 'string' },
   utility_request: { utterance_id: 'string', attempt: 'string', prompt: 'string' },

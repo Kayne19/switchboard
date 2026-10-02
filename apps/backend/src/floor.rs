@@ -4,6 +4,7 @@
 //! application supplies small callbacks for Jev, the stateless rewrite
 //! process, and audio delivery; lifecycle and presentation mutations remain in
 //! their existing owners.
+use crate::debug::{DebugBus, DebugEvent};
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
@@ -16,6 +17,9 @@ pub(crate) const REWRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FloorRequest {
+    /// Links one message's floor events on the debug page. `Floor::enqueue`
+    /// assigns it; whatever the caller set is replaced.
+    pub floor_id: u64,
     pub project: String,
     pub token: String,
     /// The lifecycle generation at admission. A route rescue during rewrite
@@ -28,6 +32,13 @@ pub(crate) struct FloorRequest {
     pub reason: String,
     /// Whether this agent has a display buffered that the caller has not seen.
     pub held_display: bool,
+}
+
+impl FloorRequest {
+    /// The id the debug page links this message's floor events by.
+    pub(crate) fn floor_debug_id(&self) -> String {
+        format!("floor-{}", self.floor_id)
+    }
 }
 
 /// All information the floor rewrite model needs. The caller's recent context
@@ -90,6 +101,9 @@ pub(crate) struct Floor {
     state: Arc<Mutex<FloorState>>,
     changed: Arc<Notify>,
     quiet_threshold: Duration,
+    next_id: Arc<std::sync::atomic::AtomicU64>,
+    /// Read-only observer; the queue never waits on it.
+    debug: DebugBus,
 }
 
 impl Floor {
@@ -102,10 +116,26 @@ impl Floor {
             })),
             changed: Arc::new(Notify::new()),
             quiet_threshold,
+            next_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+            debug: DebugBus::new(),
         }
     }
 
-    pub(crate) async fn enqueue(&self, request: FloorRequest) {
+    /// Report the queue's steps to `debug`.
+    pub(crate) fn with_debug(mut self, debug: DebugBus) -> Self {
+        self.debug = debug;
+        self
+    }
+
+    pub(crate) async fn enqueue(&self, mut request: FloorRequest) {
+        request.floor_id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.debug.publish(DebugEvent::FloorRequest {
+            agent: request.project.clone(),
+            message: request.message.clone(),
+            floor_id: Some(request.floor_debug_id()),
+        });
         self.state.lock().await.queue.push_back(QueuedRequest {
             request,
             held_after: None,
@@ -156,6 +186,7 @@ impl Floor {
         loop {
             let (entry, announce) = self.next_ready(&hooks).await;
             if !(hooks.live)(&entry.request) {
+                self.trace_released(&entry.request, "dropped_agent_gone");
                 self.drop_front(&entry.request).await;
                 continue;
             }
@@ -169,16 +200,31 @@ impl Floor {
             };
             // Without a rewrite the message is spoken as the agent wrote it:
             // it is already in the speaker's own voice.
+            let started = Instant::now();
             let rewritten = (hooks.rewrite)(input)
                 .await
                 .unwrap_or_else(|_| entry.request.message.clone());
+            self.debug.publish(DebugEvent::FloorRewrite {
+                agent: entry.request.project.clone(),
+                original: entry.request.message.clone(),
+                rewritten: rewritten.clone(),
+                latency_ms: elapsed_ms(started),
+                floor_id: Some(entry.request.floor_debug_id()),
+            });
             if !(hooks.live)(&entry.request) {
+                self.trace_released(&entry.request, "dropped_agent_gone");
                 self.drop_front(&entry.request).await;
                 continue;
             }
             let outcome = (hooks.release)(entry.request.clone(), rewritten, announce).await;
             match outcome {
                 ReleaseOutcome::Played | ReleaseOutcome::Drop => {
+                    let how = match outcome {
+                        ReleaseOutcome::Drop => "dropped_agent_gone",
+                        _ if entry.held_after.is_some() => "quiet_after_hold",
+                        _ => "gate_yes",
+                    };
+                    self.trace_released(&entry.request, how);
                     self.drop_front(&entry.request).await;
                 }
                 ReleaseOutcome::Retry => {
@@ -242,9 +288,27 @@ impl Floor {
                     .is_some_and(|item| item.held_after.is_some())
             };
             if !held {
-                match (hooks.gate)(&entry.request).await {
+                let started = Instant::now();
+                let answer = (hooks.gate)(&entry.request).await;
+                self.debug.publish(DebugEvent::FloorGate {
+                    agent: entry.request.project.clone(),
+                    answer: match answer {
+                        Ok(true) => "yes",
+                        Ok(false) => "no",
+                        Err(()) => "failed",
+                    }
+                    .into(),
+                    latency_ms: elapsed_ms(started),
+                    floor_id: Some(entry.request.floor_debug_id()),
+                });
+                match answer {
                     Ok(true) => {}
                     Ok(false) | Err(()) => {
+                        self.debug.publish(DebugEvent::FloorHeld {
+                            agent: entry.request.project.clone(),
+                            message: entry.request.message.clone(),
+                            floor_id: Some(entry.request.floor_debug_id()),
+                        });
                         let mut state = self.state.lock().await;
                         if let Some(item) = state.queue.front_mut() {
                             item.held_after = Some(Instant::now());
@@ -258,6 +322,14 @@ impl Floor {
         }
     }
 
+    fn trace_released(&self, request: &FloorRequest, how: &str) {
+        self.debug.publish(DebugEvent::FloorReleased {
+            agent: request.project.clone(),
+            how: how.to_owned(),
+            floor_id: Some(request.floor_debug_id()),
+        });
+    }
+
     async fn drop_front(&self, request: &FloorRequest) {
         let mut state = self.state.lock().await;
         if state
@@ -269,6 +341,10 @@ impl Floor {
         }
         self.changed.notify_waiters();
     }
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
