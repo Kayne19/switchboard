@@ -37,7 +37,7 @@ jobs:
       - name: TypeScript build and browser/extension tests
         run: |
           npm test
-          git diff --exit-code -- static
+          git diff --exit-code -- static static-debug
 
       - name: Rust format
         run: cargo fmt --all -- --check

@@ -53,14 +53,15 @@ commit.
 ## Working here
 
 - The service is Rust (`apps/backend/src/`), the browser client is TypeScript (`apps/frontend/src/`,
-  compiled to the committed `static/`).
+  compiled to the committed `static/`; the debug page compiles to the committed
+  `static-debug/`, which the binary embeds and only the debug listener serves).
 - The Rust toolchain is pinned in `rust-toolchain.toml` so a local run and CI
   agree. Bump it deliberately; do not work around it.
 - Every gate CI runs: `cargo fmt --all -- --check`, `cargo test --locked`,
   `cargo clippy --locked --all-targets -- -D warnings`, and `npm test` followed
-  by `git diff --exit-code -- static` — the compiled browser output is
-  committed, so rebuild it in the same change.
-- A `static/` merge conflict is resolved by rebuilding from the merged source
+  by `git diff --exit-code -- static static-debug` — the compiled browser output
+  is committed, so rebuild it in the same change.
+- A `static/` or `static-debug/` merge conflict is resolved by rebuilding from the merged source
   (`npm ci && npm run build`), never by picking a side (see #37).
 - `master` requires a passing CI `test` check on an up-to-date head. A head
   pushed by the Copilot agent gets no CI jobs until a maintainer approves its

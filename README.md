@@ -322,6 +322,7 @@ container, and the post-deploy checklist.
 | `apps/frontend/tests/` | browser, display, and operator-extension tests |
 | `static/index.html`, `static/v17-assets/`, `static/vad-worklet.js` | committed deterministic browser build output |
 | `static/openwakeword/` | same-origin Hey Jarvis ONNX, wrapper, and ONNX Runtime WASM assets |
+| `static-debug/` | committed debug-page build output (`index.html`, `debug.js`, `debug.css`); embedded in the binary and served only by the debug listener (`docs/debug-page.md`) |
 | `extensions/operator-switchboard.ts` | the operator's pi extension |
 | `skills/switchboard/` | the `switchboard` Python skill module project agents use to reach the caller, and its tests |
 | `apps/host-agent/install.mjs` | installs or redeploys the host agent, the skill and the two systemd user units on a project host |
@@ -357,15 +358,16 @@ agent gives it with the call token, so the two cannot disagree.
 
 ```bash
 npm ci
-npm test                     # builds static/, then skill module, host agent, browser, display, and extension tests, and the no-SSH check
-git diff --exit-code -- static
+npm test                     # builds static/ and static-debug/, then skill module, host agent, browser, display, and extension tests, and the no-SSH check
+git diff --exit-code -- static static-debug
 cargo fmt --all -- --check
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
 ```
 
-These are the CI gates (`.github/workflows/ci.yml`). `static/` is committed
-build output, so a change that alters it commits the rebuild too.
+These are the CI gates (`.github/workflows/ci.yml`). `static/` and
+`static-debug/` are committed build output, so a change that alters them
+commits the rebuild too.
 
 `build.rs` stamps the binary with the commit it was built from, logged at
 startup as `git=` and reported by `/healthz` as `git`. It takes
