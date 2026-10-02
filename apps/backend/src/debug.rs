@@ -1018,12 +1018,17 @@ impl DebugBus {
         self.0.rings.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Runs `f` under the publish lock with the re-entry guard set.
+    /// Runs `f` under the publish lock with the re-entry guard set. The
+    /// guard puts the flag back as it was, even if `f` panics.
     fn locked<T>(&self, f: impl FnOnce(&mut Rings) -> T) -> T {
-        PUBLISHING.with(|publishing| publishing.set(true));
-        let result = f(&mut self.rings());
-        PUBLISHING.with(|publishing| publishing.set(false));
-        result
+        struct Publishing(bool);
+        impl Drop for Publishing {
+            fn drop(&mut self) {
+                PUBLISHING.with(|publishing| publishing.set(self.0));
+            }
+        }
+        let _guard = Publishing(PUBLISHING.with(|publishing| publishing.replace(true)));
+        f(&mut self.rings())
     }
 
     /// Records `event` and sends it to live clients. Returns its sequence,

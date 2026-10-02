@@ -1126,3 +1126,13 @@ async fn a_feed_that_lags_twice_within_the_interval_is_closed() {
     lag(&bus);
     assert!(feed.next().await.is_none());
 }
+
+#[test]
+fn the_publish_guard_is_restored_after_a_panic() {
+    let bus = DebugBus::new();
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        bus.locked(|_| panic!("inside the publish lock"));
+    }));
+    assert!(panicked.is_err());
+    assert!(!PUBLISHING.with(Cell::get));
+}
