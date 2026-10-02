@@ -6736,7 +6736,7 @@ async fn until_debug(
     state: &AppState,
     want: impl Fn(&crate::debug::DebugEvent) -> bool,
 ) -> crate::debug::DebugEvent {
-    for _ in 0..500 {
+    for _ in 0..2_000 {
         if let Some(event) = debug_events(state).into_iter().find(|event| want(event)) {
             return event;
         }

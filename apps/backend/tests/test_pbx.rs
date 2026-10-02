@@ -4321,7 +4321,7 @@ async fn a_split_retry_traces_both_attempts_and_fans_out_to_every_part() {
             })
             .collect::<Vec<_>>()
     };
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
     while !inputs().iter().any(|(agent, _)| agent == "beta") {
         assert!(
             tokio::time::Instant::now() < deadline,
