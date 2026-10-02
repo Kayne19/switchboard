@@ -883,6 +883,14 @@ impl Hosts {
         }
     }
 
+    /// Delivers `frame` on `host`'s current link as its host agent sending
+    /// it, for frames a test sends on its own: an `agent_start` nobody
+    /// caused, say, which no command of the service's ever produces.
+    pub(crate) fn send_fake(&self, host: &str, frame: Value) {
+        let epoch = self.link_epoch(host).expect("the host is linked");
+        self.on_frame(host, epoch, &frame.to_string());
+    }
+
     /// Drops `host`'s current link, as a disconnect would.
     pub(crate) fn disconnect_fake(&self, host: &str) {
         if let Some(epoch) = self.link_epoch(host) {
@@ -989,6 +997,9 @@ pub(crate) struct FakeHostAgent {
     pub(crate) on_prompt: OnPrompt,
     pub(crate) on_command: Option<Override>,
     pub(crate) models: Value,
+    /// Stamps each prompt's `turn_start` and `turn_end` with a `turn_id`
+    /// (`turn-1`, `turn-2`, ...), as a current host agent does.
+    pub(crate) turn_ids: bool,
 }
 
 #[cfg(test)]
@@ -1001,6 +1012,7 @@ impl FakeHostAgent {
                 {"provider": "anthropic", "id": "current", "name": "Current", "reasoning": true},
                 {"provider": "anthropic", "id": "next", "name": "Next", "reasoning": true},
             ]),
+            turn_ids: false,
         }
     }
 
@@ -1017,6 +1029,7 @@ impl FakeHostAgent {
         let mut modes: HashMap<String, String> = HashMap::new();
         let mut cursor = 0u64;
         let mut calls = 0u64;
+        let mut turns = 0u64;
         let mut stash: std::collections::VecDeque<Value> = Default::default();
         loop {
             let frame = match stash.pop_front() {
@@ -1133,11 +1146,15 @@ impl FakeHostAgent {
             }
             match name.as_str() {
                 "prompt" => {
-                    event(
-                        &link,
-                        &session,
-                        json!({"kind": "turn_start", "cause": "input"}),
-                    );
+                    turns += 1;
+                    let turn_id = self.turn_ids.then(|| format!("turn-{turns}"));
+                    let mut start = json!({"kind": "turn_start", "cause": "input"});
+                    let mut end = json!({"kind": "turn_end"});
+                    if let Some(turn_id) = &turn_id {
+                        start["turn_id"] = json!(turn_id);
+                        end["turn_id"] = json!(turn_id);
+                    }
+                    event(&link, &session, start);
                     let message = args["message"].as_str().unwrap_or_default().to_owned();
                     let mut settles = true;
                     for step in (self.on_prompt)(&session, &message) {
@@ -1191,7 +1208,7 @@ impl FakeHostAgent {
                         }
                     }
                     if settles {
-                        event(&link, &session, json!({"kind": "turn_end"}));
+                        event(&link, &session, end);
                     }
                 }
                 "set_model" | "set_thinking" => {

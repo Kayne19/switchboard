@@ -144,6 +144,34 @@ fn autonomous_operations_require_turn_authority_and_reject_stale_calls() {
 }
 
 #[test]
+fn a_caller_turn_the_host_settled_closes_before_its_prompt_returns() {
+    let coordinator = coordinator();
+    coordinator.begin_candidate(alpha_candidate()).unwrap();
+    coordinator.adopt_candidate("cand").unwrap();
+    // The intro is the new leg's startup; only `finish_intro` ends it.
+    coordinator.bind_turn("cand", "turn-0").unwrap();
+    assert!(!coordinator.settle_turn("cand", "turn-0"));
+    assert!(coordinator.finish_intro());
+    let leg = coordinator.current_identity();
+    let caller = coordinator.begin_prompt(&leg).unwrap();
+    // Before the host names the caller's turn, no settle report owns it.
+    assert!(!coordinator.settle_turn("cand", "turn-1"));
+    coordinator.bind_turn("cand", "turn-1").unwrap();
+    assert!(!coordinator.settle_turn("other", "turn-1"));
+    assert!(!coordinator.settle_turn("cand", "turn-0"));
+    assert!(coordinator.begin_autonomous(&leg, "turn-2").is_err());
+
+    assert!(coordinator.settle_turn("cand", "turn-1"));
+
+    // The run the host started right behind it is admitted, and the prompt's
+    // own close, when it returns, leaves that run alone.
+    let woken = coordinator.begin_autonomous(&leg, "turn-2").unwrap();
+    assert!(!coordinator.finish_operation(&caller));
+    assert_eq!(coordinator.attach_steer(&leg).unwrap(), woken);
+    assert!(coordinator.finish_operation(&woken));
+}
+
+#[test]
 fn stale_generation_and_concurrent_prompt_are_rejected() {
     let coordinator = coordinator();
     let old = coordinator.current_identity();

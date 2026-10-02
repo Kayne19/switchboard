@@ -288,6 +288,50 @@ was made for, and each is closed where its side effect happens:
   the whole leg (project, identity, model, session), not the generation alone,
   because a return to the operator keeps the generation.
 
+## A run that starts as the caller's turn settles
+
+The host agent opens a turn only after the one before it has settled, and it
+can open the next one at once. Two cases do this: the caller aborts a turn in
+the Prime Agent TUI and resumes it there, and a child agent exits while the
+caller's turn runs, so its wake starts right after that turn ends. The
+host's `turn_end` for the caller's turn and the `turn_start` (`cause:
+autonomous`) of the next run then reach the session back to back.
+
+At that moment the service has not finished the caller's turn. The prompt
+that collects it returns only when its own task runs, and the turn worker
+closes the caller's operation only after that. The self-woken start used to
+land in that window. The pump saw a collector, so it handed the start to it,
+and the coordinator still held the caller's operation, so the run could not
+be admitted. The run then had no operation: its speech and displays were
+refused as a self-woken call without authority (#109). A caller message
+during it was queued behind it, not steered into it, because steering needs
+an operation and `busy`, and the collector's end had cleared `busy` (#107).
+
+Two rules close the window:
+
+- **The host's settle report closes the caller's operation.** The pump
+  reports every `turn_end` it gives the collector. When its `turn_id` is the
+  one the caller's operation is bound to, `Coordinator::settle_turn` closes
+  that operation there and then. It is the same close as `finish_operation`;
+  the turn worker's later call finds nothing to close.
+- **A self-woken start goes to the application first.** While a prompt is
+  collected, the pump offers the start to `handle_project_turn`. The
+  application admits it only when no caller operation is open, which after
+  that settle report is the case. Otherwise the collector keeps it, as
+  before: that is a prompt the host turned into part of a run the session
+  had just started itself. The collector's end leaves `busy` set while an
+  autonomous turn runs.
+
+A host that sends no turn ids gets the old behavior. Without an id the
+caller's operation is never bound to a host turn, so no settle report can
+close it.
+
+`a_turn_resumed_after_an_external_abort_can_speak` and
+`a_caller_message_steers_a_turn_woken_as_the_caller_turn_settles` in
+`apps/backend/tests/test_api.rs` send the two frames back to back.
+`a_self_woken_start_before_the_caller_turn_settles_stays_the_callers` checks
+that a start with no settle report before it stays with the caller's turn.
+
 ## `ETXTBSY` when tests write their own executables
 
 Several tests need a fake `pi` or a fake sidecar. They write a small shell script,
