@@ -355,9 +355,11 @@ function traceRoute(trace: RouteTrace, g: Geometry, lane: number): DrawnRoute | 
     const node = g.anchors.get(`node-${segment.to}`);
     const labelAt =
       segment.from === 'caller' ? { x: to.in.x - 40, y: to.in.y - 12 } : node ? { x: (from.out.x + to.in.x) / 2, y: node.y - 12 } : wireMid(from.out, to.in);
+    // A hop that skips a node goes over the band, not under the node.
+    const over = (g.anchors.get('node-jev')?.y ?? from.out.y) - 12 + dy / 2;
     wires.push({
       key: `${segment.from}-${segment.to}`,
-      d: wire(from.out, to.in),
+      d: segment.from !== 'caller' && skipsNode(from.out, to.in) ? detour(from.out, to.in, over) : wire(from.out, to.in),
       label: segment.label ? { at: labelAt, text: segment.label } : undefined,
     });
     last = to.in;
@@ -365,34 +367,50 @@ function traceRoute(trace: RouteTrace, g: Geometry, lane: number): DrawnRoute | 
   const arrivals: Point[] = [];
   for (const [index, destination] of path.destinations.entries()) {
     const from = ports.get(destination.from) ?? ports.get('caller')!;
-    const port = paneEntry(g, `port-in-${destination.agent}`, dy);
-    if (!port) continue;
-    const d = `${wire(from.out, port.entry)} H${port.end.x.toFixed(1)}`;
-    wires.push({ key: `dest-${index}`, d, clipped: port.clipped, label: { at: { x: port.end.x - 70, y: port.end.y }, text: destination.label } });
-    arrivals.push(port.end);
+    const run = paneRun(g, `port-in-${destination.agent}`, dy);
+    if (!run) continue;
+    // Up out of the gap right after the node it leaves, so it never passes
+    // under a node the utterance did not visit; along the bus above the
+    // stages and panes; then down onto the pane's top rule.
+    const rise = from.out.x + 12 + dy / 2;
+    const d = `M${fixed(from.out.x)},${fixed(from.out.y)} H${fixed(rise)} V${fixed(run.bus)} H${fixed(run.x)} V${fixed(run.edge)}`;
+    wires.push({ key: `dest-${index}`, d, clipped: run.clipped, label: { at: { x: run.x - 70, y: run.bus }, text: destination.label } });
+    arrivals.push({ x: run.x, y: run.edge });
   }
   return { id: trace.id, kind: 'trace', wires, arrivals, end: path.pending || path.ended ? last : undefined, pending: path.pending, ended: path.ended?.label };
 }
 
+const fixed = (value: number) => value.toFixed(1);
+
+/** Adjacent nodes in a band sit 24px apart; a longer hop passes a node. */
+const skipsNode = (a: Point, b: Point) => Math.abs(b.x - a.x) > 40;
+
+/** Around the nodes between `a` and `b`, along `clear`, a height outside the band. */
+function detour(a: Point, b: Point, clear: number): string {
+  const step = b.x >= a.x ? 12 : -12;
+  return `M${fixed(a.x)},${fixed(a.y)} H${fixed(a.x + step)} V${fixed(clear)} H${fixed(b.x - step)} V${fixed(b.y)} H${fixed(b.x)}`;
+}
+
 /**
- * Where a line meets a pane: it enters the strip above (or below) the pane
- * row at its left edge and runs along it to the pane, so a route to the
- * fourth pane never crosses the first three.
+ * Where a line meets a pane. Each pane has a port strip above it (routes in)
+ * and below it (floor requests out); the strips line up into one bus above
+ * and one below the pane row. `bus` is the line's height in the strip, `edge`
+ * the pane's rule it lands on, and `x` a little inside the pane's left edge.
  */
-function paneEntry(g: Geometry, anchor: string, dy: number): { entry: Point; end: Point; clipped: boolean } | null {
+function paneRun(g: Geometry, anchor: string, dy: number): { x: number; bus: number; edge: number; clipped: boolean } | null {
   const port = g.anchors.get(anchor);
   const panes = g.clips.get('panes');
   if (!port || !panes) return null;
-  const y = port.y + port.h / 2 + dy;
-  const left = panes.x;
-  const right = panes.x + panes.w - 8;
-  const x = Math.min(right, Math.max(left + 8, port.x));
-  return { entry: { x: left, y }, end: { x, y }, clipped: x !== port.x };
+  const wanted = port.x + 6;
+  const x = Math.min(panes.x + panes.w - 8, Math.max(panes.x + 6, wanted));
+  const into = anchor.startsWith('port-in-');
+  return { x, bus: port.y + port.h / 2 + dy, edge: into ? port.y + port.h : port.y, clipped: x !== wanted };
 }
 
 function floorRoute(floor: FloorTrace, g: Geometry, lane: number): DrawnRoute | null {
-  const port = paneEntry(g, `port-out-${floor.agent}`, ((lane % 5) - 2) * 3);
-  if (!port) return null;
+  const run = paneRun(g, `port-out-${floor.agent}`, ((lane % 5) - 2) * 3);
+  const panes = g.clips.get('panes');
+  if (!run || !panes) return null;
   const points: { at: Point; out: Point; box: Box; label: string }[] = [];
   const hop = (id: string, label: string) => {
     const node = g.anchors.get(`node-${id}`);
@@ -405,17 +423,21 @@ function floorRoute(floor: FloorTrace, g: Geometry, lane: number): DrawnRoute | 
   }
   if (floor.rewrite) hop('rewrite', `rewrite ${formatMs(floor.rewrite.latency_ms)}`);
   const wires: Wire[] = [];
+  // Down off the pane's bottom rule, then left along the bus below the panes.
+  const entry = { x: panes.x, y: run.bus };
   wires.push({
     key: 'f-out',
-    d: `M${port.end.x.toFixed(1)},${port.end.y.toFixed(1)} H${port.entry.x.toFixed(1)}`,
-    clipped: port.clipped,
-    label: { at: { x: port.end.x - 56, y: port.end.y }, text: floor.agent },
+    d: `M${fixed(run.x)},${fixed(run.edge)} V${fixed(run.bus)} H${fixed(entry.x)}`,
+    clipped: run.clipped,
+    label: { at: { x: run.x - 56, y: run.bus }, text: floor.agent },
   });
-  let from = port.entry;
+  let from: Point = entry;
+  // A hop that skips a node (no gate before the rewrite) goes under the band.
+  const under = Math.max(...points.map((point) => point.box.y + point.box.h), 0) + 12 + (((lane % 5) - 2) * 3) / 2;
   for (const [index, point] of points.entries()) {
     wires.push({
       key: `f-${index}`,
-      d: wire(from, point.at),
+      d: index > 0 && skipsNode(from, point.at) ? detour(from, point.at, under) : wire(from, point.at),
       // Above the gap between the two nodes, clear of both.
       label: index === 0 ? undefined : { at: { x: (from.x + point.at.x) / 2, y: point.box.y - 12 }, text: points[index - 1].label },
     });

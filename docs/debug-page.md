@@ -60,7 +60,9 @@ The source is `apps/frontend/src/debug/` (entry `apps/frontend/debug/index.html`
   through `TechFrame`, and tool calls use the tool-activity line styles.
   `debug.css` only lays these out. Route lines are thin and grey; the lit
   route is orange out and cyan back to the caller, and only a route still in
-  flight moves.
+  flight moves. A line to a pane rises to the bus above the panes and drops
+  onto the pane's top rule; a floor request leaves along the bus below. A
+  hop that skips a stage node goes around the band, never under the node.
 - A pane item or log line from a record with `"clipped": true` shows a
   `clipped` tag.
 

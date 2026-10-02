@@ -286,13 +286,15 @@ button.ci:hover {
   background: rgba(232, 230, 223, 0.08);
 }
 
-/* The stage nodes: two bands, the route out and the floor back. */
+/* The stage nodes: two bands, the route out and the floor back, kept
+   together in the middle of the column; the buses run above and below. */
 .stages {
   position: relative;
   z-index: 2;
   display: grid;
-  grid-template-rows: 1fr 1fr;
-  gap: 24px;
+  grid-template-rows: auto auto;
+  align-content: center;
+  gap: 40px;
   padding: 24px 0;
   pointer-events: none;
 }
@@ -308,7 +310,6 @@ button.ci:hover {
   color: rgba(232, 230, 223, 0.42);
 }
 .band-nodes {
-  flex: 1;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 24px;
