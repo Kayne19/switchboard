@@ -234,7 +234,7 @@ fn examples() -> Vec<(&'static str, DebugEvent)> {
             "floor_released",
             DebugEvent::FloorReleased {
                 agent: "alpha".into(),
-                how: "quiet".into(),
+                how: "quiet_after_hold".into(),
                 floor_id: Some("floor-7".into()),
             },
         ),
@@ -278,6 +278,39 @@ fn examples() -> Vec<(&'static str, DebugEvent)> {
                 phase: "ended".into(),
                 call_id: "call-1".into(),
                 reason: Some("page_closed".into()),
+            },
+        ),
+        (
+            "jev_response_good_moment",
+            DebugEvent::JevResponse {
+                utterance_id: None,
+                purpose: "good_moment".into(),
+                latency_ms: 1500,
+                outcome: "timeout".into(),
+                answers: json!({}),
+                error: Some("Jev did not answer within 1500 ms".into()),
+                floor_id: Some("floor-7".into()),
+            },
+        ),
+        (
+            "tool_end_error",
+            DebugEvent::ToolEnd {
+                agent: "alpha".into(),
+                call_id: Some("call-4".into()),
+                tool: "bash".into(),
+                result: Some(json!({"content": [{"type": "text", "text": "exit status 1"}]})),
+                error: Some("exit status 1".into()),
+                turn_id: Some("turn-8".into()),
+            },
+        ),
+        (
+            "speech_undelivered",
+            DebugEvent::Speech {
+                agent: "alpha".into(),
+                text: "The deploy finished.".into(),
+                delivered: false,
+                reason: Some("stale_generation".into()),
+                floor_id: None,
             },
         ),
     ]

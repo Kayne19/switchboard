@@ -292,7 +292,7 @@
       "event": {
         "kind": "floor_released",
         "agent": "alpha",
-        "how": "quiet",
+        "how": "quiet_after_hold",
         "floor_id": "floor-7"
       }
     },
@@ -345,6 +345,47 @@
         "phase": "ended",
         "call_id": "call-1",
         "reason": "page_closed"
+      }
+    },
+    {
+      "name": "jev_response_good_moment",
+      "event": {
+        "kind": "jev_response",
+        "purpose": "good_moment",
+        "latency_ms": 1500,
+        "outcome": "timeout",
+        "answers": {},
+        "error": "Jev did not answer within 1500 ms",
+        "floor_id": "floor-7"
+      }
+    },
+    {
+      "name": "tool_end_error",
+      "event": {
+        "kind": "tool_end",
+        "agent": "alpha",
+        "call_id": "call-4",
+        "tool": "bash",
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "exit status 1"
+            }
+          ]
+        },
+        "error": "exit status 1",
+        "turn_id": "turn-8"
+      }
+    },
+    {
+      "name": "speech_undelivered",
+      "event": {
+        "kind": "speech",
+        "agent": "alpha",
+        "text": "The deploy finished.",
+        "delivered": false,
+        "reason": "stale_generation"
       }
     }
   ],

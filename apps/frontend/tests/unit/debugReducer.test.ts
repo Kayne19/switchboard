@@ -41,7 +41,7 @@ describe('debug reducer', () => {
     const module = state.panes.alpha.items.find((item) => item.type === 'module');
     expect(module).toMatchObject({ name: 'speak', ok: true, detail: { status: 'delivered' } });
     const floor = state.floors[state.floorOrder[0]];
-    expect(floor).toMatchObject({ agent: 'alpha', requested: true, rewrite: { rewritten: 'I have good news: the build passes.' }, released: { how: 'quiet' } });
+    expect(floor).toMatchObject({ agent: 'alpha', requested: true, rewrite: { rewritten: 'I have good news: the build passes.' }, released: { how: 'quiet_after_hold' } });
     expect(floor.gates.map((gate) => gate.answer)).toEqual(['yes']);
     expect(state.hosts['builder-1'].connected).toBe(true);
     expect(state.turns[0]).toMatchObject({ agent: 'alpha', turnId: 'turn-8', endTs: expect.any(Number) });
