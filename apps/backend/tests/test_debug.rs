@@ -101,6 +101,7 @@ fn examples() -> Vec<(&'static str, DebugEvent)> {
                 turn_id: Some("turn-8".into()),
                 text: "The caller asked to inspect the build.".into(),
                 source: "caller".into(),
+                utterance_id: Some("clip-42".into()),
             },
         ),
         (
@@ -119,6 +120,7 @@ fn examples() -> Vec<(&'static str, DebugEvent)> {
                 call_id: Some("call-3".into()),
                 tool: "bash".into(),
                 args: Some(json!({"command":"cargo test"})),
+                turn_id: Some("turn-8".into()),
             },
         ),
         (
@@ -129,6 +131,7 @@ fn examples() -> Vec<(&'static str, DebugEvent)> {
                 tool: "bash".into(),
                 result: Some(json!({"exit_code":0})),
                 error: None,
+                turn_id: Some("turn-8".into()),
             },
         ),
         (
@@ -138,6 +141,7 @@ fn examples() -> Vec<(&'static str, DebugEvent)> {
                 call_id: "call-4".into(),
                 name: "speak".into(),
                 args: json!({"text":"The build passes."}),
+                turn_id: Some("turn-8".into()),
             },
         ),
         (
@@ -410,6 +414,7 @@ fn one_record_cannot_exceed_the_size_bounds() {
         tool: "bash".into(),
         result: Some(json!({"items": vec![1; 1_000], "wide": wide})),
         error: None,
+        turn_id: None,
     });
     bus.publish(host_link(1));
     bus.publish_log("INFO".into(), "t".into(), huge.clone(), json!({"f": huge}));
@@ -624,4 +629,85 @@ fn the_log_layer_respects_the_filter_and_redacts_secret_fields() {
     for secret in ["abc", "def", "ghi", "jkl", "mno", "pqr"] {
         assert!(!wire.contains(secret), "{secret} leaked: {wire}");
     }
+}
+
+#[test]
+fn credentials_are_scrubbed_from_text() {
+    assert_eq!(
+        scrub_text("API_KEY=abc123 and token: \"xyz.789\" ok"),
+        "API_KEY=[redacted] and token: \"[redacted]\" ok"
+    );
+    assert_eq!(
+        scrub_text("Authorization: Bearer eyJhbGci.payload.sig"),
+        "Authorization: [redacted] [redacted]"
+    );
+    assert_eq!(scrub_text("Bearer abc.def end"), "Bearer [redacted] end");
+    assert_eq!(
+        scrub_text("use ghp_0123456789abcdefABCDEF now"),
+        "use [redacted] now"
+    );
+    assert_eq!(scrub_text("max tokens: 500"), "max tokens: 500");
+    assert_eq!(scrub_text("the key idea"), "the key idea");
+}
+
+#[test]
+fn secret_names_match_whole_key_parts_only() {
+    for name in [
+        "token",
+        "call_token",
+        "api_key",
+        "apiKey",
+        "Authorization",
+        "client_secret",
+        "KEY",
+        "x-api-keys",
+    ] {
+        assert!(secret_name(name), "{name}");
+    }
+    for name in ["keyboard", "monkey", "project", "path"] {
+        assert!(!secret_name(name), "{name}");
+    }
+}
+
+#[test]
+fn published_events_are_scrubbed_before_they_are_kept() {
+    let bus = DebugBus::new();
+    bus.publish(DebugEvent::ToolStart {
+        agent: "alpha".into(),
+        call_id: None,
+        tool: "bash".into(),
+        args: Some(json!({
+            "call_token": "t-1",
+            "input_tokens": 12,
+            "nested": [{"password": "p"}, "SECRET=s"],
+            "path": "/srv/a"
+        })),
+        turn_id: None,
+    });
+    bus.publish(DebugEvent::AgentInput {
+        agent: "alpha".into(),
+        turn_id: None,
+        text: "deploy with GITHUB_TOKEN=ghp_0123456789abcdefABCDEF".into(),
+        source: "caller".into(),
+        utterance_id: None,
+    });
+    let snapshot = bus.snapshot();
+    let DebugEvent::ToolStart { args, .. } = &snapshot.events[0].event else {
+        panic!("tool start")
+    };
+    assert_eq!(
+        args.as_ref().unwrap(),
+        &json!({
+            "call_token": "[redacted]",
+            "input_tokens": 12,
+            "nested": [{"password": "[redacted]"}, "SECRET=[redacted]"],
+            "path": "/srv/a"
+        })
+    );
+    // Scrubbing alone does not mark a record clipped.
+    assert!(!snapshot.events[0].clipped);
+    let DebugEvent::AgentInput { text, .. } = &snapshot.events[1].event else {
+        panic!("agent input")
+    };
+    assert_eq!(text, "deploy with GITHUB_TOKEN=[redacted]");
 }

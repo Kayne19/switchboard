@@ -102,6 +102,30 @@ function textOf(message: Record<string, unknown>): string {
 		.join("");
 }
 
+/** Largest tool `args` or `result` sent on the link, as JSON bytes. */
+export const TOOL_DETAIL_LIMIT = 4 * 1024;
+
+/**
+ * A tool's `args` or `result` for the link, for the debug page only. A value
+ * whose JSON is over TOOL_DETAIL_LIMIT bytes is replaced by a marked preview,
+ * so one large file read cannot crowd the event buffer.
+ */
+export function clipDetail(value: unknown): unknown {
+	if (value === undefined) return undefined;
+	let json: string;
+	try {
+		json = JSON.stringify(value) ?? "null";
+	} catch {
+		return { clipped: true, bytes: 0, preview: "(not serializable)" };
+	}
+	const bytes = Buffer.byteLength(json, "utf8");
+	if (bytes <= TOOL_DETAIL_LIMIT) return value;
+	// Cut on a character, not a byte, so the preview stays valid text.
+	let preview = json.slice(0, TOOL_DETAIL_LIMIT);
+	while (Buffer.byteLength(preview, "utf8") > TOOL_DETAIL_LIMIT) preview = preview.slice(0, -1);
+	return { clipped: true, bytes, preview };
+}
+
 function modelLabel(s: DaemonSession | null): string | null {
 	return s?.model ? `${s.model.provider}/${s.model.id}` : null;
 }
@@ -565,12 +589,31 @@ export class SessionManager {
 					if (t.pending === 0) this.#settle(t);
 				}
 				return;
-			case "tool_execution_start":
-				this.#emit(handle, { kind: "tool_start", tool: event.toolName ?? null, call_id: event.toolCallId ?? null });
+			// `args`, `result` and `turn_id` are optional additions for the
+			// debug page (docs/host-link.md, "Session events").
+			case "tool_execution_start": {
+				const args = clipDetail(event.args);
+				this.#emit(handle, {
+					kind: "tool_start",
+					tool: event.toolName ?? null,
+					call_id: event.toolCallId ?? null,
+					...(args !== undefined ? { args } : {}),
+					...(t.turnId ? { turn_id: t.turnId } : {}),
+				});
 				return;
-			case "tool_execution_end":
-				this.#emit(handle, { kind: "tool_end", tool: event.toolName ?? null, call_id: event.toolCallId ?? null, error: event.isError === true });
+			}
+			case "tool_execution_end": {
+				const result = clipDetail(event.result);
+				this.#emit(handle, {
+					kind: "tool_end",
+					tool: event.toolName ?? null,
+					call_id: event.toolCallId ?? null,
+					error: event.isError === true,
+					...(result !== undefined ? { result } : {}),
+					...(t.turnId ? { turn_id: t.turnId } : {}),
+				});
 				return;
+			}
 			case "message_end": {
 				const message = (event.message ?? {}) as Record<string, unknown>;
 				if (message.role !== "assistant") return;

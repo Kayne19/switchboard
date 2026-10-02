@@ -1367,6 +1367,7 @@ async fn a_turn_ends_only_on_the_settled_turn_end() {
                     on_module: None,
                     on_turn: None,
                     on_closed: None,
+                    debug: None,
                 },
             )
             .await
@@ -2557,6 +2558,7 @@ async fn dead_background_handle_is_evicted_after_registration_recheck() {
         on_module: None,
         on_turn: None,
         on_closed: None,
+        debug: None,
     };
     let session = ProjectSession::create(&board.hosts(), launch)
         .await
@@ -2610,6 +2612,7 @@ async fn stale_host_loss_callback_after_resume_keeps_the_replacement_resident() 
         on_module: None,
         on_turn: None,
         on_closed: None,
+        debug: None,
     };
     let old = ProjectSession::create(&board.hosts(), launch())
         .await
@@ -3812,6 +3815,7 @@ async fn host_loss_closes_a_taken_over_session_without_killing_the_desk_process(
                 }
             })
         })),
+        debug: None,
     };
     let (session, _) = ProjectSession::attach(&board.hosts(), launch, "desk-alpha")
         .await

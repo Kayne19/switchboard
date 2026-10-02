@@ -386,7 +386,7 @@ removes the real coupling; do not create interfaces for ceremony.
 | `history.rs` | transcript storage shape | deciding when a turn routes |
 | `visual_protocol.rs` | display action validation and normalization | layout |
 | `protocol.rs` | the shape of every message sent to the browser (`ServerMessage`) | when or to whom a message is sent |
-| `debug.rs` | bounded, in-memory observation: the event and log rings, the debug schema (`DebugEvent`), log-field redaction, and the debug listener's router and WebSocket framing | call control, routing or lifecycle decisions, awaiting on clients or doing I/O while publishing, disk history |
+| `debug.rs` | bounded, in-memory observation: the event and log rings, the debug schema (`DebugEvent`), record scrubbing and clipping, and the debug listener's router and WebSocket framing | call control, routing or lifecycle decisions, awaiting on clients or doing I/O while publishing, disk history |
 | `apps/frontend/` | capture, protocol client, playback, UI | server authority or durable state |
 | `extensions/` | the operator's Pi-side tool signal | direct route mutation |
 | homelab | deployment and secrets | application implementation |

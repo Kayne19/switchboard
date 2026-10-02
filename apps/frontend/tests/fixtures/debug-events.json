@@ -126,7 +126,8 @@
         "agent": "alpha",
         "turn_id": "turn-8",
         "text": "The caller asked to inspect the build.",
-        "source": "caller"
+        "source": "caller",
+        "utterance_id": "clip-42"
       }
     },
     {
@@ -148,7 +149,8 @@
         "tool": "bash",
         "args": {
           "command": "cargo test"
-        }
+        },
+        "turn_id": "turn-8"
       }
     },
     {
@@ -160,7 +162,8 @@
         "tool": "bash",
         "result": {
           "exit_code": 0
-        }
+        },
+        "turn_id": "turn-8"
       }
     },
     {
@@ -172,7 +175,8 @@
         "name": "speak",
         "args": {
           "text": "The build passes."
-        }
+        },
+        "turn_id": "turn-8"
       }
     },
     {

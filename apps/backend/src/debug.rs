@@ -182,6 +182,9 @@ pub(crate) enum DebugEvent {
         turn_id: Option<String>,
         text: String,
         source: String,
+        /// The caller line this input carries, when routing sent one here.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        utterance_id: Option<String>,
     },
     AgentText {
         agent: String,
@@ -198,6 +201,8 @@ pub(crate) enum DebugEvent {
         tool: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         args: Option<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
     },
     ToolEnd {
         agent: String,
@@ -208,12 +213,16 @@ pub(crate) enum DebugEvent {
         result: Option<Value>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
     },
     ModuleCall {
         agent: String,
         call_id: String,
         name: String,
         args: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
     },
     ModuleResult {
         agent: String,
@@ -309,7 +318,12 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-/// Shortens strings and JSON values to the record bounds, marking each cut.
+/// Makes one record safe for the debug page, before it takes the publish
+/// lock. Every text field and JSON string goes through `scrub_text`, a JSON
+/// string under a credential-like name (`secret_name`) becomes `[redacted]`,
+/// and then strings and JSON values are shortened to the record bounds, with
+/// each cut marked. This is the only place debug records are scrubbed or
+/// clipped; producers publish raw values.
 struct Clip {
     remaining: usize,
     clipped: bool,
@@ -328,6 +342,7 @@ impl Clip {
     }
 
     fn text(&mut self, text: &mut String) {
+        *text = scrub_text(text);
         let limit = MAX_FIELD_BYTES.min(self.remaining);
         if text.len() > limit {
             let mut cut = limit;
@@ -369,6 +384,9 @@ impl Clip {
                         return false;
                     }
                     self.spend(key.len());
+                    if value.is_string() && secret_name(key) {
+                        *value = Value::String(REDACTED.to_owned());
+                    }
                     self.json(value);
                     kept += 1;
                     true
@@ -397,8 +415,9 @@ impl Clip {
         }
     }
 
-    /// Clips the fields of `event` that can carry caller, prompt or tool text.
-    /// Names and ids are short by construction and left alone.
+    /// Scrubs and clips the fields of `event` that can carry caller, prompt,
+    /// reply or tool text. Names and ids are short by construction and left
+    /// alone. A new variant or text field must be added here.
     fn event(&mut self, event: &mut DebugEvent) {
         match event {
             DebugEvent::CallerUtterance { text, .. }
@@ -798,39 +817,17 @@ struct FieldsVisitor {
     message: Option<String>,
 }
 
-/// Field names whose values never reach the debug page. The page is
-/// unauthenticated; the journal keeps whatever the log line carried.
-const SECRET_FIELD_WORDS: [&str; 6] = [
-    "token",
-    "key",
-    "secret",
-    "authorization",
-    "password",
-    "bearer",
-];
-const REDACTED: &str = "[redacted]";
-
-/// True when a log field's name suggests a credential. Matching is by
-/// substring, case-insensitive, so `call_token` and `api_key` match too.
-fn is_secret_field(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    SECRET_FIELD_WORDS.iter().any(|word| name.contains(word))
-}
-
 impl tracing::field::Visit for FieldsVisitor {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        if field.name() != "message" && is_secret_field(field.name()) {
-            self.record(field.name(), Value::String(REDACTED.to_owned()));
-            return;
-        }
         let value = format!("{value:?}");
         self.record(field.name(), Value::String(value));
     }
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
         self.record(field.name(), Value::String(value.to_owned()));
     }
-    // Numbers and booleans cannot carry a credential (`*_token_budget`,
-    // `*_key_configured`), so they are kept even under a secret-like name.
+    // Fields are kept as JSON numbers and booleans where they are ones:
+    // `Clip` redacts only strings under a secret-like name, because a number
+    // cannot carry a credential (`*_token_budget`, `*_key_configured`).
     fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
         self.fields
             .insert(field.name().to_owned(), Value::from(value));
@@ -855,9 +852,6 @@ impl FieldsVisitor {
     fn record(&mut self, name: &str, value: Value) {
         if name == "message" {
             self.message = value.as_str().map(ToOwned::to_owned);
-        } else if is_secret_field(name) {
-            self.fields
-                .insert(name.to_owned(), Value::String(REDACTED.to_owned()));
         } else {
             self.fields.insert(name.to_owned(), value);
         }
@@ -897,6 +891,125 @@ where
             Value::Object(visitor.fields),
         );
     }
+}
+
+/// What replaces a credential on the debug page. The page is
+/// unauthenticated; the journal keeps whatever the log line carried.
+const REDACTED: &str = "[redacted]";
+
+/// True for a field name that usually holds a credential: `token`,
+/// `call_token`, `api_key`, `apiKey`, `Authorization`, `client_secret` and so
+/// on. Case-insensitive. `key` counts only as a whole name part, so `keyboard`
+/// and `monkey` do not.
+fn secret_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.split(['_', '-', '.'])
+        .any(|part| part == "key" || part == "keys")
+        || [
+            "token",
+            "secret",
+            "password",
+            "passwd",
+            "apikey",
+            "privatekey",
+            "authorization",
+            "bearer",
+            "credential",
+            "cookie",
+        ]
+        .iter()
+        .any(|word| name.contains(word))
+}
+
+/// Replaces credential-looking parts of text: the value after a
+/// credential-like name and `=` or `:` (`API_KEY=...`, `"token": "..."`), the
+/// word after `Bearer`, and words with a well-known key prefix. A heuristic:
+/// it keeps a pasted `.env` or auth header off the page, not every secret.
+pub(crate) fn scrub_text(text: &str) -> String {
+    const KEY_PREFIXES: [&str; 8] = [
+        "sk-",
+        "ghp_",
+        "gho_",
+        "ghs_",
+        "github_pat_",
+        "xoxb-",
+        "xoxp-",
+        "glpat-",
+    ];
+    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+    let is_value = |c: char| !c.is_whitespace() && !matches!(c, '"' | '\'' | ',' | '}' | ']');
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    let mut redact_next_word = false;
+    while i < chars.len() {
+        let c = chars[i];
+        if !is_word(c) {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < chars.len() && is_word(chars[i]) {
+            i += 1;
+        }
+        let word: String = chars[start..i].iter().collect();
+        if redact_next_word
+            || (word.len() >= 16 && KEY_PREFIXES.iter().any(|p| word.starts_with(p)))
+        {
+            redact_next_word = false;
+            // The rest of a value such as `abc.def/ghi` goes with it.
+            while i < chars.len() && is_value(chars[i]) {
+                i += 1;
+            }
+            out.push_str(REDACTED);
+            continue;
+        }
+        out.push_str(&word);
+        if word.eq_ignore_ascii_case("bearer") {
+            redact_next_word = chars.get(i).is_some_and(|c| *c == ' ');
+            continue;
+        }
+        if !secret_name(&word) {
+            continue;
+        }
+        // `name`, an optional closing quote, spaces, `=` or `:`, spaces and an
+        // optional opening quote, then the value.
+        let mut j = i;
+        if matches!(chars.get(j), Some('"' | '\'')) {
+            j += 1;
+        }
+        while matches!(chars.get(j), Some(' ' | '\t')) {
+            j += 1;
+        }
+        if !matches!(chars.get(j), Some('=' | ':')) {
+            continue;
+        }
+        j += 1;
+        while matches!(chars.get(j), Some(' ' | '\t')) {
+            j += 1;
+        }
+        if matches!(chars.get(j), Some('"' | '\'')) {
+            j += 1;
+        }
+        let value_start = j;
+        while j < chars.len() && is_value(chars[j]) {
+            j += 1;
+        }
+        // A count such as `tokens: 500` is not a credential.
+        let numeric = chars[value_start..j].iter().all(|c| c.is_ascii_digit());
+        if j > value_start && !numeric {
+            let value: String = chars[value_start..j].iter().collect();
+            // `Authorization: Bearer <token>`: the scheme, then the token.
+            redact_next_word = ["bearer", "basic"]
+                .iter()
+                .any(|scheme| value.eq_ignore_ascii_case(scheme));
+            out.extend(&chars[i..value_start]);
+            out.push_str(REDACTED);
+            i = j;
+        }
+    }
+    out
 }
 
 #[cfg(test)]

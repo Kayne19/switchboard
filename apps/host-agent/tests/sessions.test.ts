@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { DaemonCommandError } from "../src/daemon_port.ts";
 import { HostLink } from "../src/link.ts";
-import { type LinkEvent, PREPARE_OUTPUT_LIMIT, runPrepare, SessionManager } from "../src/sessions.ts";
+import { clipDetail, type LinkEvent, PREPARE_OUTPUT_LIMIT, runPrepare, SessionManager, TOOL_DETAIL_LIMIT } from "../src/sessions.ts";
 import { SkillSocket } from "../src/skill_socket.ts";
 import { FakeDaemon, flush } from "./fake_daemon.ts";
 import { command, FakeService, type Message } from "./fake_service.ts";
@@ -192,6 +192,39 @@ test("a turn settles on wait_for_idle after the last input, not on agent_end", a
 	assert.deepEqual(kinds(s).slice(-1), ["turn_end"]);
 	assert.equal(kinds(s).filter((k) => k === "turn_end").length, 1);
 	assert.equal(kinds(s).filter((k) => k === "turn_start").length, 1);
+});
+
+test("tool events carry optional args, result and turn id, clipped for the debug page", async () => {
+	const { daemon, manager, events } = setup();
+	const s = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
+	await manager.prompt(s, "hello");
+	const turnId = events.find((e) => e.event.kind === "turn_start")?.event.turn_id;
+	assert.equal(typeof turnId, "string");
+	daemon.emit(s, { type: "tool_execution_start", toolName: "bash", toolCallId: "t1", args: { command: "cargo test" } });
+	daemon.emit(s, { type: "tool_execution_end", toolName: "bash", toolCallId: "t1", isError: false, result: { content: [{ type: "text", text: "ok" }] } });
+	const big = "x".repeat(TOOL_DETAIL_LIMIT * 2);
+	daemon.emit(s, { type: "tool_execution_start", toolName: "read", toolCallId: "t2" });
+	daemon.emit(s, { type: "tool_execution_end", toolName: "read", toolCallId: "t2", isError: true, result: { content: [{ type: "text", text: big }] } });
+	await flush();
+	const tools = events.filter((e) => e.event.kind === "tool_start" || e.event.kind === "tool_end").map((e) => e.event);
+	assert.deepEqual(tools[0], { kind: "tool_start", tool: "bash", call_id: "t1", args: { command: "cargo test" }, turn_id: turnId });
+	assert.deepEqual(tools[1], { kind: "tool_end", tool: "bash", call_id: "t1", error: false, result: { content: [{ type: "text", text: "ok" }] }, turn_id: turnId });
+	assert.equal("args" in tools[2], false, "a start without args sends none");
+	const clipped = tools[3].result as { clipped: boolean; bytes: number; preview: string };
+	assert.equal(clipped.clipped, true);
+	assert.ok(clipped.bytes > TOOL_DETAIL_LIMIT);
+	assert.ok(Buffer.byteLength(clipped.preview, "utf8") <= TOOL_DETAIL_LIMIT);
+	assert.equal(tools[3].error, true);
+});
+
+test("clipDetail cuts multi-byte text on a character boundary", () => {
+	const value = "é".repeat(TOOL_DETAIL_LIMIT);
+	const clipped = clipDetail(value) as { clipped: boolean; preview: string };
+	assert.equal(clipped.clipped, true);
+	assert.ok(Buffer.byteLength(clipped.preview, "utf8") <= TOOL_DETAIL_LIMIT);
+	assert.equal(clipped.preview.includes("\uFFFD"), false);
+	assert.deepEqual(clipDetail({ small: 1 }), { small: 1 });
+	assert.equal(clipDetail(undefined), undefined);
 });
 
 test("an agent_start nobody caused opens a turn that settles the same way", async () => {

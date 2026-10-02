@@ -669,6 +669,8 @@ pub struct Switchboard {
     /// silent leg without waiting ten minutes.
     project_turn_timeout: Duration,
     floor_quiet_threshold: Duration,
+    /// Read-only debug observer; never part of call control.
+    debug: crate::debug::DebugBus,
 }
 impl Switchboard {
     pub fn new(config: &crate::Config, registry: Registry, prewarm: Arc<Prewarm>) -> Self {
@@ -756,11 +758,15 @@ impl Switchboard {
             router,
             project_turn_timeout: PROJECT_TURN_TIMEOUT,
             floor_quiet_threshold: Duration::from_millis(config.floor_quiet_threshold_ms),
+            debug: crate::debug::DebugBus::new(),
         }
     }
 
     pub fn floor_quiet_threshold(&self) -> Duration {
         self.floor_quiet_threshold
+    }
+    pub fn set_debug_bus(&mut self, bus: crate::debug::DebugBus) {
+        self.debug = bus;
     }
     /// The project hosts' links; the application serves them on `/host`.
     pub fn hosts(&self) -> Hosts {
@@ -1624,6 +1630,7 @@ impl Switchboard {
                 self.activity_callback.clone(),
             )
             .await?;
+            session.observe(self.debug.clone());
             self.operator = Some(session);
             self.set_active_session(self.operator_leg()).await;
         }
@@ -1668,6 +1675,7 @@ impl Switchboard {
                 None,
             )
             .await?;
+            session.observe(self.debug.clone());
             self.utility = Some(session);
         }
         self.utility
@@ -1816,7 +1824,8 @@ impl Switchboard {
         } else {
             format!("[CALL STATE]\n{call_state}\n[END CALL STATE]\n\n{message}")
         };
-        let turn = match session.prompt(&message).await {
+        // s2: self.current_utterance().as_deref()
+        let turn = match session.prompt_for(&message, None).await {
             Ok(turn) => turn,
             Err(error) => {
                 tracing::warn!(%error, "the operator leg failed mid-prompt");
@@ -1863,7 +1872,11 @@ impl Switchboard {
             self.announce_agent_state(session.label(), "busy").await;
         }
         self.set_agent_task(session.label(), &context.exact_caller_transcript);
-        let turn = match session.prompt(&context.exact_caller_transcript).await {
+        // s2: self.current_utterance().as_deref()
+        let turn = match session
+            .prompt_as(&context.exact_caller_transcript, "caller", None)
+            .await
+        {
             Ok(t) => t,
             Err(error) => {
                 let detail = error.to_string();
@@ -2049,7 +2062,8 @@ impl Switchboard {
         let intro_prompt = build_intro_prompt(context, &project, plan.prepare_report.as_ref());
 
         self.announce_agent_state(&project.id, "busy").await;
-        let turn = match session.prompt(&intro_prompt).await {
+        // s2: self.current_utterance().as_deref()
+        let turn = match session.prompt_as(&intro_prompt, "intro", None).await {
             Ok(t) => t,
             Err(e) => {
                 tracing::warn!(project = %project.id, error = %e, "intro prompt to project failed");
@@ -2148,7 +2162,8 @@ impl Switchboard {
         // The agent was told background rules when it was shelved. Tell it
         // they no longer apply before it answers the caller.
         let prompt = format!("{FOREGROUND_NOTICE}\n\n{}", context.exact_caller_transcript);
-        let turn = match session.prompt(&prompt).await {
+        // s2: self.current_utterance().as_deref()
+        let turn = match session.prompt_as(&prompt, "foreground", None).await {
             Ok(turn) => turn,
             Err(error) => Turn {
                 text: String::new(),
@@ -2341,6 +2356,7 @@ impl Switchboard {
             on_module: self.module_callback.clone(),
             on_turn: self.turn_callback.clone(),
             on_closed: Some(self.session_closed_callback()),
+            debug: Some(self.debug.clone()),
         };
         let session = match ProjectSession::attach(&self.hosts, launch, session_handle).await {
             Ok((session, state)) => {
@@ -2368,7 +2384,8 @@ impl Switchboard {
         self.set_active_session(Some(LegSession::Project(session.clone())))
             .await;
         self.announce_agent_state(&project.id, "busy").await;
-        let turn = match session.prompt(text).await {
+        // s2: self.current_utterance().as_deref()
+        let turn = match session.prompt_as(text, "caller", None).await {
             Ok(turn) => turn,
             Err(error) => Turn {
                 text: String::new(),
@@ -2440,6 +2457,7 @@ impl Switchboard {
             on_module: self.module_callback.clone(),
             on_turn: self.turn_callback.clone(),
             on_closed: Some(self.session_closed_callback()),
+            debug: Some(self.debug.clone()),
         };
         // A host-agent restart keeps resident sessions alive. Prefer the
         // matching service-created session rather than creating a duplicate.
@@ -2646,7 +2664,7 @@ impl Switchboard {
                 },
                 intent.trim().trim_end_matches('.')
             );
-            let turn = match session.prompt(&prompt).await {
+            let turn = match session.prompt_as(&prompt, "model_change", None).await {
                 Ok(turn) => turn,
                 Err(error) => Turn {
                     text: String::new(),
