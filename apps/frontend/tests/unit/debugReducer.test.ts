@@ -250,4 +250,34 @@ describe('debug reducer', () => {
       destinations: [{ agent: 'operator', label: 'refused_unknown_target · continue' }],
     });
   });
+
+  it('links floor speech by floor_id and guesses only without it', () => {
+    const floorEvents = (id: string | undefined): DebugEvent[] => [
+      { kind: 'floor_request', agent: 'alpha', message: 'The build passes.', floor_id: id },
+      { kind: 'floor_gate', agent: 'alpha', answer: 'yes', latency_ms: 40, floor_id: id },
+      { kind: 'floor_released', agent: 'alpha', how: 'gate_yes', floor_id: id },
+    ];
+    // A direct speak lands between the release and the floor's own speech.
+    let state = fold([
+      snapshot(),
+      ...floorEvents('floor-1').map((body) => event(body)),
+      event({ kind: 'speech', agent: 'alpha', text: 'unrelated direct speak', delivered: true }),
+      event({ kind: 'speech', agent: 'alpha', text: 'Good news: the build passes.', delivered: true, floor_id: 'floor-1' }),
+    ]);
+    expect(state.floors['floor-1'].speech?.text).toBe('Good news: the build passes.');
+    const loose = state.callerLane.filter((item) => item.type === 'speech');
+    expect(loose.map((item) => item.type === 'speech' && item.text)).toEqual(['unrelated direct speak']);
+    // Speech naming a floor the page no longer holds stays a loose line.
+    state = reduceFrame(state, event({ kind: 'speech', agent: 'alpha', text: 'late', delivered: true, floor_id: 'floor-gone' }));
+    expect(state.callerLane[state.callerLane.length - 1]).toMatchObject({ type: 'speech', text: 'late' });
+    // An older service sends no ids: the first line after the release is it.
+    state = fold([
+      snapshot(),
+      ...floorEvents(undefined).map((body) => event(body)),
+      event({ kind: 'speech', agent: 'alpha', text: 'Good news: the build passes.', delivered: true }),
+    ]);
+    expect(state.floors[state.floorOrder[0]].speech?.text).toBe('Good news: the build passes.');
+    // The fixture's speech names floor-7.
+    expect(fixtureEvent('speech').floor_id).toBe('floor-7');
+  });
 });

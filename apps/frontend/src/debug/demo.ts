@@ -506,7 +506,7 @@ export function scriptedCall(startSeq: number, startTs: number): ScriptedFrame[]
     240,
   );
   s.event({ kind: 'floor_released', agent: 'beta', how: 'gate_yes', floor_id: 'floor-21' }, 20);
-  s.event({ kind: 'speech', agent: 'beta', text: 'Quick one from homelab: last night’s backup finished at 3:14.', delivered: true }, 30);
+  s.event({ kind: 'speech', agent: 'beta', text: 'Quick one from homelab: last night’s backup finished at 3:14.', delivered: true, floor_id: 'floor-21' }, 30);
   s.event(
     {
       kind: 'agents_state',

@@ -78,6 +78,8 @@ export interface FloorTrace {
   firstTs: number;
   lastTs: number;
   requested: boolean;
+  /** The service named this message (`floor_id`); its speech is linked by id only. */
+  stamped: boolean;
   heldTs?: number;
   gates: Numbered<FloorGateEvent>[];
   jev: DebugRecord[];
@@ -483,6 +485,7 @@ function newFloor(draft: Draft, record: DebugRecord, agent: string, message: str
     firstTs: record.timestamp_ms,
     lastTs: record.timestamp_ms,
     requested: false,
+    stamped: floorId !== undefined,
     gates: draft.fresh([]),
     jev: draft.fresh([]),
     records: draft.fresh([]),
@@ -738,8 +741,11 @@ function applyEvent(draft: Draft, record: DebugRecord): void {
     case 'speech': {
       const pane = ensurePane(draft, record.agent, seq, ts);
       pushPaneItem(draft, pane, { type: 'speech', seq, ts, text: record.text, delivered: record.delivered, reason: record.reason });
-      const floor = latestFloorAwaitingSpeech(draft, record.agent, record.text, ts);
-      if (floor) {
+      // The service names the floor message a released line delivers; only
+      // speech from an older service, without the id, is matched by guess.
+      const floor =
+        record.floor_id !== undefined ? ownFloor(draft, record.floor_id) : latestFloorAwaitingSpeech(draft, record.agent, record.text, ts);
+      if (floor && !floor.speech) {
         floor.speech = record;
         touchFloor(draft, floor, record);
         return;
@@ -879,14 +885,18 @@ function mirrorUtility(draft: Draft, record: Numbered<UtilityRequestEvent> | Num
 }
 
 /**
- * The floor message a speech line delivers: the same text as its rewrite or
- * message, or the first line within a few seconds of its release.
+ * The floor message a speech line without a `floor_id` delivers: the same
+ * text as its rewrite or message, or the first line within a few seconds of
+ * its release. Only for an older service that does not stamp the id: a
+ * floor the service named is never matched by guess, so a direct `speak`
+ * right after a release cannot take the released message's place.
  */
 function latestFloorAwaitingSpeech(draft: Draft, agent: string, text: string, ts: number): FloorTrace | undefined {
   const state = draft.state;
   for (let index = state.floorOrder.length - 1; index >= 0; index -= 1) {
     const floor = state.floors[state.floorOrder[index]];
     if (floor.agent !== agent) continue;
+    if (floor.stamped) return undefined;
     if (floor.speech) return undefined;
     const sameText = text === floor.rewrite?.rewritten || text === floor.message;
     const justReleased = floor.released !== undefined && ts - floor.released.timestamp_ms <= 3_000;

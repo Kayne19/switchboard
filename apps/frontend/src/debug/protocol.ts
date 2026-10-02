@@ -170,6 +170,8 @@ export interface SpeechEvent {
   text: string;
   delivered: boolean;
   reason?: string;
+  /** Set on speech released from the floor: the message it delivers. */
+  floor_id?: string;
 }
 export interface FloorRequestEvent {
   kind: 'floor_request';
@@ -323,7 +325,7 @@ export const EVENT_FIELDS: Record<DebugEventKind, FieldSpec> = {
   turn_start: { agent: 'string', turn_id: 'string', generation: 'number', utterance_id: 'string?' },
   turn_end: { agent: 'string', turn_id: 'string', generation: 'number', utterance_id: 'string?' },
   rescue: { generation: 'number', reason: 'string', leg: 'string?' },
-  speech: { agent: 'string', text: 'string', delivered: 'boolean', reason: 'string?' },
+  speech: { agent: 'string', text: 'string', delivered: 'boolean', reason: 'string?', floor_id: 'string?' },
   floor_request: { agent: 'string', message: 'string', floor_id: 'string?' },
   floor_held: { agent: 'string', message: 'string', floor_id: 'string?' },
   floor_gate: { agent: 'string', answer: 'string', latency_ms: 'number', floor_id: 'string?' },
