@@ -1632,7 +1632,7 @@ impl Switchboard {
             return;
         }
         if previous.busy() {
-            let _ = previous.steer(BACKGROUND_NOTICE).await;
+            let _ = previous.steer(BACKGROUND_NOTICE, None).await;
         }
         let state = if previous.busy() { "busy" } else { "idle" };
         let registered = self.register_background_session(previous_label.clone(), previous);

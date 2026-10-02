@@ -2101,7 +2101,7 @@ async fn dispatch_routed_transcript(
             {
                 false
             }
-            Some(session) => match session.steer(&transcript).await {
+            Some(session) => match session.steer(&transcript, Some(id)).await {
                 Ok(()) => active
                     .as_ref()
                     .is_some_and(|current| current.same_session(&session)),

@@ -85,6 +85,8 @@ async fn steer_writes_into_the_running_process() {
         .await
         .unwrap(),
     );
+    let bus = crate::debug::DebugBus::new();
+    session.observe(bus.clone());
     let running = Arc::clone(&session);
     let prompt = tokio::spawn(async move { running.prompt("hello").await.unwrap() });
     for _ in 0..10 {
@@ -94,8 +96,17 @@ async fn steer_writes_into_the_running_process() {
         tokio::task::yield_now().await;
     }
     assert!(session.busy());
-    session.steer("also check docs").await.unwrap();
+    session
+        .steer("also check docs", Some("clip-3"))
+        .await
+        .unwrap();
     assert!(!prompt.await.unwrap().failed);
+    // The steered words name the caller line they carry.
+    assert!(debug_events(&bus).iter().any(|event| matches!(
+        event,
+        DebugEvent::AgentInput { source, utterance_id: Some(id), .. }
+            if source == "steer" && id == "clip-3"
+    )));
     session.close().await;
 }
 

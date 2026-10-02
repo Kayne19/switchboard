@@ -367,7 +367,11 @@ impl PiSession {
         result
     }
 
-    pub async fn steer(&self, message: &str) -> Result<(), PiSessionError> {
+    pub async fn steer(
+        &self,
+        message: &str,
+        utterance_id: Option<&str>,
+    ) -> Result<(), PiSessionError> {
         if !self.alive().await {
             return Err(PiSessionError(format!(
                 "agent process is not running ({})",
@@ -389,7 +393,7 @@ impl PiSession {
                     turn_id: Some(self.debug_turn_id()),
                     text: message.to_owned(),
                     source: "steer".into(),
-                    utterance_id: None,
+                    utterance_id: utterance_id.map(str::to_owned),
                 });
             }
             Err(error) => tracing::info!(
@@ -1471,7 +1475,11 @@ impl ProjectSession {
         }
     }
 
-    pub async fn steer(&self, message: &str) -> Result<(), PiSessionError> {
+    pub async fn steer(
+        &self,
+        message: &str,
+        utterance_id: Option<&str>,
+    ) -> Result<(), PiSessionError> {
         if !self.busy() {
             return Err(PiSessionError("agent turn is no longer running".into()));
         }
@@ -1482,7 +1490,7 @@ impl ProjectSession {
         match &result {
             Ok(()) => {
                 tracing::info!(label = %self.inner.label, chars = message.chars().count(), "steered the running turn");
-                self.inner.publish_input(message, "steer", None);
+                self.inner.publish_input(message, "steer", utterance_id);
             }
             Err(error) => {
                 tracing::info!(label = %self.inner.label, %error, "could not steer the running turn")
@@ -1975,10 +1983,14 @@ impl LegSession {
             Self::Project(session) => session.alive(),
         }
     }
-    pub async fn steer(&self, message: &str) -> Result<(), PiSessionError> {
+    pub async fn steer(
+        &self,
+        message: &str,
+        utterance_id: Option<&str>,
+    ) -> Result<(), PiSessionError> {
         match self {
-            Self::Operator(session) => session.steer(message).await,
-            Self::Project(session) => session.steer(message).await,
+            Self::Operator(session) => session.steer(message, utterance_id).await,
+            Self::Project(session) => session.steer(message, utterance_id).await,
         }
     }
     pub fn same_session(&self, other: &Self) -> bool {

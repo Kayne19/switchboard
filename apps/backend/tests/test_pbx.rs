@@ -1829,7 +1829,7 @@ async fn the_route_follows_adoption_while_the_intro_turn_is_still_running() {
         .await
         .as_ref()
         .expect("the incoming leg is the live session")
-        .steer("go on")
+        .steer("go on", None)
         .await
         .unwrap();
     let reply = turn.await.unwrap();
