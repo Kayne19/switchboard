@@ -161,7 +161,10 @@ or cancellation side effect inside an unrelated helper.
 
 Host-reported project turns are admitted here through the coordinator. A
 `turn_start` with `cause: autonomous` opens a server-owned operation with the
-host's `turn_id`; caller prompts wait behind it. Module calls must carry the
+host's `turn_id`; caller prompts wait behind it. A caller prompt's operation
+closes when the host reports its bound turn settled (`turn_end` with that
+`turn_id`), even if the prompt has not returned yet, so a run the host starts
+right behind it gets an operation of its own. Module calls must carry the
 same authority, and a stale or authority-less self-wake call is refused rather
 than attached to whichever caller operation won the race. An old host may omit
 these additive fields for ordinary caller turns, but its self-wake effects
