@@ -28,7 +28,7 @@ means unset.
 | `SWITCHBOARD_AGENT_MODEL` | none | Model for a project leg whose registry entry names none. |
 | `SWITCHBOARD_AGENT_THINKING` | `medium` | Thinking level a project leg starts at unless the caller names one. |
 | `SWITCHBOARD_MODEL_SWAPS` | `1` | `0`, `false`, or `no` turns off mid-call model and thinking changes. |
-| `SWITCHBOARD_PERSONA` | empty | Given to each project session when it joins the call (`join_call`, see `docs/host-link.md`). |
+| `SWITCHBOARD_PERSONA` | empty | The spoken character. The service puts it in the operator's and the utility's system prompts and in each project session's voice brief, and still passes it in `join_call` (see `docs/host-link.md`). |
 | `SWITCHBOARD_MAX_SPOKEN_CHARS` | `700` | Longest reply the switchboard voices; longer text is clipped, at a sentence end when one is near. |
 | `SWITCHBOARD_SPEECH_DEADLINE_MS` | `25000` | Deadline for one synthesized utterance, 1–120000. Also given to each project session when it joins the call; its host agent enforces the same deadline. |
 | `SWITCHBOARD_HISTORY_LIMIT` | `200` | Transcript entries kept for page reloads; `0` keeps none. |
