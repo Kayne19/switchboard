@@ -109,10 +109,10 @@ class SurfaceTest(unittest.TestCase):
 class RequestToSpeakContractTest(unittest.TestCase):
     def test_docstring_describes_spoken_answer_contract(self):
         doc = switchboard.request_to_speak.__doc__ or ""
-        self.assertIn("actual result", doc)
+        self.assertIn("real content", doc)
         self.assertIn("not a teaser", doc)
-        self.assertIn("question and options", doc)
-        self.assertIn("what went wrong", doc)
+        self.assertIn("question with options", doc)
+        self.assertIn("problem and what you need", doc)
 
 
 class BackgroundSurfaceTest(unittest.TestCase):
@@ -151,7 +151,7 @@ class IdentityTest(ModuleTestCase):
         os.environ["RLM_DEPTH"] = "1"
         result, line = self.run_call(switchboard.speak, "Hi.")
         self.assertEqual((result.status, result.reason), ("refused", "subagent"))
-        self.assertIn("subagent", line)
+        self.assertIn("Subagents can't reach the caller", line)
         self.assertEqual(host.connections, 0)
 
     def test_not_on_call_when_the_host_agent_says_so(self):
@@ -257,13 +257,23 @@ class CallsTest(ModuleTestCase):
             }
         )
         _, held_line = self.run_call(switchboard.display, op="clear")
-        self.assertIn("held", held_line.lower())
-        self.assertIn("not on screen yet", held_line)
-        self.assertIn("brings this agent forward", held_line)
+        self.assertIn("Held until the caller comes back to you", held_line)
+        self.assertIn("not that it's on screen", held_line)
 
         mode["held"] = False
         _, shown_line = self.run_call(switchboard.display, op="clear")
         self.assertEqual(shown_line, "switchboard.display: On screen.")
+
+    def test_request_and_caller_away_lines_point_to_the_next_step(self):
+        mode = {"reply": {"status": "accepted", "reason": None}}
+        self.host(reply=lambda request: mode["reply"])
+        _, queued = self.run_call(switchboard.request_to_speak, "Done.", "finished")
+        self.assertEqual(queued, "switchboard.request_to_speak: Queued. The caller hears it at a good moment.")
+
+        mode["reply"] = {"status": "refused", "reason": "caller_away"}
+        _, away = self.run_call(switchboard.speak, "Hi.")
+        self.assertIn("nothing was played", away)
+        self.assertIn("request_to_speak", away)
 
     def test_display_rejection_carries_the_service_reason(self):
         self.host(reply=lambda request: {"status": "refused", "reason": "metric value must be a string"})

@@ -20,7 +20,7 @@ Two kinds of leg:
 
 | leg | runs | tools | lifetime |
 | --- | --- | --- | --- |
-| operator | a local `pi --mode rpc` process on damocles, driven over stdin/stdout | `transfer_to_project` only (`--no-builtin-tools`); project catalog is in its system prompt | persistent — it is the home base |
+| operator | a local `pi --mode rpc` process on damocles, driven over stdin/stdout | `route` only (`--no-builtin-tools`); the shared voice block, persona and project catalog are appended to its system prompt | persistent — it is the home base |
 | project | a session on the prime-agent daemon of the host in the registry entry, in that project's directory, reached through that host's host agent over the host link (`/host`, `docs/host-link.md`) | its normal coding tools, plus the `switchboard` skill module | created on transfer, ended on return (never resident at startup) |
 
 The service opens no connection to a project host. Each host agent dials in to
@@ -74,6 +74,14 @@ line after a reconnect. Reply and history frames carry the same voiced flag, so
 a reconnect restores the last voiced line without putting written text on the
 live surface.
 
+The caller hears **one person** for the whole call. A code-owned block,
+`CALL_VOICE` in `pbx.rs`, says how anyone on the call talks: one voice, say
+less, show rather than tell, bad news straight. The persona from
+`SWITCHBOARD_PERSONA` follows it. The operator's system prompt, the routing
+utility's system prompt and every project voice brief carry the same two
+texts, so the front desk and the project work sound like the same person, and
+each text has one source.
+
 `speak` is deliberately **not** MCP. Pi has no built-in MCP because tool
 definitions are expensive context; an adapter would add a config file, a
 process, and a per-host install. A Python module in the agent's own kernel
@@ -108,27 +116,24 @@ are in `docs/display-tool.md` and `docs/visual-channel.md`.
 
 ## Who decides where the caller goes
 
-The switchboard does — not the agents. An agent calling `transfer_to_project` or
-`return_to_operator` only raises a *signal*: the tool itself does nothing but
-acknowledge, and `pbx.rs` swings the line over. The operator's call is picked
-out of pi's `tool_execution_start` event stream; a project agent's arrives as a
-module call over the host link. That means a confused or wedged agent cannot
-strand the caller, and every failure path (a host that is not connected, wrong
-`cwd`, a session that fails to start, a leg that dies mid-call) ends with the
-caller back on the operator being told what happened, rather than talking into
-a dead pipe.
+The switchboard does — not the agents. Jev classifies each utterance first
+(`docs/jev-routing.md`), and the routing utility gives a second opinion when
+Jev is unsure or sees several projects. The operator's `route` tool only raises
+a *signal*: the tool itself does nothing but acknowledge, and `pbx.rs`, which
+picks the call out of pi's `tool_execution_start` event stream, swings the line
+over. That means a confused or wedged agent cannot strand the caller, and every
+failure path (a host that is not connected, wrong `cwd`, a session that fails
+to start, a leg that dies mid-call) ends with the caller back on the operator
+being told what happened, rather than talking into a dead pipe.
 
-For runtimes that cannot load a pi extension, the agent's system prompt tells it
-to emit `[[SWITCHBOARD:RETURN]]` instead; `pi_client.rs` treats that line as the
-same signal and strips it before anything is spoken.
+Project agents have no routing tools. Moving the caller, model changes and
+hanging up happen before their turn, and the voice brief says so. When the
+caller names another project, the switchboard takes them there.
 
-Project agents get `transfer_to_project` too, so "send me to the other project"
-is one hop instead of a round trip through the operator. They cannot read the
-registry from a project host, so the projects they may hand the caller to are
-named in the voice brief at the start of their first prompt; anything else,
-they send the caller back and let the operator resolve it.
-
-Successful transfers are silent: handoff text and model notes are omitted on successful routing paths, and the target project addresses the request immediately without spoken handoff text or greetings. The intro prompt carries the exact original caller transcript, derived intent, project metadata, and any timestamped prepare report snapshot.
+Successful transfers are silent: the target project picks up the request
+without a greeting or spoken handoff. The intro prompt carries the caller's
+exact words, the derived intent when there is one, the project id and
+description, and a one-line startup check when a prepare report exists.
 
 The page is relabelled the moment the line swings rather than when the turn
 ends, because bringing a leg up means a session start and an intro prompt,
@@ -137,10 +142,10 @@ left.
 
 ## Changing the model mid-call
 
-A caller can ask the agent they are talking to for a different model or thinking
-level, and the operator can name one on the way in (`transfer_to_project` takes
-`model` and `thinking`). Both go through the same signal mechanism as a
-transfer: `set_model` acknowledges, and `pbx.rs` decides and makes the change.
+A caller changes the model or thinking level of the project they are on with
+the page's pickers (`POST /model`, `POST /thinking`). Asking for it out loud
+reaches the operator, which points them to the picker. `pbx.rs` decides and
+makes the change.
 
 The conversation survives the change. A change that keeps the context is made
 on the live session: `set_model` and `set_thinking` over the host link, and
@@ -169,15 +174,14 @@ picker contains only the provider-qualified entries from that host's catalog;
 the current entry is retained even if a refreshed catalog no longer lists it.
 
 A swap is decided before anything is torn down. Every refusal (no project on
-the line, swaps turned off, a host that is not connected, a bare or unknown-provider model the catalog does not resolve, the model
-already running) is made from the leg the coordinator names and the launch
-plan prewarm holds, without the PBX lock, and the live leg keeps running: the
-caller hears why, and their next turn reaches the same agent. That holds for the
-page's pickers (`POST /model`, `POST /thinking`) and for the agent's own
-`set_model` alike. Only a swap that will go ahead cancels the turn in flight,
-and only while the caller is still on the leg it was decided for; a caller who
-has moved on by then, or moves before the swap reaches the PBX, stays where
-they went, and the picker is answered 409.
+the line, swaps turned off, a host that is not connected, a bare or
+unknown-provider model the catalog does not resolve, the model already running)
+is made from the leg the coordinator names and the launch plan prewarm holds,
+without the PBX lock, and the live leg keeps running: the caller hears why, and
+their next turn reaches the same agent. Only a swap that will go ahead cancels
+the turn in flight, and only while the caller is still on the leg it was
+decided for; a caller who has moved on by then, or moves before the swap
+reaches the PBX, stays where they went, and the picker is answered 409.
 
 The operator is never swappable. It is where a failed swap lands the caller, so
 it always answers on `switchboard_operator_model`. Set
@@ -243,6 +247,22 @@ The switchboard does not drop a silent call. A project session nobody uses is
 ended by prime-agent's own idle eviction on its host, and the caller stays on
 the line until they hang up or are handed back.
 
+## Context
+
+A project agent manages its own context, and the voice brief is what tells it
+how. It keeps its context lean by giving hands-on work to subagents and keeping
+only their results. When a piece of work is finished and nothing for it is
+still running, it writes down what should outlast it, in an issue, a doc or a
+commit, and then compacts. After a compaction it searches its own conversation
+log instead of guessing.
+
+Sessions do not carry memory between calls. An idle session is ended on its
+host, and the next call starts fresh, so what persists is what was written to
+issues, docs and commits. The llm-wiki brain holds engineering taste and
+decisions; it is not session memory. This lives in the brief on purpose: the
+behaviour belongs to the switchboard, not to one harness's memory feature, so
+it stays the same if the harness changes.
+
 ## Adding a project
 
 Edit `switchboard_projects` in `ansible/roles/damocles/defaults/main.yml` and
@@ -261,11 +281,11 @@ does not manage:
 2. prime-agent authenticated there for the models the project uses
 3. the `cwd` to actually exist
 
-The project agent's tools (`speak`, `display`, `view`, `return_to_operator`,
-`transfer_to_project` and `set_model`) are the `switchboard` Python skill
-module in `skills/switchboard/`. It works only during a call, through the host
-agent's local skill socket (`docs/host-link.md`, "Skill socket"); every call
-returns a result and prints one line, and a refusal or failure never raises.
+The project agent's tools (`speak`, `request_to_speak`, `display` and `view`)
+are the `switchboard` Python skill module in `skills/switchboard/`. It works
+only during a call, through the host agent's local skill socket
+(`docs/host-link.md`, "Skill socket"); every call returns a result and prints
+one line, and a refusal or failure never raises.
 
 Each project host also runs the host agent, and the shared prime-agent
 daemon, under systemd user units. One command installs or redeploys both,

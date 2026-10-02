@@ -58,20 +58,40 @@ pub type ForegroundClosedCallback =
 pub type AgentStateCallback =
     Arc<dyn Fn(AgentStateNotice) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
+/// How anyone on the call talks. One code-owned text, followed by the
+/// persona: the operator's and the utility's system prompts and every voice
+/// brief carry the same two, so the caller hears one person all call.
+const CALL_VOICE: &str = "[HOW YOU TALK ON THE CALL]
+The caller hears one person for the whole call: you. Whatever part of the work you are on, it is the same character and the same voice. Treat all of the work as your own. Do not talk about other agents, sessions, an operator, models, tools or processes. If you have help, keep it out of sight, or at most mention it in passing, in character.
+
+Match the moment. Most of the call is work. When the caller asks for something, acknowledge it and do it. Don't repeat the request, recite the plan or keep up a running commentary. Speak again when something changed, when you need a decision, or when you're asked. Never tell them what they already know or expect.
+
+When the caller wants to talk something through, be a real partner in it, not a voice waiting for the next order. Bring substance: your own read, opinions, tradeoffs, pushback, ideas they haven't raised, and the question that moves it forward. Take the time the topic needs, and help steer where the discussion goes. Keep status short. Thinking out loud together gets as much room as it needs.
+
+Show, don't tell. When you can put things on the caller's screen, say the short version out loud and put the detail on the screen. Keep the screen as clean as your speech. Take things down once they have done their job, when the topic moves on or the decision is made. Don't take them down as soon as your turn ends, because the caller may still be reading.
+
+Give bad news straight: say what broke and what it means, with no apologies as padding. If the caller cuts in, drop what you were saying and answer the new thing.";
+
 /// The voice brief's opening. The brief rides at the start of the first
 /// prompt a project session gets for the caller, and again on the first after
 /// a compaction; it is never a message of its own.
-const AGENT_BRIEF_HEADER: &str = "[SWITCHBOARD VOICE BRIEF]\nYou are on a voice call in the {project} project, in its own directory. The caller hears only what you pass to the `switchboard` module in your Python REPL (already imported); your written output goes to their screen and is not read aloud.\n";
-const AGENT_BRIEF_TOOLS: &str = "- switchboard.speak(text): say a sentence or two of plain speech. Use it to answer, and before and during long work. No code, paths or lists.\n- switchboard.request_to_speak(message, reason): queue exactly what the caller should hear from you. For finished, message is the actual result in one to three short spoken sentences; for needs_decision, it is the question and options; for problem, it is what went wrong and what you need. The service lightly smooths it and speaks it at a good moment; do not send a teaser.\n- switchboard.display(...) shows things on their screen; switchboard.view() tells you what they see.\nWhile you are in the background, displays are held until the caller brings you forward; never say a display is on screen.\n- Routing is handled by the switchboard before your turn. Do not try to transfer, return, or change models; answer the caller or explain what you completed.\n";
-const AGENT_BRIEF_SWAPS: &str = "";
+const AGENT_BRIEF_HEADER: &str = "[SWITCHBOARD VOICE BRIEF]\nYou are on a voice call, working in the {project} project in its own directory. The caller hears only what you pass to the `switchboard` module in your Python REPL (already imported). Your written replies go to a screen they may not be watching. They are never read aloud.\n";
+/// The brief's job text, after the shared voice block.
+const AGENT_BRIEF_BODY: &str = "Reaching the caller:\n- switchboard.speak(text): say it out loud, in plain spoken words. Anything that needs code, paths, lists or many numbers goes on the screen.\n- switchboard.display(...): put something on their screen. The types, data shapes and layout are in the switchboard skill's SKILL.md. Read it before your first display.\n- switchboard.view(): see what is on their screen now.\n- switchboard.request_to_speak(message, reason): how you get their attention while they are on other work. reason is finished, needs_decision or problem. message is what they should hear, said the way you would say it: the result, the question with its options, or what broke and what you need from them. Not a teaser.\n\nReport the things the caller asked for when they are done or stuck. Keep the steps along the way to yourself. While the caller is on other work, your displays wait until they come back to you. So in that time never say something is on screen; say it is ready.\n\nDecisions while the caller is quiet or away: make the calls that are cheap to undo, carry on, and say what you chose when you next report. Wait for the caller on decisions that set direction, that they would want to own, or that are expensive to reverse. While you wait, keep going on whatever does not depend on the answer.\n\nKeep yourself free to talk. You are the one the caller deals with. Give hands-on work (edits, builds, test runs, long investigations) to subagents that run your own model, several at once when the work splits. For brute-force searching and reading, use a cheaper, faster model, so that the big contexts stay small. Subagents cannot reach the caller. What they find comes to you, and you say it.\n\nYour context is this project's working memory for the call, and it costs. Keep it lean: subagents carry the detail and you keep the results. When a piece of work is truly finished and nothing for it is still running, write down what should outlast it, in an issue, a doc or a commit, and then compact yourself. Don't compact while work is in flight or in the middle of a discussion. When you compact, make sure the summary keeps what is still open and what was decided. After a compaction, when you need something from earlier in the call, search your own conversation log (its path is in your system prompt) instead of guessing. A session nobody uses is ended, and the next call starts fresh, so anything you did not write down is gone.\n\nMoving the caller to other work, model changes and hanging up happen before your turn, and you have no tools for them. If the caller asks for something that belongs to another project, say so briefly. When they name that project, the call takes them there.\n";
 const AGENT_BRIEF_END: &str = "[END OF VOICE BRIEF]";
 
+/// Steered into a busy session when the caller moves on to other work.
+const BACKGROUND_NOTICE: &str = "[switchboard] The caller has moved on to other work. Keep going quietly. They cannot hear speak() now, and your displays wait until they come back to you. When something they asked for is done or stuck, or you need a decision, send it with request_to_speak in the words they should hear.";
 /// Sent with the first caller words after a background agent is brought
 /// forward, so its background instructions stop applying.
-const FOREGROUND_NOTICE: &str = "[switchboard] The caller brought you forward: you are in the foreground now. speak() is heard directly, display() shows on the caller's screen, and any display you held is on screen now. The caller's words follow.";
+const FOREGROUND_NOTICE: &str = "[switchboard] The caller came back to you: you are in the foreground now. speak() is heard directly, and anything you held is on the screen. Do not repeat what you already sent them unless they ask. Their words follow.";
 /// Instructions for the separate, stateless process. This is code-owned so
 /// deploying the utility never requires another environment setting.
-const UTILITY_SYSTEM_PROMPT: &str = r#"You are the switchboard's stateless utility process. You never speak to the caller and you never answer general questions. For routing prompts, call exactly one routing tool: second_opinion for one target, dispatch_parts for several targets. When the caller asks for things from two or more registered projects, call dispatch_parts with one part per project and preserve the caller's exact wording in each part. When the request names only one project, call second_opinion. Never invent projects, never emit a prose answer, and never call more than one tool. For a floor rewrite prompt, call rewrite with a natural short spoken version of the supplied message. Speak as one person continuing the conversation. Vary the phrasing, mention the project only when needed for clarity, and keep it short. If the caller has been quiet longer than the floor threshold, a brief natural lead-in may make the project clear. Keep every fact from the agent's message and add none: no new names, numbers, paths, promises, or requests."#;
+const UTILITY_SYSTEM_PROMPT: &str = "You are a background helper on a voice call. You never talk to the caller and never answer questions. Each request needs exactly one tool call. Make it and write nothing else.
+
+[ROUTING REQUEST]: decide where the caller's words go. If one registered project fits, call second_opinion. Set confident only when both the project and the intent are clear. Leave target empty when the caller should be asked. If the caller asks several projects for things at once, call dispatch_parts with one part per project, each part in the caller's own words. If the caller wants to hear or see something a project has waiting, that project is the target. Use mode fresh only when the caller asks to start over. Never invent a project.
+
+[FLOOR REWRITE]: call rewrite with the message the way the caller should hear it next. The message comes from the person they have been talking to all call. Keep its voice and its first person, and never pass it on as news from someone else. Keep every fact and add none. Smooth it so it follows from what was just said, and vary how you start. If the caller has been quiet a while, ease in so they know which work it is about. Never say something is on screen. If a display is held, say it is ready when they want it.";
 #[derive(Clone, Debug, Serialize)]
 pub struct Utterance {
     pub text: String,
@@ -129,48 +149,44 @@ fn build_intro_prompt(
     project: &Project,
     prepare_report: Option<&crate::prewarm::PrepareReport>,
 ) -> String {
-    let mut prompt = String::new();
-    prompt.push_str("Address the request immediately. Do not greet the caller and do not mention tool or connection details.\n\n");
+    let mut prompt = String::from("The caller was just put through to you with this request. They know where they are, so skip greetings and do not restate it. Just pick it up.\n\n");
 
-    prompt.push_str("[PROJECT METADATA]\n");
-    prompt.push_str(&format!("ID: {}\n", project.id));
-    if !project.description.is_empty() {
-        prompt.push_str(&format!("Description: {}\n", project.description));
-    }
-
-    prompt.push_str("\n[CALLER TRANSCRIPT]\n");
+    prompt.push_str("[CALLER REQUEST]\n");
     if context.exact_caller_transcript.is_empty() {
-        prompt.push_str("No caller transcript was supplied.\n");
+        prompt.push_str("(none yet: the caller opened this project from the page. Say nothing now. Their words come next. Answer them right away and keep it short.)\n");
     } else {
-        prompt.push_str(&format!(
-            "Bytes: {}\n",
-            context.exact_caller_transcript.len()
-        ));
         prompt.push_str(&context.exact_caller_transcript);
         prompt.push('\n');
     }
 
     if !context.derived_intent.is_empty() {
-        prompt.push_str("\n[DERIVED INTENT]\n");
+        prompt.push_str("[WHAT THEY SEEM TO WANT]\n");
         prompt.push_str(&context.derived_intent);
         prompt.push('\n');
     }
 
+    prompt.push_str("[PROJECT]\n");
+    if project.description.is_empty() {
+        prompt.push_str(&project.id);
+    } else {
+        prompt.push_str(&format!("{} - {}", project.id, project.description));
+    }
+    prompt.push('\n');
+
     if let Some(rep) = prepare_report {
-        prompt.push_str("\n[STARTUP PREPARE REPORT (TIMESTAMPED SNAPSHOT)]\n");
-        prompt.push_str(&format!("Timestamp Unix Ms: {}\n", rep.timestamp_unix_ms));
-        prompt.push_str(&format!("Source: {:?}\n", rep.source));
-        prompt.push_str(&format!("Outcome: {:?}\n", rep.outcome));
-        prompt.push_str(&format!("Duration Ms: {}\n", rep.duration_ms));
+        prompt.push_str("[STARTUP CHECK]\n");
+        prompt.push_str(&format!("{:?} {:?}", rep.source, rep.outcome));
         if let Some(code) = rep.exit_code {
-            prompt.push_str(&format!("Exit Code: {code}\n"));
+            prompt.push_str(&format!(", exit {code}"));
         }
-        if !rep.stdout.is_empty() {
-            prompt.push_str(&format!("Stdout: {}\n", rep.stdout));
+        prompt.push_str(&format!(", {} ms.", rep.duration_ms));
+        for output in [&rep.stdout, &rep.stderr] {
+            if !output.is_empty() {
+                prompt.push(' ');
+                prompt.push_str(output);
+            }
         }
-        if !rep.stderr.is_empty() {
-            prompt.push_str(&format!("Stderr: {}\n", rep.stderr));
-        }
+        prompt.push_str("\nFor you only. Mention it only if it matters to the request.\n");
     }
 
     prompt
@@ -255,7 +271,7 @@ impl RedialPlanner {
     pub async fn model_change(&self, model: &str) -> Redial {
         if self.coordinator.route() == OPERATOR {
             return self.answer(
-                ["Model changes are only available on a project leg."],
+                ["I can only change the model while we're on a project."],
                 Some("Model changes are only available on a project leg.".into()),
             );
         }
@@ -272,7 +288,7 @@ impl RedialPlanner {
                 if self.coordinator.route() == OPERATOR {
                     return self.answer(
                         [format!(
-                            "Thinking is set to {value} for the next project call."
+                            "Thinking is set to {value} for the next project I open."
                         )],
                         None,
                     );
@@ -300,10 +316,10 @@ impl RedialPlanner {
             Some((leg, project))
         });
         let Some((leg, project)) = on_the_line else {
-            return self.answer(["There is no project on the line."], None);
+            return self.answer(["We're not on a project right now."], None);
         };
         if !self.model_swaps {
-            return self.answer(["Model swapping is turned off on this switchboard."], None);
+            return self.answer(["Model changes are turned off."], None);
         }
         let requested_model = if model.is_empty() && !leg.model.is_empty() {
             leg.model.clone()
@@ -330,7 +346,11 @@ impl RedialPlanner {
             Ok(launch) => launch,
             Err(error) => {
                 tracing::info!(project = %project.id, %error, "refusing a model swap: the host is not ready");
-                return self.answer([format!("I didn't switch: {error}")], Some(error));
+                return Redial::Answered(failure_reply(
+                    &self.coordinator,
+                    "I couldn't change the model.".into(),
+                    error,
+                ));
             }
         };
         let requested = if requested_model.is_empty() {
@@ -344,10 +364,11 @@ impl RedialPlanner {
                 // Refusing is the safe outcome — the live leg keeps running —
                 // but it looks identical to a swap that never happened.
                 tracing::info!(project = %project.id, %requested, %error, "refusing a model swap");
-                return self.answer(
-                    [format!("I didn't switch: {error}")],
-                    Some(error.to_string()),
-                );
+                return Redial::Answered(failure_reply(
+                    &self.coordinator,
+                    "I couldn't change the model.".into(),
+                    error.to_string(),
+                ));
             }
         };
         let spec = choice.spec();
@@ -859,7 +880,7 @@ impl Switchboard {
         tracing::warn!(%project, "the agent on the line closed on its host; returning to the operator");
         self.drop_agent().await;
         self.operator_note = Some(format!(
-            "The call to {project} ended: its session closed on the host."
+            "Work on {project} stopped: its session closed on the host."
         ));
         true
     }
@@ -1101,7 +1122,7 @@ impl Switchboard {
                 (self.coordinator.route() != OPERATOR).then(|| self.coordinator.route())
             });
             let Some(target) = target else {
-                return self.reply(["There is no project agent to stop."], None);
+                return self.reply(["Nothing is running to stop."], None);
             };
             self.pending_stop = Some(target.clone());
             return self.reply(
@@ -1114,15 +1135,16 @@ impl Switchboard {
         if matches!(decision.action, crate::router::Action::TakeOver) {
             if let Some(target) = decision.target.as_deref() {
                 let Some(takeover) = takeover else {
-                    return self.reply_transfer_error(
-                        "I couldn't inspect the live desk session before taking it over.".into(),
-                        Some("takeover lookup was not prepared".into()),
+                    return self.reply_failure(
+                        "I couldn't check what's open at your desk, so I didn't take it over."
+                            .into(),
+                        "takeover lookup was not prepared",
                     );
                 };
                 return self.take_over(text, target, takeover).await;
             }
             return self.reply(
-                ["Tell me which project session you want to take over."],
+                ["Tell me which project you want to take over."],
                 Some("takeover target missing".into()),
             );
         }
@@ -1248,11 +1270,8 @@ impl Switchboard {
         // unknown one must not move the caller or drop the leg on the line.
         if target != OPERATOR && self.registry.get(target).is_none() {
             tracing::warn!(%target, "refusing a route to an unregistered project");
-            return self.reply(
-                [format!(
-                    "I don't have a project called {target}. I know: {}.",
-                    self.registry.ids().join(", ")
-                )],
+            return self.reply_transfer_error(
+                self.unknown_project_line(target),
                 Some(format!("unknown project {target:?}")),
             );
         }
@@ -1408,9 +1427,7 @@ impl Switchboard {
             return;
         }
         if previous.busy() {
-            let _ = previous
-                .steer("[switchboard] The caller is now listening to another agent. Continue your work quietly. While you are in the background, displays are held until the caller brings you forward; never say a display is on screen. When you have something for the caller, use request_to_speak with the actual words they should hear: the result, decision question, or problem—not a teaser.")
-                .await;
+            let _ = previous.steer(BACKGROUND_NOTICE).await;
         }
         let state = if previous.busy() { "busy" } else { "idle" };
         let registered = self.register_background_session(previous_label.clone(), previous);
@@ -1588,15 +1605,12 @@ impl Switchboard {
             }
         }
         if self.operator.is_none() {
-            let catalog = self
-                .registry
-                .operator_prompt_catalog()
-                .replace("transfer_to_project", "route");
+            let appended = self.operator_prompt_suffix();
             let argv = local_argv(
                 &self.pi_binary,
                 self.operator_model.as_deref(),
                 Some(std::path::Path::new(&self.operator_system_prompt)).filter(|p| p.exists()),
-                Some(&catalog),
+                Some(&appended),
                 self.operator_extension.as_deref(),
                 &["--no-builtin-tools".into(), "--no-session".into()],
             )?;
@@ -1629,13 +1643,9 @@ impl Switchboard {
             }
         }
         if self.utility.is_none() {
-            let utility_prompt = format!(
-                "{UTILITY_SYSTEM_PROMPT}\n\n[REGISTERED PROJECTS]\n{}",
-                self.registry.operator_prompt_catalog().replace(
-                    "Available projects for transfer. Use the exact project id with transfer_to_project; aliases are included for recognition.",
-                    "Available projects for the routing utility. Use the exact project id with second_opinion or dispatch_parts; aliases are included for recognition.",
-                )
-            );
+            // The registry is fixed for the life of the service, so the
+            // catalog lives in the system prompt once.
+            let utility_prompt = self.utility_system_prompt();
             let argv = local_argv(
                 &self.pi_binary,
                 self.operator_model.as_deref(),
@@ -1665,42 +1675,51 @@ impl Switchboard {
             .ok_or_else(|| PiSessionError("utility process was not created".into()))
     }
 
-    /// Build a complete routing request instead of relying on the utility's
-    /// system prompt. The utility process is isolated and stateless, so each
-    /// request carries Jev's finding, the exact registered catalog, and the
-    /// caller wording it must preserve in split parts.
+    /// What the service appends to the operator's system prompt: the shared
+    /// voice block with the persona, then the catalog.
+    fn operator_prompt_suffix(&self) -> String {
+        format!(
+            "{}\n\n{}",
+            self.voice_block(),
+            self.registry.prompt_catalog()
+        )
+    }
+
+    /// The utility's system prompt: its standing rules, then the voice block
+    /// and the catalog in the same order the operator gets them.
+    /// Requests carry only data.
+    fn utility_system_prompt(&self) -> String {
+        format!(
+            "{UTILITY_SYSTEM_PROMPT}\n\n{}\n\n{}",
+            self.voice_block(),
+            self.registry.prompt_catalog()
+        )
+    }
+
+    /// A routing request is data only: Jev's first read, the call state and
+    /// the caller's words. The rules and the catalog are in the utility's
+    /// system prompt.
     fn utility_routing_request(&self, text: &str, decision: &Decision, retry: bool) -> String {
         let target = decision.target.as_deref().unwrap_or("(none)");
-        let projects = self.registry.operator_prompt_catalog().replace(
-            "Available projects for transfer. Use the exact project id with transfer_to_project; aliases are included for recognition.",
-            "Registered projects (use exact ids; never invent projects):",
-        );
-        let instruction = if retry {
-            "This request names several projects; split it with dispatch_parts or answer that it names only one. Do not route the whole utterance to one project. Use one part per registered project and preserve the exact caller wording in each part."
-        } else {
-            "When the caller asks for things from two or more registered projects, call dispatch_parts with one part per project and preserve the exact caller wording for each part. If it names only one project, call second_opinion. Never invent projects."
-        };
         let call_state = if self.call_state.is_empty() {
             String::new()
         } else {
             format!("[CALL STATE]\n{}\n", self.call_state)
         };
+        let retry = if retry {
+            "\nThis names more than one project. Split it with dispatch_parts, unless it really names only one."
+        } else {
+            ""
+        };
         format!(
-            "[ROUTING REQUEST]
-Jev found: action={}, target={}, multi_target={}, unsure={}.
-{}
-{}[CALLER WORDING]
-{}
-[INSTRUCTION]
-{} If the caller asks to see or hear something an agent on the call has waiting or ready, that agent is the target. Use mode fresh only when the caller asks to start over.",
+            "[ROUTING REQUEST]\nFirst read: action={}, target={}, several projects={}, unsure={}.\n{}[CALLER WORDING]\n{}{}",
             decision.action.as_str(),
             target,
             decision.multi_target,
             decision.unsure,
-            projects.trim_end(),
             call_state,
             text,
-            instruction,
+            retry,
         )
     }
 
@@ -1734,12 +1753,12 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
         input: &FloorRewriteInput,
     ) -> Result<Option<String>, PiSessionError> {
         let context = if input.context.trim().is_empty() {
-            "(no recent conversation)"
+            "(none)"
         } else {
             input.context.trim()
         };
         let prompt = format!(
-            "[FLOOR REWRITE]\nProject: {project}\nReason: {reason}\nCaller quiet longer than floor threshold: {quiet}\nHeld display not yet seen by caller: {held_display}\n[RECENT CONVERSATION]\n{context}\n[AGENT MESSAGE]\n{message}\n[INSTRUCTION]\nRewrite the agent message as a short, natural spoken continuation, the way one person would bring it up in this conversation. Vary the phrasing and avoid stock openers. If the caller has been quiet a while, ease in so they know which project this is; otherwise name the project only when it is not obvious from the conversation. Never claim anything is on screen. If a display is held, say it is ready to show when the caller wants it. Keep every fact and add none. Call rewrite with only the spoken rewrite.",
+            "[FLOOR REWRITE]\nWork: {project}\nKind: {reason}\nCaller quiet a while: {quiet}\nDisplay held: {held_display}\n[RECENT CONVERSATION]\n{context}\n[MESSAGE]\n{message}",
             project = input.project,
             reason = input.reason,
             quiet = if input.quiet { "yes" } else { "no" },
@@ -1833,9 +1852,8 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
     async fn handle_agent_ctx(&mut self, context: &TransferContext) -> Reply {
         let Some(session) = self.agent.clone() else {
             tracing::warn!(route = %self.coordinator.route(), "the project leg is gone; returning to the operator");
-            return self
-                .return_operator_ctx(context, "project session is gone")
-                .await;
+            let note = stopped_note(&self.route_label(), "it is no longer running");
+            return self.return_operator_ctx(context, &note).await;
         };
         // A synthetic/background token can coexist in lifecycle tests while
         // the foreground handle is still being drained. In production a
@@ -1852,12 +1870,10 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
                 let name = self.route_label();
                 tracing::warn!(route = %name, %error, "the project leg failed mid-prompt; returning to the operator");
                 self.drop_agent().await;
-                self.operator_note = Some(format!("The call to {name} ended: {detail}"));
-                return self.reply(
-                    [format!(
-                        "{name} stopped responding: {detail}. You're back with the operator."
-                    )],
-                    Some(detail),
+                self.operator_note = Some(stopped_note(&name, &detail));
+                return self.reply_failure(
+                    format!("{name} stopped responding, so I closed it."),
+                    detail,
                 );
             }
         };
@@ -1870,12 +1886,10 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
             let name = self.route_label();
             tracing::warn!(route = %name, %detail, "the project leg failed its turn; returning to the operator");
             self.drop_agent().await;
-            self.operator_note = Some(format!("The call to {name} ended: {detail}"));
-            return self.reply(
-                [format!(
-                    "{name} stopped responding: {detail}. You're back with the operator."
-                )],
-                Some(detail),
+            self.operator_note = Some(stopped_note(&name, &detail));
+            return self.reply_failure(
+                format!("{name} stopped responding, so I closed it."),
+                detail,
             );
         }
         self.reply_with_turn(turn)
@@ -1897,13 +1911,13 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
                     self.drop_agent().await;
                 }
                 self.operator_note = Some(format!(
-                    "Transfer to {spoken:?} was ambiguous. Candidates: {candidates_text}.{}",
+                    "Couldn't tell which project {spoken:?} meant: {candidates_text}.{}",
                     from.map(|name| format!(" The caller was on {name}."))
                         .unwrap_or_default()
                 ));
                 return self.reply_transfer_error(
                     format!(
-                        "Which project did you mean by {spoken}? Candidates: {candidates_text}."
+                        "Which project did you mean by {spoken}? It could be {candidates_text}."
                     ),
                     Some(format!("ambiguous project {spoken:?}: {candidates_text}")),
                 );
@@ -1920,12 +1934,12 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
                     self.drop_agent().await;
                 }
                 self.operator_note = Some(format!(
-                    "Transfer to {spoken:?} failed. Known projects: {known_text}.{}",
+                    "No project matches {spoken:?}. Registered: {known_text}.{}",
                     from.map(|name| format!(" The caller was on {name}."))
                         .unwrap_or_default()
                 ));
                 return self.reply_transfer_error(
-                    format!("I don't have a project called {spoken}. I know: {known_text}."),
+                    self.unknown_project_line(spoken),
                     Some(format!("unknown project {spoken:?}")),
                 );
             }
@@ -1965,11 +1979,8 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
             Ok(plan) => plan,
             Err(err) => {
                 tracing::warn!(project = %project.id, error = %err, "the project's host is not ready");
-                self.operator_note = Some(format!("Transfer to {} failed: {err}", project.id));
-                return self.reply_transfer_error(
-                    format!("I couldn't get {} on the line: {err}", project.id),
-                    Some(err),
-                );
+                self.operator_note = Some(open_failed_note(&project.id, &err));
+                return self.couldnt_open(&project.id, err);
             }
         };
 
@@ -1982,11 +1993,8 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
             Ok(m) => m,
             Err(e) => {
                 tracing::warn!(project = %project.id, error = %e, "transfer model selection failed");
-                self.operator_note = Some(format!("Transfer to {} failed: {e}", project.id));
-                return self.reply_transfer_error(
-                    format!("I couldn't get {} on the line: {e}", project.id),
-                    Some(e),
-                );
+                self.operator_note = Some(open_failed_note(&project.id, &e.to_string()));
+                return self.couldnt_open(&project.id, e);
             }
         };
 
@@ -2004,10 +2012,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
         .with_catalog(plan.catalog.clone());
         if let Err(error) = self.coordinator.begin_candidate(candidate) {
             tracing::warn!(project = %project.id, %error, "candidate startup was refused");
-            return self.reply_transfer_error(
-                format!("I couldn't get {} on the line: {error}", project.id),
-                Some(error.to_string()),
-            );
+            return self.couldnt_open(&project.id, error.to_string());
         }
 
         // At most one session per project: one the caller is on is ended
@@ -2033,11 +2038,8 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
                 );
                 self.rollback_startup(format!("startup failed: {e}"));
                 self.set_active_session(live_session.clone()).await;
-                self.operator_note = Some(format!("Transfer to {} failed: {e}", project.id));
-                return self.reply_transfer_error(
-                    format!("I couldn't get {} on the line: {e}", project.id),
-                    Some(e.to_string()),
-                );
+                self.operator_note = Some(open_failed_note(&project.id, &e.to_string()));
+                return self.couldnt_open(&project.id, e.to_string());
             }
         };
 
@@ -2071,11 +2073,8 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
             self.announce_agent_state(&project.id, "finished").await;
             self.set_active_session(live_session.clone()).await;
             self.rollback_startup(format!("intro failed: {detail}"));
-            self.operator_note = Some(format!("Transfer to {} failed: {detail}", project.id));
-            return self.reply_transfer_error(
-                format!("{} didn't pick up: {detail}", project.id),
-                Some(detail),
-            );
+            self.operator_note = Some(open_failed_note(&project.id, &detail));
+            return self.couldnt_open(&project.id, detail);
         }
 
         // The leg may be adopted already: a candidate is promoted on its first
@@ -2088,10 +2087,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
                 self.announce_agent_state(&project.id, "finished").await;
                 self.set_active_session(live_session.clone()).await;
                 self.rollback_startup(format!("adoption failed: {error}"));
-                return self.reply_transfer_error(
-                    format!("{} did not come up.", project.id),
-                    Some(error.to_string()),
-                );
+                return self.couldnt_open(&project.id, error.to_string());
             }
         }
         self.coordinator.finish_intro();
@@ -2116,7 +2112,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
                 session.close();
                 self.announce_agent_state(&project, "finished").await;
                 return self.reply_transfer_error(
-                    "The background project is no longer registered.".into(),
+                    format!("{project} isn't registered any more."),
                     Some("project is no longer registered".into()),
                 );
             }
@@ -2125,10 +2121,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
         if let Err(error) = session.set_mode("foreground").await {
             session.close();
             self.announce_agent_state(&project.id, "finished").await;
-            return self.reply_transfer_error(
-                format!("I couldn't bring {} forward: {error}", project.id),
-                Some(error.to_string()),
-            );
+            return self.couldnt_bring_back(&project.id, error.to_string());
         }
         if let Err(error) = session
             .join_call_mode(&token, &self.persona, self.speech_deadline_ms, "foreground")
@@ -2136,10 +2129,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
         {
             session.close();
             self.announce_agent_state(&project.id, "finished").await;
-            return self.reply_transfer_error(
-                format!("I couldn't bring {} forward: {error}", project.id),
-                Some(error.to_string()),
-            );
+            return self.couldnt_bring_back(&project.id, error.to_string());
         }
         self.announce_agent_state(&project.id, "busy").await;
         let candidate = CandidateLeg::new(
@@ -2153,10 +2143,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
         if let Err(error) = self.coordinator.begin_candidate(candidate) {
             session.close();
             self.announce_agent_state(&project.id, "finished").await;
-            return self.reply_transfer_error(
-                format!("I couldn't bring {} forward: {error}", project.id),
-                Some(error.to_string()),
-            );
+            return self.couldnt_bring_back(&project.id, error.to_string());
         }
         // The agent was told background rules when it was shelved. Tell it
         // they no longer apply before it answers the caller.
@@ -2174,19 +2161,13 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
             session.close();
             self.announce_agent_state(&project.id, "finished").await;
             self.rollback_startup(format!("background promotion failed: {}", turn.error));
-            return self.reply_transfer_error(
-                format!("{} did not answer: {}", project.id, turn.error),
-                Some(turn.error),
-            );
+            return self.couldnt_bring_back(&project.id, turn.error);
         }
         if self.coordinator.is_candidate() {
             if let Err(error) = self.coordinator.adopt_candidate(&token) {
                 session.close();
                 self.announce_agent_state(&project.id, "finished").await;
-                return self.reply_transfer_error(
-                    format!("{} did not come up.", project.id),
-                    Some(error.to_string()),
-                );
+                return self.couldnt_bring_back(&project.id, error.to_string());
             }
         }
         self.coordinator.finish_intro();
@@ -2273,7 +2254,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
     ) -> Reply {
         let Some(project) = self.registry.get(target).cloned() else {
             return self.reply_transfer_error(
-                format!("I don't have a registered project called {target}."),
+                self.unknown_project_line(target),
                 Some(format!("unknown project {target:?}")),
             );
         };
@@ -2289,7 +2270,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
         {
             return self.reply_transfer_error(
                 format!(
-                    "{} already has a live switchboard agent. Stop it before taking over the desk session.",
+                    "{} is already open on the call. Stop it before I take over the one at your desk.",
                     project.id
                 ),
                 Some("project already has a live switchboard agent".into()),
@@ -2299,14 +2280,11 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
             Ok(Some(session)) => session,
             Ok(None) => {
                 return self.reply_transfer_error(
-                    format!(
-                        "There is no live desk session for {} in its registered folder.",
-                        project.id
-                    ),
+                    format!("Nothing is open at your desk for {}.", project.id),
                     Some("no matching desk session".into()),
                 )
             }
-            Err(error) => return self.reply_transfer_error(error.clone(), Some(error)),
+            Err(error) => return self.couldnt_take_over(&project.id, error),
         };
         // This is the lock-held recheck after the host listing. A stale
         // discovery result must never be attached to another project or a
@@ -2314,17 +2292,14 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
         if desk["cwd"].as_str() != Some(project.cwd.as_str()) || !desk["provenance"].is_null() {
             return self.reply_transfer_error(
                 format!(
-                    "The live desk session for {} changed before takeover.",
+                    "What's open at your desk for {} changed before I could take it over. Try again.",
                     project.id
                 ),
                 Some("desk session changed during takeover".into()),
             );
         }
         let Some(session_handle) = desk["session"].as_str() else {
-            return self.reply_transfer_error(
-                format!("The live desk session for {} had no handle.", project.id),
-                Some("desk session had no handle".into()),
-            );
+            return self.couldnt_take_over(&project.id, "desk session had no handle");
         };
         let model = desk["model"].as_str().unwrap_or_default().to_owned();
         let thinking = desk["thinking"].as_str().unwrap_or_default().to_owned();
@@ -2349,10 +2324,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
             },
         );
         if let Err(error) = self.coordinator.begin_candidate(candidate) {
-            return self.reply_transfer_error(
-                format!("I couldn't take over {}: {error}", project.id),
-                Some(error.to_string()),
-            );
+            return self.couldnt_take_over(&project.id, error.to_string());
         }
         let host = match project.canonical_host() {
             Some(host) => host.to_owned(),
@@ -2377,10 +2349,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
             }
             Err(error) => {
                 self.rollback_startup(format!("takeover failed: {error}"));
-                return self.reply_transfer_error(
-                    format!("I couldn't take over {}: {error}", project.id),
-                    Some(error.to_string()),
-                );
+                return self.couldnt_take_over(&project.id, error.to_string());
             }
         };
         if let Err(error) = session
@@ -2394,10 +2363,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
         {
             session.close();
             self.rollback_startup(format!("takeover call registration failed: {error}"));
-            return self.reply_transfer_error(
-                format!("I couldn't put {} on the call: {error}", project.id),
-                Some(error.to_string()),
-            );
+            return self.couldnt_take_over(&project.id, error.to_string());
         }
         self.set_active_session(Some(LegSession::Project(session.clone())))
             .await;
@@ -2421,10 +2387,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
             self.announce_agent_state(&project.id, "finished").await;
             self.rollback_startup(format!("takeover turn failed: {detail}"));
             self.set_active_session(previous_foreground.clone()).await;
-            return self.reply_transfer_error(
-                format!("{} did not answer after takeover: {detail}", project.id),
-                Some(detail),
-            );
+            return self.couldnt_take_over(&project.id, detail);
         }
         if self.coordinator.is_candidate() {
             if let Err(error) = self.coordinator.adopt_candidate(&leg_token) {
@@ -2432,10 +2395,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
                 self.announce_agent_state(&project.id, "finished").await;
                 self.rollback_startup(format!("takeover adoption failed: {error}"));
                 self.set_active_session(previous_foreground).await;
-                return self.reply_transfer_error(
-                    format!("{} did not come up after takeover.", project.id),
-                    Some(error.to_string()),
-                );
+                return self.couldnt_take_over(&project.id, error.to_string());
             }
         }
         self.coordinator.finish_intro();
@@ -2543,37 +2503,21 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
         }
     }
 
-    /// The voice brief: how to reach the caller through the `switchboard`
-    /// module, and where they can be sent.
+    /// The shared voice block with the persona after it. An empty persona
+    /// leaves the character part out.
+    fn voice_block(&self) -> String {
+        voice_block(&self.persona)
+    }
+
+    /// The voice brief: the shared voice block with the persona, how to
+    /// reach the caller through the `switchboard` module, and how to run the
+    /// work and its context.
     fn agent_brief(&self, project: &Project) -> String {
         let mut brief = AGENT_BRIEF_HEADER.replace("{project}", &project.id);
-        brief.push_str(AGENT_BRIEF_TOOLS);
-        let others = self
-            .registry
-            .projects
-            .iter()
-            .filter(|candidate| candidate.id != project.id)
-            .map(|candidate| {
-                format!(
-                    "  - {}: {}\n",
-                    candidate.id,
-                    if candidate.description.is_empty() {
-                        "no description"
-                    } else {
-                        candidate.description.as_str()
-                    }
-                )
-            })
-            .collect::<String>();
-        if others.is_empty() {
-            brief.push_str("  - none\n");
-        } else {
-            brief.push_str(&others);
-        }
-        brief.push_str("  If the project they want is not listed, return to the operator rather than guessing.\n");
-        if self.planner.model_swaps {
-            brief.push_str(AGENT_BRIEF_SWAPS);
-        }
+        brief.push('\n');
+        brief.push_str(&self.voice_block());
+        brief.push_str("\n\n");
+        brief.push_str(AGENT_BRIEF_BODY);
         brief.push_str(AGENT_BRIEF_END);
         brief
     }
@@ -2653,9 +2597,9 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
         .with_catalog(launch.catalog.clone());
         if let Err(error) = self.coordinator.begin_candidate(candidate) {
             tracing::warn!(project = %project.id, %error, "candidate startup for the model change was refused");
-            return self.reply(
-                [format!("I couldn't switch {}: {error}", project.id)],
-                Some(error.to_string()),
+            return self.reply_failure(
+                format!("I couldn't change the model on {}.", project.id),
+                error.to_string(),
             );
         }
 
@@ -2676,16 +2620,11 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
                 self.rollback_startup(format!("model change failed: {error}"));
                 self.drop_agent().await;
                 self.operator_note = Some(format!(
-                    "{} could not be switched to {spec}: {error}",
-                    project.id
+                    "Couldn't move {} to {spec}: {}.",
+                    project.id,
+                    error.to_string().trim_end_matches('.')
                 ));
-                return self.reply(
-                    [format!(
-                        "I couldn't bring {} back on {spoken}: {error}",
-                        project.id
-                    )],
-                    Some(error.to_string()),
-                );
+                return self.couldnt_bring_up_on(&project.id, &spoken, error.to_string());
             }
         };
         self.set_active_session(Some(LegSession::Project(session.clone())))
@@ -2699,13 +2638,13 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
             None
         } else {
             let prompt = format!(
-                "[switchboard] You are now on {spec}.{} The caller asked: {}.",
+                "[switchboard] This session now runs on {spec}.{} The caller made the change, so do not announce it. Their request: {}.",
                 if keep_context {
                     ""
                 } else {
-                    " The earlier conversation was deliberately cleared."
+                    " The earlier conversation was cleared on purpose."
                 },
-                intent.trim()
+                intent.trim().trim_end_matches('.')
             );
             let turn = match session.prompt(&prompt).await {
                 Ok(turn) => turn,
@@ -2727,16 +2666,11 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
                 self.rollback_startup(format!("prompt failed: {detail}"));
                 self.drop_agent().await;
                 self.operator_note = Some(format!(
-                    "{} could not be switched to {spec}: {detail}",
-                    project.id
+                    "Couldn't move {} to {spec}: {}.",
+                    project.id,
+                    detail.trim_end_matches('.')
                 ));
-                return self.reply(
-                    [format!(
-                        "{} didn't come back on {spoken}: {detail}",
-                        project.id
-                    )],
-                    Some(detail),
-                );
+                return self.couldnt_bring_up_on(&project.id, &spoken, detail);
             }
             Some(turn)
         };
@@ -2747,10 +2681,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
                 self.announce_agent_state(&project.id, "finished").await;
                 self.rollback_startup(format!("adoption failed: {error}"));
                 self.drop_agent().await;
-                return self.reply(
-                    [format!("{} did not come up.", project.id)],
-                    Some(error.to_string()),
-                );
+                return self.couldnt_bring_up_on(&project.id, &spoken, error.to_string());
             }
         }
         self.coordinator.finish_intro();
@@ -2814,7 +2745,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
             self.operator_note = Some(note);
         }
         if reply.text.is_empty() {
-            self.reply(["You're back with the operator."], reply.error)
+            self.reply(["That work stopped."], reply.error)
         } else {
             reply
         }
@@ -2879,6 +2810,48 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
         reply.delivery_generation = Some(self.coordinator.generation());
         reply
     }
+    /// A failure said aloud in plain words. The raw `detail` goes only to
+    /// the screen text and the reply's error; it is never spoken.
+    fn reply_failure(&self, spoken: String, detail: impl Into<String>) -> Reply {
+        failure_reply(&self.coordinator, spoken, detail.into())
+    }
+
+    /// Every way opening a project for the caller can fail says the same.
+    fn couldnt_open(&self, project: &str, detail: impl Into<String>) -> Reply {
+        self.reply_failure(format!("I couldn't open {project}."), detail)
+    }
+
+    /// Bringing work back from the background failed.
+    fn couldnt_bring_back(&self, project: &str, detail: impl Into<String>) -> Reply {
+        self.reply_failure(format!("I couldn't pick {project} back up."), detail)
+    }
+
+    /// A model change could not bring the project back up on the new model.
+    fn couldnt_bring_up_on(&self, project: &str, spoken: &str, detail: impl Into<String>) -> Reply {
+        self.reply_failure(
+            format!("I couldn't bring {project} back up on {spoken}."),
+            detail,
+        )
+    }
+
+    /// Taking over a session open at the caller's desk failed.
+    fn couldnt_take_over(&self, project: &str, detail: impl Into<String>) -> Reply {
+        self.reply_failure(format!("I couldn't take over {project}."), detail)
+    }
+
+    /// The caller named a project the registry does not have.
+    fn unknown_project_line(&self, spoken: &str) -> String {
+        let known = self.registry.ids();
+        if known.is_empty() {
+            format!("I don't have a project called {spoken}, and none are set up yet.")
+        } else {
+            format!(
+                "I don't have a project called {spoken}. The ones I have are {}.",
+                known.join(", ")
+            )
+        }
+    }
+
     fn reply_transfer_error(&self, message: String, error: Option<String>) -> Reply {
         let status = self.coordinator.status();
         Reply::new(
@@ -2895,7 +2868,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
     pub async fn dial(&mut self, project: &str, intent: &str) -> Reply {
         self.force_hangup().await;
         if project.eq_ignore_ascii_case(OPERATOR) {
-            return self.reply(["You're back with the operator."], None);
+            return self.reply(["Back at the front desk."], None);
         }
         let context = TransferContext {
             derived_intent: intent.to_owned(),
@@ -2907,10 +2880,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
         if self.coordinator.route() == target {
             self.resume_blocked.insert(target.to_owned());
             self.drop_agent().await;
-            return self.reply(
-                [format!("Stopped {target}. You are back with the operator.")],
-                None,
-            );
+            return self.reply([format!("Stopped {target}.")], None);
         }
         if self.background_agents.contains_key(target) {
             self.resume_blocked.insert(target.to_owned());
@@ -2924,7 +2894,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
             self.announce_agent_state(target, "finished").await;
             return self.reply([format!("Stopped {target}.")], None);
         }
-        self.reply([format!("{target} is not running.")], None)
+        self.reply([format!("{target} isn't running.")], None)
     }
 
     pub async fn force_hangup(&mut self) -> Option<String> {
@@ -2941,7 +2911,7 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
         let left = route;
         tracing::info!(%left, "caller hung up the project leg from the page");
         self.drop_agent().await;
-        self.operator_note = Some(format!("The caller dropped the line to {left}."));
+        self.operator_note = Some(format!("The caller hung up {left} from the page."));
         Some(left)
     }
 }
@@ -2951,6 +2921,47 @@ fn is_confirmation(text: &str) -> bool {
         text.trim().to_ascii_lowercase().as_str(),
         "yes" | "yeah" | "yep" | "confirm" | "do it" | "stop it"
     )
+}
+
+/// A failure the switchboard says itself: `spoken` is read aloud, and the
+/// raw `detail` is screen text and the reply's error, never speech.
+fn failure_reply(coordinator: &Coordinator, spoken: String, detail: String) -> Reply {
+    let status = coordinator.status();
+    Reply::new(
+        &status.route,
+        &status.label,
+        vec![
+            Utterance {
+                text: spoken,
+                synthesize: true,
+            },
+            Utterance {
+                text: detail.clone(),
+                synthesize: false,
+            },
+        ],
+        Some(detail),
+    )
+}
+
+/// The operator's note when work on `name` stopped under the caller.
+fn stopped_note(name: &str, detail: &str) -> String {
+    format!("Work on {name} stopped: {}.", detail.trim_end_matches('.'))
+}
+
+/// The operator's note when `project` could not be opened for the caller.
+fn open_failed_note(project: &str, error: &str) -> String {
+    format!("Couldn't open {project}: {}.", error.trim_end_matches('.'))
+}
+
+/// `CALL_VOICE` joined with the persona, or alone when there is none.
+fn voice_block(persona: &str) -> String {
+    let persona = persona.trim();
+    if persona.is_empty() {
+        CALL_VOICE.to_owned()
+    } else {
+        format!("{CALL_VOICE}\n\nCharacter:\n{persona}")
+    }
 }
 
 /// A reply the switchboard speaks itself, labelled with the leg the

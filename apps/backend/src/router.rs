@@ -257,31 +257,35 @@ impl CallSummary {
     /// A short plain-text view of the call for the operator and the routing
     /// utility, so their decisions use the same facts Jev saw.
     pub fn render_for_llm(&self) -> String {
-        let mut lines = vec![format!(
-            "The caller is talking to: {}.",
-            self.caller_is_talking_to
-        )];
+        // The words describe work, not parties, so the reader can talk about
+        // it in the first person without repeating "operator" or "agent".
+        let on = if self.caller_is_talking_to == "operator" {
+            "the front desk"
+        } else {
+            self.caller_is_talking_to.as_str()
+        };
+        let mut lines = vec![format!("The caller is on: {on}.")];
         let agents = self
             .agents
             .iter()
             .filter(|(name, _)| name.as_str() != "operator")
             .collect::<Vec<_>>();
         if agents.is_empty() {
-            lines.push("No project agents are on the call.".into());
+            lines.push("No project work is open.".into());
         } else {
-            lines.push("Project agents on the call:".into());
+            lines.push("Open work:".into());
             for (name, agent) in agents {
                 let mut facts = vec![agent.state.clone()];
                 if name.as_str() == self.caller_is_talking_to {
-                    facts.push("in the foreground".into());
+                    facts.push("in front".into());
                 } else {
                     facts.push("in the background".into());
                 }
                 if agent.pending_request_to_speak {
-                    facts.push("has a message waiting for the caller".into());
+                    facts.push("has something to say".into());
                 }
                 if agent.display_ready {
-                    facts.push("has a display ready that the caller has not seen".into());
+                    facts.push("has a display the caller has not seen".into());
                 }
                 let task = if agent.task.is_empty() {
                     String::new()
@@ -298,9 +302,7 @@ impl CallSummary {
                 .map(|session| format!("{} ({})", session.project, session.state))
                 .collect::<Vec<_>>()
                 .join(", ");
-            lines.push(format!(
-                "Live desk sessions that can be taken over: {desk}."
-            ));
+            lines.push(format!("Desk sessions the caller can take over: {desk}."));
         }
         let recent = self
             .recent_conversation

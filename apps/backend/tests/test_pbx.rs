@@ -458,12 +458,12 @@ async fn transfer_ctx_ambiguous_project_returns_candidate_options() {
     assert!(reply
         .to_speak
         .iter()
-        .any(|s| s.contains("Which project did you mean by shared? Candidates: proj-a, proj-b.")));
+        .any(|s| s.contains("Which project did you mean by shared? It could be proj-a, proj-b.")));
     assert!(board
         .operator_note
         .as_deref()
         .unwrap_or("")
-        .contains("was ambiguous"));
+        .contains("Couldn't tell which project \"shared\" meant: proj-a, proj-b."));
 }
 
 #[tokio::test]
@@ -490,7 +490,7 @@ async fn jev_transfer_omits_the_internal_reason_from_the_intro_prompt() {
     assert_eq!(reply.route, "alpha");
     let prompt = prompts(&log).into_iter().next().expect("intro prompt");
     assert!(prompt.contains("put me through"), "{prompt}");
-    assert!(!prompt.contains("[DERIVED INTENT]"), "{prompt}");
+    assert!(!prompt.contains("[WHAT THEY SEEM TO WANT]"), "{prompt}");
     assert!(!prompt.contains("internal Jev reason"), "{prompt}");
     board.shutdown().await;
 }
@@ -735,7 +735,7 @@ async fn multi_target_jev_that_never_splits_is_handled_by_operator() {
 }
 
 #[test]
-fn multi_target_utility_request_includes_jev_hint_projects_and_caller_words() {
+fn multi_target_utility_request_carries_only_jev_hint_and_caller_words() {
     let board = board_with(
         vec![
             project("grape-segmentation", "Grape"),
@@ -758,14 +758,101 @@ fn multi_target_utility_request_includes_jev_hint_projects_and_caller_words() {
         },
         false,
     );
-    assert!(request.contains("multi_target=true"));
+    assert!(request.contains("several projects=true"));
     assert!(request.contains("action=continue"));
     assert!(request.contains("target=grape-segmentation"));
-    assert!(request.contains("grape-segmentation"));
-    assert!(request.contains("switchboard"));
-    assert!(request.contains("dispatch_parts"));
     assert!(request.contains("grape answer and switchboard answer"));
-    assert!(request.contains("never invent projects"));
+    // The rules and the catalog live once, in the utility's system prompt.
+    assert!(!request.contains("Registered projects"), "{request}");
+    assert!(!request.contains("Never invent"), "{request}");
+    let retry = board.utility_routing_request(
+        "grape answer and switchboard answer",
+        &Decision {
+            action: crate::router::Action::Continue,
+            target: None,
+            continue_or_fresh: None,
+            confidence: 0.5,
+            for_current_agent: 0.5,
+            multi_target: true,
+            unsure: true,
+            confirm: false,
+            reason: "two projects".into(),
+        },
+        true,
+    );
+    assert!(retry.contains("dispatch_parts"), "{retry}");
+}
+
+#[test]
+fn the_operator_and_the_utility_get_the_same_voice_block_and_persona() {
+    let board = board_on(
+        vec![project("alpha", "Alpha project")],
+        &[("SWITCHBOARD_PERSONA", "Gruff and short.")],
+        two_model_catalog(),
+    );
+    let operator = board.operator_prompt_suffix();
+    let utility = board.utility_system_prompt();
+    for prompt in [&operator, &utility] {
+        assert_eq!(
+            prompt.matches("[HOW YOU TALK ON THE CALL]").count(),
+            1,
+            "{prompt}"
+        );
+        assert!(prompt.contains("Character:\nGruff and short."), "{prompt}");
+        assert!(prompt.contains("- alpha - Alpha project"), "{prompt}");
+    }
+}
+
+#[tokio::test]
+async fn a_takeover_of_an_unknown_project_names_the_ones_there_are() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let reply = board.take_over("take over gamma", "gamma", Ok(None)).await;
+    assert_eq!(
+        reply.to_speak,
+        ["I don't have a project called gamma. The ones I have are alpha, beta."]
+    );
+}
+
+#[test]
+fn an_empty_persona_leaves_the_character_out() {
+    let board = board_with(vec![project("alpha", "Alpha project")], false);
+    let operator = board.operator_prompt_suffix();
+    assert!(
+        operator.contains("[HOW YOU TALK ON THE CALL]"),
+        "{operator}"
+    );
+    assert!(!operator.contains("Character:"), "{operator}");
+}
+
+#[test]
+fn the_utility_system_prompt_holds_the_rules_and_the_catalog_once() {
+    let board = board_with(
+        vec![
+            project("grape-segmentation", "Grape"),
+            project("switchboard", "Switchboard"),
+        ],
+        true,
+    );
+    let prompt = board.utility_system_prompt();
+    assert!(prompt.contains("[ROUTING REQUEST]"), "{prompt}");
+    assert!(prompt.contains("[FLOOR REWRITE]"), "{prompt}");
+    assert!(prompt.contains("dispatch_parts"), "{prompt}");
+    assert!(
+        prompt.contains("Never say something is on screen"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("say it is ready when they want it"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("- grape-segmentation - Grape"), "{prompt}");
+    assert!(prompt.contains("- switchboard - Switchboard"), "{prompt}");
+    assert_eq!(prompt.matches("Registered projects").count(), 1, "{prompt}");
+    // Voice block, then catalog: the same order the operator gets.
+    assert!(
+        prompt.find("[HOW YOU TALK ON THE CALL]") < prompt.find("Registered projects"),
+        "{prompt}"
+    );
 }
 
 #[cfg(unix)]
@@ -952,7 +1039,28 @@ fn unicode_payload_preserved_in_transfer_context_and_intro_prompt() {
     let intro = build_intro_prompt(&context, &project, None);
     assert!(intro.contains(unicode_text));
     assert!(intro.contains("intent with 日本語"));
-    assert!(intro.contains(&format!("Bytes: {}", unicode_text.len())));
+    assert!(!intro.contains("Bytes:"), "{intro}");
+    assert!(
+        intro.contains("[PROJECT]\nalpha - Alpha project"),
+        "{intro}"
+    );
+}
+
+#[test]
+fn an_intro_from_the_page_says_to_wait_for_the_callers_words() {
+    let project = Project {
+        id: "alpha".into(),
+        description: String::new(),
+        aliases: vec![],
+        host: None,
+        cwd: "/srv/alpha".into(),
+        model: None,
+        prepare: String::new(),
+    };
+    let intro = build_intro_prompt(&TransferContext::default(), &project, None);
+    assert!(intro.contains("[CALLER REQUEST]\n(none yet:"), "{intro}");
+    assert!(intro.contains("Say nothing now."), "{intro}");
+    assert!(!intro.contains("[STARTUP CHECK]"), "{intro}");
 }
 
 #[test]
@@ -1117,16 +1225,19 @@ async fn a_transfer_to_a_host_that_is_not_connected_is_refused_with_the_reason()
         .await;
 
     assert_eq!(reply.route, OPERATOR);
-    assert_eq!(
-        reply.to_speak,
-        ["I couldn't get alpha on the line: its host scriptorium is not connected"]
+    // The reason is screen text; the caller hears plain words.
+    assert_eq!(reply.to_speak, ["I couldn't open alpha."]);
+    assert!(
+        reply.text.contains("its host scriptorium is not connected"),
+        "{}",
+        reply.text
     );
     assert!(!board.coordinator.is_candidate());
     assert!(board
         .operator_note
         .as_deref()
         .unwrap()
-        .starts_with("Transfer to alpha failed"));
+        .starts_with("Couldn't open alpha:"));
 }
 
 #[tokio::test]
@@ -1185,7 +1296,7 @@ async fn the_voice_brief_rides_on_the_first_prompt_and_again_after_a_compaction(
         .map(|prompt| prompt.starts_with("[SWITCHBOARD VOICE BRIEF]"))
         .collect();
     assert_eq!(briefed, [true, false, true, false], "{prompts:#?}");
-    assert!(prompts[0].contains("[PROJECT METADATA]"));
+    assert!(prompts[0].contains("[PROJECT]"));
     assert!(
         prompts[2].ends_with("[END OF VOICE BRIEF]\n\nnext line"),
         "{}",
@@ -1201,31 +1312,39 @@ async fn the_voice_brief_rides_on_the_first_prompt_and_again_after_a_compaction(
 }
 
 #[test]
-fn the_voice_brief_teaches_the_switchboard_module_and_names_the_targets() {
-    let board = board_with(
+fn the_voice_brief_carries_the_voice_the_module_and_the_ways_of_working() {
+    let board = board_on(
         vec![project("alpha", "Alpha project"), project("beta", "")],
-        true,
+        &[("SWITCHBOARD_PERSONA", "Gruff and short.")],
+        two_model_catalog(),
     );
     let brief = board.agent_brief(&project("alpha", ""));
+    assert!(brief.starts_with("[SWITCHBOARD VOICE BRIEF]"), "{brief}");
+    assert!(brief.ends_with("[END OF VOICE BRIEF]"), "{brief}");
     for taught in [
+        "working in the alpha project",
+        "[HOW YOU TALK ON THE CALL]",
+        "Character:\nGruff and short.",
         "switchboard.speak(text)",
         "switchboard.request_to_speak(message, reason)",
-        "actual result in one to three short spoken sentences",
-        "do not send a teaser",
+        "Not a teaser",
         "switchboard.display(",
+        "SKILL.md",
         "switchboard.view()",
-        "displays are held until the caller brings you forward",
-        "never say a display is on screen",
-        "Routing is handled by the switchboard",
-        "  - beta: no description",
+        "never say something is on screen",
+        "cheap to undo",
+        "subagents",
+        "compact yourself",
+        "search your own conversation log",
+        "you have no tools for them",
     ] {
         assert!(brief.contains(taught), "{taught} missing from {brief}");
     }
-    assert!(!brief.contains("  - alpha"), "{brief}");
-    let fixed = board_with(vec![project("alpha", "")], false);
-    assert!(!fixed
-        .agent_brief(&project("alpha", ""))
-        .contains("set_model"));
+    // Moving the caller is the switchboard's job: the brief lists no other
+    // projects and offers no way back to a front desk.
+    assert!(!brief.contains("beta"), "{brief}");
+    assert!(!brief.contains("return to the operator"), "{brief}");
+    assert!(!brief.contains("set_model"), "{brief}");
 }
 
 #[tokio::test]
@@ -1490,7 +1609,7 @@ async fn a_fresh_start_ends_the_session_and_makes_a_new_one() {
     let prompts = prompts(&log);
     assert_eq!(prompts.len(), 2);
     assert!(prompts[1].starts_with("[SWITCHBOARD VOICE BRIEF]"));
-    assert!(prompts[1].contains("The caller asked: look at the parser."));
+    assert!(prompts[1].contains("Their request: look at the parser."));
     board.shutdown().await;
 }
 
@@ -1856,23 +1975,24 @@ async fn a_transfer_whose_session_cannot_start_leaves_the_caller_on_the_operator
         "could not start a session: cwd /srv/alpha does not exist"
     );
     assert_eq!(reply.route, OPERATOR);
-    assert_eq!(
-        reply.to_speak,
-        [format!("I couldn't get alpha on the line: {error}")]
-    );
+    assert_eq!(reply.to_speak, ["I couldn't open alpha."]);
+    assert!(reply.text.contains(&error), "{}", reply.text);
     assert_back_on_the_operator(
         &board,
         &coordinator,
         &notices,
         generation,
-        &format!("Transfer to alpha failed: {error}"),
+        &format!("Couldn't open alpha: {}.", error.trim_end_matches('.')),
     )
     .await;
 
     board.handle("what happened?").await;
     assert_eq!(
         operator_prompts(&operator_log).last().unwrap(),
-        &format!("[switchboard] Transfer to alpha failed: {error}\n\nwhat happened?")
+        &format!(
+            "[switchboard] Couldn't open alpha: {}.\n\nwhat happened?",
+            error.trim_end_matches('.')
+        )
     );
     assert_eq!(board.operator_note, None, "the note is delivered once");
     board.shutdown().await;
@@ -1902,16 +2022,13 @@ async fn an_intro_that_never_settles_is_dropped_at_the_turn_deadline() {
 
     assert_eq!(reply.error.as_deref(), Some("the agent stopped responding"));
     assert_eq!(reply.route, OPERATOR);
-    assert_eq!(
-        reply.to_speak,
-        ["alpha didn't pick up: the agent stopped responding"]
-    );
+    assert_eq!(reply.to_speak, ["I couldn't open alpha."]);
     assert_back_on_the_operator(
         &board,
         &coordinator,
         &notices,
         generation,
-        "Transfer to alpha failed: the agent stopped responding",
+        "Couldn't open alpha: the agent stopped responding.",
     )
     .await;
     // The silent session is not left running on its host.
@@ -1921,7 +2038,7 @@ async fn an_intro_that_never_settles_is_dropped_at_the_turn_deadline() {
     board.handle("what happened?").await;
     assert_eq!(
         operator_prompts(&operator_log).last().unwrap(),
-        "[switchboard] Transfer to alpha failed: the agent stopped responding\n\nwhat happened?"
+        "[switchboard] Couldn't open alpha: the agent stopped responding.\n\nwhat happened?"
     );
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
@@ -2014,7 +2131,7 @@ async fn hanging_up_a_project_leg_returns_the_caller_to_the_operator_and_tells_i
     board.handle("I'm back").await;
     assert_eq!(
         operator_prompts(&operator_log).last().unwrap(),
-        "[switchboard] The caller dropped the line to alpha.\n\nI'm back"
+        "[switchboard] The caller hung up alpha from the page.\n\nI'm back"
     );
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
@@ -2982,16 +3099,15 @@ async fn backgrounding_a_busy_foreground_sends_an_away_notice() {
     assert!(log.named("steer").iter().any(|args| args["message"]
         .as_str()
         .unwrap_or_default()
-        .contains("caller is now listening to another agent")));
+        .contains("The caller has moved on to other work")));
     let steer_calls = log.named("steer");
     let away = steer_calls
         .iter()
         .find_map(|args| args["message"].as_str())
         .unwrap_or_default();
-    assert!(away.contains("actual words they should hear"));
-    assert!(away.contains("not a teaser"));
-    assert!(away.contains("displays are held until the caller brings you forward"));
-    assert!(away.contains("never say a display is on screen"));
+    assert!(away.contains("request_to_speak in the words they should hear"));
+    assert!(away.contains("cannot hear speak() now"));
+    assert!(away.contains("your displays wait until they come back to you"));
     held.abort();
     let _ = held.await;
     board.shutdown().await;
@@ -3753,7 +3869,7 @@ done
     );
     let general = decision(crate::router::Action::General, None, None);
 
-    board.set_call_state("The caller is talking to: the operator.\n- alpha: idle, in the background, has a display ready that the caller has not seen".into());
+    board.set_call_state("The caller is on: the front desk.\n- alpha: idle, in the background, has a display the caller has not seen".into());
     let first = board.handle_decision("what is ready?", &general).await;
     assert_eq!(first.text, "Operator here.");
     let second = board.handle_decision("thanks", &general).await;
@@ -3763,7 +3879,11 @@ done
     let lines = input.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 2, "{input}");
     assert!(lines[0].contains("[CALL STATE]"), "{}", lines[0]);
-    assert!(lines[0].contains("has a display ready"), "{}", lines[0]);
+    assert!(
+        lines[0].contains("has a display the caller"),
+        "{}",
+        lines[0]
+    );
     assert!(lines[0].contains("what is ready?"), "{}", lines[0]);
     // The state belongs to one utterance; a later turn without a fresh
     // state must not repeat stale facts.
@@ -3777,19 +3897,14 @@ done
 async fn the_routing_utility_request_carries_the_call_state() {
     let board = board_with(vec![project("alpha", "Alpha project")], false);
     let mut board = board;
-    board.set_call_state(
-        "- alpha: waiting, in the background, has a message waiting for the caller".into(),
-    );
+    board.set_call_state("- alpha: waiting, in the background, has something to say".into());
     let request = board.utility_routing_request(
         "pull it up",
         &decision(crate::router::Action::Continue, Some("alpha"), None),
         false,
     );
     assert!(request.contains("[CALL STATE]"), "{request}");
-    assert!(
-        request.contains("has a message waiting for the caller"),
-        "{request}"
-    );
+    assert!(request.contains("has something to say"), "{request}");
     assert!(request.contains("pull it up"), "{request}");
 }
 

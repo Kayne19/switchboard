@@ -93,6 +93,34 @@ const routed = await operator.tools.get("route").execute("call", {
 	mode: "fresh",
 });
 assert.deepEqual(routed.details, { target: "alpha", mode: "fresh" });
+assert.deepEqual(
+	routed.content,
+	[{ type: "text", text: "Sent to alpha. Say nothing more this turn." }],
+	"the route result ends the turn once",
+);
+
+function descriptions(schema) {
+	const own = schema.description ? [schema.description] : [];
+	const nested = [
+		...Object.values(schema.properties ?? {}),
+		...(schema.items ? [schema.items] : []),
+	];
+	return [...own, ...nested.flatMap(descriptions)];
+}
+for (const tool of operator.tools.values()) {
+	for (const text of [tool.description, ...descriptions(tool.parameters)]) {
+		assert.doesNotMatch(
+			text,
+			/\b(agents?|operator|transfer)\b/i,
+			`${tool.name} text speaks of work, not parties: ${text}`,
+		);
+	}
+}
+assert.match(
+	operator.tools.get("rewrite").description,
+	/same voice/,
+	"the floor rewrite keeps the speaker's voice",
+);
 
 const utility = await extensionBehavior(true, ["second_opinion", "rewrite", "dispatch_parts"]);
 const split = await utility.tools.get("dispatch_parts").execute("call", {

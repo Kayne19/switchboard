@@ -168,7 +168,8 @@ pub fn normalize_thinking(text: &str) -> Result<String, ModelError> {
         return Ok(collapsed);
     }
     Err(ModelError(format!(
-        "{text:?} is not a thinking level. The levels are {}.",
+        "{} isn't a thinking level. The levels are {}.",
+        text.trim(),
         THINKING_LEVELS.join(", ")
     )))
 }

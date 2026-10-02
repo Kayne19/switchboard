@@ -4373,7 +4373,7 @@ async fn a_picker_the_catalog_does_not_resolve_leaves_its_leg_running() {
         .refused(
             "/model",
             json!({"model":"openai/missing"}),
-            "I didn't switch",
+            "I couldn't change the model.",
         )
         .await;
     assert!(error.is_string(), "{error}");
@@ -4395,7 +4395,11 @@ async fn a_picker_the_catalog_does_not_resolve_leaves_its_leg_running() {
         },
     );
     let error = call
-        .refused("/thinking", json!({"level":"high"}), "I didn't switch")
+        .refused(
+            "/thinking",
+            json!({"level":"high"}),
+            "I couldn't change the model.",
+        )
         .await;
     assert!(error.is_string(), "{error}");
 
@@ -4418,7 +4422,9 @@ async fn a_picker_on_a_host_prewarm_cannot_vouch_for_leaves_its_leg_running() {
         ("/model", json!({"model":"anthropic/next"})),
         ("/thinking", json!({"level":"high"})),
     ] {
-        let error = call.refused(path, body, "I didn't switch").await;
+        let error = call
+            .refused(path, body, "I couldn't change the model.")
+            .await;
         assert!(
             error
                 .as_str()
@@ -4441,7 +4447,7 @@ async fn a_picker_with_swaps_turned_off_leaves_its_leg_running() {
         ("/thinking", json!({"level":"high"})),
     ] {
         let error = call
-            .refused(path, body, "Model swapping is turned off")
+            .refused(path, body, "Model changes are turned off.")
             .await;
         assert_eq!(error, Value::Null);
     }
@@ -4492,13 +4498,13 @@ async fn a_picker_on_the_operator_answers_without_touching_its_turn() {
         (
             "/model",
             json!({"model":"anthropic/next"}),
-            "Model changes are only available on a project leg.",
+            "I can only change the model while we're on a project.",
             json!("Model changes are only available on a project leg."),
         ),
         (
             "/thinking",
             json!({"level":"high"}),
-            "Thinking is set to high for the next project call.",
+            "Thinking is set to high for the next project I open.",
             Value::Null,
         ),
     ] {
@@ -5201,7 +5207,7 @@ done
             .iter()
             .find(|frame| frame["type"] == "spoken")
             .expect("original background speech")["entry"]["text"],
-        "grapes: the latest ablation numbers are ready again"
+        "the latest ablation numbers are ready again"
     );
     assert_lifecycle_consistent(&state).await;
     assert!(state
@@ -5304,9 +5310,10 @@ done
         .await
         .expect("rewrite reached the utility");
     let prompt = rewrite_prompt.lock().unwrap().clone();
-    assert!(prompt.contains("Held display not yet seen by caller: yes"));
-    assert!(prompt.contains("Never claim anything is on screen"));
-    assert!(prompt.contains("ready to show when the caller wants it"));
+    assert!(prompt.contains("Display held: yes"), "{prompt}");
+    // The rules for a held display live in the utility's system prompt; the
+    // request carries only the data.
+    assert!(!prompt.contains("on screen"), "{prompt}");
     crate::pi_client::set_prompt_hook_for_test(None);
 
     // The foreground turn path can acquire the PBX lock while the utility is

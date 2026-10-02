@@ -23,18 +23,18 @@ export default function operatorSwitchboard(pi: ExtensionAPI) {
 		name: "route",
 		label: "Route",
 		description:
-			"Connect the caller to a project coding agent. Call this as soon as one project is clear; the transfer is silent and the target addresses the request immediately without a greeting.",
+			"Send the caller's request to a registered project. Call it as soon as one project clearly fits. The request goes with the caller and the project's work picks it up at once, so say nothing alongside it.",
 		parameters: Type.Object({
 			target: Type.String({
 				description: "The exact registered project id. Never invent one.",
 			}),
 			mode: Type.Optional(Type.String({
-				description: "continue (the default) to bring back an agent already on the call or its conversation; fresh only when the caller asks to start over.",
+				description: "Leave out to continue where that project stopped. Use fresh only when the caller wants to start over.",
 			})),
 		}),
 		async execute(_toolCallId, params) {
 			return {
-				content: [{ type: "text", text: `Connecting the caller to ${params.target}. Transfer is silent; say nothing further.` }],
+				content: [{ type: "text", text: `Sent to ${params.target}. Say nothing more this turn.` }],
 				details: { target: params.target, mode: params.mode ?? "continue" },
 			};
 		},
@@ -44,19 +44,19 @@ export default function operatorSwitchboard(pi: ExtensionAPI) {
 		name: "second_opinion",
 		label: "Second opinion",
 		description:
-			"Give a routing opinion on the caller's utterance. Use target only when one project is clear; leave it empty when the caller should be asked to clarify.",
+			"Say where the caller's words should go. Give a target only when one project clearly fits.",
 		parameters: Type.Object({
 			target: Type.Optional(Type.String({
-				description: "The exact registered project id, or omit when unclear.",
+				description: "Exact registered project id. Leave out when the caller should be asked.",
 			})),
 			mode: Type.Optional(Type.String({
-				description: "continue (the default) for an agent already on the call or its conversation; fresh only when the caller asks to start over.",
+				description: "Leave out to continue. fresh only when the caller asks to start over.",
 			})),
 			confident: Type.Boolean({
-				description: "True only when the target and intent are clear enough to act without asking.",
+				description: "True only when the project and the intent are both clear enough to act on without asking.",
 			}),
 			reason: Type.Optional(Type.String({
-				description: "A short internal reason for the routing choice.",
+				description: "A short internal note on why.",
 			})),
 		}),
 		async execute(_toolCallId, params) {
@@ -71,9 +71,9 @@ export default function operatorSwitchboard(pi: ExtensionAPI) {
 		name: "rewrite",
 		label: "Rewrite floor message",
 		description:
-			"Rewrite a background agent update for natural spoken delivery. Preserve every fact from the original and add none.",
+			"The message as the caller should hear it next: same voice, same facts, nothing added.",
 		parameters: Type.Object({
-			text: Type.String({ description: "A faithful, short spoken rewrite of the original message." }),
+			text: Type.String({ description: "The spoken message." }),
 		}),
 		async execute(_toolCallId, params) {
 			return {
@@ -87,11 +87,11 @@ export default function operatorSwitchboard(pi: ExtensionAPI) {
 		name: "dispatch_parts",
 		label: "Dispatch parts",
 		description:
-			"Split one caller utterance into parts for registered project agents. Keep each part in the caller's own words and use exact project ids.",
+			"Split one utterance across several registered projects, one part each, in the caller's own words.",
 		parameters: Type.Object({
 			parts: Type.Array(Type.Object({
 				agent: Type.String({ description: "Exact registered project id." }),
-				text: Type.String({ description: "The part addressed to that project." }),
+				text: Type.String({ description: "The caller's words for that project." }),
 			})),
 		}),
 		async execute(_toolCallId, params) {

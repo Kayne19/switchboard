@@ -115,14 +115,16 @@ fn host_canonicalization_and_descriptions_never_resolve() {
 }
 
 #[test]
-fn operator_prompt_catalog_contains_transfer_targets() {
+fn prompt_catalog_lists_ids_aliases_and_descriptions_without_paths() {
     let mut alpha = project("alpha", &["a"]);
     alpha.description = "Alpha project".into();
     alpha.host = Some("scriptorium".into());
     alpha.cwd = "/srv/alpha".into();
-    let prompt = Registry::new(vec![alpha]).operator_prompt_catalog();
-    assert!(prompt.contains("alpha (also: a)"));
-    assert!(prompt.contains("Alpha project [scriptorium:/srv/alpha]"));
+    let prompt = Registry::new(vec![alpha]).prompt_catalog();
+    assert!(prompt.contains("- alpha (a) - Alpha project"));
+    assert!(!prompt.contains("scriptorium"));
+    assert!(!prompt.contains("/srv/alpha"));
+    assert!(!prompt.contains("transfer_to_project"));
 }
 
 #[test]

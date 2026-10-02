@@ -154,14 +154,14 @@ def _common(result):
     if result.reason == "not_on_call":
         return "Not on a call; nothing was sent. Put anything for the caller in your written reply."
     if result.reason == "subagent":
-        return "A subagent cannot reach the caller; nothing was sent. Report back to your parent instead."
+        return "Subagents can't reach the caller; nothing was sent. Put it in your report to your parent."
     if result.status == "failed":
         detail = result.data.get("error") if isinstance(result.data, dict) else None
         if not detail and result.reason not in (None, "failed"):
             detail = result.reason
         return f"Could not reach the switchboard{f': {detail}' if detail else ''}. Nothing was sent."
     if result.reason == "caller_away":
-        return "The caller is listening to another session; use request_to_speak with the actual words they should hear."
+        return "The caller is on other work; nothing was played. If it matters to them, send it with request_to_speak."
     return None
 
 
@@ -184,7 +184,7 @@ def _optional_args(**values):
 
 
 def speak(text):
-    """Say `text` out loud to the caller: a sentence or two of plain spoken English."""
+    """Say `text` out loud to the caller, in plain spoken words. Detail goes on the screen."""
     _require_str("text", text)
 
     def describe(result):
@@ -198,13 +198,11 @@ def speak(text):
 
 
 def request_to_speak(message, reason):
-    """Queue exactly what the caller should hear from this background session.
+    """Queue what the caller should hear while they are on other work.
 
-    ``message`` is the spoken content, not a teaser: for ``finished`` give the
-    actual result in one to three short sentences; for ``needs_decision`` give
-    the question and options; for ``problem`` say what went wrong and what is
-    needed. ``reason`` is one of ``finished``, ``needs_decision`` or ``problem``.
-    The service lightly smooths the message and speaks it at a good moment.
+    ``message`` is the real content (the result, the question with options, or
+    the problem and what you need), not a teaser. ``reason`` is ``finished``,
+    ``needs_decision`` or ``problem``.
     """
     _require_str("message", message)
     _require_str("reason", reason)
@@ -213,7 +211,7 @@ def request_to_speak(message, reason):
 
     def describe(result):
         if result.accepted or result.delivered:
-            return "Request to speak accepted."
+            return "Queued. The caller hears it at a good moment."
         return _common(result) or _refused(result, "request to speak")
 
     return _send("request_to_speak", {"message": message, "reason": reason}, describe)
@@ -263,7 +261,7 @@ def display(action=None, **fields):
         data = result.data if isinstance(result.data, dict) else {}
         if result.delivered or result.accepted:
             if data.get("held") is True:
-                return "Held, not on screen yet. It will appear when the caller brings this agent forward; say it is ready, not that it is on screen."
+                return "Held until the caller comes back to you. Say it's ready, not that it's on screen."
             if data.get("rendered") is False:
                 return "Sent, but the caller's screen has not confirmed it; it may not be visible yet."
             return "On screen."
