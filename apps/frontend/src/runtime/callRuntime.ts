@@ -47,6 +47,7 @@ import {
   type Clip,
 } from "./outbox";
 import { PushToTalk, type PushToTalkOptions } from "./pushToTalk";
+import { SpokenLines, type HeardLine } from "./spokenLines";
 
 export const IDLE_TEXT = "Connected. Tap Talk and speak.";
 
@@ -113,6 +114,12 @@ export interface CallRuntimeOptions {
   socketUrl: string;
   onState: (state: RuntimeState) => void;
   onServer: (message: ServerMessage) => void;
+  /**
+   * A spoken line has started to be heard: its audio's turn to play came.
+   * Its text arrived earlier, through `onServer`, and is already in the
+   * transcript.
+   */
+  onHeard?: (line: HeardLine) => void;
   createSocket?: (url: string) => WebSocket;
   postJson?: typeof postJson;
   player?: HTMLAudioElement;
@@ -134,6 +141,7 @@ export class CallRuntime {
   private readonly createSocket: (url: string) => WebSocket;
   private readonly postJson: typeof postJson;
   private readonly playback: AudioPlayback;
+  private readonly spokenLines: SpokenLines;
   private readonly pushToTalk: PushToTalk;
   private readonly outbox = new ClipOutbox();
   private state: RuntimeState = { ...INITIAL_RUNTIME_STATE };
@@ -205,6 +213,7 @@ export class CallRuntime {
     this.options = options;
     this.createSocket = options.createSocket ?? ((url) => new WebSocket(url));
     this.postJson = options.postJson ?? postJson;
+    this.spokenLines = new SpokenLines((line) => this.options.onHeard?.(line));
     this.playback = new AudioPlayback({
       player: options.player,
       idleText: IDLE_TEXT,
@@ -220,6 +229,7 @@ export class CallRuntime {
         this.update({ speaking: this.playback.isPlaying });
         this.maybeCompleteResponseBarrier();
       },
+      onUtterance: (sequence) => this.spokenLines.reach(sequence),
     });
     this.pushToTalk = new PushToTalk({
       idleText: IDLE_TEXT,
@@ -819,6 +829,9 @@ export class CallRuntime {
         }
         this.handleText(message, socket, generation);
         this.options.onServer(message);
+        // After `onServer`, so a line is in the transcript before it is
+        // heard, even when its audio has already started.
+        this.trackSpokenLine(message);
       } else if (event.data instanceof ArrayBuffer) {
         this.playback.receiveAudioChunk(event.data);
       } else if (event.data instanceof Blob) {
@@ -827,6 +840,26 @@ export class CallRuntime {
         });
       }
     };
+  }
+
+  /**
+   * Holds a spoken line until its audio's turn to play comes (#112). Only
+   * lines voiced to the caller are captions; a written reply stays in the
+   * transcript.
+   */
+  private trackSpokenLine(message: ServerMessage): void {
+    if (message.type === "spoken") {
+      if (!message.entry.text) return;
+      this.spokenLines.add(
+        { text: message.entry.text, route: message.entry.route || undefined },
+        message.sequence,
+      );
+    } else if (message.type === "reply" && message.voiced) {
+      this.spokenLines.add(
+        { text: message.text, route: message.route || undefined },
+        message.sequence,
+      );
+    }
   }
 
   private scheduleReconnect(generation: number): void {
@@ -897,8 +930,12 @@ export class CallRuntime {
               true,
             );
           }
-          if (handoff) this.playback.handOffToGeneration(epoch);
-          else this.playback.resetForGeneration(epoch);
+          if (handoff) {
+            this.playback.handOffToGeneration(epoch);
+          } else {
+            this.playback.resetForGeneration(epoch);
+            this.spokenLines.retire();
+          }
         }
         break;
       case "candidate":
@@ -982,6 +1019,7 @@ export class CallRuntime {
         break;
       }
       case "history": {
+        this.spokenLines.clear();
         // A transcript in history is the durable completion acknowledgement.
         // Drop its retained audio even if the live transcript frame was lost.
         const completed = new Set(

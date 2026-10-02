@@ -64,12 +64,22 @@ export interface AudioPlaybackOptions {
   gapMs?: number;
   /** Receives the live output level without entering React state. */
   onAudioLevel?: (level: number) => void;
+  /**
+   * Called with an utterance's `sequence` when its turn to play comes, or
+   * when it is dropped and will never play. The caption follows this, so a
+   * line is shown when its audio starts rather than when it arrives (#112).
+   * It may be called more than once for one utterance (a replay after a
+   * blocked autoplay, a streaming fallback).
+   */
+  onUtterance?: (sequence: number) => void;
 }
 
 export class AudioPlayback {
   readonly player: HTMLAudioElement;
   /** Complete utterances waiting for the element, oldest first. */
   readonly audioQueue: Blob[] = [];
+  /** The utterance each complete replay voices. */
+  private readonly replaySequences = new WeakMap<Blob, number>();
   private readonly options: AudioPlaybackOptions;
   private playing = false;
   private playbackOwner: PlaybackOwner | null = null;
@@ -222,6 +232,8 @@ export class AudioPlayback {
       handlers: [],
     };
     this.playbackOwner = owner;
+    const sequence = this.replaySequences.get(blob);
+    if (sequence !== undefined) this.options.onUtterance?.(sequence);
     this.notifyPlaybackChange();
     const ended: EventListener = () => {
       if (
@@ -293,12 +305,12 @@ export class AudioPlayback {
   ): void {
     const generation = message.generation;
     const sequence = message.sequence;
-    if (
-      typeof generation !== "number" ||
-      typeof sequence !== "number" ||
-      generation !== this.audioEpoch
-    )
+    if (typeof generation !== "number" || typeof sequence !== "number") return;
+    if (generation !== this.audioEpoch) {
+      // Audio from a leg the call has left never plays.
+      this.options.onUtterance?.(sequence);
       return;
+    }
     const utterance: MseUtterance = {
       generation,
       sequence,
@@ -562,9 +574,12 @@ export class AudioPlayback {
         "Audio exceeded the replay limit and was stopped.",
         true,
       );
+      this.options.onUtterance?.(utterance.sequence);
       return;
     }
-    this.audioQueue.push(new Blob(utterance.parts, { type: utterance.mime }));
+    const replay = new Blob(utterance.parts, { type: utterance.mime });
+    this.replaySequences.set(replay, utterance.sequence);
+    this.audioQueue.push(replay);
     this.notifyPlaybackChange();
   }
 
@@ -682,6 +697,7 @@ export class AudioPlayback {
     const utterance = this.mseQueue.shift()!;
     const player = this.player;
     this.mseActive = utterance;
+    this.options.onUtterance?.(utterance.sequence);
     utterance.media = new MediaSource();
     utterance.url = URL.createObjectURL(utterance.media);
     utterance.endedHandler = () => {

@@ -87,14 +87,25 @@ pub enum ServerMessage {
         label: String,
     },
     /// A turn settled with this reply; `voiced` says whether its text was
-    /// synthesized for the caller.
+    /// synthesized for the caller. `sequence` names the audio utterance its
+    /// speech starts with, so the page shows the line when that utterance
+    /// starts to play rather than when the reply arrives (#112). It is absent
+    /// when no audio carries the reply.
     Reply {
         text: String,
         route: String,
         voiced: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sequence: Option<u64>,
     },
     /// A line was spoken to the caller and kept in the transcript.
-    Spoken { entry: TranscriptEntry },
+    /// `sequence` names the audio utterance that voices it, as on `reply`;
+    /// absent for a line no audio carries.
+    Spoken {
+        entry: TranscriptEntry,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sequence: Option<u64>,
+    },
     /// The transcript so far, in every connection's snapshot.
     History { entries: Vec<TranscriptEntry> },
     /// An utterance of synthesized speech begins; its audio follows as

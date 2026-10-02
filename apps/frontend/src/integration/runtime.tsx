@@ -8,7 +8,7 @@ import { deriveScreenState } from "../app/sceneModel";
 import { interpretDisplayMessage } from "../app/displayMessage";
 import { planReportDispatch, shouldClearRejectionOnSend } from "../app/reportDispatch";
 import { useController } from "../controller/context";
-import type { MessageData, ScreenStateReport } from "../controller/types";
+import type { MessageData, ScreenStateReport, SpokenLine } from "../controller/types";
 import { RUNTIME_CONVERSATION_ID } from "../controller/types";
 import type { ServerMessage, TranscriptEntry } from "../protocol";
 import {
@@ -16,6 +16,7 @@ import {
   INITIAL_RUNTIME_STATE,
   type RuntimeState,
 } from "../runtime/callRuntime";
+import type { HeardLine } from "../runtime/spokenLines";
 
 interface TranscriptLine {
   speaker: string;
@@ -43,6 +44,14 @@ function normalizeHistory(entries: TranscriptEntry[]): TranscriptLine[] {
   );
 }
 
+/** How many heard lines the live response keeps for scrollback (#113). */
+const SPOKEN_LOG_LIMIT = 50;
+
+/** A heard line in the live response's log, with where it falls in it. */
+interface LoggedLine extends SpokenLine {
+  order: number;
+}
+
 // `?ws=` points the page at another backend. The dev server has no backend of
 // its own, so without one the call runtime stays down there.
 function backendSocketUrl(): string | null {
@@ -66,6 +75,11 @@ export function RuntimeIntegration() {
   const pendingRejectionRef = useRef<{ seq: number; reason: string } | null>(null);
   const handleServerRef = useRef<(message: ServerMessage) => void>(() => {});
   const handleStateRef = useRef<(runtimeState: RuntimeState) => void>(() => {});
+  const handleHeardRef = useRef<(line: HeardLine) => void>(() => {});
+  // The lines the caller heard, oldest first, for the live response's log;
+  // the last is the one being heard.
+  const spokenLogRef = useRef<LoggedLine[]>([]);
+  const nextLineIdRef = useRef(0);
   const [reportNonce, setReportNonce] = useState(0);
   const [runtime, setRuntime] = useState<RuntimeState>(INITIAL_RUNTIME_STATE);
 
@@ -108,6 +122,7 @@ export function RuntimeIntegration() {
         // No response yet means no segments: the conversation scene shows
         // its own open-line prompt, and a content rail shows no live card.
         segments: currentResponseRef.current ? [{ text: currentResponseRef.current }] : [],
+        lines: spokenLogRef.current.map(({ id, text }) => ({ id, text })),
         channel: {
           name: "VOICE",
           mode: runtime.handsFree ? "HANDS-FREE" : "PUSH-TO-TALK",
@@ -157,10 +172,16 @@ export function RuntimeIntegration() {
         }
         case "history": {
           transcriptRef.current = normalizeHistory(message.entries);
-          const latestVoiced = [...transcriptRef.current]
-            .reverse()
-            .find((entry) => entry.voiced);
-          currentResponseRef.current = latestVoiced?.text ?? "";
+          // The log restarts from the lines the history says were voiced.
+          spokenLogRef.current = transcriptRef.current
+            .filter((entry) => entry.voiced)
+            .slice(-SPOKEN_LOG_LIMIT)
+            .map((entry) => ({
+              id: nextLineIdRef.current++,
+              text: entry.text,
+              order: Number.NEGATIVE_INFINITY,
+            }));
+          currentResponseRef.current = spokenLogRef.current.at(-1)?.text ?? "";
           if (transcriptRef.current.length > 0) {
             showConversation();
           } else {
@@ -181,6 +202,8 @@ export function RuntimeIntegration() {
           break;
         }
         case "spoken": {
+          // The line goes into the transcript now; the live response shows
+          // it when its audio starts (`handleHeardRef`).
           const body = message.entry.text;
           if (!body) break;
           appendTranscript({
@@ -190,13 +213,7 @@ export function RuntimeIntegration() {
             voiced: true,
             agent: message.entry.route || undefined,
           });
-          currentResponseRef.current = body;
-          showConversation(body);
-          dispatch({
-            op: "runtime_say",
-            target: RUNTIME_CONVERSATION_ID,
-            text: body,
-          });
+          showConversation();
           break;
         }
         case "reply": {
@@ -210,19 +227,11 @@ export function RuntimeIntegration() {
             voiced: message.voiced,
             agent: message.route || undefined,
           });
-          if (message.voiced) {
-            currentResponseRef.current = body;
-            showConversation(body);
-            dispatch({
-              op: "runtime_say",
-              target: RUNTIME_CONVERSATION_ID,
-              text: body,
-            });
-          } else {
-            // Unvoiced written replies belong in the transcript drawer. Keep
-            // the live response on the last line that was actually spoken.
-            showConversation();
-          }
+          // A voiced reply reaches the live response when its audio starts
+          // (`handleHeardRef`). An unvoiced written reply belongs in the
+          // transcript drawer only, and the live response stays on the last
+          // line that was actually spoken.
+          showConversation();
           break;
         }
         case "thinking":
@@ -294,6 +303,31 @@ export function RuntimeIntegration() {
       }
     };
 
+    // A spoken line's audio started: it is the line being heard (#112), and
+    // it joins the log (#113). A line whose text came after a later line was
+    // already heard goes into the log before that line, and the live
+    // response stays on the later one.
+    handleHeardRef.current = (line: HeardLine) => {
+      const log = spokenLogRef.current;
+      let at = log.length;
+      while (at > 0 && log[at - 1].order > line.order) at -= 1;
+      const entry = { id: nextLineIdRef.current++, text: line.text, order: line.order };
+      spokenLogRef.current = [...log.slice(0, at), entry, ...log.slice(at)].slice(
+        -SPOKEN_LOG_LIMIT,
+      );
+      if (at < log.length) {
+        showConversation();
+        return;
+      }
+      currentResponseRef.current = line.text;
+      showConversation(line.text);
+      dispatch({
+        op: "runtime_say",
+        target: RUNTIME_CONVERSATION_ID,
+        text: line.text,
+      });
+    };
+
     handleStateRef.current = (runtimeState: RuntimeState) => {
       if (!runtimeState.connected) transportReadyRef.current = false;
       setRuntime(runtimeState);
@@ -322,6 +356,7 @@ export function RuntimeIntegration() {
       socketUrl,
       onState: (runtimeState) => handleStateRef.current(runtimeState),
       onServer: (message) => handleServerRef.current(message),
+      onHeard: (line) => handleHeardRef.current(line),
       document,
       window,
     });

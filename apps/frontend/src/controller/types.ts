@@ -97,11 +97,24 @@ export interface CodeData {
   source: CodeSourceData;
 }
 
+/** A line the caller heard, in the live response's log (#113). */
+export interface SpokenLine {
+  /** Stable across updates, for rendering. */
+  id: number;
+  text: string;
+}
+
 export interface MessageData {
   context?: string;
   tag?: string;
   caption?: string;
   segments: RichSegment[];
+  /**
+   * The recent lines the caller heard, oldest first; the last is the one
+   * being heard. The live response shows them as a log. Absent or empty,
+   * it shows `segments`.
+   */
+  lines?: SpokenLine[];
   channel?: { name: string; mode: string };
   /** `agent` names the project agent that spoke, when one did. */
   transcript?: Array<{ speaker: string; text: string; agent?: string }>;

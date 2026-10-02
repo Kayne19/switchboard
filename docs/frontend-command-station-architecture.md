@@ -128,6 +128,30 @@ new tab with `noopener noreferrer`. Unsafe or malformed links show their label,
 and model-provided HTML remains text. The live and spoken response surfaces
 keep their existing non-navigable link behavior.
 
+### The live response
+
+The live response (the conversation answer, and the live card beside a
+visual) shows what the caller is hearing, as a log of the recent spoken lines
+in the card's own text area (#113): the line being heard last and in full,
+the lines before it receding above it. It holds the last 50 lines. It stays
+pinned to the newest line while lines arrive; the caller can scroll back to
+read earlier ones, which unpins it, and scrolling back down pins it again. A
+line taller than the window rests at its first words. Only spoken lines go
+in it: written replies and tool output stay in the transcript drawer. A
+reconnect starts it again from the lines the history marks as voiced.
+
+A spoken line reaches the page twice, as text and as audio, and the two
+travel apart: the text of a `speak()` line
+comes once its audio has been sent, often while earlier lines are still
+playing, and a voiced reply's text comes before its audio. So each `spoken`
+frame and voiced `reply` names the audio utterance that voices it (`sequence`,
+as on `audio_start`), and the page holds the line until playback reaches that
+utterance: its turn to play comes, or it is dropped and will never play
+(`runtime/spokenLines.ts`). Queued lines wait their turn, stitched speech
+included. A line with no audio, such as the hangup notice, shows at once. A
+new leg that cuts the audio off shows the lines that were waiting. The
+transcript drawer takes every line as soon as its text arrives.
+
 ## Shared screen-state contract
 
 The browser reports the state it actually rendered over the existing WebSocket:

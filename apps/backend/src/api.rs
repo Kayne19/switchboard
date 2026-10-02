@@ -1413,7 +1413,9 @@ async fn complete_speech_request(
     result: oneshot::Sender<Result<(), String>>,
     synthesized: Result<(usize, bool), crate::audio::AudioError>,
     started: std::time::Instant,
-    log_spoken: bool,
+    // The utterance's sequence when the line is written to the spoken
+    // transcript; None when it is not.
+    spoken_as: Option<u64>,
 ) {
     match synthesized {
         Ok((bytes, delivered)) => {
@@ -1424,7 +1426,7 @@ async fn complete_speech_request(
                 "synthesized a speech line"
             );
             if delivered {
-                if log_spoken {
+                if let Some(sequence) = spoken_as {
                     if let Some(entry) = state
                         .0
                         .transcript_log
@@ -1432,7 +1434,15 @@ async fn complete_speech_request(
                         .await
                         .add_voiced(AGENT, &text, route)
                     {
-                        emit_message(state, ServerMessage::Spoken { entry });
+                        // Emitted once its audio is out: the line names the
+                        // utterance, and the page shows it when it plays.
+                        emit_message(
+                            state,
+                            ServerMessage::Spoken {
+                                entry,
+                                sequence: Some(sequence),
+                            },
+                        );
                     }
                 }
                 let _ = result.send(Ok(()));
@@ -1545,7 +1555,7 @@ async fn process_speech(state: AppState) {
                     result,
                     Err(error),
                     started,
-                    log_spoken,
+                    log_spoken.then_some(sequence),
                 )
                 .await;
                 continue;
@@ -1585,7 +1595,7 @@ async fn process_speech(state: AppState) {
                     "speech generation was superseded".into(),
                 )),
                 started,
-                log_spoken,
+                log_spoken.then_some(sequence),
             )
             .await;
             continue;
@@ -1622,7 +1632,7 @@ async fn process_speech(state: AppState) {
                 result,
                 synthesized,
                 started,
-                log_spoken,
+                log_spoken.then_some(sequence),
             )
             .await;
         });
@@ -2478,7 +2488,14 @@ async fn hangup(State(state): State<AppState>) -> impl IntoResponse {
                 .await
                 .add_voiced(AGENT, line, state.0.coordinator.route())
         {
-            emit_message(&state, ServerMessage::Spoken { entry });
+            // Nothing voices the hangup line, so the page shows it at once.
+            emit_message(
+                &state,
+                ServerMessage::Spoken {
+                    entry,
+                    sequence: None,
+                },
+            );
         }
     }
     // Like every page control, a hangup settles the call on its way out, even
@@ -2702,6 +2719,7 @@ async fn handle_project_turn(state: &AppState, turn: ProjectTurn) -> bool {
                     text: turn.text,
                     route,
                     voiced: false,
+                    sequence: None,
                 },
             );
         }
@@ -3652,8 +3670,10 @@ async fn deliver_page_reply_if_current(
     reply: &crate::pbx::Reply,
     generation: u64,
 ) -> bool {
+    let voice = reserve_reply_voice(state, &reply.to_speak, generation).await;
     let _transition = state.0.operation_transition.lock().await;
     if generation != state.0.coordinator.generation() {
+        release_reply_voice(state, voice, generation).await;
         return false;
     }
     if reply.error.as_deref() == Some("routing_unavailable") {
@@ -3664,6 +3684,7 @@ async fn deliver_page_reply_if_current(
             },
         );
         publish_status(state);
+        release_reply_voice(state, voice, generation).await;
         return true;
     }
     if !reply.text.is_empty() {
@@ -3675,7 +3696,13 @@ async fn deliver_page_reply_if_current(
                 .await
                 .add_voiced(AGENT, &reply.text, reply.route.clone())
         {
-            emit_message(state, ServerMessage::Spoken { entry });
+            emit_message(
+                state,
+                ServerMessage::Spoken {
+                    entry,
+                    sequence: voice.as_ref().map(|voice| voice.sequence),
+                },
+            );
         }
     }
     publish_status(state);
@@ -3685,6 +3712,7 @@ async fn deliver_page_reply_if_current(
         &reply.to_speak,
         generation,
         std::time::Instant::now() + state.0.speech_deadline,
+        voice,
     )
     .await;
     generation == state.0.coordinator.generation()
@@ -3696,8 +3724,10 @@ async fn deliver_turn_if_current(
     generation: u64,
     response_id: &str,
 ) -> bool {
+    let voice = reserve_reply_voice(state, &reply.to_speak, generation).await;
     let _transition = state.0.operation_transition.lock().await;
     if generation != state.0.coordinator.generation() {
+        release_reply_voice(state, voice, generation).await;
         return false;
     }
     if reply.error.as_deref() == Some("routing_unavailable") {
@@ -3708,6 +3738,7 @@ async fn deliver_turn_if_current(
             },
         );
         publish_status(state);
+        release_reply_voice(state, voice, generation).await;
         return true;
     }
     if !reply.text.is_empty() {
@@ -3725,6 +3756,7 @@ async fn deliver_turn_if_current(
             text: reply.text.clone(),
             route: reply.route.clone(),
             voiced: reply.voiced,
+            sequence: voice.as_ref().map(|voice| voice.sequence),
         },
     );
     publish_status(state);
@@ -3734,6 +3766,7 @@ async fn deliver_turn_if_current(
         &reply.to_speak,
         generation,
         std::time::Instant::now() + state.0.speech_deadline,
+        voice,
     )
     .await;
     if generation != state.0.coordinator.generation() {
@@ -3766,16 +3799,15 @@ struct SpeechAdmission {
     log_spoken: bool,
 }
 
-async fn queue_speech(state: &AppState, admission: SpeechAdmission) -> Result<(), String> {
-    let SpeechAdmission {
-        text,
-        route,
-        generation,
-        deadline,
-        scope,
-        group,
-        log_spoken,
-    } = admission;
+/// A speech request's place in the speech worker and the audio order, taken
+/// before the request itself is made. The permit comes first and then the
+/// audio slot, as for every speech request.
+struct ReservedSpeech<'a> {
+    permit: mpsc::Permit<'a, SpeechRequest>,
+    sequence: u64,
+}
+
+async fn reserve_speech(state: &AppState, generation: u64) -> Result<ReservedSpeech<'_>, String> {
     let permit = state
         .0
         .speech
@@ -3785,6 +3817,55 @@ async fn queue_speech(state: &AppState, admission: SpeechAdmission) -> Result<()
     let sequence = reserve_audio(state, generation)
         .await
         .ok_or_else(|| "speech generation was superseded".to_owned())?;
+    Ok(ReservedSpeech { permit, sequence })
+}
+
+/// The first utterance of a reply that will be spoken, reserved before the
+/// reply is announced so the announcement can name the audio that voices it
+/// (#112): the page shows the line when that utterance starts to play. None
+/// when nothing in the reply can be said aloud, or nothing could be reserved,
+/// in which case the page shows the line when it arrives.
+async fn reserve_reply_voice<'a>(
+    state: &'a AppState,
+    utterances: &[String],
+    generation: u64,
+) -> Option<ReservedSpeech<'a>> {
+    if utterances
+        .iter()
+        .all(|text| state.0.speaker.clip_for_speech(text).is_empty())
+    {
+        return None;
+    }
+    reserve_speech(state, generation).await.ok()
+}
+
+/// Gives back a reply's reserved first utterance that will not be spoken. Its
+/// audio slot is closed, or every later utterance would wait behind it.
+async fn release_reply_voice(state: &AppState, voice: Option<ReservedSpeech<'_>>, generation: u64) {
+    if let Some(ReservedSpeech { permit, sequence }) = voice {
+        drop(permit);
+        finish_audio(state, sequence, generation, Vec::new()).await;
+    }
+}
+
+async fn queue_speech(
+    state: &AppState,
+    admission: SpeechAdmission,
+    reserved: Option<ReservedSpeech<'_>>,
+) -> Result<(), String> {
+    let SpeechAdmission {
+        text,
+        route,
+        generation,
+        deadline,
+        scope,
+        group,
+        log_spoken,
+    } = admission;
+    let ReservedSpeech { permit, sequence } = match reserved {
+        Some(reserved) => reserved,
+        None => reserve_speech(state, generation).await?,
+    };
     let (result_tx, result_rx) = oneshot::channel();
     permit.send(SpeechRequest {
         text,
@@ -3804,11 +3885,14 @@ async fn queue_speech(state: &AppState, admission: SpeechAdmission) -> Result<()
         .map_err(|_| "speech worker stopped".to_owned())?
 }
 
+/// Speaks a reply's utterances in order. `first` is the slot reserved for
+/// the first of them when the reply was announced (`reserve_reply_voice`).
 async fn synthesize_reply_if_current(
     state: &AppState,
     utterances: &[String],
     generation: u64,
     deadline: std::time::Instant,
+    mut first: Option<ReservedSpeech<'_>>,
 ) -> bool {
     let group = state.0.new_speech_group();
     let mut first_spoken = true;
@@ -3835,6 +3919,7 @@ async fn synthesize_reply_if_current(
                 group,
                 log_spoken: false,
             },
+            first.take(),
         )
         .await
         {
@@ -3843,6 +3928,7 @@ async fn synthesize_reply_if_current(
             break;
         }
     }
+    release_reply_voice(state, first, generation).await;
     if success && generation == state.0.coordinator.generation() {
         state.0.mark_foreground_audio(generation);
         true

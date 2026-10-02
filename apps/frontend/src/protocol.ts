@@ -176,12 +176,18 @@ export interface ReplyMessage {
 	text: string;
 	route: string;
 	voiced: boolean;
+	/** The audio utterance its speech starts with (`audio_start`'s
+	 * `sequence`); the page shows the line when that utterance starts to
+	 * play. Absent when no audio carries the reply. */
+	sequence?: number;
 }
 
 /// A line was spoken to the caller and kept in the transcript.
 export interface SpokenMessage {
 	type: "spoken";
 	entry: TranscriptEntry;
+	/** The audio utterance that voices the line, as on `reply`. */
+	sequence?: number;
 }
 
 /// The transcript so far, in every connection's snapshot.
@@ -409,8 +415,13 @@ const MESSAGE_FIELDS: { [Type in MessageType]: MessageFields<Type> } = {
 	routing_unavailable: { message: string },
 	thinking: { route: string, waiting: number },
 	activity: { state: string, tool: string, detail: string, label: string },
-	reply: { text: string, route: string, voiced: boolean },
-	spoken: { entry: transcriptEntry },
+	reply: {
+		text: string,
+		route: string,
+		voiced: boolean,
+		sequence: optional(number),
+	},
+	spoken: { entry: transcriptEntry, sequence: optional(number) },
 	history: { entries: list(transcriptEntry) },
 	audio_start: {
 		generation: number,

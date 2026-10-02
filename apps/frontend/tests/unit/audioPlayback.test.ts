@@ -502,7 +502,7 @@ describe("AudioPlayback streaming", () => {
     }
   }
 
-  function streamingPlayback() {
+  function streamingPlayback(onUtterance?: (sequence: number) => void) {
     const player = fakePlayer();
     player.play = () => {
       player.playCalls.push(player.src);
@@ -515,6 +515,7 @@ describe("AudioPlayback streaming", () => {
       idleText: "idle",
       onStatus: () => {},
       onChange: () => {},
+      onUtterance,
       gapMs: 0,
     });
     playback.setStreamingEnabled(true);
@@ -605,6 +606,26 @@ describe("AudioPlayback streaming", () => {
     expect(playback.isDrained()).toBe(true);
   });
 
+  it("reports each utterance when its turn to play comes (#112)", () => {
+    const reached: number[] = [];
+    const { player, playback } = streamingPlayback((sequence) => reached.push(sequence));
+
+    playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+    playback.receiveAudioChunk(bytes("one"));
+    expect(reached).toEqual([1]);
+    // The next utterance arrives whole while the first still plays.
+    playback.receiveAudioStart({ generation: 0, sequence: 2, mime: "audio/mpeg" });
+    playback.receiveAudioChunk(bytes("two"));
+    playback.receiveAudioDone({ generation: 0, sequence: 2, done: true });
+    expect(reached, "a queued utterance waits its turn").toEqual([1]);
+    player.emit("ended");
+    expect(reached).toEqual([1, 2]);
+
+    // Audio from a leg the call has left never plays.
+    playback.receiveAudioStart({ generation: 5, sequence: 3, mime: "audio/mpeg" });
+    expect(reached).toEqual([1, 2, 3]);
+  });
+
   it("ignores audio stamped with another generation", () => {
     const { player, urls, playback } = streamingPlayback();
     playback.resetForGeneration(4);
@@ -615,6 +636,31 @@ describe("AudioPlayback streaming", () => {
     expect(urls.size, "stale audio creates no source").toBe(createdBefore);
     expect(player.playCalls.length).toBe(0);
     expect(playback.isDrained()).toBe(true);
+  });
+});
+
+describe("AudioPlayback complete replays", () => {
+  it("reports an utterance when its replay starts (#112)", () => {
+    const player = fakePlayer();
+    stubObjectUrls();
+    const reached: number[] = [];
+    const playback = new AudioPlayback({
+      player: player as unknown as HTMLAudioElement,
+      idleText: "idle",
+      onStatus: () => {},
+      onChange: () => {},
+      onUtterance: (sequence) => reached.push(sequence),
+      gapMs: 0,
+    });
+    for (const sequence of [4, 5]) {
+      playback.receiveAudioStart({ generation: 0, sequence, mime: "audio/mpeg" });
+      playback.receiveAudioChunk(new TextEncoder().encode("x").buffer);
+      playback.receiveAudioDone({ generation: 0, sequence, done: true });
+    }
+    expect(reached).toEqual([4]);
+    player.ended = true;
+    player.emit("ended");
+    expect(reached).toEqual([4, 5]);
   });
 });
 
