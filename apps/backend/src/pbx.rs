@@ -71,7 +71,11 @@ const AGENT_BRIEF_END: &str = "[END OF VOICE BRIEF]";
 const FOREGROUND_NOTICE: &str = "[switchboard] The caller brought you forward: you are in the foreground now. speak() is heard directly, display() shows on the caller's screen, and any display you held is on screen now. The caller's words follow.";
 /// Instructions for the separate, stateless process. This is code-owned so
 /// deploying the utility never requires another environment setting.
-const UTILITY_SYSTEM_PROMPT: &str = r#"You are the switchboard's stateless utility process. You never speak to the caller and you never answer general questions. For routing prompts, call exactly one routing tool: second_opinion for one target, dispatch_parts for several targets. When the caller asks for things from two or more registered projects, call dispatch_parts with one part per project and preserve the caller's exact wording in each part. When the request names only one project, call second_opinion. Never invent projects, never emit a prose answer, and never call more than one tool. For a floor rewrite prompt, call rewrite with a natural short spoken version of the supplied message. Speak as one person continuing the conversation. Vary the phrasing, mention the project only when needed for clarity, and keep it short. If the caller has been quiet longer than the floor threshold, a brief natural lead-in may make the project clear. Keep every fact from the agent's message and add none: no new names, numbers, paths, promises, or requests."#;
+const UTILITY_SYSTEM_PROMPT: &str = "You are a background helper on a voice call. You never talk to the caller and never answer questions. Each request needs exactly one tool call. Make it and write nothing else.
+
+[ROUTING REQUEST]: decide where the caller's words go. If one registered project fits, call second_opinion. Set confident only when both the project and the intent are clear. Leave target empty when the caller should be asked. If the caller asks several projects for things at once, call dispatch_parts with one part per project, each part in the caller's own words. If the caller wants to hear or see something a project has waiting, that project is the target. Use mode fresh only when the caller asks to start over. Never invent a project.
+
+[FLOOR REWRITE]: call rewrite with the message the way the caller should hear it next. The message comes from the person they have been talking to all call. Keep its voice and its first person, and never pass it on as news from someone else. Keep every fact and add none. Smooth it so it follows from what was just said, and vary how you start. If the caller has been quiet a while, ease in so they know which work it is about. Never say something is on screen. If a display is held, say it is ready when they want it.";
 #[derive(Clone, Debug, Serialize)]
 pub struct Utterance {
     pub text: String,
@@ -1588,10 +1592,7 @@ impl Switchboard {
             }
         }
         if self.operator.is_none() {
-            let catalog = self
-                .registry
-                .operator_prompt_catalog()
-                .replace("transfer_to_project", "route");
+            let catalog = self.registry.prompt_catalog();
             let argv = local_argv(
                 &self.pi_binary,
                 self.operator_model.as_deref(),
@@ -1629,13 +1630,9 @@ impl Switchboard {
             }
         }
         if self.utility.is_none() {
-            let utility_prompt = format!(
-                "{UTILITY_SYSTEM_PROMPT}\n\n[REGISTERED PROJECTS]\n{}",
-                self.registry.operator_prompt_catalog().replace(
-                    "Available projects for transfer. Use the exact project id with transfer_to_project; aliases are included for recognition.",
-                    "Available projects for the routing utility. Use the exact project id with second_opinion or dispatch_parts; aliases are included for recognition.",
-                )
-            );
+            // The registry is fixed for the life of the service, so the
+            // catalog lives in the system prompt once.
+            let utility_prompt = self.utility_system_prompt();
             let argv = local_argv(
                 &self.pi_binary,
                 self.operator_model.as_deref(),
@@ -1665,42 +1662,39 @@ impl Switchboard {
             .ok_or_else(|| PiSessionError("utility process was not created".into()))
     }
 
-    /// Build a complete routing request instead of relying on the utility's
-    /// system prompt. The utility process is isolated and stateless, so each
-    /// request carries Jev's finding, the exact registered catalog, and the
-    /// caller wording it must preserve in split parts.
+    /// The utility's system prompt: its standing rules and the catalog, once.
+    /// Requests carry only data.
+    fn utility_system_prompt(&self) -> String {
+        format!(
+            "{UTILITY_SYSTEM_PROMPT}\n\n{}",
+            self.registry.prompt_catalog()
+        )
+    }
+
+    /// A routing request is data only: Jev's first read, the call state and
+    /// the caller's words. The rules and the catalog are in the utility's
+    /// system prompt.
     fn utility_routing_request(&self, text: &str, decision: &Decision, retry: bool) -> String {
         let target = decision.target.as_deref().unwrap_or("(none)");
-        let projects = self.registry.operator_prompt_catalog().replace(
-            "Available projects for transfer. Use the exact project id with transfer_to_project; aliases are included for recognition.",
-            "Registered projects (use exact ids; never invent projects):",
-        );
-        let instruction = if retry {
-            "This request names several projects; split it with dispatch_parts or answer that it names only one. Do not route the whole utterance to one project. Use one part per registered project and preserve the exact caller wording in each part."
-        } else {
-            "When the caller asks for things from two or more registered projects, call dispatch_parts with one part per project and preserve the exact caller wording for each part. If it names only one project, call second_opinion. Never invent projects."
-        };
         let call_state = if self.call_state.is_empty() {
             String::new()
         } else {
             format!("[CALL STATE]\n{}\n", self.call_state)
         };
+        let retry = if retry {
+            "\nThis names more than one project. Split it with dispatch_parts, unless it really names only one."
+        } else {
+            ""
+        };
         format!(
-            "[ROUTING REQUEST]
-Jev found: action={}, target={}, multi_target={}, unsure={}.
-{}
-{}[CALLER WORDING]
-{}
-[INSTRUCTION]
-{} If the caller asks to see or hear something an agent on the call has waiting or ready, that agent is the target. Use mode fresh only when the caller asks to start over.",
+            "[ROUTING REQUEST]\nFirst read: action={}, target={}, several projects={}, unsure={}.\n{}[CALLER WORDING]\n{}{}",
             decision.action.as_str(),
             target,
             decision.multi_target,
             decision.unsure,
-            projects.trim_end(),
             call_state,
             text,
-            instruction,
+            retry,
         )
     }
 
@@ -1734,12 +1728,12 @@ Jev found: action={}, target={}, multi_target={}, unsure={}.
         input: &FloorRewriteInput,
     ) -> Result<Option<String>, PiSessionError> {
         let context = if input.context.trim().is_empty() {
-            "(no recent conversation)"
+            "(none)"
         } else {
             input.context.trim()
         };
         let prompt = format!(
-            "[FLOOR REWRITE]\nProject: {project}\nReason: {reason}\nCaller quiet longer than floor threshold: {quiet}\nHeld display not yet seen by caller: {held_display}\n[RECENT CONVERSATION]\n{context}\n[AGENT MESSAGE]\n{message}\n[INSTRUCTION]\nRewrite the agent message as a short, natural spoken continuation, the way one person would bring it up in this conversation. Vary the phrasing and avoid stock openers. If the caller has been quiet a while, ease in so they know which project this is; otherwise name the project only when it is not obvious from the conversation. Never claim anything is on screen. If a display is held, say it is ready to show when the caller wants it. Keep every fact and add none. Call rewrite with only the spoken rewrite.",
+            "[FLOOR REWRITE]\nWork: {project}\nKind: {reason}\nCaller quiet a while: {quiet}\nDisplay held: {held_display}\n[RECENT CONVERSATION]\n{context}\n[MESSAGE]\n{message}",
             project = input.project,
             reason = input.reason,
             quiet = if input.quiet { "yes" } else { "no" },

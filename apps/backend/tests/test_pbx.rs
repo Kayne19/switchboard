@@ -735,7 +735,7 @@ async fn multi_target_jev_that_never_splits_is_handled_by_operator() {
 }
 
 #[test]
-fn multi_target_utility_request_includes_jev_hint_projects_and_caller_words() {
+fn multi_target_utility_request_carries_only_jev_hint_and_caller_words() {
     let board = board_with(
         vec![
             project("grape-segmentation", "Grape"),
@@ -758,14 +758,49 @@ fn multi_target_utility_request_includes_jev_hint_projects_and_caller_words() {
         },
         false,
     );
-    assert!(request.contains("multi_target=true"));
+    assert!(request.contains("several projects=true"));
     assert!(request.contains("action=continue"));
     assert!(request.contains("target=grape-segmentation"));
-    assert!(request.contains("grape-segmentation"));
-    assert!(request.contains("switchboard"));
-    assert!(request.contains("dispatch_parts"));
     assert!(request.contains("grape answer and switchboard answer"));
-    assert!(request.contains("never invent projects"));
+    // The rules and the catalog live once, in the utility's system prompt.
+    assert!(!request.contains("Registered projects"), "{request}");
+    assert!(!request.contains("Never invent"), "{request}");
+    let retry = board.utility_routing_request(
+        "grape answer and switchboard answer",
+        &Decision {
+            action: crate::router::Action::Continue,
+            target: None,
+            continue_or_fresh: None,
+            confidence: 0.5,
+            for_current_agent: 0.5,
+            multi_target: true,
+            unsure: true,
+            confirm: false,
+            reason: "two projects".into(),
+        },
+        true,
+    );
+    assert!(retry.contains("dispatch_parts"), "{retry}");
+}
+
+#[test]
+fn the_utility_system_prompt_holds_the_rules_and_the_catalog_once() {
+    let board = board_with(
+        vec![
+            project("grape-segmentation", "Grape"),
+            project("switchboard", "Switchboard"),
+        ],
+        true,
+    );
+    let prompt = board.utility_system_prompt();
+    assert!(prompt.contains("[ROUTING REQUEST]"), "{prompt}");
+    assert!(prompt.contains("[FLOOR REWRITE]"), "{prompt}");
+    assert!(prompt.contains("dispatch_parts"), "{prompt}");
+    assert!(prompt.contains("Never say something is on screen"), "{prompt}");
+    assert!(prompt.contains("say it is ready when they want it"), "{prompt}");
+    assert!(prompt.contains("- grape-segmentation - Grape"), "{prompt}");
+    assert!(prompt.contains("- switchboard - Switchboard"), "{prompt}");
+    assert_eq!(prompt.matches("Registered projects").count(), 1, "{prompt}");
 }
 
 #[cfg(unix)]

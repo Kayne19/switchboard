@@ -5304,9 +5304,10 @@ done
         .await
         .expect("rewrite reached the utility");
     let prompt = rewrite_prompt.lock().unwrap().clone();
-    assert!(prompt.contains("Held display not yet seen by caller: yes"));
-    assert!(prompt.contains("Never claim anything is on screen"));
-    assert!(prompt.contains("ready to show when the caller wants it"));
+    assert!(prompt.contains("Display held: yes"), "{prompt}");
+    // The rules for a held display live in the utility's system prompt; the
+    // request carries only the data.
+    assert!(!prompt.contains("on screen"), "{prompt}");
     crate::pi_client::set_prompt_hook_for_test(None);
 
     // The foreground turn path can acquire the PBX lock while the utility is

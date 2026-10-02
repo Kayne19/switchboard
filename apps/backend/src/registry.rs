@@ -256,9 +256,12 @@ impl Registry {
         }
     }
 
-    pub fn operator_prompt_catalog(&self) -> String {
+    /// The registered projects as the operator and the routing utility read
+    /// them. It names no tool and no host path: both readers speak to the
+    /// caller or feed a speaker, and neither needs a path.
+    pub fn prompt_catalog(&self) -> String {
         let mut prompt = String::from(
-            "Available projects for transfer. Use the exact project id with transfer_to_project; aliases are included for recognition.\n",
+            "Registered projects. Use the exact id; the names in brackets are other ways the caller may say it.\n",
         );
         if self.projects.is_empty() {
             prompt.push_str("- No projects are currently configured.\n");
@@ -268,16 +271,11 @@ impl Registry {
             let aliases = if project.aliases.is_empty() {
                 String::new()
             } else {
-                format!(" (also: {})", project.aliases.join(", "))
+                format!(" ({})", project.aliases.join(", "))
             };
-            let location = format!(
-                "{}:{}",
-                project.canonical_host().unwrap_or("no host"),
-                project.cwd
-            );
             let _ = writeln!(
                 prompt,
-                "- {}{} - {} [{}]",
+                "- {}{} - {}",
                 project.id,
                 aliases,
                 if project.description.is_empty() {
@@ -285,7 +283,6 @@ impl Registry {
                 } else {
                     &project.description
                 },
-                location
             );
         }
         prompt
