@@ -273,6 +273,16 @@
       }
     },
     {
+      "name": "reply_voiced_with_its_audio",
+      "message": {
+        "type": "reply",
+        "text": "Putting you through to alpha.",
+        "route": "operator",
+        "voiced": true,
+        "sequence": 7
+      }
+    },
+    {
       "name": "spoken",
       "message": {
         "type": "spoken",
@@ -280,6 +290,20 @@
           "role": "agent",
           "text": "Running the tests now.",
           "route": "alpha",
+          "ts": 1758844800.25,
+          "voiced": true
+        },
+        "sequence": 12
+      }
+    },
+    {
+      "name": "spoken_without_audio",
+      "message": {
+        "type": "spoken",
+        "entry": {
+          "role": "agent",
+          "text": "You hung up the line to alpha. You're back with the operator.",
+          "route": "operator",
           "ts": 1758844800.25,
           "voiced": true
         }

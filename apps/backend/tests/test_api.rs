@@ -291,6 +291,7 @@ async fn speech_worker_stitches_same_group_and_resets_unrelated_group() {
             group,
             log_spoken: false,
         },
+        None,
     )
     .await
     .expect("first line should be spoken");
@@ -309,6 +310,7 @@ async fn speech_worker_stitches_same_group_and_resets_unrelated_group() {
             group,
             log_spoken: false,
         },
+        None,
     )
     .await
     .expect("same-group continuation should be spoken");
@@ -329,6 +331,7 @@ async fn speech_worker_stitches_same_group_and_resets_unrelated_group() {
             group: unrelated,
             log_spoken: false,
         },
+        None,
     )
     .await
     .expect("unrelated line should start fresh");
@@ -450,7 +453,7 @@ async fn speech_worker_duplicate_text_failure_keeps_newer_pending_drain() {
     let first = tokio::spawn({
         let state = state.clone();
         let admission = admission(ContinuationScope::FreshTurn);
-        async move { queue_speech(&state, admission).await }
+        async move { queue_speech(&state, admission, None).await }
     });
     timeout(Duration::from_secs(1), gate.wait_started())
         .await
@@ -458,7 +461,7 @@ async fn speech_worker_duplicate_text_failure_keeps_newer_pending_drain() {
     let second = tokio::spawn({
         let state = state.clone();
         let admission = admission(ContinuationScope::ContinueCurrentTurn);
-        async move { queue_speech(&state, admission).await }
+        async move { queue_speech(&state, admission, None).await }
     });
     timeout(Duration::from_secs(1), gate.wait_started())
         .await
@@ -820,6 +823,200 @@ async fn stale_final_response_does_not_emit_a_barrier() {
         events.try_recv(),
         Err(broadcast::error::TryRecvError::Empty)
     ));
+}
+
+// A line on the wire names the audio utterance that voices it, so the page
+// can show it when that utterance starts to play rather than when the line
+// arrives (#112).
+
+/// A call whose speech synthesis succeeds, with its speech worker running.
+fn speaking_state() -> AppState {
+    let config = crate::Config::for_tests(&[]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    let state = AppState::new(
+        Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
+        TranscriptLog::new(10),
+        Speaker::test_success(100, Duration::from_millis(25_000)),
+        SttAdapter::from_command(None),
+        SttStreamAdapter::from_command(None),
+    );
+    start_speech_worker_for_test(&state);
+    state
+}
+
+fn voiced_reply(text: &str, to_speak: &[&str]) -> crate::pbx::Reply {
+    crate::pbx::Reply {
+        text: text.into(),
+        route: OPERATOR.into(),
+        route_label: "Operator".into(),
+        error: None,
+        to_speak: to_speak.iter().map(|line| (*line).to_owned()).collect(),
+        voiced: !to_speak.is_empty(),
+        delivery_generation: None,
+    }
+}
+
+/// Frames up to and including the first of type `until`, as the browser
+/// reads them, audio markers included.
+async fn wire_frames_until(connection: &mut DeliveryConnection, until: &str) -> Vec<Value> {
+    let mut frames = Vec::new();
+    loop {
+        let frame = timeout(Duration::from_secs(2), connection.receiver.recv())
+            .await
+            .expect("a frame before the deadline")
+            .expect("an open connection");
+        let value = match frame {
+            DeliveryFrame::Event {
+                event: Event::AudioStart { sequence, .. },
+                ..
+            } => json!({"type": "audio_start", "sequence": sequence}),
+            DeliveryFrame::Event {
+                event: Event::AudioDone { sequence, .. },
+                ..
+            } => json!({"type": "audio_done", "sequence": sequence}),
+            frame => match frame_json(frame) {
+                Some(value) => value,
+                None => continue,
+            },
+        };
+        let done = value["type"] == until;
+        frames.push(value);
+        if done {
+            return frames;
+        }
+    }
+}
+
+/// The sequences of the utterances that started, in order.
+fn audio_starts(frames: &[Value]) -> Vec<u64> {
+    frames
+        .iter()
+        .filter(|frame| frame["type"] == "audio_start")
+        .map(|frame| frame["sequence"].as_u64().unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn each_spoken_line_names_the_utterance_that_voices_it() {
+    let state = speaking_state();
+    let (mut connection, _, _) = state.register_connection().await;
+
+    for text in ["First line.", "Second line."] {
+        let (code, _) = agent_call_json(&state, "/speak", json!({"text": text})).await;
+        assert_eq!(code, StatusCode::OK);
+    }
+
+    let mut frames = wire_frames_until(&mut connection, "spoken").await;
+    frames.extend(wire_frames_until(&mut connection, "spoken").await);
+    let starts = audio_starts(&frames);
+    assert_eq!(starts.len(), 2, "{frames:#?}");
+    let spoken: Vec<(&Value, &Value)> = frames
+        .iter()
+        .filter(|frame| frame["type"] == "spoken")
+        .map(|frame| (&frame["entry"]["text"], &frame["sequence"]))
+        .collect();
+    assert_eq!(
+        spoken,
+        [
+            (&json!("First line."), &json!(starts[0])),
+            (&json!("Second line."), &json!(starts[1])),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_voiced_reply_names_the_utterance_its_speech_starts_with() {
+    let state = speaking_state();
+    let (mut connection, _, _) = state.register_connection().await;
+    let generation = state.0.coordinator.generation();
+    let reply = voiced_reply("First part. Second part.", &["First part.", "Second part."]);
+
+    assert!(deliver_turn_if_current(&state, &reply, generation, "clip-1").await);
+
+    let frames = wire_frames_until(&mut connection, "final_response_audio_closed").await;
+    let starts = audio_starts(&frames);
+    assert_eq!(starts.len(), 2, "{frames:#?}");
+    let reply = frames
+        .iter()
+        .find(|frame| frame["type"] == "reply")
+        .expect("the reply is announced");
+    assert_eq!(reply["sequence"], starts[0], "{frames:#?}");
+    // The announcement comes before the audio it names.
+    let position = |kind: &str| frames.iter().position(|frame| frame["type"] == kind);
+    assert!(position("reply") < position("audio_start"), "{frames:#?}");
+}
+
+#[tokio::test]
+async fn a_voiced_page_reply_names_the_utterance_its_speech_starts_with() {
+    let state = speaking_state();
+    let (mut connection, _, _) = state.register_connection().await;
+    let generation = state.0.coordinator.generation();
+    let reply = voiced_reply("Putting you through.", &["Putting you through."]);
+
+    assert!(deliver_page_reply_if_current(&state, &reply, generation).await);
+
+    let frames = wire_frames_until(&mut connection, "audio_done").await;
+    let spoken = frames
+        .iter()
+        .find(|frame| frame["type"] == "spoken")
+        .expect("the reply is told to the caller");
+    assert_eq!(
+        spoken["sequence"],
+        json!(audio_starts(&frames)[0]),
+        "{frames:#?}"
+    );
+}
+
+#[tokio::test]
+async fn a_reply_with_nothing_to_say_aloud_names_no_utterance() {
+    let state = speaking_state();
+    let (mut connection, _, _) = state.register_connection().await;
+    let generation = state.0.coordinator.generation();
+    let reply = voiced_reply("   ", &["   "]);
+
+    assert!(deliver_turn_if_current(&state, &reply, generation, "clip-1").await);
+
+    let frames = wire_frames_until(&mut connection, "final_response_audio_closed").await;
+    let reply = frames
+        .iter()
+        .find(|frame| frame["type"] == "reply")
+        .unwrap();
+    assert!(reply.get("sequence").is_none(), "{reply}");
+    assert!(audio_starts(&frames).is_empty(), "{frames:#?}");
+}
+
+#[tokio::test]
+async fn a_reply_superseded_after_its_utterance_was_reserved_leaves_no_slot_open() {
+    let state = speaking_state();
+    let generation = state.0.coordinator.generation();
+    let reply = voiced_reply("Too late.", &["Too late."]);
+    // Hold the delivery gate so the rescue lands after the reservation.
+    let gate = state.0.operation_transition.lock().await;
+    let delivery = tokio::spawn({
+        let state = state.clone();
+        async move { deliver_turn_if_current(&state, &reply, generation, "clip-1").await }
+    });
+    timeout(Duration::from_secs(1), async {
+        while state.0.audio.lock().await.slots.is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the reply reserves its first utterance before the gate");
+    state.0.coordinator.begin_rescue("test rescue");
+    drop(gate);
+
+    assert!(!delivery.await.unwrap());
+    assert!(
+        state.0.audio.lock().await.slots.is_empty(),
+        "a reserved slot left open holds back every later utterance"
+    );
+    assert!(state.0.transcript_log.lock().await.entries().is_empty());
 }
 
 #[tokio::test]
