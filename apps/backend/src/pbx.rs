@@ -2254,7 +2254,7 @@ impl Switchboard {
     ) -> Reply {
         let Some(project) = self.registry.get(target).cloned() else {
             return self.reply_transfer_error(
-                format!("I don't have a project called {target}."),
+                self.unknown_project_line(target),
                 Some(format!("unknown project {target:?}")),
             );
         };

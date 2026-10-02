@@ -803,6 +803,16 @@ fn the_operator_and_the_utility_get_the_same_voice_block_and_persona() {
     }
 }
 
+#[tokio::test]
+async fn a_takeover_of_an_unknown_project_names_the_ones_there_are() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let reply = board.take_over("take over gamma", "gamma", Ok(None)).await;
+    assert_eq!(
+        reply.to_speak,
+        ["I don't have a project called gamma. The ones I have are alpha, beta."]
+    );
+}
+
 #[test]
 fn an_empty_persona_leaves_the_character_out() {
     let board = board_with(vec![project("alpha", "Alpha project")], false);
