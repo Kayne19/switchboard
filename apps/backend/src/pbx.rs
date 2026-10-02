@@ -58,6 +58,20 @@ pub type ForegroundClosedCallback =
 pub type AgentStateCallback =
     Arc<dyn Fn(AgentStateNotice) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
+/// How anyone on the call talks. One code-owned text, followed by the
+/// persona: the operator's and the utility's system prompts and every voice
+/// brief carry the same two, so the caller hears one person all call.
+const CALL_VOICE: &str = "[HOW YOU TALK ON THE CALL]
+The caller hears one person for the whole call: you. Whatever part of the work you are on, it is the same character and the same voice. Treat all of the work as your own. Do not talk about other agents, sessions, an operator, models, tools or processes. If you have help, keep it out of sight, or at most mention it in passing, in character.
+
+Match the moment. Most of the call is work. When the caller asks for something, acknowledge it and do it. Don't repeat the request, recite the plan or keep up a running commentary. Speak again when something changed, when you need a decision, or when you're asked. Never tell them what they already know or expect.
+
+When the caller wants to talk something through, be a real partner in it, not a voice waiting for the next order. Bring substance: your own read, opinions, tradeoffs, pushback, ideas they haven't raised, and the question that moves it forward. Take the time the topic needs, and help steer where the discussion goes. Keep status short. Thinking out loud together gets as much room as it needs.
+
+Show, don't tell. When you can put things on the caller's screen, say the short version out loud and put the detail on the screen. Keep the screen as clean as your speech. Take things down once they have done their job, when the topic moves on or the decision is made. Don't take them down as soon as your turn ends, because the caller may still be reading.
+
+Give bad news straight: say what broke and what it means, with no apologies as padding. If the caller cuts in, drop what you were saying and answer the new thing.";
+
 /// The voice brief's opening. The brief rides at the start of the first
 /// prompt a project session gets for the caller, and again on the first after
 /// a compaction; it is never a message of its own.
@@ -1592,12 +1606,12 @@ impl Switchboard {
             }
         }
         if self.operator.is_none() {
-            let catalog = self.registry.prompt_catalog();
+            let appended = self.operator_prompt_suffix();
             let argv = local_argv(
                 &self.pi_binary,
                 self.operator_model.as_deref(),
                 Some(std::path::Path::new(&self.operator_system_prompt)).filter(|p| p.exists()),
-                Some(&catalog),
+                Some(&appended),
                 self.operator_extension.as_deref(),
                 &["--no-builtin-tools".into(), "--no-session".into()],
             )?;
@@ -1662,12 +1676,23 @@ impl Switchboard {
             .ok_or_else(|| PiSessionError("utility process was not created".into()))
     }
 
+    /// What the service appends to the operator's system prompt: the shared
+    /// voice block with the persona, then the catalog.
+    fn operator_prompt_suffix(&self) -> String {
+        format!(
+            "{}\n\n{}",
+            self.voice_block(),
+            self.registry.prompt_catalog()
+        )
+    }
+
     /// The utility's system prompt: its standing rules and the catalog, once.
     /// Requests carry only data.
     fn utility_system_prompt(&self) -> String {
         format!(
-            "{UTILITY_SYSTEM_PROMPT}\n\n{}",
-            self.registry.prompt_catalog()
+            "{UTILITY_SYSTEM_PROMPT}\n\n{}\n\n{}",
+            self.registry.prompt_catalog(),
+            self.voice_block()
         )
     }
 
@@ -2537,6 +2562,12 @@ impl Switchboard {
         }
     }
 
+    /// The shared voice block with the persona after it. An empty persona
+    /// leaves the character part out.
+    fn voice_block(&self) -> String {
+        voice_block(&self.persona)
+    }
+
     /// The voice brief: how to reach the caller through the `switchboard`
     /// module, and where they can be sent.
     fn agent_brief(&self, project: &Project) -> String {
@@ -2945,6 +2976,16 @@ fn is_confirmation(text: &str) -> bool {
         text.trim().to_ascii_lowercase().as_str(),
         "yes" | "yeah" | "yep" | "confirm" | "do it" | "stop it"
     )
+}
+
+/// `CALL_VOICE` joined with the persona, or alone when there is none.
+fn voice_block(persona: &str) -> String {
+    let persona = persona.trim();
+    if persona.is_empty() {
+        CALL_VOICE.to_owned()
+    } else {
+        format!("{CALL_VOICE}\n\nCharacter:\n{persona}")
+    }
 }
 
 /// A reply the switchboard speaks itself, labelled with the leg the

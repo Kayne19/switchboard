@@ -784,6 +784,37 @@ fn multi_target_utility_request_carries_only_jev_hint_and_caller_words() {
 }
 
 #[test]
+fn the_operator_and_the_utility_get_the_same_voice_block_and_persona() {
+    let board = board_on(
+        vec![project("alpha", "Alpha project")],
+        &[("SWITCHBOARD_PERSONA", "Gruff and short.")],
+        two_model_catalog(),
+    );
+    let operator = board.operator_prompt_suffix();
+    let utility = board.utility_system_prompt();
+    for prompt in [&operator, &utility] {
+        assert_eq!(
+            prompt.matches("[HOW YOU TALK ON THE CALL]").count(),
+            1,
+            "{prompt}"
+        );
+        assert!(prompt.contains("Character:\nGruff and short."), "{prompt}");
+        assert!(prompt.contains("- alpha - Alpha project"), "{prompt}");
+    }
+}
+
+#[test]
+fn an_empty_persona_leaves_the_character_out() {
+    let board = board_with(vec![project("alpha", "Alpha project")], false);
+    let operator = board.operator_prompt_suffix();
+    assert!(
+        operator.contains("[HOW YOU TALK ON THE CALL]"),
+        "{operator}"
+    );
+    assert!(!operator.contains("Character:"), "{operator}");
+}
+
+#[test]
 fn the_utility_system_prompt_holds_the_rules_and_the_catalog_once() {
     let board = board_with(
         vec![
@@ -796,8 +827,14 @@ fn the_utility_system_prompt_holds_the_rules_and_the_catalog_once() {
     assert!(prompt.contains("[ROUTING REQUEST]"), "{prompt}");
     assert!(prompt.contains("[FLOOR REWRITE]"), "{prompt}");
     assert!(prompt.contains("dispatch_parts"), "{prompt}");
-    assert!(prompt.contains("Never say something is on screen"), "{prompt}");
-    assert!(prompt.contains("say it is ready when they want it"), "{prompt}");
+    assert!(
+        prompt.contains("Never say something is on screen"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("say it is ready when they want it"),
+        "{prompt}"
+    );
     assert!(prompt.contains("- grape-segmentation - Grape"), "{prompt}");
     assert!(prompt.contains("- switchboard - Switchboard"), "{prompt}");
     assert_eq!(prompt.matches("Registered projects").count(), 1, "{prompt}");
