@@ -23,6 +23,29 @@ trusted network: it can contain caller text, prompts, project activity, and
 logs. There is no authentication and no disk history. The event and log rings
 are bounded and memory-only.
 
+## The page
+
+The source is `apps/frontend/src/debug/` (entry `apps/frontend/debug/index.html`).
+`npm run build` builds it with `apps/frontend/vite.debug.config.ts` into
+`static-debug/`, after the main build. Commit the output in the same change.
+`npm run dev:debug` serves it on port 4174 and proxies `/ws` to
+`SWITCHBOARD_DEBUG_ORIGIN` (default `ws://127.0.0.1:8766`).
+
+- `protocol.ts` parses frames. It rejects an unknown frame type or a malformed
+  event and counts it in the top bar. It keeps a numbered event of an unknown
+  kind raw, in the raw log tab.
+- `reducer.ts` folds frames into route traces per `utterance_id`, one pane per
+  agent, floor traces, turns, and logs. A snapshot replaces the projection.
+  Frames at or below the newest seen seq are dropped. A seq gap still open
+  after 2 seconds makes the page reconnect for a fresh snapshot.
+- `connection.ts` reconnects with backoff from 0.5 s up to 10 s.
+- A pane item or log line from a record with `"clipped": true` shows a
+  `clipped` tag.
+
+`?fixture=1` plays the shared fixture and then a scripted call, with no
+listener. `&instant=1` applies it all at once, `&speed=N` changes the pace,
+`&select=<utterance_id>` opens a trace, and `&tab=` picks a tab.
+
 ## WebSocket framing
 
 The page connects to `/ws` on the debug listener. The page sends nothing; the
