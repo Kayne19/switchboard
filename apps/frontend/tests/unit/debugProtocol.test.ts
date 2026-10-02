@@ -57,6 +57,17 @@ describe('debug protocol parser', () => {
     }
   });
 
+  it('reports the seq of a refused numbered frame so the stream can skip it', () => {
+    expect(parseDebugFrame(JSON.stringify({ type: 'event', seq: 6, timestamp_ms: 1, kind: 'speech', agent: 'a', delivered: true }))).toEqual({
+      ok: false,
+      error: 'speech.text is missing',
+      seq: 6,
+    });
+    expect(parseDebugFrame(JSON.stringify({ type: 'log', seq: 7, timestamp_ms: 1, level: 3, target: 't', message: 'm' }))).toMatchObject({ ok: false, seq: 7 });
+    expect(parseDebugFrame(JSON.stringify({ type: 'event', seq: 1.5, timestamp_ms: 1, kind: 'host_link' }))).toEqual({ ok: false, error: 'seq is not an integer' });
+    expect(parseDebugFrame('not json')).toEqual({ ok: false, error: 'frame is not JSON' });
+  });
+
   it('keeps an event of an unknown kind raw, and skips bad snapshot entries', () => {
     const unknown = parseDebugFrame(JSON.stringify({ type: 'event', seq: 4, timestamp_ms: 2, kind: 'from_the_future', x: 1 }));
     expect(unknown).toEqual({

@@ -53,11 +53,14 @@ describe('debug feed connection', () => {
     sockets[0].send(JSON.stringify({ type: 'log', seq: 1, timestamp_ms: 1, level: 'INFO', target: 't', message: 'a', fields: {} }));
     sockets[0].send(JSON.stringify({ type: 'log', seq: 2, timestamp_ms: 1, level: 'INFO', target: 't', message: 'b', fields: {} }));
     sockets[0].send('{"type":"bogus"}');
+    sockets[0].send(JSON.stringify({ type: 'event', seq: 3, timestamp_ms: 1, kind: 'host_link', host: 'h', connected: 'yes' }));
     expect(batches).toHaveLength(0);
     expect(ticks).toHaveLength(1);
     ticks[0]();
     expect(batches).toHaveLength(1);
-    expect(batches[0].map((frame) => (frame.type === 'snapshot' ? -1 : frame.seq))).toEqual([1, 2]);
+    expect(batches[0].map((frame) => (frame.type === 'snapshot' ? -1 : frame.seq))).toEqual([1, 2, 3]);
+    // The malformed numbered event is passed on as a skip; the reducer counts it.
+    expect(batches[0][2]).toEqual({ type: 'skipped', seq: 3, error: 'host_link.connected is not boolean' });
     expect(rejected).toEqual(['unknown frame type "bogus"']);
     sockets[0].drop();
     expect(statuses).toEqual(['connecting', 'live', 'reconnecting']);

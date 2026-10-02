@@ -6,7 +6,7 @@ import type { AgentPane as Pane, PaneItem } from './reducer';
 
 const PAGE = 250;
 // Context the agent was given rather than words from the caller: folded.
-const COLLAPSED_SOURCES = new Set(['intro', 'brief', 'call_state', 'autonomous', 'routing_request', 'floor_rewrite', 'model_change']);
+export const COLLAPSED_SOURCES = new Set(['intro', 'brief', 'routing_request', 'floor_rewrite', 'model_change']);
 const MODULE_GLYPHS: Record<string, string> = { speak: '◉', display: '▣', request_to_speak: '⚑', view: '◎' };
 
 export interface PaneSelect {
@@ -196,10 +196,18 @@ const Item = memo(function Item({ item, color, select, lit }: { item: PaneItem; 
             <span className="tool-time">{item.done ? formatMs(item.latencyMs) : 'thinking…'}</span>
           </div>
           {item.purpose === 'rewrite' ? (
-            <div className="pi-text">
-              <s className="muted">{item.prompt}</s>
-              <br />→ {typeof item.decision === 'string' ? item.decision : preview(item.decision)}
-            </div>
+            <>
+              <div className="pi-text">
+                <s className="muted">{item.prompt}</s>
+                <br />→ {typeof item.decision === 'string' ? item.decision : preview(item.decision)}
+              </div>
+              {item.input && (
+                <details className="pi-prompt">
+                  <summary className="muted">prompt</summary>
+                  <pre className="pre-wrap">{item.input}</pre>
+                </details>
+              )}
+            </>
           ) : (
             <>
               {item.prompt && (

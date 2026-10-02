@@ -33,7 +33,7 @@ const CallerEntry = memo(function CallerEntry({
     return (
       <button
         type="button"
-        className={`ci ci-utt${active ? ' active' : ''}${path.pending ? ' pending' : ''}`}
+        className={`ci ci-utt${active ? ' active' : ''}${path.pending ? ' pending' : ''}${path.ended ? ' ended' : ''}`}
         data-anchor={`utt-${trace.id}`}
         onClick={() => select.trace(trace.id)}
       >
@@ -55,6 +55,11 @@ const CallerEntry = memo(function CallerEntry({
             </span>
           ))}
           {path.pending && <span className="chip chip-pending">routing…</span>}
+          {path.ended && (
+            <span className="chip chip-ended" title={path.ended.reason}>
+              ✕ {path.ended.label}
+            </span>
+          )}
         </div>
       </button>
     );
@@ -196,6 +201,8 @@ function StageColumns({ state, focus, floorFocus }: { state: DebugState; focus?:
                 {focus.decision && <div className="kv">{focus.decision.action}</div>}
                 {focus.decision && <div className="kv dim">{focus.decision.rule}</div>}
               </>
+            ) : focus?.jevRequest && path?.ended ? (
+              <div className="kv dim">no answer · {path.ended.label}</div>
             ) : focus?.jevRequest ? (
               <div className="kv blink">asking…</div>
             ) : (
@@ -340,6 +347,8 @@ interface DrawnRoute {
   motion: string[];
   end?: Point;
   pending: boolean;
+  /** A trace the service ended with no destination: drawn with a stop mark. */
+  ended?: string;
 }
 
 function stageColor(stage: 'caller' | Stage): string {
@@ -387,7 +396,7 @@ function traceRoute(trace: RouteTrace, g: Geometry, lane: number, order: readonl
   }
   const last = spine[spine.length - 1];
   if (path.pending) motion.push(chain(spine));
-  return { id: trace.id, kind: 'trace', wires, motion, end: path.pending ? last : undefined, pending: path.pending };
+  return { id: trace.id, kind: 'trace', wires, motion, end: path.pending || path.ended ? last : undefined, pending: path.pending, ended: path.ended?.label };
 }
 
 /**
@@ -558,6 +567,12 @@ function RouteOverlay({
                   ) : null,
                 )}
               {route.pending && route.end && <circle className="pending-ring" cx={route.end.x} cy={route.end.y} r={6} />}
+              {route.ended && route.end && (
+                <g className="end-mark" transform={`translate(${route.end.x.toFixed(1)},${route.end.y.toFixed(1)})`}>
+                  <title>{route.ended}</title>
+                  <path d="M-5,-5 L5,5 M5,-5 L-5,5" />
+                </g>
+              )}
             </g>
           );
         })}

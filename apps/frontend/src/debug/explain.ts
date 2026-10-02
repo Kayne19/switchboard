@@ -1,26 +1,39 @@
 // Plain words for the routing decisions the debug page shows.
 import type { DebugConfig, JsonValue } from './protocol';
 
-const RULES: Record<string, string> = {
-  stayed_with_current:
-    'Jev was sure the caller is still talking to the current agent (for_current_agent at or above the upper threshold), so the line stayed where it was.',
-  jev_action: 'Jev’s action answer met the action threshold, so the PBX acted on Jev’s answer directly.',
-  asked_llm:
-    'Jev was unsure (for_current_agent between the lower and upper thresholds, or action confidence below the action threshold), so the decision went to the utility LLM.',
-  jev_unavailable: 'Jev did not answer (timeout or error), so the router used its explicit fallback.',
+// One sentence for every value the service emits. The lists are the Rust
+// `RouteRule::as_str` (router.rs) and the `pbx_branch` branches (pbx.rs,
+// api.rs); `debugExplain.test.ts` reads those sources and fails on a gap.
+export const RULES: Record<string, string> = {
   stop_confirms: 'Stopping a project always asks the caller to confirm, whatever the confidence.',
+  stayed_with_current:
+    'On a project, Jev was sure the caller is still talking to the current agent (for_current_agent at or above the upper threshold), so the line stayed where it was.',
+  current_agent_unsure:
+    'On a project, Jev was unsure whether the caller is still talking to the current agent (for_current_agent between the lower and upper thresholds), so the routing utility gives a second opinion.',
+  action_below_threshold: 'Jev’s action confidence was below the action threshold, so the routing utility gives a second opinion.',
+  jev_action: 'Jev’s action confidence met the action threshold, so the PBX acted on Jev’s answer directly.',
+  jev_unavailable: 'Jev gave no usable answer (timeout, error, or an invalid answer), so the router used its explicit fallback.',
 };
 
-const BRANCHES: Record<string, string> = {
+export const BRANCHES: Record<string, string> = {
   stop_confirmed: 'The caller confirmed a stop; the project leg is ended.',
-  stop_asked: 'A stop was requested; the operator asks the caller to confirm first.',
-  take_over: 'The caller takes over the waiting agent’s pending request.',
+  stop_asked: 'A stop was requested; the switchboard asks the caller to confirm first.',
+  take_over: 'The caller takes over a desk session.',
   answer_waiting: 'The caller is answering an agent that is waiting on them.',
-  utility: 'The PBX asked the utility LLM for a second opinion or a split.',
-  multi_unresolved_to_operator: 'The utility could not resolve the target, so the operator (front desk) handles it.',
+  utility: 'The PBX asked the routing utility for a second opinion or a split.',
+  multi_unresolved: 'The routing utility could not split a multi-target line, so the operator asks the caller.',
   go_to_project: 'A transfer to a project leg.',
-  continue_current: 'The utterance continues on the current leg.',
-  operator: 'The operator (front desk) handles the utterance.',
+  continue_current: 'The line continues on the current leg.',
+  operator: 'The operator (front desk) handles the line.',
+  refused_unknown_target: 'The chosen target is not a registered project, so the line went back to the operator.',
+  dropped_stale: 'A newer generation discarded this line before it was acted on; its trace ends here.',
+  failed: 'The routing task failed before the line reached anyone; its trace ends here.',
+};
+
+/** Branches that end a trace with no `routed` after them. */
+export const TERMINAL_BRANCHES: Record<string, string> = {
+  dropped_stale: 'dropped (stale generation)',
+  failed: 'failed',
 };
 
 export function ruleText(rule: string): string {
@@ -91,7 +104,7 @@ export function answerRows(answers: JsonValue, config: DebugConfig | null): Answ
         noul >= upper
           ? `${noul.toFixed(2)} ≥ upper ${upper.toFixed(2)}: stays with the current agent`
           : noul > lower
-            ? `${noul.toFixed(2)} between ${lower.toFixed(2)} and ${upper.toFixed(2)}: unsure, ask the LLM`
+            ? `${noul.toFixed(2)} between ${lower.toFixed(2)} and ${upper.toFixed(2)}: unsure, ask the utility`
             : `${noul.toFixed(2)} ≤ lower ${lower.toFixed(2)}: not for the current agent`;
     }
     if (question === 'multi_target' && noul !== undefined) {

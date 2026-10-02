@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import fixture from '../fixtures/debug-events.json';
 import { fixtureFrames, scriptedCall } from '../../src/debug/demo';
 import type { DebugEvent, DebugFrame } from '../../src/debug/protocol';
-import { initialDebugState, reduceFrame, reduceFrames, routePath, type DebugState } from '../../src/debug/reducer';
+import { initialDebugState, LIMITS, reduceFrame, reduceFrames, routePath, type DebugState } from '../../src/debug/reducer';
 
 const config = fixture.snapshot.config;
 const snapshot = (events: DebugFrame[] = [], extra: Record<string, unknown> = {}): DebugFrame =>
@@ -12,6 +12,7 @@ const snapshot = (events: DebugFrame[] = [], extra: Record<string, unknown> = {}
 let nextSeq = 100;
 const event = (body: DebugEvent, seq = (nextSeq += 1), timestamp_ms = 1_000 + seq): DebugFrame => ({ type: 'event', seq, timestamp_ms, ...body }) as DebugFrame;
 const fold = (frames: DebugFrame[]): DebugState => reduceFrames(initialDebugState(), frames);
+const fixtureEvent = (kind: string) => fixture.events.find((entry) => entry.event.kind === kind)!.event as Record<string, unknown>;
 
 describe('debug reducer', () => {
   const played = fixtureFrames(fixture as Parameters<typeof fixtureFrames>[0]).map((entry) => entry.frame);
@@ -41,7 +42,7 @@ describe('debug reducer', () => {
     const module = state.panes.alpha.items.find((item) => item.type === 'module');
     expect(module).toMatchObject({ name: 'speak', ok: true, detail: { status: 'delivered' } });
     const floor = state.floors[state.floorOrder[0]];
-    expect(floor).toMatchObject({ agent: 'alpha', requested: true, rewrite: { rewritten: 'I have good news: the build passes.' }, released: { how: 'quiet_after_hold' } });
+    expect(floor).toMatchObject({ agent: 'alpha', requested: true, rewrite: { rewritten: 'I have good news: the build passes.' }, released: { how: fixtureEvent('floor_released').how } });
     expect(floor.gates.map((gate) => gate.answer)).toEqual(['yes']);
     expect(state.hosts['builder-1'].connected).toBe(true);
     expect(state.turns[0]).toMatchObject({ agent: 'alpha', turnId: 'turn-8', endTs: expect.any(Number) });
@@ -63,12 +64,20 @@ describe('debug reducer', () => {
     expect(handOffPath.stages).toEqual(['jev', 'utility', 'operator']);
     expect(handOffPath.segments[2].label).toBe('second_opinion · unsure');
     expect(handOffPath.destinations).toMatchObject([{ agent: 'beta', from: 'operator', via: 'operator' }]);
+    expect(state.traces['u-105'].decision).toMatchObject({ rule: 'jev_unavailable', decided_by: 'fallback' });
     expect(routePath(state.traces['u-105'])).toMatchObject({
       pending: false,
-      segments: [{ label: 'timeout' }],
-      destinations: [{ agent: 'beta', from: 'jev', via: 'pbx', label: 'continue_current · continue' }],
+      stages: ['jev', 'utility'],
+      segments: [{ label: 'timeout' }, { label: 'utility' }],
+      destinations: [{ agent: 'alpha', from: 'utility', via: 'utility', label: 'utility · continue' }],
     });
-    expect(routePath(state.traces['u-106'])).toMatchObject({ stages: ['jev'], pending: true, destinations: [] });
+    expect(routePath(state.traces['u-106'])).toMatchObject({
+      stages: ['jev'],
+      pending: false,
+      destinations: [],
+      ended: { branch: 'dropped_stale', label: 'dropped (stale generation)' },
+    });
+    expect(routePath(state.traces['u-107'])).toMatchObject({ stages: ['jev'], pending: true, destinations: [] });
     // The operator answered u-101 itself and the utility pane mirrors routing work.
     expect(routePath(state.traces['u-101']).destinations[0]).toMatchObject({ agent: 'operator' });
     expect(state.panes.utility.items.filter((item) => item.type === 'utility').length).toBeGreaterThanOrEqual(4);
@@ -214,5 +223,150 @@ describe('debug reducer', () => {
     const snapStarted = performance.now();
     fold([snapshot(records.slice(-4000))]);
     expect(performance.now() - snapStarted).toBeLessThan(1500);
+  });
+
+  it('ends a dropped or failed trace instead of leaving it routing', () => {
+    const utterance = (id: string): DebugEvent => ({ kind: 'caller_utterance', utterance_id: id, text: 'hello', talking_to: 'operator' });
+    const branch = (id: string, name: string): DebugEvent => ({ kind: 'pbx_branch', utterance_id: id, branch: name, reason: `${name} because` });
+    const state = fold([
+      snapshot(),
+      event(utterance('d-1')),
+      event(branch('d-1', 'dropped_stale')),
+      event(utterance('d-2')),
+      event(branch('d-2', 'operator')),
+      event(branch('d-2', 'failed')),
+      event(utterance('d-3')),
+      event(branch('d-3', 'operator')),
+      event(utterance('d-4')),
+      event(branch('d-4', 'refused_unknown_target')),
+      event({ kind: 'routed', utterance_id: 'd-4', to_agent: 'operator', text_part: 'hello', mode: 'continue', via: 'pbx' }),
+    ]);
+    expect(routePath(state.traces['d-1'])).toMatchObject({ pending: false, destinations: [], ended: { branch: 'dropped_stale', reason: 'dropped_stale because' } });
+    expect(routePath(state.traces['d-2'])).toMatchObject({ pending: false, ended: { branch: 'failed', label: 'failed' } });
+    expect(routePath(state.traces['d-3'])).toMatchObject({ pending: true, ended: undefined });
+    expect(routePath(state.traces['d-4'])).toMatchObject({
+      pending: false,
+      ended: undefined,
+      destinations: [{ agent: 'operator', label: 'refused_unknown_target · continue' }],
+    });
+  });
+
+  it('links floor speech by floor_id and guesses only without it', () => {
+    const floorEvents = (id: string | undefined): DebugEvent[] => [
+      { kind: 'floor_request', agent: 'alpha', message: 'The build passes.', floor_id: id },
+      { kind: 'floor_gate', agent: 'alpha', answer: 'yes', latency_ms: 40, floor_id: id },
+      { kind: 'floor_released', agent: 'alpha', how: 'gate_yes', floor_id: id },
+    ];
+    // A direct speak lands between the release and the floor's own speech.
+    let state = fold([
+      snapshot(),
+      ...floorEvents('floor-1').map((body) => event(body)),
+      event({ kind: 'speech', agent: 'alpha', text: 'unrelated direct speak', delivered: true }),
+      event({ kind: 'speech', agent: 'alpha', text: 'Good news: the build passes.', delivered: true, floor_id: 'floor-1' }),
+    ]);
+    expect(state.floors['floor-1'].speech?.text).toBe('Good news: the build passes.');
+    const loose = state.callerLane.filter((item) => item.type === 'speech');
+    expect(loose.map((item) => item.type === 'speech' && item.text)).toEqual(['unrelated direct speak']);
+    // Speech naming a floor the page no longer holds stays a loose line.
+    state = reduceFrame(state, event({ kind: 'speech', agent: 'alpha', text: 'late', delivered: true, floor_id: 'floor-gone' }));
+    expect(state.callerLane[state.callerLane.length - 1]).toMatchObject({ type: 'speech', text: 'late' });
+    // An older service sends no ids: the first line after the release is it.
+    state = fold([
+      snapshot(),
+      ...floorEvents(undefined).map((body) => event(body)),
+      event({ kind: 'speech', agent: 'alpha', text: 'Good news: the build passes.', delivered: true }),
+    ]);
+    expect(state.floors[state.floorOrder[0]].speech?.text).toBe('Good news: the build passes.');
+    // The fixture's speech names floor-7.
+    expect(fixtureEvent('speech').floor_id).toBe('floor-7');
+  });
+
+  it('skips a refused live frame without opening a gap', () => {
+    let state = fold([snapshot([], { last_seq: 5 })]);
+    state = reduceFrames(state, [
+      { type: 'skipped', seq: 6, error: 'speech.text is missing' },
+      event({ kind: 'host_link', host: 'h', connected: true }, 7),
+    ]);
+    expect(state.missing).toEqual([]);
+    expect(state.gaps).toBe(0);
+    expect(state.rejected).toBe(1);
+    expect(state.lastRejection).toBe('speech.text is missing');
+    expect(state.events).toHaveLength(1);
+    // A skip that fills a real hole closes it; a lost frame still opens one.
+    state = reduceFrame(state, event({ kind: 'host_link', host: 'h', connected: false }, 10));
+    expect(state.missing).toEqual([8, 9]);
+    state = reduceFrame(state, { type: 'skipped', seq: 8, error: 'bad' });
+    expect(state.missing).toEqual([9]);
+    expect(state.rejected).toBe(2);
+    expect(state.gaps).toBe(1);
+  });
+
+  it('bounds every collection a long session grows', () => {
+    const frames: DebugFrame[] = [snapshot()];
+    let seq = 0;
+    const push = (body: DebugEvent) => frames.push(event(body, (seq += 1)));
+    push({ kind: 'agents_state', agents: [{ project: 'alpha', state: 'busy' }] });
+    for (let i = 0; i < 6_000; i += 1) push({ kind: 'rescue', generation: i, reason: 'operation interrupted' });
+    // One held floor message gated again and again.
+    push({ kind: 'floor_held', agent: 'alpha', message: 'later', floor_id: 'floor-1' });
+    for (let i = 0; i < 500; i += 1) {
+      push({ kind: 'jev_request', purpose: 'good_moment', state: {}, floor_id: 'floor-1' });
+      push({ kind: 'floor_gate', agent: 'alpha', answer: 'no', latency_ms: 30, floor_id: 'floor-1' });
+    }
+    // One trace that keeps getting records, and many odd agent and host names.
+    push({ kind: 'caller_utterance', utterance_id: 'u-1', text: 'x', talking_to: 'operator' });
+    for (let i = 0; i < 500; i += 1) {
+      push({ kind: 'pbx_branch', utterance_id: 'u-1', branch: 'utility', reason: 'r' });
+      push({ kind: 'utility_request', utterance_id: 'u-1', attempt: `try-${i}`, prompt: 'p' });
+      push({ kind: 'routed', utterance_id: 'u-1', to_agent: 'operator', text_part: 'x', mode: 'continue', via: 'pbx' });
+    }
+    for (let i = 0; i < 300; i += 1) push({ kind: 'agent_input', agent: `ghost-${i}`, text: 'hi', source: 'caller' });
+    for (let i = 0; i < 300; i += 1) {
+      push({ kind: 'host_link', host: `host-${i}`, connected: true });
+      push({ kind: 'host_link', host: `host-${i}`, connected: false });
+    }
+    for (let i = 0; i < 200; i += 1) push({ kind: 'call_boundary', phase: 'started', call_id: `call-${i}` });
+    const state = fold(frames);
+    const within = (length: number, limit: number) => expect(length).toBeLessThanOrEqual(Math.ceil(limit * 1.1));
+    within(state.rescues.length, LIMITS.rescues);
+    within(state.calls.length, LIMITS.calls);
+    const floor = state.floors['floor-1'];
+    expect(floor.gates).toHaveLength(LIMITS.floorGates);
+    expect(floor.jev).toHaveLength(LIMITS.floorJev);
+    expect(floor.records).toHaveLength(LIMITS.floorRecords);
+    const trace = state.traces['u-1'];
+    expect(trace.records).toHaveLength(LIMITS.traceRecords);
+    expect(trace.routed).toHaveLength(LIMITS.traceRouted);
+    expect(trace.utility).toHaveLength(LIMITS.traceUtility);
+    expect(state.paneOrder).toHaveLength(LIMITS.panes);
+    expect(Object.keys(state.panes)).toHaveLength(LIMITS.panes);
+    expect(state.paneOrder.slice(0, 3)).toEqual(['operator', 'utility', 'alpha']);
+    expect(state.paneOrder[state.paneOrder.length - 1]).toBe('ghost-299');
+    expect(Object.keys(state.hosts).length).toBeLessThanOrEqual(LIMITS.hosts);
+    expect(state.hosts['host-299']).toBeDefined();
+    within(state.events.length, LIMITS.events);
+  });
+
+  it('shows each utility prompt once in the utility pane', () => {
+    const prompt = 'Caller said: "send me to alpha". Which project?';
+    const rewrite = '[FLOOR REWRITE] Make this sound natural: The build passes.';
+    const state = fold([
+      snapshot(),
+      event({ kind: 'utility_request', utterance_id: 'u-1', attempt: 'first', prompt }),
+      event({ kind: 'agent_input', agent: 'utility', turn_id: 'utility-1', text: prompt, source: 'routing_request' }),
+      event({ kind: 'utility_decision', utterance_id: 'u-1', attempt: 'first', decision: { kind: 'none' }, latency_ms: 10 }),
+      // The input first, then the request: still one card.
+      event({ kind: 'agent_input', agent: 'utility', turn_id: 'utility-2', text: `${prompt} (retry)`, source: 'routing_request' }),
+      event({ kind: 'utility_request', utterance_id: 'u-1', attempt: 'split_retry', prompt: `${prompt} (retry)` }),
+      event({ kind: 'agent_input', agent: 'utility', turn_id: 'utility-3', text: rewrite, source: 'floor_rewrite' }),
+      event({ kind: 'floor_rewrite', agent: 'alpha', original: 'The build passes.', rewritten: 'Good news: the build passes.', latency_ms: 90 }),
+      // An input with no card of its own stays.
+      event({ kind: 'agent_input', agent: 'utility', turn_id: 'utility-4', text: 'something else', source: 'routing_request' }),
+    ]);
+    const items = state.panes.utility.items;
+    expect(items.map((item) => item.type)).toEqual(['utility', 'utility', 'utility', 'input']);
+    expect(items[0]).toMatchObject({ purpose: 'route', prompt, done: true });
+    expect(items[2]).toMatchObject({ purpose: 'rewrite', prompt: 'The build passes.', input: rewrite });
+    expect(items[3]).toMatchObject({ type: 'input', text: 'something else' });
   });
 });

@@ -1,7 +1,9 @@
 // The debug page's view model: one pure reducer from debug frames to view
 // state. A snapshot replaces the whole projection (the backend also sends one
 // after a slow client lags); live frames are folded in seq order, with
-// duplicates dropped and gaps remembered so the connection can resync.
+// duplicates dropped and gaps remembered so the connection can resync. A
+// numbered frame the parser refused still takes its seq, so it never opens
+// a gap.
 import type {
   AgentState,
   DebugConfig,
@@ -24,6 +26,7 @@ import type {
   SpeechEvent,
   UnknownEventFrame,
 } from './protocol';
+import { TERMINAL_BRANCHES } from './explain';
 
 type Numbered<T> = T & { seq: number; timestamp_ms: number };
 
@@ -37,6 +40,20 @@ export const LIMITS = {
   floors: 300,
   unknown: 200,
   missing: 1000,
+  rescues: 500,
+  calls: 50,
+  /** Agent panes; past this the least recently active project pane goes. */
+  panes: 64,
+  hosts: 100,
+  hostFlips: 50,
+  /** Per route trace. One utterance has a dozen records; these only stop a runaway. */
+  traceRecords: 200,
+  traceRouted: 64,
+  traceUtility: 16,
+  /** Per floor message: a held message can be gated again and again. */
+  floorGates: 50,
+  floorJev: 100,
+  floorRecords: 200,
 } as const;
 
 /** The two always-present agents; project agents follow in order seen. */
@@ -77,6 +94,8 @@ export interface FloorTrace {
   firstTs: number;
   lastTs: number;
   requested: boolean;
+  /** The service named this message (`floor_id`); its speech is linked by id only. */
+  stamped: boolean;
   heldTs?: number;
   gates: Numbered<FloorGateEvent>[];
   jev: DebugRecord[];
@@ -142,6 +161,8 @@ export type PaneItem =
       utteranceId?: string;
       attempt: string;
       prompt?: string;
+      /** A floor rewrite's whole prompt, folded in from the utility's input. */
+      input?: string;
       decision?: JsonValue;
       latencyMs?: number;
       done: boolean;
@@ -271,6 +292,13 @@ class Draft {
   }
 }
 
+/** Append to the list at `parent[key]` (copied first if needed), keeping its newest `limit` items. */
+function pushBounded<P extends object, K extends keyof P>(draft: Draft, parent: P, key: K, item: P[K] extends (infer T)[] ? T : never, limit: number): void {
+  const list = draft.own(parent, key) as unknown as unknown[];
+  list.push(item);
+  if (list.length > limit) list.splice(0, list.length - limit);
+}
+
 function trimFront<T>(items: T[], limit: number): T[] {
   // Trim in steps so a full ring costs one splice per tenth, not per frame.
   return items.length > limit + Math.ceil(limit / 10) ? items.slice(items.length - limit) : items;
@@ -288,6 +316,13 @@ export function reduceFrames(state: DebugState, frames: readonly DebugFrame[]): 
   for (const frame of frames) {
     if (frame.type === 'snapshot') {
       draft = applySnapshot(draft.state, frame);
+      continue;
+    }
+    if (frame.type === 'skipped') {
+      // A refused frame: its seq is accounted for, and the refusal counted.
+      admitSeq(draft, frame.seq);
+      draft.state.rejected += 1;
+      draft.state.lastRejection = frame.error;
       continue;
     }
     if (!admitSeq(draft, frame.seq)) continue;
@@ -360,6 +395,7 @@ function applySnapshot(previous: DebugState, frame: Extract<DebugFrame, { type: 
     state.maxSeq = Math.max(state.maxSeq, unknown.seq);
   }
   state.unknown = trimFront(state.unknown, LIMITS.unknown);
+  state.logs = trimFront(state.logs, LIMITS.logs);
   if (frame.last_seq !== undefined) state.maxSeq = Math.max(state.maxSeq, frame.last_seq);
   // The two rings evict at different rates, so holes inside a snapshot are
   // expected; only gaps in the live stream after it count.
@@ -390,12 +426,43 @@ function ensurePane(draft: Draft, agent: string, seq: number, ts: number): Agent
   const panes = draft.own(state, 'panes');
   if (!panes[agent]) {
     panes[agent] = draft.fresh({ agent, items: draft.fresh([] as PaneItem[]), firstSeq: seq, lastTs: ts, tools: 0 });
-    draft.own(state, 'paneOrder').push(agent);
+    const order = draft.own(state, 'paneOrder');
+    order.push(agent);
+    if (order.length > LIMITS.panes) evictPane(state, panes, order, agent);
     return panes[agent];
   }
   const pane = draft.own(panes, agent);
   if (ts > pane.lastTs) pane.lastTs = ts;
   return pane;
+}
+
+/**
+ * Drop the least recently active pane that is not the operator, the utility,
+ * a project the service lists, or the one just added. Agent names come from
+ * events, so a stream of odd names must not add panes without end.
+ */
+function evictPane(state: DebugState, panes: Record<string, AgentPane>, order: string[], added: string): void {
+  const listed = new Set(state.agents.map((agent) => agent.project));
+  let victim = -1;
+  for (const [index, agent] of order.entries()) {
+    if (agent === OPERATOR || agent === UTILITY || agent === added || listed.has(agent)) continue;
+    if (victim < 0 || panes[agent].lastTs < panes[order[victim]].lastTs) victim = index;
+  }
+  if (victim < 0) return;
+  delete panes[order[victim]];
+  order.splice(victim, 1);
+}
+
+/** Past the host limit, forget the disconnected host that has been down longest. */
+function evictHost(hosts: Record<string, HostState>): void {
+  const names = Object.keys(hosts);
+  if (names.length < LIMITS.hosts) return;
+  let victim: string | undefined;
+  for (const name of names) {
+    if (hosts[name].connected) continue;
+    if (victim === undefined || hosts[name].sinceTs < hosts[victim].sinceTs) victim = name;
+  }
+  if (victim !== undefined) delete hosts[victim];
 }
 
 function paneItems(draft: Draft, pane: AgentPane): PaneItem[] {
@@ -482,6 +549,7 @@ function newFloor(draft: Draft, record: DebugRecord, agent: string, message: str
     firstTs: record.timestamp_ms,
     lastTs: record.timestamp_ms,
     requested: false,
+    stamped: floorId !== undefined,
     gates: draft.fresh([]),
     jev: draft.fresh([]),
     records: draft.fresh([]),
@@ -505,7 +573,7 @@ function newFloor(draft: Draft, record: DebugRecord, agent: string, message: str
 }
 
 function touchFloor(draft: Draft, floor: FloorTrace, record: DebugRecord): void {
-  draft.own(floor, 'records').push(record);
+  pushBounded(draft, floor, 'records', record, LIMITS.floorRecords);
   floor.lastTs = Math.max(floor.lastTs, record.timestamp_ms);
 }
 
@@ -531,7 +599,7 @@ function applyEvent(draft: Draft, record: DebugRecord): void {
   switch (record.kind) {
     case 'caller_utterance': {
       const trace = ensureTrace(draft, record);
-      draft.own(trace, 'records').push(record);
+      pushBounded(draft, trace, 'records', record, LIMITS.traceRecords);
       trace.text = record.text;
       trace.talkingTo = record.talking_to;
       return;
@@ -541,7 +609,7 @@ function applyEvent(draft: Draft, record: DebugRecord): void {
       if (record.purpose !== 'route') {
         const floor = floorAwaitingGate(draft, record.floor_id);
         if (floor) {
-          draft.own(floor, 'jev').push(record);
+          pushBounded(draft, floor, 'jev', record, LIMITS.floorJev);
           touchFloor(draft, floor, record);
         }
         return;
@@ -549,7 +617,7 @@ function applyEvent(draft: Draft, record: DebugRecord): void {
       // A route call always names its utterance; one without is malformed.
       if (record.utterance_id === undefined) return;
       const trace = ensureTrace(draft, { ...record, utterance_id: record.utterance_id });
-      draft.own(trace, 'records').push(record);
+      pushBounded(draft, trace, 'records', record, LIMITS.traceRecords);
       if (record.kind === 'jev_request') trace.jevRequest = record;
       else trace.jevResponse = record;
       return;
@@ -559,7 +627,7 @@ function applyEvent(draft: Draft, record: DebugRecord): void {
     case 'operator_hop':
     case 'operator_route_tool': {
       const trace = ensureTrace(draft, record);
-      draft.own(trace, 'records').push(record);
+      pushBounded(draft, trace, 'records', record, LIMITS.traceRecords);
       if (record.kind === 'route_decision') trace.decision = record;
       else if (record.kind === 'pbx_branch') trace.branch = record;
       else if (record.kind === 'operator_hop') trace.operatorHop = record;
@@ -569,7 +637,7 @@ function applyEvent(draft: Draft, record: DebugRecord): void {
     case 'utility_request':
     case 'utility_decision': {
       const trace = ensureTrace(draft, record);
-      draft.own(trace, 'records').push(record);
+      pushBounded(draft, trace, 'records', record, LIMITS.traceRecords);
       const attempts = draft.own(trace, 'utility');
       let index = -1;
       for (let i = attempts.length - 1; i >= 0; i -= 1) {
@@ -580,6 +648,7 @@ function applyEvent(draft: Draft, record: DebugRecord): void {
         }
       }
       if (index < 0) {
+        if (attempts.length >= LIMITS.traceUtility) attempts.splice(0, attempts.length - LIMITS.traceUtility + 1);
         attempts.push(draft.fresh({ attempt: record.attempt }));
         index = attempts.length - 1;
       }
@@ -591,14 +660,16 @@ function applyEvent(draft: Draft, record: DebugRecord): void {
     }
     case 'routed': {
       const trace = ensureTrace(draft, record);
-      draft.own(trace, 'records').push(record);
-      draft.own(trace, 'routed').push(record);
+      pushBounded(draft, trace, 'records', record, LIMITS.traceRecords);
+      pushBounded(draft, trace, 'routed', record, LIMITS.traceRouted);
       const pane = ensurePane(draft, record.to_agent, seq, ts);
       pushPaneItem(draft, pane, { type: 'routed', seq, ts, utteranceId: record.utterance_id, textPart: record.text_part, mode: record.mode, via: record.via });
       return;
     }
     case 'agent_input': {
       const pane = ensurePane(draft, record.agent, seq, ts);
+      // The utility's routing prompt is already on its attempt card.
+      if (record.agent === UTILITY && record.source === 'routing_request' && findUtilityCard(pane, record.text) >= 0) return;
       pushPaneItem(draft, pane, {
         type: 'input',
         seq,
@@ -727,7 +798,9 @@ function applyEvent(draft: Draft, record: DebugRecord): void {
       return;
     }
     case 'rescue': {
-      draft.own(state, 'rescues').push(record);
+      const rescues = draft.own(state, 'rescues');
+      rescues.push(record);
+      state.rescues = trimFront(rescues, LIMITS.rescues);
       if (record.leg) {
         const pane = ensurePane(draft, record.leg, seq, ts);
         pushPaneItem(draft, pane, { type: 'rescue', seq, ts, generation: record.generation, reason: record.reason });
@@ -737,8 +810,11 @@ function applyEvent(draft: Draft, record: DebugRecord): void {
     case 'speech': {
       const pane = ensurePane(draft, record.agent, seq, ts);
       pushPaneItem(draft, pane, { type: 'speech', seq, ts, text: record.text, delivered: record.delivered, reason: record.reason });
-      const floor = latestFloorAwaitingSpeech(draft, record.agent, record.text, ts);
-      if (floor) {
+      // The service names the floor message a released line delivers; only
+      // speech from an older service, without the id, is matched by guess.
+      const floor =
+        record.floor_id !== undefined ? ownFloor(draft, record.floor_id) : latestFloorAwaitingSpeech(draft, record.agent, record.text, ts);
+      if (floor && !floor.speech) {
         floor.speech = record;
         touchFloor(draft, floor, record);
         return;
@@ -765,16 +841,20 @@ function applyEvent(draft: Draft, record: DebugRecord): void {
     case 'floor_rewrite':
     case 'floor_released': {
       const floor = openFloor(draft, record.agent, record.floor_id) ?? newFloor(draft, record, record.agent, '', record.floor_id);
-      if (record.kind === 'floor_gate') draft.own(floor, 'gates').push(record);
+      if (record.kind === 'floor_gate') pushBounded(draft, floor, 'gates', record, LIMITS.floorGates);
       else if (record.kind === 'floor_rewrite') {
         floor.rewrite = record;
-        pushPaneItem(draft, ensurePane(draft, UTILITY, seq, ts), {
+        const utility = ensurePane(draft, UTILITY, seq, ts);
+        // The rewrite prompt went in as a utility input first; fold it into the card.
+        const input = takeUtilityInput(draft, utility, 'floor_rewrite', (text) => text.includes(record.original));
+        pushPaneItem(draft, utility, {
           type: 'utility',
           seq,
           ts,
           purpose: 'rewrite',
           attempt: `floor rewrite for ${record.agent}`,
           prompt: record.original,
+          input,
           decision: record.rewritten,
           latencyMs: record.latency_ms,
           done: true,
@@ -802,14 +882,15 @@ function applyEvent(draft: Draft, record: DebugRecord): void {
       } else {
         call.startTs = ts;
       }
-      if (calls.length > 60) state.calls = calls.slice(-50);
+      state.calls = trimFront(calls, LIMITS.calls);
       pushCaller(draft, { type: 'call', seq, ts, callId: record.call_id, phase: record.phase, reason: record.reason });
       return;
     }
     case 'host_link': {
       const hosts = draft.own(state, 'hosts');
       const previous = hosts[record.host];
-      const flips = previous ? [...previous.flips, { ts, connected: record.connected }].slice(-50) : [{ ts, connected: record.connected }];
+      const flips = previous ? [...previous.flips, { ts, connected: record.connected }].slice(-LIMITS.hostFlips) : [{ ts, connected: record.connected }];
+      if (!previous) evictHost(hosts);
       hosts[record.host] = {
         host: record.host,
         connected: record.connected,
@@ -863,6 +944,7 @@ function mirrorUtility(draft: Draft, record: Numbered<UtilityRequestEvent> | Num
       return;
     }
   }
+  if (record.kind === 'utility_request') takeUtilityInput(draft, pane, 'routing_request', (text) => text === record.prompt);
   pushPaneItem(draft, pane, {
     type: 'utility',
     seq: record.seq,
@@ -877,15 +959,45 @@ function mirrorUtility(draft: Draft, record: Numbered<UtilityRequestEvent> | Num
   });
 }
 
+const UTILITY_SCAN = 50;
+
+/** The index of a recent route card in the utility pane with this prompt, or -1. */
+function findUtilityCard(pane: AgentPane, prompt: string): number {
+  for (let index = pane.items.length - 1; index >= 0 && index >= pane.items.length - UTILITY_SCAN; index -= 1) {
+    const item = pane.items[index];
+    if (item.type === 'utility' && item.purpose === 'route' && item.prompt === prompt) return index;
+  }
+  return -1;
+}
+
 /**
- * The floor message a speech line delivers: the same text as its rewrite or
- * message, or the first line within a few seconds of its release.
+ * Remove a recent utility input of `source` that `match`es and return its
+ * text, so the card that describes the same job shows the prompt once.
+ */
+function takeUtilityInput(draft: Draft, pane: AgentPane, source: string, match: (text: string) => boolean): string | undefined {
+  for (let index = pane.items.length - 1; index >= 0 && index >= pane.items.length - UTILITY_SCAN; index -= 1) {
+    const item = pane.items[index];
+    if (item.type === 'input' && item.source === source && match(item.text)) {
+      paneItems(draft, pane).splice(index, 1);
+      return item.text;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The floor message a speech line without a `floor_id` delivers: the same
+ * text as its rewrite or message, or the first line within a few seconds of
+ * its release. Only for an older service that does not stamp the id: a
+ * floor the service named is never matched by guess, so a direct `speak`
+ * right after a release cannot take the released message's place.
  */
 function latestFloorAwaitingSpeech(draft: Draft, agent: string, text: string, ts: number): FloorTrace | undefined {
   const state = draft.state;
   for (let index = state.floorOrder.length - 1; index >= 0; index -= 1) {
     const floor = state.floors[state.floorOrder[index]];
     if (floor.agent !== agent) continue;
+    if (floor.stamped) return undefined;
     if (floor.speech) return undefined;
     const sameText = text === floor.rewrite?.rewritten || text === floor.message;
     const justReleased = floor.released !== undefined && ts - floor.released.timestamp_ms <= 3_000;
@@ -916,11 +1028,22 @@ export interface RouteDestination {
   seq?: number;
 }
 
+/** A trace the service ended on purpose with no destination. */
+export interface RouteEnd {
+  /** The terminal `pbx_branch` value, for example `dropped_stale`. */
+  branch: string;
+  label: string;
+  reason: string;
+  seq: number;
+}
+
 export interface RoutePath {
   stages: Stage[];
   segments: RouteSegment[];
   destinations: RouteDestination[];
-  /** No destination yet: the line ends at the last stage reached. */
+  /** Set when a terminal `pbx_branch` ended the trace with no `routed`. */
+  ended?: RouteEnd;
+  /** Still routing: no destination yet and nothing ended the trace. */
   pending: boolean;
 }
 
@@ -1003,7 +1126,15 @@ export function routePath(trace: RouteTrace): RoutePath {
   if (destinations.length === 0 && trace.operatorHop && trace.operatorHop.outcome !== 'route_tool') {
     destinations.push({ agent: OPERATOR, from: 'operator', label: trace.operatorHop.outcome, via: 'operator', mode: '', textPart: trace.operatorHop.text });
   }
-  return { stages, segments, destinations, pending: destinations.length === 0 };
+  let ended: RouteEnd | undefined;
+  if (destinations.length === 0) {
+    for (const record of trace.records) {
+      if (record.kind === 'pbx_branch' && Object.hasOwn(TERMINAL_BRANCHES, record.branch)) {
+        ended = { branch: record.branch, label: TERMINAL_BRANCHES[record.branch], reason: record.reason, seq: record.seq };
+      }
+    }
+  }
+  return { stages, segments, destinations, ended, pending: destinations.length === 0 && ended === undefined };
 }
 
 /** The newest route trace, the one the page animates. */

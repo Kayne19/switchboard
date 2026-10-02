@@ -33,8 +33,16 @@ afterEach(() => {
   host.remove();
 });
 
+/** Wait for fixture mode to load and play: its last utterance is on screen. */
 async function settle() {
-  for (let round = 0; round < 10; round += 1) {
+  // The fixture loads through a dynamic import, which can be slow on a busy
+  // machine, so wait for its result instead of a fixed number of ticks.
+  for (let round = 0; round < 300 && !host.querySelector('[data-anchor="utt-u-107"]'); round += 1) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+  }
+  for (let round = 0; round < 5; round += 1) {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     });
@@ -54,8 +62,16 @@ describe('debug page', () => {
     act(() => fanOut.click());
     const drawer = host.querySelector('.drawer');
     expect(drawer?.textContent).toContain('dispatch 2 parts → alpha, beta');
-    expect(drawer?.textContent).toContain('asked_llm');
+    expect(drawer?.textContent).toContain('current_agent_unsure');
+    expect(drawer?.textContent).toContain('for_current_agent between the lower and upper thresholds');
     expect(drawer?.querySelectorAll('.bar-row').length).toBeGreaterThan(5);
+    const dropped = host.querySelector('[data-anchor="utt-u-106"]') as HTMLButtonElement;
+    expect(dropped.textContent).toContain('dropped (stale generation)');
+    expect(dropped.textContent).not.toContain('routing…');
+    expect(dropped.classList.contains('pending')).toBe(false);
+    expect(host.querySelector('[data-anchor="utt-u-107"]')?.textContent).toContain('routing…');
+    act(() => dropped.click());
+    expect(host.querySelector('.drawer')?.textContent).toContain('no destination: the line changed before this was acted on');
     for (const tab of ['Timeline', 'Floor gate', 'Agents & hosts', 'Raw log']) {
       const button = [...host.querySelectorAll('.tabs button')].find((element) => element.textContent === tab) as HTMLButtonElement;
       act(() => button.click());
