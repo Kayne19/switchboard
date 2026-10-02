@@ -167,9 +167,11 @@ impl Floor {
                 reason: entry.request.reason.clone(),
                 held_display: entry.request.held_display,
             };
-            let rewritten = (hooks.rewrite)(input).await.unwrap_or_else(|_| {
-                format!("{}: {}", entry.request.project, entry.request.message)
-            });
+            // Without a rewrite the message is spoken as the agent wrote it:
+            // it is already in the speaker's own voice.
+            let rewritten = (hooks.rewrite)(input)
+                .await
+                .unwrap_or_else(|_| entry.request.message.clone());
             if !(hooks.live)(&entry.request) {
                 self.drop_front(&entry.request).await;
                 continue;

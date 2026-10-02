@@ -268,7 +268,7 @@ async fn rewrite_error_uses_the_original_message() {
     let floor_worker = floor.clone();
     let worker = tokio::spawn(async move { floor_worker.run(h).await });
     yield_worker().await;
-    assert_eq!(results.recv().await.unwrap().0, "grape: update 1:update 1");
+    assert_eq!(results.recv().await.unwrap().0, "update 1:update 1");
     worker.abort();
 }
 
@@ -302,7 +302,7 @@ async fn rewrite_timeout_uses_the_original_message() {
     assert!(results.try_recv().is_err());
     timeout_events.recv().await.unwrap();
     yield_worker().await;
-    assert_eq!(results.recv().await.unwrap().0, "grape: update 1:update 1");
+    assert_eq!(results.recv().await.unwrap().0, "update 1:update 1");
     worker.abort();
 }
 

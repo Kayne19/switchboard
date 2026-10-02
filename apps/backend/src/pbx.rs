@@ -271,7 +271,7 @@ impl RedialPlanner {
     pub async fn model_change(&self, model: &str) -> Redial {
         if self.coordinator.route() == OPERATOR {
             return self.answer(
-                ["Model changes are only available on a project leg."],
+                ["I can only change the model while we're on a project."],
                 Some("Model changes are only available on a project leg.".into()),
             );
         }
@@ -288,7 +288,7 @@ impl RedialPlanner {
                 if self.coordinator.route() == OPERATOR {
                     return self.answer(
                         [format!(
-                            "Thinking is set to {value} for the next project call."
+                            "Thinking is set to {value} for the next project I open."
                         )],
                         None,
                     );
@@ -316,10 +316,10 @@ impl RedialPlanner {
             Some((leg, project))
         });
         let Some((leg, project)) = on_the_line else {
-            return self.answer(["There is no project on the line."], None);
+            return self.answer(["We're not on a project right now."], None);
         };
         if !self.model_swaps {
-            return self.answer(["Model swapping is turned off on this switchboard."], None);
+            return self.answer(["Model changes are turned off."], None);
         }
         let requested_model = if model.is_empty() && !leg.model.is_empty() {
             leg.model.clone()
@@ -346,7 +346,11 @@ impl RedialPlanner {
             Ok(launch) => launch,
             Err(error) => {
                 tracing::info!(project = %project.id, %error, "refusing a model swap: the host is not ready");
-                return self.answer([format!("I didn't switch: {error}")], Some(error));
+                return Redial::Answered(failure_reply(
+                    &self.coordinator,
+                    "I couldn't change the model.".into(),
+                    error,
+                ));
             }
         };
         let requested = if requested_model.is_empty() {
@@ -360,10 +364,11 @@ impl RedialPlanner {
                 // Refusing is the safe outcome — the live leg keeps running —
                 // but it looks identical to a swap that never happened.
                 tracing::info!(project = %project.id, %requested, %error, "refusing a model swap");
-                return self.answer(
-                    [format!("I didn't switch: {error}")],
-                    Some(error.to_string()),
-                );
+                return Redial::Answered(failure_reply(
+                    &self.coordinator,
+                    "I couldn't change the model.".into(),
+                    error.to_string(),
+                ));
             }
         };
         let spec = choice.spec();
@@ -1117,7 +1122,7 @@ impl Switchboard {
                 (self.coordinator.route() != OPERATOR).then(|| self.coordinator.route())
             });
             let Some(target) = target else {
-                return self.reply(["There is no project agent to stop."], None);
+                return self.reply(["Nothing is running to stop."], None);
             };
             self.pending_stop = Some(target.clone());
             return self.reply(
@@ -1130,15 +1135,16 @@ impl Switchboard {
         if matches!(decision.action, crate::router::Action::TakeOver) {
             if let Some(target) = decision.target.as_deref() {
                 let Some(takeover) = takeover else {
-                    return self.reply_transfer_error(
-                        "I couldn't inspect the live desk session before taking it over.".into(),
-                        Some("takeover lookup was not prepared".into()),
+                    return self.reply_failure(
+                        "I couldn't check what's open at your desk, so I didn't take it over."
+                            .into(),
+                        "takeover lookup was not prepared",
                     );
                 };
                 return self.take_over(text, target, takeover).await;
             }
             return self.reply(
-                ["Tell me which project session you want to take over."],
+                ["Tell me which project you want to take over."],
                 Some("takeover target missing".into()),
             );
         }
@@ -1264,11 +1270,8 @@ impl Switchboard {
         // unknown one must not move the caller or drop the leg on the line.
         if target != OPERATOR && self.registry.get(target).is_none() {
             tracing::warn!(%target, "refusing a route to an unregistered project");
-            return self.reply(
-                [format!(
-                    "I don't have a project called {target}. I know: {}.",
-                    self.registry.ids().join(", ")
-                )],
+            return self.reply_transfer_error(
+                self.unknown_project_line(target),
                 Some(format!("unknown project {target:?}")),
             );
         }
@@ -1871,11 +1874,9 @@ impl Switchboard {
                 tracing::warn!(route = %name, %error, "the project leg failed mid-prompt; returning to the operator");
                 self.drop_agent().await;
                 self.operator_note = Some(stopped_note(&name, &detail));
-                return self.reply(
-                    [format!(
-                        "{name} stopped responding: {detail}. You're back with the operator."
-                    )],
-                    Some(detail),
+                return self.reply_failure(
+                    format!("{name} stopped responding, so I closed it."),
+                    detail,
                 );
             }
         };
@@ -1889,11 +1890,9 @@ impl Switchboard {
             tracing::warn!(route = %name, %detail, "the project leg failed its turn; returning to the operator");
             self.drop_agent().await;
             self.operator_note = Some(stopped_note(&name, &detail));
-            return self.reply(
-                [format!(
-                    "{name} stopped responding: {detail}. You're back with the operator."
-                )],
-                Some(detail),
+            return self.reply_failure(
+                format!("{name} stopped responding, so I closed it."),
+                detail,
             );
         }
         self.reply_with_turn(turn)
@@ -1921,7 +1920,7 @@ impl Switchboard {
                 ));
                 return self.reply_transfer_error(
                     format!(
-                        "Which project did you mean by {spoken}? Candidates: {candidates_text}."
+                        "Which project did you mean by {spoken}? It could be {candidates_text}."
                     ),
                     Some(format!("ambiguous project {spoken:?}: {candidates_text}")),
                 );
@@ -1943,7 +1942,7 @@ impl Switchboard {
                         .unwrap_or_default()
                 ));
                 return self.reply_transfer_error(
-                    format!("I don't have a project called {spoken}. I know: {known_text}."),
+                    self.unknown_project_line(spoken),
                     Some(format!("unknown project {spoken:?}")),
                 );
             }
@@ -1984,10 +1983,7 @@ impl Switchboard {
             Err(err) => {
                 tracing::warn!(project = %project.id, error = %err, "the project's host is not ready");
                 self.operator_note = Some(open_failed_note(&project.id, &err));
-                return self.reply_transfer_error(
-                    format!("I couldn't get {} on the line: {err}", project.id),
-                    Some(err),
-                );
+                return self.couldnt_open(&project.id, err);
             }
         };
 
@@ -2001,10 +1997,7 @@ impl Switchboard {
             Err(e) => {
                 tracing::warn!(project = %project.id, error = %e, "transfer model selection failed");
                 self.operator_note = Some(open_failed_note(&project.id, &e.to_string()));
-                return self.reply_transfer_error(
-                    format!("I couldn't get {} on the line: {e}", project.id),
-                    Some(e),
-                );
+                return self.couldnt_open(&project.id, e);
             }
         };
 
@@ -2022,10 +2015,7 @@ impl Switchboard {
         .with_catalog(plan.catalog.clone());
         if let Err(error) = self.coordinator.begin_candidate(candidate) {
             tracing::warn!(project = %project.id, %error, "candidate startup was refused");
-            return self.reply_transfer_error(
-                format!("I couldn't get {} on the line: {error}", project.id),
-                Some(error.to_string()),
-            );
+            return self.couldnt_open(&project.id, error.to_string());
         }
 
         // At most one session per project: one the caller is on is ended
@@ -2052,10 +2042,7 @@ impl Switchboard {
                 self.rollback_startup(format!("startup failed: {e}"));
                 self.set_active_session(live_session.clone()).await;
                 self.operator_note = Some(open_failed_note(&project.id, &e.to_string()));
-                return self.reply_transfer_error(
-                    format!("I couldn't get {} on the line: {e}", project.id),
-                    Some(e.to_string()),
-                );
+                return self.couldnt_open(&project.id, e.to_string());
             }
         };
 
@@ -2090,10 +2077,7 @@ impl Switchboard {
             self.set_active_session(live_session.clone()).await;
             self.rollback_startup(format!("intro failed: {detail}"));
             self.operator_note = Some(open_failed_note(&project.id, &detail));
-            return self.reply_transfer_error(
-                format!("{} didn't pick up: {detail}", project.id),
-                Some(detail),
-            );
+            return self.couldnt_open(&project.id, detail);
         }
 
         // The leg may be adopted already: a candidate is promoted on its first
@@ -2106,10 +2090,7 @@ impl Switchboard {
                 self.announce_agent_state(&project.id, "finished").await;
                 self.set_active_session(live_session.clone()).await;
                 self.rollback_startup(format!("adoption failed: {error}"));
-                return self.reply_transfer_error(
-                    format!("{} did not come up.", project.id),
-                    Some(error.to_string()),
-                );
+                return self.couldnt_open(&project.id, error.to_string());
             }
         }
         self.coordinator.finish_intro();
@@ -2134,7 +2115,7 @@ impl Switchboard {
                 session.close();
                 self.announce_agent_state(&project, "finished").await;
                 return self.reply_transfer_error(
-                    "The background project is no longer registered.".into(),
+                    format!("{project} isn't registered any more."),
                     Some("project is no longer registered".into()),
                 );
             }
@@ -2143,10 +2124,7 @@ impl Switchboard {
         if let Err(error) = session.set_mode("foreground").await {
             session.close();
             self.announce_agent_state(&project.id, "finished").await;
-            return self.reply_transfer_error(
-                format!("I couldn't bring {} forward: {error}", project.id),
-                Some(error.to_string()),
-            );
+            return self.couldnt_bring_back(&project.id, error.to_string());
         }
         if let Err(error) = session
             .join_call_mode(&token, &self.persona, self.speech_deadline_ms, "foreground")
@@ -2154,10 +2132,7 @@ impl Switchboard {
         {
             session.close();
             self.announce_agent_state(&project.id, "finished").await;
-            return self.reply_transfer_error(
-                format!("I couldn't bring {} forward: {error}", project.id),
-                Some(error.to_string()),
-            );
+            return self.couldnt_bring_back(&project.id, error.to_string());
         }
         self.announce_agent_state(&project.id, "busy").await;
         let candidate = CandidateLeg::new(
@@ -2171,10 +2146,7 @@ impl Switchboard {
         if let Err(error) = self.coordinator.begin_candidate(candidate) {
             session.close();
             self.announce_agent_state(&project.id, "finished").await;
-            return self.reply_transfer_error(
-                format!("I couldn't bring {} forward: {error}", project.id),
-                Some(error.to_string()),
-            );
+            return self.couldnt_bring_back(&project.id, error.to_string());
         }
         // The agent was told background rules when it was shelved. Tell it
         // they no longer apply before it answers the caller.
@@ -2192,19 +2164,13 @@ impl Switchboard {
             session.close();
             self.announce_agent_state(&project.id, "finished").await;
             self.rollback_startup(format!("background promotion failed: {}", turn.error));
-            return self.reply_transfer_error(
-                format!("{} did not answer: {}", project.id, turn.error),
-                Some(turn.error),
-            );
+            return self.couldnt_bring_back(&project.id, turn.error);
         }
         if self.coordinator.is_candidate() {
             if let Err(error) = self.coordinator.adopt_candidate(&token) {
                 session.close();
                 self.announce_agent_state(&project.id, "finished").await;
-                return self.reply_transfer_error(
-                    format!("{} did not come up.", project.id),
-                    Some(error.to_string()),
-                );
+                return self.couldnt_bring_back(&project.id, error.to_string());
             }
         }
         self.coordinator.finish_intro();
@@ -2291,7 +2257,7 @@ impl Switchboard {
     ) -> Reply {
         let Some(project) = self.registry.get(target).cloned() else {
             return self.reply_transfer_error(
-                format!("I don't have a registered project called {target}."),
+                format!("I don't have a project called {target}."),
                 Some(format!("unknown project {target:?}")),
             );
         };
@@ -2307,7 +2273,7 @@ impl Switchboard {
         {
             return self.reply_transfer_error(
                 format!(
-                    "{} already has a live switchboard agent. Stop it before taking over the desk session.",
+                    "{} is already open on the call. Stop it before I take over the one at your desk.",
                     project.id
                 ),
                 Some("project already has a live switchboard agent".into()),
@@ -2317,14 +2283,11 @@ impl Switchboard {
             Ok(Some(session)) => session,
             Ok(None) => {
                 return self.reply_transfer_error(
-                    format!(
-                        "There is no live desk session for {} in its registered folder.",
-                        project.id
-                    ),
+                    format!("Nothing is open at your desk for {}.", project.id),
                     Some("no matching desk session".into()),
                 )
             }
-            Err(error) => return self.reply_transfer_error(error.clone(), Some(error)),
+            Err(error) => return self.couldnt_take_over(&project.id, error),
         };
         // This is the lock-held recheck after the host listing. A stale
         // discovery result must never be attached to another project or a
@@ -2332,17 +2295,14 @@ impl Switchboard {
         if desk["cwd"].as_str() != Some(project.cwd.as_str()) || !desk["provenance"].is_null() {
             return self.reply_transfer_error(
                 format!(
-                    "The live desk session for {} changed before takeover.",
+                    "What's open at your desk for {} changed before I could take it over. Try again.",
                     project.id
                 ),
                 Some("desk session changed during takeover".into()),
             );
         }
         let Some(session_handle) = desk["session"].as_str() else {
-            return self.reply_transfer_error(
-                format!("The live desk session for {} had no handle.", project.id),
-                Some("desk session had no handle".into()),
-            );
+            return self.couldnt_take_over(&project.id, "desk session had no handle");
         };
         let model = desk["model"].as_str().unwrap_or_default().to_owned();
         let thinking = desk["thinking"].as_str().unwrap_or_default().to_owned();
@@ -2367,10 +2327,7 @@ impl Switchboard {
             },
         );
         if let Err(error) = self.coordinator.begin_candidate(candidate) {
-            return self.reply_transfer_error(
-                format!("I couldn't take over {}: {error}", project.id),
-                Some(error.to_string()),
-            );
+            return self.couldnt_take_over(&project.id, error.to_string());
         }
         let host = match project.canonical_host() {
             Some(host) => host.to_owned(),
@@ -2395,10 +2352,7 @@ impl Switchboard {
             }
             Err(error) => {
                 self.rollback_startup(format!("takeover failed: {error}"));
-                return self.reply_transfer_error(
-                    format!("I couldn't take over {}: {error}", project.id),
-                    Some(error.to_string()),
-                );
+                return self.couldnt_take_over(&project.id, error.to_string());
             }
         };
         if let Err(error) = session
@@ -2412,10 +2366,7 @@ impl Switchboard {
         {
             session.close();
             self.rollback_startup(format!("takeover call registration failed: {error}"));
-            return self.reply_transfer_error(
-                format!("I couldn't put {} on the call: {error}", project.id),
-                Some(error.to_string()),
-            );
+            return self.couldnt_take_over(&project.id, error.to_string());
         }
         self.set_active_session(Some(LegSession::Project(session.clone())))
             .await;
@@ -2439,10 +2390,7 @@ impl Switchboard {
             self.announce_agent_state(&project.id, "finished").await;
             self.rollback_startup(format!("takeover turn failed: {detail}"));
             self.set_active_session(previous_foreground.clone()).await;
-            return self.reply_transfer_error(
-                format!("{} did not answer after takeover: {detail}", project.id),
-                Some(detail),
-            );
+            return self.couldnt_take_over(&project.id, detail);
         }
         if self.coordinator.is_candidate() {
             if let Err(error) = self.coordinator.adopt_candidate(&leg_token) {
@@ -2450,10 +2398,7 @@ impl Switchboard {
                 self.announce_agent_state(&project.id, "finished").await;
                 self.rollback_startup(format!("takeover adoption failed: {error}"));
                 self.set_active_session(previous_foreground).await;
-                return self.reply_transfer_error(
-                    format!("{} did not come up after takeover.", project.id),
-                    Some(error.to_string()),
-                );
+                return self.couldnt_take_over(&project.id, error.to_string());
             }
         }
         self.coordinator.finish_intro();
@@ -2655,9 +2600,9 @@ impl Switchboard {
         .with_catalog(launch.catalog.clone());
         if let Err(error) = self.coordinator.begin_candidate(candidate) {
             tracing::warn!(project = %project.id, %error, "candidate startup for the model change was refused");
-            return self.reply(
-                [format!("I couldn't switch {}: {error}", project.id)],
-                Some(error.to_string()),
+            return self.reply_failure(
+                format!("I couldn't change the model on {}.", project.id),
+                error.to_string(),
             );
         }
 
@@ -2682,13 +2627,7 @@ impl Switchboard {
                     project.id,
                     error.to_string().trim_end_matches('.')
                 ));
-                return self.reply(
-                    [format!(
-                        "I couldn't bring {} back on {spoken}: {error}",
-                        project.id
-                    )],
-                    Some(error.to_string()),
-                );
+                return self.couldnt_bring_up_on(&project.id, &spoken, error.to_string());
             }
         };
         self.set_active_session(Some(LegSession::Project(session.clone())))
@@ -2734,13 +2673,7 @@ impl Switchboard {
                     project.id,
                     detail.trim_end_matches('.')
                 ));
-                return self.reply(
-                    [format!(
-                        "{} didn't come back on {spoken}: {detail}",
-                        project.id
-                    )],
-                    Some(detail),
-                );
+                return self.couldnt_bring_up_on(&project.id, &spoken, detail);
             }
             Some(turn)
         };
@@ -2751,10 +2684,7 @@ impl Switchboard {
                 self.announce_agent_state(&project.id, "finished").await;
                 self.rollback_startup(format!("adoption failed: {error}"));
                 self.drop_agent().await;
-                return self.reply(
-                    [format!("{} did not come up.", project.id)],
-                    Some(error.to_string()),
-                );
+                return self.couldnt_bring_up_on(&project.id, &spoken, error.to_string());
             }
         }
         self.coordinator.finish_intro();
@@ -2818,7 +2748,7 @@ impl Switchboard {
             self.operator_note = Some(note);
         }
         if reply.text.is_empty() {
-            self.reply(["You're back with the operator."], reply.error)
+            self.reply(["That work stopped."], reply.error)
         } else {
             reply
         }
@@ -2883,6 +2813,48 @@ impl Switchboard {
         reply.delivery_generation = Some(self.coordinator.generation());
         reply
     }
+    /// A failure said aloud in plain words. The raw `detail` goes only to
+    /// the screen text and the reply's error; it is never spoken.
+    fn reply_failure(&self, spoken: String, detail: impl Into<String>) -> Reply {
+        failure_reply(&self.coordinator, spoken, detail.into())
+    }
+
+    /// Every way opening a project for the caller can fail says the same.
+    fn couldnt_open(&self, project: &str, detail: impl Into<String>) -> Reply {
+        self.reply_failure(format!("I couldn't open {project}."), detail)
+    }
+
+    /// Bringing work back from the background failed.
+    fn couldnt_bring_back(&self, project: &str, detail: impl Into<String>) -> Reply {
+        self.reply_failure(format!("I couldn't pick {project} back up."), detail)
+    }
+
+    /// A model change could not bring the project back up on the new model.
+    fn couldnt_bring_up_on(&self, project: &str, spoken: &str, detail: impl Into<String>) -> Reply {
+        self.reply_failure(
+            format!("I couldn't bring {project} back up on {spoken}."),
+            detail,
+        )
+    }
+
+    /// Taking over a session open at the caller's desk failed.
+    fn couldnt_take_over(&self, project: &str, detail: impl Into<String>) -> Reply {
+        self.reply_failure(format!("I couldn't take over {project}."), detail)
+    }
+
+    /// The caller named a project the registry does not have.
+    fn unknown_project_line(&self, spoken: &str) -> String {
+        let known = self.registry.ids();
+        if known.is_empty() {
+            format!("I don't have a project called {spoken}, and none are set up yet.")
+        } else {
+            format!(
+                "I don't have a project called {spoken}. The ones I have are {}.",
+                known.join(", ")
+            )
+        }
+    }
+
     fn reply_transfer_error(&self, message: String, error: Option<String>) -> Reply {
         let status = self.coordinator.status();
         Reply::new(
@@ -2899,7 +2871,7 @@ impl Switchboard {
     pub async fn dial(&mut self, project: &str, intent: &str) -> Reply {
         self.force_hangup().await;
         if project.eq_ignore_ascii_case(OPERATOR) {
-            return self.reply(["You're back with the operator."], None);
+            return self.reply(["Back at the front desk."], None);
         }
         let context = TransferContext {
             derived_intent: intent.to_owned(),
@@ -2911,10 +2883,7 @@ impl Switchboard {
         if self.coordinator.route() == target {
             self.resume_blocked.insert(target.to_owned());
             self.drop_agent().await;
-            return self.reply(
-                [format!("Stopped {target}. You are back with the operator.")],
-                None,
-            );
+            return self.reply([format!("Stopped {target}.")], None);
         }
         if self.background_agents.contains_key(target) {
             self.resume_blocked.insert(target.to_owned());
@@ -2928,7 +2897,7 @@ impl Switchboard {
             self.announce_agent_state(target, "finished").await;
             return self.reply([format!("Stopped {target}.")], None);
         }
-        self.reply([format!("{target} is not running.")], None)
+        self.reply([format!("{target} isn't running.")], None)
     }
 
     pub async fn force_hangup(&mut self) -> Option<String> {
@@ -2954,6 +2923,27 @@ fn is_confirmation(text: &str) -> bool {
     matches!(
         text.trim().to_ascii_lowercase().as_str(),
         "yes" | "yeah" | "yep" | "confirm" | "do it" | "stop it"
+    )
+}
+
+/// A failure the switchboard says itself: `spoken` is read aloud, and the
+/// raw `detail` is screen text and the reply's error, never speech.
+fn failure_reply(coordinator: &Coordinator, spoken: String, detail: String) -> Reply {
+    let status = coordinator.status();
+    Reply::new(
+        &status.route,
+        &status.label,
+        vec![
+            Utterance {
+                text: spoken,
+                synthesize: true,
+            },
+            Utterance {
+                text: detail.clone(),
+                synthesize: false,
+            },
+        ],
+        Some(detail),
     )
 }
 

@@ -458,7 +458,7 @@ async fn transfer_ctx_ambiguous_project_returns_candidate_options() {
     assert!(reply
         .to_speak
         .iter()
-        .any(|s| s.contains("Which project did you mean by shared? Candidates: proj-a, proj-b.")));
+        .any(|s| s.contains("Which project did you mean by shared? It could be proj-a, proj-b.")));
     assert!(board
         .operator_note
         .as_deref()
@@ -1210,9 +1210,12 @@ async fn a_transfer_to_a_host_that_is_not_connected_is_refused_with_the_reason()
         .await;
 
     assert_eq!(reply.route, OPERATOR);
-    assert_eq!(
-        reply.to_speak,
-        ["I couldn't get alpha on the line: its host scriptorium is not connected"]
+    // The reason is screen text; the caller hears plain words.
+    assert_eq!(reply.to_speak, ["I couldn't open alpha."]);
+    assert!(
+        reply.text.contains("its host scriptorium is not connected"),
+        "{}",
+        reply.text
     );
     assert!(!board.coordinator.is_candidate());
     assert!(board
@@ -1957,10 +1960,8 @@ async fn a_transfer_whose_session_cannot_start_leaves_the_caller_on_the_operator
         "could not start a session: cwd /srv/alpha does not exist"
     );
     assert_eq!(reply.route, OPERATOR);
-    assert_eq!(
-        reply.to_speak,
-        [format!("I couldn't get alpha on the line: {error}")]
-    );
+    assert_eq!(reply.to_speak, ["I couldn't open alpha."]);
+    assert!(reply.text.contains(&error), "{}", reply.text);
     assert_back_on_the_operator(
         &board,
         &coordinator,
@@ -2006,10 +2007,7 @@ async fn an_intro_that_never_settles_is_dropped_at_the_turn_deadline() {
 
     assert_eq!(reply.error.as_deref(), Some("the agent stopped responding"));
     assert_eq!(reply.route, OPERATOR);
-    assert_eq!(
-        reply.to_speak,
-        ["alpha didn't pick up: the agent stopped responding"]
-    );
+    assert_eq!(reply.to_speak, ["I couldn't open alpha."]);
     assert_back_on_the_operator(
         &board,
         &coordinator,
