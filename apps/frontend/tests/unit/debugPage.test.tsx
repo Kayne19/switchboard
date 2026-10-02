@@ -33,8 +33,16 @@ afterEach(() => {
   host.remove();
 });
 
+/** Wait for fixture mode to load and play: its last utterance is on screen. */
 async function settle() {
-  for (let round = 0; round < 10; round += 1) {
+  // The fixture loads through a dynamic import, which can be slow on a busy
+  // machine, so wait for its result instead of a fixed number of ticks.
+  for (let round = 0; round < 300 && !host.querySelector('[data-anchor="utt-u-107"]'); round += 1) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+  }
+  for (let round = 0; round < 5; round += 1) {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     });
