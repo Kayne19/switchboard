@@ -28,6 +28,9 @@ const LIVE_CAPACITY: usize = 256;
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[cfg_attr(test, derive(Deserialize))]
 #[serde(tag = "kind", rename_all = "snake_case")]
+// The schema is deliberately complete before all producers land in later
+// slices. Unemitted variants are still public within the crate by design.
+#[allow(dead_code)]
 pub(crate) enum DebugEvent {
     CallerUtterance {
         utterance_id: String,
