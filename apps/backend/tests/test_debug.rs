@@ -559,6 +559,67 @@ mod wire {
         }
     }
 
+    /// The status the debug socket answers an upgrade from `origin` with.
+    async fn upgrade_status(origin: Option<&str>) -> u16 {
+        use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Error};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (_shutdown, shutdown_rx) = watch::channel(false);
+        let app = router(DebugBus::new(), Vec::new, shutdown_rx);
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let mut request = format!("ws://{address}/ws").into_client_request().unwrap();
+        if let Some(origin) = origin {
+            let origin = origin.replace("{address}", &address.to_string());
+            request
+                .headers_mut()
+                .insert("Origin", origin.parse().unwrap());
+        }
+        let status = match tokio_tungstenite::connect_async(request).await {
+            Ok((_, response)) => response.status().as_u16(),
+            Err(Error::Http(response)) => response.status().as_u16(),
+            Err(error) => panic!("upgrade failed: {error}"),
+        };
+        server.abort();
+        status
+    }
+
+    #[tokio::test]
+    async fn the_debug_socket_accepts_only_its_own_origin() {
+        assert_eq!(upgrade_status(None).await, 101);
+        assert_eq!(upgrade_status(Some("http://{address}")).await, 101);
+        assert_eq!(upgrade_status(Some("HTTP://{address}")).await, 101);
+        for foreign in [
+            "http://evil.example",
+            "http://evil.example:8766",
+            "https://{address}.evil.example",
+            "null",
+            "file://",
+        ] {
+            assert_eq!(upgrade_status(Some(foreign)).await, 403, "{foreign}");
+        }
+    }
+
+    #[test]
+    fn an_origin_matches_its_host_with_or_without_the_default_port() {
+        let headers = |origin: &str, host: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::ORIGIN, origin.parse().unwrap());
+            headers.insert(header::HOST, host.parse().unwrap());
+            headers
+        };
+        assert!(same_origin(&headers("http://damocles", "damocles:80")));
+        assert!(same_origin(&headers("https://damocles:443", "damocles")));
+        assert!(same_origin(&headers("http://[::1]:8766", "[::1]:8766")));
+        assert!(!same_origin(&headers(
+            "http://damocles:8765",
+            "damocles:8766"
+        )));
+        assert!(!same_origin(&HeaderMap::from_iter([(
+            header::ORIGIN,
+            "http://damocles".parse().unwrap()
+        )])));
+    }
+
     #[tokio::test]
     async fn the_debug_socket_sends_a_snapshot_then_live_frames_then_closes_on_shutdown() {
         let bus = DebugBus::new();

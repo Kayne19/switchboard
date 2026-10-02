@@ -9,7 +9,7 @@ use axum::{
         ws::{Message, WebSocket},
         State, WebSocketUpgrade,
     },
-    http::header,
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
     Router,
@@ -117,6 +117,8 @@ const CLIP_MARKER: &str = "…[clipped]";
 /// A debug client that does not take a frame within this time is dropped; it
 /// can reconnect and get a fresh snapshot.
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
+/// The largest frame the debug socket accepts; it reads none.
+const MAX_INCOMING_BYTES: usize = 4096;
 /// A client that falls behind twice within this time is closed instead of
 /// resynced again: each resync is a full snapshot.
 const RESYNC_INTERVAL: Duration = Duration::from_secs(10);
@@ -1181,8 +1183,50 @@ impl Feed {
     }
 }
 
-async fn ws(State(site): State<Site>, upgrade: WebSocketUpgrade) -> Response {
-    upgrade.on_upgrade(move |socket| serve_socket(socket, site))
+/// The read-only debug stream. A browser does not apply CORS to a
+/// WebSocket, so any page it opens could otherwise read this stream: only a
+/// request from the debug page itself (an `Origin` naming the host it
+/// connected to) or from a non-browser client (no `Origin`) is upgraded.
+async fn ws(State(site): State<Site>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
+    if !same_origin(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    // The page sends nothing; anything it sends is ignored.
+    upgrade
+        .max_message_size(MAX_INCOMING_BYTES)
+        .on_upgrade(move |socket| serve_socket(socket, site))
+}
+
+/// True when the request has no `Origin`, or its `Origin` names the same
+/// host and port as its `Host`.
+fn same_origin(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get(header::ORIGIN) else {
+        return true;
+    };
+    let (Ok(origin), Some(host)) = (
+        origin.to_str(),
+        headers
+            .get(header::HOST)
+            .and_then(|host| host.to_str().ok()),
+    ) else {
+        return false;
+    };
+    let Some((scheme, authority)) = origin.split_once("://") else {
+        return false;
+    };
+    let default_port = match scheme.to_ascii_lowercase().as_str() {
+        "http" => ":80",
+        "https" => ":443",
+        _ => return false,
+    };
+    let normal = |authority: &str| {
+        let authority = authority.to_ascii_lowercase();
+        match authority.strip_suffix(default_port) {
+            Some(bare) => bare.to_owned(),
+            None => authority,
+        }
+    };
+    normal(authority) == normal(host)
 }
 
 async fn send_text(socket: &mut WebSocket, text: String) -> Result<(), ()> {
