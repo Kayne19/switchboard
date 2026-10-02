@@ -737,3 +737,39 @@ fn hosts_tokens_file_defaults_under_the_config_dir() {
         std::path::PathBuf::from("/run/sb/tokens.json")
     );
 }
+
+/// The debug events published so far, oldest first.
+fn debug_events(bus: &crate::debug::DebugBus) -> Vec<crate::debug::DebugEvent> {
+    bus.events_for_test()
+}
+
+#[tokio::test]
+async fn hosts_report_link_up_and_down_but_not_a_fenced_close() {
+    use crate::debug::DebugEvent;
+    let hosts = Hosts::new(tokens(), slow());
+    let bus = crate::debug::DebugBus::new();
+    hosts.set_debug_bus(bus.clone());
+    let hello = || Hello {
+        kind: "hello".to_owned(),
+        host_id: "scriptorium".to_owned(),
+        token: TOKEN.to_owned(),
+        protocol: json!(1),
+        git_sha: None,
+        prime_agent: None,
+    };
+    let (older, _older_frames) = mpsc::unbounded_channel();
+    assert_eq!(hosts.admit(hello(), older), Ok(1));
+    let (newer, _newer_frames) = mpsc::unbounded_channel();
+    assert_eq!(hosts.admit(hello(), newer), Ok(2));
+    // The fenced link closing is not a disconnect: link 2 is up.
+    hosts.release("scriptorium", 1, "fenced");
+    hosts.release("scriptorium", 2, "disconnected");
+    let link = |connected| DebugEvent::HostLink {
+        host: "scriptorium".into(),
+        connected,
+    };
+    assert_eq!(
+        debug_events(&bus),
+        vec![link(true), link(true), link(false)]
+    );
+}

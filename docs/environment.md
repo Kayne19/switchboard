@@ -22,6 +22,7 @@ means unset.
 | `SWITCHBOARD_HOST_TOKENS_FILE` | `<config dir>/host-tokens.json` | Secret. The per-host bearer tokens of the host link (`/host`, see `docs/host-link.md`). Read once at startup; format below. |
 | `SWITCHBOARD_OPERATOR_PROMPT` | `<config dir>/operator.system.md` | The operator's system prompt; skipped if the file is missing. |
 | `SWITCHBOARD_BIND` | `0.0.0.0:8765` | Listen address. |
+| `SWITCHBOARD_DEBUG_BIND` | none (off) | Optional read-only debug-page listener, for example `0.0.0.0:8766` (`docs/debug-page.md`). Unauthenticated plain HTTP that shows caller text, prompts, tool arguments and results, and logs: keep it on a trusted network or behind a firewall. Unset or blank, no listener is opened and nothing is recorded for the page. A bind failure is logged (`debug listener not started`) and the service runs on without the page. This is a public interface; homelab must set it deliberately. |
 | `SWITCHBOARD_PI_BINARY` | `pi` | The operator's runtime, run locally. |
 | `SWITCHBOARD_OPERATOR_MODEL` | runtime default | The operator's model. Never swappable. |
 | `SWITCHBOARD_OPERATOR_EXTENSION` | none | Pi extension loaded into the operator. |
@@ -116,6 +117,13 @@ Every project needs a `host`: the id of a host agent in the host tokens file.
 builder compiles a `git archive` of the pinned commit, which has no `.git`, and
 passes the commit here so `/healthz` and the startup log can name it. See
 `README.md`.
+
+## Development only
+
+`SWITCHBOARD_DEBUG_ORIGIN` is read by `npm run dev:debug`
+(`apps/frontend/vite.debug.config.ts`), never by the service and never from the
+env file: it is the debug listener the dev server proxies `/ws` to (default
+`ws://127.0.0.1:8766`).
 
 ## In the same file, read by something else
 

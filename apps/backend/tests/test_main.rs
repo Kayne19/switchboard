@@ -89,3 +89,37 @@ fn floor_quiet_threshold_is_parsed_by_config_only() {
     let config = Config::for_tests(&[("SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS", "321")]);
     assert_eq!(config.floor_quiet_threshold_ms, 321);
 }
+
+#[tokio::test]
+async fn a_debug_bind_failure_leaves_the_debug_listener_and_bus_off() {
+    let bus = debug::DebugBus::off();
+    let config = || debug::DebugConfig::from_config(&Config::for_tests(&[]));
+    assert!(bind_debug_listener(None, &bus, config()).await.is_none());
+    let taken = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = taken.local_addr().unwrap().to_string();
+    assert!(bind_debug_listener(Some(&address), &bus, config())
+        .await
+        .is_none());
+    assert!(bind_debug_listener(Some("not an address"), &bus, config())
+        .await
+        .is_none());
+    assert!(!bus.enabled(), "no listener, so nothing is recorded");
+    assert!(bind_debug_listener(Some("127.0.0.1:0"), &bus, config())
+        .await
+        .is_some());
+    assert!(bus.enabled());
+}
+
+#[test]
+fn the_debug_listener_is_off_unless_an_address_is_set() {
+    let off = Config::from_values(&HashMap::new(), PathBuf::from("/tmp/env"));
+    assert_eq!(off.debug_bind, None);
+    for blank in ["", "   "] {
+        let values = HashMap::from([("SWITCHBOARD_DEBUG_BIND".into(), blank.into())]);
+        let config = Config::from_values(&values, PathBuf::from("/tmp/env"));
+        assert_eq!(config.debug_bind, None, "{blank:?}");
+    }
+    let values = HashMap::from([("SWITCHBOARD_DEBUG_BIND".into(), " 0.0.0.0:8766 ".into())]);
+    let config = Config::from_values(&values, PathBuf::from("/tmp/env"));
+    assert_eq!(config.debug_bind.as_deref(), Some("0.0.0.0:8766"));
+}

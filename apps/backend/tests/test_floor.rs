@@ -1,10 +1,12 @@
 use super::*;
+use crate::debug::DebugEvent;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::time::Duration;
 
 fn request(n: usize) -> FloorRequest {
     FloorRequest {
+        floor_id: 0,
         project: "grape".into(),
         token: "grape-token".into(),
         generation: 0,
@@ -447,4 +449,115 @@ async fn rewrite_receives_conversation_project_quiet_and_message() {
     );
     assert_eq!(results.recv().await.unwrap().0, "spoken result:update 1");
     worker.abort();
+}
+
+/// The debug events published so far, oldest first.
+fn debug_events(bus: &crate::debug::DebugBus) -> Vec<DebugEvent> {
+    bus.events_for_test()
+}
+
+#[tokio::test]
+async fn the_floor_traces_one_message_from_request_to_release_under_one_id() {
+    let bus = crate::debug::DebugBus::new();
+    let floor = Floor::new(Duration::ZERO).with_debug(bus.clone());
+    let (released, mut results) = mpsc::unbounded_channel();
+    let mut h = hooks(
+        Arc::new(AtomicBool::new(true)),
+        Arc::new(AtomicBool::new(true)),
+        Arc::new(AtomicUsize::new(0)),
+        released,
+    );
+    // Jev says no once: the message is held, then released at the next quiet
+    // moment without asking again.
+    h.gate = Arc::new(|_| Box::pin(async { Ok(false) }) as GateFuture);
+    h.rewrite = Arc::new(|input| {
+        let text = format!("Grape says: {}", input.message);
+        Box::pin(async move { Ok(text) }) as RewriteFuture
+    });
+    floor.set_page_connected(true).await;
+    floor.enqueue(request(1)).await;
+    let worker_floor = floor.clone();
+    let worker = tokio::spawn(async move { worker_floor.run(h).await });
+    assert_eq!(
+        results.recv().await.unwrap().0,
+        "Grape says: update 1:update 1"
+    );
+    worker.abort();
+
+    let id = Some("floor-1".to_owned());
+    let events = debug_events(&bus);
+    assert_eq!(
+        events[0],
+        DebugEvent::FloorRequest {
+            agent: "grape".into(),
+            message: "update 1".into(),
+            floor_id: id.clone(),
+        }
+    );
+    assert!(matches!(
+        &events[1],
+        DebugEvent::FloorGate { agent, answer, floor_id, .. }
+            if agent == "grape" && answer == "no" && *floor_id == id
+    ));
+    assert_eq!(
+        events[2],
+        DebugEvent::FloorHeld {
+            agent: "grape".into(),
+            message: "update 1".into(),
+            floor_id: id.clone(),
+        }
+    );
+    assert!(matches!(
+        &events[3],
+        DebugEvent::FloorRewrite { original, rewritten, floor_id, .. }
+            if original == "update 1" && rewritten == "Grape says: update 1" && *floor_id == id
+    ));
+    assert_eq!(
+        events[4],
+        DebugEvent::FloorReleased {
+            agent: "grape".into(),
+            how: "quiet_after_hold".into(),
+            floor_id: id,
+        }
+    );
+    assert_eq!(events.len(), 5);
+}
+
+#[tokio::test]
+async fn the_floor_traces_a_gate_yes_release_and_a_dropped_message() {
+    let bus = crate::debug::DebugBus::new();
+    let floor = Floor::new(Duration::ZERO).with_debug(bus.clone());
+    let live = Arc::new(AtomicBool::new(true));
+    let (released, mut results) = mpsc::unbounded_channel();
+    let h = hooks(
+        Arc::new(AtomicBool::new(true)),
+        live.clone(),
+        Arc::new(AtomicUsize::new(0)),
+        released,
+    );
+    floor.set_page_connected(true).await;
+    floor.enqueue(request(1)).await;
+    let worker_floor = floor.clone();
+    let worker = tokio::spawn(async move { worker_floor.run(h).await });
+    results.recv().await.unwrap();
+    live.store(false, Ordering::SeqCst);
+    floor.enqueue(request(2)).await;
+    while floor.queue_len().await > 0 {
+        tokio::task::yield_now().await;
+    }
+    worker.abort();
+    let released: Vec<_> = debug_events(&bus)
+        .into_iter()
+        .filter_map(|event| match event {
+            DebugEvent::FloorReleased { how, floor_id, .. } => Some((how, floor_id)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        released,
+        vec![
+            ("gate_yes".to_owned(), Some("floor-1".to_owned())),
+            ("dropped_agent_gone".to_owned(), Some("floor-2".to_owned())),
+        ]
+    );
 }

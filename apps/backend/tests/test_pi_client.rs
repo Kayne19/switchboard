@@ -85,6 +85,8 @@ async fn steer_writes_into_the_running_process() {
         .await
         .unwrap(),
     );
+    let bus = crate::debug::DebugBus::new();
+    session.observe(bus.clone());
     let running = Arc::clone(&session);
     let prompt = tokio::spawn(async move { running.prompt("hello").await.unwrap() });
     for _ in 0..10 {
@@ -94,8 +96,17 @@ async fn steer_writes_into_the_running_process() {
         tokio::task::yield_now().await;
     }
     assert!(session.busy());
-    session.steer("also check docs").await.unwrap();
+    session
+        .steer("also check docs", Some("clip-3"))
+        .await
+        .unwrap();
     assert!(!prompt.await.unwrap().failed);
+    // The steered words name the caller line they carry.
+    assert!(debug_events(&bus).iter().any(|event| matches!(
+        event,
+        DebugEvent::AgentInput { source, utterance_id: Some(id), .. }
+            if source == "steer" && id == "clip-3"
+    )));
     session.close().await;
 }
 
@@ -271,6 +282,7 @@ async fn releasing_a_closed_taken_over_session_still_aborts_before_detaching() {
         on_module: None,
         on_turn: None,
         on_closed: None,
+        debug: None,
         turn_lock: Mutex::new(()),
         busy: AtomicBool::new(true),
         closed: AtomicBool::new(false),
@@ -318,6 +330,7 @@ async fn malformed_successful_takeover_is_detached() {
         on_module: None,
         on_turn: None,
         on_closed: None,
+        debug: None,
     };
     let error = match ProjectSession::attach(&hosts, launch, "desk-alpha").await {
         Ok(_) => panic!("missing session handle is malformed success"),
@@ -363,6 +376,7 @@ async fn takeover_reply_cannot_make_release_kill_a_desk_session() {
         on_module: None,
         on_turn: None,
         on_closed: None,
+        debug: None,
     };
     let (session, _) = ProjectSession::attach(&hosts, launch, "desk-alpha")
         .await
@@ -372,4 +386,397 @@ async fn takeover_reply_cannot_make_release_kill_a_desk_session() {
     assert_eq!(command_rx.recv().await.as_deref(), Some("attach"));
     assert_eq!(command_rx.recv().await.as_deref(), Some("abort"));
     assert_eq!(command_rx.recv().await.as_deref(), Some("detach"));
+}
+
+fn debug_events(bus: &crate::debug::DebugBus) -> Vec<DebugEvent> {
+    bus.events_for_test()
+}
+
+#[tokio::test]
+async fn operator_conversation_is_mirrored_to_the_debug_bus() {
+    let script = "read line; printf '%s\\n' \
+        '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"Hel\"}}' \
+        '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"thinking_delta\",\"delta\":\"hidden\"}}' \
+        '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"lo\"}}' \
+        '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_end\",\"content\":\"Hello\"}}' \
+        '{\"type\":\"tool_execution_start\",\"toolName\":\"route\",\"toolCallId\":\"c1\",\"args\":{\"target\":\"alpha\",\"api_key\":\"sk-live-123\"}}' \
+        '{\"type\":\"tool_execution_end\",\"toolName\":\"route\",\"toolCallId\":\"c1\",\"isError\":true,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"no such project\"}]}}' \
+        '{\"type\":\"agent_settled\"}'";
+    let session = PiSession::start(
+        vec!["sh".into(), "-c".into(), script.into()],
+        "operator",
+        "operator",
+        None,
+        None,
+        Duration::from_secs(1),
+        None,
+    )
+    .await
+    .unwrap();
+    let bus = crate::debug::DebugBus::new();
+    session.observe(bus.clone());
+    let turn = session
+        .prompt_for("hi there", Some("clip-1"))
+        .await
+        .unwrap();
+    assert_eq!(turn.text, "Hello");
+    let turn_id = Some("operator-1".to_owned());
+    assert_eq!(
+        debug_events(&bus),
+        vec![
+            DebugEvent::AgentInput {
+                agent: "operator".into(),
+                turn_id: turn_id.clone(),
+                text: "hi there".into(),
+                source: "caller".into(),
+                utterance_id: Some("clip-1".into()),
+            },
+            DebugEvent::AgentText {
+                agent: "operator".into(),
+                turn_id: turn_id.clone(),
+                text: "Hello".into(),
+                final_: false,
+            },
+            DebugEvent::ToolStart {
+                agent: "operator".into(),
+                call_id: Some("c1".into()),
+                tool: "route".into(),
+                args: Some(json!({"target": "alpha", "api_key": "[redacted]"})),
+                turn_id: turn_id.clone(),
+            },
+            DebugEvent::ToolEnd {
+                agent: "operator".into(),
+                call_id: Some("c1".into()),
+                tool: "route".into(),
+                result: Some(json!({"content": [{"type": "text", "text": "no such project"}]})),
+                error: Some("no such project".into()),
+                turn_id: turn_id.clone(),
+            },
+            DebugEvent::AgentText {
+                agent: "operator".into(),
+                turn_id,
+                text: "Hello".into(),
+                final_: true,
+            },
+        ]
+    );
+    session.close().await;
+}
+
+#[tokio::test]
+async fn utility_prompts_are_tagged_by_kind_and_numbered_per_process() {
+    let script = "while read line; do printf '%s\\n' '{\"type\":\"agent_settled\"}'; done";
+    let session = PiSession::start(
+        vec!["sh".into(), "-c".into(), script.into()],
+        "routing utility",
+        "utility",
+        None,
+        None,
+        Duration::from_secs(1),
+        None,
+    )
+    .await
+    .unwrap();
+    let bus = crate::debug::DebugBus::new();
+    session.observe(bus.clone());
+    session.prompt("[JEV]\nwhere to?").await.unwrap();
+    session
+        .prompt("[FLOOR REWRITE]\nWork: alpha")
+        .await
+        .unwrap();
+    let inputs: Vec<(Option<String>, String)> = debug_events(&bus)
+        .into_iter()
+        .filter_map(|event| match event {
+            DebugEvent::AgentInput {
+                agent,
+                turn_id,
+                source,
+                utterance_id,
+                ..
+            } => {
+                assert_eq!(agent, "utility");
+                assert_eq!(utterance_id, None);
+                Some((turn_id, source))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        inputs,
+        vec![
+            (Some("utility-1".into()), "routing_request".into()),
+            (Some("utility-2".into()), "floor_rewrite".into()),
+        ]
+    );
+    session.close().await;
+}
+
+#[tokio::test]
+async fn an_unobserved_process_publishes_nothing_and_a_second_observe_is_ignored() {
+    let script = "while read line; do printf '%s\\n' '{\"type\":\"agent_settled\"}'; done";
+    let session = PiSession::start(
+        vec!["sh".into(), "-c".into(), script.into()],
+        "operator",
+        "operator",
+        None,
+        None,
+        Duration::from_secs(1),
+        None,
+    )
+    .await
+    .unwrap();
+    session.prompt("before").await.unwrap();
+    let first = crate::debug::DebugBus::new();
+    let second = crate::debug::DebugBus::new();
+    session.observe(first.clone());
+    session.observe(second.clone());
+    session.prompt("after").await.unwrap();
+    assert_eq!(
+        debug_events(&first).len(),
+        1,
+        "the input; an empty reply is not shown"
+    );
+    assert!(debug_events(&second).is_empty());
+    session.close().await;
+}
+
+#[test]
+fn streamed_text_goes_out_in_bounded_pieces() {
+    let mut buffer = DeltaBuffer::default();
+    assert_eq!(buffer.push("a"), None);
+    assert_eq!(buffer.push(""), None);
+    let piece = buffer.push(&"b".repeat(DELTA_FLUSH_BYTES)).unwrap();
+    assert_eq!(piece.len(), DELTA_FLUSH_BYTES + 1);
+    assert_eq!(buffer.take(), None);
+    assert_eq!(buffer.push("c"), None);
+    assert_eq!(buffer.take().as_deref(), Some("c"));
+}
+
+#[test]
+fn tool_errors_and_prompt_sources_for_the_debug_page() {
+    assert_eq!(tool_error_text(None), "the tool reported an error");
+    assert_eq!(tool_error_text(Some(&json!("boom"))), "boom");
+    assert_eq!(
+        tool_error_text(Some(
+            &json!({"content": [{"type": "text", "text": "x".repeat(600)}]})
+        ))
+        .chars()
+        .count(),
+        TOOL_ERROR_CHARS + 1
+    );
+    assert_eq!(
+        local_prompt_source("operator", "[CALL STATE]\n..."),
+        "caller"
+    );
+    assert_eq!(
+        local_prompt_source("utility", "[FLOOR REWRITE]"),
+        "floor_rewrite"
+    );
+    assert_eq!(
+        local_prompt_source("utility", "anything"),
+        "routing_request"
+    );
+}
+
+fn debug_hosts() -> crate::hosts::Hosts {
+    crate::hosts::Hosts::new(
+        std::collections::HashMap::from([("scriptorium".to_owned(), "token".to_owned())]),
+        crate::hosts::Heartbeat {
+            interval: Duration::from_secs(60),
+            missed_pong_limit: 3,
+        },
+    )
+}
+
+fn debug_launch(bus: &crate::debug::DebugBus, on_module: Option<ModuleCallback>) -> ProjectLaunch {
+    ProjectLaunch {
+        host: "scriptorium".into(),
+        project: "alpha".into(),
+        cwd: "/srv/alpha".into(),
+        spec: "anthropic/current".into(),
+        brief: "BRIEF".into(),
+        turn_timeout: Duration::from_secs(5),
+        on_activity: None,
+        on_module,
+        on_turn: None,
+        on_closed: None,
+        debug: Some(bus.clone()),
+    }
+}
+
+#[tokio::test]
+async fn project_conversation_is_mirrored_to_the_debug_bus() {
+    use crate::hosts::Step;
+    let hosts = debug_hosts();
+    let mut fake = crate::hosts::FakeHostAgent::new(Box::new(|_, message| {
+        if message.contains("second") {
+            // An older host: tool events without args or results.
+            return vec![
+                Step::Event(json!({"kind": "tool_start", "tool": "read", "call_id": "t2"})),
+                Step::Event(
+                    json!({"kind": "tool_end", "tool": "read", "call_id": "t2", "error": false}),
+                ),
+            ];
+        }
+        vec![
+            Step::Event(
+                json!({"kind": "tool_start", "tool": "bash", "call_id": "t1", "args": {"command": "cargo test", "token": "abc"}, "turn_id": "turn-1"}),
+            ),
+            Step::Event(
+                json!({"kind": "tool_end", "tool": "bash", "call_id": "t1", "error": true, "result": {"content": [{"type": "text", "text": "1 failed"}]}, "turn_id": "turn-1"}),
+            ),
+            Step::Event(json!({"kind": "text", "text": "Done.", "turn_id": "turn-1"})),
+        ]
+    }));
+    fake.turn_ids = true;
+    let _log = fake.serve(hosts.connect_fake("scriptorium"));
+    let bus = crate::debug::DebugBus::new();
+    let (session, _) = ProjectSession::create(&hosts, debug_launch(&bus, None))
+        .await
+        .unwrap();
+    session.join_call("call-token", "", 1000).await.unwrap();
+    let turn = session
+        .prompt_as("first", "intro", Some("clip-9"))
+        .await
+        .unwrap();
+    assert_eq!(turn.text, "Done.");
+    session.prompt("second").await.unwrap();
+    let agent = || "alpha".to_owned();
+    assert_eq!(
+        debug_events(&bus),
+        vec![
+            DebugEvent::AgentInput {
+                agent: agent(),
+                turn_id: None,
+                text: "BRIEF".into(),
+                source: "brief".into(),
+                utterance_id: None,
+            },
+            DebugEvent::AgentInput {
+                agent: agent(),
+                turn_id: None,
+                text: "first".into(),
+                source: "intro".into(),
+                utterance_id: Some("clip-9".into()),
+            },
+            DebugEvent::ToolStart {
+                agent: agent(),
+                call_id: Some("t1".into()),
+                tool: "bash".into(),
+                args: Some(json!({"command": "cargo test", "token": "[redacted]"})),
+                turn_id: Some("turn-1".into()),
+            },
+            DebugEvent::ToolEnd {
+                agent: agent(),
+                call_id: Some("t1".into()),
+                tool: "bash".into(),
+                result: Some(json!({"content": [{"type": "text", "text": "1 failed"}]})),
+                error: Some("1 failed".into()),
+                turn_id: Some("turn-1".into()),
+            },
+            DebugEvent::AgentText {
+                agent: agent(),
+                turn_id: Some("turn-1".into()),
+                text: "Done.".into(),
+                final_: false,
+            },
+            DebugEvent::AgentText {
+                agent: agent(),
+                turn_id: Some("turn-1".into()),
+                text: "Done.".into(),
+                final_: true,
+            },
+            DebugEvent::AgentInput {
+                agent: agent(),
+                turn_id: None,
+                text: "second".into(),
+                source: "caller".into(),
+                utterance_id: None,
+            },
+            DebugEvent::ToolStart {
+                agent: agent(),
+                call_id: Some("t2".into()),
+                tool: "read".into(),
+                args: None,
+                turn_id: None,
+            },
+            DebugEvent::ToolEnd {
+                agent: agent(),
+                call_id: Some("t2".into()),
+                tool: "read".into(),
+                result: None,
+                error: None,
+                turn_id: None,
+            },
+        ]
+    );
+    session.close();
+}
+
+#[tokio::test]
+async fn module_calls_and_their_answers_are_mirrored_without_the_token() {
+    use crate::hosts::Step;
+    let hosts = debug_hosts();
+    let fake = crate::hosts::FakeHostAgent::new(Box::new(|_, _| {
+        vec![
+            Step::Call("speak", json!({"text": "The build passes."})),
+            Step::CallWithToken("old-token".into(), "speak", json!({"text": "stale"})),
+        ]
+    }));
+    let _log = fake.serve(hosts.connect_fake("scriptorium"));
+    let bus = crate::debug::DebugBus::new();
+    let on_module: ModuleCallback = Arc::new(|call: AgentCall| {
+        Box::pin(async move {
+            assert_eq!(call.call, "speak");
+            json!({"status": "delivered", "reason": null})
+        })
+    });
+    let (session, _) = ProjectSession::create(&hosts, debug_launch(&bus, Some(on_module)))
+        .await
+        .unwrap();
+    session.join_call("call-token", "", 1000).await.unwrap();
+    session.prompt("go").await.unwrap();
+    let modules: Vec<DebugEvent> = debug_events(&bus)
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event,
+                DebugEvent::ModuleCall { .. } | DebugEvent::ModuleResult { .. }
+            )
+        })
+        .collect();
+    assert_eq!(
+        modules,
+        vec![
+            DebugEvent::ModuleCall {
+                agent: "alpha".into(),
+                call_id: "m1".into(),
+                name: "speak".into(),
+                args: json!({"text": "The build passes."}),
+                turn_id: None,
+            },
+            DebugEvent::ModuleResult {
+                agent: "alpha".into(),
+                call_id: "m1".into(),
+                ok: true,
+                detail: json!({"status": "delivered", "reason": null}),
+            },
+            DebugEvent::ModuleCall {
+                agent: "alpha".into(),
+                call_id: "m2".into(),
+                name: "speak".into(),
+                args: json!({"text": "stale"}),
+                turn_id: None,
+            },
+            DebugEvent::ModuleResult {
+                agent: "alpha".into(),
+                call_id: "m2".into(),
+                ok: false,
+                detail: json!({"status": "refused", "reason": "not_on_call"}),
+            },
+        ]
+    );
+    let serialized = serde_json::to_string(&modules).unwrap();
+    assert!(!serialized.contains("call-token") && !serialized.contains("old-token"));
+    session.close();
 }

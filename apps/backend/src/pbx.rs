@@ -566,6 +566,28 @@ impl BackgroundRegistry {
     }
 }
 
+/// Marks the caller line a decision is handling, for the debug trace, and
+/// clears it when dropped: at the end of the decision or when a rescue
+/// aborts it.
+struct UtteranceScope(Arc<StdMutex<Option<String>>>);
+
+impl UtteranceScope {
+    fn enter(slot: &Arc<StdMutex<Option<String>>>, utterance_id: &str) -> Self {
+        *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some(utterance_id.to_owned());
+        Self(Arc::clone(slot))
+    }
+}
+
+impl Drop for UtteranceScope {
+    fn drop(&mut self) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+}
+
 /// What routing reads about the call, without the PBX lock. The turn worker
 /// holds that lock for a whole prompt; a caller utterance that arrives during
 /// the prompt must still be routed while it runs, or it can never be steered
@@ -648,6 +670,10 @@ pub struct Switchboard {
     /// The call as Jev saw it for the utterance being handled, in plain text.
     /// The operator and the routing utility get the same facts.
     call_state: String,
+    /// The caller line being handled, for the debug trace only. Set for one
+    /// decision by `handle_decision_with_takeover`, and cleared when that
+    /// decision ends or is cancelled; routing never reads it.
+    trace_utterance: Arc<StdMutex<Option<String>>>,
     /// Project awaiting a caller confirmation before it is stopped.
     pending_stop: Option<String>,
     /// Projects explicitly stopped by the caller must start fresh once.
@@ -669,6 +695,8 @@ pub struct Switchboard {
     /// silent leg without waiting ten minutes.
     project_turn_timeout: Duration,
     floor_quiet_threshold: Duration,
+    /// Read-only debug observer; never part of call control.
+    debug: crate::debug::DebugBus,
 }
 impl Switchboard {
     pub fn new(config: &crate::Config, registry: Registry, prewarm: Arc<Prewarm>) -> Self {
@@ -747,6 +775,7 @@ impl Switchboard {
             operator_note: None,
             agent_tasks: Arc::new(StdMutex::new(HashMap::new())),
             call_state: String::new(),
+            trace_utterance: Arc::new(StdMutex::new(None)),
             pending_stop: None,
             resume_blocked: HashSet::new(),
             coordinator,
@@ -756,11 +785,15 @@ impl Switchboard {
             router,
             project_turn_timeout: PROJECT_TURN_TIMEOUT,
             floor_quiet_threshold: Duration::from_millis(config.floor_quiet_threshold_ms),
+            debug: crate::debug::DebugBus::off(),
         }
     }
 
     pub fn floor_quiet_threshold(&self) -> Duration {
         self.floor_quiet_threshold
+    }
+    pub fn set_debug_bus(&mut self, bus: crate::debug::DebugBus) {
+        self.debug = bus;
     }
     /// The project hosts' links; the application serves them on `/host`.
     pub fn hosts(&self) -> Hosts {
@@ -1082,7 +1115,7 @@ impl Switchboard {
             (true, Some(target)) => Some(self.desk_session_for_takeover_target(target).await),
             _ => None,
         };
-        self.handle_decision_with_takeover(text, decision, takeover)
+        self.handle_decision_with_takeover("utterance", text, decision, takeover)
             .await
     }
 
@@ -1091,16 +1124,64 @@ impl Switchboard {
     /// `list_sessions` waits on a host link.
     pub(crate) async fn handle_decision_with_takeover(
         &mut self,
+        utterance_id: &str,
         text: &str,
         decision: &Decision,
         takeover: Option<Result<Option<Value>, String>>,
     ) -> Reply {
+        // Dropped when the decision ends or a rescue aborts it part way, so
+        // a cancelled utterance's id never labels later work.
+        let _scope = UtteranceScope::enter(&self.trace_utterance, utterance_id);
         let reply = self
             .handle_decision_for_state(text, decision, takeover)
             .await;
         // The call state belongs to this utterance only.
         self.call_state.clear();
         reply
+    }
+
+    /// The caller line this decision is handling; `None` outside one.
+    fn current_utterance(&self) -> Option<String> {
+        self.trace_utterance
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// Publish one hop of the current utterance's routing trace. Outside a
+    /// caller decision there is no utterance, and nothing is published.
+    fn trace(&self, event: impl FnOnce(String) -> crate::debug::DebugEvent) {
+        if let Some(utterance_id) = self.current_utterance() {
+            self.debug.publish(event(utterance_id));
+        }
+    }
+
+    fn trace_branch(&self, branch: &str, reason: String) {
+        self.trace(|utterance_id| crate::debug::DebugEvent::PbxBranch {
+            utterance_id,
+            branch: branch.to_owned(),
+            reason,
+        });
+    }
+
+    fn trace_routed(&self, to_agent: &str, text_part: &str, mode: &str, via: &str) {
+        self.trace(|utterance_id| crate::debug::DebugEvent::Routed {
+            utterance_id,
+            to_agent: to_agent.to_owned(),
+            text_part: text_part.to_owned(),
+            mode: mode.to_owned(),
+            via: via.to_owned(),
+        });
+    }
+
+    /// A destination that is not a registered project: the switchboard
+    /// refuses it and answers the caller itself.
+    fn trace_refused(&self, target: &str, text: &str, via: &str) {
+        self.trace_branch(
+            "refused_unknown_target",
+            format!("{via} chose {target:?}, which is not a registered project, so the switchboard refused it"),
+        );
+        self.trace_routed(OPERATOR, text, "continue", "pbx");
     }
 
     async fn handle_decision_for_state(
@@ -1112,18 +1193,37 @@ impl Switchboard {
         // These actions are owned by the PBX, not by an agent. A stop decision
         // is deliberately confirmation-only here; the next utterance must
         // confirm before a resident session is closed.
+        let mut note = String::new();
         if let Some(target) = self.pending_stop.take() {
             if is_confirmation(text) {
+                self.trace_branch(
+                    "stop_confirmed",
+                    format!("the caller confirmed stopping {target}"),
+                );
+                self.trace_routed(OPERATOR, text, "continue", "pbx");
                 return self.stop_project(&target).await;
             }
+            note = format!("the pending stop of {target} was not confirmed, so it was dropped; ");
         }
         if matches!(decision.action, crate::router::Action::Stop) {
             let target = decision.target.clone().or_else(|| {
                 (self.coordinator.route() != OPERATOR).then(|| self.coordinator.route())
             });
             let Some(target) = target else {
+                self.trace_branch(
+                    "stop_asked",
+                    format!("{note}Jev chose stop, but nothing is running to stop"),
+                );
+                self.trace_routed(OPERATOR, text, "continue", "pbx");
                 return self.reply(["Nothing is running to stop."], None);
             };
+            self.trace_branch(
+                "stop_asked",
+                format!(
+                    "{note}Jev chose stop for {target}; a stop always asks the caller to confirm"
+                ),
+            );
+            self.trace_routed(OPERATOR, text, "continue", "pbx");
             self.pending_stop = Some(target.clone());
             return self.reply(
                 [format!(
@@ -1134,15 +1234,30 @@ impl Switchboard {
         }
         if matches!(decision.action, crate::router::Action::TakeOver) {
             if let Some(target) = decision.target.as_deref() {
+                self.trace_branch(
+                    "take_over",
+                    format!("{note}Jev chose take_over of the desk session for {target}"),
+                );
                 let Some(takeover) = takeover else {
+                    self.trace_routed(OPERATOR, text, "continue", "pbx");
                     return self.reply_failure(
                         "I couldn't check what's open at your desk, so I didn't take it over."
                             .into(),
                         "takeover lookup was not prepared",
                     );
                 };
+                if self.registry.get(target).is_some() {
+                    self.trace_routed(target, text, "take_over", "jev");
+                } else {
+                    self.trace_refused(target, text, "jev");
+                }
                 return self.take_over(text, target, takeover).await;
             }
+            self.trace_branch(
+                "take_over",
+                format!("{note}Jev chose take_over without a target, so the caller is asked which"),
+            );
+            self.trace_routed(OPERATOR, text, "continue", "pbx");
             return self.reply(
                 ["Tell me which project you want to take over."],
                 Some("takeover target missing".into()),
@@ -1150,8 +1265,17 @@ impl Switchboard {
         }
         if matches!(decision.action, crate::router::Action::AnswerWaiting) {
             if let Some(target) = decision.target.as_deref() {
+                self.trace_branch(
+                    "answer_waiting",
+                    format!("{note}the caller answered {target}, which is waiting to speak"),
+                );
                 return self
-                    .route_project_part(text, target, crate::router::ConversationMode::Continue)
+                    .route_project_part(
+                        text,
+                        target,
+                        crate::router::ConversationMode::Continue,
+                        Some("jev"),
+                    )
                     .await;
             }
         }
@@ -1163,8 +1287,19 @@ impl Switchboard {
         // this is only a second routing opinion from the stateless utility.
         let utility_required = decision.multi_target || decision.unsure;
         if utility_required {
+            self.trace_branch(
+                "utility",
+                if decision.multi_target {
+                    format!("{note}Jev found several targets (multi_target), so the routing utility splits the utterance")
+                } else {
+                    format!(
+                        "{note}Jev was unsure, so the routing utility gives a second opinion ({})",
+                        decision.reason
+                    )
+                },
+            );
             let request = self.utility_routing_request(text, decision, false);
-            let first = self.utility_decision(&request).await;
+            let first = self.utility_decision(&request, "first").await;
             if decision.multi_target {
                 match first {
                     Ok(Some(UtilityDecision::DispatchParts(parts))) => {
@@ -1176,7 +1311,10 @@ impl Switchboard {
                         // utterance to the current agent, so ask once with an
                         // explicit split instruction.
                         let retry = self
-                            .utility_decision(&self.utility_routing_request(text, decision, true))
+                            .utility_decision(
+                                &self.utility_routing_request(text, decision, true),
+                                "split_retry",
+                            )
                             .await;
                         match retry {
                             Ok(Some(UtilityDecision::DispatchParts(parts))) => {
@@ -1202,7 +1340,9 @@ impl Switchboard {
                         mode,
                         confident: true,
                     })) => {
-                        return self.route_project_part(text, &target, mode).await;
+                        return self
+                            .route_project_part(text, &target, mode, Some("utility"))
+                            .await;
                     }
                     Ok(_) => {}
                     Err(error) => {
@@ -1216,6 +1356,10 @@ impl Switchboard {
         // never fall through to the current project with the whole utterance.
         // Let the conversational operator ask the caller instead.
         if decision.multi_target {
+            self.trace_branch(
+                "multi_unresolved",
+                "the routing utility could not split a multi-target utterance, so the operator asks the caller".into(),
+            );
             let context = TransferContext {
                 exact_caller_transcript: text.to_owned(),
                 derived_intent: String::new(),
@@ -1235,13 +1379,36 @@ impl Switchboard {
                     .continue_or_fresh
                     .clone()
                     .unwrap_or(crate::router::ConversationMode::Continue);
-                return self.route_project_part(text, target, mode).await;
+                self.trace_branch(
+                    "go_to_project",
+                    format!(
+                        "{note}Jev chose go_to_project to {target} ({}): {}",
+                        mode.as_str(),
+                        decision.reason
+                    ),
+                );
+                return self
+                    .route_project_part(text, target, mode, Some("jev"))
+                    .await;
             }
         }
         if matches!(decision.action, crate::router::Action::Continue)
             && !decision.sends_to_operator()
             && self.coordinator.route() != OPERATOR
         {
+            let route = self.coordinator.route();
+            self.trace_branch(
+                "continue_current",
+                format!(
+                    "{note}Jev chose continue, so {route} keeps the line: {}",
+                    decision.reason
+                ),
+            );
+            // With its leg gone, the operator takes the line and records
+            // its own destination.
+            if self.agent.is_some() {
+                self.trace_routed(&route, text, "continue", "jev");
+            }
             return self
                 .handle_agent_ctx(&TransferContext {
                     exact_caller_transcript: text.to_owned(),
@@ -1249,6 +1416,19 @@ impl Switchboard {
                 })
                 .await;
         }
+        self.trace_branch(
+            "operator",
+            if utility_required {
+                format!("{note}the routing utility gave no confident destination, so the operator handles it")
+            } else {
+                format!(
+                    "{note}Jev chose {} on {}, which the operator handles: {}",
+                    decision.action.as_str(),
+                    self.coordinator.route(),
+                    decision.reason
+                )
+            },
+        );
         let context = TransferContext {
             exact_caller_transcript: text.to_owned(),
             derived_intent: String::new(),
@@ -1256,11 +1436,17 @@ impl Switchboard {
         self.handle_operator_ctx(&context).await
     }
 
+    /// Sends `text` to `target`. `via` names who chose the target, for the
+    /// `routed` event, which goes out only once the target is known to be
+    /// registered; `None` when the caller already traced it. The operator,
+    /// and a line whose leg turns out to be gone, are traced by the
+    /// operator's own hop.
     async fn route_project_part(
         &mut self,
         text: &str,
         target: &str,
         mode: crate::router::ConversationMode,
+        via: Option<&str>,
     ) -> Reply {
         let context = TransferContext {
             exact_caller_transcript: text.to_owned(),
@@ -1270,10 +1456,17 @@ impl Switchboard {
         // unknown one must not move the caller or drop the leg on the line.
         if target != OPERATOR && self.registry.get(target).is_none() {
             tracing::warn!(%target, "refusing a route to an unregistered project");
+            self.trace_refused(target, text, via.unwrap_or("routing"));
             return self.reply_transfer_error(
                 self.unknown_project_line(target),
                 Some(format!("unknown project {target:?}")),
             );
+        }
+        if let Some(via) = via {
+            let leg_gone = self.coordinator.route() == target && self.agent.is_none();
+            if target != OPERATOR && !leg_gone {
+                self.trace_routed(target, text, mode.as_str(), via);
+            }
         }
         if target != OPERATOR {
             self.set_agent_task(target, text);
@@ -1342,6 +1535,17 @@ impl Switchboard {
             .partition(|part| self.registry.get(&part.agent).is_some());
         for part in &unknown {
             tracing::warn!(project = %part.agent, "dropping a split part for an unregistered project");
+            self.trace_branch(
+                "refused_unknown_target",
+                format!(
+                    "the routing utility sent a part to {:?}, which is not a registered project; that part was dropped",
+                    part.agent
+                ),
+            );
+        }
+        // One utterance fans out to every part's agent.
+        for part in &parts {
+            self.trace_routed(&part.agent, &part.text, "continue", "utility");
         }
         let current = self.coordinator.route();
         let foreground_index = parts
@@ -1371,6 +1575,7 @@ impl Switchboard {
             &foreground.text,
             &foreground.agent,
             crate::router::ConversationMode::Continue,
+            None,
         )
         .await
     }
@@ -1427,7 +1632,7 @@ impl Switchboard {
             return;
         }
         if previous.busy() {
-            let _ = previous.steer(BACKGROUND_NOTICE).await;
+            let _ = previous.steer(BACKGROUND_NOTICE, None).await;
         }
         let state = if previous.busy() { "busy" } else { "idle" };
         let registered = self.register_background_session(previous_label.clone(), previous);
@@ -1475,8 +1680,19 @@ impl Switchboard {
         self.register_background_session_with(project, session.clone(), || session.close())
     }
 
-    fn spawn_background_prompt(&mut self, project: &str, session: ProjectSession, text: String) {
+    /// Prompts a background agent without waiting for its turn. `source` is
+    /// what the prompt is for the debug page (`caller` or `intro`); the
+    /// caller line it carries is read now, before the task leaves the
+    /// decision that set it.
+    fn spawn_background_prompt(
+        &mut self,
+        project: &str,
+        session: ProjectSession,
+        text: String,
+        source: &'static str,
+    ) {
         let (epoch, generation) = self.background_agents.begin_task(project);
+        let utterance = self.current_utterance();
         let token = session.token();
         let callback = self.agent_state_callback.clone();
         let closed_callback = self.session_closed_callback();
@@ -1484,7 +1700,7 @@ impl Switchboard {
         let session_id = session.session_id().to_owned();
         let instance_id = session.instance_id();
         let task = tokio::spawn(async move {
-            let result = session.prompt(&text).await;
+            let result = session.prompt_as(&text, source, utterance.as_deref()).await;
             if let Err(error) = result {
                 tracing::warn!(%error, project = %project_id, "background agent prompt failed");
                 // Prompt transport failure is terminal for this resident. Do
@@ -1534,7 +1750,7 @@ impl Switchboard {
                 return Err(format!("project {} is already busy", project.id));
             }
             self.announce_agent_state(&project.id, "busy").await;
-            self.spawn_background_prompt(&project.id, session, text.to_owned());
+            self.spawn_background_prompt(&project.id, session, text.to_owned(), "caller");
             return Ok(());
         }
         let plan = self
@@ -1566,7 +1782,7 @@ impl Switchboard {
             ));
         }
         self.announce_agent_state(&project.id, "busy").await;
-        self.spawn_background_prompt(&project.id, session, intro);
+        self.spawn_background_prompt(&project.id, session, intro, "intro");
         Ok(())
     }
 
@@ -1624,6 +1840,7 @@ impl Switchboard {
                 self.activity_callback.clone(),
             )
             .await?;
+            session.observe(self.debug.clone());
             self.operator = Some(session);
             self.set_active_session(self.operator_leg()).await;
         }
@@ -1668,6 +1885,7 @@ impl Switchboard {
                 None,
             )
             .await?;
+            session.observe(self.debug.clone());
             self.utility = Some(session);
         }
         self.utility
@@ -1726,6 +1944,32 @@ impl Switchboard {
     /// Ask the isolated utility process. This call never touches the
     /// conversational operator session, so an operator turn cannot block it.
     async fn utility_decision(
+        &mut self,
+        request: &str,
+        attempt: &str,
+    ) -> Result<Option<UtilityDecision>, PiSessionError> {
+        self.trace(|utterance_id| crate::debug::DebugEvent::UtilityRequest {
+            utterance_id,
+            attempt: attempt.to_owned(),
+            prompt: request.to_owned(),
+        });
+        let started = std::time::Instant::now();
+        let decision = self.ask_utility(request).await;
+        let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.trace(|utterance_id| crate::debug::DebugEvent::UtilityDecision {
+            utterance_id,
+            attempt: attempt.to_owned(),
+            decision: match &decision {
+                Ok(Some(decision)) => decision.debug_value(),
+                Ok(None) => json!({"kind": "none"}),
+                Err(error) => json!({"kind": "error", "error": error.to_string()}),
+            },
+            latency_ms,
+        });
+        decision
+    }
+
+    async fn ask_utility(
         &mut self,
         request: &str,
     ) -> Result<Option<UtilityDecision>, PiSessionError> {
@@ -1796,6 +2040,7 @@ impl Switchboard {
             Err(e) => {
                 tracing::error!(error = %e, "operator unavailable");
                 tracing::error!(error = %e, "operator unavailable for routing");
+                self.trace_operator_hop(context, &context.exact_caller_transcript, "unavailable");
                 return self.routing_unavailable();
             }
         };
@@ -1810,16 +2055,19 @@ impl Switchboard {
         );
         // The operator keeps a conversation, but the call changes under it:
         // give it the same current facts Jev saw, once per turn.
+        let operator_text = message.clone();
         let call_state = std::mem::take(&mut self.call_state);
         let message = if call_state.is_empty() {
             message
         } else {
             format!("[CALL STATE]\n{call_state}\n[END CALL STATE]\n\n{message}")
         };
-        let turn = match session.prompt(&message).await {
+        let utterance = self.current_utterance();
+        let turn = match session.prompt_for(&message, utterance.as_deref()).await {
             Ok(turn) => turn,
             Err(error) => {
                 tracing::warn!(%error, "the operator leg failed mid-prompt");
+                self.trace_operator_hop(context, &operator_text, "failed");
                 return self.recover_operator(error.to_string()).await;
             }
         };
@@ -1834,19 +2082,60 @@ impl Switchboard {
             } else {
                 turn.error
             };
+            self.trace_operator_hop(context, &operator_text, "failed");
             return self.recover_operator(error).await;
         }
         if let Some(signal) = turn.signals.iter().find(|s| s.name == ROUTE_TOOL) {
             let target = arg_first(signal, &["target", "project"]);
             let mode = conversation_mode(signal);
             if target.is_empty() {
+                self.trace_operator_hop(context, &operator_text, "route_tool_without_target");
                 return self.reply([turn.text], None);
             }
+            self.trace_operator_hop(context, &operator_text, "route_tool");
+            let action = if target == OPERATOR {
+                "return_to_operator"
+            } else if target == self.coordinator.route() {
+                "continue"
+            } else {
+                "transfer"
+            };
+            self.trace(|utterance_id| crate::debug::DebugEvent::OperatorRouteTool {
+                utterance_id,
+                target: target.clone(),
+                mode: mode.as_str().into(),
+                action: action.into(),
+            });
             return self
-                .route_project_part(&context.exact_caller_transcript, &target, mode)
+                .route_project_part(
+                    &context.exact_caller_transcript,
+                    &target,
+                    mode,
+                    Some("operator"),
+                )
                 .await;
         }
+        self.trace_operator_hop(context, &operator_text, "answered");
         self.reply([turn.text], None)
+    }
+
+    /// The operator's part in an utterance's trace. Unless it handed the
+    /// caller on with its route tool, the operator is the destination: it
+    /// answered (or its recovery did), so the trace ends in a `routed` to it.
+    fn trace_operator_hop(&self, context: &TransferContext, text: &str, outcome: &str) {
+        self.trace(|utterance_id| crate::debug::DebugEvent::OperatorHop {
+            utterance_id,
+            text: text.to_owned(),
+            outcome: outcome.to_owned(),
+        });
+        if outcome != "route_tool" {
+            self.trace_routed(
+                OPERATOR,
+                &context.exact_caller_transcript,
+                "continue",
+                "operator",
+            );
+        }
     }
 
     async fn handle_agent_ctx(&mut self, context: &TransferContext) -> Reply {
@@ -1863,7 +2152,15 @@ impl Switchboard {
             self.announce_agent_state(session.label(), "busy").await;
         }
         self.set_agent_task(session.label(), &context.exact_caller_transcript);
-        let turn = match session.prompt(&context.exact_caller_transcript).await {
+        let utterance = self.current_utterance();
+        let turn = match session
+            .prompt_as(
+                &context.exact_caller_transcript,
+                "caller",
+                utterance.as_deref(),
+            )
+            .await
+        {
             Ok(t) => t,
             Err(error) => {
                 let detail = error.to_string();
@@ -2049,7 +2346,11 @@ impl Switchboard {
         let intro_prompt = build_intro_prompt(context, &project, plan.prepare_report.as_ref());
 
         self.announce_agent_state(&project.id, "busy").await;
-        let turn = match session.prompt(&intro_prompt).await {
+        let utterance = self.current_utterance();
+        let turn = match session
+            .prompt_as(&intro_prompt, "intro", utterance.as_deref())
+            .await
+        {
             Ok(t) => t,
             Err(e) => {
                 tracing::warn!(project = %project.id, error = %e, "intro prompt to project failed");
@@ -2148,7 +2449,11 @@ impl Switchboard {
         // The agent was told background rules when it was shelved. Tell it
         // they no longer apply before it answers the caller.
         let prompt = format!("{FOREGROUND_NOTICE}\n\n{}", context.exact_caller_transcript);
-        let turn = match session.prompt(&prompt).await {
+        let utterance = self.current_utterance();
+        let turn = match session
+            .prompt_as(&prompt, "foreground", utterance.as_deref())
+            .await
+        {
             Ok(turn) => turn,
             Err(error) => Turn {
                 text: String::new(),
@@ -2341,6 +2646,7 @@ impl Switchboard {
             on_module: self.module_callback.clone(),
             on_turn: self.turn_callback.clone(),
             on_closed: Some(self.session_closed_callback()),
+            debug: Some(self.debug.clone()),
         };
         let session = match ProjectSession::attach(&self.hosts, launch, session_handle).await {
             Ok((session, state)) => {
@@ -2368,7 +2674,11 @@ impl Switchboard {
         self.set_active_session(Some(LegSession::Project(session.clone())))
             .await;
         self.announce_agent_state(&project.id, "busy").await;
-        let turn = match session.prompt(text).await {
+        let utterance = self.current_utterance();
+        let turn = match session
+            .prompt_as(text, "caller", utterance.as_deref())
+            .await
+        {
             Ok(turn) => turn,
             Err(error) => Turn {
                 text: String::new(),
@@ -2440,6 +2750,7 @@ impl Switchboard {
             on_module: self.module_callback.clone(),
             on_turn: self.turn_callback.clone(),
             on_closed: Some(self.session_closed_callback()),
+            debug: Some(self.debug.clone()),
         };
         // A host-agent restart keeps resident sessions alive. Prefer the
         // matching service-created session rather than creating a duplicate.
@@ -2646,7 +2957,7 @@ impl Switchboard {
                 },
                 intent.trim().trim_end_matches('.')
             );
-            let turn = match session.prompt(&prompt).await {
+            let turn = match session.prompt_as(&prompt, "model_change", None).await {
                 Ok(turn) => turn,
                 Err(error) => Turn {
                     text: String::new(),

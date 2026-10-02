@@ -1,5 +1,6 @@
 //! HTTP, WebSocket and application workers.
 use crate::audio::{Speaker, StreamResult, SttAdapter, SttStreamAdapter, TtsContinuity};
+use crate::debug::{DebugBus, DebugEvent};
 use crate::delivery::{AudioQueue, DeliveryConnection, DeliveryFrame, DeliveryState, Event};
 use crate::display::{
     is_display_event, stamp_display_seq, ConfirmState, DisplayGateState, DisplayProjection,
@@ -18,7 +19,7 @@ use crate::pi_client::{
     Activity, ActivityCallback, AgentCall, LegSession, ModuleCallback, ProjectTurn, TurnCallback,
 };
 use crate::protocol::{AgentRequest, AgentState, CandidateEnd, ErrorCode, ServerMessage, Status};
-use crate::router::{Action, CallSummary, Decision};
+use crate::router::{jev_outcome, Action, CallSummary, Decision, RouteRule};
 use axum::extract::ws::{Message, WebSocket};
 use axum::{
     extract::rejection::JsonRejection,
@@ -445,6 +446,11 @@ pub struct AppInner {
     pub switchboard: Mutex<Switchboard>,
     /// The project hosts' links (`/host`).
     hosts: Hosts,
+    /// Read-only, bounded observability. It never participates in call control.
+    pub(crate) debug: DebugBus,
+    /// The call the debug page groups events under, while a page is on it.
+    debug_call: std::sync::Mutex<Option<String>>,
+    next_debug_call: AtomicU64,
     /// What routing reads about the call. Routing must never wait on the PBX
     /// lock: the turn worker holds it for a whole prompt, and an utterance
     /// routed only after the prompt ends can no longer steer it.
@@ -618,6 +624,7 @@ impl AppState {
         gate.active_epoch = Some(epoch);
         gate.screen_state["stale"] = json!(true);
         self.0.floor.set_page_connected(true).await;
+        self.start_debug_call();
         *self.0.screen_state.lock().await = gate.screen_state.clone();
         let snapshot_actions = gate.projection.snapshot_actions();
         let watermark = gate.watermark;
@@ -634,18 +641,77 @@ impl AppState {
             }
         }
         self.0.delivery.retire(epoch);
-        self.0
-            .floor
-            .set_page_connected(self.0.delivery.connected())
-            .await;
+        let connected = self.0.delivery.connected();
+        self.0.floor.set_page_connected(connected).await;
+        if !connected {
+            self.end_debug_call("page_closed");
+        }
     }
 
+    /// Opens the debug page's call when a caller page connects to none.
+    fn start_debug_call(&self) {
+        let mut call = self
+            .0
+            .debug_call
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if call.is_some() {
+            return;
+        }
+        let call_id = format!(
+            "call-{}",
+            self.0.next_debug_call.fetch_add(1, Ordering::Relaxed)
+        );
+        *call = Some(call_id.clone());
+        self.0.debug.publish(DebugEvent::CallBoundary {
+            phase: "started".into(),
+            call_id,
+            reason: None,
+        });
+    }
+
+    /// Closes the debug page's call, if one is open.
+    fn end_debug_call(&self, reason: &str) {
+        let ended = self
+            .0
+            .debug_call
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(call_id) = ended {
+            self.0.debug.publish(DebugEvent::CallBoundary {
+                phase: "ended".into(),
+                call_id,
+                reason: Some(reason.to_owned()),
+            });
+        }
+    }
+
+    #[cfg(test)]
     pub fn new(
         switchboard: Switchboard,
         transcript_log: TranscriptLog,
         speaker: Speaker,
         stt: SttAdapter,
         stt_stream: SttStreamAdapter,
+    ) -> Self {
+        Self::new_with_debug(
+            switchboard,
+            transcript_log,
+            speaker,
+            stt,
+            stt_stream,
+            DebugBus::new(),
+        )
+    }
+
+    pub fn new_with_debug(
+        switchboard: Switchboard,
+        transcript_log: TranscriptLog,
+        speaker: Speaker,
+        stt: SttAdapter,
+        stt_stream: SttStreamAdapter,
+        debug: DebugBus,
     ) -> Self {
         let (events, _) = broadcast::channel(256);
         let (speech, speech_rx) = mpsc::channel(64);
@@ -736,14 +802,16 @@ impl AppState {
             let announcer = route_announcer.clone();
             Box::pin(async move { announcer.announce_route().await })
         });
-        let floor = Floor::new(switchboard.floor_quiet_threshold());
+        let floor = Floor::new(switchboard.floor_quiet_threshold()).with_debug(debug.clone());
         let active_session = switchboard.session_control();
         let redials = switchboard.redial_planner();
         let hosts = switchboard.hosts();
+        hosts.set_debug_bus(debug.clone());
         let routing = switchboard.routing_view();
         let mut switchboard = switchboard;
         switchboard.set_activity_callback(Some(activity_callback));
         switchboard.set_route_callback(Some(route_callback));
+        switchboard.set_debug_bus(debug.clone());
         Self(Arc::new_cyclic(|app: &std::sync::Weak<AppInner>| {
             let state_app = app.clone();
             let state_callback: AgentStateCallback = Arc::new(move |notice: AgentStateNotice| {
@@ -808,6 +876,9 @@ impl AppState {
             AppInner {
                 switchboard: Mutex::new(switchboard),
                 hosts,
+                debug,
+                debug_call: std::sync::Mutex::new(None),
+                next_debug_call: AtomicU64::new(1),
                 routing,
                 delivery,
                 transcript_log: Mutex::new(transcript_log),
@@ -876,6 +947,26 @@ impl AppState {
         } else {
             router
         }
+    }
+
+    /// The optional read-only listener. It has no call controls and serves
+    /// only the embedded debug page and its WebSocket.
+    pub fn debug_router(&self) -> Router {
+        let state = self.clone();
+        crate::debug::router(
+            self.0.debug.clone(),
+            move || state.0.projection.snapshot(),
+            self.0.shutdown.subscribe(),
+        )
+    }
+
+    /// Wait for the same idempotent shutdown signal used by the main server.
+    pub async fn wait_for_shutdown(self) {
+        let mut shutdown = self.0.shutdown.subscribe();
+        if *shutdown.borrow() {
+            return;
+        }
+        let _ = shutdown.changed().await;
     }
 }
 
@@ -1119,9 +1210,26 @@ fn spawn_floor_worker(state: AppState) {
                 summary.merge_live_agents(&live_agents(&state));
                 summary.queued_update = Some(crate::router::QueuedUpdate {
                     from_agent: request.project.clone(),
-                    message: request.message,
+                    message: request.message.clone(),
                 });
-                router.good_moment(&summary).await.map_err(|_| ())
+                let floor_id = request.floor_debug_id();
+                let jev_request = router.good_moment_request(&summary);
+                state.0.debug.publish(DebugEvent::JevRequest {
+                    utterance_id: None,
+                    purpose: "good_moment".into(),
+                    state: jev_request.state.clone(),
+                    floor_id: Some(floor_id.clone()),
+                });
+                let trace = router.good_moment(jev_request).await;
+                state.0.debug.publish(jev_response_event(
+                    None,
+                    Some(floor_id),
+                    "good_moment",
+                    trace.latency_ms,
+                    trace.response.as_ref(),
+                    trace.result.as_ref().err(),
+                ));
+                trace.result.map_err(|_| ())
             }) as floor::GateFuture
         }),
         rewrite: Arc::new(move |input: FloorRewriteInput| {
@@ -1176,6 +1284,7 @@ pub async fn shutdown(state: &AppState) {
     // shutdown waits for upgraded connections, so merely stopping the listener
     // can otherwise leave systemd waiting on a browser tab indefinitely.
     state.0.shutdown.send_replace(true);
+    state.end_debug_call("shutdown");
     state.0.coordinator.finish_shutdown();
 }
 fn emit(state: &AppState, event: Event) -> bool {
@@ -1815,13 +1924,29 @@ impl From<Decision> for RoutedDecision {
 
 /// Build a summary and ask Jev once for this utterance. The operator path is
 /// the only fallback for a timeout, malformed response, or missing key.
-async fn route_transcript(state: &AppState, transcript: &str) -> RoutedDecision {
+async fn route_transcript(state: &AppState, id: &str, transcript: &str) -> RoutedDecision {
     let entries = state.0.transcript_log.lock().await.entries();
     let screen = state.0.screen_state.lock().await.clone();
     let (router, summary) =
         call_summary_without_pbx_lock(state, &entries, screen, transcript.to_owned()).await;
-    let mut decision = match router.route(&summary).await {
-        Ok(decision) => decision,
+    let request = router.build_request(&summary);
+    state.0.debug.publish(DebugEvent::JevRequest {
+        utterance_id: Some(id.to_owned()),
+        purpose: "route".into(),
+        state: request.state.clone(),
+        floor_id: None,
+    });
+    let trace = router.route_request(request).await;
+    state.0.debug.publish(jev_response_event(
+        Some(id.to_owned()),
+        None,
+        "route",
+        trace.latency_ms,
+        trace.response.as_ref(),
+        trace.result.as_ref().err(),
+    ));
+    let (mut decision, rule) = match trace.result {
+        Ok(routed) => routed,
         Err(error) => {
             let decision = router.fallback(&error);
             tracing::warn!(
@@ -1831,22 +1956,87 @@ async fn route_transcript(state: &AppState, transcript: &str) -> RoutedDecision 
                 reason = %decision.reason,
                 "Jev routing unavailable; using the top-level LLM path"
             );
-            decision
+            (decision, RouteRule::JevUnavailable)
         }
     };
+    let mut reason = decision.reason.clone();
     // "Answer waiting" names the agent that is waiting. When Jev leaves the
     // target out and exactly one agent has something for the caller, that
     // agent is the target; otherwise the operator asks.
     if matches!(decision.action, Action::AnswerWaiting) && decision.target.is_none() {
         if let Some(agent) = summary.single_waiting_agent() {
             tracing::info!(target = %agent, "answer_waiting without a target; using the one waiting agent");
+            reason.push_str(&format!(
+                "; answer_waiting named no agent, so it goes to {agent}, the only one waiting"
+            ));
             decision.target = Some(agent);
         }
     }
+    state.0.debug.publish(DebugEvent::RouteDecision {
+        utterance_id: id.to_owned(),
+        rule: rule.as_str().into(),
+        reason,
+        action: decision.action.as_str().into(),
+        target: decision.target.clone(),
+        mode: decision
+            .continue_or_fresh
+            .as_ref()
+            .map_or("not_applicable", |mode| mode.as_str())
+            .into(),
+        decided_by: if matches!(rule, RouteRule::JevUnavailable) {
+            "fallback".into()
+        } else {
+            "jev".into()
+        },
+    });
     RoutedDecision {
         decision,
         call_state: summary.render_for_llm(),
     }
+}
+
+/// Jev's raw answers and timing for one question set, for the debug page.
+fn jev_response_event(
+    utterance_id: Option<String>,
+    floor_id: Option<String>,
+    purpose: &str,
+    latency_ms: u64,
+    response: Option<&crate::jev::JevResponse>,
+    error: Option<&crate::jev::JevError>,
+) -> DebugEvent {
+    DebugEvent::JevResponse {
+        utterance_id,
+        purpose: purpose.to_owned(),
+        latency_ms,
+        outcome: jev_outcome(response, error).into(),
+        answers: response
+            .and_then(|response| serde_json::to_value(&response.answers).ok())
+            .unwrap_or_else(|| json!({})),
+        error: error.map(ToString::to_string),
+        floor_id,
+    }
+}
+
+/// Ends an utterance's routing trace when a newer generation discards it.
+fn trace_stale_utterance(state: &AppState, id: &str, stamped: u64) {
+    state.0.debug.publish(DebugEvent::PbxBranch {
+        utterance_id: id.to_owned(),
+        branch: "dropped_stale".into(),
+        reason: format!(
+            "the line changed before this was acted on (stamped generation {stamped}, now {}); it was discarded",
+            state.0.coordinator.generation()
+        ),
+    });
+}
+
+/// Ends an utterance's routing trace when its turn ended without an answer:
+/// a rescue cancelled it (`dropped_stale`) or the worker failed (`failed`).
+fn trace_cut_short(state: &AppState, id: &str, branch: &str, reason: String) {
+    state.0.debug.publish(DebugEvent::PbxBranch {
+        utterance_id: id.to_owned(),
+        branch: branch.to_owned(),
+        reason,
+    });
 }
 
 fn emit_transcript_verdict(state: &AppState, id: &str, transcript: &str) {
@@ -1869,18 +2059,26 @@ async fn dispatch_routed_transcript(
     generation: u64,
     transcript: String,
 ) {
-    let routed = route_transcript(state, &transcript).await;
+    let talking_to = state.0.coordinator.route();
+    state.0.debug.publish(DebugEvent::CallerUtterance {
+        utterance_id: id.to_owned(),
+        text: transcript.clone(),
+        talking_to,
+    });
+    let routed = route_transcript(state, id, &transcript).await;
     let decision = &routed.decision;
     let can_steer = matches!(decision.action, Action::Continue) && !decision.sends_to_operator();
     // Routing itself can span a rescue. Do not let a fallback decision queue
     // words for the leg that was current when Jev started.
     if generation != state.0.coordinator.generation() {
+        trace_stale_utterance(state, id, generation);
         emit_stale_clip(state, id);
         return;
     }
     let steered = if can_steer {
         let _transition = state.0.operation_transition.lock().await;
         if generation != state.0.coordinator.generation() {
+            trace_stale_utterance(state, id, generation);
             emit_stale_clip(state, id);
             return;
         }
@@ -1892,6 +2090,7 @@ async fn dispatch_routed_transcript(
         let active = state.0.active_session.lock().await;
         if generation != state.0.coordinator.generation() {
             drop(active);
+            trace_stale_utterance(state, id, generation);
             emit_stale_clip(state, id);
             return;
         }
@@ -1902,7 +2101,7 @@ async fn dispatch_routed_transcript(
             {
                 false
             }
-            Some(session) => match session.steer(&transcript).await {
+            Some(session) => match session.steer(&transcript, Some(id)).await {
                 Ok(()) => active
                     .as_ref()
                     .is_some_and(|current| current.same_session(&session)),
@@ -1919,6 +2118,7 @@ async fn dispatch_routed_transcript(
         let active = state.0.active_session.lock().await;
         if generation != state.0.coordinator.generation() {
             drop(active);
+            trace_stale_utterance(state, id, generation);
             emit_stale_clip(state, id);
             return;
         }
@@ -1926,6 +2126,14 @@ async fn dispatch_routed_transcript(
         false
     };
     if steered {
+        // Steering is this utterance's destination: the live turn on the line.
+        state.0.debug.publish(DebugEvent::Routed {
+            utterance_id: id.to_owned(),
+            to_agent: state.0.coordinator.route(),
+            text_part: transcript,
+            mode: "steer".into(),
+            via: "jev".into(),
+        });
         emit_message(
             state,
             ServerMessage::Queued {
@@ -2086,6 +2294,7 @@ async fn process_turns(state: AppState) {
         let routed_decision = state.0.routed_decisions.lock().await.remove(&id);
         if generation != state.0.coordinator.generation() {
             tracing::info!(clip = %id, stamped = generation, current = state.0.coordinator.generation(), "dropping a queued turn before Jev routing");
+            trace_stale_utterance(&state, &id, generation);
             emit_stale_clip(&state, &id);
             continue;
         }
@@ -2095,7 +2304,7 @@ async fn process_turns(state: AppState) {
         } = if let Some(routed) = routed_decision {
             routed
         } else {
-            route_transcript(&state, &transcript).await
+            route_transcript(&state, &id, &transcript).await
         };
         let takeover = prepare_takeover_lookup(&state, &decision).await;
 
@@ -2116,6 +2325,7 @@ async fn process_turns(state: AppState) {
                 let current = state.0.coordinator.generation();
                 if generation != current {
                     tracing::info!(clip = %id, stamped = generation, %current, "dropping a queued turn from before a page rescue");
+                    trace_stale_utterance(&state, &id, generation);
                     emit_stale_clip(&state, &id);
                     Some(Err(()))
                 } else {
@@ -2130,6 +2340,7 @@ async fn process_turns(state: AppState) {
                         }
                         Err(error) => {
                             tracing::info!(clip = %id, %error, "dropping queued turn during lifecycle transition");
+                            trace_stale_utterance(&state, &id, generation);
                             emit_stale_clip(&state, &id);
                             Some(Err(()))
                         }
@@ -2159,15 +2370,35 @@ async fn process_turns(state: AppState) {
         let route = state.0.coordinator.route();
         let waiting = state.0.queued_turns.load(Ordering::Acquire);
         tracing::info!(clip = %id, %route, waiting, "dispatching a turn");
+        let trace_turn_end = {
+            let debug = state.0.debug.clone();
+            let agent = route.clone();
+            let id = id.clone();
+            move || {
+                debug.publish(DebugEvent::TurnEnd {
+                    agent,
+                    turn_id: id.clone(),
+                    generation,
+                    utterance_id: Some(id),
+                });
+            }
+        };
+        state.0.debug.publish(DebugEvent::TurnStart {
+            agent: route.clone(),
+            turn_id: id.clone(),
+            generation,
+            utterance_id: Some(id.clone()),
+        });
         emit_message(&state, ServerMessage::Thinking { route, waiting });
         // The PBX, the agent, and the reply's synthesis all log under the
         // clip that started the turn.
         let turn = tracing::info_span!("turn", clip = %id);
+        let turn_id = id.clone();
         let handle_turn = async move {
             let mut board = turn_state.0.switchboard.lock().await;
             board.set_call_state(call_state);
             board
-                .handle_decision_with_takeover(&transcript, &decision, takeover)
+                .handle_decision_with_takeover(&turn_id, &transcript, &decision, takeover)
                 .await
         };
         let Some((task, task_id)) =
@@ -2175,6 +2406,8 @@ async fn process_turns(state: AppState) {
                 .await
         else {
             tracing::info!(clip = %id, stamped = generation, "dropping turn because rescue occurred before registration");
+            trace_turn_end();
+            trace_stale_utterance(&state, &id, generation);
             emit_stale_clip(&state, &id);
             state.0.coordinator.finish_operation(&operation);
             state.0.clear_active_speech_group(speech_group);
@@ -2185,6 +2418,16 @@ async fn process_turns(state: AppState) {
             Ok(result) => result,
             Err(error) if error.is_cancelled() => {
                 tracing::info!(clip = %id, elapsed = ?started.elapsed(), "the turn was cancelled by a page rescue");
+                trace_turn_end();
+                trace_cut_short(
+                    &state,
+                    &id,
+                    "dropped_stale",
+                    format!(
+                        "a page rescue cancelled the turn (stamped generation {generation}, now {}); its answer was discarded",
+                        state.0.coordinator.generation()
+                    ),
+                );
                 clear_active_operation(&state, task_id).await;
                 state.0.coordinator.finish_operation(&operation);
                 state.0.clear_active_speech_group(speech_group);
@@ -2195,6 +2438,13 @@ async fn process_turns(state: AppState) {
                 // A panic inside `handle()` arrives here. Without this line the
                 // caller hears a generic apology and the journal holds nothing.
                 tracing::error!(clip = %id, %error, elapsed = ?started.elapsed(), "the turn worker failed");
+                trace_turn_end();
+                trace_cut_short(
+                    &state,
+                    &id,
+                    "failed",
+                    format!("the turn worker failed: {error}"),
+                );
                 clear_active_operation(&state, task_id).await;
                 state.0.coordinator.finish_operation(&operation);
                 state.0.clear_active_speech_group(speech_group);
@@ -2214,6 +2464,7 @@ async fn process_turns(state: AppState) {
             tracing::warn!(clip = %id, route = %reply.route, %error, "the turn reported a failure");
         }
         tracing::info!(clip = %id, route = %reply.route, elapsed = ?started.elapsed(), "turn settled");
+        trace_turn_end();
         let delivery_generation = reply.delivery_generation.unwrap_or(generation);
         let _delivered = deliver_turn_if_current(&state, &reply, delivery_generation, &id)
             .instrument(turn)
@@ -2257,7 +2508,7 @@ async fn cancel_active_operations(state: &AppState) -> Option<String> {
         .coordinator
         .begin_rescue("operation interrupted")
         .generation;
-    release_rescued_work(state, generation, false).await
+    release_rescued_work(state, generation, false, "operation interrupted").await
 }
 /// Cancels running work to make way for `plan`, but only while its leg is
 /// still the one on the line: a caller who has moved since the redial was
@@ -2265,7 +2516,13 @@ async fn cancel_active_operations(state: &AppState) -> Option<String> {
 /// leg as the rescue left it.
 async fn cancel_active_operations_for(state: &AppState, plan: RedialPlan) -> Option<RedialPlan> {
     let rescued = state.0.coordinator.begin_rescue_of(plan.leg(), "redial")?;
-    release_rescued_work(state, rescued.identity.generation, plan.keeps_session()).await;
+    release_rescued_work(
+        state,
+        rescued.identity.generation,
+        plan.keeps_session(),
+        "redial",
+    )
+    .await;
     Some(plan.rescued(rescued))
 }
 /// What a rescue does once the coordinator has retired the leg: drop queued
@@ -2276,6 +2533,7 @@ async fn release_rescued_work(
     state: &AppState,
     generation: u64,
     keep_session: bool,
+    reason: &str,
 ) -> Option<String> {
     state.0.clear_continuity();
     state.0.audio.lock().await.clear();
@@ -2298,6 +2556,11 @@ async fn release_rescued_work(
             session.close().await;
         }
     }
+    state.0.debug.publish(DebugEvent::Rescue {
+        generation,
+        reason: reason.to_owned(),
+        leg: label.clone(),
+    });
     label
 }
 async fn spawn_replacing_operation<F, T>(
@@ -2479,6 +2742,14 @@ async fn hangup(State(state): State<AppState>) -> impl IntoResponse {
     let closed = interrupt_active_turn(&state).await;
     let dropped = state.0.switchboard.lock().await.force_hangup().await;
     let hung_up = hangup_outcome(dropped, closed);
+    // A hangup ends the call on the debug page; a page still connected is on
+    // a new one with the operator.
+    if hung_up.is_some() {
+        state.end_debug_call("hangup");
+        if state.0.delivery.connected() {
+            state.start_debug_call();
+        }
+    }
     if let Some((_, line)) = &hung_up {
         if let Some(entry) =
             state
@@ -2654,6 +2925,9 @@ async fn model(
 /// lifecycle notices; waiting requests are kept until promotion or stop.
 async fn update_agent_state(state: &AppState, notice: AgentStateNotice) {
     let agents = state.0.projection.notice(&notice);
+    state.0.debug.publish(DebugEvent::AgentsState {
+        agents: agents.clone(),
+    });
     emit_message(state, ServerMessage::AgentsState { agents });
 }
 
@@ -2704,6 +2978,14 @@ async fn handle_project_turn(state: &AppState, turn: ProjectTurn) -> bool {
             );
             return false;
         }
+        if let Some(turn_id) = operation.turn_id.clone() {
+            state.0.debug.publish(DebugEvent::TurnEnd {
+                agent: state.0.coordinator.route(),
+                turn_id,
+                generation: operation.leg.generation,
+                utterance_id: None,
+            });
+        }
         if !turn.text.trim().is_empty() {
             let route = state.0.coordinator.route();
             state.0.transcript_log.lock().await.add_with_id_and_voiced(
@@ -2728,9 +3010,10 @@ async fn handle_project_turn(state: &AppState, turn: ProjectTurn) -> bool {
 
     let current = state.0.coordinator.current_identity();
     if current.token != turn.token {
+        // The leg's call token stays out of the log: the debug page copies
+        // log lines to an unauthenticated listener.
         tracing::info!(
             instance = turn.instance_id,
-            token = %turn.token,
             "ignoring turn start from a leg that is no longer on the call"
         );
         return false;
@@ -2760,8 +3043,19 @@ async fn handle_project_turn(state: &AppState, turn: ProjectTurn) -> bool {
         );
         return false;
     }
-    match state.0.coordinator.begin_autonomous(&current, turn_id) {
+    match state
+        .0
+        .coordinator
+        .begin_autonomous(&current, turn_id.clone())
+    {
         Ok(operation) => {
+            // A self-woken turn answers no caller line.
+            state.0.debug.publish(DebugEvent::TurnStart {
+                agent: state.0.coordinator.route(),
+                turn_id,
+                generation: current.generation,
+                utterance_id: None,
+            });
             state
                 .0
                 .autonomous_operations
@@ -2799,6 +3093,9 @@ async fn update_agent_state_if_current(
     else {
         return false;
     };
+    state.0.debug.publish(DebugEvent::AgentsState {
+        agents: agents.clone(),
+    });
     emit_message(state, ServerMessage::AgentsState { agents });
     true
 }
@@ -2882,7 +3179,26 @@ async fn release_floor(
         result: result_tx,
         span: tracing::Span::current(),
     });
-    match result_rx.await {
+    let floor_id = Some(request.floor_debug_id());
+    let result = result_rx.await;
+    match &result {
+        Ok(Ok(())) => trace_speech(state, request.project.clone(), &text, None, floor_id),
+        Ok(Err(detail)) => trace_speech(
+            state,
+            request.project.clone(),
+            &text,
+            Some(detail.clone()),
+            floor_id,
+        ),
+        Err(_) => trace_speech(
+            state,
+            request.project.clone(),
+            &text,
+            Some("speech worker stopped".into()),
+            floor_id,
+        ),
+    }
+    match result {
         Ok(Ok(())) => {
             if let Some(agents) = state
                 .0
@@ -2891,6 +3207,9 @@ async fn release_floor(
                     state.0.projection.floor_released(project)
                 })
             {
+                state.0.debug.publish(DebugEvent::AgentsState {
+                    agents: agents.clone(),
+                });
                 emit_message(state, ServerMessage::AgentsState { agents });
                 ReleaseOutcome::Played
             } else {
@@ -3012,9 +3331,10 @@ async fn speak(state: AppState, req: Speak) -> Response {
         };
         let (result_tx, result_rx) = oneshot::channel();
         let group = state.0.active_speech_group();
+        let speaker = state.0.coordinator.route();
         permit.send(SpeechRequest {
             text: spoken,
-            route: state.0.coordinator.route(),
+            route: speaker.clone(),
             generation,
             sequence,
             deadline: std::time::Instant::now() + state.0.speech_deadline,
@@ -3033,10 +3353,12 @@ async fn speak(state: AppState, req: Speak) -> Response {
             Ok(Ok(())) => {
                 state.0.mark_foreground_audio(generation);
                 tracing::info!(generation, sequence, elapsed = ?started.elapsed(), "spoken");
+                trace_speech(&state, speaker, &req.text, None, None);
                 return Json(delivery_response(true)).into_response();
             }
             Ok(Err(detail)) => {
                 tracing::info!(generation, sequence, %detail, elapsed = ?started.elapsed(), "not spoken");
+                trace_speech(&state, speaker, &req.text, Some(detail.clone()), None);
                 return (
                     axum::http::StatusCode::BAD_GATEWAY,
                     Json(json!({"delivered":false, "reason":detail.clone(), "detail":detail})),
@@ -3045,6 +3367,13 @@ async fn speak(state: AppState, req: Speak) -> Response {
             }
             Err(_) => {
                 tracing::warn!(elapsed = ?started.elapsed(), "not spoken: the speech worker stopped");
+                trace_speech(
+                    &state,
+                    speaker,
+                    &req.text,
+                    Some("speech worker stopped".into()),
+                    None,
+                );
                 return (
                     axum::http::StatusCode::SERVICE_UNAVAILABLE,
                     Json(json!({"delivered":false, "reason":"speech worker stopped", "detail":"speech worker stopped"})),
@@ -3130,6 +3459,7 @@ async fn request_to_speak(state: AppState, token: &str, raw: Value) -> Response 
         .0
         .floor
         .enqueue(FloorRequest {
+            floor_id: 0,
             project,
             token: token.to_owned(),
             generation,
@@ -3728,6 +4058,7 @@ async fn deliver_turn_if_current(
     let _transition = state.0.operation_transition.lock().await;
     if generation != state.0.coordinator.generation() {
         release_reply_voice(state, voice, generation).await;
+        trace_reply_speech(state, reply, Some("stale_generation"));
         return false;
     }
     if reply.error.as_deref() == Some("routing_unavailable") {
@@ -3770,8 +4101,10 @@ async fn deliver_turn_if_current(
     )
     .await;
     if generation != state.0.coordinator.generation() {
+        trace_reply_speech(state, reply, Some("stale_generation"));
         return false;
     }
+    trace_reply_speech(state, reply, (!success).then_some("not_spoken"));
     let Some(sequence) = reserve_audio(state, generation).await else {
         return false;
     };
@@ -3787,6 +4120,37 @@ async fn deliver_turn_if_current(
     };
     let _ = publish_audio_events(state, events).await;
     success
+}
+
+/// What became of speech the caller was meant to hear, for the debug page.
+fn trace_speech(
+    state: &AppState,
+    agent: String,
+    text: &str,
+    not_delivered: Option<String>,
+    floor_id: Option<String>,
+) {
+    state.0.debug.publish(DebugEvent::Speech {
+        agent,
+        text: text.to_owned(),
+        delivered: not_delivered.is_none(),
+        reason: not_delivered,
+        floor_id,
+    });
+}
+
+/// A turn's reply speech; a reply with nothing to say aloud is not speech.
+fn trace_reply_speech(state: &AppState, reply: &crate::pbx::Reply, not_delivered: Option<&str>) {
+    if reply.to_speak.is_empty() {
+        return;
+    }
+    trace_speech(
+        state,
+        reply.route.clone(),
+        &reply.to_speak.join(" "),
+        not_delivered.map(str::to_owned),
+        None,
+    );
 }
 
 struct SpeechAdmission {

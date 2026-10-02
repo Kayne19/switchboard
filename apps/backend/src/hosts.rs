@@ -79,6 +79,8 @@ struct HostsInner {
     /// Moves on every link that comes up or goes away.
     changes: watch::Sender<u64>,
     next_command: AtomicU64,
+    /// Read-only observer of links coming and going; set once by the app.
+    debug: std::sync::OnceLock<crate::debug::DebugBus>,
 }
 
 #[derive(Default)]
@@ -189,6 +191,8 @@ pub enum SessionFrame {
 /// unanswered is answered `failed`.
 #[derive(Debug)]
 pub struct ModuleCall {
+    /// The host's id for the call; the debug page pairs call and answer by it.
+    pub id: String,
     pub token: String,
     pub turn_id: Option<String>,
     pub cause: Option<String>,
@@ -333,7 +337,23 @@ impl Hosts {
             hosts: Mutex::new(HashMap::new()),
             changes: watch::channel(0).0,
             next_command: AtomicU64::new(1),
+            debug: std::sync::OnceLock::new(),
         }))
+    }
+
+    /// Report links coming up and going away to `debug`. Only the first bus
+    /// set is kept.
+    pub(crate) fn set_debug_bus(&self, debug: crate::debug::DebugBus) {
+        let _ = self.0.debug.set(debug);
+    }
+
+    fn trace_link(&self, host: &str, connected: bool) {
+        if let Some(debug) = self.0.debug.get() {
+            debug.publish(crate::debug::DebugEvent::HostLink {
+                host: host.to_owned(),
+                connected,
+            });
+        }
     }
 
     /// The epoch of `host`'s current link; `None` while it is not connected.
@@ -588,6 +608,10 @@ impl Hosts {
             git_sha = state.hello.as_ref().and_then(|hello| hello.git_sha.as_deref()).unwrap_or("unknown"),
             "host linked"
         );
+        // Published under the hosts lock, so a fast `release` of this link
+        // cannot report it down before this reports it up. Publishing takes
+        // only the debug rings' lock.
+        self.trace_link(host, true);
         drop(hosts);
         self.0.changes.send_modify(|count| *count += 1);
         epoch
@@ -766,6 +790,7 @@ impl Hosts {
                 };
                 let (reply, answer) = oneshot::channel();
                 let delivered = subscriber.send(SessionFrame::ModuleCall(ModuleCall {
+                    id: id.clone(),
                     token: frame["token"].as_str().unwrap_or_default().to_owned(),
                     turn_id,
                     cause,
@@ -801,9 +826,11 @@ impl Hosts {
     /// Forgets the link at `epoch` if it is still the host's current one.
     fn release(&self, host: &str, epoch: u64, reason: &str) {
         let mut hosts = self.0.hosts.lock().unwrap();
+        let mut disconnected = false;
         if let Some(state) = hosts.get_mut(host) {
             if state.link.as_ref().map(|link| link.epoch) == Some(epoch) {
                 state.link = None;
+                disconnected = true;
                 // A resident handle subscribed to this link must not remain
                 // reusable after the host has gone away. Its pump turns this
                 // into the normal session-closed callback, which evicts the
@@ -820,6 +847,12 @@ impl Hosts {
             }
             state.pending.retain(|_, pending| pending.epoch != epoch);
         }
+        // A fenced link closing is not a disconnect: its newer link is up.
+        // Published under the hosts lock, in order with `link_up`.
+        if disconnected {
+            self.trace_link(host, false);
+        }
+        drop(hosts);
         tracing::info!(%host, epoch, reason, "host link closed");
         self.0.changes.send_modify(|count| *count += 1);
     }

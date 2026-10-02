@@ -1,5 +1,6 @@
 mod api;
 mod audio;
+mod debug;
 mod delivery;
 mod display;
 mod floor;
@@ -45,6 +46,8 @@ pub struct Config {
     pub stt_command: Option<String>,
     pub stt_stream_command: Option<String>,
     pub bind: String,
+    /// Optional read-only listener for the in-memory debug page.
+    pub debug_bind: Option<String>,
     pub pi_binary: String,
     pub operator_model: Option<String>,
     pub agent_model: Option<String>,
@@ -118,6 +121,7 @@ impl Config {
             stt_command: optional(values, "SWITCHBOARD_STT_COMMAND"),
             stt_stream_command: optional(values, "SWITCHBOARD_STT_STREAM_COMMAND"),
             bind: get(values, "SWITCHBOARD_BIND", "0.0.0.0:8765"),
+            debug_bind: optional(values, "SWITCHBOARD_DEBUG_BIND"),
             pi_binary: get(values, "SWITCHBOARD_PI_BINARY", "pi"),
             operator_model: optional(values, "SWITCHBOARD_OPERATOR_MODEL"),
             agent_model: optional(values, "SWITCHBOARD_AGENT_MODEL"),
@@ -347,7 +351,10 @@ const DEFAULT_LOG_FILTER: &str = "switchboard=info,warn";
 /// and `RUST_LOG` cannot be set there without leaking into every other process
 /// the unit starts. Returns a description of what it installed so the caller
 /// can log it once the subscriber is live.
-fn init_tracing(values: &HashMap<String, String>) -> (String, Option<String>) {
+fn init_tracing(
+    values: &HashMap<String, String>,
+    debug_bus: debug::DebugBus,
+) -> (String, Option<String>) {
     let requested = values
         .get("SWITCHBOARD_LOG")
         .or_else(|| values.get("RUST_LOG"))
@@ -374,21 +381,57 @@ fn init_tracing(values: &HashMap<String, String>) -> (String, Option<String>) {
             .as_str(),
         "json"
     );
-    let builder = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(true);
+    use tracing_subscriber::prelude::*;
     if json {
-        builder.json().flatten_event(true).init();
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(debug::DebugLogLayer::new(debug_bus.clone()))
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .json()
+                    .flatten_event(true)
+                    .with_target(true),
+            )
+            .init();
     } else {
-        builder.init();
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(debug::DebugLogLayer::new(debug_bus))
+            .with(tracing_subscriber::fmt::layer().with_target(true))
+            .init();
     }
     (describe, rejected)
+}
+
+/// Binds the optional debug listener and, once it is bound, starts `bus`
+/// recording. It is read-only and optional, so a failure is reported and the
+/// phone line keeps running without it, and with the bus off.
+async fn bind_debug_listener(
+    debug_bind: Option<&str>,
+    bus: &debug::DebugBus,
+    config: debug::DebugConfig,
+) -> Option<tokio::net::TcpListener> {
+    let debug_bind = debug_bind?;
+    match tokio::net::TcpListener::bind(debug_bind).await {
+        Ok(listener) => {
+            bus.enable(config);
+            tracing::info!(%debug_bind, "switchboard debug listener listening");
+            Some(listener)
+        }
+        Err(error) => {
+            tracing::error!(%debug_bind, %error, "debug listener not started");
+            None
+        }
+    }
 }
 
 #[tokio::main]
 async fn main() {
     let (values, env_file) = Config::values_from_env();
-    let (filter, rejected_filter) = init_tracing(&values);
+    // Off until the debug listener is bound: with no listener, nothing is
+    // recorded and the log copy does nothing.
+    let debug_bus = debug::DebugBus::off();
+    let (filter, rejected_filter) = init_tracing(&values, debug_bus.clone());
     if let Some(rejected) = rejected_filter {
         tracing::warn!(%rejected, default = DEFAULT_LOG_FILTER, "log filter could not be parsed; using the default");
     }
@@ -401,6 +444,8 @@ async fn main() {
         version = env!("CARGO_PKG_VERSION"),
         git = GIT_SHA,
         env_file = %config.env_file.display(),
+        bind = %config.bind,
+        debug_bind = config.debug_bind.as_deref().unwrap_or("<off>"),
         projects_file = %config.projects_file.display(),
         host_tokens_file = %config.host_tokens_file.display(),
         operator_prompt = %config.operator_prompt.display(),
@@ -433,7 +478,7 @@ async fn main() {
     // on it rather than doing any of it itself.
     let prewarm = std::sync::Arc::new(prewarm::Prewarm::start(&registry, hosts));
     let board = pbx::Switchboard::new(&config, registry, prewarm);
-    let state = api::AppState::new(
+    let state = api::AppState::new_with_debug(
         board,
         history::TranscriptLog::new(config.history_limit),
         audio::Speaker::from_values(
@@ -443,6 +488,7 @@ async fn main() {
         ),
         audio::SttAdapter::from_command(config.stt_command.clone()),
         audio::SttStreamAdapter::from_command(config.stt_stream_command.clone()),
+        debug_bus.clone(),
     );
     api::spawn_workers(state.clone());
     let bind = config.bind.clone();
@@ -450,6 +496,27 @@ async fn main() {
         .await
         .expect("bind switchboard listener");
     tracing::info!(%bind, "switchboard listening");
+    let debug_listener = bind_debug_listener(
+        config.debug_bind.as_deref(),
+        &debug_bus,
+        debug::DebugConfig::from_config(&config),
+    )
+    .await;
+    let debug_task = if let Some(debug_listener) = debug_listener {
+        let debug_state = state.clone();
+        Some(tokio::spawn(async move {
+            let debug_router = debug_state.debug_router();
+            let shutdown_state = debug_state.clone();
+            let result = axum::serve(debug_listener, debug_router)
+                .with_graceful_shutdown(shutdown_state.wait_for_shutdown())
+                .await;
+            if let Err(error) = result {
+                tracing::error!(%error, "switchboard debug listener stopped");
+            }
+        }))
+    } else {
+        None
+    };
     let server = axum::serve(
         listener,
         state
@@ -461,6 +528,9 @@ async fn main() {
     // Also covers listener/server failures that did not arrive through the
     // signal future. Shutdown is intentionally idempotent.
     api::shutdown(&state).await;
+    if let Some(debug_task) = debug_task {
+        let _ = debug_task.await;
+    }
     if let Err(error) = result {
         tracing::error!(%error, "switchboard server stopped");
     }

@@ -1,3 +1,4 @@
+use crate::debug::{DebugBus, DebugEvent};
 use futures_util::FutureExt;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -9,7 +10,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(test)]
 use std::sync::OnceLock;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock as StdOnceLock};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, Command};
 use tokio::sync::{watch, Mutex};
@@ -121,6 +122,11 @@ struct SessionInner {
     /// True once stderr has been read to its end.
     stderr_closed: watch::Receiver<bool>,
     process_guard: ProcessTreeGuard,
+    /// Where this process's conversation is mirrored for the debug page.
+    /// Observation only: nothing here waits on it.
+    debug: StdOnceLock<DebugBus>,
+    /// Numbers this process's prompts, for the debug page's turn ids.
+    prompts: AtomicU64,
 }
 
 #[derive(Clone)]
@@ -200,6 +206,8 @@ impl PiSession {
             stderr_task: StdMutex::new(Some(stderr_task)),
             stderr_closed,
             process_guard,
+            debug: StdOnceLock::new(),
+            prompts: AtomicU64::new(0),
         });
         Ok(Self { inner })
     }
@@ -243,6 +251,34 @@ impl PiSession {
     }
     pub fn label(&self) -> &str {
         &self.inner.label
+    }
+
+    /// Mirrors this process's prompts, replies and tool calls to `bus`,
+    /// tagged with the leg token (`operator`, `utility`). Set once, before
+    /// the first prompt; a later call changes nothing.
+    pub(crate) fn observe(&self, bus: DebugBus) {
+        let _ = self.inner.debug.set(bus);
+    }
+
+    fn publish(&self, event: DebugEvent) {
+        if let Some(bus) = self.inner.debug.get() {
+            bus.publish(event);
+        }
+    }
+
+    /// True when a recording bus observes this process, so an event worth
+    /// building (a deep copy of tool arguments) is built only then.
+    fn observed(&self) -> bool {
+        self.inner.debug.get().is_some_and(DebugBus::enabled)
+    }
+
+    /// The debug turn id of the prompt being run: `<leg>-<n>`.
+    fn debug_turn_id(&self) -> String {
+        format!(
+            "{}-{}",
+            self.inner.leg,
+            self.inner.prompts.load(Ordering::Acquire)
+        )
     }
 
     pub fn same_session(&self, other: &Self) -> bool {
@@ -289,6 +325,16 @@ impl PiSession {
     }
 
     pub async fn prompt(&self, message: &str) -> Result<Turn, PiSessionError> {
+        self.prompt_for(message, None).await
+    }
+
+    /// `prompt`, naming the caller line (`utterance_id`) the message carries
+    /// so the debug page can link the route to it.
+    pub async fn prompt_for(
+        &self,
+        message: &str,
+        utterance_id: Option<&str>,
+    ) -> Result<Turn, PiSessionError> {
         #[cfg(test)]
         notify_prompt_hook_for_test(message);
         let _turn = self.inner.turn_lock.lock().await;
@@ -306,13 +352,26 @@ impl PiSession {
             }
             return Err(error);
         }
+        self.inner.prompts.fetch_add(1, Ordering::AcqRel);
+        let turn_id = self.debug_turn_id();
+        self.publish(DebugEvent::AgentInput {
+            agent: self.inner.leg.clone(),
+            turn_id: Some(turn_id.clone()),
+            text: message.to_owned(),
+            source: local_prompt_source(&self.inner.leg, message).into(),
+            utterance_id: utterance_id.map(str::to_owned),
+        });
         self.inner.busy.store(true, Ordering::Release);
-        let result = self.collect().await;
+        let result = self.collect(&turn_id).await;
         self.inner.busy.store(false, Ordering::Release);
         result
     }
 
-    pub async fn steer(&self, message: &str) -> Result<(), PiSessionError> {
+    pub async fn steer(
+        &self,
+        message: &str,
+        utterance_id: Option<&str>,
+    ) -> Result<(), PiSessionError> {
         if !self.alive().await {
             return Err(PiSessionError(format!(
                 "agent process is not running ({})",
@@ -323,11 +382,20 @@ impl PiSession {
             .write(json!({"type":"steer", "message":message}), true)
             .await;
         match &result {
-            Ok(()) => tracing::info!(
-                label = %self.inner.label,
-                chars = message.chars().count(),
-                "steered the running turn"
-            ),
+            Ok(()) => {
+                tracing::info!(
+                    label = %self.inner.label,
+                    chars = message.chars().count(),
+                    "steered the running turn"
+                );
+                self.publish(DebugEvent::AgentInput {
+                    agent: self.inner.leg.clone(),
+                    turn_id: Some(self.debug_turn_id()),
+                    text: message.to_owned(),
+                    source: "steer".into(),
+                    utterance_id: utterance_id.map(str::to_owned),
+                });
+            }
             Err(error) => tracing::info!(
                 label = %self.inner.label,
                 %error,
@@ -358,11 +426,12 @@ impl PiSession {
             .map_err(|error| PiSessionError(format!("agent process closed its input: {error}")))
     }
 
-    async fn collect(&self) -> Result<Turn, PiSessionError> {
+    async fn collect(&self, turn_id: &str) -> Result<Turn, PiSessionError> {
         let mut chunks = Vec::new();
         let mut signals = Vec::new();
         let mut error = String::new();
         let mut response_life_reported = false;
+        let mut deltas = DeltaBuffer::default();
         loop {
             let read = {
                 let mut stdout = self.inner.stdout.lock().await;
@@ -384,6 +453,7 @@ impl PiSession {
                         stderr_lines = self.stderr_tail(5).lines().count(),
                         "agent stream ended mid-turn"
                     );
+                    self.publish_delta(turn_id, deltas.take());
                     return Ok(Turn {
                         text: chunks.join("\n"),
                         signals,
@@ -460,7 +530,16 @@ impl PiSession {
                         response_life_reported = true;
                         self.report_activity("life", "", String::new()).await;
                     }
+                    if event_type == Some("text_delta") {
+                        if let Some(delta) = assistant_event
+                            .and_then(|event| event.get("delta"))
+                            .and_then(Value::as_str)
+                        {
+                            self.publish_delta(turn_id, deltas.push(delta));
+                        }
+                    }
                     if event_type == Some("text_end") {
+                        self.publish_delta(turn_id, deltas.take());
                         if let Some(content) = text {
                             let collected = chunks.iter().map(String::len).sum::<usize>();
                             if collected.saturating_add(content.len()) > STREAM_LIMIT {
@@ -507,6 +586,18 @@ impl PiSession {
                 }
                 Some("tool_execution_start") => {
                     let name = event.get("toolName").and_then(Value::as_str).unwrap_or("");
+                    if self.observed() {
+                        self.publish(DebugEvent::ToolStart {
+                            agent: self.inner.leg.clone(),
+                            call_id: event
+                                .get("toolCallId")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned),
+                            tool: name.into(),
+                            args: event.get("args").cloned(),
+                            turn_id: Some(turn_id.to_owned()),
+                        });
+                    }
                     if [
                         ROUTE_TOOL,
                         SECOND_OPINION_TOOL,
@@ -538,6 +629,21 @@ impl PiSession {
                 }
                 Some("tool_execution_end") => {
                     let name = event.get("toolName").and_then(Value::as_str).unwrap_or("");
+                    if self.observed() {
+                        let result = event.get("result").filter(|value| !value.is_null());
+                        self.publish(DebugEvent::ToolEnd {
+                            agent: self.inner.leg.clone(),
+                            call_id: event
+                                .get("toolCallId")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned),
+                            tool: name.into(),
+                            result: result.cloned(),
+                            error: (event.get("isError") == Some(&Value::Bool(true)))
+                                .then(|| tool_error_text(result)),
+                            turn_id: Some(turn_id.to_owned()),
+                        });
+                    }
                     self.report_activity("end", name, String::new()).await
                 }
                 Some("extension_error") => {
@@ -551,13 +657,33 @@ impl PiSession {
                 _ => {}
             }
         }
+        self.publish_delta(turn_id, deltas.take());
         let text = chunks.join("\n").trim().to_owned();
+        if !text.is_empty() {
+            self.publish(DebugEvent::AgentText {
+                agent: self.inner.leg.clone(),
+                turn_id: Some(turn_id.to_owned()),
+                text: text.clone(),
+                final_: true,
+            });
+        }
         Ok(Turn {
             text,
             signals,
             failed: !error.is_empty(),
             error,
         })
+    }
+
+    fn publish_delta(&self, turn_id: &str, text: Option<String>) {
+        if let Some(text) = text {
+            self.publish(DebugEvent::AgentText {
+                agent: self.inner.leg.clone(),
+                turn_id: Some(turn_id.to_owned()),
+                text,
+                final_: false,
+            });
+        }
     }
 
     async fn report_activity(&self, state: &str, tool: &str, detail: String) {
@@ -636,6 +762,8 @@ pub struct ProjectLaunch {
     pub on_module: Option<ModuleCallback>,
     pub on_turn: Option<TurnCallback>,
     pub on_closed: Option<SessionClosedCallback>,
+    /// Where the session's conversation is mirrored for the debug page.
+    pub debug: Option<DebugBus>,
 }
 
 /// The model and effective thinking level a host agent reports for a
@@ -689,6 +817,8 @@ struct ProjectInner {
     on_module: Option<ModuleCallback>,
     on_turn: Option<TurnCallback>,
     on_closed: Option<SessionClosedCallback>,
+    /// Observation only: nothing here waits on it.
+    debug: Option<DebugBus>,
     turn_lock: Mutex<()>,
     busy: AtomicBool,
     closed: AtomicBool,
@@ -889,6 +1019,81 @@ impl ProjectInner {
         if !self.closed.swap(true, Ordering::AcqRel) {
             self.report_closed().await;
         }
+    }
+
+    fn publish(&self, event: DebugEvent) {
+        if let Some(bus) = &self.debug {
+            bus.publish(event);
+        }
+    }
+
+    /// Mirrors a host event to the debug page: tool calls with the
+    /// arguments and results new hosts send, and each assistant message.
+    /// Every event is mirrored, whichever turn it belongs to.
+    fn mirror_event(&self, event: &Value) {
+        if !self.debug.as_ref().is_some_and(DebugBus::enabled) {
+            return;
+        }
+        let call_id = || event["call_id"].as_str().map(str::to_owned);
+        let tool = || event["tool"].as_str().unwrap_or_default().to_owned();
+        let turn_id = || event["turn_id"].as_str().map(str::to_owned);
+        match event["kind"].as_str() {
+            Some("tool_start") => self.publish(DebugEvent::ToolStart {
+                agent: self.label.clone(),
+                call_id: call_id(),
+                tool: tool(),
+                args: event.get("args").filter(|v| !v.is_null()).cloned(),
+                turn_id: turn_id(),
+            }),
+            Some("tool_end") => {
+                let result = event.get("result").filter(|value| !value.is_null());
+                self.publish(DebugEvent::ToolEnd {
+                    agent: self.label.clone(),
+                    call_id: call_id(),
+                    tool: tool(),
+                    result: result.cloned(),
+                    error: (event["error"] == true).then(|| tool_error_text(result)),
+                    turn_id: turn_id(),
+                });
+            }
+            Some("text") => {
+                if let Some(text) = event["text"]
+                    .as_str()
+                    .filter(|text| !text.trim().is_empty())
+                {
+                    self.publish(DebugEvent::AgentText {
+                        agent: self.label.clone(),
+                        turn_id: turn_id(),
+                        text: text.to_owned(),
+                        final_: false,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The whole reply of a settled turn, for the debug page.
+    fn publish_final(&self, turn_id: Option<String>, text: &str) {
+        if !text.trim().is_empty() {
+            self.publish(DebugEvent::AgentText {
+                agent: self.label.clone(),
+                turn_id,
+                text: text.to_owned(),
+                final_: true,
+            });
+        }
+    }
+
+    /// What the service sent the session, for the debug page.
+    fn publish_input(&self, text: &str, source: &str, utterance_id: Option<&str>) {
+        self.publish(DebugEvent::AgentInput {
+            agent: self.label.clone(),
+            turn_id: None,
+            text: text.to_owned(),
+            source: source.into(),
+            utterance_id: utterance_id.map(str::to_owned),
+        });
     }
 
     async fn report_activity(&self, state: &str, tool: &str) {
@@ -1104,6 +1309,7 @@ impl ProjectSession {
             on_module: launch.on_module,
             on_turn: launch.on_turn,
             on_closed: launch.on_closed,
+            debug: launch.debug,
             turn_lock: Mutex::new(()),
             busy: AtomicBool::new(false),
             closed: AtomicBool::new(false),
@@ -1269,7 +1475,11 @@ impl ProjectSession {
         }
     }
 
-    pub async fn steer(&self, message: &str) -> Result<(), PiSessionError> {
+    pub async fn steer(
+        &self,
+        message: &str,
+        utterance_id: Option<&str>,
+    ) -> Result<(), PiSessionError> {
         if !self.busy() {
             return Err(PiSessionError("agent turn is no longer running".into()));
         }
@@ -1279,7 +1489,8 @@ impl ProjectSession {
             .map(|_| ());
         match &result {
             Ok(()) => {
-                tracing::info!(label = %self.inner.label, chars = message.chars().count(), "steered the running turn")
+                tracing::info!(label = %self.inner.label, chars = message.chars().count(), "steered the running turn");
+                self.inner.publish_input(message, "steer", utterance_id);
             }
             Err(error) => {
                 tracing::info!(label = %self.inner.label, %error, "could not steer the running turn")
@@ -1288,10 +1499,25 @@ impl ProjectSession {
         result
     }
 
+    /// `prompt_as` for a caller line with no utterance id. Production code
+    /// always names the source; tests use this shorthand.
+    #[cfg(test)]
+    pub async fn prompt(&self, message: &str) -> Result<Turn, PiSessionError> {
+        self.prompt_as(message, "caller", None).await
+    }
+
     /// Sends `message` and collects the turn until the host link says it has
     /// settled. The voice brief goes first when it is due: on the first
-    /// prompt, and on the first after a compaction.
-    pub async fn prompt(&self, message: &str) -> Result<Turn, PiSessionError> {
+    /// prompt, and on the first after a compaction. `source` says for the
+    /// debug page what the message is (`caller`, `intro`, `foreground`,
+    /// `model_change`), and `utterance_id` names the caller line it carries,
+    /// if any.
+    pub async fn prompt_as(
+        &self,
+        message: &str,
+        source: &str,
+        utterance_id: Option<&str>,
+    ) -> Result<Turn, PiSessionError> {
         let _turn = self.inner.turn_lock.lock().await;
         if !self.alive() {
             return Err(PiSessionError("the project session has ended".into()));
@@ -1303,6 +1529,13 @@ impl ProjectSession {
         self.inner.busy.store(true, Ordering::Release);
         let _collecting = Collecting(&self.inner);
         let briefed = self.inner.brief_due.swap(false, Ordering::AcqRel);
+        // Published as the prompt goes out: the host's first events can be
+        // read before its reply to the prompt is. The page shows the brief as
+        // an input of its own, so the pane can fold it away.
+        if briefed {
+            self.inner.publish_input(&self.inner.brief, "brief", None);
+        }
+        self.inner.publish_input(message, source, utterance_id);
         let message = if briefed {
             format!("{}\n\n{message}", self.inner.brief)
         } else {
@@ -1332,6 +1565,7 @@ impl ProjectSession {
         let mut texts: Vec<String> = Vec::new();
         let signals = Vec::new();
         let mut error = String::new();
+        let mut settled_turn = None;
         loop {
             let frame = match timeout(self.inner.turn_timeout, frames.recv()).await {
                 Ok(Some(frame)) => frame,
@@ -1400,6 +1634,7 @@ impl ProjectSession {
                             error = spoken_error(Some(failure));
                         }
                     }
+                    settled_turn = event["turn_id"].as_str().map(str::to_owned);
                     break;
                 }
                 Some("session_closed") => {
@@ -1414,8 +1649,10 @@ impl ProjectSession {
                 _ => {}
             }
         }
+        let text = texts.join("\n").trim().to_owned();
+        self.inner.publish_final(settled_turn, &text);
         Turn {
-            text: texts.join("\n").trim().to_owned(),
+            text,
             signals,
             failed: !error.is_empty(),
             error,
@@ -1437,6 +1674,7 @@ async fn pump(
         };
         match frame {
             SessionFrame::Event { seq, event } => {
+                inner.mirror_event(&event);
                 let kind = event["kind"].as_str().unwrap_or_default();
                 if kind == "turn_start" {
                     let cause = event["cause"].as_str().unwrap_or("unknown").to_owned();
@@ -1534,6 +1772,7 @@ async fn pump(
                         }
                         if let Some((turn_id, cause, text)) = inner.finish_autonomous(event_turn_id)
                         {
+                            inner.publish_final(turn_id.clone(), &text);
                             inner
                                 .report_turn(ProjectTurn {
                                     instance_id: inner.instance_id,
@@ -1577,6 +1816,12 @@ async fn pump(
                     if let Some((turn_id, cause, text)) =
                         inner.finish_autonomous(info["turn_id"].as_str())
                     {
+                        let text = if text.is_empty() {
+                            info["last_text"].as_str().unwrap_or_default().to_owned()
+                        } else {
+                            text
+                        };
+                        inner.publish_final(turn_id.clone(), &text);
                         inner
                             .report_turn(ProjectTurn {
                                 instance_id: inner.instance_id,
@@ -1584,11 +1829,7 @@ async fn pump(
                                 turn_id,
                                 cause,
                                 ended: true,
-                                text: if text.is_empty() {
-                                    info["last_text"].as_str().unwrap_or_default().to_owned()
-                                } else {
-                                    text
-                                },
+                                text,
                             })
                             .await;
                         continue;
@@ -1628,13 +1869,40 @@ async fn pump(
 
 /// Answers one module call. A call must carry the session's current call
 /// token; routing signals become signals of the turn being collected, and
-/// the rest go to the application.
-async fn answer_module_call(inner: Arc<ProjectInner>, call: crate::hosts::ModuleCall) {
+/// the rest go to the application. The call and its answer are mirrored to
+/// the debug page, refusals included, after the answer is sent: the mirror
+/// takes the call's fields instead of copying them, and never delays the
+/// answer.
+async fn answer_module_call(inner: Arc<ProjectInner>, mut call: crate::hosts::ModuleCall) {
+    let reply = module_reply(&inner, &call).await;
+    let ok = matches!(reply["status"].as_str(), Some("delivered" | "accepted"));
+    let detail = reply.clone();
+    let call_id = std::mem::take(&mut call.id);
+    let name = std::mem::take(&mut call.call);
+    let args = std::mem::take(&mut call.args);
+    let turn_id = call.turn_id.take();
+    call.answer(reply);
+    inner.publish(DebugEvent::ModuleCall {
+        agent: inner.label.clone(),
+        call_id: call_id.clone(),
+        name,
+        args,
+        turn_id,
+    });
+    inner.publish(DebugEvent::ModuleResult {
+        agent: inner.label.clone(),
+        call_id,
+        ok,
+        detail,
+    });
+}
+
+/// The answer to one module call (`answer_module_call`).
+async fn module_reply(inner: &ProjectInner, call: &crate::hosts::ModuleCall) -> Value {
     let label = inner.label.clone();
     if call.token.is_empty() || call.token != inner.token() {
         tracing::info!(%label, call = %call.call, "module call with a stale call token refused");
-        call.answer(json!({"status": "refused", "reason": "not_on_call"}));
-        return;
+        return json!({"status": "refused", "reason": "not_on_call"});
     }
     match call.call.as_str() {
         // These names remain recognized for one release so hosts that still
@@ -1642,12 +1910,11 @@ async fn answer_module_call(inner: Arc<ProjectInner>, call: crate::hosts::Module
         // signals: stale hosts must never move the caller.
         "transfer_to_project" | "return_to_operator" | "set_model" => {
             tracing::info!(%label, call = %call.call, "removed project routing call refused");
-            call.answer(json!({"status": "refused", "reason": "removed"}));
+            json!({"status": "refused", "reason": "removed"})
         }
         SPEAK_TOOL | "request_to_speak" | "display" | "view" => {
             let Some(callback) = inner.on_module.clone() else {
-                call.answer(json!({"status": "failed", "reason": "failed"}));
-                return;
+                return json!({"status": "failed", "reason": "failed"});
             };
             let mut args = call.args.clone();
             if call.call == "request_to_speak" {
@@ -1670,16 +1937,15 @@ async fn answer_module_call(inner: Arc<ProjectInner>, call: crate::hosts::Module
                 cause,
                 args,
             };
-            let reply = match AssertUnwindSafe(callback(request)).catch_unwind().await {
+            match AssertUnwindSafe(callback(request)).catch_unwind().await {
                 Ok(reply) => reply,
                 Err(panic) => {
                     tracing::error!(%label, call = %call.call, panic = %panic_message(&panic), "module call handler panicked");
                     json!({"status": "failed", "reason": "failed"})
                 }
-            };
-            call.answer(reply);
+            }
         }
-        _ => call.answer(json!({"status": "refused", "reason": "unknown_call"})),
+        _ => json!({"status": "refused", "reason": "unknown_call"}),
     }
 }
 
@@ -1717,10 +1983,14 @@ impl LegSession {
             Self::Project(session) => session.alive(),
         }
     }
-    pub async fn steer(&self, message: &str) -> Result<(), PiSessionError> {
+    pub async fn steer(
+        &self,
+        message: &str,
+        utterance_id: Option<&str>,
+    ) -> Result<(), PiSessionError> {
         match self {
-            Self::Operator(session) => session.steer(message).await,
-            Self::Project(session) => session.steer(message).await,
+            Self::Operator(session) => session.steer(message, utterance_id).await,
+            Self::Project(session) => session.steer(message, utterance_id).await,
         }
     }
     pub fn same_session(&self, other: &Self) -> bool {
@@ -1966,6 +2236,80 @@ where
     }
     BoundedOutput { bytes, truncated }
 }
+
+/// Streamed reply text gathered for the debug page. Deltas arrive about one
+/// per token; one event each would crowd the debug ring, so they go out in
+/// pieces of `DELTA_FLUSH_BYTES` or every `DELTA_FLUSH_AFTER`.
+#[derive(Default)]
+struct DeltaBuffer {
+    text: String,
+    since: Option<Instant>,
+}
+
+const DELTA_FLUSH_BYTES: usize = 256;
+const DELTA_FLUSH_AFTER: Duration = Duration::from_millis(250);
+
+impl DeltaBuffer {
+    /// Adds `delta`; the gathered text when it is due to go out.
+    fn push(&mut self, delta: &str) -> Option<String> {
+        if delta.is_empty() {
+            return None;
+        }
+        self.text.push_str(delta);
+        let since = *self.since.get_or_insert_with(Instant::now);
+        if self.text.len() >= DELTA_FLUSH_BYTES || since.elapsed() >= DELTA_FLUSH_AFTER {
+            return self.take();
+        }
+        None
+    }
+
+    /// The text gathered so far, if any.
+    fn take(&mut self) -> Option<String> {
+        self.since = None;
+        (!self.text.is_empty()).then(|| std::mem::take(&mut self.text))
+    }
+}
+
+/// What a local process's prompt is, for the debug page. The utility gets
+/// routing requests and floor rewrites; the operator gets the caller's turns.
+fn local_prompt_source(leg: &str, message: &str) -> &'static str {
+    match leg {
+        "utility" if message.starts_with("[FLOOR REWRITE]") => "floor_rewrite",
+        "utility" => "routing_request",
+        _ => "caller",
+    }
+}
+
+/// A failed tool's error for the debug page: the text its result carries,
+/// clipped, or a plain note when it carries none.
+fn tool_error_text(result: Option<&Value>) -> String {
+    let text = match result {
+        Some(Value::String(text)) => text.clone(),
+        Some(result) => result
+            .get("content")
+            .and_then(Value::as_array)
+            .map(|parts| {
+                parts
+                    .iter()
+                    .filter_map(|part| part.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default(),
+        None => String::new(),
+    };
+    let text = text.trim();
+    if text.is_empty() {
+        return "the tool reported an error".into();
+    }
+    if text.chars().count() > TOOL_ERROR_CHARS {
+        let clipped = text.chars().take(TOOL_ERROR_CHARS).collect::<String>();
+        return format!("{}…", clipped.trim_end());
+    }
+    text.to_owned()
+}
+
+const TOOL_ERROR_CHARS: usize = 500;
 
 fn activity_detail(args: Option<&Value>) -> String {
     let Some(args) = args.and_then(Value::as_object) else {

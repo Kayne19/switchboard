@@ -1,0 +1,429 @@
+{
+  "version": 1,
+  "events": [
+    {
+      "name": "caller_utterance",
+      "event": {
+        "kind": "caller_utterance",
+        "utterance_id": "clip-42",
+        "text": "Please send me to alpha.",
+        "talking_to": "operator"
+      }
+    },
+    {
+      "name": "jev_request",
+      "event": {
+        "kind": "jev_request",
+        "utterance_id": "clip-42",
+        "purpose": "route",
+        "state": {
+          "caller_just_said": "Please send me to alpha."
+        }
+      }
+    },
+    {
+      "name": "jev_response",
+      "event": {
+        "kind": "jev_response",
+        "utterance_id": "clip-42",
+        "purpose": "route",
+        "latency_ms": 83,
+        "outcome": "ok",
+        "answers": {
+          "action": {
+            "type": "choice",
+            "choice": "go_to_project",
+            "probabilities": {
+              "go_to_project": 0.92,
+              "continue": 0.05,
+              "general": 0.03
+            },
+            "confidence": 0.92,
+            "noul": null
+          },
+          "for_current_agent": {
+            "type": "noul",
+            "choice": null,
+            "probabilities": null,
+            "confidence": null,
+            "noul": 0.08
+          },
+          "target": {
+            "type": "choice",
+            "choice": "alpha",
+            "probabilities": {
+              "alpha": 0.97,
+              "none": 0.03
+            },
+            "confidence": 0.97,
+            "noul": null
+          }
+        }
+      }
+    },
+    {
+      "name": "route_decision",
+      "event": {
+        "kind": "route_decision",
+        "utterance_id": "clip-42",
+        "rule": "jev_action",
+        "reason": "action confidence 0.92 meets threshold 0.60",
+        "action": "transfer",
+        "target": "alpha",
+        "mode": "fresh",
+        "decided_by": "jev"
+      }
+    },
+    {
+      "name": "pbx_branch",
+      "event": {
+        "kind": "pbx_branch",
+        "utterance_id": "clip-42",
+        "branch": "utility",
+        "reason": "Jev requested a fresh transfer with an uncertain target"
+      }
+    },
+    {
+      "name": "utility_request",
+      "event": {
+        "kind": "utility_request",
+        "utterance_id": "clip-42",
+        "attempt": "first",
+        "prompt": "Choose a destination for the caller."
+      }
+    },
+    {
+      "name": "utility_decision",
+      "event": {
+        "kind": "utility_decision",
+        "utterance_id": "clip-42",
+        "attempt": "first",
+        "decision": {
+          "kind": "second_opinion",
+          "target": "alpha",
+          "mode": "fresh",
+          "confident": true
+        },
+        "latency_ms": 211
+      }
+    },
+    {
+      "name": "operator_hop",
+      "event": {
+        "kind": "operator_hop",
+        "utterance_id": "clip-42",
+        "text": "The caller asked to inspect the build.",
+        "outcome": "route_tool"
+      }
+    },
+    {
+      "name": "operator_route_tool",
+      "event": {
+        "kind": "operator_route_tool",
+        "utterance_id": "clip-42",
+        "target": "alpha",
+        "mode": "fresh",
+        "action": "transfer"
+      }
+    },
+    {
+      "name": "routed",
+      "event": {
+        "kind": "routed",
+        "utterance_id": "clip-42",
+        "to_agent": "alpha",
+        "text_part": "Please inspect the build.",
+        "mode": "fresh",
+        "via": "utility"
+      }
+    },
+    {
+      "name": "agent_input",
+      "event": {
+        "kind": "agent_input",
+        "agent": "alpha",
+        "turn_id": "turn-8",
+        "text": "The caller asked to inspect the build.",
+        "source": "caller",
+        "utterance_id": "clip-42"
+      }
+    },
+    {
+      "name": "agent_text",
+      "event": {
+        "kind": "agent_text",
+        "agent": "alpha",
+        "turn_id": "turn-8",
+        "text": "I will check the build now.",
+        "final": true
+      }
+    },
+    {
+      "name": "tool_start",
+      "event": {
+        "kind": "tool_start",
+        "agent": "alpha",
+        "call_id": "call-3",
+        "tool": "bash",
+        "args": {
+          "command": "cargo test"
+        },
+        "turn_id": "turn-8"
+      }
+    },
+    {
+      "name": "tool_end",
+      "event": {
+        "kind": "tool_end",
+        "agent": "alpha",
+        "call_id": "call-3",
+        "tool": "bash",
+        "result": {
+          "exit_code": 0
+        },
+        "turn_id": "turn-8"
+      }
+    },
+    {
+      "name": "module_call",
+      "event": {
+        "kind": "module_call",
+        "agent": "alpha",
+        "call_id": "call-4",
+        "name": "speak",
+        "args": {
+          "text": "The build passes."
+        },
+        "turn_id": "turn-8"
+      }
+    },
+    {
+      "name": "module_result",
+      "event": {
+        "kind": "module_result",
+        "agent": "alpha",
+        "call_id": "call-4",
+        "ok": true,
+        "detail": {
+          "status": "delivered"
+        }
+      }
+    },
+    {
+      "name": "turn_start",
+      "event": {
+        "kind": "turn_start",
+        "agent": "alpha",
+        "turn_id": "turn-8",
+        "generation": 3,
+        "utterance_id": "clip-42"
+      }
+    },
+    {
+      "name": "turn_end",
+      "event": {
+        "kind": "turn_end",
+        "agent": "alpha",
+        "turn_id": "turn-8",
+        "generation": 3,
+        "utterance_id": "clip-42"
+      }
+    },
+    {
+      "name": "rescue",
+      "event": {
+        "kind": "rescue",
+        "generation": 4,
+        "reason": "caller hung up",
+        "leg": "alpha"
+      }
+    },
+    {
+      "name": "speech",
+      "event": {
+        "kind": "speech",
+        "agent": "alpha",
+        "text": "The build passes.",
+        "delivered": true,
+        "floor_id": "floor-7"
+      }
+    },
+    {
+      "name": "floor_request",
+      "event": {
+        "kind": "floor_request",
+        "agent": "alpha",
+        "message": "The build passes.",
+        "floor_id": "floor-7"
+      }
+    },
+    {
+      "name": "floor_held",
+      "event": {
+        "kind": "floor_held",
+        "agent": "alpha",
+        "message": "The build passes.",
+        "floor_id": "floor-7"
+      }
+    },
+    {
+      "name": "floor_gate",
+      "event": {
+        "kind": "floor_gate",
+        "agent": "alpha",
+        "answer": "yes",
+        "latency_ms": 41,
+        "floor_id": "floor-7"
+      }
+    },
+    {
+      "name": "floor_rewrite",
+      "event": {
+        "kind": "floor_rewrite",
+        "agent": "alpha",
+        "original": "The build passes.",
+        "rewritten": "I have good news: the build passes.",
+        "latency_ms": 127,
+        "floor_id": "floor-7"
+      }
+    },
+    {
+      "name": "floor_released",
+      "event": {
+        "kind": "floor_released",
+        "agent": "alpha",
+        "how": "quiet_after_hold",
+        "floor_id": "floor-7"
+      }
+    },
+    {
+      "name": "agents_state",
+      "event": {
+        "kind": "agents_state",
+        "agents": [
+          {
+            "project": "alpha",
+            "state": "busy"
+          }
+        ]
+      }
+    },
+    {
+      "name": "host_link",
+      "event": {
+        "kind": "host_link",
+        "host": "builder-1",
+        "connected": true
+      }
+    },
+    {
+      "name": "jev_request_good_moment",
+      "event": {
+        "kind": "jev_request",
+        "purpose": "good_moment",
+        "state": {
+          "queued_update": {
+            "from_agent": "alpha",
+            "message": "The build passes."
+          }
+        },
+        "floor_id": "floor-7"
+      }
+    },
+    {
+      "name": "call_boundary",
+      "event": {
+        "kind": "call_boundary",
+        "phase": "started",
+        "call_id": "call-1"
+      }
+    },
+    {
+      "name": "call_boundary_ended",
+      "event": {
+        "kind": "call_boundary",
+        "phase": "ended",
+        "call_id": "call-1",
+        "reason": "page_closed"
+      }
+    },
+    {
+      "name": "jev_response_good_moment",
+      "event": {
+        "kind": "jev_response",
+        "purpose": "good_moment",
+        "latency_ms": 1500,
+        "outcome": "timeout",
+        "answers": {},
+        "error": "Jev did not answer within 1500 ms",
+        "floor_id": "floor-7"
+      }
+    },
+    {
+      "name": "tool_end_error",
+      "event": {
+        "kind": "tool_end",
+        "agent": "alpha",
+        "call_id": "call-4",
+        "tool": "bash",
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "exit status 1"
+            }
+          ]
+        },
+        "error": "exit status 1",
+        "turn_id": "turn-8"
+      }
+    },
+    {
+      "name": "speech_undelivered",
+      "event": {
+        "kind": "speech",
+        "agent": "alpha",
+        "text": "The deploy finished.",
+        "delivered": false,
+        "reason": "stale_generation"
+      }
+    }
+  ],
+  "snapshot": {
+    "type": "snapshot",
+    "last_seq": 2,
+    "events": [
+      {
+        "seq": 1,
+        "timestamp_ms": 1758844800000,
+        "kind": "caller_utterance",
+        "utterance_id": "clip-42",
+        "text": "Please send me to alpha.",
+        "talking_to": "operator"
+      }
+    ],
+    "logs": [
+      {
+        "seq": 2,
+        "timestamp_ms": 1758844800001,
+        "level": "INFO",
+        "target": "switchboard::router",
+        "message": "route selected",
+        "fields": {
+          "target": "alpha"
+        }
+      }
+    ],
+    "agents": [
+      {
+        "project": "alpha",
+        "state": "busy"
+      }
+    ],
+    "config": {
+      "jev_for_current_agent_lower": 0.3,
+      "jev_for_current_agent_upper": 0.7,
+      "jev_action_threshold": 0.6
+    }
+  }
+}

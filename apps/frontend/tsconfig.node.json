@@ -7,5 +7,5 @@
     "resolveJsonModule": true,
     "noEmit": true
   },
-  "include": ["vite.config.ts", "playwright.config.ts", "playwright.production.config.ts"]
+  "include": ["vite.config.ts", "vite.debug.config.ts", "playwright.config.ts", "playwright.production.config.ts"]
 }
