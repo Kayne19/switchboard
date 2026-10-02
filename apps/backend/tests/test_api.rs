@@ -5602,6 +5602,106 @@ async fn foreground_alpha_turn(state: &AppState) -> (String, u64) {
     (token, instance)
 }
 
+/// A call on alpha (as `state_with_agents`) whose utterances Jev routes as
+/// `continue`, and the log of `host`, alpha's host agent.
+#[cfg(unix)]
+fn state_with_agents_and_jev(root: &std::path::Path, host: FakeHostAgent) -> (AppState, FakeLog) {
+    let (client, _requests, _responded) = fake_jev_client();
+    let operator = answering_agent(root, "fake-operator", "Operator here.");
+    let config =
+        crate::Config::for_tests(&[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())]);
+    let registry = Registry::new(vec![serde_json::from_value(json!({
+        "id": "alpha",
+        "host": "scriptorium",
+        "cwd": root.to_string_lossy(),
+        "model": "anthropic/current",
+    }))
+    .unwrap()]);
+    let prewarm = crate::prewarm::Prewarm::settled(&config, &registry, catalog_of(&["current"]));
+    let log = host.serve(prewarm.hosts().connect_fake("scriptorium"));
+    let state = state_on(Switchboard::new_with_jev(
+        &config,
+        registry,
+        std::sync::Arc::new(prewarm),
+        client,
+    ));
+    (state, log)
+}
+
+/// Sends a session event from alpha's host agent on its own, as the host
+/// does when the daemon starts or settles a run no command caused.
+#[cfg(unix)]
+fn alpha_host_event(state: &AppState, event: Value) {
+    state.0.hosts.send_fake(
+        "scriptorium",
+        json!({"type": "event", "session": "s1", "cursor": "external", "event": event}),
+    );
+}
+
+/// Waits until the API has opened an autonomous operation for `instance_id`.
+#[cfg(unix)]
+async fn until_autonomous(state: &AppState, instance_id: u64) {
+    timeout(Duration::from_secs(1), async {
+        while !state
+            .0
+            .autonomous_operations
+            .lock()
+            .await
+            .contains_key(&instance_id)
+        {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("the autonomous turn was admitted");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_caller_message_steers_an_autonomous_project_turn() {
+    let root = scratch_root("autonomous-steer");
+    let (state, host) = state_with_agents_and_jev(
+        &root,
+        FakeHostAgent::new(Box::new(|_, _| {
+            vec![Step::Event(json!({"kind":"text","text":"Alpha here."}))]
+        })),
+    );
+    let (_token, instance_id) = foreground_alpha_turn(&state).await;
+    // A child agent exits and the session starts a run on its own.
+    alpha_host_event(
+        &state,
+        json!({"kind":"turn_start","cause":"autonomous","turn_id":"auto-steer"}),
+    );
+    until_autonomous(&state, instance_id).await;
+    let mut events = state.0.events.subscribe();
+    let generation = state.0.coordinator.generation();
+
+    dispatch_routed_transcript(
+        &state,
+        "steer-auto",
+        generation,
+        "what branch are you on?".into(),
+    )
+    .await;
+
+    let queued = next_event_of(&mut events, "queued").await;
+    assert_eq!(queued["id"], "steer-auto");
+    assert_eq!(
+        queued["steered"], true,
+        "the message was queued, not steered"
+    );
+    assert_eq!(state.0.queued_turns.load(Ordering::Acquire), 0);
+    assert_eq!(
+        host.named("steer")
+            .iter()
+            .map(|args| args["message"].as_str().unwrap_or_default().to_owned())
+            .collect::<Vec<_>>(),
+        vec!["what branch are you on?".to_owned()]
+    );
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
 #[cfg(unix)]
 fn autonomous_turn(token: String, instance_id: u64, turn_id: Option<&str>) -> ProjectTurn {
     ProjectTurn {
