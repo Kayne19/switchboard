@@ -1,8 +1,9 @@
 // Fixture mode (`?fixture=1`): the page without a live call. It plays the
 // shared fixture (one example of every event kind) and then a scripted call
 // that exercises each routing path: Jev straight through, a utility fan-out,
-// a split retry handed to the operator's route tool, a Jev timeout, and a
-// floor message travelling back to the caller.
+// a split retry handed to the operator's route tool, a Jev timeout, a line
+// dropped as stale, and a floor message travelling back to the caller. Every
+// rule, branch, source and `how` it uses is a value the service emits.
 import type { DebugConfig, DebugEvent, DebugFrame, DebugLog, JsonValue } from './protocol';
 import { parseDebugFrame } from './protocol';
 import type { Feed, FeedHandlers } from './connection';
@@ -132,27 +133,17 @@ export function scriptedCall(startSeq: number, startTs: number): ScriptedFrame[]
       kind: 'route_decision',
       utterance_id: 'u-101',
       rule: 'jev_action',
-      reason: 'Jev action confidence 0.880 met threshold',
+      reason: 'Jev action general: action_conf=0.880 >= threshold 0.600',
       action: 'general',
       mode: 'continue',
       decided_by: 'jev',
     },
     10,
   );
-  s.event({ kind: 'pbx_branch', utterance_id: 'u-101', branch: 'operator', reason: 'general conversation stays with the front desk' }, 10);
+  s.event({ kind: 'pbx_branch', utterance_id: 'u-101', branch: 'operator', reason: 'Jev chose general on operator, which the operator handles' }, 10);
   s.event({ kind: 'operator_hop', utterance_id: 'u-101', text: 'Morning! Anything break overnight?', outcome: 'answered' }, 20);
-  s.event({ kind: 'routed', utterance_id: 'u-101', to_agent: 'operator', text_part: 'Morning! Anything break overnight?', mode: 'continue', via: 'jev' }, 10);
+  s.event({ kind: 'routed', utterance_id: 'u-101', to_agent: 'operator', text_part: 'Morning! Anything break overnight?', mode: 'continue', via: 'operator' }, 10);
   s.event({ kind: 'turn_start', agent: 'operator', turn_id: 'op-1', generation: 7 }, 20);
-  s.event(
-    {
-      kind: 'agent_input',
-      agent: 'operator',
-      turn_id: 'op-1',
-      text: 'Projects: alpha (switchboard, idle), beta (homelab, busy: nightly backup check).',
-      source: 'call_state',
-    },
-    10,
-  );
   s.event({ kind: 'agent_input', agent: 'operator', turn_id: 'op-1', text: 'Morning! Anything break overnight?', source: 'caller' }, 10);
   s.event({ kind: 'tool_start', agent: 'operator', call_id: 'op-c1', tool: 'status', args: { scope: 'all' } }, 150);
   s.event({ kind: 'tool_end', agent: 'operator', call_id: 'op-c1', tool: 'status', result: { alpha: 'idle', beta: 'busy', failing_ci: ['alpha#128'] } }, 260);
@@ -212,7 +203,7 @@ export function scriptedCall(startSeq: number, startTs: number): ScriptedFrame[]
       kind: 'route_decision',
       utterance_id: 'u-102',
       rule: 'jev_action',
-      reason: 'Jev action confidence 0.930 met threshold',
+      reason: 'Jev action go_to_project: action_conf=0.930 >= threshold 0.600',
       action: 'go_to_project',
       target: 'alpha',
       mode: 'fresh',
@@ -355,8 +346,9 @@ export function scriptedCall(startSeq: number, startTs: number): ScriptedFrame[]
     {
       kind: 'route_decision',
       utterance_id: 'u-103',
-      rule: 'asked_llm',
-      reason: 'confidence policy requested top-level LLM (action=continue, action_conf=0.480, for_current_agent=0.520)',
+      rule: 'current_agent_unsure',
+      reason:
+        'confidence policy requested top-level LLM: on alpha, for_current_agent=0.520 is between lower 0.300 and upper 0.700 (action=continue, action_conf=0.480); multi_target is yes, so the routing utility splits it',
       action: 'continue',
       target: 'beta',
       mode: 'continue',
@@ -364,7 +356,7 @@ export function scriptedCall(startSeq: number, startTs: number): ScriptedFrame[]
     },
     10,
   );
-  s.event({ kind: 'pbx_branch', utterance_id: 'u-103', branch: 'utility', reason: 'Jev unsure and multi_target 0.83: ask the utility to split' }, 10);
+  s.event({ kind: 'pbx_branch', utterance_id: 'u-103', branch: 'utility', reason: 'Jev found several targets (multi_target), so the routing utility splits the utterance' }, 10);
   s.event(
     {
       kind: 'utility_request',
@@ -433,8 +425,8 @@ export function scriptedCall(startSeq: number, startTs: number): ScriptedFrame[]
     { kind: 'module_call', agent: 'beta', call_id: 'b-m1', name: 'request_to_speak', args: { message: 'Backup finished at 03:14, 1.4 GiB added.' } },
     120,
   );
-  s.event({ kind: 'floor_request', agent: 'beta', message: 'Backup finished at 03:14, 1.4 GiB added.' }, 10);
-  s.event({ kind: 'floor_held', agent: 'beta', message: 'Backup finished at 03:14, 1.4 GiB added.' }, 20);
+  s.event({ kind: 'floor_request', agent: 'beta', message: 'Backup finished at 03:14, 1.4 GiB added.', floor_id: 'floor-21' }, 10);
+  s.event({ kind: 'floor_held', agent: 'beta', message: 'Backup finished at 03:14, 1.4 GiB added.', floor_id: 'floor-21' }, 20);
   s.event({ kind: 'module_result', agent: 'beta', call_id: 'b-m1', ok: true, detail: { status: 'queued' } }, 10);
   s.event({ kind: 'turn_end', agent: 'beta', turn_id: 'b-4', generation: 8 }, 30);
   s.event(
@@ -450,7 +442,7 @@ export function scriptedCall(startSeq: number, startTs: number): ScriptedFrame[]
   s.event(
     {
       kind: 'jev_request',
-      utterance_id: 'gm-17',
+      floor_id: 'floor-21',
       purpose: 'good_moment',
       state: jevState('', 'alpha', { queued_update: 'Backup finished at 03:14, 1.4 GiB added.' }),
     },
@@ -459,7 +451,7 @@ export function scriptedCall(startSeq: number, startTs: number): ScriptedFrame[]
   s.event(
     {
       kind: 'jev_response',
-      utterance_id: 'gm-17',
+      floor_id: 'floor-21',
       purpose: 'good_moment',
       latency_ms: 38,
       outcome: 'ok',
@@ -467,7 +459,7 @@ export function scriptedCall(startSeq: number, startTs: number): ScriptedFrame[]
     },
     40,
   );
-  s.event({ kind: 'floor_gate', agent: 'beta', answer: 'no', latency_ms: 38 }, 10);
+  s.event({ kind: 'floor_gate', agent: 'beta', answer: 'no', latency_ms: 38, floor_id: 'floor-21' }, 10);
   s.event(
     {
       kind: 'tool_end',
@@ -484,7 +476,7 @@ export function scriptedCall(startSeq: number, startTs: number): ScriptedFrame[]
   s.event(
     {
       kind: 'jev_request',
-      utterance_id: 'gm-18',
+      floor_id: 'floor-21',
       purpose: 'good_moment',
       state: jevState('', 'alpha', { queued_update: 'Backup finished at 03:14, 1.4 GiB added.' }),
     },
@@ -493,7 +485,7 @@ export function scriptedCall(startSeq: number, startTs: number): ScriptedFrame[]
   s.event(
     {
       kind: 'jev_response',
-      utterance_id: 'gm-18',
+      floor_id: 'floor-21',
       purpose: 'good_moment',
       latency_ms: 41,
       outcome: 'ok',
@@ -501,7 +493,7 @@ export function scriptedCall(startSeq: number, startTs: number): ScriptedFrame[]
     },
     45,
   );
-  s.event({ kind: 'floor_gate', agent: 'beta', answer: 'yes', latency_ms: 41 }, 10);
+  s.event({ kind: 'floor_gate', agent: 'beta', answer: 'yes', latency_ms: 41, floor_id: 'floor-21' }, 10);
   s.event(
     {
       kind: 'floor_rewrite',
@@ -509,10 +501,11 @@ export function scriptedCall(startSeq: number, startTs: number): ScriptedFrame[]
       original: 'Backup finished at 03:14, 1.4 GiB added.',
       rewritten: 'Quick one from homelab: last night’s backup finished at 3:14.',
       latency_ms: 233,
+      floor_id: 'floor-21',
     },
     240,
   );
-  s.event({ kind: 'floor_released', agent: 'beta', how: 'spoken' }, 20);
+  s.event({ kind: 'floor_released', agent: 'beta', how: 'gate_yes', floor_id: 'floor-21' }, 20);
   s.event({ kind: 'speech', agent: 'beta', text: 'Quick one from homelab: last night’s backup finished at 3:14.', delivered: true }, 30);
   s.event(
     {
@@ -526,8 +519,8 @@ export function scriptedCall(startSeq: number, startTs: number): ScriptedFrame[]
   );
 
   // 5. Vague follow-up: utility unsure twice, the operator's route tool decides.
-  s.event({ kind: 'caller_utterance', utterance_id: 'u-104', text: 'Great — tell it to keep the old snapshots too.', talking_to: 'alpha' }, 1200);
-  s.event({ kind: 'jev_request', utterance_id: 'u-104', purpose: 'route', state: jevState('Great — tell it to keep the old snapshots too.', 'alpha') }, 30);
+  s.event({ kind: 'caller_utterance', utterance_id: 'u-104', text: 'Great — tell it to keep the old snapshots too.', talking_to: 'operator' }, 1200);
+  s.event({ kind: 'jev_request', utterance_id: 'u-104', purpose: 'route', state: jevState('Great — tell it to keep the old snapshots too.', 'operator') }, 30);
   s.event(
     {
       kind: 'jev_response',
@@ -538,11 +531,11 @@ export function scriptedCall(startSeq: number, startTs: number): ScriptedFrame[]
       answers: routeAnswers(
         'go_to_project',
         { go_to_project: 0.52, continue: 0.37, general: 0.11 },
-        0.44,
+        0.08,
         'beta',
         { beta: 0.51, alpha: 0.45, none: 0.04 },
         'continue',
-        0.31,
+        0.62,
       ),
     },
     90,
@@ -551,8 +544,9 @@ export function scriptedCall(startSeq: number, startTs: number): ScriptedFrame[]
     {
       kind: 'route_decision',
       utterance_id: 'u-104',
-      rule: 'asked_llm',
-      reason: 'confidence policy requested top-level LLM (action=go_to_project, action_conf=0.520, for_current_agent=0.440)',
+      rule: 'action_below_threshold',
+      reason:
+        'confidence policy requested top-level LLM: action_conf=0.520 < threshold 0.600 (action=go_to_project, for_current_agent=0.080); multi_target is yes, so the routing utility splits it',
       action: 'go_to_project',
       target: 'beta',
       mode: 'continue',
@@ -560,13 +554,13 @@ export function scriptedCall(startSeq: number, startTs: number): ScriptedFrame[]
     },
     10,
   );
-  s.event({ kind: 'pbx_branch', utterance_id: 'u-104', branch: 'utility', reason: 'Jev unsure between alpha and beta' }, 10);
+  s.event({ kind: 'pbx_branch', utterance_id: 'u-104', branch: 'utility', reason: 'Jev found several targets (multi_target), so the routing utility splits the utterance' }, 10);
   s.event(
     {
       kind: 'utility_request',
       utterance_id: 'u-104',
       attempt: 'first',
-      prompt: 'Caller is on alpha. They said: "Great — tell it to keep the old snapshots too." Which project?',
+      prompt: 'Caller is on the operator. They said: "Great — tell it to keep the old snapshots too." Which project?',
     },
     20,
   );
@@ -590,7 +584,7 @@ export function scriptedCall(startSeq: number, startTs: number): ScriptedFrame[]
     },
     345,
   );
-  s.event({ kind: 'pbx_branch', utterance_id: 'u-104', branch: 'multi_unresolved_to_operator', reason: 'utility not confident after split retry' }, 10);
+  s.event({ kind: 'pbx_branch', utterance_id: 'u-104', branch: 'multi_unresolved', reason: 'the routing utility could not split a multi-target utterance, so the operator asks the caller' }, 10);
   s.event({ kind: 'operator_hop', utterance_id: 'u-104', text: 'Great — tell it to keep the old snapshots too.', outcome: 'route_tool' }, 30);
   s.event({ kind: 'turn_start', agent: 'operator', turn_id: 'op-2', generation: 8 }, 20);
   s.event({ kind: 'agent_input', agent: 'operator', turn_id: 'op-2', text: 'Great — tell it to keep the old snapshots too.', source: 'caller' }, 10);
@@ -628,20 +622,61 @@ export function scriptedCall(startSeq: number, startTs: number): ScriptedFrame[]
       kind: 'route_decision',
       utterance_id: 'u-105',
       rule: 'jev_unavailable',
-      reason: 'Jev unavailable: request timed out',
-      action: 'continue',
-      mode: 'continue',
-      decided_by: 'jev',
+      reason: 'Jev unavailable: Jev request timed out after 1500 ms',
+      action: 'general',
+      mode: 'not_applicable',
+      decided_by: 'fallback',
     },
     10,
   );
-  s.event({ kind: 'pbx_branch', utterance_id: 'u-105', branch: 'continue_current', reason: 'fallback keeps the caller on the current leg' }, 10);
-  s.event({ kind: 'routed', utterance_id: 'u-105', to_agent: 'beta', text_part: 'And how long did the tests take?', mode: 'continue', via: 'pbx' }, 20);
+  s.event(
+    {
+      kind: 'pbx_branch',
+      utterance_id: 'u-105',
+      branch: 'utility',
+      reason: 'Jev was unsure, so the routing utility gives a second opinion (Jev unavailable: Jev request timed out after 1500 ms)',
+    },
+    10,
+  );
+  s.event(
+    {
+      kind: 'utility_request',
+      utterance_id: 'u-105',
+      attempt: 'first',
+      prompt: 'Caller is on beta (homelab). They said: "And how long did the tests take?" Registered projects: alpha, beta. Which project?',
+    },
+    20,
+  );
+  s.event(
+    {
+      kind: 'utility_decision',
+      utterance_id: 'u-105',
+      attempt: 'first',
+      decision: { kind: 'second_opinion', target: 'alpha', mode: 'continue', confident: true },
+      latency_ms: 298,
+    },
+    300,
+  );
+  s.event({ kind: 'routed', utterance_id: 'u-105', to_agent: 'alpha', text_part: 'And how long did the tests take?', mode: 'continue', via: 'utility' }, 20);
 
-  // 7. Still in flight.
-  s.event({ kind: 'caller_utterance', utterance_id: 'u-106', text: 'Actually, hang on, switch me back to the operator.', talking_to: 'beta' }, 1400);
-  s.event({ kind: 'jev_request', utterance_id: 'u-106', purpose: 'route', state: jevState('Actually, hang on, switch me back to the operator.', 'beta') }, 30);
-  s.log('INFO', 'switchboard::router', 'Jev request sent', { utterance_id: 'u-106' });
+  // 7. A barge-in rescues the line before Jev answers: the line is dropped.
+  s.event({ kind: 'caller_utterance', utterance_id: 'u-106', text: 'Oh and can you also—', talking_to: 'alpha' }, 900);
+  s.event({ kind: 'jev_request', utterance_id: 'u-106', purpose: 'route', state: jevState('Oh and can you also—', 'alpha') }, 30);
+  s.event({ kind: 'rescue', generation: 10, reason: 'operation interrupted', leg: 'alpha' }, 120);
+  s.event(
+    {
+      kind: 'pbx_branch',
+      utterance_id: 'u-106',
+      branch: 'dropped_stale',
+      reason: 'the line changed before this was acted on (stamped generation 9, now 10); it was discarded',
+    },
+    10,
+  );
+
+  // 8. Still in flight.
+  s.event({ kind: 'caller_utterance', utterance_id: 'u-107', text: 'Actually, hang on, switch me back to the operator.', talking_to: 'alpha' }, 1400);
+  s.event({ kind: 'jev_request', utterance_id: 'u-107', purpose: 'route', state: jevState('Actually, hang on, switch me back to the operator.', 'alpha') }, 30);
+  s.log('INFO', 'switchboard::router', 'Jev request sent', { utterance_id: 'u-107' });
   return s.frames;
 }
 

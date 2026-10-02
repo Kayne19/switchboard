@@ -6,7 +6,7 @@ import type { AgentPane as Pane, PaneItem } from './reducer';
 
 const PAGE = 250;
 // Context the agent was given rather than words from the caller: folded.
-const COLLAPSED_SOURCES = new Set(['intro', 'brief', 'call_state', 'autonomous', 'routing_request', 'floor_rewrite', 'model_change']);
+export const COLLAPSED_SOURCES = new Set(['intro', 'brief', 'routing_request', 'floor_rewrite', 'model_change']);
 const MODULE_GLYPHS: Record<string, string> = { speak: '◉', display: '▣', request_to_speak: '⚑', view: '◎' };
 
 export interface PaneSelect {

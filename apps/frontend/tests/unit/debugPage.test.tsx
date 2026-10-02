@@ -54,7 +54,8 @@ describe('debug page', () => {
     act(() => fanOut.click());
     const drawer = host.querySelector('.drawer');
     expect(drawer?.textContent).toContain('dispatch 2 parts → alpha, beta');
-    expect(drawer?.textContent).toContain('asked_llm');
+    expect(drawer?.textContent).toContain('current_agent_unsure');
+    expect(drawer?.textContent).toContain('for_current_agent between the lower and upper thresholds');
     expect(drawer?.querySelectorAll('.bar-row').length).toBeGreaterThan(5);
     for (const tab of ['Timeline', 'Floor gate', 'Agents & hosts', 'Raw log']) {
       const button = [...host.querySelectorAll('.tabs button')].find((element) => element.textContent === tab) as HTMLButtonElement;

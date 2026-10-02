@@ -12,6 +12,7 @@ const snapshot = (events: DebugFrame[] = [], extra: Record<string, unknown> = {}
 let nextSeq = 100;
 const event = (body: DebugEvent, seq = (nextSeq += 1), timestamp_ms = 1_000 + seq): DebugFrame => ({ type: 'event', seq, timestamp_ms, ...body }) as DebugFrame;
 const fold = (frames: DebugFrame[]): DebugState => reduceFrames(initialDebugState(), frames);
+const fixtureEvent = (kind: string) => fixture.events.find((entry) => entry.event.kind === kind)!.event as Record<string, unknown>;
 
 describe('debug reducer', () => {
   const played = fixtureFrames(fixture as Parameters<typeof fixtureFrames>[0]).map((entry) => entry.frame);
@@ -41,7 +42,7 @@ describe('debug reducer', () => {
     const module = state.panes.alpha.items.find((item) => item.type === 'module');
     expect(module).toMatchObject({ name: 'speak', ok: true, detail: { status: 'delivered' } });
     const floor = state.floors[state.floorOrder[0]];
-    expect(floor).toMatchObject({ agent: 'alpha', requested: true, rewrite: { rewritten: 'I have good news: the build passes.' }, released: { how: 'quiet' } });
+    expect(floor).toMatchObject({ agent: 'alpha', requested: true, rewrite: { rewritten: 'I have good news: the build passes.' }, released: { how: fixtureEvent('floor_released').how } });
     expect(floor.gates.map((gate) => gate.answer)).toEqual(['yes']);
     expect(state.hosts['builder-1'].connected).toBe(true);
     expect(state.turns[0]).toMatchObject({ agent: 'alpha', turnId: 'turn-8', endTs: expect.any(Number) });
@@ -63,12 +64,14 @@ describe('debug reducer', () => {
     expect(handOffPath.stages).toEqual(['jev', 'utility', 'operator']);
     expect(handOffPath.segments[2].label).toBe('second_opinion · unsure');
     expect(handOffPath.destinations).toMatchObject([{ agent: 'beta', from: 'operator', via: 'operator' }]);
+    expect(state.traces['u-105'].decision).toMatchObject({ rule: 'jev_unavailable', decided_by: 'fallback' });
     expect(routePath(state.traces['u-105'])).toMatchObject({
       pending: false,
-      segments: [{ label: 'timeout' }],
-      destinations: [{ agent: 'beta', from: 'jev', via: 'pbx', label: 'continue_current · continue' }],
+      stages: ['jev', 'utility'],
+      segments: [{ label: 'timeout' }, { label: 'utility' }],
+      destinations: [{ agent: 'alpha', from: 'utility', via: 'utility', label: 'utility · continue' }],
     });
-    expect(routePath(state.traces['u-106'])).toMatchObject({ stages: ['jev'], pending: true, destinations: [] });
+    expect(routePath(state.traces['u-107'])).toMatchObject({ stages: ['jev'], pending: true, destinations: [] });
     // The operator answered u-101 itself and the utility pane mirrors routing work.
     expect(routePath(state.traces['u-101']).destinations[0]).toMatchObject({ agent: 'operator' });
     expect(state.panes.utility.items.filter((item) => item.type === 'utility').length).toBeGreaterThanOrEqual(4);
