@@ -6,15 +6,7 @@ import { DamoclesPresence } from "../primitives/DamoclesPresence";
 import { FocusLayer } from "./FocusLayer";
 import { SurfaceBoundary } from "./SurfaceBoundary";
 import { TranscriptDrawer } from "./TranscriptDrawer";
-import {
-  ArchitectureScene,
-  CodeScene,
-  ComposedScene,
-  ConversationScene,
-  DocumentScene,
-  IdleScene,
-  TrainingScene,
-} from "./Scenes";
+import { SceneShell } from "./Scenes";
 
 interface SceneContentProps {
   state: ControllerState;
@@ -53,30 +45,7 @@ function SceneContent({
     <LayoutGroup id="switchboard-layout">
       <main className="stage" data-scene-kind={kind}>
         <AnimatePresence mode="sync" initial={false}>
-          {kind === "idle" ? (
-            <IdleScene
-              key="idle"
-              state={state}
-              onToggleListening={shared.onToggleListening}
-              setTranscriptOpen={setTranscriptOpen}
-            />
-          ) : null}
-          {kind === "conversation" ? (
-            <ConversationScene key="conversation" {...shared} />
-          ) : null}
-          {kind === "training" ? (
-            <TrainingScene key="training" {...shared} />
-          ) : null}
-          {kind === "architecture" ? (
-            <ArchitectureScene key="architecture" {...shared} />
-          ) : null}
-          {kind === "document" ? (
-            <DocumentScene key="document" {...shared} />
-          ) : null}
-          {kind === "code" ? <CodeScene key="code" {...shared} /> : null}
-          {kind === "composed" ? (
-            <ComposedScene key="composed" {...shared} />
-          ) : null}
+          <SceneShell key={kind} kind={kind} {...shared} />
         </AnimatePresence>
         <TranscriptDrawer
           open={transcriptOpen}
