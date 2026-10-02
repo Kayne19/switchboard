@@ -482,7 +482,10 @@ file. Flags given on a rerun replace them. The installed binary is reused
 only while it exists, and the installed package only while it has
 `dist/index.js`; otherwise the rerun falls back to the defaults (the
 `prime-agent` on `PATH` and the package next to it). So a plain rerun works
-on a host whose package is not next to the binary. It
+on a host whose package is not next to the binary. A rerun that gives
+`--prime-agent` without `--prime-agent-package` moves to that binary's
+package: the package next to it when it has `dist/index.js`, else the
+installed one while it is still there, else it stops. It
 rewrites only what changed, restarts the host agent, and never restarts the
 daemon: resident agents keep running, and the new host agent reattaches to
 them. Whether a running session picks up a changed `switchboard` skill before

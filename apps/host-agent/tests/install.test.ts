@@ -286,6 +286,42 @@ test("installer: a rerun reuses the installed prime-agent binary while it is sti
 	assert.match(execStarts(unit(r, "prime-agent-daemon.service"))[0], new RegExp(`^ExecStart=${r.primeAgent} `));
 });
 
+test("installer: an explicit --prime-agent prefers the package next to it over the installed one", () => {
+	const r = rig();
+	const elsewhere = path.join(r.root, "pkgs", "prime-agent");
+	mkdirSync(path.join(elsewhere, "dist"), { recursive: true });
+	writeFileSync(path.join(elsewhere, "dist", "index.js"), "export {};\n");
+	const cfgFile = path.join(r.home, ".config/switchboard/host-agent.json");
+	assert.equal(install(r, ["--host-id", "familiar", "--token-file", r.tokenSource, "--prime-agent-package", elsewhere]).status, 0);
+
+	// A new prime-agent laid out as its own npm prefix: its package wins.
+	const binary = path.join(r.root, "other", "bin", "prime-agent");
+	const pkg = path.join(r.root, "other", "lib", "node_modules", "prime-agent");
+	mkdirSync(path.dirname(binary), { recursive: true });
+	mkdirSync(path.join(pkg, "dist"), { recursive: true });
+	writeFileSync(binary, "not a real prime-agent\n", { mode: 0o755 });
+	writeFileSync(path.join(pkg, "dist", "index.js"), "export {};\n");
+	const res = install(r, ["--prime-agent", binary]);
+	assert.equal(res.status, 0, res.stderr);
+	let cfg = JSON.parse(readFileSync(cfgFile, "utf8"));
+	assert.equal(cfg.prime_agent, binary);
+	assert.equal(cfg.prime_agent_package, pkg);
+
+	// No package next to it: the installed one, while it is still there.
+	assert.equal(install(r, ["--prime-agent", binary, "--prime-agent-package", elsewhere]).status, 0);
+	rmSync(pkg, { recursive: true });
+	const res3 = install(r, ["--prime-agent", binary]);
+	assert.equal(res3.status, 0, res3.stderr);
+	cfg = JSON.parse(readFileSync(cfgFile, "utf8"));
+	assert.equal(cfg.prime_agent_package, elsewhere);
+
+	// Neither: the same stop as before.
+	rmSync(elsewhere, { recursive: true });
+	const res4 = install(r, ["--prime-agent", binary]);
+	assert.equal(res4.status, 1);
+	assert.match(res4.stderr, new RegExp(`no prime-agent npm package at ${pkg} \\(dist/index\\.js missing\\)`));
+});
+
 test("installer: a CA file is copied next to the config and trusted by the host agent only", () => {
 	const r = rig();
 	const res = install(r, ["--host-id", "familiar", "--token-file", r.tokenSource, "--ca-file", r.caSource]);
