@@ -397,6 +397,22 @@ button {
   align-content: safe center;
   padding-right: clamp(6px, 1cqw, 16px);
 }
+/* The live response's log of what was said (#113), in the card's own text
+   area: the line being heard reads in full, and the lines before it recede
+   above it. The area scrolls, pinned to the newest line. */
+.spoken-log {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.55em;
+}
+.spoken-log__line {
+  min-width: 0;
+  color: rgba(232, 230, 223, 0.42);
+  transition: color 0.24s ease;
+}
+.spoken-log__line--current {
+  color: inherit;
+}
 .conversation-channel {
   position: absolute;
   left: 6.2cqw;

@@ -1,9 +1,9 @@
 import type { MessageData } from '../controller/types';
-import { RichText } from './RichText';
+import { SpokenLog } from './SpokenLog';
 
 /**
- * The runtime-owned live chat output surface: the current assistant turn in
- * a small scrollable card beside the active visual. It is a separate
+ * The runtime-owned live chat output surface: the recent spoken lines in a
+ * small scrolling log beside the active visual, newest at the bottom. It is a separate
  * citizen from the durable notes -- chat updates never mutate a note, and
  * hiding a note never clears the chat.
  */
@@ -21,9 +21,7 @@ export function LiveChatCard({ message, onOpenHistory }: { message: MessageData;
         ) : null}
       </div>
       <div className="live-chat-card__body">
-        <div className="live-chat-card__text">
-          <RichText segments={message.segments} />
-        </div>
+        <SpokenLog message={message} className="live-chat-card__text" />
       </div>
     </div>
   );

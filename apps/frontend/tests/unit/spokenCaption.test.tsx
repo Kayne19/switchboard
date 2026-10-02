@@ -92,6 +92,11 @@ function liveText(): string | undefined {
   return message?.segments[0]?.text;
 }
 
+function loggedTexts(): string[] {
+  const message = latest.runtimeObjects[RUNTIME_CONVERSATION_ID]?.data as MessageData | undefined;
+  return message?.lines?.map((line) => line.text) ?? [];
+}
+
 function transcriptTexts(): string[] {
   const message = latest.runtimeObjects[RUNTIME_CONVERSATION_ID]?.data as MessageData | undefined;
   return message?.transcript?.map((line) => line.text) ?? [];
@@ -202,5 +207,53 @@ describe('the live response follows the audio (#112)', () => {
     // A rescue: a new epoch the page did not see coming retires the audio.
     await receive({ type: 'epoch', generation: 2 });
     expect(liveText()).toBe('Cut off.');
+  });
+});
+
+describe('the live response keeps a log of what was said (#113)', () => {
+  it('adds each line when its audio starts, and keeps the earlier ones', async () => {
+    await receiveUtterance(1);
+    await receive(spoken('First line.', 1));
+    await receiveUtterance(2);
+    await receive(spoken('Second line.', 2));
+    expect(loggedTexts()).toEqual(['First line.']);
+
+    await finishPlaying();
+    expect(loggedTexts()).toEqual(['First line.', 'Second line.']);
+    expect(liveText()).toBe('Second line.');
+  });
+
+  it('keeps written replies out of it', async () => {
+    await receive(spoken('Running the tests.'));
+    await receive({ type: 'reply', text: 'Written summary.', route: 'alpha', voiced: false });
+    expect(loggedTexts()).toEqual(['Running the tests.']);
+    expect(transcriptTexts()).toEqual(['Running the tests.', 'Written summary.']);
+  });
+
+  it('puts a line whose text came late before the line heard after it', async () => {
+    // The second utterance is already playing when the first line's text
+    // arrives: it goes before it, and the live response stays on the second.
+    await receiveUtterance(1);
+    await receiveUtterance(2);
+    await finishPlaying();
+    await receive(spoken('Done.', 2));
+    await receive(spoken('A long first line.', 1));
+    expect(loggedTexts()).toEqual(['A long first line.', 'Done.']);
+    expect(liveText()).toBe('Done.');
+  });
+
+  it("starts again from the voiced lines a reconnect's history holds", async () => {
+    await receive(spoken('Before the reconnect.'));
+    await receive({
+      type: 'history',
+      entries: [
+        transcriptEntry({ role: 'caller', text: 'Status?', id: 'c1' }),
+        transcriptEntry({ role: 'agent', text: 'Spoken earlier.', voiced: true }),
+        transcriptEntry({ role: 'agent', text: 'Written only.', voiced: false }),
+        transcriptEntry({ role: 'agent', text: 'Spoken last.', voiced: true }),
+      ],
+    });
+    expect(loggedTexts()).toEqual(['Spoken earlier.', 'Spoken last.']);
+    expect(liveText()).toBe('Spoken last.');
   });
 });

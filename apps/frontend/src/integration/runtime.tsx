@@ -8,7 +8,7 @@ import { deriveScreenState } from "../app/sceneModel";
 import { interpretDisplayMessage } from "../app/displayMessage";
 import { planReportDispatch, shouldClearRejectionOnSend } from "../app/reportDispatch";
 import { useController } from "../controller/context";
-import type { MessageData, ScreenStateReport } from "../controller/types";
+import type { MessageData, ScreenStateReport, SpokenLine } from "../controller/types";
 import { RUNTIME_CONVERSATION_ID } from "../controller/types";
 import type { ServerMessage, TranscriptEntry } from "../protocol";
 import {
@@ -44,6 +44,14 @@ function normalizeHistory(entries: TranscriptEntry[]): TranscriptLine[] {
   );
 }
 
+/** How many heard lines the live response keeps for scrollback (#113). */
+const SPOKEN_LOG_LIMIT = 50;
+
+/** A heard line in the live response's log, with where it falls in it. */
+interface LoggedLine extends SpokenLine {
+  order: number;
+}
+
 // `?ws=` points the page at another backend. The dev server has no backend of
 // its own, so without one the call runtime stays down there.
 function backendSocketUrl(): string | null {
@@ -68,8 +76,10 @@ export function RuntimeIntegration() {
   const handleServerRef = useRef<(message: ServerMessage) => void>(() => {});
   const handleStateRef = useRef<(runtimeState: RuntimeState) => void>(() => {});
   const handleHeardRef = useRef<(line: HeardLine) => void>(() => {});
-  // The order of the line the live response shows (`HeardLine.order`).
-  const heardOrderRef = useRef(Number.NEGATIVE_INFINITY);
+  // The lines the caller heard, oldest first, for the live response's log;
+  // the last is the one being heard.
+  const spokenLogRef = useRef<LoggedLine[]>([]);
+  const nextLineIdRef = useRef(0);
   const [reportNonce, setReportNonce] = useState(0);
   const [runtime, setRuntime] = useState<RuntimeState>(INITIAL_RUNTIME_STATE);
 
@@ -112,6 +122,7 @@ export function RuntimeIntegration() {
         // No response yet means no segments: the conversation scene shows
         // its own open-line prompt, and a content rail shows no live card.
         segments: currentResponseRef.current ? [{ text: currentResponseRef.current }] : [],
+        lines: spokenLogRef.current.map(({ id, text }) => ({ id, text })),
         channel: {
           name: "VOICE",
           mode: runtime.handsFree ? "HANDS-FREE" : "PUSH-TO-TALK",
@@ -161,11 +172,16 @@ export function RuntimeIntegration() {
         }
         case "history": {
           transcriptRef.current = normalizeHistory(message.entries);
-          heardOrderRef.current = Number.NEGATIVE_INFINITY;
-          const latestVoiced = [...transcriptRef.current]
-            .reverse()
-            .find((entry) => entry.voiced);
-          currentResponseRef.current = latestVoiced?.text ?? "";
+          // The log restarts from the lines the history says were voiced.
+          spokenLogRef.current = transcriptRef.current
+            .filter((entry) => entry.voiced)
+            .slice(-SPOKEN_LOG_LIMIT)
+            .map((entry) => ({
+              id: nextLineIdRef.current++,
+              text: entry.text,
+              order: Number.NEGATIVE_INFINITY,
+            }));
+          currentResponseRef.current = spokenLogRef.current.at(-1)?.text ?? "";
           if (transcriptRef.current.length > 0) {
             showConversation();
           } else {
@@ -287,12 +303,22 @@ export function RuntimeIntegration() {
       }
     };
 
-    // A spoken line's audio started: it is the line being heard (#112). A
-    // line whose text came after a later line was already heard stays in the
-    // transcript and leaves the live response on the later line.
+    // A spoken line's audio started: it is the line being heard (#112), and
+    // it joins the log (#113). A line whose text came after a later line was
+    // already heard goes into the log before that line, and the live
+    // response stays on the later one.
     handleHeardRef.current = (line: HeardLine) => {
-      if (line.order < heardOrderRef.current) return;
-      heardOrderRef.current = line.order;
+      const log = spokenLogRef.current;
+      let at = log.length;
+      while (at > 0 && log[at - 1].order > line.order) at -= 1;
+      const entry = { id: nextLineIdRef.current++, text: line.text, order: line.order };
+      spokenLogRef.current = [...log.slice(0, at), entry, ...log.slice(at)].slice(
+        -SPOKEN_LOG_LIMIT,
+      );
+      if (at < log.length) {
+        showConversation();
+        return;
+      }
       currentResponseRef.current = line.text;
       showConversation(line.text);
       dispatch({

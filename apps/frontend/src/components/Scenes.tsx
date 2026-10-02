@@ -21,10 +21,10 @@ import { DamoclesPresence } from '../primitives/DamoclesPresence';
 import { DiagramPrimitive } from '../primitives/DiagramPrimitive';
 import { DocumentViewport } from '../primitives/DocumentViewport';
 import { LiveChatCard } from '../primitives/LiveChatCard';
+import { SpokenLog } from '../primitives/SpokenLog';
 import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
 import { ObjectMotion } from '../primitives/ObjectMotion';
 import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
-import { RichText } from '../primitives/RichText';
 import { SceneFooter } from '../primitives/SceneFooter';
 import { FocusableSurface } from '../primitives/FocusableSurface';
 import { TechFrame } from '../primitives/TechFrame';
@@ -276,7 +276,7 @@ export function ConversationScene({ state, onToggleListening, voiceLevel, setTra
         <TechFrame variant="answer" />
         <SurfaceBoundary surfaceId={object?.id ?? 'conversation'} resetKey={object ?? message}>
           <div className="conversation-answer__tag tech micro">{message.tag ?? 'CURRENT RESPONSE / 01'}</div>
-          <div className="conversation-answer__text"><div className="conversation-answer__text-inner"><RichText segments={segments} /></div></div>
+          <SpokenLog message={{ ...message, segments }} className="conversation-answer__text" innerClassName="conversation-answer__text-inner" />
           <div className="conversation-answer__index tech micro">{message.caption ?? `${message.channel?.name ?? 'VOICE'} / LIVE`}</div>
         </SurfaceBoundary>
       </ObjectMotion>

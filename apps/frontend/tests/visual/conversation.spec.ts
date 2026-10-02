@@ -191,3 +191,57 @@ test("explanations read Markdown, scroll, and open a history the caller can type
     await fixtureServer.stop();
   }
 });
+
+test("the live response keeps a log of what was said, pinned to the newest line (#113)", async ({ page }) => {
+  const fixtureServer = new DisplayFixtureServer({ initialGeneration: 2 });
+  const { wsUrl } = await fixtureServer.start();
+  let said = 0;
+  const say = () => {
+    said += 1;
+    fixtureServer.broadcast({
+      type: "spoken",
+      entry: transcriptEntry({ role: "agent", text: `Line ${said}: the tests are still running on the second host.`, voiced: true }),
+    });
+  };
+  try {
+    await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+    await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === "hello")).toBe(true);
+    for (let index = 0; index < 8; index += 1) say();
+    const log = page.locator(".conversation-answer__text");
+    const lines = log.locator(".spoken-log__line");
+    await expect(lines).toHaveCount(8);
+    await expect(log.locator(".spoken-log__line--current")).toHaveText(/^Line 8:/);
+    const position = () =>
+      log.evaluate((element) => ({
+        top: Math.round(element.scrollTop),
+        bottom: Math.round(element.scrollHeight - element.clientHeight),
+      }));
+    // The log overflows the card and rests on its newest line.
+    await expect.poll(async () => (await position()).bottom).toBeGreaterThan(0);
+    await expect.poll(async () => { const at = await position(); return at.top === at.bottom; }).toBe(true);
+    await page.screenshot({ path: test.info().outputPath("spoken-log.png") });
+
+    // Scrolled back up, the caller keeps their place while lines arrive.
+    const scrollTo = (top: "top" | "bottom") =>
+      log.evaluate(
+        (element, where) =>
+          new Promise<void>((resolve) => {
+            element.addEventListener("scroll", () => resolve(), { once: true });
+            element.scrollTop = where === "top" ? 0 : element.scrollHeight;
+          }),
+        top,
+      );
+    await scrollTo("top");
+    say();
+    await expect(lines).toHaveCount(9);
+    expect((await position()).top).toBe(0);
+
+    // Back at the bottom, the log follows new lines again.
+    await scrollTo("bottom");
+    say();
+    await expect(lines).toHaveCount(10);
+    await expect.poll(async () => { const at = await position(); return at.top === at.bottom; }).toBe(true);
+  } finally {
+    await fixtureServer.stop();
+  }
+});
