@@ -29,7 +29,7 @@ use std::{
 };
 use tokio::{
     sync::{broadcast, watch},
-    time::{timeout, Duration},
+    time::{timeout, Duration, Instant},
 };
 use tracing_subscriber::{layer::Context, registry::LookupSpan, Layer};
 
@@ -117,6 +117,9 @@ const CLIP_MARKER: &str = "…[clipped]";
 /// A debug client that does not take a frame within this time is dropped; it
 /// can reconnect and get a fresh snapshot.
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
+/// A client that falls behind twice within this time is closed instead of
+/// resynced again: each resync is a full snapshot.
+const RESYNC_INTERVAL: Duration = Duration::from_secs(10);
 
 /// One event in the debug page's immutable event stream. This is the schema
 /// shared with `apps/frontend/src/debug/protocol.ts` and its fixture.
@@ -1127,6 +1130,8 @@ pub(crate) struct Feed {
     bus: DebugBus,
     receiver: broadcast::Receiver<LiveFrame>,
     last_seq: u64,
+    /// When this client was last sent a resync snapshot.
+    last_resync: Option<Instant>,
 }
 
 impl Feed {
@@ -1136,11 +1141,15 @@ impl Feed {
             bus,
             receiver,
             last_seq: snapshot.last_seq,
+            last_resync: None,
         };
         (feed, snapshot)
     }
 
-    /// The next frame, or `None` once the bus is gone. Cancel-safe.
+    /// The next frame, or `None` once the bus is gone or the client fell
+    /// behind again within `RESYNC_INTERVAL` of its last resync: a client
+    /// that cannot keep up is closed rather than sent snapshot after
+    /// snapshot, and the page reconnects with its backoff. Cancel-safe.
     pub(crate) async fn next(&mut self) -> Option<Outgoing> {
         loop {
             match self.receiver.recv().await {
@@ -1151,6 +1160,14 @@ impl Feed {
                     return Some(Outgoing::Live(frame));
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {
+                    let now = Instant::now();
+                    if self
+                        .last_resync
+                        .is_some_and(|last| now.duration_since(last) < RESYNC_INTERVAL)
+                    {
+                        return None;
+                    }
+                    self.last_resync = Some(now);
                     // Skip the stale backlog: a fresh receiver starts at the
                     // tail, and the snapshot taken with it covers the rest.
                     let (receiver, snapshot) = self.bus.attach();

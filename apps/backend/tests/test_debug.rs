@@ -503,6 +503,7 @@ async fn a_feed_skips_live_frames_its_snapshot_already_holds() {
         bus: bus.clone(),
         receiver,
         last_seq: snapshot.last_seq,
+        last_resync: None,
     };
     assert_eq!(live_seq(feed.next().await), 3);
     bus.publish(host_link(4));
@@ -1043,4 +1044,24 @@ fn a_record_size_estimate_counts_what_it_keeps() {
     // The rings' budgets hold far more than one record each.
     const { assert!(EVENT_BUDGET_BYTES > 1000 * (MAX_RECORD_BYTES + RECORD_OVERHEAD_BYTES)) };
     const { assert!(LOG_BUDGET_BYTES > 256 * (MAX_RECORD_BYTES + RECORD_OVERHEAD_BYTES)) };
+}
+
+#[tokio::test]
+async fn a_feed_that_lags_twice_within_the_interval_is_closed() {
+    let bus = DebugBus::new();
+    let lag = |bus: &DebugBus| {
+        for n in 0..LIVE_CAPACITY + 1 {
+            bus.publish(host_link(n));
+        }
+    };
+    let (mut feed, _) = Feed::attach(bus.clone());
+    lag(&bus);
+    assert!(matches!(feed.next().await, Some(Outgoing::Snapshot(_))));
+    // Behind again once the interval has passed: one more resync.
+    feed.last_resync = Some(Instant::now() - RESYNC_INTERVAL - Duration::from_millis(1));
+    lag(&bus);
+    assert!(matches!(feed.next().await, Some(Outgoing::Snapshot(_))));
+    // Behind again within it: closed.
+    lag(&bus);
+    assert!(feed.next().await.is_none());
 }
