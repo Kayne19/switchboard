@@ -2491,7 +2491,7 @@ async fn cancel_active_operations(state: &AppState) -> Option<String> {
         .coordinator
         .begin_rescue("operation interrupted")
         .generation;
-    release_rescued_work(state, generation, false).await
+    release_rescued_work(state, generation, false, "operation interrupted").await
 }
 /// Cancels running work to make way for `plan`, but only while its leg is
 /// still the one on the line: a caller who has moved since the redial was
@@ -2499,7 +2499,13 @@ async fn cancel_active_operations(state: &AppState) -> Option<String> {
 /// leg as the rescue left it.
 async fn cancel_active_operations_for(state: &AppState, plan: RedialPlan) -> Option<RedialPlan> {
     let rescued = state.0.coordinator.begin_rescue_of(plan.leg(), "redial")?;
-    release_rescued_work(state, rescued.identity.generation, plan.keeps_session()).await;
+    release_rescued_work(
+        state,
+        rescued.identity.generation,
+        plan.keeps_session(),
+        "redial",
+    )
+    .await;
     Some(plan.rescued(rescued))
 }
 /// What a rescue does once the coordinator has retired the leg: drop queued
@@ -2510,6 +2516,7 @@ async fn release_rescued_work(
     state: &AppState,
     generation: u64,
     keep_session: bool,
+    reason: &str,
 ) -> Option<String> {
     state.0.clear_continuity();
     state.0.audio.lock().await.clear();
@@ -2532,6 +2539,11 @@ async fn release_rescued_work(
             session.close().await;
         }
     }
+    state.0.debug.publish(DebugEvent::Rescue {
+        generation,
+        reason: reason.to_owned(),
+        leg: label.clone(),
+    });
     label
 }
 async fn spawn_replacing_operation<F, T>(
@@ -3141,7 +3153,26 @@ async fn release_floor(
         result: result_tx,
         span: tracing::Span::current(),
     });
-    match result_rx.await {
+    let floor_id = Some(request.floor_debug_id());
+    let result = result_rx.await;
+    match &result {
+        Ok(Ok(())) => trace_speech(state, request.project.clone(), &text, None, floor_id),
+        Ok(Err(detail)) => trace_speech(
+            state,
+            request.project.clone(),
+            &text,
+            Some(detail.clone()),
+            floor_id,
+        ),
+        Err(_) => trace_speech(
+            state,
+            request.project.clone(),
+            &text,
+            Some("speech worker stopped".into()),
+            floor_id,
+        ),
+    }
+    match result {
         Ok(Ok(())) => {
             if let Some(agents) = state
                 .0
@@ -3150,6 +3181,9 @@ async fn release_floor(
                     state.0.projection.floor_released(project)
                 })
             {
+                state.0.debug.publish(DebugEvent::AgentsState {
+                    agents: agents.clone(),
+                });
                 emit_message(state, ServerMessage::AgentsState { agents });
                 ReleaseOutcome::Played
             } else {
@@ -3271,9 +3305,10 @@ async fn speak(state: AppState, req: Speak) -> Response {
         };
         let (result_tx, result_rx) = oneshot::channel();
         let group = state.0.active_speech_group();
+        let speaker = state.0.coordinator.route();
         permit.send(SpeechRequest {
             text: spoken,
-            route: state.0.coordinator.route(),
+            route: speaker.clone(),
             generation,
             sequence,
             deadline: std::time::Instant::now() + state.0.speech_deadline,
@@ -3292,10 +3327,12 @@ async fn speak(state: AppState, req: Speak) -> Response {
             Ok(Ok(())) => {
                 state.0.mark_foreground_audio(generation);
                 tracing::info!(generation, sequence, elapsed = ?started.elapsed(), "spoken");
+                trace_speech(&state, speaker, &req.text, None, None);
                 return Json(delivery_response(true)).into_response();
             }
             Ok(Err(detail)) => {
                 tracing::info!(generation, sequence, %detail, elapsed = ?started.elapsed(), "not spoken");
+                trace_speech(&state, speaker, &req.text, Some(detail.clone()), None);
                 return (
                     axum::http::StatusCode::BAD_GATEWAY,
                     Json(json!({"delivered":false, "reason":detail.clone(), "detail":detail})),
@@ -3304,6 +3341,13 @@ async fn speak(state: AppState, req: Speak) -> Response {
             }
             Err(_) => {
                 tracing::warn!(elapsed = ?started.elapsed(), "not spoken: the speech worker stopped");
+                trace_speech(
+                    &state,
+                    speaker,
+                    &req.text,
+                    Some("speech worker stopped".into()),
+                    None,
+                );
                 return (
                     axum::http::StatusCode::SERVICE_UNAVAILABLE,
                     Json(json!({"delivered":false, "reason":"speech worker stopped", "detail":"speech worker stopped"})),
@@ -3988,6 +4032,7 @@ async fn deliver_turn_if_current(
     let _transition = state.0.operation_transition.lock().await;
     if generation != state.0.coordinator.generation() {
         release_reply_voice(state, voice, generation).await;
+        trace_reply_speech(state, reply, Some("stale_generation"));
         return false;
     }
     if reply.error.as_deref() == Some("routing_unavailable") {
@@ -4030,8 +4075,10 @@ async fn deliver_turn_if_current(
     )
     .await;
     if generation != state.0.coordinator.generation() {
+        trace_reply_speech(state, reply, Some("stale_generation"));
         return false;
     }
+    trace_reply_speech(state, reply, (!success).then_some("not_spoken"));
     let Some(sequence) = reserve_audio(state, generation).await else {
         return false;
     };
@@ -4047,6 +4094,37 @@ async fn deliver_turn_if_current(
     };
     let _ = publish_audio_events(state, events).await;
     success
+}
+
+/// What became of speech the caller was meant to hear, for the debug page.
+fn trace_speech(
+    state: &AppState,
+    agent: String,
+    text: &str,
+    not_delivered: Option<String>,
+    floor_id: Option<String>,
+) {
+    state.0.debug.publish(DebugEvent::Speech {
+        agent,
+        text: text.to_owned(),
+        delivered: not_delivered.is_none(),
+        reason: not_delivered,
+        floor_id,
+    });
+}
+
+/// A turn's reply speech; a reply with nothing to say aloud is not speech.
+fn trace_reply_speech(state: &AppState, reply: &crate::pbx::Reply, not_delivered: Option<&str>) {
+    if reply.to_speak.is_empty() {
+        return;
+    }
+    trace_speech(
+        state,
+        reply.route.clone(),
+        &reply.to_speak.join(" "),
+        not_delivered.map(str::to_owned),
+        None,
+    );
 }
 
 struct SpeechAdmission {

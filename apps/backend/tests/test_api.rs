@@ -6803,6 +6803,35 @@ async fn a_stale_routed_utterance_ends_its_trace() {
     );
 }
 
+#[tokio::test]
+async fn a_stale_reply_is_traced_as_speech_not_delivered() {
+    let state = state();
+    let generation = state.0.coordinator.generation();
+    state.0.coordinator.begin_rescue("test rescue");
+    let reply = crate::pbx::Reply {
+        text: "Old news.".into(),
+        to_speak: vec!["Old news.".into()],
+        route: OPERATOR.into(),
+        route_label: OPERATOR.into(),
+        error: None,
+        voiced: true,
+        delivery_generation: None,
+    };
+
+    assert!(!deliver_turn_if_current(&state, &reply, generation, "r-1").await);
+
+    assert_eq!(
+        debug_events(&state).pop(),
+        Some(crate::debug::DebugEvent::Speech {
+            agent: OPERATOR.into(),
+            text: "Old news.".into(),
+            delivered: false,
+            reason: Some("stale_generation".into()),
+            floor_id: None,
+        })
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn an_autonomous_project_turn_is_traced_with_its_host_turn_id() {
