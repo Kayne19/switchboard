@@ -2224,6 +2224,7 @@ async fn background_split_selects_foreground_and_hangup_keeps_residents() {
             "bring beta forward",
             "beta",
             crate::router::ConversationMode::Continue,
+            None,
         )
         .await;
     assert_eq!(promoted.route, "beta");
@@ -2397,6 +2398,7 @@ async fn promoting_a_background_resident_cancels_its_detached_prompt_before_fore
             "bring beta forward",
             "beta",
             crate::router::ConversationMode::Continue,
+            None,
         )
         .await;
 
@@ -2498,6 +2500,7 @@ async fn failed_background_promotion_closes_the_resident_and_finishes_its_state(
             "bring alpha forward",
             "alpha",
             crate::router::ConversationMode::Continue,
+            None,
         )
         .await;
 
@@ -2968,8 +2971,12 @@ async fn busy_background_split_part_is_refused_and_fresh_brings_the_live_agent_f
     assert_eq!(log.named("create_session").len(), creates);
     // Fresh for an agent already on this call brings it forward instead of
     // refusing or starting a second session: the caller's words reach beta.
-    let forward =
-        board.route_project_part("fresh beta", "beta", crate::router::ConversationMode::Fresh);
+    let forward = board.route_project_part(
+        "fresh beta",
+        "beta",
+        crate::router::ConversationMode::Fresh,
+        None,
+    );
     tokio::pin!(forward);
     loop {
         tokio::select! {
@@ -3925,6 +3932,7 @@ async fn a_route_to_an_unregistered_project_keeps_the_caller_on_the_line() {
             "show me",
             "ghost",
             crate::router::ConversationMode::Continue,
+            None,
         )
         .await;
 
@@ -4050,6 +4058,7 @@ async fn a_failed_move_to_the_background_closes_the_previous_agent() {
             "beta please",
             "beta",
             crate::router::ConversationMode::Continue,
+            None,
         )
         .await;
 
@@ -4093,6 +4102,7 @@ async fn a_promoted_agent_is_told_it_is_in_the_foreground() {
             "show me beta",
             "beta",
             crate::router::ConversationMode::Continue,
+            None,
         )
         .await;
 
@@ -4265,6 +4275,40 @@ async fn an_unsure_utterance_traces_the_utility_second_opinion_to_its_destinatio
         })
         .expect("utility request");
     assert!(request.contains("inspect alpha"), "{request}");
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unregistered_utility_target_is_traced_as_refused_not_routed() {
+    let root = scratch_dir("trace-refused-target");
+    let binary = fake_routing_process(
+        &root,
+        r#"{"type":"tool_execution_start","toolName":"second_opinion","args":{"target":"nope","mode":"fresh","confident":true}}"#,
+        None,
+    );
+    let mut board = board_on(
+        vec![project("alpha", "Alpha project")],
+        &[("SWITCHBOARD_PI_BINARY", &binary.to_string_lossy())],
+        two_model_catalog(),
+    );
+    let mut unsure = decision(crate::router::Action::General, None, None);
+    unsure.unsure = true;
+
+    let reply = board.handle_decision("inspect nope", &unsure).await;
+
+    assert_eq!(reply.route, OPERATOR);
+    assert_eq!(
+        route_trace(&board),
+        vec![
+            "utterance:branch:utility",
+            "utterance:utility_request:first",
+            "utterance:utility_decision:first:second_opinion",
+            "utterance:branch:refused_unknown_target",
+            "utterance:routed:operator:continue:pbx",
+        ]
+    );
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }

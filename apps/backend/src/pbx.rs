@@ -1174,6 +1174,16 @@ impl Switchboard {
         });
     }
 
+    /// A destination that is not a registered project: the switchboard
+    /// refuses it and answers the caller itself.
+    fn trace_refused(&self, target: &str, text: &str, via: &str) {
+        self.trace_branch(
+            "refused_unknown_target",
+            format!("{via} chose {target:?}, which is not a registered project, so the switchboard refused it"),
+        );
+        self.trace_routed(OPERATOR, text, "continue", "pbx");
+    }
+
     async fn handle_decision_for_state(
         &mut self,
         text: &str,
@@ -1228,14 +1238,19 @@ impl Switchboard {
                     "take_over",
                     format!("{note}Jev chose take_over of the desk session for {target}"),
                 );
-                self.trace_routed(target, text, "take_over", "jev");
                 let Some(takeover) = takeover else {
+                    self.trace_routed(OPERATOR, text, "continue", "pbx");
                     return self.reply_failure(
                         "I couldn't check what's open at your desk, so I didn't take it over."
                             .into(),
                         "takeover lookup was not prepared",
                     );
                 };
+                if self.registry.get(target).is_some() {
+                    self.trace_routed(target, text, "take_over", "jev");
+                } else {
+                    self.trace_refused(target, text, "jev");
+                }
                 return self.take_over(text, target, takeover).await;
             }
             self.trace_branch(
@@ -1254,9 +1269,13 @@ impl Switchboard {
                     "answer_waiting",
                     format!("{note}the caller answered {target}, which is waiting to speak"),
                 );
-                self.trace_routed(target, text, "continue", "jev");
                 return self
-                    .route_project_part(text, target, crate::router::ConversationMode::Continue)
+                    .route_project_part(
+                        text,
+                        target,
+                        crate::router::ConversationMode::Continue,
+                        Some("jev"),
+                    )
                     .await;
             }
         }
@@ -1321,11 +1340,9 @@ impl Switchboard {
                         mode,
                         confident: true,
                     })) => {
-                        // The operator records its own destination when it answers.
-                        if target != OPERATOR {
-                            self.trace_routed(&target, text, mode.as_str(), "utility");
-                        }
-                        return self.route_project_part(text, &target, mode).await;
+                        return self
+                            .route_project_part(text, &target, mode, Some("utility"))
+                            .await;
                     }
                     Ok(_) => {}
                     Err(error) => {
@@ -1370,8 +1387,9 @@ impl Switchboard {
                         decision.reason
                     ),
                 );
-                self.trace_routed(target, text, mode.as_str(), "jev");
-                return self.route_project_part(text, target, mode).await;
+                return self
+                    .route_project_part(text, target, mode, Some("jev"))
+                    .await;
             }
         }
         if matches!(decision.action, crate::router::Action::Continue)
@@ -1386,7 +1404,11 @@ impl Switchboard {
                     decision.reason
                 ),
             );
-            self.trace_routed(&route, text, "continue", "jev");
+            // With its leg gone, the operator takes the line and records
+            // its own destination.
+            if self.agent.is_some() {
+                self.trace_routed(&route, text, "continue", "jev");
+            }
             return self
                 .handle_agent_ctx(&TransferContext {
                     exact_caller_transcript: text.to_owned(),
@@ -1414,11 +1436,17 @@ impl Switchboard {
         self.handle_operator_ctx(&context).await
     }
 
+    /// Sends `text` to `target`. `via` names who chose the target, for the
+    /// `routed` event, which goes out only once the target is known to be
+    /// registered; `None` when the caller already traced it. The operator,
+    /// and a line whose leg turns out to be gone, are traced by the
+    /// operator's own hop.
     async fn route_project_part(
         &mut self,
         text: &str,
         target: &str,
         mode: crate::router::ConversationMode,
+        via: Option<&str>,
     ) -> Reply {
         let context = TransferContext {
             exact_caller_transcript: text.to_owned(),
@@ -1428,10 +1456,17 @@ impl Switchboard {
         // unknown one must not move the caller or drop the leg on the line.
         if target != OPERATOR && self.registry.get(target).is_none() {
             tracing::warn!(%target, "refusing a route to an unregistered project");
+            self.trace_refused(target, text, via.unwrap_or("routing"));
             return self.reply_transfer_error(
                 self.unknown_project_line(target),
                 Some(format!("unknown project {target:?}")),
             );
+        }
+        if let Some(via) = via {
+            let leg_gone = self.coordinator.route() == target && self.agent.is_none();
+            if target != OPERATOR && !leg_gone {
+                self.trace_routed(target, text, mode.as_str(), via);
+            }
         }
         if target != OPERATOR {
             self.set_agent_task(target, text);
@@ -1500,6 +1535,13 @@ impl Switchboard {
             .partition(|part| self.registry.get(&part.agent).is_some());
         for part in &unknown {
             tracing::warn!(project = %part.agent, "dropping a split part for an unregistered project");
+            self.trace_branch(
+                "refused_unknown_target",
+                format!(
+                    "the routing utility sent a part to {:?}, which is not a registered project; that part was dropped",
+                    part.agent
+                ),
+            );
         }
         // One utterance fans out to every part's agent.
         for part in &parts {
@@ -1533,6 +1575,7 @@ impl Switchboard {
             &foreground.text,
             &foreground.agent,
             crate::router::ConversationMode::Continue,
+            None,
         )
         .await
     }
@@ -2063,16 +2106,13 @@ impl Switchboard {
                 mode: mode.as_str().into(),
                 action: action.into(),
             });
-            if target != OPERATOR {
-                self.trace_routed(
-                    &target,
-                    &context.exact_caller_transcript,
-                    mode.as_str(),
-                    "operator",
-                );
-            }
             return self
-                .route_project_part(&context.exact_caller_transcript, &target, mode)
+                .route_project_part(
+                    &context.exact_caller_transcript,
+                    &target,
+                    mode,
+                    Some("operator"),
+                )
                 .await;
         }
         self.trace_operator_hop(context, &operator_text, "answered");
