@@ -108,10 +108,6 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[cfg_attr(test, derive(Deserialize))]
 #[serde(tag = "kind", rename_all = "snake_case")]
-// TEMPORARY: the schema landed before its producers. Remove this allow once
-// the S2/S3 slices emit every variant; the debug-page PR must not merge with
-// it, because it hides a variant nobody emits from clippy's dead-code check.
-#[allow(dead_code)]
 pub(crate) enum DebugEvent {
     CallerUtterance {
         utterance_id: String,
