@@ -1028,7 +1028,8 @@ export interface RouteDestination {
   seq?: number;
 }
 
-/** A trace the service ended on purpose with no destination. */
+/** A trace the service ended on purpose: with no destination, or by
+ * cancelling the turn it was routed to. */
 export interface RouteEnd {
   /** The terminal `pbx_branch` value, for example `dropped_stale`. */
   branch: string;
@@ -1037,12 +1038,21 @@ export interface RouteEnd {
   seq: number;
 }
 
+export interface RouteRefusal {
+  reason: string;
+  seq: number;
+}
+
 export interface RoutePath {
   stages: Stage[];
   segments: RouteSegment[];
   destinations: RouteDestination[];
-  /** Set when a terminal `pbx_branch` ended the trace with no `routed`. */
+  /** Set when a terminal `pbx_branch` ended the trace: with no `routed`, or
+   * after one (a rescue cancelled the turn the line was routed to). */
   ended?: RouteEnd;
+  /** Destinations the switchboard refused (`refused_unknown_target`): the
+   * line went to the operator instead, or that split part was dropped. */
+  refused: RouteRefusal[];
   /** Still routing: no destination yet and nothing ended the trace. */
   pending: boolean;
 }
@@ -1126,15 +1136,19 @@ export function routePath(trace: RouteTrace): RoutePath {
   if (destinations.length === 0 && trace.operatorHop && trace.operatorHop.outcome !== 'route_tool') {
     destinations.push({ agent: OPERATOR, from: 'operator', label: trace.operatorHop.outcome, via: 'operator', mode: '', textPart: trace.operatorHop.text });
   }
+  // A terminal branch ends the trace when nothing reached anyone, or when it
+  // came after the last `routed`: the turn was cut short after routing.
+  const lastRouted = Math.max(0, ...destinations.map((destination) => destination.seq ?? 0));
   let ended: RouteEnd | undefined;
-  if (destinations.length === 0) {
-    for (const record of trace.records) {
-      if (record.kind === 'pbx_branch' && Object.hasOwn(TERMINAL_BRANCHES, record.branch)) {
-        ended = { branch: record.branch, label: TERMINAL_BRANCHES[record.branch], reason: record.reason, seq: record.seq };
-      }
+  const refused: RouteRefusal[] = [];
+  for (const record of trace.records) {
+    if (record.kind !== 'pbx_branch') continue;
+    if (record.branch === 'refused_unknown_target') refused.push({ reason: record.reason, seq: record.seq });
+    if (Object.hasOwn(TERMINAL_BRANCHES, record.branch) && (destinations.length === 0 || record.seq > lastRouted)) {
+      ended = { branch: record.branch, label: TERMINAL_BRANCHES[record.branch], reason: record.reason, seq: record.seq };
     }
   }
-  return { stages, segments, destinations, ended, pending: destinations.length === 0 && ended === undefined };
+  return { stages, segments, destinations, ended, refused, pending: destinations.length === 0 && ended === undefined };
 }
 
 /** The newest route trace, the one the page animates. */

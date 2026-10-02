@@ -189,13 +189,17 @@ function TraceDetail({ trace, state }: { trace: RouteTrace; state: DebugState })
       )}
 
       <Section title="Destinations">
-        {path.ended ? (
+        {path.refused.map((refusal) => (
+          <div key={refusal.seq} className="dest dest-ended">
+            <b>✕ refused</b> <span className="muted">{refusal.reason}</span>
+          </div>
+        ))}
+        {path.ended && path.destinations.length === 0 && (
           <div className="dest dest-ended">
             <b>✕ {path.ended.label}</b> <span className="muted">no destination: {path.ended.reason}</span>
           </div>
-        ) : (
-          path.destinations.length === 0 && <div className="muted">none yet</div>
         )}
+        {!path.ended && path.destinations.length === 0 && <div className="muted">none yet</div>}
         {path.destinations.map((destination, index) => (
           <div key={index} className="dest" style={{ borderColor: agentColor(destination.agent, state.paneOrder) }}>
             <b>{destination.agent}</b>{' '}
@@ -205,6 +209,11 @@ function TraceDetail({ trace, state }: { trace: RouteTrace; state: DebugState })
             <div>“{destination.textPart}”</div>
           </div>
         ))}
+        {path.ended && path.destinations.length > 0 && (
+          <div className="dest dest-ended">
+            <b>✕ {path.ended.label}</b> <span className="muted">after routing: {path.ended.reason}</span>
+          </div>
+        )}
       </Section>
 
       <Section title="Raw events">

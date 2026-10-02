@@ -65,6 +65,7 @@ function emittedBranches(): string[] {
   for (const text of Object.values(backend)) {
     for (const match of text.matchAll(/trace_branch\(\s*"([a-z_]+)"/g)) found.add(match[1]);
     for (const match of text.matchAll(/branch:\s*"([a-z_]+)"\.into\(\)/g)) found.add(match[1]);
+    for (const match of text.matchAll(/trace_cut_short\(\s*[^,]+,\s*[^,]+,\s*"([a-z_]+)"/g)) found.add(match[1]);
   }
   return [...found].sort();
 }
@@ -106,7 +107,7 @@ describe('debug vocabulary', () => {
 
   it('explains every PBX branch the service emits', () => {
     const branches = emittedBranches();
-    expect(branches).toEqual(expect.arrayContaining(['multi_unresolved', 'dropped_stale', 'operator']));
+    expect(branches).toEqual(expect.arrayContaining(['multi_unresolved', 'dropped_stale', 'operator', 'failed', 'refused_unknown_target']));
     expect(branches.filter((branch) => !(branch in BRANCHES))).toEqual([]);
     for (const branch of branches) expect(branchText(branch)).not.toMatch(/^Branch “/);
     for (const branch of Object.keys(TERMINAL_BRANCHES)) expect(BRANCHES).toHaveProperty(branch);

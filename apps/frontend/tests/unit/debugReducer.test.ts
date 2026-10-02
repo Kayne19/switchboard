@@ -248,6 +248,40 @@ describe('debug reducer', () => {
       pending: false,
       ended: undefined,
       destinations: [{ agent: 'operator', label: 'refused_unknown_target · continue' }],
+      refused: [{ reason: 'refused_unknown_target because' }],
+    });
+  });
+
+  it('ends a trace whose routed turn a rescue cancelled, keeping its destination', () => {
+    const routed = (id: string, agent: string, text = 'hello'): DebugEvent => ({ kind: 'routed', utterance_id: id, to_agent: agent, text_part: text, mode: 'continue', via: 'jev' });
+    const state = fold([
+      snapshot(),
+      event({ kind: 'caller_utterance', utterance_id: 'c-1', text: 'hello', talking_to: 'alpha' }),
+      event({ kind: 'pbx_branch', utterance_id: 'c-1', branch: 'continue_current', reason: 'alpha keeps the line' }),
+      event(routed('c-1', 'alpha')),
+      event({ kind: 'pbx_branch', utterance_id: 'c-1', branch: 'dropped_stale', reason: 'a page rescue cancelled the turn' }),
+    ]);
+    expect(routePath(state.traces['c-1'])).toMatchObject({
+      pending: false,
+      destinations: [{ agent: 'alpha' }],
+      ended: { branch: 'dropped_stale', reason: 'a page rescue cancelled the turn' },
+    });
+  });
+
+  it('shows a refused split part as dropped beside the parts that were routed', () => {
+    const part = (agent: string, text: string): DebugEvent => ({ kind: 'routed', utterance_id: 's-1', to_agent: agent, text_part: text, mode: 'continue', via: 'utility' });
+    const state = fold([
+      snapshot(),
+      event({ kind: 'caller_utterance', utterance_id: 's-1', text: 'alpha work and nope work', talking_to: 'operator' }),
+      event({ kind: 'pbx_branch', utterance_id: 's-1', branch: 'utility', reason: 'split' }),
+      event({ kind: 'pbx_branch', utterance_id: 's-1', branch: 'refused_unknown_target', reason: 'the routing utility sent a part to "nope"' }),
+      event(part('alpha', 'alpha work')),
+    ]);
+    expect(routePath(state.traces['s-1'])).toMatchObject({
+      pending: false,
+      ended: undefined,
+      destinations: [{ agent: 'alpha', textPart: 'alpha work' }],
+      refused: [{ reason: 'the routing utility sent a part to "nope"' }],
     });
   });
 

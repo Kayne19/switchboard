@@ -25,12 +25,14 @@ export const BRANCHES: Record<string, string> = {
   go_to_project: 'A transfer to a project leg.',
   continue_current: 'The line continues on the current leg.',
   operator: 'The operator (front desk) handles the line.',
-  refused_unknown_target: 'The chosen target is not a registered project, so the line went back to the operator.',
-  dropped_stale: 'A newer generation discarded this line before it was acted on; its trace ends here.',
-  failed: 'The routing task failed before the line reached anyone; its trace ends here.',
+  refused_unknown_target:
+    'The chosen target is not a registered project, so the switchboard refused it: the line went to the operator, or that split part was dropped.',
+  dropped_stale: 'A newer generation discarded this line, or a page rescue cancelled its turn; its trace ends here.',
+  failed: 'The turn worker failed, so nothing answered this line; its trace ends here.',
 };
 
-/** Branches that end a trace with no `routed` after them. */
+/** Branches that end a trace: with no `routed`, or after one when a rescue
+ * cancelled the routed turn. */
 export const TERMINAL_BRANCHES: Record<string, string> = {
   dropped_stale: 'dropped (stale generation)',
   failed: 'failed',
