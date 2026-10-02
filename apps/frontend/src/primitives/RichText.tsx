@@ -37,6 +37,13 @@ function renderBlock(block: Block, key: string, allowLinks: boolean): ReactNode 
     : <ul className="rich-text__list" key={key}>{items}</ul>;
 }
 
+// A block of agent prose read as Markdown and always rendered as blocks, for
+// surfaces such as the document reader whose text is paragraphs by contract.
+// Keys are positional, as in RichText, so an update patches in place.
+export function MarkdownBlocks({ text, allowLinks = false }: { text: string; allowLinks?: boolean }) {
+  return <>{parseBlocks(text).map((block, index) => renderBlock(block, `block.${index}`, allowLinks))}</>;
+}
+
 function segmentClass(segment: RichSegment): string | undefined {
   return [segment.accent ? 'accent' : '', segment.semantic ? `semantic-${segment.semantic}` : ''].filter(Boolean).join(' ') || undefined;
 }

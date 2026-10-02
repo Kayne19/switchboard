@@ -71,7 +71,8 @@ Types and their `data` shapes (each type takes only its own shape):
 - metric: `{label, value}`
 - progress: `{label, value}` (value is a percent, 0-100)
 - diagram: `{mode: "graph", nodes: [{id, label}], edges: [{from, to}]}`
-- document: `{subject, paragraphs: [str]}`
+- document: `{subject, paragraphs: [str]}` (each paragraph reads Markdown:
+  headings, bold, italic, inline code, lists, fenced code; no HTML)
 - code: `{source: {text}}`
 - note: `{segments: [{text}]}`
 
