@@ -15,11 +15,9 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use std::{
+    cell::Cell,
     collections::VecDeque,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::broadcast;
@@ -279,34 +277,93 @@ impl Default for DebugConfig {
     }
 }
 
-/// Frames sent only on the debug listener. Event records are flattened so a
-/// frontend can switch on `kind` without a second nested object.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[cfg_attr(test, derive(Deserialize))]
+/// Frames sent only on the debug listener, serialized from borrowed records
+/// so a snapshot never deep-copies the rings. Event records are flattened so
+/// a frontend can switch on `kind` without a second nested object.
+#[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum DebugFrame {
+pub(crate) enum DebugFrame<'a> {
     Snapshot {
-        events: Vec<DebugRecord>,
-        logs: Vec<DebugLog>,
-        agents: Vec<AgentState>,
-        config: DebugConfig,
+        /// Every record with `seq <= last_seq` is in this snapshot or was
+        /// evicted before it; a client drops live frames at or below it.
+        last_seq: u64,
+        events: Vec<&'a DebugRecord>,
+        logs: Vec<&'a DebugLog>,
+        agents: &'a [AgentState],
+        config: &'a DebugConfig,
     },
     Event {
         #[serde(flatten)]
-        record: DebugRecord,
+        record: &'a DebugRecord,
     },
     Log {
         #[serde(flatten)]
-        log: DebugLog,
+        log: &'a DebugLog,
     },
 }
 
+/// One record on the live broadcast. Cloning it is a reference-count bump.
+#[derive(Clone, Debug)]
+pub(crate) enum LiveFrame {
+    Event(Arc<DebugRecord>),
+    Log(Arc<DebugLog>),
+}
+
+impl LiveFrame {
+    pub(crate) fn seq(&self) -> u64 {
+        match self {
+            Self::Event(record) => record.seq,
+            Self::Log(log) => log.seq,
+        }
+    }
+
+    pub(crate) fn to_json(&self) -> String {
+        let frame = match self {
+            Self::Event(record) => DebugFrame::Event { record },
+            Self::Log(log) => DebugFrame::Log { log },
+        };
+        serde_json::to_string(&frame).unwrap_or_default()
+    }
+}
+
+/// The rings as they stood at one sequence number. Taking it costs only
+/// reference-count bumps under the publish lock; serializing it happens later,
+/// off that lock.
+#[derive(Clone, Debug)]
+pub(crate) struct Snapshot {
+    pub last_seq: u64,
+    pub events: Vec<Arc<DebugRecord>>,
+    pub logs: Vec<Arc<DebugLog>>,
+    pub config: DebugConfig,
+}
+
+impl Snapshot {
+    pub(crate) fn to_json(&self, agents: &[AgentState]) -> String {
+        let frame = DebugFrame::Snapshot {
+            last_seq: self.last_seq,
+            events: self.events.iter().map(AsRef::as_ref).collect(),
+            logs: self.logs.iter().map(AsRef::as_ref).collect(),
+            agents,
+            config: &self.config,
+        };
+        serde_json::to_string(&frame).unwrap_or_default()
+    }
+}
+
+struct Rings {
+    last_seq: u64,
+    events: VecDeque<Arc<DebugRecord>>,
+    logs: VecDeque<Arc<DebugLog>>,
+    config: DebugConfig,
+}
+
 struct DebugInner {
-    next_seq: AtomicU64,
-    events: Mutex<VecDeque<DebugRecord>>,
-    logs: Mutex<VecDeque<DebugLog>>,
-    config: Mutex<DebugConfig>,
-    live: broadcast::Sender<DebugFrame>,
+    /// One short critical section per publish: sequence assignment, ring push
+    /// and broadcast send happen together, so the ring and every live
+    /// receiver see records in `seq` order with no gaps. Nothing awaits or
+    /// does I/O under it.
+    rings: Mutex<Rings>,
+    live: broadcast::Sender<LiveFrame>,
 }
 
 /// Bounded, process-local observability state. There is intentionally no disk
@@ -314,44 +371,56 @@ struct DebugInner {
 #[derive(Clone)]
 pub(crate) struct DebugBus(Arc<DebugInner>);
 
+thread_local! {
+    /// Set while this thread is inside a publish. The log layer skips events
+    /// raised there, so a log line can never re-enter the publish lock.
+    static PUBLISHING: Cell<bool> = const { Cell::new(false) };
+}
+
 impl DebugBus {
     pub(crate) fn new() -> Self {
         let (live, _) = broadcast::channel(LIVE_CAPACITY);
         Self(Arc::new(DebugInner {
-            next_seq: AtomicU64::new(1),
-            events: Mutex::new(VecDeque::with_capacity(EVENT_CAPACITY)),
-            logs: Mutex::new(VecDeque::with_capacity(LOG_CAPACITY)),
-            config: Mutex::new(DebugConfig::default()),
+            rings: Mutex::new(Rings {
+                last_seq: 0,
+                events: VecDeque::with_capacity(EVENT_CAPACITY),
+                logs: VecDeque::with_capacity(LOG_CAPACITY),
+                config: DebugConfig::default(),
+            }),
             live,
         }))
     }
 
+    fn rings(&self) -> MutexGuard<'_, Rings> {
+        self.0.rings.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Runs `f` under the publish lock with the re-entry guard set.
+    fn locked<T>(&self, f: impl FnOnce(&mut Rings) -> T) -> T {
+        PUBLISHING.with(|publishing| publishing.set(true));
+        let result = f(&mut self.rings());
+        PUBLISHING.with(|publishing| publishing.set(false));
+        result
+    }
+
     pub(crate) fn set_config(&self, config: DebugConfig) {
-        if let Ok(mut current) = self.0.config.lock() {
-            *current = config;
-        }
+        self.locked(|rings| rings.config = config);
     }
 
-    pub(crate) fn subscribe(&self) -> broadcast::Receiver<DebugFrame> {
-        self.0.live.subscribe()
-    }
-
-    pub(crate) fn publish(&self, event: DebugEvent) -> DebugRecord {
-        let record = DebugRecord {
-            seq: self.0.next_seq.fetch_add(1, Ordering::Relaxed),
-            timestamp_ms: now_ms(),
-            event,
-        };
-        if let Ok(mut events) = self.0.events.try_lock() {
-            events.push_back(record.clone());
-            if events.len() > EVENT_CAPACITY {
-                events.pop_front();
-            }
-        }
-        let _ = self.0.live.send(DebugFrame::Event {
-            record: record.clone(),
-        });
-        record
+    /// Records `event` and sends it to live clients. Returns its sequence.
+    pub(crate) fn publish(&self, event: DebugEvent) -> u64 {
+        let timestamp_ms = now_ms();
+        self.locked(|rings| {
+            rings.last_seq += 1;
+            let record = Arc::new(DebugRecord {
+                seq: rings.last_seq,
+                timestamp_ms,
+                event,
+            });
+            push_bounded(&mut rings.events, record.clone(), EVENT_CAPACITY);
+            let _ = self.0.live.send(LiveFrame::Event(record));
+            rings.last_seq
+        })
     }
 
     pub(crate) fn publish_log(
@@ -360,51 +429,51 @@ impl DebugBus {
         target: String,
         message: String,
         fields: Value,
-    ) -> DebugLog {
-        let log = DebugLog {
-            seq: self.0.next_seq.fetch_add(1, Ordering::Relaxed),
-            timestamp_ms: now_ms(),
-            level,
-            target,
-            message,
-            fields,
-        };
-        if let Ok(mut logs) = self.0.logs.try_lock() {
-            logs.push_back(log.clone());
-            if logs.len() > LOG_CAPACITY {
-                logs.pop_front();
-            }
-        }
-        let _ = self.0.live.send(DebugFrame::Log { log: log.clone() });
-        log
+    ) -> u64 {
+        let timestamp_ms = now_ms();
+        self.locked(|rings| {
+            rings.last_seq += 1;
+            let log = Arc::new(DebugLog {
+                seq: rings.last_seq,
+                timestamp_ms,
+                level,
+                target,
+                message,
+                fields,
+            });
+            push_bounded(&mut rings.logs, log.clone(), LOG_CAPACITY);
+            let _ = self.0.live.send(LiveFrame::Log(log));
+            rings.last_seq
+        })
     }
 
-    pub(crate) fn snapshot(&self, agents: Vec<AgentState>) -> DebugFrame {
-        let events = self
-            .0
-            .events
-            .lock()
-            .map(|events| events.iter().cloned().collect())
-            .unwrap_or_default();
-        let logs = self
-            .0
-            .logs
-            .lock()
-            .map(|logs| logs.iter().cloned().collect())
-            .unwrap_or_default();
-        let config = self
-            .0
-            .config
-            .lock()
-            .map(|config| config.clone())
-            .unwrap_or_default();
-        DebugFrame::Snapshot {
-            events,
-            logs,
-            agents,
-            config,
-        }
+    /// The rings now. Records after `last_seq` arrive only live.
+    #[cfg(test)]
+    pub(crate) fn snapshot(&self) -> Snapshot {
+        self.locked(|rings| take_snapshot(rings))
     }
+
+    /// Subscribes to the live stream and takes a snapshot in one critical
+    /// section, so the receiver holds exactly the records after `last_seq`.
+    pub(crate) fn attach(&self) -> (broadcast::Receiver<LiveFrame>, Snapshot) {
+        self.locked(|rings| (self.0.live.subscribe(), take_snapshot(rings)))
+    }
+}
+
+fn take_snapshot(rings: &Rings) -> Snapshot {
+    Snapshot {
+        last_seq: rings.last_seq,
+        events: rings.events.iter().cloned().collect(),
+        logs: rings.logs.iter().cloned().collect(),
+        config: rings.config.clone(),
+    }
+}
+
+fn push_bounded<T>(ring: &mut VecDeque<T>, item: T, capacity: usize) {
+    if ring.len() == capacity {
+        ring.pop_front();
+    }
+    ring.push_back(item);
 }
 
 fn now_ms() -> u64 {
@@ -472,6 +541,11 @@ where
     S: tracing::Subscriber + for<'a> LookupSpan<'a>,
 {
     fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+        // Never log from the publish path; this guard makes a mistake there
+        // drop the line instead of deadlocking on the publish lock.
+        if PUBLISHING.with(Cell::get) {
+            return;
+        }
         let metadata = event.metadata();
         let mut visitor = FieldsVisitor::default();
         event.record(&mut visitor);

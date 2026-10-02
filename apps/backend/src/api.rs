@@ -1,6 +1,6 @@
 //! HTTP, WebSocket and application workers.
 use crate::audio::{Speaker, StreamResult, SttAdapter, SttStreamAdapter, TtsContinuity};
-use crate::debug::{DebugBus, DebugEvent, DebugFrame};
+use crate::debug::{DebugBus, DebugEvent};
 use crate::delivery::{AudioQueue, DeliveryConnection, DeliveryFrame, DeliveryState, Event};
 use crate::display::{
     is_display_event, stamp_display_seq, ConfirmState, DisplayGateState, DisplayProjection,
@@ -920,40 +920,40 @@ impl AppState {
 }
 
 async fn debug_ws(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> Response {
-    let receiver = state.0.debug.subscribe();
     upgrade
-        .on_upgrade(move |socket| debug_socket(socket, state, receiver))
+        .on_upgrade(move |socket| debug_socket(socket, state))
         .into_response()
 }
 
-async fn debug_socket(
-    mut socket: WebSocket,
-    state: AppState,
-    mut receiver: broadcast::Receiver<DebugFrame>,
-) {
-    async fn send(socket: &mut WebSocket, frame: DebugFrame) -> Result<(), ()> {
-        let text = serde_json::to_string(&frame).map_err(|_| ())?;
+async fn debug_socket(mut socket: WebSocket, state: AppState) {
+    async fn send(socket: &mut WebSocket, text: String) -> Result<(), ()> {
         socket
             .send(Message::Text(text.into()))
             .await
             .map_err(|_| ())
     }
 
-    let snapshot = state.0.debug.snapshot(state.0.projection.snapshot());
-    if send(&mut socket, snapshot).await.is_err() {
+    let (mut receiver, snapshot) = state.0.debug.attach();
+    let mut last_seq = snapshot.last_seq;
+    let text = snapshot.to_json(&state.0.projection.snapshot());
+    if send(&mut socket, text).await.is_err() {
         return;
     }
     loop {
         tokio::select! {
             frame = receiver.recv() => {
-                let frame = match frame {
-                    Ok(frame) => frame,
+                let text = match frame {
+                    Ok(frame) if frame.seq() <= last_seq => continue,
+                    Ok(frame) => frame.to_json(),
                     Err(broadcast::error::RecvError::Lagged(_)) => {
-                        state.0.debug.snapshot(state.0.projection.snapshot())
+                        let (fresh, snapshot) = state.0.debug.attach();
+                        receiver = fresh;
+                        last_seq = snapshot.last_seq;
+                        snapshot.to_json(&state.0.projection.snapshot())
                     }
                     Err(broadcast::error::RecvError::Closed) => return,
                 };
-                if send(&mut socket, frame).await.is_err() {
+                if send(&mut socket, text).await.is_err() {
                     return;
                 }
             }

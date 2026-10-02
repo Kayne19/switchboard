@@ -272,33 +272,122 @@ fn every_event_variant_matches_fixture() {
 }
 
 #[test]
-fn snapshot_frame_round_trips_fixture() {
+fn snapshot_frame_matches_fixture() {
     #[derive(Deserialize)]
     struct Fixture {
         snapshot: Value,
+    }
+    #[derive(Deserialize)]
+    struct OwnedSnapshot {
+        last_seq: u64,
+        events: Vec<DebugRecord>,
+        logs: Vec<DebugLog>,
+        agents: Vec<AgentState>,
+        config: DebugConfig,
     }
     let fixture: Fixture = serde_json::from_str(include_str!(
         "../../frontend/tests/fixtures/debug-events.json"
     ))
     .unwrap();
-    let snapshot: DebugFrame = serde_json::from_value(fixture.snapshot.clone()).unwrap();
-    assert_eq!(serde_json::to_value(snapshot).unwrap(), fixture.snapshot);
+    let owned: OwnedSnapshot = serde_json::from_value(fixture.snapshot.clone()).unwrap();
+    let snapshot = Snapshot {
+        last_seq: owned.last_seq,
+        events: owned.events.into_iter().map(Arc::new).collect(),
+        logs: owned.logs.into_iter().map(Arc::new).collect(),
+        config: owned.config,
+    };
+    let json: Value = serde_json::from_str(&snapshot.to_json(&owned.agents)).unwrap();
+    assert_eq!(json, fixture.snapshot);
+}
+
+fn host_link(n: usize) -> DebugEvent {
+    DebugEvent::HostLink {
+        host: format!("host-{n}"),
+        connected: true,
+    }
 }
 
 #[test]
-fn publishing_is_bounded_and_numbered() {
+fn publishing_is_numbered_and_snapshot_reports_last_seq() {
     let bus = DebugBus::new();
-    let first = bus.publish(DebugEvent::HostLink {
-        host: "one".into(),
-        connected: true,
+    let first = bus.publish(host_link(1));
+    let log = bus.publish_log("INFO".into(), "t".into(), "m".into(), json!({}));
+    let second = bus.publish(host_link(2));
+    assert_eq!((first, log, second), (1, 2, 3));
+    let snapshot = bus.snapshot();
+    assert_eq!(snapshot.last_seq, 3);
+    assert_eq!(snapshot.events.len(), 2);
+    assert_eq!(snapshot.logs.len(), 1);
+}
+
+#[test]
+fn rings_evict_the_oldest_record_at_capacity() {
+    let bus = DebugBus::new();
+    for n in 0..EVENT_CAPACITY + 5 {
+        bus.publish(host_link(n));
+    }
+    for _ in 0..LOG_CAPACITY + 3 {
+        bus.publish_log("INFO".into(), "t".into(), "m".into(), json!({}));
+    }
+    let snapshot = bus.snapshot();
+    assert_eq!(snapshot.events.len(), EVENT_CAPACITY);
+    assert_eq!(snapshot.events[0].seq, 6);
+    assert_eq!(
+        snapshot.events.last().unwrap().seq,
+        (EVENT_CAPACITY + 5) as u64
+    );
+    assert_eq!(snapshot.logs.len(), LOG_CAPACITY);
+    assert_eq!(snapshot.logs[0].seq, (EVENT_CAPACITY + 5 + 4) as u64);
+    assert_eq!(
+        snapshot.last_seq,
+        (EVENT_CAPACITY + 5 + LOG_CAPACITY + 3) as u64
+    );
+}
+
+#[test]
+fn concurrent_publishers_keep_ring_and_live_order_without_gaps() {
+    // One critical section assigns the seq, pushes and broadcasts, so a
+    // receiver and the rings agree on order even under contention, and a
+    // concurrent snapshot never drops a record from the ring.
+    const THREADS: usize = 4;
+    const EACH: usize = 50; // THREADS * EACH stays under LIVE_CAPACITY.
+    let bus = DebugBus::new();
+    let (mut receiver, _) = bus.attach();
+    std::thread::scope(|scope| {
+        for thread in 0..THREADS {
+            let bus = bus.clone();
+            scope.spawn(move || {
+                for n in 0..EACH {
+                    if n % 2 == 0 {
+                        bus.publish(host_link(thread * EACH + n));
+                    } else {
+                        bus.publish_log("INFO".into(), "t".into(), "m".into(), json!({}));
+                    }
+                }
+            });
+        }
+        let bus = bus.clone();
+        scope.spawn(move || {
+            for _ in 0..20 {
+                let _ = bus.snapshot();
+            }
+        });
     });
-    let second = bus.publish(DebugEvent::HostLink {
-        host: "one".into(),
-        connected: false,
-    });
-    assert_eq!((first.seq, second.seq), (1, 2));
-    let DebugFrame::Snapshot { events, .. } = bus.snapshot(vec![]) else {
-        panic!("snapshot")
-    };
-    assert_eq!(events.len(), 2);
+    let total = (THREADS * EACH) as u64;
+    let live: Vec<u64> = std::iter::from_fn(|| receiver.try_recv().ok())
+        .map(|frame| frame.seq())
+        .collect();
+    assert_eq!(live, (1..=total).collect::<Vec<_>>());
+    let snapshot = bus.snapshot();
+    let mut ring: Vec<u64> = snapshot
+        .events
+        .iter()
+        .map(|record| record.seq)
+        .chain(snapshot.logs.iter().map(|log| log.seq))
+        .collect();
+    let events_in_order = snapshot.events.windows(2).all(|w| w[0].seq < w[1].seq);
+    let logs_in_order = snapshot.logs.windows(2).all(|w| w[0].seq < w[1].seq);
+    assert!(events_in_order && logs_in_order);
+    ring.sort_unstable();
+    assert_eq!(ring, (1..=total).collect::<Vec<_>>());
 }
