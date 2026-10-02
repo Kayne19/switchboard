@@ -1849,23 +1849,31 @@ async fn pump(
 /// Answers one module call. A call must carry the session's current call
 /// token; routing signals become signals of the turn being collected, and
 /// the rest go to the application. The call and its answer are mirrored to
-/// the debug page, refusals included.
-async fn answer_module_call(inner: Arc<ProjectInner>, call: crate::hosts::ModuleCall) {
+/// the debug page, refusals included, after the answer is sent: the mirror
+/// takes the call's fields instead of copying them, and never delays the
+/// answer.
+async fn answer_module_call(inner: Arc<ProjectInner>, mut call: crate::hosts::ModuleCall) {
+    let reply = module_reply(&inner, &call).await;
+    let ok = matches!(reply["status"].as_str(), Some("delivered" | "accepted"));
+    let detail = reply.clone();
+    let call_id = std::mem::take(&mut call.id);
+    let name = std::mem::take(&mut call.call);
+    let args = std::mem::take(&mut call.args);
+    let turn_id = call.turn_id.take();
+    call.answer(reply);
     inner.publish(DebugEvent::ModuleCall {
         agent: inner.label.clone(),
-        call_id: call.id.clone(),
-        name: call.call.clone(),
-        args: call.args.clone(),
-        turn_id: call.turn_id.clone(),
+        call_id: call_id.clone(),
+        name,
+        args,
+        turn_id,
     });
-    let reply = module_reply(&inner, &call).await;
     inner.publish(DebugEvent::ModuleResult {
         agent: inner.label.clone(),
-        call_id: call.id.clone(),
-        ok: matches!(reply["status"].as_str(), Some("delivered" | "accepted")),
-        detail: reply.clone(),
+        call_id,
+        ok,
+        detail,
     });
-    call.answer(reply);
 }
 
 /// The answer to one module call (`answer_module_call`).
