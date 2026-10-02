@@ -53,6 +53,14 @@ The source is `apps/frontend/src/debug/` (entry `apps/frontend/debug/index.html`
   a `pbx_branch` `dropped_stale` or `failed` ends is drawn as ended, not as
   still routing.
 - `connection.ts` reconnects with backoff from 0.5 s up to 10 s.
+- The page looks like the main page because it is drawn with it: it loads
+  `src/styles/index.css` before its own `debug.css`, and takes the tokens,
+  type and frames from there. Agent text goes through `RichText`, latencies
+  through `MetricsPrimitive`, raw records through `CodeViewport`, stage nodes
+  through `TechFrame`, and tool calls use the tool-activity line styles.
+  `debug.css` only lays these out. Route lines are thin and grey; the lit
+  route is orange out and cyan back to the caller, and only a route still in
+  flight moves.
 - A pane item or log line from a record with `"clipped": true` shows a
   `clipped` tag.
 

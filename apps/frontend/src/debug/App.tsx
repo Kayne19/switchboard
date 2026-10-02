@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { DamoclesGlyph } from '../primitives/DamoclesGlyph';
+import { SceneFooter } from '../primitives/SceneFooter';
 import type { PaneSelect } from './AgentPane';
 import { DetailDrawer } from './Drawer';
 import { AgentsPanel } from './panels/AgentsPanel';
@@ -53,41 +55,31 @@ export function DebugApp() {
   return (
     <div className="app">
       <header className="topbar">
+        <DamoclesGlyph className="brand-glyph" title="Damocles" />
         <div className="brand">
-          <span className="brand-mark">◢◤</span> SWITCHBOARD <span className="brand-sub">// debug</span>
+          <span className="brand-title tech">Switchboard / debug</span>
+          <span className="brand-sub tech micro">
+            {call ? `call ${call.callId} / ${call.endTs ? `ended${call.reason ? ` / ${call.reason}` : ''}` : 'live'}` : 'no call yet'}
+          </span>
         </div>
-        <div className={`status status-${status}`} title={statusDetail}>
-          <span className="status-dot" />
+        <div className={`status status-${status} tech micro`} title={statusDetail}>
           {STATUS_TEXT[status]}
         </div>
-        {call && (
-          <div className="meta">
-            call <b>{call.callId}</b> {call.endTs ? `ended${call.reason ? ` · ${call.reason}` : ''}` : 'live'}
-          </div>
-        )}
-        <div className="meta">
-          seq <b>{state.maxSeq}</b> · {state.events.length} ev · {state.logs.length} log
-        </div>
-        {config && (
-          <div className="meta thresholds-top" title="Jev thresholds">
-            fca <b>{config.jev_for_current_agent_lower}</b>–<b>{config.jev_for_current_agent_upper}</b> · act <b>{config.jev_action_threshold}</b>
-          </div>
-        )}
         {(state.missing.length > 0 || state.gaps > 0) && (
-          <button type="button" className="meta warn" onClick={resync} title="resync from a fresh snapshot">
+          <button type="button" className="meta warn tech micro" onClick={resync} title="resync from a fresh snapshot">
             gaps {state.gaps}
-            {state.missing.length ? ` · ${state.missing.length} missing` : ''}
+            {state.missing.length ? ` / ${state.missing.length} missing` : ''} / resync
           </button>
         )}
-        {state.resyncs > 0 && <div className="meta">resyncs {state.resyncs}</div>}
+        {state.resyncs > 0 && <div className="meta tech micro">resyncs {state.resyncs}</div>}
         {state.rejected > 0 && (
-          <div className="meta err" title={state.lastRejection}>
+          <div className="meta semantic-red tech micro" title={state.lastRejection}>
             rejected {state.rejected}
           </div>
         )}
         <nav className="tabs">
           {TABS.map((entry) => (
-            <button key={entry.id} type="button" className={tab === entry.id ? 'on' : ''} onClick={() => setTab(entry.id)}>
+            <button key={entry.id} type="button" className={`tech micro${tab === entry.id ? ' on' : ''}`} aria-pressed={tab === entry.id} onClick={() => setTab(entry.id)}>
               {entry.label}
             </button>
           ))}
@@ -101,6 +93,16 @@ export function DebugApp() {
         {tab === 'log' && <LogPanel state={state} />}
         <DetailDrawer selection={selection} state={state} onClose={close} />
       </main>
+      <footer className="footer">
+        <SceneFooter
+          left={`seq ${state.maxSeq} / ${state.events.length} events / ${state.logs.length} log lines`}
+          right={
+            config
+              ? `jev thresholds / for current agent ${config.jev_for_current_agent_lower}–${config.jev_for_current_agent_upper} / action ${config.jev_action_threshold}`
+              : 'jev thresholds / not reported'
+          }
+        />
+      </footer>
     </div>
   );
 }
