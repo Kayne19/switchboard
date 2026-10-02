@@ -4,6 +4,12 @@
 //! synchronous and bounded: it records a small in-memory copy and uses
 //! `broadcast::Sender::send`, so a slow browser can never hold up a call.
 use crate::protocol::AgentState;
+use axum::{
+    http::header,
+    response::{IntoResponse, Response},
+    routing::get,
+    Router,
+};
 #[cfg(test)]
 use serde::Deserialize;
 use serde::Serialize;
@@ -18,6 +24,43 @@ use std::{
 };
 use tokio::sync::broadcast;
 use tracing_subscriber::{layer::Context, registry::LookupSpan, Layer};
+
+/// The compiled debug page. It is embedded at build time so it is served only
+/// by the debug listener's router: the primary listener's static directory
+/// never holds it, so no path spelling there can reach it.
+pub(crate) const INDEX_HTML: &str = include_str!("../../../static-debug/index.html");
+pub(crate) const DEBUG_JS: &str = include_str!("../../../static-debug/debug.js");
+pub(crate) const DEBUG_CSS: &str = include_str!("../../../static-debug/debug.css");
+
+/// The debug page's asset routes. Anything else is a 404.
+pub(crate) fn asset_routes<S>() -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    fn asset(content_type: &'static str, body: &'static str) -> Response {
+        (
+            [
+                (header::CONTENT_TYPE, content_type),
+                (header::CACHE_CONTROL, "no-cache"),
+            ],
+            body,
+        )
+            .into_response()
+    }
+    Router::new()
+        .route(
+            "/",
+            get(|| async { asset("text/html; charset=utf-8", INDEX_HTML) }),
+        )
+        .route(
+            "/debug.js",
+            get(|| async { asset("text/javascript; charset=utf-8", DEBUG_JS) }),
+        )
+        .route(
+            "/debug.css",
+            get(|| async { asset("text/css; charset=utf-8", DEBUG_CSS) }),
+        )
+}
 
 const EVENT_CAPACITY: usize = 4_000;
 const LOG_CAPACITY: usize = 2_000;

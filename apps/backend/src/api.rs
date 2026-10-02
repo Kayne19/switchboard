@@ -24,7 +24,6 @@ use axum::extract::ws::{Message, WebSocket};
 use axum::{
     extract::rejection::JsonRejection,
     extract::{State, WebSocketUpgrade},
-    http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -886,10 +885,6 @@ impl AppState {
     }
     pub fn router(self, static_dir: Option<ServeDir>) -> Router {
         let router = Router::new()
-            // The debug listener is deliberately separate. Never let the
-            // primary static fallback expose its assets on /debug.
-            .route("/debug", get(debug_assets_not_served))
-            .route("/debug/{*path}", get(debug_assets_not_served))
             .route("/healthz", get(healthz))
             .route("/status", get(status))
             .route("/hangup", post(hangup))
@@ -907,11 +902,10 @@ impl AppState {
     }
 
     /// The optional read-only listener. It has no call controls and serves
-    /// only `static/debug`, unlike the primary listener.
+    /// only the embedded debug page and its WebSocket.
     pub fn debug_router(&self) -> Router {
-        Router::new()
+        crate::debug::asset_routes()
             .route("/ws", get(debug_ws))
-            .fallback_service(ServeDir::new("static/debug"))
             .with_state(self.clone())
     }
 
@@ -923,10 +917,6 @@ impl AppState {
         }
         let _ = shutdown.changed().await;
     }
-}
-
-async fn debug_assets_not_served() -> StatusCode {
-    StatusCode::NOT_FOUND
 }
 
 async fn debug_ws(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> Response {

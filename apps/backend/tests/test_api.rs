@@ -1151,6 +1151,98 @@ async fn no_agent_callback_is_served_over_http() {
     }
 }
 
+async fn get_body(router: Router, path: &str) -> (StatusCode, Vec<u8>) {
+    let response = router
+        .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, bytes.to_vec())
+}
+
+#[tokio::test]
+async fn the_primary_listener_never_serves_the_debug_page() {
+    // The debug page is embedded in the binary and routed only by the debug
+    // listener. These spellings once reached a `static/debug/` directory
+    // through the primary static fallback, past a raw-path route guard.
+    let static_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/static");
+    assert!(
+        !std::path::Path::new(static_dir).join("debug").exists(),
+        "debug assets must not live under the primary static root"
+    );
+    let debug_assets = [
+        crate::debug::INDEX_HTML.as_bytes(),
+        crate::debug::DEBUG_JS.as_bytes(),
+        crate::debug::DEBUG_CSS.as_bytes(),
+    ];
+    for path in [
+        "/debug",
+        "/debug/",
+        "/debug/index.html",
+        "/%64ebug/index.html",
+        "/%64ebug/",
+        "//debug/index.html",
+        "/./debug/index.html",
+        "/debug%2Findex.html",
+        "/debug/../debug/index.html",
+        "/debug.js",
+        "/debug.css",
+        "/debug/debug.js",
+    ] {
+        let router = state().router(Some(ServeDir::new(static_dir)));
+        let (status, body) = get_body(router, path).await;
+        assert!(
+            !debug_assets.contains(&body.as_slice()),
+            "{path} served debug content ({status})"
+        );
+        assert_ne!(status, StatusCode::OK, "{path}");
+    }
+}
+
+#[tokio::test]
+async fn the_debug_listener_serves_only_the_embedded_page() {
+    let state = state();
+    for (path, body, content_type) in [
+        ("/", crate::debug::INDEX_HTML, "text/html; charset=utf-8"),
+        (
+            "/debug.js",
+            crate::debug::DEBUG_JS,
+            "text/javascript; charset=utf-8",
+        ),
+        (
+            "/debug.css",
+            crate::debug::DEBUG_CSS,
+            "text/css; charset=utf-8",
+        ),
+    ] {
+        let response = state
+            .debug_router()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        assert_eq!(
+            response.headers()["content-type"].to_str().unwrap(),
+            content_type,
+            "{path}"
+        );
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(bytes.as_ref(), body.as_bytes(), "{path}");
+    }
+    // No call control and no primary page on the debug listener.
+    for path in [
+        "/index.html",
+        "/status",
+        "/healthz",
+        "/debug/",
+        "/v17-assets/x.js",
+    ] {
+        let (status, _) = get_body(state.debug_router(), path).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+    }
+}
+
 #[tokio::test]
 async fn a_view_call_with_an_unknown_field_is_refused_with_the_reason() {
     let (code, body) =
