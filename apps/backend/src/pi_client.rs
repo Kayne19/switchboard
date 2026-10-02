@@ -1,3 +1,4 @@
+use crate::debug::{clip_text, clip_value, DebugBus, DebugEvent};
 use futures_util::FutureExt;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -9,7 +10,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(test)]
 use std::sync::OnceLock;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock as StdOnceLock};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, Command};
 use tokio::sync::{watch, Mutex};
@@ -121,6 +122,11 @@ struct SessionInner {
     /// True once stderr has been read to its end.
     stderr_closed: watch::Receiver<bool>,
     process_guard: ProcessTreeGuard,
+    /// Where this process's conversation is mirrored for the debug page.
+    /// Observation only: nothing here waits on it.
+    debug: StdOnceLock<DebugBus>,
+    /// Numbers this process's prompts, for the debug page's turn ids.
+    prompts: AtomicU64,
 }
 
 #[derive(Clone)]
@@ -200,6 +206,8 @@ impl PiSession {
             stderr_task: StdMutex::new(Some(stderr_task)),
             stderr_closed,
             process_guard,
+            debug: StdOnceLock::new(),
+            prompts: AtomicU64::new(0),
         });
         Ok(Self { inner })
     }
@@ -243,6 +251,28 @@ impl PiSession {
     }
     pub fn label(&self) -> &str {
         &self.inner.label
+    }
+
+    /// Mirrors this process's prompts, replies and tool calls to `bus`,
+    /// tagged with the leg token (`operator`, `utility`). Set once, before
+    /// the first prompt; a later call changes nothing.
+    pub(crate) fn observe(&self, bus: DebugBus) {
+        let _ = self.inner.debug.set(bus);
+    }
+
+    fn publish(&self, event: DebugEvent) {
+        if let Some(bus) = self.inner.debug.get() {
+            bus.publish(event);
+        }
+    }
+
+    /// The debug turn id of the prompt being run: `<leg>-<n>`.
+    fn debug_turn_id(&self) -> String {
+        format!(
+            "{}-{}",
+            self.inner.leg,
+            self.inner.prompts.load(Ordering::Acquire)
+        )
     }
 
     pub fn same_session(&self, other: &Self) -> bool {
@@ -289,6 +319,16 @@ impl PiSession {
     }
 
     pub async fn prompt(&self, message: &str) -> Result<Turn, PiSessionError> {
+        self.prompt_for(message, None).await
+    }
+
+    /// `prompt`, naming the caller line (`utterance_id`) the message carries
+    /// so the debug page can link the route to it.
+    pub async fn prompt_for(
+        &self,
+        message: &str,
+        utterance_id: Option<&str>,
+    ) -> Result<Turn, PiSessionError> {
         #[cfg(test)]
         notify_prompt_hook_for_test(message);
         let _turn = self.inner.turn_lock.lock().await;
@@ -306,8 +346,17 @@ impl PiSession {
             }
             return Err(error);
         }
+        self.inner.prompts.fetch_add(1, Ordering::AcqRel);
+        let turn_id = self.debug_turn_id();
+        self.publish(DebugEvent::AgentInput {
+            agent: self.inner.leg.clone(),
+            turn_id: Some(turn_id.clone()),
+            text: clip_text(message),
+            source: local_prompt_source(&self.inner.leg, message).into(),
+            utterance_id: utterance_id.map(str::to_owned),
+        });
         self.inner.busy.store(true, Ordering::Release);
-        let result = self.collect().await;
+        let result = self.collect(&turn_id).await;
         self.inner.busy.store(false, Ordering::Release);
         result
     }
@@ -323,11 +372,20 @@ impl PiSession {
             .write(json!({"type":"steer", "message":message}), true)
             .await;
         match &result {
-            Ok(()) => tracing::info!(
-                label = %self.inner.label,
-                chars = message.chars().count(),
-                "steered the running turn"
-            ),
+            Ok(()) => {
+                tracing::info!(
+                    label = %self.inner.label,
+                    chars = message.chars().count(),
+                    "steered the running turn"
+                );
+                self.publish(DebugEvent::AgentInput {
+                    agent: self.inner.leg.clone(),
+                    turn_id: Some(self.debug_turn_id()),
+                    text: clip_text(message),
+                    source: "steer".into(),
+                    utterance_id: None,
+                });
+            }
             Err(error) => tracing::info!(
                 label = %self.inner.label,
                 %error,
@@ -358,11 +416,12 @@ impl PiSession {
             .map_err(|error| PiSessionError(format!("agent process closed its input: {error}")))
     }
 
-    async fn collect(&self) -> Result<Turn, PiSessionError> {
+    async fn collect(&self, turn_id: &str) -> Result<Turn, PiSessionError> {
         let mut chunks = Vec::new();
         let mut signals = Vec::new();
         let mut error = String::new();
         let mut response_life_reported = false;
+        let mut deltas = DeltaBuffer::default();
         loop {
             let read = {
                 let mut stdout = self.inner.stdout.lock().await;
@@ -384,6 +443,7 @@ impl PiSession {
                         stderr_lines = self.stderr_tail(5).lines().count(),
                         "agent stream ended mid-turn"
                     );
+                    self.publish_delta(turn_id, deltas.take());
                     return Ok(Turn {
                         text: chunks.join("\n"),
                         signals,
@@ -460,7 +520,16 @@ impl PiSession {
                         response_life_reported = true;
                         self.report_activity("life", "", String::new()).await;
                     }
+                    if event_type == Some("text_delta") {
+                        if let Some(delta) = assistant_event
+                            .and_then(|event| event.get("delta"))
+                            .and_then(Value::as_str)
+                        {
+                            self.publish_delta(turn_id, deltas.push(delta));
+                        }
+                    }
                     if event_type == Some("text_end") {
+                        self.publish_delta(turn_id, deltas.take());
                         if let Some(content) = text {
                             let collected = chunks.iter().map(String::len).sum::<usize>();
                             if collected.saturating_add(content.len()) > STREAM_LIMIT {
@@ -507,6 +576,15 @@ impl PiSession {
                 }
                 Some("tool_execution_start") => {
                     let name = event.get("toolName").and_then(Value::as_str).unwrap_or("");
+                    self.publish(DebugEvent::ToolStart {
+                        agent: self.inner.leg.clone(),
+                        call_id: event
+                            .get("toolCallId")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                        tool: name.into(),
+                        args: event.get("args").cloned().map(clip_value),
+                    });
                     if [
                         ROUTE_TOOL,
                         SECOND_OPINION_TOOL,
@@ -538,6 +616,18 @@ impl PiSession {
                 }
                 Some("tool_execution_end") => {
                     let name = event.get("toolName").and_then(Value::as_str).unwrap_or("");
+                    let result = event.get("result").filter(|value| !value.is_null());
+                    self.publish(DebugEvent::ToolEnd {
+                        agent: self.inner.leg.clone(),
+                        call_id: event
+                            .get("toolCallId")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                        tool: name.into(),
+                        result: result.cloned().map(clip_value),
+                        error: (event.get("isError") == Some(&Value::Bool(true)))
+                            .then(|| tool_error_text(result)),
+                    });
                     self.report_activity("end", name, String::new()).await
                 }
                 Some("extension_error") => {
@@ -551,13 +641,31 @@ impl PiSession {
                 _ => {}
             }
         }
+        self.publish_delta(turn_id, deltas.take());
         let text = chunks.join("\n").trim().to_owned();
+        self.publish(DebugEvent::AgentText {
+            agent: self.inner.leg.clone(),
+            turn_id: Some(turn_id.to_owned()),
+            text: clip_text(&text),
+            final_: true,
+        });
         Ok(Turn {
             text,
             signals,
             failed: !error.is_empty(),
             error,
         })
+    }
+
+    fn publish_delta(&self, turn_id: &str, text: Option<String>) {
+        if let Some(text) = text {
+            self.publish(DebugEvent::AgentText {
+                agent: self.inner.leg.clone(),
+                turn_id: Some(turn_id.to_owned()),
+                text,
+                final_: false,
+            });
+        }
     }
 
     async fn report_activity(&self, state: &str, tool: &str, detail: String) {
@@ -1966,6 +2074,80 @@ where
     }
     BoundedOutput { bytes, truncated }
 }
+
+/// Streamed reply text gathered for the debug page. Deltas arrive about one
+/// per token; one event each would crowd the debug ring, so they go out in
+/// pieces of `DELTA_FLUSH_BYTES` or every `DELTA_FLUSH_AFTER`.
+#[derive(Default)]
+struct DeltaBuffer {
+    text: String,
+    since: Option<Instant>,
+}
+
+const DELTA_FLUSH_BYTES: usize = 256;
+const DELTA_FLUSH_AFTER: Duration = Duration::from_millis(250);
+
+impl DeltaBuffer {
+    /// Adds `delta`; the gathered text when it is due to go out.
+    fn push(&mut self, delta: &str) -> Option<String> {
+        if delta.is_empty() {
+            return None;
+        }
+        self.text.push_str(delta);
+        let since = *self.since.get_or_insert_with(Instant::now);
+        if self.text.len() >= DELTA_FLUSH_BYTES || since.elapsed() >= DELTA_FLUSH_AFTER {
+            return self.take();
+        }
+        None
+    }
+
+    /// The text gathered so far, if any.
+    fn take(&mut self) -> Option<String> {
+        self.since = None;
+        (!self.text.is_empty()).then(|| std::mem::take(&mut self.text))
+    }
+}
+
+/// What a local process's prompt is, for the debug page. The utility gets
+/// routing requests and floor rewrites; the operator gets the caller's turns.
+fn local_prompt_source(leg: &str, message: &str) -> &'static str {
+    match leg {
+        "utility" if message.starts_with("[FLOOR REWRITE]") => "floor_rewrite",
+        "utility" => "routing_request",
+        _ => "caller",
+    }
+}
+
+/// A failed tool's error for the debug page: the text its result carries,
+/// clipped, or a plain note when it carries none.
+fn tool_error_text(result: Option<&Value>) -> String {
+    let text = match result {
+        Some(Value::String(text)) => text.clone(),
+        Some(result) => result
+            .get("content")
+            .and_then(Value::as_array)
+            .map(|parts| {
+                parts
+                    .iter()
+                    .filter_map(|part| part.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default(),
+        None => String::new(),
+    };
+    let text = text.trim();
+    if text.is_empty() {
+        return "the tool reported an error".into();
+    }
+    if text.chars().count() > TOOL_ERROR_CHARS {
+        let clipped = text.chars().take(TOOL_ERROR_CHARS).collect::<String>();
+        return format!("{}…", clipped.trim_end());
+    }
+    text.to_owned()
+}
+
+const TOOL_ERROR_CHARS: usize = 500;
 
 fn activity_detail(args: Option<&Value>) -> String {
     let Some(args) = args.and_then(Value::as_object) else {

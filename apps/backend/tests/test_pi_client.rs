@@ -373,3 +373,190 @@ async fn takeover_reply_cannot_make_release_kill_a_desk_session() {
     assert_eq!(command_rx.recv().await.as_deref(), Some("abort"));
     assert_eq!(command_rx.recv().await.as_deref(), Some("detach"));
 }
+
+fn debug_events(bus: &crate::debug::DebugBus) -> Vec<DebugEvent> {
+    let crate::debug::DebugFrame::Snapshot { events, .. } = bus.snapshot(vec![]) else {
+        panic!("snapshot");
+    };
+    events.iter().map(|record| record.event.clone()).collect()
+}
+
+#[tokio::test]
+async fn operator_conversation_is_mirrored_to_the_debug_bus() {
+    let script = "read line; printf '%s\\n' \
+        '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"Hel\"}}' \
+        '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"thinking_delta\",\"delta\":\"hidden\"}}' \
+        '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"lo\"}}' \
+        '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_end\",\"content\":\"Hello\"}}' \
+        '{\"type\":\"tool_execution_start\",\"toolName\":\"route\",\"toolCallId\":\"c1\",\"args\":{\"target\":\"alpha\",\"api_key\":\"sk-live-123\"}}' \
+        '{\"type\":\"tool_execution_end\",\"toolName\":\"route\",\"toolCallId\":\"c1\",\"isError\":true,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"no such project\"}]}}' \
+        '{\"type\":\"agent_settled\"}'";
+    let session = PiSession::start(
+        vec!["sh".into(), "-c".into(), script.into()],
+        "operator",
+        "operator",
+        None,
+        None,
+        Duration::from_secs(1),
+        None,
+    )
+    .await
+    .unwrap();
+    let bus = crate::debug::DebugBus::new();
+    session.observe(bus.clone());
+    let turn = session
+        .prompt_for("hi there", Some("clip-1"))
+        .await
+        .unwrap();
+    assert_eq!(turn.text, "Hello");
+    let turn_id = Some("operator-1".to_owned());
+    assert_eq!(
+        debug_events(&bus),
+        vec![
+            DebugEvent::AgentInput {
+                agent: "operator".into(),
+                turn_id: turn_id.clone(),
+                text: "hi there".into(),
+                source: "caller".into(),
+                utterance_id: Some("clip-1".into()),
+            },
+            DebugEvent::AgentText {
+                agent: "operator".into(),
+                turn_id: turn_id.clone(),
+                text: "Hello".into(),
+                final_: false,
+            },
+            DebugEvent::ToolStart {
+                agent: "operator".into(),
+                call_id: Some("c1".into()),
+                tool: "route".into(),
+                args: Some(json!({"target": "alpha", "api_key": "[redacted]"})),
+            },
+            DebugEvent::ToolEnd {
+                agent: "operator".into(),
+                call_id: Some("c1".into()),
+                tool: "route".into(),
+                result: Some(json!({"content": [{"type": "text", "text": "no such project"}]})),
+                error: Some("no such project".into()),
+            },
+            DebugEvent::AgentText {
+                agent: "operator".into(),
+                turn_id,
+                text: "Hello".into(),
+                final_: true,
+            },
+        ]
+    );
+    session.close().await;
+}
+
+#[tokio::test]
+async fn utility_prompts_are_tagged_by_kind_and_numbered_per_process() {
+    let script = "while read line; do printf '%s\\n' '{\"type\":\"agent_settled\"}'; done";
+    let session = PiSession::start(
+        vec!["sh".into(), "-c".into(), script.into()],
+        "routing utility",
+        "utility",
+        None,
+        None,
+        Duration::from_secs(1),
+        None,
+    )
+    .await
+    .unwrap();
+    let bus = crate::debug::DebugBus::new();
+    session.observe(bus.clone());
+    session.prompt("[JEV]\nwhere to?").await.unwrap();
+    session
+        .prompt("[FLOOR REWRITE]\nWork: alpha")
+        .await
+        .unwrap();
+    let inputs: Vec<(Option<String>, String)> = debug_events(&bus)
+        .into_iter()
+        .filter_map(|event| match event {
+            DebugEvent::AgentInput {
+                agent,
+                turn_id,
+                source,
+                utterance_id,
+                ..
+            } => {
+                assert_eq!(agent, "utility");
+                assert_eq!(utterance_id, None);
+                Some((turn_id, source))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        inputs,
+        vec![
+            (Some("utility-1".into()), "routing_request".into()),
+            (Some("utility-2".into()), "floor_rewrite".into()),
+        ]
+    );
+    session.close().await;
+}
+
+#[tokio::test]
+async fn an_unobserved_process_publishes_nothing_and_a_second_observe_is_ignored() {
+    let script = "while read line; do printf '%s\\n' '{\"type\":\"agent_settled\"}'; done";
+    let session = PiSession::start(
+        vec!["sh".into(), "-c".into(), script.into()],
+        "operator",
+        "operator",
+        None,
+        None,
+        Duration::from_secs(1),
+        None,
+    )
+    .await
+    .unwrap();
+    session.prompt("before").await.unwrap();
+    let first = crate::debug::DebugBus::new();
+    let second = crate::debug::DebugBus::new();
+    session.observe(first.clone());
+    session.observe(second.clone());
+    session.prompt("after").await.unwrap();
+    assert_eq!(debug_events(&first).len(), 2, "input and final reply");
+    assert!(debug_events(&second).is_empty());
+    session.close().await;
+}
+
+#[test]
+fn streamed_text_goes_out_in_bounded_pieces() {
+    let mut buffer = DeltaBuffer::default();
+    assert_eq!(buffer.push("a"), None);
+    assert_eq!(buffer.push(""), None);
+    let piece = buffer.push(&"b".repeat(DELTA_FLUSH_BYTES)).unwrap();
+    assert_eq!(piece.len(), DELTA_FLUSH_BYTES + 1);
+    assert_eq!(buffer.take(), None);
+    assert_eq!(buffer.push("c"), None);
+    assert_eq!(buffer.take().as_deref(), Some("c"));
+}
+
+#[test]
+fn tool_errors_and_prompt_sources_for_the_debug_page() {
+    assert_eq!(tool_error_text(None), "the tool reported an error");
+    assert_eq!(tool_error_text(Some(&json!("boom"))), "boom");
+    assert_eq!(
+        tool_error_text(Some(
+            &json!({"content": [{"type": "text", "text": "x".repeat(600)}]})
+        ))
+        .chars()
+        .count(),
+        TOOL_ERROR_CHARS + 1
+    );
+    assert_eq!(
+        local_prompt_source("operator", "[CALL STATE]\n..."),
+        "caller"
+    );
+    assert_eq!(
+        local_prompt_source("utility", "[FLOOR REWRITE]"),
+        "floor_rewrite"
+    );
+    assert_eq!(
+        local_prompt_source("utility", "anything"),
+        "routing_request"
+    );
+}

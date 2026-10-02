@@ -1630,6 +1630,7 @@ impl Switchboard {
                 self.activity_callback.clone(),
             )
             .await?;
+            session.observe(self.debug.clone());
             self.operator = Some(session);
             self.set_active_session(self.operator_leg()).await;
         }
@@ -1674,6 +1675,7 @@ impl Switchboard {
                 None,
             )
             .await?;
+            session.observe(self.debug.clone());
             self.utility = Some(session);
         }
         self.utility
@@ -1822,7 +1824,8 @@ impl Switchboard {
         } else {
             format!("[CALL STATE]\n{call_state}\n[END CALL STATE]\n\n{message}")
         };
-        let turn = match session.prompt(&message).await {
+        // s2: self.trace_utterance.as_deref()
+        let turn = match session.prompt_for(&message, None).await {
             Ok(turn) => turn,
             Err(error) => {
                 tracing::warn!(%error, "the operator leg failed mid-prompt");

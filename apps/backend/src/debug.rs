@@ -445,6 +445,184 @@ where
     }
 }
 
+/// Largest tool or module value, as JSON bytes, kept in one event.
+pub(crate) const VALUE_CLIP_BYTES: usize = 4 * 1024;
+/// Largest prompt or reply text kept in one event.
+pub(crate) const TEXT_CLIP_BYTES: usize = 16 * 1024;
+const REDACTED: &str = "[redacted]";
+
+/// A value for an event: scrubbed (`scrub_value`), and, when its JSON is over
+/// `VALUE_CLIP_BYTES`, replaced by
+/// `{"clipped": true, "bytes": <full size>, "preview": <start of the JSON>}`,
+/// the shape the host agent sends too (`docs/host-link.md`).
+pub(crate) fn clip_value(value: Value) -> Value {
+    let value = scrub_value(value);
+    let json = value.to_string();
+    if json.len() <= VALUE_CLIP_BYTES {
+        return value;
+    }
+    serde_json::json!({
+        "clipped": true,
+        "bytes": json.len(),
+        "preview": prefix(&json, VALUE_CLIP_BYTES),
+    })
+}
+
+/// Text for an event: scrubbed (`scrub_text`), and, when over
+/// `TEXT_CLIP_BYTES`, cut with a marker that gives the full size.
+pub(crate) fn clip_text(text: &str) -> String {
+    let text = scrub_text(text);
+    if text.len() <= TEXT_CLIP_BYTES {
+        return text;
+    }
+    format!(
+        "{}\n[clipped: {} bytes in all]",
+        prefix(&text, TEXT_CLIP_BYTES),
+        text.len()
+    )
+}
+
+fn prefix(text: &str, limit: usize) -> &str {
+    let mut end = limit.min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+/// True for a field name that usually holds a credential.
+fn secret_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name == "key"
+        || name.ends_with("_key")
+        || name.ends_with("-key")
+        || [
+            "token",
+            "secret",
+            "password",
+            "passwd",
+            "apikey",
+            "authorization",
+            "credential",
+            "cookie",
+        ]
+        .iter()
+        .any(|word| name.contains(word))
+}
+
+/// Replaces credential-looking strings in a tool or module value: string
+/// fields with a credential-like name, and credentials inside text.
+pub(crate) fn scrub_value(value: Value) -> Value {
+    match value {
+        Value::String(text) => Value::String(scrub_text(&text)),
+        Value::Array(items) => Value::Array(items.into_iter().map(scrub_value).collect()),
+        Value::Object(fields) => Value::Object(
+            fields
+                .into_iter()
+                .map(|(name, value)| {
+                    let value = match value {
+                        Value::String(_) if secret_name(&name) => Value::String(REDACTED.into()),
+                        value => scrub_value(value),
+                    };
+                    (name, value)
+                })
+                .collect(),
+        ),
+        value => value,
+    }
+}
+
+/// Replaces credential-looking parts of text: the value after a
+/// credential-like name and `=` or `:` (`API_KEY=...`, `"token": "..."`), the
+/// word after `Bearer`, and words with a well-known key prefix. A heuristic:
+/// it keeps a pasted `.env` or auth header off the page, not every secret.
+pub(crate) fn scrub_text(text: &str) -> String {
+    const KEY_PREFIXES: [&str; 8] = [
+        "sk-",
+        "ghp_",
+        "gho_",
+        "ghs_",
+        "github_pat_",
+        "xoxb-",
+        "xoxp-",
+        "glpat-",
+    ];
+    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+    let is_value = |c: char| !c.is_whitespace() && !matches!(c, '"' | '\'' | ',' | '}' | ']');
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    let mut redact_next_word = false;
+    while i < chars.len() {
+        let c = chars[i];
+        if !is_word(c) {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < chars.len() && is_word(chars[i]) {
+            i += 1;
+        }
+        let word: String = chars[start..i].iter().collect();
+        if redact_next_word
+            || (word.len() >= 16 && KEY_PREFIXES.iter().any(|p| word.starts_with(p)))
+        {
+            redact_next_word = false;
+            // The rest of a value such as `abc.def/ghi` goes with it.
+            while i < chars.len() && is_value(chars[i]) {
+                i += 1;
+            }
+            out.push_str(REDACTED);
+            continue;
+        }
+        out.push_str(&word);
+        if word.eq_ignore_ascii_case("bearer") {
+            redact_next_word = chars.get(i).is_some_and(|c| *c == ' ');
+            continue;
+        }
+        if !secret_name(&word) {
+            continue;
+        }
+        // `name`, an optional closing quote, spaces, `=` or `:`, spaces and an
+        // optional opening quote, then the value.
+        let mut j = i;
+        if matches!(chars.get(j), Some('"' | '\'')) {
+            j += 1;
+        }
+        while matches!(chars.get(j), Some(' ' | '\t')) {
+            j += 1;
+        }
+        if !matches!(chars.get(j), Some('=' | ':')) {
+            continue;
+        }
+        j += 1;
+        while matches!(chars.get(j), Some(' ' | '\t')) {
+            j += 1;
+        }
+        if matches!(chars.get(j), Some('"' | '\'')) {
+            j += 1;
+        }
+        let value_start = j;
+        while j < chars.len() && is_value(chars[j]) {
+            j += 1;
+        }
+        // A count such as `tokens: 500` is not a credential.
+        let numeric = chars[value_start..j].iter().all(|c| c.is_ascii_digit());
+        if j > value_start && !numeric {
+            let value: String = chars[value_start..j].iter().collect();
+            // `Authorization: Bearer <token>`: the scheme, then the token.
+            redact_next_word = ["bearer", "basic"]
+                .iter()
+                .any(|scheme| value.eq_ignore_ascii_case(scheme));
+            out.extend(&chars[i..value_start]);
+            out.push_str(REDACTED);
+            i = j;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -733,6 +911,56 @@ mod tests {
         .unwrap();
         let snapshot: DebugFrame = serde_json::from_value(fixture.snapshot.clone()).unwrap();
         assert_eq!(serde_json::to_value(snapshot).unwrap(), fixture.snapshot);
+    }
+
+    #[test]
+    fn large_values_and_text_are_clipped_and_marked() {
+        let small = json!({"command": "cargo test"});
+        assert_eq!(clip_value(small.clone()), small);
+        let big = json!({"text": "é".repeat(VALUE_CLIP_BYTES)});
+        let clipped = clip_value(big.clone());
+        assert_eq!(clipped["clipped"], true);
+        assert_eq!(clipped["bytes"], big.to_string().len());
+        assert!(clipped["preview"].as_str().unwrap().len() <= VALUE_CLIP_BYTES);
+
+        assert_eq!(clip_text("short"), "short");
+        let long = "ü".repeat(TEXT_CLIP_BYTES);
+        let text = clip_text(&long);
+        assert!(text.ends_with(&format!("[clipped: {} bytes in all]", long.len())));
+        assert!(text.len() < long.len());
+    }
+
+    #[test]
+    fn credentials_are_scrubbed_from_text_and_values() {
+        assert_eq!(
+            scrub_text("API_KEY=abc123 and token: \"xyz.789\" ok"),
+            "API_KEY=[redacted] and token: \"[redacted]\" ok"
+        );
+        assert_eq!(
+            scrub_text("Authorization: Bearer eyJhbGci.payload.sig"),
+            "Authorization: [redacted] [redacted]"
+        );
+        assert_eq!(scrub_text("Bearer abc.def end"), "Bearer [redacted] end");
+        assert_eq!(
+            scrub_text("use ghp_0123456789abcdefABCDEF now"),
+            "use [redacted] now"
+        );
+        assert_eq!(scrub_text("max tokens: 500"), "max tokens: 500");
+        assert_eq!(scrub_text("the key idea"), "the key idea");
+        assert_eq!(
+            scrub_value(json!({
+                "call_token": "t-1",
+                "input_tokens": 12,
+                "nested": [{"password": "p"}, "SECRET=s"],
+                "path": "/srv/a"
+            })),
+            json!({
+                "call_token": "[redacted]",
+                "input_tokens": 12,
+                "nested": [{"password": "[redacted]"}, "SECRET=[redacted]"],
+                "path": "/srv/a"
+            })
+        );
     }
 
     #[test]
