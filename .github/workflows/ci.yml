@@ -38,6 +38,8 @@ jobs:
         run: |
           npm test
           git diff --exit-code -- static static-debug
+          # A new output file is untracked, so the diff above misses it.
+          test -z "$(git status --porcelain -- static static-debug)"
 
       - name: Rust format
         run: cargo fmt --all -- --check
