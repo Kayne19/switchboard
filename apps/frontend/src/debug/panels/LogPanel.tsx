@@ -36,7 +36,7 @@ const LogRow = memo(function LogRow({ log }: { log: DebugLog }) {
       <span className="target">{log.target}</span>
       <span className="msg">{log.message}</span>
       {log.clipped && (
-        <span className="tag tag-clip" title="The service cut this line to the debug record bounds">
+        <span className="tag-clip" title="The service cut this line to the debug record bounds">
           clipped
         </span>
       )}
@@ -68,13 +68,14 @@ export function LogPanel({ state }: { state: DebugState }) {
   return (
     <div className="panel panel-log">
       <div className="panel-bar">
-        <h2>Raw log</h2>
+        <h2 className="tech">Raw log</h2>
         <div className="seg">
           {LEVELS.map((level) => (
             <button
               key={level}
               type="button"
-              className={`${levels.has(level) ? 'on' : ''} lv-${level.toLowerCase()}`}
+              className={`tech micro${levels.has(level) ? ' on' : ''} lv-${level.toLowerCase()}`}
+              aria-pressed={levels.has(level)}
               onClick={() => {
                 const next = new Set(levels);
                 if (next.has(level)) next.delete(level);
@@ -86,25 +87,26 @@ export function LogPanel({ state }: { state: DebugState }) {
             </button>
           ))}
         </div>
-        <input list="log-targets" placeholder="target" value={target} onChange={(event) => setTarget(event.target.value)} />
+        <input className="field-input" list="log-targets" placeholder="target" value={target} onChange={(event) => setTarget(event.target.value)} />
         <datalist id="log-targets">
           {targets.map((name) => (
             <option key={name} value={name} />
           ))}
         </datalist>
-        <input placeholder="search text" value={text} onChange={(event) => setText(event.target.value)} />
+        <input className="field-input" placeholder="search text" value={text} onChange={(event) => setText(event.target.value)} />
         <button
           type="button"
-          className={paused ? 'on warn' : ''}
+          className={`tech micro${paused ? ' on' : ''}`}
+          aria-pressed={paused}
           onClick={() => {
             if (!paused) setFrozen(state.logs);
             setPaused(!paused);
           }}
         >
-          {paused ? '▶ resume' : '❚❚ pause'}
+          {paused ? 'resume' : 'pause'}
         </button>
-        <span className="muted">
-          {shown.length} / {state.logs.length} lines{state.unknown.length ? ` · ${state.unknown.length} unknown events` : ''}
+        <span className="tech micro muted">
+          {shown.length} / {state.logs.length} lines{state.unknown.length ? ` / ${state.unknown.length} unknown events` : ''}
         </span>
       </div>
       <div className="log-body" ref={body}>
@@ -113,7 +115,7 @@ export function LogPanel({ state }: { state: DebugState }) {
         ))}
         {state.unknown.length > 0 && (
           <details className="raw">
-            <summary>{state.unknown.length} events of unknown kinds (newer backend)</summary>
+            <summary className="tech micro">{state.unknown.length} events of unknown kinds (newer backend)</summary>
             {state.unknown.slice(-50).map((event) => (
               <div key={event.seq} className="log-row">
                 <time>{clockTime(event.timestamp_ms)}</time>

@@ -1,13 +1,15 @@
 import { memo, useState } from 'react';
 import type { JsonValue } from './protocol';
 
+// Scalars take the main page's code colours (CodeViewport's `tok-*`).
+
 const MAX_ENTRIES = 200;
 
 function Scalar({ value }: { value: JsonValue }) {
-  if (value === null) return <span className="j-null">null</span>;
-  if (typeof value === 'string') return <span className="j-str">{JSON.stringify(value)}</span>;
-  if (typeof value === 'number') return <span className="j-num">{value}</span>;
-  if (typeof value === 'boolean') return <span className="j-bool">{String(value)}</span>;
+  if (value === null) return <span className="tok-keyword">null</span>;
+  if (typeof value === 'string') return <span className="tok-string">{JSON.stringify(value)}</span>;
+  if (typeof value === 'number') return <span className="tok-number">{value}</span>;
+  if (typeof value === 'boolean') return <span className="tok-keyword">{String(value)}</span>;
   return null;
 }
 
@@ -24,7 +26,7 @@ export const JsonView = memo(function JsonView({
   depth?: number;
 }) {
   const [open, setOpen] = useState(depth < openDepth);
-  if (value === undefined) return <span className="j-null">—</span>;
+  if (value === undefined) return <span className="muted">—</span>;
   const key = label !== undefined ? <span className="j-key">{label}: </span> : null;
   if (value === null || typeof value !== 'object') {
     return (

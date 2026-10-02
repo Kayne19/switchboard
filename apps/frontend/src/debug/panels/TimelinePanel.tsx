@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react';
-import { agentColor, STAGE_COLORS } from '../colors';
 import { clockTime, formatMs } from '../explain';
 import type { DebugState } from '../reducer';
 import type { PaneSelect } from '../AgentPane';
@@ -35,16 +34,22 @@ export function TimelinePanel({ state, select }: { state: DebugState; select: Pa
   return (
     <div className="panel">
       <div className="panel-bar">
-        <h2>Turn timeline</h2>
+        <h2 className="tech">Turn timeline</h2>
         <div className="seg">
           {WINDOWS.map((option) => (
-            <button key={option.label} type="button" className={option === window ? 'on' : ''} onClick={() => setWindow(option)}>
+            <button
+              key={option.label}
+              type="button"
+              className={`tech micro${option === window ? ' on' : ''}`}
+              aria-pressed={option === window}
+              onClick={() => setWindow(option)}
+            >
               {option.label}
             </button>
           ))}
         </div>
-        <span className="muted">
-          {state.turns.length} turns · {state.rescues.length} rescues
+        <span className="tech micro muted">
+          {state.turns.length} turns / {state.rescues.length} rescues
         </span>
       </div>
       <div className="timeline-wrap">
@@ -63,7 +68,7 @@ export function TimelinePanel({ state, select }: { state: DebugState; select: Pa
           {rows.map((row, index) => (
             <g key={row} transform={`translate(0, ${index * ROW})`}>
               <rect className="lane-bg" x={0} y={2} width={WIDTH} height={ROW - 4} />
-              <text className="row-label" x={8} y={ROW / 2 + 4} fill={row === 'caller' ? STAGE_COLORS.caller : agentColor(row, state.paneOrder)}>
+              <text className="row-label" x={8} y={ROW / 2 + 4}>
                 {row}
               </text>
             </g>
@@ -85,7 +90,6 @@ export function TimelinePanel({ state, select }: { state: DebugState; select: Pa
                       y1={ROW / 2}
                       x2={x(routed.timestamp_ms)}
                       y2={row * ROW + ROW / 2}
-                      stroke={agentColor(routed.to_agent, state.paneOrder)}
                     />
                   );
                 })}
@@ -106,7 +110,6 @@ export function TimelinePanel({ state, select }: { state: DebugState; select: Pa
                   y={row * ROW + 7}
                   width={Math.max(3, x(end) - left)}
                   height={ROW - 14}
-                  fill={agentColor(turn.agent, state.paneOrder)}
                 />
               </g>
             );
@@ -121,12 +124,11 @@ export function TimelinePanel({ state, select }: { state: DebugState; select: Pa
                 <g key={`${id}-${index}`} onClick={() => select.trace(id)}>
                   <title>{`${id} utility ${attempt.attempt}`}</title>
                   <rect
-                    className={`tl-turn${attempt.decision ? '' : ' open'}`}
+                    className={`tl-turn tl-utility${attempt.decision ? '' : ' open'}`}
                     x={x(start)}
                     y={row * ROW + 7}
                     width={Math.max(3, x(end) - x(start))}
                     height={ROW - 14}
-                    fill={STAGE_COLORS.utility}
                   />
                 </g>
               );

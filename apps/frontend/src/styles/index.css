@@ -9,6 +9,13 @@
   --paper: #e8e6df;
   --muted: #8c8c86;
   --dim: #3e3e3a;
+  /* The two stacks beside the narrow root face: data and labels (.tech,
+     code) set in mono, and spoken or written prose (answers, notes, the
+     transcript). Named so a second page can take them as tokens. */
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    monospace;
+  --font-prose: "Helvetica Neue", Arial, sans-serif;
   color: var(--paper);
   background: var(--black);
   font-family:

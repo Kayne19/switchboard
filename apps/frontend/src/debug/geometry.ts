@@ -1,4 +1,4 @@
-// Pure geometry for the route overlay: wires between anchor rectangles.
+// Pure geometry for the route overlay: lines between anchor rectangles.
 
 export interface Point {
   x: number;
@@ -24,23 +24,20 @@ export function clampToClip(point: Point, clip: Box | undefined, inset = 10): { 
   return { point: { x: point.x, y }, clipped: y !== point.y };
 }
 
-/** A horizontal S-curve from `a` to `b`, either direction. */
+const fixed = (value: number) => value.toFixed(1);
+
+/**
+ * An orthogonal line from `a` to `b`, either direction: across, then along
+ * the vertical halfway between them, then across again. The main page's
+ * diagram edges route the same way.
+ */
 export function wire(a: Point, b: Point): string {
-  const span = Math.abs(b.x - a.x);
-  const dx = Math.max(24, span / 2) * (b.x >= a.x ? 1 : -1);
-  return `M${a.x.toFixed(1)},${a.y.toFixed(1)} C${(a.x + dx).toFixed(1)},${a.y.toFixed(1)} ${(b.x - dx).toFixed(1)},${b.y.toFixed(1)} ${b.x.toFixed(1)},${b.y.toFixed(1)}`;
+  if (Math.abs(a.y - b.y) < 0.5) return `M${fixed(a.x)},${fixed(a.y)} H${fixed(b.x)}`;
+  const middle = (a.x + b.x) / 2;
+  return `M${fixed(a.x)},${fixed(a.y)} H${fixed(middle)} V${fixed(b.y)} H${fixed(b.x)}`;
 }
 
 /** The point halfway along `wire(a, b)`, for its label. */
 export function wireMid(a: Point, b: Point): Point {
   return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-}
-
-/** One continuous path through every point, wiring each consecutive pair. */
-export function chain(points: Point[]): string {
-  if (points.length < 2) return '';
-  let path = wire(points[0], points[1]);
-  for (let index = 1; index < points.length - 1; index += 1)
-    path += ' ' + wire(points[index], points[index + 1]).replace(/^M[^C]+/, 'L' + points[index].x.toFixed(1) + ',' + points[index].y.toFixed(1) + ' ');
-  return path;
 }

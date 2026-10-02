@@ -10,9 +10,9 @@ export function FloorPanel({ state, select }: { state: DebugState; select: PaneS
   return (
     <div className="panel">
       <div className="panel-bar">
-        <h2>Floor gate</h2>
-        <span className="muted">
-          {floors.filter((floor) => !floor.released).length} waiting · {floors.length} total
+        <h2 className="tech">Floor gate</h2>
+        <span className="tech micro muted">
+          {floors.filter((floor) => !floor.released).length} waiting / {floors.length} total
         </span>
       </div>
       <table className="grid">
@@ -44,7 +44,7 @@ export function FloorPanel({ state, select }: { state: DebugState; select: PaneS
                     ))}
               </td>
               <td>{floor.rewrite ? `“${floor.rewrite.rewritten}” (${formatMs(floor.rewrite.latency_ms)})` : '—'}</td>
-              <td>{floor.released?.how ?? <span className="blink">waiting</span>}</td>
+              <td>{floor.released?.how ?? <span className="semantic-orange">waiting</span>}</td>
               <td>{floor.speech ? (floor.speech.delivered ? 'yes' : `no${floor.speech.reason ? `: ${floor.speech.reason}` : ''}`) : '—'}</td>
               <td className="mono">{formatMs((floor.released?.timestamp_ms ?? floor.lastTs) - floor.firstTs)}</td>
             </tr>

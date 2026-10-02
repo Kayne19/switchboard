@@ -1,16 +1,47 @@
-import { agentColor } from './colors';
+import type { ReactNode } from 'react';
+import type { MetricData, SceneObject } from '../controller/types';
+import { CodeViewport } from '../primitives/CodeViewport';
+import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
 import { answerRows, branchText, clockTime, decisionSummary, formatMs, ruleText, type AnswerRow } from './explain';
 import { JsonView } from './Json';
 import type { DebugConfig, JsonValue } from './protocol';
 import { routePath, type DebugState, type FloorTrace, type RouteTrace } from './reducer';
-import type { Selection } from './SwitchboardView';
+import { RoutePathLine, type Selection } from './SwitchboardView';
 
-function Section({ title, children, accent }: { title: string; children: React.ReactNode; accent?: string }) {
+function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="dr-section" style={accent ? { ['--accent' as string]: accent } : undefined}>
-      <h3>{title}</h3>
+    <section className="dr-section">
+      <h3 className="tech micro">{title}</h3>
       {children}
     </section>
+  );
+}
+
+/** Latencies as the main page's metric rows: label left, value right. */
+function Latencies({ rows }: { rows: { label: string; ms: number | undefined }[] }) {
+  const metrics: SceneObject<MetricData>[] = rows.map((row, index) => ({
+    id: `latency-${index}`,
+    type: 'metric',
+    data: { label: row.label, value: formatMs(row.ms), semantic: row.ms === undefined ? 'muted' : 'paper' },
+    createdAt: 0,
+    updatedAt: 0,
+  }));
+  return (
+    <div className="lats">
+      <MetricsPrimitive metrics={metrics} />
+    </div>
+  );
+}
+
+/** Records as JSON in the main page's code viewport. */
+function RawRecords({ records }: { records: unknown[] }) {
+  return (
+    <details className="raw">
+      <summary className="tech micro">{records.length} events</summary>
+      <div className="raw-code">
+        <CodeViewport data={{ source: { text: JSON.stringify(records, null, 2) } }} />
+      </div>
+    </details>
   );
 }
 
@@ -20,15 +51,16 @@ function Bars({ row }: { row: AnswerRow }) {
   return (
     <div className="answer">
       <div className="answer-head">
-        <span className="answer-q">{row.question}</span>
-        {row.selected !== undefined && <span className="answer-sel">→ {row.selected}</span>}
-        {row.confidence !== undefined && !single && <span className="muted">conf {row.confidence.toFixed(2)}</span>}
+        <span className="answer-q tech">{row.question}</span>
+        {row.selected !== undefined && <span className="answer-sel tech micro">→ {row.selected}</span>}
+        {row.confidence !== undefined && !single && <span className="tech micro muted">conf {row.confidence.toFixed(2)}</span>}
       </div>
       {bars.map((bar) => (
         <div key={bar.label} className={`bar-row${bar.selected ? ' sel' : ''}`}>
-          <span className="bar-label">{bar.label}</span>
-          <span className="bar-track">
-            <span className="bar-fill" style={{ width: `${Math.max(0, Math.min(1, bar.value)) * 100}%` }} />
+          <span className="bar-label tech micro">{bar.label}</span>
+          {/* The main page's progress track; the marks are the thresholds. */}
+          <span className="bar-track progress-primitive__track">
+            <span className="progress-primitive__fill" style={{ width: `${Math.max(0, Math.min(1, bar.value)) * 100}%` }} />
             {row.markers.map((marker) => (
               <span key={marker.label} className="bar-mark" style={{ left: `${marker.value * 100}%` }} title={`${marker.label} ${marker.value}`} />
             ))}
@@ -37,15 +69,6 @@ function Bars({ row }: { row: AnswerRow }) {
         </div>
       ))}
       {row.verdict && <div className="verdict">{row.verdict}</div>}
-    </div>
-  );
-}
-
-function Latency({ label, ms }: { label: string; ms: number | undefined }) {
-  return (
-    <div className="lat">
-      <span>{label}</span>
-      <b>{formatMs(ms)}</b>
     </div>
   );
 }
@@ -62,43 +85,29 @@ function TraceDetail({ trace, state }: { trace: RouteTrace; state: DebugState })
   return (
     <>
       <header className="dr-head">
-        <div className="dr-kicker">utterance {trace.id}</div>
+        <div className="dr-kicker tech micro">utterance / {trace.id}</div>
         <div className="dr-title">“{trace.text ?? '…'}”</div>
-        <div className="muted">
-          {clockTime(trace.firstTs)} · caller was talking to <b>{trace.talkingTo ?? '?'}</b>
+        <div className="dr-sub tech micro">
+          {clockTime(trace.firstTs)} / caller was talking to {trace.talkingTo ?? '?'}
         </div>
-        <div className="ci-path">
-          <span className="chip">caller</span>
-          {path.stages.map((stage) => (
-            <span key={stage} className={`chip chip-${stage}`}>
-              {stage}
-            </span>
-          ))}
-          {path.destinations.map((destination, index) => (
-            <span key={index} className="chip chip-dest" style={{ color: agentColor(destination.agent, state.paneOrder) }}>
-              ⇢ {destination.agent}
-            </span>
-          ))}
-          {path.pending && <span className="chip chip-pending">routing…</span>}
-          {path.ended && <span className="chip chip-ended">✕ {path.ended.label}</span>}
-        </div>
+        <RoutePathLine trace={trace} />
       </header>
 
       <Section title="Latency">
-        <div className="lats">
-          <Latency label="jev" ms={trace.jevResponse?.latency_ms} />
-          {trace.utility.map((attempt, index) => (
-            <Latency key={index} label={`utility ${attempt.attempt}`} ms={attempt.decision?.latency_ms} />
-          ))}
-          <Latency label="to first destination" ms={firstRouted ? firstRouted.timestamp_ms - trace.firstTs : undefined} />
-          <Latency label="to first agent output" ms={firstReply ? firstReply.ts - trace.firstTs : undefined} />
-        </div>
+        <Latencies
+          rows={[
+            { label: 'jev', ms: trace.jevResponse?.latency_ms },
+            ...trace.utility.map((attempt) => ({ label: `utility ${attempt.attempt}`, ms: attempt.decision?.latency_ms })),
+            { label: 'to first destination', ms: firstRouted ? firstRouted.timestamp_ms - trace.firstTs : undefined },
+            { label: 'to first agent output', ms: firstReply ? firstReply.ts - trace.firstTs : undefined },
+          ]}
+        />
       </Section>
 
-      <Section title="Jev" accent="var(--jev)">
+      <Section title="Jev">
         {trace.jevResponse ? (
           <>
-            <div className={`kv ${trace.jevResponse.outcome === 'ok' ? '' : 'err'}`}>
+            <div className={`kv${trace.jevResponse.outcome === 'ok' ? '' : ' semantic-red'}`}>
               outcome <b>{trace.jevResponse.outcome}</b> in {formatMs(trace.jevResponse.latency_ms)}
               {trace.jevResponse.error ? ` — ${trace.jevResponse.error}` : ''}
             </div>
@@ -110,23 +119,23 @@ function TraceDetail({ trace, state }: { trace: RouteTrace; state: DebugState })
           <div className="muted">{trace.jevRequest ? (path.ended ? 'Jev did not answer before the trace ended.' : 'waiting for Jev…') : 'Jev was not asked.'}</div>
         )}
         {config && (
-          <div className="thresholds">
-            thresholds: for_current_agent lower {config.jev_for_current_agent_lower} · upper {config.jev_for_current_agent_upper} · action{' '}
+          <div className="thresholds tech micro">
+            thresholds / for_current_agent lower {config.jev_for_current_agent_lower} / upper {config.jev_for_current_agent_upper} / action{' '}
             {config.jev_action_threshold}
           </div>
         )}
         {trace.jevRequest && (
           <details className="raw">
-            <summary>request state</summary>
+            <summary className="tech micro">request state</summary>
             <JsonView value={trace.jevRequest.state} openDepth={1} />
           </details>
         )}
       </Section>
 
       {trace.decision && (
-        <Section title="Rule fired" accent="var(--jev)">
+        <Section title="Rule fired">
           <div className="rule">
-            <span className="tag">{trace.decision.rule}</span> decided by {trace.decision.decided_by}: <b>{trace.decision.action}</b>
+            <span className="tag tech micro">{trace.decision.rule}</span> decided by {trace.decision.decided_by}: <b>{trace.decision.action}</b>
             {trace.decision.target ? ` → ${trace.decision.target}` : ''} ({trace.decision.mode})
           </div>
           <p>{ruleText(trace.decision.rule)}</p>
@@ -140,7 +149,7 @@ function TraceDetail({ trace, state }: { trace: RouteTrace; state: DebugState })
           record.kind === 'pbx_branch' ? (
             <Section key={record.seq} title="PBX branch">
               <div className="rule">
-                <span className="tag">{record.branch}</span> {branchText(record.branch)}
+                <span className="tag tech micro">{record.branch}</span> {branchText(record.branch)}
               </div>
               <p className="muted">why: {record.reason}</p>
             </Section>
@@ -148,23 +157,23 @@ function TraceDetail({ trace, state }: { trace: RouteTrace; state: DebugState })
         )}
 
       {trace.utility.length > 0 && (
-        <Section title="Utility" accent="var(--utility)">
+        <Section title="Utility">
           {trace.utility.map((attempt, index) => (
             <div key={index} className="attempt">
               <div className="attempt-head">
-                <span className="tag">{attempt.attempt}</span>
+                <span className="tag tech micro">{attempt.attempt}</span>
                 <b>{decisionSummary(attempt.decision?.decision)}</b>
                 <span className="muted">{formatMs(attempt.decision?.latency_ms)}</span>
               </div>
               {attempt.request && (
                 <details className="raw">
-                  <summary>request</summary>
-                  <pre className="pre-wrap">{attempt.request.prompt}</pre>
+                  <summary className="tech micro">request</summary>
+                  <pre className="rich-text__code-block">{attempt.request.prompt}</pre>
                 </details>
               )}
               {attempt.decision && (
                 <details className="raw">
-                  <summary>decision</summary>
+                  <summary className="tech micro">decision</summary>
                   <JsonView value={attempt.decision.decision} openDepth={3} />
                 </details>
               )}
@@ -174,7 +183,7 @@ function TraceDetail({ trace, state }: { trace: RouteTrace; state: DebugState })
       )}
 
       {(trace.operatorHop || trace.operatorTool) && (
-        <Section title="Operator" accent="var(--operator)">
+        <Section title="Operator">
           {trace.operatorHop && (
             <div className="kv">
               hop outcome <b>{trace.operatorHop.outcome}</b>: “{trace.operatorHop.text}”
@@ -201,7 +210,7 @@ function TraceDetail({ trace, state }: { trace: RouteTrace; state: DebugState })
         )}
         {!path.ended && path.destinations.length === 0 && <div className="muted">none yet</div>}
         {path.destinations.map((destination, index) => (
-          <div key={index} className="dest" style={{ borderColor: agentColor(destination.agent, state.paneOrder) }}>
+          <div key={index} className="dest">
             <b>{destination.agent}</b>{' '}
             <span className="muted">
               via {destination.via} · {destination.mode || '—'}
@@ -217,10 +226,7 @@ function TraceDetail({ trace, state }: { trace: RouteTrace; state: DebugState })
       </Section>
 
       <Section title="Raw events">
-        <details className="raw">
-          <summary>{trace.records.length} events</summary>
-          <JsonView value={trace.records as unknown as JsonValue} openDepth={1} />
-        </details>
+        <RawRecords records={trace.records} />
       </Section>
     </>
   );
@@ -231,13 +237,13 @@ function FloorDetail({ floor }: { floor: FloorTrace }) {
   return (
     <>
       <header className="dr-head">
-        <div className="dr-kicker">floor message from {floor.agent}</div>
+        <div className="dr-kicker tech micro">floor message / {floor.agent}</div>
         <div className="dr-title">“{floor.message || '…'}”</div>
-        <div className="muted">
-          {clockTime(floor.firstTs)} · {floor.released ? `released (${floor.released.how})` : 'waiting'}
+        <div className="dr-sub tech micro">
+          {clockTime(floor.firstTs)} / {floor.released ? `released (${floor.released.how})` : 'waiting'}
         </div>
       </header>
-      <Section title="Path back to the caller" accent="var(--floor)">
+      <Section title="Path back to the caller">
         <ol className="floor-steps">
           <li className={floor.requested ? 'done' : ''}>request_to_speak {floor.requested ? '✓' : '—'}</li>
           <li className={floor.heldTs !== undefined ? 'done' : ''}>held {floor.heldTs !== undefined ? clockTime(floor.heldTs) : '—'}</li>
@@ -258,12 +264,10 @@ function FloorDetail({ floor }: { floor: FloorTrace }) {
             </li>
           )}
         </ol>
-        <div className="lats">
-          <Latency label="waited" ms={(floor.released?.timestamp_ms ?? floor.lastTs) - floor.firstTs} />
-        </div>
+        <Latencies rows={[{ label: 'waited', ms: (floor.released?.timestamp_ms ?? floor.lastTs) - floor.firstTs }]} />
       </Section>
       {answers.length > 0 && (
-        <Section title="Jev good_moment answers" accent="var(--jev)">
+        <Section title="Jev good_moment answers">
           {answers.map((record) =>
             record.kind === 'jev_response' ? (
               <div key={record.seq}>
@@ -276,10 +280,7 @@ function FloorDetail({ floor }: { floor: FloorTrace }) {
         </Section>
       )}
       <Section title="Raw events">
-        <details className="raw">
-          <summary>{floor.records.length} events</summary>
-          <JsonView value={floor.records as unknown as JsonValue} openDepth={1} />
-        </details>
+        <RawRecords records={floor.records} />
       </Section>
     </>
   );
@@ -291,8 +292,8 @@ export function DetailDrawer({ selection, state, onClose }: { selection: Selecti
   const floor = selection.type === 'floor' ? state.floors[selection.id] : undefined;
   return (
     <aside className="drawer" aria-label="route detail">
-      <button type="button" className="drawer-close" onClick={onClose} aria-label="close">
-        ✕
+      <button type="button" className="drawer-close tech micro" onClick={onClose} aria-label="close">
+        close
       </button>
       <div className="drawer-body">
         {trace && <TraceDetail trace={trace} state={state} />}
