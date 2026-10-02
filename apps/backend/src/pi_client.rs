@@ -608,8 +608,10 @@ pub struct ProjectTurn {
     pub ended: bool,
     pub text: String,
 }
+/// Answers whether the application admitted a self-woken turn's start as an
+/// operation of its own; false for every other report.
 pub type TurnCallback =
-    Arc<dyn Fn(ProjectTurn) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+    Arc<dyn Fn(ProjectTurn) -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>;
 /// Called once when the host reports that a project session closed. The PBX
 /// uses this to evict a background resident without waiting for another call.
 pub type SessionClosedCallback =
@@ -725,7 +727,7 @@ impl ProjectInner {
         let Ok(mut turn) = self.autonomous_turn.lock() else {
             return false;
         };
-        if turn.is_some() || self.has_turn_collector() {
+        if turn.is_some() {
             return false;
         }
         *turn = Some(AutonomousTurn {
@@ -805,13 +807,19 @@ impl ProjectInner {
         }
     }
 
-    async fn report_turn(&self, event: ProjectTurn) {
+    /// Reports a turn boundary to the application; true when it admitted a
+    /// self-woken start as an operation of its own.
+    async fn report_turn(&self, event: ProjectTurn) -> bool {
         let Some(callback) = &self.on_turn else {
-            return;
+            return false;
         };
         let callback = Arc::clone(callback);
-        if let Err(panic) = AssertUnwindSafe(callback(event)).catch_unwind().await {
-            tracing::error!(label = %self.label, panic = %panic_message(&panic), "turn callback panicked");
+        match AssertUnwindSafe(callback(event)).catch_unwind().await {
+            Ok(admitted) => admitted,
+            Err(panic) => {
+                tracing::error!(label = %self.label, panic = %panic_message(&panic), "turn callback panicked");
+                false
+            }
         }
     }
 
@@ -929,7 +937,16 @@ impl Drop for Collecting<'_> {
         if let Ok(mut turn) = self.0.turn.lock() {
             turn.take();
         }
-        self.0.busy.store(false, Ordering::Release);
+        // A run the host started right behind this turn keeps the session
+        // busy. Checked under the lock its start and finish set `busy` under,
+        // so neither can land between the check and the store.
+        let Ok(autonomous) = self.0.autonomous_turn.lock() else {
+            self.0.busy.store(false, Ordering::Release);
+            return;
+        };
+        if autonomous.is_none() {
+            self.0.busy.store(false, Ordering::Release);
+        }
     }
 }
 
@@ -1425,30 +1442,44 @@ async fn pump(
                     let cause = event["cause"].as_str().unwrap_or("unknown").to_owned();
                     let turn_id = event["turn_id"].as_str().map(str::to_owned);
                     if matches!(cause.as_str(), "autonomous" | "unknown") {
+                        let start = ProjectTurn {
+                            instance_id: inner.instance_id,
+                            token: inner.token(),
+                            turn_id: turn_id.clone(),
+                            cause: cause.clone(),
+                            ended: false,
+                            text: String::new(),
+                        };
                         if inner.has_turn_collector() {
-                            // A daemon may report a nested autonomous run while
-                            // the caller's turn is still being collected. Keep
-                            // the existing collector authoritative.
-                            inner.to_turn(TurnFrame::Event { seq, event });
+                            // The host opens a turn only once the one before
+                            // it settled. So a self-woken start seen while the
+                            // caller's prompt is collected either carries that
+                            // prompt (it reached a session that had just woken
+                            // itself), and the collector keeps it, or it follows
+                            // the caller's turn straight away: a run resumed
+                            // after an external abort, or a wake queued behind
+                            // the turn. The application tells them apart: it
+                            // admits the start only once the caller's operation
+                            // has closed, which the host's settle report of
+                            // that turn does (`settle_turn`).
+                            if inner.autonomous_authority().is_none()
+                                && inner.report_turn(start).await
+                            {
+                                inner.start_autonomous(turn_id, cause);
+                                inner.clear_ignored_autonomous();
+                            } else {
+                                inner.to_turn(TurnFrame::Event { seq, event });
+                            }
                             continue;
                         }
                         if inner.start_autonomous(turn_id.clone(), cause.clone()) {
                             inner.clear_ignored_autonomous();
-                            inner
-                                .report_turn(ProjectTurn {
-                                    instance_id: inner.instance_id,
-                                    token: inner.token(),
-                                    turn_id,
-                                    cause,
-                                    ended: false,
-                                    text: String::new(),
-                                })
-                                .await;
+                            inner.report_turn(start).await;
                         } else {
                             inner.ignore_autonomous(turn_id.as_deref());
                         }
-                        // Whether admitted or refused, an autonomous start is
-                        // never part of a caller prompt collector.
+                        // With no prompt being collected, an autonomous
+                        // start, admitted or refused, is no caller's turn.
                         continue;
                     } else {
                         inner.clear_ignored_autonomous();
@@ -1521,7 +1552,25 @@ async fn pump(
                 if inner.autonomous_authority().is_some() {
                     continue;
                 }
+                let settled = (kind == "turn_end")
+                    .then(|| event["turn_id"].as_str().map(str::to_owned))
+                    .flatten();
                 inner.to_turn(TurnFrame::Event { seq, event });
+                if let Some(turn_id) = settled {
+                    // The caller's turn settled on the host. Its operation
+                    // closes on this report, not when the prompt returns, so
+                    // a run the host starts right behind it is admitted.
+                    inner
+                        .report_turn(ProjectTurn {
+                            instance_id: inner.instance_id,
+                            token: inner.token(),
+                            turn_id: Some(turn_id),
+                            cause: "input".into(),
+                            ended: true,
+                            text: String::new(),
+                        })
+                        .await;
+                }
             }
             SessionFrame::Snapshot { seq, info } => {
                 if inner.autonomous_authority().is_some() && info["turn_open"] == false {

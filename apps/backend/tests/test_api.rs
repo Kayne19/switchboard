@@ -5702,6 +5702,179 @@ async fn a_caller_message_steers_an_autonomous_project_turn() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// A call on alpha whose host stamps turn ids, with a caller turn in flight:
+/// the turn worker has prompted alpha with "run the tests", and the host has
+/// opened that turn (`turn-2`, after the intro's `turn-1`) and holds it.
+/// Returns the state, the host's log, alpha's call token and its instance,
+/// and the turn worker.
+#[cfg(unix)]
+async fn alpha_caller_turn_in_flight(
+    root: &std::path::Path,
+) -> (AppState, FakeLog, String, u64, tokio::task::JoinHandle<()>) {
+    let mut host = FakeHostAgent::new(Box::new(|_, message| {
+        if message.contains("run the tests") {
+            vec![Step::Hold]
+        } else {
+            vec![Step::Event(json!({"kind":"text","text":"Alpha here."}))]
+        }
+    }));
+    host.turn_ids = true;
+    let (state, log) = state_with_agents_and_jev(root, host);
+    let (token, instance_id) = foreground_alpha_turn(&state).await;
+    let generation = state.0.coordinator.generation();
+    state.0.queued_turns.store(1, Ordering::Release);
+    let worker = tokio::spawn(process_turns(state.clone()));
+    state
+        .0
+        .turns
+        .send(("caller-held".into(), "run the tests".into(), generation))
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(5), async {
+        while state
+            .0
+            .coordinator
+            .accept_side_effect(&token, Some("turn-2"), Some("input"))
+            .is_err()
+        {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("the caller turn is running on the host");
+    (state, log, token, instance_id, worker)
+}
+
+/// The host settles the caller's turn and, at once, opens one nobody caused:
+/// the run the caller resumed in the TUI after aborting it (#109), or the
+/// wake a child agent's exit queued behind the caller's turn (#107). Both
+/// frames reach the session before the service has seen the prompt return.
+#[cfg(unix)]
+fn caller_turn_settles_into_a_self_woken_one(state: &AppState, turn_id: &str) {
+    alpha_host_event(state, json!({"kind":"turn_end","turn_id":"turn-2"}));
+    alpha_host_event(
+        state,
+        json!({"kind":"turn_start","cause":"autonomous","turn_id":turn_id}),
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_turn_resumed_after_an_external_abort_can_speak() {
+    let root = scratch_root("autonomous-after-abort");
+    let (state, _host, token, instance_id, worker) = alpha_caller_turn_in_flight(&root).await;
+
+    caller_turn_settles_into_a_self_woken_one(&state, "auto-resumed");
+
+    until_autonomous(&state, instance_id).await;
+    let display = module_call(
+        &state,
+        AgentCall {
+            call: "display".into(),
+            token: token.clone(),
+            turn_id: Some("auto-resumed".into()),
+            cause: Some("autonomous".into()),
+            args: diagram_show(),
+        },
+    )
+    .await;
+    assert_eq!(display["status"], "accepted", "{display}");
+    worker.abort();
+    let _ = worker.await;
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_self_woken_start_before_the_caller_turn_settles_stays_the_callers() {
+    let root = scratch_root("autonomous-before-caller-settles");
+    let (state, _host, token, instance_id, worker) = alpha_caller_turn_in_flight(&root).await;
+
+    // No settle report for the caller's turn came first, so this start
+    // cannot be a run behind it: the caller's operation keeps the leg.
+    alpha_host_event(
+        &state,
+        json!({"kind":"turn_start","cause":"autonomous","turn_id":"auto-early"}),
+    );
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert!(!state
+        .0
+        .autonomous_operations
+        .lock()
+        .await
+        .contains_key(&instance_id));
+    assert!(state
+        .0
+        .coordinator
+        .accept_side_effect(&token, Some("auto-early"), Some("autonomous"))
+        .is_err());
+    assert!(state
+        .0
+        .coordinator
+        .accept_side_effect(&token, Some("turn-2"), Some("input"))
+        .is_ok());
+    assert!(state.0.turn_in_flight.load(Ordering::Acquire));
+
+    // The caller's turn still ends as its own.
+    alpha_host_event(&state, json!({"kind":"turn_end","turn_id":"turn-2"}));
+    timeout(Duration::from_secs(1), async {
+        while state.0.turn_in_flight.load(Ordering::Acquire) {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("the caller turn settled");
+    worker.abort();
+    let _ = worker.await;
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_caller_message_steers_a_turn_woken_as_the_caller_turn_settles() {
+    let root = scratch_root("autonomous-steer-after-caller");
+    let (state, host, _token, _instance_id, worker) = alpha_caller_turn_in_flight(&root).await;
+
+    caller_turn_settles_into_a_self_woken_one(&state, "auto-woken");
+
+    // The caller's turn is over on both sides; only the woken one runs.
+    timeout(Duration::from_secs(1), async {
+        while state.0.turn_in_flight.load(Ordering::Acquire) {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("the caller turn settled");
+    let mut events = state.0.events.subscribe();
+    let generation = state.0.coordinator.generation();
+    dispatch_routed_transcript(
+        &state,
+        "steer-woken",
+        generation,
+        "what branch are you on?".into(),
+    )
+    .await;
+    assert_eq!(
+        host.named("steer")
+            .iter()
+            .map(|args| args["message"].as_str().unwrap_or_default().to_owned())
+            .collect::<Vec<_>>(),
+        vec!["what branch are you on?".to_owned()],
+        "the message was queued behind the woken turn, not steered into it"
+    );
+    let queued = next_event_of(&mut events, "queued").await;
+    assert_eq!(queued["id"], "steer-woken");
+    assert_eq!(queued["steered"], true);
+    worker.abort();
+    let _ = worker.await;
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
 #[cfg(unix)]
 fn autonomous_turn(token: String, instance_id: u64, turn_id: Option<&str>) -> ProjectTurn {
     ProjectTurn {
