@@ -408,20 +408,13 @@ fn the_llm_call_state_names_foreground_background_and_ready_work() {
         display_ready: true,
     }]);
     let text = summary.render_for_llm();
+    assert!(text.contains("The caller is on: switchboard."), "{text}");
     assert!(
-        text.contains("The caller is talking to: switchboard."),
+        text.contains("- grape: idle, in the background, has a display the caller has not seen"),
         "{text}"
     );
     assert!(
-        text.contains(
-            "- grape: idle, in the background, has a display ready that the caller has not seen"
-        ),
-        "{text}"
-    );
-    assert!(
-        text.contains(
-            "- switchboard: busy, in the foreground; last asked: \"draw the Jev diagram\""
-        ),
+        text.contains("- switchboard: busy, in front; last asked: \"draw the Jev diagram\""),
         "{text}"
     );
     assert!(

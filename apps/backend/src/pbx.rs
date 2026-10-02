@@ -80,9 +80,11 @@ const AGENT_BRIEF_HEADER: &str = "[SWITCHBOARD VOICE BRIEF]\nYou are on a voice 
 const AGENT_BRIEF_BODY: &str = "Reaching the caller:\n- switchboard.speak(text): say it out loud, in plain spoken words. Anything that needs code, paths, lists or many numbers goes on the screen.\n- switchboard.display(...): put something on their screen. The types, data shapes and layout are in the switchboard skill's SKILL.md. Read it before your first display.\n- switchboard.view(): see what is on their screen now.\n- switchboard.request_to_speak(message, reason): how you get their attention while they are on other work. reason is finished, needs_decision or problem. message is what they should hear, said the way you would say it: the result, the question with its options, or what broke and what you need from them. Not a teaser.\n\nReport the things the caller asked for when they are done or stuck. Keep the steps along the way to yourself. While the caller is on other work, your displays wait until they come back to you. So in that time never say something is on screen; say it is ready.\n\nDecisions while the caller is quiet or away: make the calls that are cheap to undo, carry on, and say what you chose when you next report. Wait for the caller on decisions that set direction, that they would want to own, or that are expensive to reverse. While you wait, keep going on whatever does not depend on the answer.\n\nKeep yourself free to talk. You are the one the caller deals with. Give hands-on work (edits, builds, test runs, long investigations) to subagents that run your own model, several at once when the work splits. For brute-force searching and reading, use a cheaper, faster model, so that the big contexts stay small. Subagents cannot reach the caller. What they find comes to you, and you say it.\n\nYour context is this project's working memory for the call, and it costs. Keep it lean: subagents carry the detail and you keep the results. When a piece of work is truly finished and nothing for it is still running, write down what should outlast it, in an issue, a doc or a commit, and then compact yourself. Don't compact while work is in flight or in the middle of a discussion. When you compact, make sure the summary keeps what is still open and what was decided. After a compaction, when you need something from earlier in the call, search your own conversation log (its path is in your system prompt) instead of guessing. A session nobody uses is ended, and the next call starts fresh, so anything you did not write down is gone.\n\nMoving the caller to other work, model changes and hanging up happen before your turn, and you have no tools for them. If the caller asks for something that belongs to another project, say so briefly. When they name that project, the call takes them there.\n";
 const AGENT_BRIEF_END: &str = "[END OF VOICE BRIEF]";
 
+/// Steered into a busy session when the caller moves on to other work.
+const BACKGROUND_NOTICE: &str = "[switchboard] The caller has moved on to other work. Keep going quietly. They cannot hear speak() now, and your displays wait until they come back to you. When something they asked for is done or stuck, or you need a decision, send it with request_to_speak in the words they should hear.";
 /// Sent with the first caller words after a background agent is brought
 /// forward, so its background instructions stop applying.
-const FOREGROUND_NOTICE: &str = "[switchboard] The caller brought you forward: you are in the foreground now. speak() is heard directly, display() shows on the caller's screen, and any display you held is on screen now. The caller's words follow.";
+const FOREGROUND_NOTICE: &str = "[switchboard] The caller came back to you: you are in the foreground now. speak() is heard directly, and anything you held is on the screen. Do not repeat what you already sent them unless they ask. Their words follow.";
 /// Instructions for the separate, stateless process. This is code-owned so
 /// deploying the utility never requires another environment setting.
 const UTILITY_SYSTEM_PROMPT: &str = "You are a background helper on a voice call. You never talk to the caller and never answer questions. Each request needs exactly one tool call. Make it and write nothing else.
@@ -147,48 +149,44 @@ fn build_intro_prompt(
     project: &Project,
     prepare_report: Option<&crate::prewarm::PrepareReport>,
 ) -> String {
-    let mut prompt = String::new();
-    prompt.push_str("Address the request immediately. Do not greet the caller and do not mention tool or connection details.\n\n");
+    let mut prompt = String::from("The caller was just put through to you with this request. They know where they are, so skip greetings and do not restate it. Just pick it up.\n\n");
 
-    prompt.push_str("[PROJECT METADATA]\n");
-    prompt.push_str(&format!("ID: {}\n", project.id));
-    if !project.description.is_empty() {
-        prompt.push_str(&format!("Description: {}\n", project.description));
-    }
-
-    prompt.push_str("\n[CALLER TRANSCRIPT]\n");
+    prompt.push_str("[CALLER REQUEST]\n");
     if context.exact_caller_transcript.is_empty() {
-        prompt.push_str("No caller transcript was supplied.\n");
+        prompt.push_str("(none yet: the caller opened this project from the page. Say nothing now. Their words come next. Answer them right away and keep it short.)\n");
     } else {
-        prompt.push_str(&format!(
-            "Bytes: {}\n",
-            context.exact_caller_transcript.len()
-        ));
         prompt.push_str(&context.exact_caller_transcript);
         prompt.push('\n');
     }
 
     if !context.derived_intent.is_empty() {
-        prompt.push_str("\n[DERIVED INTENT]\n");
+        prompt.push_str("[WHAT THEY SEEM TO WANT]\n");
         prompt.push_str(&context.derived_intent);
         prompt.push('\n');
     }
 
+    prompt.push_str("[PROJECT]\n");
+    if project.description.is_empty() {
+        prompt.push_str(&project.id);
+    } else {
+        prompt.push_str(&format!("{} - {}", project.id, project.description));
+    }
+    prompt.push('\n');
+
     if let Some(rep) = prepare_report {
-        prompt.push_str("\n[STARTUP PREPARE REPORT (TIMESTAMPED SNAPSHOT)]\n");
-        prompt.push_str(&format!("Timestamp Unix Ms: {}\n", rep.timestamp_unix_ms));
-        prompt.push_str(&format!("Source: {:?}\n", rep.source));
-        prompt.push_str(&format!("Outcome: {:?}\n", rep.outcome));
-        prompt.push_str(&format!("Duration Ms: {}\n", rep.duration_ms));
+        prompt.push_str("[STARTUP CHECK]\n");
+        prompt.push_str(&format!("{:?} {:?}", rep.source, rep.outcome));
         if let Some(code) = rep.exit_code {
-            prompt.push_str(&format!("Exit Code: {code}\n"));
+            prompt.push_str(&format!(", exit {code}"));
         }
-        if !rep.stdout.is_empty() {
-            prompt.push_str(&format!("Stdout: {}\n", rep.stdout));
+        prompt.push_str(&format!(", {} ms.", rep.duration_ms));
+        for output in [&rep.stdout, &rep.stderr] {
+            if !output.is_empty() {
+                prompt.push(' ');
+                prompt.push_str(output);
+            }
         }
-        if !rep.stderr.is_empty() {
-            prompt.push_str(&format!("Stderr: {}\n", rep.stderr));
-        }
+        prompt.push_str("\nFor you only. Mention it only if it matters to the request.\n");
     }
 
     prompt
@@ -877,7 +875,7 @@ impl Switchboard {
         tracing::warn!(%project, "the agent on the line closed on its host; returning to the operator");
         self.drop_agent().await;
         self.operator_note = Some(format!(
-            "The call to {project} ended: its session closed on the host."
+            "Work on {project} stopped: its session closed on the host."
         ));
         true
     }
@@ -1426,9 +1424,7 @@ impl Switchboard {
             return;
         }
         if previous.busy() {
-            let _ = previous
-                .steer("[switchboard] The caller is now listening to another agent. Continue your work quietly. While you are in the background, displays are held until the caller brings you forward; never say a display is on screen. When you have something for the caller, use request_to_speak with the actual words they should hear: the result, decision question, or problem—not a teaser.")
-                .await;
+            let _ = previous.steer(BACKGROUND_NOTICE).await;
         }
         let state = if previous.busy() { "busy" } else { "idle" };
         let registered = self.register_background_session(previous_label.clone(), previous);
@@ -1853,7 +1849,10 @@ impl Switchboard {
         let Some(session) = self.agent.clone() else {
             tracing::warn!(route = %self.coordinator.route(), "the project leg is gone; returning to the operator");
             return self
-                .return_operator_ctx(context, "project session is gone")
+                .return_operator_ctx(
+                    context,
+                    "The work the caller was on stopped: its session is gone.",
+                )
                 .await;
         };
         // A synthetic/background token can coexist in lifecycle tests while
@@ -1871,7 +1870,7 @@ impl Switchboard {
                 let name = self.route_label();
                 tracing::warn!(route = %name, %error, "the project leg failed mid-prompt; returning to the operator");
                 self.drop_agent().await;
-                self.operator_note = Some(format!("The call to {name} ended: {detail}"));
+                self.operator_note = Some(stopped_note(&name, &detail));
                 return self.reply(
                     [format!(
                         "{name} stopped responding: {detail}. You're back with the operator."
@@ -1889,7 +1888,7 @@ impl Switchboard {
             let name = self.route_label();
             tracing::warn!(route = %name, %detail, "the project leg failed its turn; returning to the operator");
             self.drop_agent().await;
-            self.operator_note = Some(format!("The call to {name} ended: {detail}"));
+            self.operator_note = Some(stopped_note(&name, &detail));
             return self.reply(
                 [format!(
                     "{name} stopped responding: {detail}. You're back with the operator."
@@ -1916,7 +1915,7 @@ impl Switchboard {
                     self.drop_agent().await;
                 }
                 self.operator_note = Some(format!(
-                    "Transfer to {spoken:?} was ambiguous. Candidates: {candidates_text}.{}",
+                    "Couldn't tell which project {spoken:?} meant: {candidates_text}.{}",
                     from.map(|name| format!(" The caller was on {name}."))
                         .unwrap_or_default()
                 ));
@@ -1939,7 +1938,7 @@ impl Switchboard {
                     self.drop_agent().await;
                 }
                 self.operator_note = Some(format!(
-                    "Transfer to {spoken:?} failed. Known projects: {known_text}.{}",
+                    "No project matches {spoken:?}. Registered: {known_text}.{}",
                     from.map(|name| format!(" The caller was on {name}."))
                         .unwrap_or_default()
                 ));
@@ -1984,7 +1983,7 @@ impl Switchboard {
             Ok(plan) => plan,
             Err(err) => {
                 tracing::warn!(project = %project.id, error = %err, "the project's host is not ready");
-                self.operator_note = Some(format!("Transfer to {} failed: {err}", project.id));
+                self.operator_note = Some(open_failed_note(&project.id, &err));
                 return self.reply_transfer_error(
                     format!("I couldn't get {} on the line: {err}", project.id),
                     Some(err),
@@ -2001,7 +2000,7 @@ impl Switchboard {
             Ok(m) => m,
             Err(e) => {
                 tracing::warn!(project = %project.id, error = %e, "transfer model selection failed");
-                self.operator_note = Some(format!("Transfer to {} failed: {e}", project.id));
+                self.operator_note = Some(open_failed_note(&project.id, &e.to_string()));
                 return self.reply_transfer_error(
                     format!("I couldn't get {} on the line: {e}", project.id),
                     Some(e),
@@ -2052,7 +2051,7 @@ impl Switchboard {
                 );
                 self.rollback_startup(format!("startup failed: {e}"));
                 self.set_active_session(live_session.clone()).await;
-                self.operator_note = Some(format!("Transfer to {} failed: {e}", project.id));
+                self.operator_note = Some(open_failed_note(&project.id, &e.to_string()));
                 return self.reply_transfer_error(
                     format!("I couldn't get {} on the line: {e}", project.id),
                     Some(e.to_string()),
@@ -2090,7 +2089,7 @@ impl Switchboard {
             self.announce_agent_state(&project.id, "finished").await;
             self.set_active_session(live_session.clone()).await;
             self.rollback_startup(format!("intro failed: {detail}"));
-            self.operator_note = Some(format!("Transfer to {} failed: {detail}", project.id));
+            self.operator_note = Some(open_failed_note(&project.id, &detail));
             return self.reply_transfer_error(
                 format!("{} didn't pick up: {detail}", project.id),
                 Some(detail),
@@ -2679,8 +2678,9 @@ impl Switchboard {
                 self.rollback_startup(format!("model change failed: {error}"));
                 self.drop_agent().await;
                 self.operator_note = Some(format!(
-                    "{} could not be switched to {spec}: {error}",
-                    project.id
+                    "Couldn't move {} to {spec}: {}.",
+                    project.id,
+                    error.to_string().trim_end_matches('.')
                 ));
                 return self.reply(
                     [format!(
@@ -2702,13 +2702,13 @@ impl Switchboard {
             None
         } else {
             let prompt = format!(
-                "[switchboard] You are now on {spec}.{} The caller asked: {}.",
+                "[switchboard] This session now runs on {spec}.{} The caller made the change, so do not announce it. Their request: {}.",
                 if keep_context {
                     ""
                 } else {
-                    " The earlier conversation was deliberately cleared."
+                    " The earlier conversation was cleared on purpose."
                 },
-                intent.trim()
+                intent.trim().trim_end_matches('.')
             );
             let turn = match session.prompt(&prompt).await {
                 Ok(turn) => turn,
@@ -2730,8 +2730,9 @@ impl Switchboard {
                 self.rollback_startup(format!("prompt failed: {detail}"));
                 self.drop_agent().await;
                 self.operator_note = Some(format!(
-                    "{} could not be switched to {spec}: {detail}",
-                    project.id
+                    "Couldn't move {} to {spec}: {}.",
+                    project.id,
+                    detail.trim_end_matches('.')
                 ));
                 return self.reply(
                     [format!(
@@ -2944,7 +2945,7 @@ impl Switchboard {
         let left = route;
         tracing::info!(%left, "caller hung up the project leg from the page");
         self.drop_agent().await;
-        self.operator_note = Some(format!("The caller dropped the line to {left}."));
+        self.operator_note = Some(format!("The caller hung up {left} from the page."));
         Some(left)
     }
 }
@@ -2954,6 +2955,16 @@ fn is_confirmation(text: &str) -> bool {
         text.trim().to_ascii_lowercase().as_str(),
         "yes" | "yeah" | "yep" | "confirm" | "do it" | "stop it"
     )
+}
+
+/// The operator's note when work on `name` stopped under the caller.
+fn stopped_note(name: &str, detail: &str) -> String {
+    format!("Work on {name} stopped: {}.", detail.trim_end_matches('.'))
+}
+
+/// The operator's note when `project` could not be opened for the caller.
+fn open_failed_note(project: &str, error: &str) -> String {
+    format!("Couldn't open {project}: {}.", error.trim_end_matches('.'))
 }
 
 /// `CALL_VOICE` joined with the persona, or alone when there is none.

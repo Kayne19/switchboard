@@ -463,7 +463,7 @@ async fn transfer_ctx_ambiguous_project_returns_candidate_options() {
         .operator_note
         .as_deref()
         .unwrap_or("")
-        .contains("was ambiguous"));
+        .contains("Couldn't tell which project \"shared\" meant: proj-a, proj-b."));
 }
 
 #[tokio::test]
@@ -490,7 +490,7 @@ async fn jev_transfer_omits_the_internal_reason_from_the_intro_prompt() {
     assert_eq!(reply.route, "alpha");
     let prompt = prompts(&log).into_iter().next().expect("intro prompt");
     assert!(prompt.contains("put me through"), "{prompt}");
-    assert!(!prompt.contains("[DERIVED INTENT]"), "{prompt}");
+    assert!(!prompt.contains("[WHAT THEY SEEM TO WANT]"), "{prompt}");
     assert!(!prompt.contains("internal Jev reason"), "{prompt}");
     board.shutdown().await;
 }
@@ -1024,7 +1024,28 @@ fn unicode_payload_preserved_in_transfer_context_and_intro_prompt() {
     let intro = build_intro_prompt(&context, &project, None);
     assert!(intro.contains(unicode_text));
     assert!(intro.contains("intent with 日本語"));
-    assert!(intro.contains(&format!("Bytes: {}", unicode_text.len())));
+    assert!(!intro.contains("Bytes:"), "{intro}");
+    assert!(
+        intro.contains("[PROJECT]\nalpha - Alpha project"),
+        "{intro}"
+    );
+}
+
+#[test]
+fn an_intro_from_the_page_says_to_wait_for_the_callers_words() {
+    let project = Project {
+        id: "alpha".into(),
+        description: String::new(),
+        aliases: vec![],
+        host: None,
+        cwd: "/srv/alpha".into(),
+        model: None,
+        prepare: String::new(),
+    };
+    let intro = build_intro_prompt(&TransferContext::default(), &project, None);
+    assert!(intro.contains("[CALLER REQUEST]\n(none yet:"), "{intro}");
+    assert!(intro.contains("Say nothing now."), "{intro}");
+    assert!(!intro.contains("[STARTUP CHECK]"), "{intro}");
 }
 
 #[test]
@@ -1198,7 +1219,7 @@ async fn a_transfer_to_a_host_that_is_not_connected_is_refused_with_the_reason()
         .operator_note
         .as_deref()
         .unwrap()
-        .starts_with("Transfer to alpha failed"));
+        .starts_with("Couldn't open alpha:"));
 }
 
 #[tokio::test]
@@ -1257,7 +1278,7 @@ async fn the_voice_brief_rides_on_the_first_prompt_and_again_after_a_compaction(
         .map(|prompt| prompt.starts_with("[SWITCHBOARD VOICE BRIEF]"))
         .collect();
     assert_eq!(briefed, [true, false, true, false], "{prompts:#?}");
-    assert!(prompts[0].contains("[PROJECT METADATA]"));
+    assert!(prompts[0].contains("[PROJECT]"));
     assert!(
         prompts[2].ends_with("[END OF VOICE BRIEF]\n\nnext line"),
         "{}",
@@ -1570,7 +1591,7 @@ async fn a_fresh_start_ends_the_session_and_makes_a_new_one() {
     let prompts = prompts(&log);
     assert_eq!(prompts.len(), 2);
     assert!(prompts[1].starts_with("[SWITCHBOARD VOICE BRIEF]"));
-    assert!(prompts[1].contains("The caller asked: look at the parser."));
+    assert!(prompts[1].contains("Their request: look at the parser."));
     board.shutdown().await;
 }
 
@@ -1945,14 +1966,17 @@ async fn a_transfer_whose_session_cannot_start_leaves_the_caller_on_the_operator
         &coordinator,
         &notices,
         generation,
-        &format!("Transfer to alpha failed: {error}"),
+        &format!("Couldn't open alpha: {}.", error.trim_end_matches('.')),
     )
     .await;
 
     board.handle("what happened?").await;
     assert_eq!(
         operator_prompts(&operator_log).last().unwrap(),
-        &format!("[switchboard] Transfer to alpha failed: {error}\n\nwhat happened?")
+        &format!(
+            "[switchboard] Couldn't open alpha: {}.\n\nwhat happened?",
+            error.trim_end_matches('.')
+        )
     );
     assert_eq!(board.operator_note, None, "the note is delivered once");
     board.shutdown().await;
@@ -1991,7 +2015,7 @@ async fn an_intro_that_never_settles_is_dropped_at_the_turn_deadline() {
         &coordinator,
         &notices,
         generation,
-        "Transfer to alpha failed: the agent stopped responding",
+        "Couldn't open alpha: the agent stopped responding.",
     )
     .await;
     // The silent session is not left running on its host.
@@ -2001,7 +2025,7 @@ async fn an_intro_that_never_settles_is_dropped_at_the_turn_deadline() {
     board.handle("what happened?").await;
     assert_eq!(
         operator_prompts(&operator_log).last().unwrap(),
-        "[switchboard] Transfer to alpha failed: the agent stopped responding\n\nwhat happened?"
+        "[switchboard] Couldn't open alpha: the agent stopped responding.\n\nwhat happened?"
     );
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
@@ -2094,7 +2118,7 @@ async fn hanging_up_a_project_leg_returns_the_caller_to_the_operator_and_tells_i
     board.handle("I'm back").await;
     assert_eq!(
         operator_prompts(&operator_log).last().unwrap(),
-        "[switchboard] The caller dropped the line to alpha.\n\nI'm back"
+        "[switchboard] The caller hung up alpha from the page.\n\nI'm back"
     );
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
@@ -3062,16 +3086,15 @@ async fn backgrounding_a_busy_foreground_sends_an_away_notice() {
     assert!(log.named("steer").iter().any(|args| args["message"]
         .as_str()
         .unwrap_or_default()
-        .contains("caller is now listening to another agent")));
+        .contains("The caller has moved on to other work")));
     let steer_calls = log.named("steer");
     let away = steer_calls
         .iter()
         .find_map(|args| args["message"].as_str())
         .unwrap_or_default();
-    assert!(away.contains("actual words they should hear"));
-    assert!(away.contains("not a teaser"));
-    assert!(away.contains("displays are held until the caller brings you forward"));
-    assert!(away.contains("never say a display is on screen"));
+    assert!(away.contains("request_to_speak in the words they should hear"));
+    assert!(away.contains("cannot hear speak() now"));
+    assert!(away.contains("your displays wait until they come back to you"));
     held.abort();
     let _ = held.await;
     board.shutdown().await;
@@ -3833,7 +3856,7 @@ done
     );
     let general = decision(crate::router::Action::General, None, None);
 
-    board.set_call_state("The caller is talking to: the operator.\n- alpha: idle, in the background, has a display ready that the caller has not seen".into());
+    board.set_call_state("The caller is on: the front desk.\n- alpha: idle, in the background, has a display the caller has not seen".into());
     let first = board.handle_decision("what is ready?", &general).await;
     assert_eq!(first.text, "Operator here.");
     let second = board.handle_decision("thanks", &general).await;
@@ -3843,7 +3866,11 @@ done
     let lines = input.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 2, "{input}");
     assert!(lines[0].contains("[CALL STATE]"), "{}", lines[0]);
-    assert!(lines[0].contains("has a display ready"), "{}", lines[0]);
+    assert!(
+        lines[0].contains("has a display the caller"),
+        "{}",
+        lines[0]
+    );
     assert!(lines[0].contains("what is ready?"), "{}", lines[0]);
     // The state belongs to one utterance; a later turn without a fresh
     // state must not repeat stale facts.
@@ -3857,19 +3884,14 @@ done
 async fn the_routing_utility_request_carries_the_call_state() {
     let board = board_with(vec![project("alpha", "Alpha project")], false);
     let mut board = board;
-    board.set_call_state(
-        "- alpha: waiting, in the background, has a message waiting for the caller".into(),
-    );
+    board.set_call_state("- alpha: waiting, in the background, has something to say".into());
     let request = board.utility_routing_request(
         "pull it up",
         &decision(crate::router::Action::Continue, Some("alpha"), None),
         false,
     );
     assert!(request.contains("[CALL STATE]"), "{request}");
-    assert!(
-        request.contains("has a message waiting for the caller"),
-        "{request}"
-    );
+    assert!(request.contains("has something to say"), "{request}");
     assert!(request.contains("pull it up"), "{request}");
 }
 
