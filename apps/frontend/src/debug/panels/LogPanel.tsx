@@ -35,6 +35,11 @@ const LogRow = memo(function LogRow({ log }: { log: DebugLog }) {
       <span className="lv">{log.level}</span>
       <span className="target">{log.target}</span>
       <span className="msg">{log.message}</span>
+      {log.clipped && (
+        <span className="tag tag-clip" title="The service cut this line to the debug record bounds">
+          clipped
+        </span>
+      )}
       {fields.map(([key, value]) => (
         <span key={key} className="field">
           {key}=<b>{typeof value === 'string' ? value : JSON.stringify(value)}</b>

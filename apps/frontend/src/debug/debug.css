@@ -747,6 +747,11 @@ time,
 .tag-util {
   color: var(--utility);
 }
+.tag-clip {
+  color: var(--floor);
+  border: 1px dashed currentColor;
+  padding: 0 4px;
+}
 .tag-live {
   color: var(--jev);
   animation: blink 1.2s steps(2) infinite;

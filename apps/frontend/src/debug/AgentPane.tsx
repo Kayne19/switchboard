@@ -24,6 +24,17 @@ function moduleHeadline(name: string, args: JsonValue): string {
   return preview(args, 90) || name;
 }
 
+const CLIP_TITLE = 'The service cut this to the debug record bounds; the cut text ends with …[clipped]';
+
+/** Marks an item whose record the service cut to the debug record bounds. */
+function ClipTag({ clipped }: { clipped?: boolean }) {
+  return clipped ? (
+    <span className="tag tag-clip" title={CLIP_TITLE}>
+      clipped
+    </span>
+  ) : null;
+}
+
 const Item = memo(function Item({ item, color, select, lit }: { item: PaneItem; color: string; select: PaneSelect; lit: boolean }) {
   switch (item.type) {
     case 'input': {
@@ -34,6 +45,7 @@ const Item = memo(function Item({ item, color, select, lit }: { item: PaneItem; 
             <summary>
               <span className="tag">{item.source}</span>
               <span className="muted">{preview(item.text, 70)}</span>
+              <ClipTag clipped={item.clipped} />
               {time}
             </summary>
             <pre className="pre-wrap">{item.text}</pre>
@@ -45,6 +57,7 @@ const Item = memo(function Item({ item, color, select, lit }: { item: PaneItem; 
           <div className="pi-meta">
             <span className="tag tag-in">{item.source}</span>
             {item.turnId && <span className="muted">{item.turnId}</span>}
+            <ClipTag clipped={item.clipped} />
             {time}
           </div>
           <div className="pi-text">{item.text}</div>
@@ -66,6 +79,7 @@ const Item = memo(function Item({ item, color, select, lit }: { item: PaneItem; 
             ) : (
               !item.final && <span className="tag tag-live">streaming · {item.parts}</span>
             )}
+            <ClipTag clipped={item.clipped} />
             <time>{clockTime(item.ts)}</time>
           </div>
           <div className="pi-text">
@@ -81,6 +95,7 @@ const Item = memo(function Item({ item, color, select, lit }: { item: PaneItem; 
             <span className="tool-glyph">{item.status === 'running' ? '◌' : item.status === 'ok' ? '✓' : '✕'}</span>
             <span className="tool-name">{item.tool}</span>
             <span className="muted tool-args">{preview(item.args, 64)}</span>
+            <ClipTag clipped={item.clipped} />
             <span className="tool-time">{item.endTs !== undefined ? formatMs(item.endTs - item.ts) : 'running'}</span>
           </summary>
           <div className="pi-body">
@@ -109,6 +124,7 @@ const Item = memo(function Item({ item, color, select, lit }: { item: PaneItem; 
             <span className="mod-glyph">{MODULE_GLYPHS[item.name] ?? '◆'}</span>
             <span className="mod-name">{item.name}</span>
             <span className="mod-head">{moduleHeadline(item.name, item.args)}</span>
+            <ClipTag clipped={item.clipped} />
             <span className="tool-time">{item.ok === undefined ? '…' : item.ok ? 'ok' : 'failed'}</span>
           </summary>
           <div className="pi-body">

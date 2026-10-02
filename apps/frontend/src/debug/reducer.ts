@@ -87,7 +87,7 @@ export interface FloorTrace {
 }
 
 export type PaneItem =
-  | { type: 'input'; seq: number; ts: number; turnId?: string; text: string; source: string; utteranceId?: string }
+  | { type: 'input'; seq: number; ts: number; turnId?: string; text: string; source: string; utteranceId?: string; clipped?: boolean }
   | {
       type: 'text';
       seq: number;
@@ -98,6 +98,8 @@ export type PaneItem =
       parts: number;
       /** A piece the turn's final reply has since replaced; shown dimmed. */
       superseded?: boolean;
+      /** The service cut this text to the record bounds. */
+      clipped?: boolean;
     }
   | {
       type: 'tool';
@@ -110,6 +112,8 @@ export type PaneItem =
       result?: JsonValue;
       error?: string;
       status: 'running' | 'ok' | 'error';
+      /** The service cut the call's args, result or error to the record bounds. */
+      clipped?: boolean;
     }
   | {
       type: 'module';
@@ -121,6 +125,8 @@ export type PaneItem =
       args: JsonValue;
       ok?: boolean;
       detail?: JsonValue;
+      /** The service cut the call's args or answer to the record bounds. */
+      clipped?: boolean;
     }
   | { type: 'turn'; seq: number; ts: number; turnId: string; generation: number; edge: 'start' | 'end'; startTs?: number }
   | { type: 'speech'; seq: number; ts: number; text: string; delivered: boolean; reason?: string }
@@ -591,7 +597,16 @@ function applyEvent(draft: Draft, record: DebugRecord): void {
     }
     case 'agent_input': {
       const pane = ensurePane(draft, record.agent, seq, ts);
-      pushPaneItem(draft, pane, { type: 'input', seq, ts, turnId: record.turn_id, text: record.text, source: record.source, utteranceId: record.utterance_id });
+      pushPaneItem(draft, pane, {
+        type: 'input',
+        seq,
+        ts,
+        turnId: record.turn_id,
+        text: record.text,
+        source: record.source,
+        utteranceId: record.utterance_id,
+        clipped: clippedFlag(record),
+      });
       return;
     }
     case 'agent_text': {
@@ -605,19 +620,21 @@ function applyEvent(draft: Draft, record: DebugRecord): void {
           const item = draft.own(paneItems(draft, pane), pane.items.length - 1) as Extract<PaneItem, { type: 'text' }>;
           if (record.final) item.text = record.text || item.text;
           else item.text += record.text;
+          if (record.final) item.clipped = clippedFlag(record);
+          else if (record.clipped) item.clipped = true;
           item.final = record.final;
           item.parts += 1;
           return;
         }
       }
       if (record.final && record.turn_id !== undefined) supersedePieces(draft, pane, record.turn_id);
-      pushPaneItem(draft, pane, { type: 'text', seq, ts, turnId: record.turn_id, text: record.text, final: record.final, parts: 1 });
+      pushPaneItem(draft, pane, { type: 'text', seq, ts, turnId: record.turn_id, text: record.text, final: record.final, parts: 1, clipped: clippedFlag(record) });
       return;
     }
     case 'tool_start': {
       const pane = ensurePane(draft, record.agent, seq, ts);
       pane.tools += 1;
-      pushPaneItem(draft, pane, { type: 'tool', seq, ts, callId: record.call_id, tool: record.tool, args: record.args, status: 'running' });
+      pushPaneItem(draft, pane, { type: 'tool', seq, ts, callId: record.call_id, tool: record.tool, args: record.args, status: 'running', clipped: clippedFlag(record) });
       return;
     }
     case 'tool_end': {
@@ -631,6 +648,7 @@ function applyEvent(draft: Draft, record: DebugRecord): void {
         item.error = record.error;
         item.status = status;
         item.endTs = ts;
+        if (record.clipped) item.clipped = true;
       } else {
         pushPaneItem(draft, pane, {
           type: 'tool',
@@ -642,13 +660,14 @@ function applyEvent(draft: Draft, record: DebugRecord): void {
           result: record.result,
           error: record.error,
           status,
+          clipped: clippedFlag(record),
         });
       }
       return;
     }
     case 'module_call': {
       const pane = ensurePane(draft, record.agent, seq, ts);
-      pushPaneItem(draft, pane, { type: 'module', seq, ts, callId: record.call_id, name: record.name, args: record.args });
+      pushPaneItem(draft, pane, { type: 'module', seq, ts, callId: record.call_id, name: record.name, args: record.args, clipped: clippedFlag(record) });
       return;
     }
     case 'module_result': {
@@ -662,6 +681,7 @@ function applyEvent(draft: Draft, record: DebugRecord): void {
         item.ok = record.ok;
         item.detail = record.detail;
         item.endTs = ts;
+        if (record.clipped) item.clipped = true;
       } else {
         pushPaneItem(draft, pane, {
           type: 'module',
@@ -673,6 +693,7 @@ function applyEvent(draft: Draft, record: DebugRecord): void {
           args: null,
           ok: record.ok,
           detail: record.detail,
+          clipped: clippedFlag(record),
         });
       }
       return;
@@ -807,6 +828,11 @@ function countPieces(pane: AgentPane, turnId: string): number {
     if (item.type === 'text' && item.turnId === turnId && !item.final) count += 1;
   }
   return count;
+}
+
+/** `true` when the service cut a field of `record`; absent otherwise. */
+function clippedFlag(record: DebugRecord): true | undefined {
+  return record.clipped === true ? true : undefined;
 }
 
 function supersedePieces(draft: Draft, pane: AgentPane, turnId: string): void {

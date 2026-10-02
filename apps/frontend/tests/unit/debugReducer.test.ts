@@ -144,6 +144,23 @@ describe('debug reducer', () => {
     expect(items.filter((item) => item.type === 'text' && item.superseded)).toHaveLength(2);
   });
 
+  it('marks pane items whose record the service clipped', () => {
+    const clipped = (frame: DebugFrame): DebugFrame => ({ ...frame, clipped: true }) as DebugFrame;
+    const state = fold([
+      clipped(event({ kind: 'agent_input', agent: 'beta', text: 'long prompt…[clipped]', source: 'caller' })),
+      event({ kind: 'agent_text', agent: 'beta', turn_id: 'b-1', text: 'short', final: false }),
+      clipped(event({ kind: 'agent_text', agent: 'beta', turn_id: 'b-1', text: 'more…[clipped]', final: false })),
+      event({ kind: 'tool_start', agent: 'beta', call_id: 'c-1', tool: 'bash', args: { command: 'ls' } }),
+      clipped(event({ kind: 'tool_end', agent: 'beta', call_id: 'c-1', tool: 'bash', result: { out: 'x…[clipped]' } })),
+      event({ kind: 'module_call', agent: 'beta', call_id: 'm-1', name: 'speak', args: { text: 'hi' } }),
+    ]);
+    const items = state.panes.beta.items;
+    expect(items.find((item) => item.type === 'input')).toMatchObject({ clipped: true });
+    expect(items.find((item) => item.type === 'text')).toMatchObject({ clipped: true, parts: 2 });
+    expect(items.find((item) => item.type === 'tool')).toMatchObject({ clipped: true, status: 'ok' });
+    expect(items.find((item) => item.type === 'module')).not.toHaveProperty('clipped', true);
+  });
+
   it('keys floor messages by floor_id when present', () => {
     const state = fold([
       snapshot(),

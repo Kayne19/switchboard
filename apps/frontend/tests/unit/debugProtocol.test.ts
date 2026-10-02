@@ -17,13 +17,26 @@ describe('debug protocol parser', () => {
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {
       expect(parsed.value.skipped).toEqual([]);
-      expect(parsed.value.frame).toMatchObject({ type: 'snapshot', config, events: fixture.snapshot.events, logs: fixture.snapshot.logs });
+      expect(parsed.value.frame).toMatchObject({
+        type: 'snapshot',
+        last_seq: fixture.snapshot.last_seq,
+        config,
+        events: fixture.snapshot.events,
+        logs: fixture.snapshot.logs,
+      });
     }
   });
 
   it('admits a live event frame with its kind and fields flattened', () => {
     const parsed = parseDebugFrame(JSON.stringify({ type: 'event', seq: 9, timestamp_ms: 5, ...fixture.events[0].event }));
     expect(parsed).toEqual({ ok: true, value: { frame: { type: 'event', seq: 9, timestamp_ms: 5, ...fixture.events[0].event }, skipped: [] } });
+  });
+
+  it('keeps the clipped mark on an event and a log', () => {
+    const event = { type: 'event', seq: 9, timestamp_ms: 5, clipped: true, ...fixture.events[0].event };
+    expect(parseDebugFrame(JSON.stringify(event))).toEqual({ ok: true, value: { frame: event, skipped: [] } });
+    const log = { type: 'log', seq: 10, timestamp_ms: 6, level: 'INFO', target: 't', message: 'm…[clipped]', fields: {}, clipped: true };
+    expect(parseDebugFrame(JSON.stringify(log))).toEqual({ ok: true, value: { frame: log, skipped: [] } });
   });
 
   it('rejects malformed frames gracefully instead of throwing', () => {

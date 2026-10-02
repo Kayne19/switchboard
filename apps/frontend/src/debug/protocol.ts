@@ -250,8 +250,12 @@ export type DebugEvent =
 
 export type DebugEventKind = DebugEvent['kind'];
 
-/** A numbered event: the ring's and the live stream's unit. */
-export type DebugRecord = DebugEvent & { seq: number; timestamp_ms: number };
+/**
+ * A numbered event: the ring's and the live stream's unit. `clipped` is true
+ * when the service cut a field to the record bounds (the cut text ends with
+ * `…[clipped]`); it is absent otherwise.
+ */
+export type DebugRecord = DebugEvent & { seq: number; timestamp_ms: number; clipped?: boolean };
 
 export interface DebugLog {
   seq: number;
@@ -260,6 +264,8 @@ export interface DebugLog {
   target: string;
   message: string;
   fields: { [key: string]: JsonValue };
+  /** True when the service cut the message or a field to the record bounds. */
+  clipped?: boolean;
 }
 
 export interface SnapshotFrame {
