@@ -271,6 +271,7 @@ async fn releasing_a_closed_taken_over_session_still_aborts_before_detaching() {
         on_module: None,
         on_turn: None,
         on_closed: None,
+        debug: None,
         turn_lock: Mutex::new(()),
         busy: AtomicBool::new(true),
         closed: AtomicBool::new(false),
@@ -318,6 +319,7 @@ async fn malformed_successful_takeover_is_detached() {
         on_module: None,
         on_turn: None,
         on_closed: None,
+        debug: None,
     };
     let error = match ProjectSession::attach(&hosts, launch, "desk-alpha").await {
         Ok(_) => panic!("missing session handle is malformed success"),
@@ -363,6 +365,7 @@ async fn takeover_reply_cannot_make_release_kill_a_desk_session() {
         on_module: None,
         on_turn: None,
         on_closed: None,
+        debug: None,
     };
     let (session, _) = ProjectSession::attach(&hosts, launch, "desk-alpha")
         .await

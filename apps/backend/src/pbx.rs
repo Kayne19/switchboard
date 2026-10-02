@@ -1824,7 +1824,7 @@ impl Switchboard {
         } else {
             format!("[CALL STATE]\n{call_state}\n[END CALL STATE]\n\n{message}")
         };
-        // s2: self.trace_utterance.as_deref()
+        // s2: self.current_utterance().as_deref()
         let turn = match session.prompt_for(&message, None).await {
             Ok(turn) => turn,
             Err(error) => {
@@ -2350,6 +2350,7 @@ impl Switchboard {
             on_module: self.module_callback.clone(),
             on_turn: self.turn_callback.clone(),
             on_closed: Some(self.session_closed_callback()),
+            debug: Some(self.debug.clone()),
         };
         let session = match ProjectSession::attach(&self.hosts, launch, session_handle).await {
             Ok((session, state)) => {
@@ -2449,6 +2450,7 @@ impl Switchboard {
             on_module: self.module_callback.clone(),
             on_turn: self.turn_callback.clone(),
             on_closed: Some(self.session_closed_callback()),
+            debug: Some(self.debug.clone()),
         };
         // A host-agent restart keeps resident sessions alive. Prefer the
         // matching service-created session rather than creating a duplicate.

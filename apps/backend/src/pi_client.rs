@@ -744,6 +744,8 @@ pub struct ProjectLaunch {
     pub on_module: Option<ModuleCallback>,
     pub on_turn: Option<TurnCallback>,
     pub on_closed: Option<SessionClosedCallback>,
+    /// Where the session's conversation is mirrored for the debug page.
+    pub debug: Option<DebugBus>,
 }
 
 /// The model and effective thinking level a host agent reports for a
@@ -797,6 +799,8 @@ struct ProjectInner {
     on_module: Option<ModuleCallback>,
     on_turn: Option<TurnCallback>,
     on_closed: Option<SessionClosedCallback>,
+    /// Observation only: nothing here waits on it.
+    debug: Option<DebugBus>,
     turn_lock: Mutex<()>,
     busy: AtomicBool,
     closed: AtomicBool,
@@ -1212,6 +1216,7 @@ impl ProjectSession {
             on_module: launch.on_module,
             on_turn: launch.on_turn,
             on_closed: launch.on_closed,
+            debug: launch.debug,
             turn_lock: Mutex::new(()),
             busy: AtomicBool::new(false),
             closed: AtomicBool::new(false),
