@@ -79,6 +79,8 @@ struct HostsInner {
     /// Moves on every link that comes up or goes away.
     changes: watch::Sender<u64>,
     next_command: AtomicU64,
+    /// Read-only observer of links coming and going; set once by the app.
+    debug: std::sync::OnceLock<crate::debug::DebugBus>,
 }
 
 #[derive(Default)]
@@ -333,7 +335,23 @@ impl Hosts {
             hosts: Mutex::new(HashMap::new()),
             changes: watch::channel(0).0,
             next_command: AtomicU64::new(1),
+            debug: std::sync::OnceLock::new(),
         }))
+    }
+
+    /// Report links coming up and going away to `debug`. Only the first bus
+    /// set is kept.
+    pub(crate) fn set_debug_bus(&self, debug: crate::debug::DebugBus) {
+        let _ = self.0.debug.set(debug);
+    }
+
+    fn trace_link(&self, host: &str, connected: bool) {
+        if let Some(debug) = self.0.debug.get() {
+            debug.publish(crate::debug::DebugEvent::HostLink {
+                host: host.to_owned(),
+                connected,
+            });
+        }
     }
 
     /// The epoch of `host`'s current link; `None` while it is not connected.
@@ -589,6 +607,7 @@ impl Hosts {
             "host linked"
         );
         drop(hosts);
+        self.trace_link(host, true);
         self.0.changes.send_modify(|count| *count += 1);
         epoch
     }
@@ -801,9 +820,11 @@ impl Hosts {
     /// Forgets the link at `epoch` if it is still the host's current one.
     fn release(&self, host: &str, epoch: u64, reason: &str) {
         let mut hosts = self.0.hosts.lock().unwrap();
+        let mut disconnected = false;
         if let Some(state) = hosts.get_mut(host) {
             if state.link.as_ref().map(|link| link.epoch) == Some(epoch) {
                 state.link = None;
+                disconnected = true;
                 // A resident handle subscribed to this link must not remain
                 // reusable after the host has gone away. Its pump turns this
                 // into the normal session-closed callback, which evicts the
@@ -820,7 +841,12 @@ impl Hosts {
             }
             state.pending.retain(|_, pending| pending.epoch != epoch);
         }
+        drop(hosts);
         tracing::info!(%host, epoch, reason, "host link closed");
+        // A fenced link closing is not a disconnect: its newer link is up.
+        if disconnected {
+            self.trace_link(host, false);
+        }
         self.0.changes.send_modify(|count| *count += 1);
     }
 }

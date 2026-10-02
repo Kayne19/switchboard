@@ -763,6 +763,7 @@ impl AppState {
         let active_session = switchboard.session_control();
         let redials = switchboard.redial_planner();
         let hosts = switchboard.hosts();
+        hosts.set_debug_bus(debug.clone());
         let routing = switchboard.routing_view();
         let mut switchboard = switchboard;
         switchboard.set_activity_callback(Some(activity_callback));
