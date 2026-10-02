@@ -644,6 +644,7 @@ impl AppState {
             .await;
     }
 
+    #[cfg(test)]
     pub fn new(
         switchboard: Switchboard,
         transcript_log: TranscriptLog,
