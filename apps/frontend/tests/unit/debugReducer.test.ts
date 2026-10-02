@@ -346,4 +346,27 @@ describe('debug reducer', () => {
     expect(state.hosts['host-299']).toBeDefined();
     within(state.events.length, LIMITS.events);
   });
+
+  it('shows each utility prompt once in the utility pane', () => {
+    const prompt = 'Caller said: "send me to alpha". Which project?';
+    const rewrite = '[FLOOR REWRITE] Make this sound natural: The build passes.';
+    const state = fold([
+      snapshot(),
+      event({ kind: 'utility_request', utterance_id: 'u-1', attempt: 'first', prompt }),
+      event({ kind: 'agent_input', agent: 'utility', turn_id: 'utility-1', text: prompt, source: 'routing_request' }),
+      event({ kind: 'utility_decision', utterance_id: 'u-1', attempt: 'first', decision: { kind: 'none' }, latency_ms: 10 }),
+      // The input first, then the request: still one card.
+      event({ kind: 'agent_input', agent: 'utility', turn_id: 'utility-2', text: `${prompt} (retry)`, source: 'routing_request' }),
+      event({ kind: 'utility_request', utterance_id: 'u-1', attempt: 'split_retry', prompt: `${prompt} (retry)` }),
+      event({ kind: 'agent_input', agent: 'utility', turn_id: 'utility-3', text: rewrite, source: 'floor_rewrite' }),
+      event({ kind: 'floor_rewrite', agent: 'alpha', original: 'The build passes.', rewritten: 'Good news: the build passes.', latency_ms: 90 }),
+      // An input with no card of its own stays.
+      event({ kind: 'agent_input', agent: 'utility', turn_id: 'utility-4', text: 'something else', source: 'routing_request' }),
+    ]);
+    const items = state.panes.utility.items;
+    expect(items.map((item) => item.type)).toEqual(['utility', 'utility', 'utility', 'input']);
+    expect(items[0]).toMatchObject({ purpose: 'route', prompt, done: true });
+    expect(items[2]).toMatchObject({ purpose: 'rewrite', prompt: 'The build passes.', input: rewrite });
+    expect(items[3]).toMatchObject({ type: 'input', text: 'something else' });
+  });
 });

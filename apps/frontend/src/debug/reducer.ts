@@ -161,6 +161,8 @@ export type PaneItem =
       utteranceId?: string;
       attempt: string;
       prompt?: string;
+      /** A floor rewrite's whole prompt, folded in from the utility's input. */
+      input?: string;
       decision?: JsonValue;
       latencyMs?: number;
       done: boolean;
@@ -666,6 +668,8 @@ function applyEvent(draft: Draft, record: DebugRecord): void {
     }
     case 'agent_input': {
       const pane = ensurePane(draft, record.agent, seq, ts);
+      // The utility's routing prompt is already on its attempt card.
+      if (record.agent === UTILITY && record.source === 'routing_request' && findUtilityCard(pane, record.text) >= 0) return;
       pushPaneItem(draft, pane, {
         type: 'input',
         seq,
@@ -840,13 +844,17 @@ function applyEvent(draft: Draft, record: DebugRecord): void {
       if (record.kind === 'floor_gate') pushBounded(draft, floor, 'gates', record, LIMITS.floorGates);
       else if (record.kind === 'floor_rewrite') {
         floor.rewrite = record;
-        pushPaneItem(draft, ensurePane(draft, UTILITY, seq, ts), {
+        const utility = ensurePane(draft, UTILITY, seq, ts);
+        // The rewrite prompt went in as a utility input first; fold it into the card.
+        const input = takeUtilityInput(draft, utility, 'floor_rewrite', (text) => text.includes(record.original));
+        pushPaneItem(draft, utility, {
           type: 'utility',
           seq,
           ts,
           purpose: 'rewrite',
           attempt: `floor rewrite for ${record.agent}`,
           prompt: record.original,
+          input,
           decision: record.rewritten,
           latencyMs: record.latency_ms,
           done: true,
@@ -936,6 +944,7 @@ function mirrorUtility(draft: Draft, record: Numbered<UtilityRequestEvent> | Num
       return;
     }
   }
+  if (record.kind === 'utility_request') takeUtilityInput(draft, pane, 'routing_request', (text) => text === record.prompt);
   pushPaneItem(draft, pane, {
     type: 'utility',
     seq: record.seq,
@@ -948,6 +957,32 @@ function mirrorUtility(draft: Draft, record: Numbered<UtilityRequestEvent> | Num
     latencyMs: record.kind === 'utility_decision' ? record.latency_ms : undefined,
     done: record.kind === 'utility_decision',
   });
+}
+
+const UTILITY_SCAN = 50;
+
+/** The index of a recent route card in the utility pane with this prompt, or -1. */
+function findUtilityCard(pane: AgentPane, prompt: string): number {
+  for (let index = pane.items.length - 1; index >= 0 && index >= pane.items.length - UTILITY_SCAN; index -= 1) {
+    const item = pane.items[index];
+    if (item.type === 'utility' && item.purpose === 'route' && item.prompt === prompt) return index;
+  }
+  return -1;
+}
+
+/**
+ * Remove a recent utility input of `source` that `match`es and return its
+ * text, so the card that describes the same job shows the prompt once.
+ */
+function takeUtilityInput(draft: Draft, pane: AgentPane, source: string, match: (text: string) => boolean): string | undefined {
+  for (let index = pane.items.length - 1; index >= 0 && index >= pane.items.length - UTILITY_SCAN; index -= 1) {
+    const item = pane.items[index];
+    if (item.type === 'input' && item.source === source && match(item.text)) {
+      paneItems(draft, pane).splice(index, 1);
+      return item.text;
+    }
+  }
+  return undefined;
 }
 
 /**

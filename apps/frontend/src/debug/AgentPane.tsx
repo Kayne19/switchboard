@@ -196,10 +196,18 @@ const Item = memo(function Item({ item, color, select, lit }: { item: PaneItem; 
             <span className="tool-time">{item.done ? formatMs(item.latencyMs) : 'thinking…'}</span>
           </div>
           {item.purpose === 'rewrite' ? (
-            <div className="pi-text">
-              <s className="muted">{item.prompt}</s>
-              <br />→ {typeof item.decision === 'string' ? item.decision : preview(item.decision)}
-            </div>
+            <>
+              <div className="pi-text">
+                <s className="muted">{item.prompt}</s>
+                <br />→ {typeof item.decision === 'string' ? item.decision : preview(item.decision)}
+              </div>
+              {item.input && (
+                <details className="pi-prompt">
+                  <summary className="muted">prompt</summary>
+                  <pre className="pre-wrap">{item.input}</pre>
+                </details>
+              )}
+            </>
           ) : (
             <>
               {item.prompt && (
