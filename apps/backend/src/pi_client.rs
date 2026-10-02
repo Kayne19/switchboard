@@ -1844,13 +1844,31 @@ async fn pump(
 
 /// Answers one module call. A call must carry the session's current call
 /// token; routing signals become signals of the turn being collected, and
-/// the rest go to the application.
+/// the rest go to the application. The call and its answer are mirrored to
+/// the debug page, refusals included.
 async fn answer_module_call(inner: Arc<ProjectInner>, call: crate::hosts::ModuleCall) {
+    inner.publish(DebugEvent::ModuleCall {
+        agent: inner.label.clone(),
+        call_id: call.id.clone(),
+        name: call.call.clone(),
+        args: clip_value(call.args.clone()),
+    });
+    let reply = module_reply(&inner, &call).await;
+    inner.publish(DebugEvent::ModuleResult {
+        agent: inner.label.clone(),
+        call_id: call.id.clone(),
+        ok: matches!(reply["status"].as_str(), Some("delivered" | "accepted")),
+        detail: clip_value(reply.clone()),
+    });
+    call.answer(reply);
+}
+
+/// The answer to one module call (`answer_module_call`).
+async fn module_reply(inner: &ProjectInner, call: &crate::hosts::ModuleCall) -> Value {
     let label = inner.label.clone();
     if call.token.is_empty() || call.token != inner.token() {
         tracing::info!(%label, call = %call.call, "module call with a stale call token refused");
-        call.answer(json!({"status": "refused", "reason": "not_on_call"}));
-        return;
+        return json!({"status": "refused", "reason": "not_on_call"});
     }
     match call.call.as_str() {
         // These names remain recognized for one release so hosts that still
@@ -1858,12 +1876,11 @@ async fn answer_module_call(inner: Arc<ProjectInner>, call: crate::hosts::Module
         // signals: stale hosts must never move the caller.
         "transfer_to_project" | "return_to_operator" | "set_model" => {
             tracing::info!(%label, call = %call.call, "removed project routing call refused");
-            call.answer(json!({"status": "refused", "reason": "removed"}));
+            json!({"status": "refused", "reason": "removed"})
         }
         SPEAK_TOOL | "request_to_speak" | "display" | "view" => {
             let Some(callback) = inner.on_module.clone() else {
-                call.answer(json!({"status": "failed", "reason": "failed"}));
-                return;
+                return json!({"status": "failed", "reason": "failed"});
             };
             let mut args = call.args.clone();
             if call.call == "request_to_speak" {
@@ -1886,16 +1903,15 @@ async fn answer_module_call(inner: Arc<ProjectInner>, call: crate::hosts::Module
                 cause,
                 args,
             };
-            let reply = match AssertUnwindSafe(callback(request)).catch_unwind().await {
+            match AssertUnwindSafe(callback(request)).catch_unwind().await {
                 Ok(reply) => reply,
                 Err(panic) => {
                     tracing::error!(%label, call = %call.call, panic = %panic_message(&panic), "module call handler panicked");
                     json!({"status": "failed", "reason": "failed"})
                 }
-            };
-            call.answer(reply);
+            }
         }
-        _ => call.answer(json!({"status": "refused", "reason": "unknown_call"})),
+        _ => json!({"status": "refused", "reason": "unknown_call"}),
     }
 }
 

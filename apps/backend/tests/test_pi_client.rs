@@ -698,3 +698,69 @@ async fn project_conversation_is_mirrored_to_the_debug_bus() {
     );
     session.close();
 }
+
+#[tokio::test]
+async fn module_calls_and_their_answers_are_mirrored_without_the_token() {
+    use crate::hosts::Step;
+    let hosts = debug_hosts();
+    let fake = crate::hosts::FakeHostAgent::new(Box::new(|_, _| {
+        vec![
+            Step::Call("speak", json!({"text": "The build passes."})),
+            Step::CallWithToken("old-token".into(), "speak", json!({"text": "stale"})),
+        ]
+    }));
+    let _log = fake.serve(hosts.connect_fake("scriptorium"));
+    let bus = crate::debug::DebugBus::new();
+    let on_module: ModuleCallback = Arc::new(|call: AgentCall| {
+        Box::pin(async move {
+            assert_eq!(call.call, "speak");
+            json!({"status": "delivered", "reason": null})
+        })
+    });
+    let (session, _) = ProjectSession::create(&hosts, debug_launch(&bus, Some(on_module)))
+        .await
+        .unwrap();
+    session.join_call("call-token", "", 1000).await.unwrap();
+    session.prompt("go").await.unwrap();
+    let modules: Vec<DebugEvent> = debug_events(&bus)
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event,
+                DebugEvent::ModuleCall { .. } | DebugEvent::ModuleResult { .. }
+            )
+        })
+        .collect();
+    assert_eq!(
+        modules,
+        vec![
+            DebugEvent::ModuleCall {
+                agent: "alpha".into(),
+                call_id: "m1".into(),
+                name: "speak".into(),
+                args: json!({"text": "The build passes."}),
+            },
+            DebugEvent::ModuleResult {
+                agent: "alpha".into(),
+                call_id: "m1".into(),
+                ok: true,
+                detail: json!({"status": "delivered", "reason": null}),
+            },
+            DebugEvent::ModuleCall {
+                agent: "alpha".into(),
+                call_id: "m2".into(),
+                name: "speak".into(),
+                args: json!({"text": "stale"}),
+            },
+            DebugEvent::ModuleResult {
+                agent: "alpha".into(),
+                call_id: "m2".into(),
+                ok: false,
+                detail: json!({"status": "refused", "reason": "not_on_call"}),
+            },
+        ]
+    );
+    let serialized = serde_json::to_string(&modules).unwrap();
+    assert!(!serialized.contains("call-token") && !serialized.contains("old-token"));
+    session.close();
+}

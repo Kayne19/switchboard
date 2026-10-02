@@ -189,6 +189,8 @@ pub enum SessionFrame {
 /// unanswered is answered `failed`.
 #[derive(Debug)]
 pub struct ModuleCall {
+    /// The host's id for the call; the debug page pairs call and answer by it.
+    pub id: String,
     pub token: String,
     pub turn_id: Option<String>,
     pub cause: Option<String>,
@@ -766,6 +768,7 @@ impl Hosts {
                 };
                 let (reply, answer) = oneshot::channel();
                 let delivered = subscriber.send(SessionFrame::ModuleCall(ModuleCall {
+                    id: id.clone(),
                     token: frame["token"].as_str().unwrap_or_default().to_owned(),
                     turn_id,
                     cause,
