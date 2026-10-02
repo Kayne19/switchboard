@@ -79,6 +79,55 @@ fan out to several destination panes. Floor events run in the reverse
 direction from an agent through the good-moment gate and optional utility
 rewrite to the caller.
 
+## Agent conversations
+
+`agent_input`, `agent_text`, `tool_start`, `tool_end`, `module_call`, and
+`module_result` build one chat pane per agent. `agent` names the pane:
+`operator`, `utility` (the routing utility), or the project id of a project
+leg.
+
+- `agent_input` is what the service sent the agent, as it is sent. `source`
+  is `caller` (a routed caller line), `steer` (words added to a running turn),
+  `routing_request` or `floor_rewrite` (the utility's two jobs), `brief` (a
+  project session's voice brief, sent in front of the first prompt and the
+  first after a compaction, shown as an input of its own), `intro` (the first
+  prompt of a transfer), `foreground` (a background agent brought back), or
+  `model_change`. `utterance_id` is set when the input carries a routed
+  caller line.
+- `agent_text` with `final: false` is a piece of the reply: a streamed chunk
+  from the operator or utility (gathered to about 256 bytes or 250 ms), or one
+  finished assistant message from a project agent. `final: true` is the whole
+  reply of the turn and replaces the pieces with the same `agent` and
+  `turn_id`. A turn that said nothing has no final event.
+- `turn_id` for the operator and utility is a per-process prompt number
+  (`operator-3`); it groups that prompt's input, text, and tools. For a
+  project it is the host agent's turn id, when the host sends one (new hosts
+  stamp text, tool events, and the turn's end; inputs have none, because the
+  host assigns the id after the prompt arrives).
+- `tool_start` and `tool_end` carry the call's `args` and `result` when known:
+  always for the operator and utility, and for a project only when its host
+  agent sends them (`docs/host-link.md`, "Session events"). An older host
+  agent sends the tool name only. `error` is set, with the tool's error text,
+  when the tool failed.
+- `module_call` and `module_result` pair a project's `switchboard` module call
+  (`speak`, `display`, `request_to_speak`, `view`, or a refused name) with the
+  service's answer by `call_id`, the host's id for the call. `ok` is true when
+  the answer's status is `delivered` or `accepted`; `detail` is the answer.
+
+The pane mirrors what each agent process did, including a turn the call has
+since moved away from. Generation and staleness are shown by the turn and
+rescue events, not by these.
+
+A value over 4 KB of JSON (tool `args`, `result`, module `args`, `detail`) is
+replaced by `{"clipped": true, "bytes": <full size>, "preview": "<start of the
+JSON>"}`; text over 16 KB is cut and ends with `[clipped: <n> bytes in all]`.
+Before that, the service replaces credential-looking strings with
+`[redacted]`: string fields whose names look like credentials (`token`,
+`secret`, `password`, `api_key`, `authorization`, and similar), the value
+after such a name and `=` or `:` in text, the word after `Bearer`, and words
+with a well-known key prefix (`sk-`, `ghp_`, ...). It is a heuristic for a
+trusted-network page, not a guarantee.
+
 Arguments, prompts, and log fields must never contain bearer keys, host tokens,
 or call tokens. The debug observer must not delay, cancel, or otherwise alter
 call behavior.
