@@ -2029,6 +2029,16 @@ fn trace_stale_utterance(state: &AppState, id: &str, stamped: u64) {
     });
 }
 
+/// Ends an utterance's routing trace when its turn ended without an answer:
+/// a rescue cancelled it (`dropped_stale`) or the worker failed (`failed`).
+fn trace_cut_short(state: &AppState, id: &str, branch: &str, reason: String) {
+    state.0.debug.publish(DebugEvent::PbxBranch {
+        utterance_id: id.to_owned(),
+        branch: branch.to_owned(),
+        reason,
+    });
+}
+
 fn emit_transcript_verdict(state: &AppState, id: &str, transcript: &str) {
     emit_clip_verdict(
         state,
@@ -2409,6 +2419,15 @@ async fn process_turns(state: AppState) {
             Err(error) if error.is_cancelled() => {
                 tracing::info!(clip = %id, elapsed = ?started.elapsed(), "the turn was cancelled by a page rescue");
                 trace_turn_end();
+                trace_cut_short(
+                    &state,
+                    &id,
+                    "dropped_stale",
+                    format!(
+                        "a page rescue cancelled the turn (stamped generation {generation}, now {}); its answer was discarded",
+                        state.0.coordinator.generation()
+                    ),
+                );
                 clear_active_operation(&state, task_id).await;
                 state.0.coordinator.finish_operation(&operation);
                 state.0.clear_active_speech_group(speech_group);
@@ -2420,6 +2439,12 @@ async fn process_turns(state: AppState) {
                 // caller hears a generic apology and the journal holds nothing.
                 tracing::error!(clip = %id, %error, elapsed = ?started.elapsed(), "the turn worker failed");
                 trace_turn_end();
+                trace_cut_short(
+                    &state,
+                    &id,
+                    "failed",
+                    format!("the turn worker failed: {error}"),
+                );
                 clear_active_operation(&state, task_id).await;
                 state.0.coordinator.finish_operation(&operation);
                 state.0.clear_active_speech_group(speech_group);

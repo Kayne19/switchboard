@@ -6870,6 +6870,29 @@ async fn an_unavailable_jev_is_traced_as_the_fallback_rule() {
     ));
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn a_turn_cancelled_by_a_rescue_ends_its_trace() {
+    let root = scratch_root("trace-cancelled-turn");
+    let (state, _host, _token, _instance_id, worker) = alpha_caller_turn_in_flight(&root).await;
+
+    cancel_active_operations(&state).await;
+
+    let ended = until_debug(&state, |event| {
+        matches!(event, crate::debug::DebugEvent::PbxBranch { utterance_id, branch, .. }
+            if utterance_id == "caller-held" && branch == "dropped_stale")
+    })
+    .await;
+    let crate::debug::DebugEvent::PbxBranch { reason, .. } = ended else {
+        unreachable!()
+    };
+    assert!(reason.contains("cancelled the turn"), "{reason}");
+    worker.abort();
+    let _ = worker.await;
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
 #[tokio::test]
 async fn a_stale_routed_utterance_ends_its_trace() {
     let (client, _requests, _responded) = fake_jev_client();
