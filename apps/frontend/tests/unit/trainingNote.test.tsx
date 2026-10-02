@@ -8,6 +8,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { TrainingScene } from '../../src/components/Scenes';
+import { ControllerProvider } from '../../src/controller/context';
 import { createInitialState, reduceActions } from '../../src/controller/reducer';
 import type { ControllerAction, ControllerState } from '../../src/controller/types';
 import { chartSeriesPoint } from '../../src/primitives/chartGeometry';
@@ -76,7 +77,9 @@ afterEach(() => {
 function render(state: ControllerState) {
   act(() =>
     root.render(
-      <TrainingScene state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} />,
+      <ControllerProvider>
+        <TrainingScene state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} />
+      </ControllerProvider>,
     ),
   );
 }
