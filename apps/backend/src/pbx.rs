@@ -785,7 +785,7 @@ impl Switchboard {
             router,
             project_turn_timeout: PROJECT_TURN_TIMEOUT,
             floor_quiet_threshold: Duration::from_millis(config.floor_quiet_threshold_ms),
-            debug: crate::debug::DebugBus::new(),
+            debug: crate::debug::DebugBus::off(),
         }
     }
 

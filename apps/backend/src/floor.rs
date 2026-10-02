@@ -117,7 +117,7 @@ impl Floor {
             changed: Arc::new(Notify::new()),
             quiet_threshold,
             next_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
-            debug: DebugBus::new(),
+            debug: DebugBus::off(),
         }
     }
 

@@ -266,6 +266,12 @@ impl PiSession {
         }
     }
 
+    /// True when a recording bus observes this process, so an event worth
+    /// building (a deep copy of tool arguments) is built only then.
+    fn observed(&self) -> bool {
+        self.inner.debug.get().is_some_and(DebugBus::enabled)
+    }
+
     /// The debug turn id of the prompt being run: `<leg>-<n>`.
     fn debug_turn_id(&self) -> String {
         format!(
@@ -576,16 +582,18 @@ impl PiSession {
                 }
                 Some("tool_execution_start") => {
                     let name = event.get("toolName").and_then(Value::as_str).unwrap_or("");
-                    self.publish(DebugEvent::ToolStart {
-                        agent: self.inner.leg.clone(),
-                        call_id: event
-                            .get("toolCallId")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned),
-                        tool: name.into(),
-                        args: event.get("args").cloned(),
-                        turn_id: Some(turn_id.to_owned()),
-                    });
+                    if self.observed() {
+                        self.publish(DebugEvent::ToolStart {
+                            agent: self.inner.leg.clone(),
+                            call_id: event
+                                .get("toolCallId")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned),
+                            tool: name.into(),
+                            args: event.get("args").cloned(),
+                            turn_id: Some(turn_id.to_owned()),
+                        });
+                    }
                     if [
                         ROUTE_TOOL,
                         SECOND_OPINION_TOOL,
@@ -617,19 +625,21 @@ impl PiSession {
                 }
                 Some("tool_execution_end") => {
                     let name = event.get("toolName").and_then(Value::as_str).unwrap_or("");
-                    let result = event.get("result").filter(|value| !value.is_null());
-                    self.publish(DebugEvent::ToolEnd {
-                        agent: self.inner.leg.clone(),
-                        call_id: event
-                            .get("toolCallId")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned),
-                        tool: name.into(),
-                        result: result.cloned(),
-                        error: (event.get("isError") == Some(&Value::Bool(true)))
-                            .then(|| tool_error_text(result)),
-                        turn_id: Some(turn_id.to_owned()),
-                    });
+                    if self.observed() {
+                        let result = event.get("result").filter(|value| !value.is_null());
+                        self.publish(DebugEvent::ToolEnd {
+                            agent: self.inner.leg.clone(),
+                            call_id: event
+                                .get("toolCallId")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned),
+                            tool: name.into(),
+                            result: result.cloned(),
+                            error: (event.get("isError") == Some(&Value::Bool(true)))
+                                .then(|| tool_error_text(result)),
+                            turn_id: Some(turn_id.to_owned()),
+                        });
+                    }
                     self.report_activity("end", name, String::new()).await
                 }
                 Some("extension_error") => {
@@ -1017,6 +1027,9 @@ impl ProjectInner {
     /// arguments and results new hosts send, and each assistant message.
     /// Every event is mirrored, whichever turn it belongs to.
     fn mirror_event(&self, event: &Value) {
+        if !self.debug.as_ref().is_some_and(DebugBus::enabled) {
+            return;
+        }
         let call_id = || event["call_id"].as_str().map(str::to_owned);
         let tool = || event["tool"].as_str().unwrap_or_default().to_owned();
         let turn_id = || event["turn_id"].as_str().map(str::to_owned);

@@ -26,7 +26,9 @@ fn board_on(
     let config = crate::Config::for_tests(settings);
     let registry = Registry::new(projects);
     let prewarm = crate::prewarm::Prewarm::settled(&config, &registry, catalog);
-    Switchboard::new(&config, registry, Arc::new(prewarm))
+    let mut board = Switchboard::new(&config, registry, Arc::new(prewarm));
+    board.set_debug_bus(crate::debug::DebugBus::new());
+    board
 }
 
 /// Links `HOST` to `board` with a fake host agent that runs `on_prompt` for

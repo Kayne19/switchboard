@@ -21,7 +21,10 @@ use serde_json::Value;
 use std::{
     cell::Cell,
     collections::VecDeque,
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, MutexGuard, PoisonError,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::{
@@ -794,6 +797,7 @@ impl Clip {
     }
 }
 
+/// The routing thresholds the page shows beside Jev's answers.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[cfg_attr(test, derive(Deserialize))]
 pub(crate) struct DebugConfig {
@@ -802,12 +806,12 @@ pub(crate) struct DebugConfig {
     pub jev_action_threshold: f64,
 }
 
-impl Default for DebugConfig {
-    fn default() -> Self {
+impl DebugConfig {
+    pub(crate) fn from_config(config: &crate::Config) -> Self {
         Self {
-            jev_for_current_agent_lower: 0.3,
-            jev_for_current_agent_upper: 0.7,
-            jev_action_threshold: 0.6,
+            jev_for_current_agent_lower: config.jev_for_current_agent_lower,
+            jev_for_current_agent_upper: config.jev_for_current_agent_upper,
+            jev_action_threshold: config.jev_action_threshold,
         }
     }
 }
@@ -825,7 +829,8 @@ pub(crate) enum DebugFrame<'a> {
         events: Vec<&'a DebugRecord>,
         logs: Vec<&'a DebugLog>,
         agents: &'a [AgentState],
-        config: &'a DebugConfig,
+        /// Set from the service's configuration when recording starts.
+        config: Option<&'a DebugConfig>,
     },
     Event {
         #[serde(flatten)]
@@ -869,7 +874,7 @@ pub(crate) struct Snapshot {
     pub last_seq: u64,
     pub events: Vec<Arc<DebugRecord>>,
     pub logs: Vec<Arc<DebugLog>>,
-    pub config: DebugConfig,
+    pub config: Option<DebugConfig>,
 }
 
 impl Snapshot {
@@ -879,7 +884,7 @@ impl Snapshot {
             events: self.events.iter().map(AsRef::as_ref).collect(),
             logs: self.logs.iter().map(AsRef::as_ref).collect(),
             agents,
-            config: &self.config,
+            config: self.config.as_ref(),
         };
         serde_json::to_string(&frame).unwrap_or_default()
     }
@@ -889,10 +894,13 @@ struct Rings {
     last_seq: u64,
     events: VecDeque<Arc<DebugRecord>>,
     logs: VecDeque<Arc<DebugLog>>,
-    config: DebugConfig,
+    config: Option<DebugConfig>,
 }
 
 struct DebugInner {
+    /// Off until `enable`: with no debug listener nothing reads the rings,
+    /// so nothing is recorded and publishing returns at once.
+    enabled: AtomicBool,
     /// One short critical section per publish: sequence assignment, ring push
     /// and broadcast send happen together, so the ring and every live
     /// receiver see records in `seq` order with no gaps. Nothing awaits or
@@ -913,17 +921,40 @@ thread_local! {
 }
 
 impl DebugBus {
-    pub(crate) fn new() -> Self {
+    /// A bus that records nothing until `enable`. The service enables it
+    /// only once its debug listener is bound.
+    pub(crate) fn off() -> Self {
         let (live, _) = broadcast::channel(LIVE_CAPACITY);
         Self(Arc::new(DebugInner {
+            enabled: AtomicBool::new(false),
             rings: Mutex::new(Rings {
                 last_seq: 0,
-                events: VecDeque::with_capacity(EVENT_CAPACITY),
-                logs: VecDeque::with_capacity(LOG_CAPACITY),
-                config: DebugConfig::default(),
+                events: VecDeque::new(),
+                logs: VecDeque::new(),
+                config: None,
             }),
             live,
         }))
+    }
+
+    /// A recording bus with the test configuration's thresholds.
+    #[cfg(test)]
+    pub(crate) fn new() -> Self {
+        let bus = Self::off();
+        bus.enable(DebugConfig::from_config(&crate::Config::for_tests(&[])));
+        bus
+    }
+
+    /// Starts recording, with the thresholds the page shows.
+    pub(crate) fn enable(&self, config: DebugConfig) {
+        self.locked(|rings| rings.config = Some(config));
+        self.0.enabled.store(true, Ordering::Release);
+    }
+
+    /// True once `enable` was called. A producer can check it before it
+    /// builds an expensive event.
+    pub(crate) fn enabled(&self) -> bool {
+        self.0.enabled.load(Ordering::Acquire)
     }
 
     fn rings(&self) -> MutexGuard<'_, Rings> {
@@ -938,12 +969,12 @@ impl DebugBus {
         result
     }
 
-    pub(crate) fn set_config(&self, config: DebugConfig) {
-        self.locked(|rings| rings.config = config);
-    }
-
-    /// Records `event` and sends it to live clients. Returns its sequence.
+    /// Records `event` and sends it to live clients. Returns its sequence,
+    /// or 0 when the bus is off.
     pub(crate) fn publish(&self, mut event: DebugEvent) -> u64 {
+        if !self.enabled() {
+            return 0;
+        }
         let timestamp_ms = now_ms();
         let mut clip = Clip::new();
         clip.event(&mut event);
@@ -968,6 +999,9 @@ impl DebugBus {
         mut message: String,
         mut fields: Value,
     ) -> u64 {
+        if !self.enabled() {
+            return 0;
+        }
         let timestamp_ms = now_ms();
         let mut clip = Clip::new();
         clip.text(&mut message);
@@ -1211,8 +1245,9 @@ where
 {
     fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
         // Never log from the publish path; this guard makes a mistake there
-        // drop the line instead of deadlocking on the publish lock.
-        if PUBLISHING.with(Cell::get) {
+        // drop the line instead of deadlocking on the publish lock. With the
+        // bus off, the layer does nothing at all.
+        if !self.bus.enabled() || PUBLISHING.with(Cell::get) {
             return;
         }
         let metadata = event.metadata();

@@ -337,7 +337,7 @@ fn snapshot_frame_matches_fixture() {
         last_seq: owned.last_seq,
         events: owned.events.into_iter().map(Arc::new).collect(),
         logs: owned.logs.into_iter().map(Arc::new).collect(),
-        config: owned.config,
+        config: Some(owned.config),
     };
     let json: Value = serde_json::from_str(&snapshot.to_json(&owned.agents)).unwrap();
     assert_eq!(json, fixture.snapshot);
@@ -970,4 +970,42 @@ fn only_the_part_of_a_string_that_can_be_kept_is_scrubbed() {
     );
     Clip::new().text(&mut text);
     assert!(!text.contains("sss"), "{}", &text[text.len() - 40..]);
+}
+
+#[test]
+fn an_off_bus_records_nothing_until_it_is_enabled() {
+    use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
+    let bus = DebugBus::off();
+    let (mut receiver, _) = bus.attach();
+    assert_eq!(bus.publish(host_link(1)), 0);
+    assert_eq!(
+        bus.publish_log("INFO".into(), "t".into(), "m".into(), json!({})),
+        0
+    );
+    let subscriber = tracing_subscriber::registry()
+        .with(EnvFilter::new("switchboard=info"))
+        .with(DebugLogLayer::new(bus.clone()));
+    tracing::subscriber::with_default(subscriber, || tracing::info!("not copied"));
+    let snapshot = bus.snapshot();
+    assert_eq!(
+        (
+            snapshot.last_seq,
+            snapshot.events.len(),
+            snapshot.logs.len()
+        ),
+        (0, 0, 0)
+    );
+    assert!(snapshot.config.is_none());
+    assert!(receiver.try_recv().is_err());
+
+    let config = DebugConfig {
+        jev_for_current_agent_lower: 0.1,
+        jev_for_current_agent_upper: 0.9,
+        jev_action_threshold: 0.5,
+    };
+    bus.enable(config.clone());
+    assert_eq!(bus.publish(host_link(2)), 1);
+    let snapshot = bus.snapshot();
+    assert_eq!(snapshot.events.len(), 1);
+    assert_eq!(snapshot.config, Some(config));
 }

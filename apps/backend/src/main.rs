@@ -403,12 +403,18 @@ fn init_tracing(
     (describe, rejected)
 }
 
-/// Binds the optional debug listener. It is read-only and optional, so a
-/// failure is reported and the phone line keeps running without it.
-async fn bind_debug_listener(debug_bind: Option<&str>) -> Option<tokio::net::TcpListener> {
+/// Binds the optional debug listener and, once it is bound, starts `bus`
+/// recording. It is read-only and optional, so a failure is reported and the
+/// phone line keeps running without it, and with the bus off.
+async fn bind_debug_listener(
+    debug_bind: Option<&str>,
+    bus: &debug::DebugBus,
+    config: debug::DebugConfig,
+) -> Option<tokio::net::TcpListener> {
     let debug_bind = debug_bind?;
     match tokio::net::TcpListener::bind(debug_bind).await {
         Ok(listener) => {
+            bus.enable(config);
             tracing::info!(%debug_bind, "switchboard debug listener listening");
             Some(listener)
         }
@@ -422,17 +428,14 @@ async fn bind_debug_listener(debug_bind: Option<&str>) -> Option<tokio::net::Tcp
 #[tokio::main]
 async fn main() {
     let (values, env_file) = Config::values_from_env();
-    let debug_bus = debug::DebugBus::new();
+    // Off until the debug listener is bound: with no listener, nothing is
+    // recorded and the log copy does nothing.
+    let debug_bus = debug::DebugBus::off();
     let (filter, rejected_filter) = init_tracing(&values, debug_bus.clone());
     if let Some(rejected) = rejected_filter {
         tracing::warn!(%rejected, default = DEFAULT_LOG_FILTER, "log filter could not be parsed; using the default");
     }
     let config = Config::from_values(&values, env_file);
-    debug_bus.set_config(debug::DebugConfig {
-        jev_for_current_agent_lower: config.jev_for_current_agent_lower,
-        jev_for_current_agent_upper: config.jev_for_current_agent_upper,
-        jev_action_threshold: config.jev_action_threshold,
-    });
     // The first thing worth knowing about a running switchboard is what it was
     // configured to be. Secrets are reported as configured-or-not, never
     // echoed: this line goes to the journal, which is not where the
@@ -493,7 +496,12 @@ async fn main() {
         .await
         .expect("bind switchboard listener");
     tracing::info!(%bind, "switchboard listening");
-    let debug_listener = bind_debug_listener(config.debug_bind.as_deref()).await;
+    let debug_listener = bind_debug_listener(
+        config.debug_bind.as_deref(),
+        &debug_bus,
+        debug::DebugConfig::from_config(&config),
+    )
+    .await;
     let debug_task = if let Some(debug_listener) = debug_listener {
         let debug_state = state.clone();
         Some(tokio::spawn(async move {
