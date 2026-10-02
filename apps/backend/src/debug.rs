@@ -345,8 +345,9 @@ fn is_false(value: &bool) -> bool {
 }
 
 /// Makes one record safe for the debug page, before it takes the publish
-/// lock. Every text field and JSON string goes through `scrub_text`, a JSON
-/// string under a credential-like name (`secret_name`) becomes `[redacted]`,
+/// lock. Every string, names and ids included, goes through `scrub_text`, a
+/// JSON value under a credential-like name (`secret_name`, `secret_value`)
+/// becomes `[redacted]`,
 /// and then strings and JSON values are shortened to the record bounds, with
 /// each cut marked. This is the only place debug records are scrubbed or
 /// clipped; producers publish raw values.
@@ -382,6 +383,11 @@ impl Clip {
         self.spend(text.len());
     }
 
+    /// A name or id: scrubbed like text.
+    fn name(&mut self, name: &mut String) {
+        self.text(name);
+    }
+
     fn json(&mut self, value: &mut Value) {
         match value {
             Value::String(text) => self.text(text),
@@ -410,7 +416,7 @@ impl Clip {
                         return false;
                     }
                     self.spend(key.len());
-                    if value.is_string() && secret_name(key) {
+                    if secret_name(key) && secret_value(key, value) {
                         *value = Value::String(REDACTED.to_owned());
                     }
                     self.json(value);
@@ -441,57 +447,307 @@ impl Clip {
         }
     }
 
-    /// Scrubs and clips the fields of `event` that can carry caller, prompt,
-    /// reply or tool text. Names and ids are short by construction and left
-    /// alone. A new variant or text field must be added here.
+    fn opt_name(&mut self, name: &mut Option<String>) {
+        if let Some(name) = name {
+            self.name(name);
+        }
+    }
+
+    /// Scrubs and clips every string in `event`. Names and ids come from
+    /// hosts and models too, so they are scrubbed like text (`name`). The
+    /// match names every field, so a new field does not compile until it is
+    /// handled here.
     fn event(&mut self, event: &mut DebugEvent) {
         match event {
-            DebugEvent::CallerUtterance { text, .. }
-            | DebugEvent::OperatorHop { text, .. }
-            | DebugEvent::AgentInput { text, .. }
-            | DebugEvent::AgentText { text, .. } => self.text(text),
-            DebugEvent::JevRequest { state, .. } => self.json(state),
-            DebugEvent::JevResponse { answers, error, .. } => {
+            DebugEvent::CallerUtterance {
+                utterance_id,
+                text,
+                talking_to,
+            } => {
+                self.name(utterance_id);
+                self.name(talking_to);
+                self.text(text);
+            }
+            DebugEvent::JevRequest {
+                utterance_id,
+                purpose,
+                state,
+                floor_id,
+            } => {
+                self.opt_name(utterance_id);
+                self.name(purpose);
+                self.opt_name(floor_id);
+                self.json(state);
+            }
+            DebugEvent::JevResponse {
+                utterance_id,
+                purpose,
+                latency_ms: _,
+                outcome,
+                answers,
+                error,
+                floor_id,
+            } => {
+                self.opt_name(utterance_id);
+                self.name(purpose);
+                self.name(outcome);
+                self.opt_name(floor_id);
                 self.opt_text(error);
                 self.json(answers);
             }
-            DebugEvent::RouteDecision { reason, .. } | DebugEvent::PbxBranch { reason, .. } => {
-                self.text(reason)
+            DebugEvent::RouteDecision {
+                utterance_id,
+                rule,
+                reason,
+                action,
+                target,
+                mode,
+                decided_by,
+            } => {
+                self.name(utterance_id);
+                self.name(rule);
+                self.name(action);
+                self.opt_name(target);
+                self.name(mode);
+                self.name(decided_by);
+                self.text(reason);
             }
-            DebugEvent::UtilityRequest { prompt, .. } => self.text(prompt),
-            DebugEvent::UtilityDecision { decision, .. } => self.json(decision),
-            DebugEvent::Routed { text_part, .. } => self.text(text_part),
-            DebugEvent::ToolStart { args, .. } => self.opt_json(args),
-            DebugEvent::ToolEnd { result, error, .. } => {
+            DebugEvent::PbxBranch {
+                utterance_id,
+                branch,
+                reason,
+            } => {
+                self.name(utterance_id);
+                self.name(branch);
+                self.text(reason);
+            }
+            DebugEvent::UtilityRequest {
+                utterance_id,
+                attempt,
+                prompt,
+            } => {
+                self.name(utterance_id);
+                self.name(attempt);
+                self.text(prompt);
+            }
+            DebugEvent::UtilityDecision {
+                utterance_id,
+                attempt,
+                decision,
+                latency_ms: _,
+            } => {
+                self.name(utterance_id);
+                self.name(attempt);
+                self.json(decision);
+            }
+            DebugEvent::OperatorHop {
+                utterance_id,
+                text,
+                outcome,
+            } => {
+                self.name(utterance_id);
+                self.name(outcome);
+                self.text(text);
+            }
+            DebugEvent::OperatorRouteTool {
+                utterance_id,
+                target,
+                mode,
+                action,
+            } => {
+                self.name(utterance_id);
+                self.name(target);
+                self.name(mode);
+                self.name(action);
+            }
+            DebugEvent::Routed {
+                utterance_id,
+                to_agent,
+                text_part,
+                mode,
+                via,
+            } => {
+                self.name(utterance_id);
+                self.name(to_agent);
+                self.name(mode);
+                self.name(via);
+                self.text(text_part);
+            }
+            DebugEvent::AgentInput {
+                agent,
+                turn_id,
+                text,
+                source,
+                utterance_id,
+            } => {
+                self.name(agent);
+                self.opt_name(turn_id);
+                self.name(source);
+                self.opt_name(utterance_id);
+                self.text(text);
+            }
+            DebugEvent::AgentText {
+                agent,
+                turn_id,
+                text,
+                final_: _,
+            } => {
+                self.name(agent);
+                self.opt_name(turn_id);
+                self.text(text);
+            }
+            DebugEvent::ToolStart {
+                agent,
+                call_id,
+                tool,
+                args,
+                turn_id,
+            } => {
+                self.name(agent);
+                self.opt_name(call_id);
+                self.name(tool);
+                self.opt_name(turn_id);
+                self.opt_json(args);
+            }
+            DebugEvent::ToolEnd {
+                agent,
+                call_id,
+                tool,
+                result,
+                error,
+                turn_id,
+            } => {
+                self.name(agent);
+                self.opt_name(call_id);
+                self.name(tool);
+                self.opt_name(turn_id);
                 self.opt_text(error);
                 self.opt_json(result);
             }
-            DebugEvent::ModuleCall { args, .. } => self.json(args),
-            DebugEvent::ModuleResult { detail, .. } => self.json(detail),
-            DebugEvent::Rescue { reason, .. } => self.text(reason),
-            DebugEvent::CallBoundary { reason, .. } => self.opt_text(reason),
-            DebugEvent::Speech { text, reason, .. } => {
+            DebugEvent::ModuleCall {
+                agent,
+                call_id,
+                name,
+                args,
+                turn_id,
+            } => {
+                self.name(agent);
+                self.name(call_id);
+                self.name(name);
+                self.opt_name(turn_id);
+                self.json(args);
+            }
+            DebugEvent::ModuleResult {
+                agent,
+                call_id,
+                ok: _,
+                detail,
+            } => {
+                self.name(agent);
+                self.name(call_id);
+                self.json(detail);
+            }
+            DebugEvent::TurnStart {
+                agent,
+                turn_id,
+                generation: _,
+                utterance_id,
+            }
+            | DebugEvent::TurnEnd {
+                agent,
+                turn_id,
+                generation: _,
+                utterance_id,
+            } => {
+                self.name(agent);
+                self.name(turn_id);
+                self.opt_name(utterance_id);
+            }
+            DebugEvent::Rescue {
+                generation: _,
+                reason,
+                leg,
+            } => {
+                self.opt_name(leg);
+                self.text(reason);
+            }
+            DebugEvent::Speech {
+                agent,
+                text,
+                delivered: _,
+                reason,
+                floor_id,
+            } => {
+                self.name(agent);
+                self.opt_name(floor_id);
                 self.opt_text(reason);
                 self.text(text);
             }
-            DebugEvent::FloorRequest { message, .. } | DebugEvent::FloorHeld { message, .. } => {
-                self.text(message)
+            DebugEvent::FloorRequest {
+                agent,
+                message,
+                floor_id,
+            }
+            | DebugEvent::FloorHeld {
+                agent,
+                message,
+                floor_id,
+            } => {
+                self.name(agent);
+                self.opt_name(floor_id);
+                self.text(message);
+            }
+            DebugEvent::FloorGate {
+                agent,
+                answer,
+                latency_ms: _,
+                floor_id,
+            } => {
+                self.name(agent);
+                self.name(answer);
+                self.opt_name(floor_id);
             }
             DebugEvent::FloorRewrite {
+                agent,
                 original,
                 rewritten,
-                ..
+                latency_ms: _,
+                floor_id,
             } => {
+                self.name(agent);
+                self.opt_name(floor_id);
                 self.text(original);
                 self.text(rewritten);
             }
-            DebugEvent::OperatorRouteTool { .. }
-            | DebugEvent::TurnStart { .. }
-            | DebugEvent::TurnEnd { .. }
-            | DebugEvent::FloorGate { .. }
-            | DebugEvent::FloorReleased { .. }
-            | DebugEvent::AgentsState { .. }
-            | DebugEvent::HostLink { .. } => {}
+            DebugEvent::FloorReleased {
+                agent,
+                how,
+                floor_id,
+            } => {
+                self.name(agent);
+                self.name(how);
+                self.opt_name(floor_id);
+            }
+            DebugEvent::AgentsState { agents } => {
+                for agent in agents {
+                    self.name(&mut agent.project);
+                    self.name(&mut agent.state);
+                    if let Some(request) = &mut agent.pending_request {
+                        self.text(&mut request.message);
+                        self.text(&mut request.reason);
+                    }
+                }
+            }
+            DebugEvent::HostLink { host, connected: _ } => self.name(host),
+            DebugEvent::CallBoundary {
+                phase,
+                call_id,
+                reason,
+            } => {
+                self.name(phase);
+                self.name(call_id);
+                self.opt_text(reason);
+            }
         }
     }
 }
@@ -862,9 +1118,9 @@ impl tracing::field::Visit for FieldsVisitor {
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
         self.record(field.name(), Value::String(value.to_owned()));
     }
-    // Fields are kept as JSON numbers and booleans where they are ones:
-    // `Clip` redacts only strings under a secret-like name, because a number
-    // cannot carry a credential (`*_token_budget`, `*_key_configured`).
+    // Fields are kept as JSON numbers and booleans where they are ones, so
+    // `Clip` can keep a count or a flag under a secret-like name
+    // (`*_token_budget`, `*_key_configured`); see `secret_value`.
     fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
         self.fields
             .insert(field.name().to_owned(), Value::from(value));
@@ -958,21 +1214,165 @@ fn secret_name(name: &str) -> bool {
         .any(|word| name.contains(word))
 }
 
-/// Replaces credential-looking parts of text: the value after a
-/// credential-like name and `=` or `:` (`API_KEY=...`, `"token": "..."`), the
-/// word after `Bearer`, and words with a well-known key prefix. A heuristic:
-/// it keeps a pasted `.env` or auth header off the page, not every secret.
+/// True when `value`, under the credential-like name `key`, is redacted
+/// whole: any string, array or object, and a number unless the name says it
+/// is a count (`jev_summary_token_budget`, `input_tokens`). A `null` or a
+/// boolean (`*_key_configured`) cannot carry a credential.
+fn secret_value(key: &str, value: &Value) -> bool {
+    const COUNT_WORDS: [&str; 10] = [
+        "budget", "count", "max", "limit", "chars", "bytes", "tokens", "size", "length", "total",
+    ];
+    match value {
+        Value::Null | Value::Bool(_) => false,
+        Value::Number(_) => {
+            let key = key.to_ascii_lowercase();
+            !COUNT_WORDS.iter().any(|word| key.contains(word))
+        }
+        Value::String(_) | Value::Array(_) | Value::Object(_) => true,
+    }
+}
+
+/// Replaces credential-looking parts of text: a PEM private key block, the
+/// value after a credential-like name and `=` or `:` (`API_KEY=...`,
+/// `"token": "..."`), the word after `Bearer`, words with a well-known key
+/// prefix or shape (`sk-`, `ghp_`, `AKIA`, `AIza`, `hf_`, a JWT, ...), and
+/// long random-looking words. A heuristic: it keeps a pasted `.env`, key
+/// file or auth header off the page, not every secret.
 pub(crate) fn scrub_text(text: &str) -> String {
-    const KEY_PREFIXES: [&str; 8] = [
+    let text = redact_private_keys(text);
+    scrub_words(&text)
+}
+
+/// Replaces each `-----BEGIN ... PRIVATE KEY-----` block through its
+/// `-----END ...-----` line. A block with no end (the text was cut) is
+/// redacted to the end of the text.
+fn redact_private_keys(text: &str) -> std::borrow::Cow<'_, str> {
+    const BEGIN: &str = "-----BEGIN ";
+    const DASHES: &str = "-----";
+    if !text.contains(BEGIN) {
+        return text.into();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(BEGIN) {
+        let after_begin = &rest[start + BEGIN.len()..];
+        let Some(label_end) = after_begin.find(DASHES) else {
+            break;
+        };
+        let label = &after_begin[..label_end];
+        let header_end = start + BEGIN.len() + label_end + DASHES.len();
+        if !label.contains("PRIVATE KEY") || label.contains('\n') {
+            out.push_str(&rest[..header_end]);
+            rest = &rest[header_end..];
+            continue;
+        }
+        out.push_str(&rest[..start]);
+        out.push_str(REDACTED);
+        let body = &rest[header_end..];
+        rest = match body.find("-----END ") {
+            Some(end) => {
+                let footer = &body[end + "-----END ".len()..];
+                match footer.find(DASHES) {
+                    Some(close) => &footer[close + DASHES.len()..],
+                    None => "",
+                }
+            }
+            None => "",
+        };
+    }
+    out.push_str(rest);
+    out.into()
+}
+
+/// A word that is a credential by its own shape, whatever surrounds it.
+/// `rest` is the text after the word, for the shapes that span punctuation
+/// (a JWT's `.`-separated segments).
+fn credential_word(word: &str, rest: &[char]) -> bool {
+    // Prefixes of provider keys. Each is followed by a long random part, so
+    // a short word that happens to start the same way (`sk-learn`) is kept.
+    const KEY_PREFIXES: [&str; 20] = [
         "sk-",
         "ghp_",
         "gho_",
+        "ghu_",
         "ghs_",
+        "ghr_",
         "github_pat_",
+        "xoxa-",
         "xoxb-",
         "xoxp-",
+        "xoxr-",
+        "xoxs-",
+        "xapp-",
         "glpat-",
+        "glsa_",
+        "hf_",
+        "npm_",
+        "AIza",
+        "pypi-",
+        "dop_v1_",
     ];
+    if word.len() >= 16 && KEY_PREFIXES.iter().any(|prefix| word.starts_with(prefix)) {
+        return true;
+    }
+    // AWS access key ids: `AKIA` or `ASIA` and 16 upper-case letters or digits.
+    if word.len() == 20
+        && (word.starts_with("AKIA") || word.starts_with("ASIA"))
+        && word[4..]
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+    {
+        return true;
+    }
+    // A JWT: base64url JSON (`eyJ`) and two more `.`-separated segments.
+    if word.len() >= 8 && word.starts_with("eyJ") {
+        let dots = rest
+            .iter()
+            .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+            .filter(|c| **c == '.')
+            .count();
+        if dots >= 2 {
+            return true;
+        }
+    }
+    random_looking(word)
+}
+
+/// A long word that looks generated rather than written: 32 or more
+/// characters mixing upper case, lower case and digits, with high entropy.
+/// Hex digests (`git` hashes) and UUIDs are lower case and kept, as are
+/// identifiers, whose letters repeat.
+fn random_looking(word: &str) -> bool {
+    const MIN_LEN: usize = 32;
+    const MIN_BITS_PER_CHAR: f64 = 4.2;
+    if word.len() < MIN_LEN {
+        return false;
+    }
+    let bytes = word.as_bytes();
+    let upper = bytes.iter().any(u8::is_ascii_uppercase);
+    let lower = bytes.iter().any(u8::is_ascii_lowercase);
+    let digit = bytes.iter().any(u8::is_ascii_digit);
+    if !(upper && lower && digit) {
+        return false;
+    }
+    let mut counts = [0usize; 256];
+    for byte in bytes {
+        counts[usize::from(*byte)] += 1;
+    }
+    let len = bytes.len() as f64;
+    let bits: f64 = counts
+        .iter()
+        .filter(|count| **count > 0)
+        .map(|count| {
+            let p = *count as f64 / len;
+            -p * p.log2()
+        })
+        .sum();
+    bits >= MIN_BITS_PER_CHAR
+}
+
+/// The word-level part of `scrub_text`.
+fn scrub_words(text: &str) -> String {
     let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
     let is_value = |c: char| !c.is_whitespace() && !matches!(c, '"' | '\'' | ',' | '}' | ']');
     let chars: Vec<char> = text.chars().collect();
@@ -991,9 +1391,7 @@ pub(crate) fn scrub_text(text: &str) -> String {
             i += 1;
         }
         let word: String = chars[start..i].iter().collect();
-        if redact_next_word
-            || (word.len() >= 16 && KEY_PREFIXES.iter().any(|p| word.starts_with(p)))
-        {
+        if redact_next_word || credential_word(&word, &chars[i..]) {
             redact_next_word = false;
             // The rest of a value such as `abc.def/ghi` goes with it.
             while i < chars.len() && is_value(chars[i]) {

@@ -750,3 +750,150 @@ fn published_events_are_scrubbed_before_they_are_kept() {
     };
     assert_eq!(text, "deploy with GITHUB_TOKEN=[redacted]");
 }
+
+#[test]
+fn private_key_blocks_are_redacted_whole() {
+    let key = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ\nAAAAMwAAAAtzc2gtZWQyNTUxOQ\n-----END OPENSSH PRIVATE KEY-----";
+    assert_eq!(
+        scrub_text(&format!("$ cat id_ed25519\n{key}\n$ ")),
+        "$ cat id_ed25519\n[redacted]\n$ "
+    );
+    for label in [
+        "RSA PRIVATE KEY",
+        "PRIVATE KEY",
+        "EC PRIVATE KEY",
+        "ENCRYPTED PRIVATE KEY",
+    ] {
+        let block = format!("-----BEGIN {label}-----\nMIIEow\n-----END {label}-----");
+        assert_eq!(
+            scrub_text(&format!("a {block} b")),
+            "a [redacted] b",
+            "{label}"
+        );
+    }
+    // A block cut before its end is redacted to the end of the text.
+    assert_eq!(
+        scrub_text("key:\n-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC"),
+        "key:\n[redacted]"
+    );
+    // A public certificate is not a secret.
+    let cert = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    assert_eq!(scrub_text(cert), cert);
+}
+
+#[test]
+fn credentials_with_a_known_shape_are_redacted() {
+    let secrets = [
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+        "AKIAIOSFODNN7EXAMPLE",
+        "ASIAY34FZKBOKMUTVV7A",
+        "AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFMBWY",
+        "hf_aBcDeFgHiJkLmNoPqRsTuVwXyZ01234567",
+        "xoxb-1234567890-0987654321-AbCdEfGhIjKl",
+        "xoxp-1234567890-0987654321-AbCdEfGhIjKl",
+        "ghp_0123456789abcdefABCDEF0123456789ab",
+        "gho_0123456789abcdefABCDEF0123456789ab",
+        "ghu_0123456789abcdefABCDEF0123456789ab",
+        "ghs_0123456789abcdefABCDEF0123456789ab",
+        "ghr_0123456789abcdefABCDEF0123456789ab",
+        "github_pat_11ABCDEFG0123456789_abcdefghijklmnop",
+        "sk-proj-0123456789abcdefABCDEF",
+        "sk-ant-api03-0123456789abcdef",
+        concat!("glp", "at-0123456789abcdefABCD"),
+        "npm_0123456789abcdefABCDEF0123456789ab",
+        // No known prefix, but long and random: an opaque bearer token.
+        "Zx8Qp2Lk9Vw3Rt7Ym4Nb6Hc1Jd5Fg0Ks2Pq9",
+    ];
+    for secret in secrets {
+        assert_eq!(
+            scrub_text(&format!("got {secret} back")),
+            "got [redacted] back",
+            "{secret}"
+        );
+    }
+}
+
+#[test]
+fn ordinary_words_and_digests_are_kept() {
+    for text in [
+        "sk-learn is installed",
+        "commit a94a8fe5ccb19ba61c4c0873d391e987982fbbd3 landed",
+        "id 550e8400-e29b-41d4-a716-446655440000",
+        "handleDecisionForStateWithUtterance2 returned",
+        "test_debug_published_events_are_scrubbed_before_they_are_kept",
+        "AKIA is a prefix",
+        "eyJhbGciOiJIUzI1NiJ9 alone",
+        "the key idea",
+    ] {
+        assert_eq!(scrub_text(text), text);
+    }
+}
+
+#[test]
+fn a_secret_named_value_is_redacted_whatever_its_type() {
+    let mut clip = Clip::new();
+    let mut value = json!({
+        "password": ["hunter2"],
+        "client_secret": {"value": "s"},
+        "pin_token": 987654321,
+        "api_key": "k",
+        "input_tokens": 12,
+        "jev_summary_token_budget": 300,
+        "key_configured": true,
+        "token": null,
+        "path": "/srv/a"
+    });
+    clip.json(&mut value);
+    assert_eq!(
+        value,
+        json!({
+            "password": "[redacted]",
+            "client_secret": "[redacted]",
+            "pin_token": "[redacted]",
+            "api_key": "[redacted]",
+            "input_tokens": 12,
+            "jev_summary_token_budget": 300,
+            "key_configured": true,
+            "token": null,
+            "path": "/srv/a"
+        })
+    );
+}
+
+#[test]
+fn names_and_ids_are_scrubbed_too() {
+    let bus = DebugBus::new();
+    let secret = "sk-abcdefghijklmnopqrstuvwxyz012345";
+    bus.publish(DebugEvent::OperatorRouteTool {
+        utterance_id: "u".into(),
+        target: secret.into(),
+        mode: "fresh".into(),
+        action: "transfer".into(),
+    });
+    bus.publish(DebugEvent::Routed {
+        utterance_id: "u".into(),
+        to_agent: secret.into(),
+        text_part: "t".into(),
+        mode: "fresh".into(),
+        via: "operator".into(),
+    });
+    bus.publish(DebugEvent::ModuleCall {
+        agent: "alpha".into(),
+        call_id: secret.into(),
+        name: secret.into(),
+        args: json!({}),
+        turn_id: None,
+    });
+    bus.publish(DebugEvent::ToolEnd {
+        agent: "alpha".into(),
+        call_id: Some(secret.into()),
+        tool: secret.into(),
+        result: None,
+        error: None,
+        turn_id: Some(secret.into()),
+    });
+    for record in bus.snapshot().events {
+        let wire = serde_json::to_string(record.as_ref()).unwrap();
+        assert!(!wire.contains(secret), "leaked: {wire}");
+    }
+}
