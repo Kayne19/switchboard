@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import fixture from '../fixtures/debug-events.json';
 import { fixtureFrames, scriptedCall } from '../../src/debug/demo';
 import type { DebugEvent, DebugFrame } from '../../src/debug/protocol';
-import { initialDebugState, reduceFrame, reduceFrames, routePath, type DebugState } from '../../src/debug/reducer';
+import { initialDebugState, LIMITS, reduceFrame, reduceFrames, routePath, type DebugState } from '../../src/debug/reducer';
 
 const config = fixture.snapshot.config;
 const snapshot = (events: DebugFrame[] = [], extra: Record<string, unknown> = {}): DebugFrame =>
@@ -299,5 +299,51 @@ describe('debug reducer', () => {
     expect(state.missing).toEqual([9]);
     expect(state.rejected).toBe(2);
     expect(state.gaps).toBe(1);
+  });
+
+  it('bounds every collection a long session grows', () => {
+    const frames: DebugFrame[] = [snapshot()];
+    let seq = 0;
+    const push = (body: DebugEvent) => frames.push(event(body, (seq += 1)));
+    push({ kind: 'agents_state', agents: [{ project: 'alpha', state: 'busy' }] });
+    for (let i = 0; i < 6_000; i += 1) push({ kind: 'rescue', generation: i, reason: 'operation interrupted' });
+    // One held floor message gated again and again.
+    push({ kind: 'floor_held', agent: 'alpha', message: 'later', floor_id: 'floor-1' });
+    for (let i = 0; i < 500; i += 1) {
+      push({ kind: 'jev_request', purpose: 'good_moment', state: {}, floor_id: 'floor-1' });
+      push({ kind: 'floor_gate', agent: 'alpha', answer: 'no', latency_ms: 30, floor_id: 'floor-1' });
+    }
+    // One trace that keeps getting records, and many odd agent and host names.
+    push({ kind: 'caller_utterance', utterance_id: 'u-1', text: 'x', talking_to: 'operator' });
+    for (let i = 0; i < 500; i += 1) {
+      push({ kind: 'pbx_branch', utterance_id: 'u-1', branch: 'utility', reason: 'r' });
+      push({ kind: 'utility_request', utterance_id: 'u-1', attempt: `try-${i}`, prompt: 'p' });
+      push({ kind: 'routed', utterance_id: 'u-1', to_agent: 'operator', text_part: 'x', mode: 'continue', via: 'pbx' });
+    }
+    for (let i = 0; i < 300; i += 1) push({ kind: 'agent_input', agent: `ghost-${i}`, text: 'hi', source: 'caller' });
+    for (let i = 0; i < 300; i += 1) {
+      push({ kind: 'host_link', host: `host-${i}`, connected: true });
+      push({ kind: 'host_link', host: `host-${i}`, connected: false });
+    }
+    for (let i = 0; i < 200; i += 1) push({ kind: 'call_boundary', phase: 'started', call_id: `call-${i}` });
+    const state = fold(frames);
+    const within = (length: number, limit: number) => expect(length).toBeLessThanOrEqual(Math.ceil(limit * 1.1));
+    within(state.rescues.length, LIMITS.rescues);
+    within(state.calls.length, LIMITS.calls);
+    const floor = state.floors['floor-1'];
+    expect(floor.gates).toHaveLength(LIMITS.floorGates);
+    expect(floor.jev).toHaveLength(LIMITS.floorJev);
+    expect(floor.records).toHaveLength(LIMITS.floorRecords);
+    const trace = state.traces['u-1'];
+    expect(trace.records).toHaveLength(LIMITS.traceRecords);
+    expect(trace.routed).toHaveLength(LIMITS.traceRouted);
+    expect(trace.utility).toHaveLength(LIMITS.traceUtility);
+    expect(state.paneOrder).toHaveLength(LIMITS.panes);
+    expect(Object.keys(state.panes)).toHaveLength(LIMITS.panes);
+    expect(state.paneOrder.slice(0, 3)).toEqual(['operator', 'utility', 'alpha']);
+    expect(state.paneOrder[state.paneOrder.length - 1]).toBe('ghost-299');
+    expect(Object.keys(state.hosts).length).toBeLessThanOrEqual(LIMITS.hosts);
+    expect(state.hosts['host-299']).toBeDefined();
+    within(state.events.length, LIMITS.events);
   });
 });
