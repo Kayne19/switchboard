@@ -1273,31 +1273,39 @@ async fn the_voice_brief_rides_on_the_first_prompt_and_again_after_a_compaction(
 }
 
 #[test]
-fn the_voice_brief_teaches_the_switchboard_module_and_names_the_targets() {
-    let board = board_with(
+fn the_voice_brief_carries_the_voice_the_module_and_the_ways_of_working() {
+    let board = board_on(
         vec![project("alpha", "Alpha project"), project("beta", "")],
-        true,
+        &[("SWITCHBOARD_PERSONA", "Gruff and short.")],
+        two_model_catalog(),
     );
     let brief = board.agent_brief(&project("alpha", ""));
+    assert!(brief.starts_with("[SWITCHBOARD VOICE BRIEF]"), "{brief}");
+    assert!(brief.ends_with("[END OF VOICE BRIEF]"), "{brief}");
     for taught in [
+        "working in the alpha project",
+        "[HOW YOU TALK ON THE CALL]",
+        "Character:\nGruff and short.",
         "switchboard.speak(text)",
         "switchboard.request_to_speak(message, reason)",
-        "actual result in one to three short spoken sentences",
-        "do not send a teaser",
+        "Not a teaser",
         "switchboard.display(",
+        "SKILL.md",
         "switchboard.view()",
-        "displays are held until the caller brings you forward",
-        "never say a display is on screen",
-        "Routing is handled by the switchboard",
-        "  - beta: no description",
+        "never say something is on screen",
+        "cheap to undo",
+        "subagents",
+        "compact yourself",
+        "search your own conversation log",
+        "you have no tools for them",
     ] {
         assert!(brief.contains(taught), "{taught} missing from {brief}");
     }
-    assert!(!brief.contains("  - alpha"), "{brief}");
-    let fixed = board_with(vec![project("alpha", "")], false);
-    assert!(!fixed
-        .agent_brief(&project("alpha", ""))
-        .contains("set_model"));
+    // Moving the caller is the switchboard's job: the brief lists no other
+    // projects and offers no way back to a front desk.
+    assert!(!brief.contains("beta"), "{brief}");
+    assert!(!brief.contains("return to the operator"), "{brief}");
+    assert!(!brief.contains("set_model"), "{brief}");
 }
 
 #[tokio::test]

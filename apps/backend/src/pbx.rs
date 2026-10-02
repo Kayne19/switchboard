@@ -75,9 +75,9 @@ Give bad news straight: say what broke and what it means, with no apologies as p
 /// The voice brief's opening. The brief rides at the start of the first
 /// prompt a project session gets for the caller, and again on the first after
 /// a compaction; it is never a message of its own.
-const AGENT_BRIEF_HEADER: &str = "[SWITCHBOARD VOICE BRIEF]\nYou are on a voice call in the {project} project, in its own directory. The caller hears only what you pass to the `switchboard` module in your Python REPL (already imported); your written output goes to their screen and is not read aloud.\n";
-const AGENT_BRIEF_TOOLS: &str = "- switchboard.speak(text): say a sentence or two of plain speech. Use it to answer, and before and during long work. No code, paths or lists.\n- switchboard.request_to_speak(message, reason): queue exactly what the caller should hear from you. For finished, message is the actual result in one to three short spoken sentences; for needs_decision, it is the question and options; for problem, it is what went wrong and what you need. The service lightly smooths it and speaks it at a good moment; do not send a teaser.\n- switchboard.display(...) shows things on their screen; switchboard.view() tells you what they see.\nWhile you are in the background, displays are held until the caller brings you forward; never say a display is on screen.\n- Routing is handled by the switchboard before your turn. Do not try to transfer, return, or change models; answer the caller or explain what you completed.\n";
-const AGENT_BRIEF_SWAPS: &str = "";
+const AGENT_BRIEF_HEADER: &str = "[SWITCHBOARD VOICE BRIEF]\nYou are on a voice call, working in the {project} project in its own directory. The caller hears only what you pass to the `switchboard` module in your Python REPL (already imported). Your written replies go to a screen they may not be watching. They are never read aloud.\n";
+/// The brief's job text, after the shared voice block.
+const AGENT_BRIEF_BODY: &str = "Reaching the caller:\n- switchboard.speak(text): say it out loud, in plain spoken words. Anything that needs code, paths, lists or many numbers goes on the screen.\n- switchboard.display(...): put something on their screen. The types, data shapes and layout are in the switchboard skill's SKILL.md. Read it before your first display.\n- switchboard.view(): see what is on their screen now.\n- switchboard.request_to_speak(message, reason): how you get their attention while they are on other work. reason is finished, needs_decision or problem. message is what they should hear, said the way you would say it: the result, the question with its options, or what broke and what you need from them. Not a teaser.\n\nReport the things the caller asked for when they are done or stuck. Keep the steps along the way to yourself. While the caller is on other work, your displays wait until they come back to you. So in that time never say something is on screen; say it is ready.\n\nDecisions while the caller is quiet or away: make the calls that are cheap to undo, carry on, and say what you chose when you next report. Wait for the caller on decisions that set direction, that they would want to own, or that are expensive to reverse. While you wait, keep going on whatever does not depend on the answer.\n\nKeep yourself free to talk. You are the one the caller deals with. Give hands-on work (edits, builds, test runs, long investigations) to subagents that run your own model, several at once when the work splits. For brute-force searching and reading, use a cheaper, faster model, so that the big contexts stay small. Subagents cannot reach the caller. What they find comes to you, and you say it.\n\nYour context is this project's working memory for the call, and it costs. Keep it lean: subagents carry the detail and you keep the results. When a piece of work is truly finished and nothing for it is still running, write down what should outlast it, in an issue, a doc or a commit, and then compact yourself. Don't compact while work is in flight or in the middle of a discussion. When you compact, make sure the summary keeps what is still open and what was decided. After a compaction, when you need something from earlier in the call, search your own conversation log (its path is in your system prompt) instead of guessing. A session nobody uses is ended, and the next call starts fresh, so anything you did not write down is gone.\n\nMoving the caller to other work, model changes and hanging up happen before your turn, and you have no tools for them. If the caller asks for something that belongs to another project, say so briefly. When they name that project, the call takes them there.\n";
 const AGENT_BRIEF_END: &str = "[END OF VOICE BRIEF]";
 
 /// Sent with the first caller words after a background agent is brought
@@ -2568,37 +2568,15 @@ impl Switchboard {
         voice_block(&self.persona)
     }
 
-    /// The voice brief: how to reach the caller through the `switchboard`
-    /// module, and where they can be sent.
+    /// The voice brief: the shared voice block with the persona, how to
+    /// reach the caller through the `switchboard` module, and how to run the
+    /// work and its context.
     fn agent_brief(&self, project: &Project) -> String {
         let mut brief = AGENT_BRIEF_HEADER.replace("{project}", &project.id);
-        brief.push_str(AGENT_BRIEF_TOOLS);
-        let others = self
-            .registry
-            .projects
-            .iter()
-            .filter(|candidate| candidate.id != project.id)
-            .map(|candidate| {
-                format!(
-                    "  - {}: {}\n",
-                    candidate.id,
-                    if candidate.description.is_empty() {
-                        "no description"
-                    } else {
-                        candidate.description.as_str()
-                    }
-                )
-            })
-            .collect::<String>();
-        if others.is_empty() {
-            brief.push_str("  - none\n");
-        } else {
-            brief.push_str(&others);
-        }
-        brief.push_str("  If the project they want is not listed, return to the operator rather than guessing.\n");
-        if self.planner.model_swaps {
-            brief.push_str(AGENT_BRIEF_SWAPS);
-        }
+        brief.push('\n');
+        brief.push_str(&self.voice_block());
+        brief.push_str("\n\n");
+        brief.push_str(AGENT_BRIEF_BODY);
         brief.push_str(AGENT_BRIEF_END);
         brief
     }
