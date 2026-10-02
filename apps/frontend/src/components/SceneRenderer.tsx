@@ -62,6 +62,8 @@ function SceneContent({
   );
 }
 
+// Deliberately outside SceneShell: this fallback must still render when the
+// shell itself is what failed. See "Scene shell" in apps/frontend/ARCHITECTURE.md.
 function UnavailableStage({
   state,
   onToggleListening,
