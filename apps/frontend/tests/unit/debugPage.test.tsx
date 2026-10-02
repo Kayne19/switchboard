@@ -57,6 +57,13 @@ describe('debug page', () => {
     expect(drawer?.textContent).toContain('current_agent_unsure');
     expect(drawer?.textContent).toContain('for_current_agent between the lower and upper thresholds');
     expect(drawer?.querySelectorAll('.bar-row').length).toBeGreaterThan(5);
+    const dropped = host.querySelector('[data-anchor="utt-u-106"]') as HTMLButtonElement;
+    expect(dropped.textContent).toContain('dropped (stale generation)');
+    expect(dropped.textContent).not.toContain('routing…');
+    expect(dropped.classList.contains('pending')).toBe(false);
+    expect(host.querySelector('[data-anchor="utt-u-107"]')?.textContent).toContain('routing…');
+    act(() => dropped.click());
+    expect(host.querySelector('.drawer')?.textContent).toContain('no destination: the line changed before this was acted on');
     for (const tab of ['Timeline', 'Floor gate', 'Agents & hosts', 'Raw log']) {
       const button = [...host.querySelectorAll('.tabs button')].find((element) => element.textContent === tab) as HTMLButtonElement;
       act(() => button.click());

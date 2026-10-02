@@ -386,6 +386,21 @@ time,
   color: var(--floor);
   border-style: dashed;
 }
+.chip-ended {
+  color: var(--err);
+  border-color: var(--err);
+}
+.ci.ended {
+  border-left-color: var(--muted);
+}
+.ci.ended .ci-text {
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-color: rgba(255, 84, 112, 0.5);
+}
+.dest.dest-ended {
+  border-left-color: var(--err);
+}
 
 /* --- Stage columns --- */
 .stage-col {
@@ -551,6 +566,11 @@ time,
 }
 .route-floor .pulse-dot {
   filter: drop-shadow(0 0 4px #fff) drop-shadow(0 0 8px var(--floor));
+}
+.end-mark path {
+  stroke: var(--err);
+  stroke-width: 2;
+  fill: none;
 }
 .pending-ring {
   fill: none;

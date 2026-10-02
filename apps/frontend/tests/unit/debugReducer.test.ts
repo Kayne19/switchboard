@@ -71,6 +71,12 @@ describe('debug reducer', () => {
       segments: [{ label: 'timeout' }, { label: 'utility' }],
       destinations: [{ agent: 'alpha', from: 'utility', via: 'utility', label: 'utility · continue' }],
     });
+    expect(routePath(state.traces['u-106'])).toMatchObject({
+      stages: ['jev'],
+      pending: false,
+      destinations: [],
+      ended: { branch: 'dropped_stale', label: 'dropped (stale generation)' },
+    });
     expect(routePath(state.traces['u-107'])).toMatchObject({ stages: ['jev'], pending: true, destinations: [] });
     // The operator answered u-101 itself and the utility pane mirrors routing work.
     expect(routePath(state.traces['u-101']).destinations[0]).toMatchObject({ agent: 'operator' });
@@ -217,5 +223,31 @@ describe('debug reducer', () => {
     const snapStarted = performance.now();
     fold([snapshot(records.slice(-4000))]);
     expect(performance.now() - snapStarted).toBeLessThan(1500);
+  });
+
+  it('ends a dropped or failed trace instead of leaving it routing', () => {
+    const utterance = (id: string): DebugEvent => ({ kind: 'caller_utterance', utterance_id: id, text: 'hello', talking_to: 'operator' });
+    const branch = (id: string, name: string): DebugEvent => ({ kind: 'pbx_branch', utterance_id: id, branch: name, reason: `${name} because` });
+    const state = fold([
+      snapshot(),
+      event(utterance('d-1')),
+      event(branch('d-1', 'dropped_stale')),
+      event(utterance('d-2')),
+      event(branch('d-2', 'operator')),
+      event(branch('d-2', 'failed')),
+      event(utterance('d-3')),
+      event(branch('d-3', 'operator')),
+      event(utterance('d-4')),
+      event(branch('d-4', 'refused_unknown_target')),
+      event({ kind: 'routed', utterance_id: 'd-4', to_agent: 'operator', text_part: 'hello', mode: 'continue', via: 'pbx' }),
+    ]);
+    expect(routePath(state.traces['d-1'])).toMatchObject({ pending: false, destinations: [], ended: { branch: 'dropped_stale', reason: 'dropped_stale because' } });
+    expect(routePath(state.traces['d-2'])).toMatchObject({ pending: false, ended: { branch: 'failed', label: 'failed' } });
+    expect(routePath(state.traces['d-3'])).toMatchObject({ pending: true, ended: undefined });
+    expect(routePath(state.traces['d-4'])).toMatchObject({
+      pending: false,
+      ended: undefined,
+      destinations: [{ agent: 'operator', label: 'refused_unknown_target · continue' }],
+    });
   });
 });

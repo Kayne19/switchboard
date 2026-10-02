@@ -24,6 +24,7 @@ import type {
   SpeechEvent,
   UnknownEventFrame,
 } from './protocol';
+import { TERMINAL_BRANCHES } from './explain';
 
 type Numbered<T> = T & { seq: number; timestamp_ms: number };
 
@@ -916,11 +917,22 @@ export interface RouteDestination {
   seq?: number;
 }
 
+/** A trace the service ended on purpose with no destination. */
+export interface RouteEnd {
+  /** The terminal `pbx_branch` value, for example `dropped_stale`. */
+  branch: string;
+  label: string;
+  reason: string;
+  seq: number;
+}
+
 export interface RoutePath {
   stages: Stage[];
   segments: RouteSegment[];
   destinations: RouteDestination[];
-  /** No destination yet: the line ends at the last stage reached. */
+  /** Set when a terminal `pbx_branch` ended the trace with no `routed`. */
+  ended?: RouteEnd;
+  /** Still routing: no destination yet and nothing ended the trace. */
   pending: boolean;
 }
 
@@ -1003,7 +1015,15 @@ export function routePath(trace: RouteTrace): RoutePath {
   if (destinations.length === 0 && trace.operatorHop && trace.operatorHop.outcome !== 'route_tool') {
     destinations.push({ agent: OPERATOR, from: 'operator', label: trace.operatorHop.outcome, via: 'operator', mode: '', textPart: trace.operatorHop.text });
   }
-  return { stages, segments, destinations, pending: destinations.length === 0 };
+  let ended: RouteEnd | undefined;
+  if (destinations.length === 0) {
+    for (const record of trace.records) {
+      if (record.kind === 'pbx_branch' && Object.hasOwn(TERMINAL_BRANCHES, record.branch)) {
+        ended = { branch: record.branch, label: TERMINAL_BRANCHES[record.branch], reason: record.reason, seq: record.seq };
+      }
+    }
+  }
+  return { stages, segments, destinations, ended, pending: destinations.length === 0 && ended === undefined };
 }
 
 /** The newest route trace, the one the page animates. */

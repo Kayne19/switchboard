@@ -80,6 +80,7 @@ function TraceDetail({ trace, state }: { trace: RouteTrace; state: DebugState })
             </span>
           ))}
           {path.pending && <span className="chip chip-pending">routing…</span>}
+          {path.ended && <span className="chip chip-ended">✕ {path.ended.label}</span>}
         </div>
       </header>
 
@@ -106,7 +107,7 @@ function TraceDetail({ trace, state }: { trace: RouteTrace; state: DebugState })
             ))}
           </>
         ) : (
-          <div className="muted">{trace.jevRequest ? 'waiting for Jev…' : 'Jev was not asked.'}</div>
+          <div className="muted">{trace.jevRequest ? (path.ended ? 'Jev did not answer before the trace ended.' : 'waiting for Jev…') : 'Jev was not asked.'}</div>
         )}
         {config && (
           <div className="thresholds">
@@ -188,7 +189,13 @@ function TraceDetail({ trace, state }: { trace: RouteTrace; state: DebugState })
       )}
 
       <Section title="Destinations">
-        {path.destinations.length === 0 && <div className="muted">none yet</div>}
+        {path.ended ? (
+          <div className="dest dest-ended">
+            <b>✕ {path.ended.label}</b> <span className="muted">no destination: {path.ended.reason}</span>
+          </div>
+        ) : (
+          path.destinations.length === 0 && <div className="muted">none yet</div>
+        )}
         {path.destinations.map((destination, index) => (
           <div key={index} className="dest" style={{ borderColor: agentColor(destination.agent, state.paneOrder) }}>
             <b>{destination.agent}</b>{' '}
