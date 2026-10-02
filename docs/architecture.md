@@ -71,10 +71,14 @@ browser mic / page controls
           +--> history / registry / models / visual_protocol
           |
           +--> protocol.rs: every message the service sends the browser
+          |
+          +--> debug.rs: the read-only debug bus, its log copy, and the
+                  debug listener's router (docs/debug-page.md)
 
 apps/backend/ ------- the Rust service (src/) and its tests (tests/)
 apps/frontend/ ------ browser: call runtime (socket, capture, playback) and rendering
 static/ ------------- committed browser build output
+static-debug/ ------- committed debug-page build output, embedded in the binary
 apps/host-agent/ ---- the host agent on each project host, and its installer
 extensions/ --------- the operator's Pi-side tool adapter
 skills/switchboard/ - the Python skill module project agents reach the caller with
@@ -382,6 +386,7 @@ removes the real coupling; do not create interfaces for ceremony.
 | `history.rs` | transcript storage shape | deciding when a turn routes |
 | `visual_protocol.rs` | display action validation and normalization | layout |
 | `protocol.rs` | the shape of every message sent to the browser (`ServerMessage`) | when or to whom a message is sent |
+| `debug.rs` | bounded, in-memory observation: the event and log rings, the debug schema (`DebugEvent`), log-field redaction, and the debug listener's router and WebSocket framing | call control, routing or lifecycle decisions, awaiting on clients or doing I/O while publishing, disk history |
 | `apps/frontend/` | capture, protocol client, playback, UI | server authority or durable state |
 | `extensions/` | the operator's Pi-side tool signal | direct route mutation |
 | homelab | deployment and secrets | application implementation |

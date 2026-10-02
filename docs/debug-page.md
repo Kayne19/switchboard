@@ -2,22 +2,36 @@
 
 The debug page is an optional, read-only observer. Set `SWITCHBOARD_DEBUG_BIND`
 to start its second HTTP listener. When the variable is unset or blank, no debug
-listener is opened. The normal listener does not serve `/debug` assets.
+listener is opened. If the address cannot be bound, the service logs
+`debug listener not started` and keeps serving calls without it.
 
-The listener serves the page from `static/debug/` and accepts a WebSocket at
-`/ws` relative to that listener. It shares the service process and its graceful
-shutdown, but it has no call controls. The page is intended for a trusted
-network: it can contain caller text, prompts, project activity, and logs.
-There is no authentication or disk history. The event and log rings are
-bounded and memory-only.
+## Assets
+
+The page is built into the committed `static-debug/` directory as three
+fixed-name files: `index.html`, `debug.js` and `debug.css`. The binary embeds
+them at compile time (`include_str!` in `apps/backend/src/debug.rs`), and only
+the debug listener's router serves them, at `/`, `/debug.js` and `/debug.css`.
+Every other path there is a 404, and it has no call controls. The primary
+listener serves `static/`, which does not hold the debug page, so no path
+spelling there reaches it. A test drives the primary router with encoded and
+dot-segment variants of `/debug/` to keep it that way. Because the page is
+embedded, deployment copies nothing for it.
+
+The listener shares the service process and its graceful shutdown: on
+shutdown each debug WebSocket gets a Close frame. The page is intended for a
+trusted network: it can contain caller text, prompts, project activity, and
+logs. There is no authentication and no disk history. The event and log rings
+are bounded and memory-only.
 
 ## WebSocket framing
 
-The first frame is a JSON `snapshot`:
+The page connects to `/ws` on the debug listener. The page sends nothing; the
+listener ignores anything it receives. The first frame is a JSON `snapshot`:
 
 ```json
 {
   "type": "snapshot",
+  "last_seq": 2,
   "events": [],
   "logs": [],
   "agents": [],
@@ -29,16 +43,50 @@ The first frame is a JSON `snapshot`:
 }
 ```
 
-After the snapshot, live event frames have `type: "event"`, a monotonically
-increasing `seq`, a wall-clock `timestamp_ms`, and the event's `kind` and
-fields at the same level. Log frames have `type: "log"` and the same sequence and
-timestamp fields. Event and log sequences share one process-local sequence
-space; a reconnect receives the current ring again.
+After the snapshot, live event frames have `type: "event"`, a `seq`, a
+wall-clock `timestamp_ms`, and the event's `kind` and fields at the same level.
+Log frames have `type: "log"`, the same `seq` and `timestamp_ms`, and `level`,
+`target`, `message` and `fields`. Events and logs share one process-local
+sequence space.
 
-A slow client does not block publishing. If its live broadcast receiver falls
-behind, the listener drops the missed frames and sends a fresh `snapshot` frame
-instead. The page must replace its retained event/log projection with that
-snapshot. Ring capacity is approximately 4,000 events and 2,000 log lines.
+Ordering and deduplication:
+
+- One lock covers assigning a `seq`, adding the record to its ring, and sending
+  it live, so the rings and the live stream are both in strictly increasing
+  `seq` order with no gaps.
+- The listener subscribes to the live stream and takes the snapshot under that
+  same lock. `last_seq` is the newest `seq` the snapshot covers: every record
+  at or below it is in the snapshot or was already evicted from its ring.
+- The client must ignore a live frame whose `seq` is at or below the
+  `last_seq` of the snapshot it holds. The listener already drops such frames,
+  so this rule is a safeguard; it is exact because nothing is lost between
+  the snapshot and the first live frame.
+- A slow client does not block publishing. If its live receiver falls behind
+  (256 frames), the listener drops the backlog, subscribes again at the tail,
+  and sends a fresh `snapshot` with a new `last_seq`. The page must replace its
+  whole event and log projection with it. Stale frames from before the resync
+  are never sent. A client that does not take a frame within 5 seconds is
+  disconnected and can reconnect.
+
+Ring capacity is 4,000 events and 2,000 log lines. One record is also bounded
+in bytes: each text field is cut at 4 KiB, a JSON value keeps at most 64 items
+per array or object, and a record keeps about 16 KiB of text in total. A cut
+string ends with `…[clipped]`, a cut array or object gains a
+`…[clipped] N more` entry, and the record carries `"clipped": true`. The
+field is absent when nothing was cut. Snapshots are serialized on the blocking
+pool, never in `publish`.
+
+## Log copy and redaction
+
+A tracing layer copies every log line that passes the service's log filter
+(`SWITCHBOARD_LOG`) to the log ring. The same filter governs the journal and
+the page. The copy replaces the value of any field whose name contains
+`token`, `key`, `secret`, `authorization`, `password` or `bearer`
+(case-insensitive) with `"[redacted]"`. Numbers and booleans are kept, because
+they cannot carry a credential (`jev_summary_token_budget`,
+`*_key_configured`). The journal still receives the line unchanged. Redaction
+is by field name only: a credential written into a message or under another
+field name is not caught, so never log one.
 
 ## Event schema
 
@@ -79,6 +127,7 @@ fan out to several destination panes. Floor events run in the reverse
 direction from an agent through the good-moment gate and optional utility
 rewrite to the caller.
 
-Arguments, prompts, and log fields must never contain bearer keys, host tokens,
-or call tokens. The debug observer must not delay, cancel, or otherwise alter
+Producers must never put bearer keys, host tokens, or call tokens into event
+fields (tool arguments and results, prompts, module call arguments): the
+field-name redaction above applies to log lines only. The debug observer must not delay, cancel, or otherwise alter
 call behavior.
