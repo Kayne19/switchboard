@@ -22,6 +22,7 @@ means unset.
 | `SWITCHBOARD_HOST_TOKENS_FILE` | `<config dir>/host-tokens.json` | Secret. The per-host bearer tokens of the host link (`/host`, see `docs/host-link.md`). Read once at startup; format below. |
 | `SWITCHBOARD_OPERATOR_PROMPT` | `<config dir>/operator.system.md` | The operator's system prompt; skipped if the file is missing. |
 | `SWITCHBOARD_BIND` | `0.0.0.0:8765` | Listen address. |
+| `SWITCHBOARD_DEBUG_BIND` | none (off) | Optional read-only debug-page listener, for example `0.0.0.0:8766`. This is a public interface; homelab must set it deliberately. |
 | `SWITCHBOARD_PI_BINARY` | `pi` | The operator's runtime, run locally. |
 | `SWITCHBOARD_OPERATOR_MODEL` | runtime default | The operator's model. Never swappable. |
 | `SWITCHBOARD_OPERATOR_EXTENSION` | none | Pi extension loaded into the operator. |

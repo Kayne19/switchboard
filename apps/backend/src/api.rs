@@ -1,5 +1,6 @@
 //! HTTP, WebSocket and application workers.
 use crate::audio::{Speaker, StreamResult, SttAdapter, SttStreamAdapter, TtsContinuity};
+use crate::debug::{DebugBus, DebugEvent, DebugFrame};
 use crate::delivery::{AudioQueue, DeliveryConnection, DeliveryFrame, DeliveryState, Event};
 use crate::display::{
     is_display_event, stamp_display_seq, ConfirmState, DisplayGateState, DisplayProjection,
@@ -23,6 +24,7 @@ use axum::extract::ws::{Message, WebSocket};
 use axum::{
     extract::rejection::JsonRejection,
     extract::{State, WebSocketUpgrade},
+    http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -445,6 +447,8 @@ pub struct AppInner {
     pub switchboard: Mutex<Switchboard>,
     /// The project hosts' links (`/host`).
     hosts: Hosts,
+    /// Read-only, bounded observability. It never participates in call control.
+    pub(crate) debug: DebugBus,
     /// What routing reads about the call. Routing must never wait on the PBX
     /// lock: the turn worker holds it for a whole prompt, and an utterance
     /// routed only after the prompt ends can no longer steer it.
@@ -647,6 +651,24 @@ impl AppState {
         stt: SttAdapter,
         stt_stream: SttStreamAdapter,
     ) -> Self {
+        Self::new_with_debug(
+            switchboard,
+            transcript_log,
+            speaker,
+            stt,
+            stt_stream,
+            DebugBus::new(),
+        )
+    }
+
+    pub fn new_with_debug(
+        switchboard: Switchboard,
+        transcript_log: TranscriptLog,
+        speaker: Speaker,
+        stt: SttAdapter,
+        stt_stream: SttStreamAdapter,
+        debug: DebugBus,
+    ) -> Self {
         let (events, _) = broadcast::channel(256);
         let (speech, speech_rx) = mpsc::channel(64);
         // Audio frames may be up to the WebSocket limit. A small bounded queue
@@ -808,6 +830,7 @@ impl AppState {
             AppInner {
                 switchboard: Mutex::new(switchboard),
                 hosts,
+                debug,
                 routing,
                 delivery,
                 transcript_log: Mutex::new(transcript_log),
@@ -862,6 +885,10 @@ impl AppState {
     }
     pub fn router(self, static_dir: Option<ServeDir>) -> Router {
         let router = Router::new()
+            // The debug listener is deliberately separate. Never let the
+            // primary static fallback expose its assets on /debug.
+            .route("/debug", get(debug_assets_not_served))
+            .route("/debug/{*path}", get(debug_assets_not_served))
             .route("/healthz", get(healthz))
             .route("/status", get(status))
             .route("/hangup", post(hangup))
@@ -875,6 +902,77 @@ impl AppState {
             router.fallback_service(service)
         } else {
             router
+        }
+    }
+
+    /// The optional read-only listener. It has no call controls and serves
+    /// only `static/debug`, unlike the primary listener.
+    pub fn debug_router(&self) -> Router {
+        Router::new()
+            .route("/ws", get(debug_ws))
+            .fallback_service(ServeDir::new("static/debug"))
+            .with_state(self.clone())
+    }
+
+    /// Wait for the same idempotent shutdown signal used by the main server.
+    pub async fn wait_for_shutdown(self) {
+        let mut shutdown = self.0.shutdown.subscribe();
+        if *shutdown.borrow() {
+            return;
+        }
+        let _ = shutdown.changed().await;
+    }
+}
+
+async fn debug_assets_not_served() -> StatusCode {
+    StatusCode::NOT_FOUND
+}
+
+async fn debug_ws(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> Response {
+    let receiver = state.0.debug.subscribe();
+    upgrade
+        .on_upgrade(move |socket| debug_socket(socket, state, receiver))
+        .into_response()
+}
+
+async fn debug_socket(
+    mut socket: WebSocket,
+    state: AppState,
+    mut receiver: broadcast::Receiver<DebugFrame>,
+) {
+    async fn send(socket: &mut WebSocket, frame: DebugFrame) -> Result<(), ()> {
+        let text = serde_json::to_string(&frame).map_err(|_| ())?;
+        socket
+            .send(Message::Text(text.into()))
+            .await
+            .map_err(|_| ())
+    }
+
+    let snapshot = state.0.debug.snapshot(state.0.projection.snapshot());
+    if send(&mut socket, snapshot).await.is_err() {
+        return;
+    }
+    loop {
+        tokio::select! {
+            frame = receiver.recv() => {
+                let frame = match frame {
+                    Ok(frame) => frame,
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        state.0.debug.snapshot(state.0.projection.snapshot())
+                    }
+                    Err(broadcast::error::RecvError::Closed) => return,
+                };
+                if send(&mut socket, frame).await.is_err() {
+                    return;
+                }
+            }
+            incoming = socket.next() => {
+                match incoming {
+                    Some(Ok(Message::Close(_))) | None => return,
+                    Some(Ok(_)) => {}
+                    Some(Err(_)) => return,
+                }
+            }
         }
     }
 }
@@ -1869,6 +1967,12 @@ async fn dispatch_routed_transcript(
     generation: u64,
     transcript: String,
 ) {
+    let talking_to = state.0.coordinator.status().route;
+    state.0.debug.publish(DebugEvent::CallerUtterance {
+        utterance_id: id.to_owned(),
+        text: transcript.clone(),
+        talking_to,
+    });
     let routed = route_transcript(state, &transcript).await;
     let decision = &routed.decision;
     let can_steer = matches!(decision.action, Action::Continue) && !decision.sends_to_operator();
@@ -2654,6 +2758,9 @@ async fn model(
 /// lifecycle notices; waiting requests are kept until promotion or stop.
 async fn update_agent_state(state: &AppState, notice: AgentStateNotice) {
     let agents = state.0.projection.notice(&notice);
+    state.0.debug.publish(DebugEvent::AgentsState {
+        agents: agents.clone(),
+    });
     emit_message(state, ServerMessage::AgentsState { agents });
 }
 
@@ -2799,6 +2906,9 @@ async fn update_agent_state_if_current(
     else {
         return false;
     };
+    state.0.debug.publish(DebugEvent::AgentsState {
+        agents: agents.clone(),
+    });
     emit_message(state, ServerMessage::AgentsState { agents });
     true
 }
