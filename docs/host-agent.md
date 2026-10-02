@@ -377,6 +377,7 @@ node apps/host-agent/install.mjs --host-id <id> --token-file <path> \
   `PATH` and the npm package next to it
   (`<prefix>/lib/node_modules/prime-agent`, the one that exports
   `DaemonClient`). Give them when the host lays prime-agent out another way.
+  A rerun reuses the installed ones (see "Redeploying").
 
 ### What it does
 
@@ -394,7 +395,8 @@ node apps/host-agent/install.mjs --host-id <id> --token-file <path> \
    host has the `switchboard` module. Extra files there are removed.
 4. Writes `~/.config/switchboard/` (directory 0700): `host-token` (0600),
    `ca.crt` when a CA file is given, and `host-agent.json` (0600), the config
-   in `docs/host-link.md` with every path explicit. `git_sha` is the
+   in `docs/host-link.md` with every path explicit. It also records the
+   `prime-agent` binary as `prime_agent`, for the next rerun. `git_sha` is the
    checkout's `git rev-parse HEAD`. `daemon_socket` is
    `$TMPDIR/prime-agent-<uid>/daemon.sock` as seen by the installer, the same
    path a desk `prime-agent` in that shell uses.
@@ -474,8 +476,13 @@ git fetch && git checkout <pinned commit>
 node apps/host-agent/install.mjs
 ```
 
-A rerun reads the host id, service URL and token from the installed config
-and keeps the installed CA file. Flags given on a rerun replace them. It
+A rerun reads the host id, service URL, token, `prime-agent` binary and
+`prime-agent` package from the installed config and keeps the installed CA
+file. Flags given on a rerun replace them. The installed binary is reused
+only while it exists, and the installed package only while it has
+`dist/index.js`; otherwise the rerun falls back to the defaults (the
+`prime-agent` on `PATH` and the package next to it). So a plain rerun works
+on a host whose package is not next to the binary. It
 rewrites only what changed, restarts the host agent, and never restarts the
 daemon: resident agents keep running, and the new host agent reattaches to
 them. Whether a running session picks up a changed `switchboard` skill before
