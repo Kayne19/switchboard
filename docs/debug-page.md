@@ -2,8 +2,11 @@
 
 The debug page is an optional, read-only observer. Set `SWITCHBOARD_DEBUG_BIND`
 to start its second HTTP listener. When the variable is unset or blank, no debug
-listener is opened. If the address cannot be bound, the service logs
-`debug listener not started` and keeps serving calls without it.
+listener is opened and nothing is recorded: the event bus and the log copy stay
+off, and publishing returns at once. They start only once the listener is
+bound. If the address cannot be bound, the service logs
+`debug listener not started` and keeps serving calls without it, and without
+recording.
 
 ## Assets
 
@@ -23,6 +26,13 @@ trusted network: it can contain caller text, prompts, project activity, and
 logs. There is no authentication and no disk history. The event and log rings
 are bounded and memory-only.
 
+Browsers do not apply CORS to a WebSocket, so `/ws` checks the origin itself:
+a request with an `Origin` header is upgraded only when that origin's host and
+port equal the request's `Host` (a default port may be left out on either
+side). Any other page a browser on the network opens gets a 403. A request
+with no `Origin` (curl, a probe script) is served. The `npm run dev:debug`
+proxy forwards the dev server's own `Host`, so it passes.
+
 ## The page
 
 The source is `apps/frontend/src/debug/` (entry `apps/frontend/debug/index.html`).
@@ -33,11 +43,15 @@ The source is `apps/frontend/src/debug/` (entry `apps/frontend/debug/index.html`
 
 - `protocol.ts` parses frames. It rejects an unknown frame type or a malformed
   event and counts it in the top bar. It keeps a numbered event of an unknown
-  kind raw, in the raw log tab.
+  kind raw, in the raw log tab. A malformed live frame that still has a valid
+  `seq` is skipped and counted, and its `seq` is admitted, so it causes no
+  resync; only a real gap in the sequence does.
 - `reducer.ts` folds frames into route traces per `utterance_id`, one pane per
   agent, floor traces, turns, and logs. A snapshot replaces the projection.
   Frames at or below the newest seen seq are dropped. A seq gap still open
-  after 2 seconds makes the page reconnect for a fresh snapshot.
+  after 2 seconds makes the page reconnect for a fresh snapshot. A trace that
+  a `pbx_branch` `dropped_stale` or `failed` ends is drawn as ended, not as
+  still routing.
 - `connection.ts` reconnects with backoff from 0.5 s up to 10 s.
 - A pane item or log line from a record with `"clipped": true` shows a
   `clipped` tag.
@@ -49,7 +63,8 @@ listener. `&instant=1` applies it all at once, `&speed=N` changes the pace,
 ## WebSocket framing
 
 The page connects to `/ws` on the debug listener. The page sends nothing; the
-listener ignores anything it receives. The first frame is a JSON `snapshot`:
+listener ignores anything it receives, and refuses a frame over 4 KiB. The
+first frame is a JSON `snapshot`:
 
 ```json
 {
@@ -88,16 +103,22 @@ Ordering and deduplication:
   (256 frames), the listener drops the backlog, subscribes again at the tail,
   and sends a fresh `snapshot` with a new `last_seq`. The page must replace its
   whole event and log projection with it. Stale frames from before the resync
-  are never sent. A client that does not take a frame within 5 seconds is
-  disconnected and can reconnect.
+  are never sent. A client that falls behind again within 10 seconds of its
+  last resync is closed instead, since each resync is a full snapshot; the
+  page reconnects with its backoff. A client that does not take a frame
+  within 5 seconds is disconnected and can reconnect.
 
-Ring capacity is 4,000 events and 2,000 log lines. One record is also bounded
-in bytes: each text field is cut at 4 KiB, a JSON value keeps at most 64 items
-per array or object, and a record keeps about 16 KiB of text in total. A cut
-string ends with `…[clipped]`, a cut array or object gains a
-`…[clipped] N more` entry, and the record carries `"clipped": true`. The
-field is absent when nothing was cut. Snapshots are serialized on the blocking
-pool, never in `publish`.
+Ring capacity is 4,000 events and 2,000 log lines, and at most 32 MiB of
+events and 8 MiB of logs by each record's estimated size; past either bound
+the oldest records go first. One record is also bounded in bytes: each text
+field is cut at 4 KiB, each name, id or JSON object key at 256 bytes, a JSON
+value keeps at most 64 items per array or object, and a record keeps about
+16 KiB of text in total, whatever its input. A cut string ends with
+`…[clipped]`, a cut array or object gains a `…[clipped] N more` entry, and the
+record carries `"clipped": true`. The field is absent when nothing was cut.
+A field is cut before it is scrubbed, so publishing a 16 MiB value costs about
+as much as a 5 KiB one. Snapshots are serialized on the blocking pool, never
+in `publish`.
 
 ## Log copy and redaction
 
@@ -105,21 +126,36 @@ A tracing layer copies every log line that passes the service's log filter
 (`SWITCHBOARD_LOG`) to the log ring. The same filter governs the journal and
 the page. The journal still receives every line unchanged.
 
-Every event and log record is scrubbed before it is clipped and kept, in one
-place (`Clip` in `debug.rs`); producers publish raw values:
+Every event and log record is scrubbed before it is kept, in one place
+(`Clip` in `debug.rs`); producers publish raw values. Every string is
+scrubbed: text, JSON strings and keys, log messages, and names and ids
+(`target`, `to_agent`, `tool`, `call_id`, a module call's `name`).
 
-- A JSON string, or a log field, whose name looks like a credential becomes
-  `"[redacted]"`. Names match case-insensitively when they contain `token`,
-  `secret`, `password`, `passwd`, `apikey`, `privatekey`, `authorization`,
-  `bearer`, `credential` or `cookie`, or have `key` or `keys` as a whole part
-  (`api_key`, `x-api-key`; not `keyboard`). Numbers and booleans are kept,
-  because they cannot carry a credential (`jev_summary_token_budget`,
-  `*_key_configured`).
-- In every text field, JSON string and log message, `[redacted]` replaces the
-  value after such a name and `=` or `:` (`API_KEY=...`, `"token": "..."`;
-  a plain number such as `max tokens: 500` is kept), the word after `Bearer`
-  (and after `Authorization: Bearer`), and words with a well-known key prefix
-  (`sk-`, `ghp_`, `gho_`, `ghs_`, `github_pat_`, `xoxb-`, `xoxp-`, `glpat-`).
+- A JSON value, or a log field, whose name looks like a credential becomes
+  `"[redacted]"`, whatever its type: a string, an array or an object. Names
+  match case-insensitively when they contain `token`, `secret`, `password`,
+  `passwd`, `apikey`, `privatekey`, `authorization`, `bearer`, `credential` or
+  `cookie`, or have `key` or `keys` as a whole part (`api_key`, `x-api-key`;
+  not `keyboard`). A `null` and a boolean are kept (`*_key_configured`), and so
+  is a number whose name also says it is a count (`budget`, `count`, `max`,
+  `limit`, `chars`, `bytes`, `tokens`, `size`, `length`, `total`:
+  `jev_summary_token_budget`, `input_tokens`). Any other number under such a
+  name is redacted (`pin_token`).
+- In every string, `[redacted]` replaces a PEM private key block
+  (`-----BEGIN ... PRIVATE KEY-----` through its `-----END ...-----` line, or
+  to the end of a cut string), the value after a credential-like name and `=`
+  or `:` (`API_KEY=...`, `"token": "..."`; a plain number such as
+  `max tokens: 500` is kept), and the word after `Bearer` (and after
+  `Authorization: Bearer`).
+- It also replaces a word that is a credential by its shape: a word of 16 or
+  more characters with a well-known key prefix (`sk-`, `ghp_`, `gho_`, `ghu_`,
+  `ghs_`, `ghr_`, `github_pat_`, `xoxa-`, `xoxb-`, `xoxp-`, `xoxr-`, `xoxs-`,
+  `xapp-`, `glpat-`, `glsa_`, `hf_`, `npm_`, `AIza`, `pypi-`, `dop_v1_`), an
+  AWS access key id (`AKIA` or `ASIA` and 16 upper-case letters or digits), a
+  JWT (`eyJ` and two more `.`-separated segments), and a random-looking word:
+  32 or more characters that mix upper case, lower case and digits with at
+  least 4.2 bits of entropy per character. Lower-case hex digests (git hashes)
+  and UUIDs are kept.
 
 This is a heuristic for a trusted-network page, not a guarantee. It can
 redact an innocent phrase such as `token: x`, and it misses a credential
@@ -137,12 +173,12 @@ Rust `DebugEvent` in `apps/backend/src/debug.rs` is the source of truth. The
 - `jev_request`: optional `utterance_id` (`route` purpose), `purpose` (`route` or `good_moment`), `state` (the call summary sent to Jev), optional `floor_id` (`good_moment` purpose)
 - `jev_response`: optional `utterance_id`, `purpose`, `latency_ms`, `outcome` (`ok`, `invalid`, `timeout`, or `error`), `answers`, optional `error`, optional `floor_id`. `answers` is Jev's raw answer per question: `{"<question>": {"type", "choice", "probabilities", "confidence", "noul"}}`, with `null` for what Jev left out; it is `{}` when Jev gave no answer. `invalid` means Jev answered but the answer could not be used.
 - `route_decision`: `utterance_id`, `rule`, `reason`, `action`, optional `target`, `mode` (`continue`, `fresh`, or `not_applicable`), `decided_by` (`jev`, or `fallback` when Jev was unavailable). `rule` is the threshold rule that fired: `jev_action` (action confidence met the threshold), `action_below_threshold`, `stayed_with_current` (on a project, `for_current_agent` reached the upper threshold), `current_agent_unsure` (on a project, `for_current_agent` between the thresholds), `stop_confirms`, or `jev_unavailable`. `reason` says it in plain words with the numbers and thresholds.
-- `pbx_branch`: `utterance_id`, `branch`, `reason`; records the branch taken after Jev. `branch` is `stop_confirmed`, `stop_asked`, `take_over`, `answer_waiting`, `utility`, `multi_unresolved`, `go_to_project`, `continue_current`, `operator`, or `dropped_stale` (a newer generation discarded the utterance; this ends its trace). An utterance can have two: `utility`, then `multi_unresolved` or `operator` when the utility gave no usable answer.
+- `pbx_branch`: `utterance_id`, `branch`, `reason`; records the branch taken after Jev. `branch` is `stop_confirmed`, `stop_asked`, `take_over`, `answer_waiting`, `utility`, `multi_unresolved`, `go_to_project`, `continue_current`, `operator`, `refused_unknown_target` (Jev, the utility or the operator named a destination that is not a registered project; the switchboard refused it, and a `routed` to `operator` via `pbx` follows, or, for one part of a split, the part was dropped), `dropped_stale` (a newer generation discarded the utterance, or a page rescue cancelled its turn; this ends its trace), or `failed` (the turn worker failed; this ends its trace). An utterance can have two: `utility`, then `multi_unresolved` or `operator` when the utility gave no usable answer.
 - `utility_request`: `utterance_id`, `attempt` (`first` or `split_retry`), `prompt`
 - `utility_decision`: `utterance_id`, `attempt`, `decision`, `latency_ms`; `decision` is an object with `kind` `second_opinion` (`target`, `mode`, `confident`), `dispatch_parts` (`parts`: `[{project, text}]`), `none`, or `error` (`error`)
 - `operator_hop`: `utterance_id`, `text`, `outcome` (`answered`, `route_tool`, `route_tool_without_target`, `failed`, or `unavailable`)
 - `operator_route_tool`: `utterance_id`, `target`, `mode`, `action` (`transfer`, `continue`, or `return_to_operator`). The route tool is read from the operator turn that answers the utterance, so it carries that utterance's id.
-- `routed`: `utterance_id`, `to_agent`, `text_part`, `mode` (`continue`, `fresh`, `take_over`, or `steer` for words steered into a running turn), `via` (`jev`, `utility`, `operator`, or `pbx`); multiple events represent fan-out from `dispatch_parts`. A caller line handled by the operator has an `operator_hop`; when the operator answers by itself (or its recovery does) the trace ends in a `routed` to `operator` via `operator`, and when it uses its route tool, in `operator_route_tool` and a `routed` to the target via `operator`. A line the switchboard answers itself (a stop question or confirmation, a takeover with no target) ends in a `routed` to `operator` via `pbx`. Every caller line's trace ends in at least one `routed`, unless a `pbx_branch` `dropped_stale` ends it
+- `routed`: `utterance_id`, `to_agent`, `text_part`, `mode` (`continue`, `fresh`, `take_over`, or `steer` for words steered into a running turn), `via` (`jev`, `utility`, `operator`, or `pbx`); multiple events represent fan-out from `dispatch_parts`. A caller line handled by the operator has an `operator_hop`; when the operator answers by itself (or its recovery does) the trace ends in a `routed` to `operator` via `operator`, and when it uses its route tool, in `operator_route_tool` and a `routed` to the target via `operator`. A line the switchboard answers itself (a stop question or confirmation, a takeover with no target, a refused destination) ends in a `routed` to `operator` via `pbx`. A `routed` goes out only after its destination is checked against the registry, and a line whose agent turns out to be gone is traced by the operator's hop instead. Every caller line's trace ends in at least one `routed`, or in a `pbx_branch` `dropped_stale` or `failed`. A turn cancelled after it was routed has both: the `routed`, then `dropped_stale`.
 - `agent_input`: `agent`, optional `turn_id`, `text`, `source`, optional `utterance_id` (the caller line this input carries, when routing sent one here)
 - `agent_text`: `agent`, optional `turn_id`, `text`, `final`
 - `tool_start`: `agent`, optional `call_id`, `tool`, optional `args`, optional `turn_id`
@@ -165,6 +201,10 @@ Rust `DebugEvent` in `apps/backend/src/debug.rs` is the source of truth. The
 `floor_request` through the good-moment Jev call, the gate, the rewrite, the
 release and its `speech`.
 
+`utterance_id` is the caller page's id for the clip (a UUID, or a
+`Date.now()`-based id from an older page), capped at 128 characters. The page
+assumes it is unique within the ring; it is not scoped to a call.
+
 Routing events form an ordered multi-hop trace per `utterance_id`: Jev, the PBX
 branch, each utility attempt, the operator and its route tool when used, then
 one or more `routed` destinations. A `dispatch_parts` utility decision can
@@ -186,7 +226,7 @@ leg.
   first after a compaction, shown as an input of its own), `intro` (the first
   prompt of a transfer), `foreground` (a background agent brought back), or
   `model_change`. `utterance_id` is set when the input carries a routed
-  caller line.
+  caller line, a steer included.
 - `agent_text` with `final: false` is a piece of the reply: a streamed chunk
   from the operator or utility (gathered to about 256 bytes or 250 ms), or one
   finished assistant message from a project agent. `final: true` is the whole

@@ -318,7 +318,10 @@ Only `turn_end` means settled.
 They feed the service's debug page (`docs/debug-page.md`) and nothing else; an
 older host omits them and the service shows the tool name only. A value whose
 JSON is over 4 KB is sent as `{"clipped": true, "bytes": <full size>,
-"preview": "<start of the JSON>"}` instead. The host sends assistant text once
+"preview": "<start of the JSON>"}` instead. They are sent whether or not
+the service's debug page is on, so a tool pair can add about 8 KB to a
+session's replay buffer. The host does not scrub them: the service scrubs
+credentials before a debug record is kept. The host sends assistant text once
 per message (`text`), not as streamed deltas: one delta per token would fill
 the per-session replay buffer of 1000 events and make a reconnect lose its
 replay.
