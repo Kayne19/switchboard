@@ -1,4 +1,3 @@
-import { agentColor } from '../colors';
 import { clockTime } from '../explain';
 import type { DebugState } from '../reducer';
 
@@ -9,10 +8,10 @@ export function AgentsPanel({ state }: { state: DebugState }) {
   return (
     <div className="panel">
       <div className="panel-bar">
-        <h2>Agents & hosts</h2>
+        <h2 className="tech">Agents & hosts</h2>
         {call && (
-          <span className="muted">
-            call {call.callId} · {call.endTs ? `ended ${clockTime(call.endTs)}${call.reason ? ` (${call.reason})` : ''}` : 'live'}
+          <span className="tech micro muted">
+            call {call.callId} / {call.endTs ? `ended ${clockTime(call.endTs)}${call.reason ? ` (${call.reason})` : ''}` : 'live'}
           </span>
         )}
       </div>
@@ -22,23 +21,22 @@ export function AgentsPanel({ state }: { state: DebugState }) {
           const info = agentStates.get(agent);
           const turns = state.turns.filter((turn) => turn.agent === agent);
           return (
-            <div key={agent} className="card" style={{ ['--agent' as string]: agentColor(agent, state.paneOrder) }}>
+            <div key={agent} className="card agent-card">
               <div className="card-head">
-                <span className="dot" />
-                <b>{agent}</b>
-                {info && <span className={`badge state-${info.state}`}>{info.state}</span>}
+                <span className="card-title tech">{agent}</span>
+                {info && <span className={`pane-state tech micro state-${info.state}`}>{info.state}</span>}
               </div>
               <div className="kv">
-                {turns.length} turns · {pane?.tools ?? 0} tools · {pane?.items.length ?? 0} items
+                {turns.length} turns / {pane?.tools ?? 0} tools / {pane?.items.length ?? 0} items
               </div>
-              <div className="kv dim">{pane?.openTurn ? `in turn ${pane.openTurn}` : 'no open turn'}</div>
-              {pane && pane.lastTs > 0 && <div className="kv dim">last activity {clockTime(pane.lastTs)}</div>}
-              {info?.pending_request && <div className="kv pending">pending: “{info.pending_request.message}”</div>}
+              <div className="kv muted">{pane?.openTurn ? `in turn ${pane.openTurn}` : 'no open turn'}</div>
+              {pane && pane.lastTs > 0 && <div className="kv muted">last activity {clockTime(pane.lastTs)}</div>}
+              {info?.pending_request && <div className="kv semantic-orange">pending: “{info.pending_request.message}”</div>}
             </div>
           );
         })}
       </div>
-      <h3 className="sub-h">Host links</h3>
+      <h3 className="sub-h tech micro">Host links</h3>
       <table className="grid">
         <thead>
           <tr>
@@ -52,11 +50,11 @@ export function AgentsPanel({ state }: { state: DebugState }) {
           {hosts.map((host) => (
             <tr key={host.host}>
               <td>{host.host}</td>
-              <td className={host.connected ? 'ok' : 'err'}>{host.connected ? '● connected' : '○ down'}</td>
+              <td className={host.connected ? 'semantic-green' : 'semantic-red'}>{host.connected ? 'connected' : 'down'}</td>
               <td className="mono">{clockTime(host.sinceTs)}</td>
               <td className="mono">
                 {host.flips.slice(-6).map((flip) => (
-                  <span key={flip.ts} className={flip.connected ? 'ok' : 'err'}>
+                  <span key={flip.ts} className={flip.connected ? 'semantic-green' : 'semantic-red'}>
                     {flip.connected ? '▲' : '▼'}
                     {clockTime(flip.ts).slice(0, 8)}{' '}
                   </span>
