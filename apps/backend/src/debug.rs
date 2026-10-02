@@ -63,6 +63,12 @@ where
 const EVENT_CAPACITY: usize = 4_000;
 const LOG_CAPACITY: usize = 2_000;
 const LIVE_CAPACITY: usize = 256;
+/// Bounds on one record, so a single event (a long prompt, a large tool
+/// result) cannot grow the rings by more than a few kilobytes.
+const MAX_FIELD_BYTES: usize = 4 * 1024;
+const MAX_RECORD_BYTES: usize = 16 * 1024;
+const MAX_JSON_ITEMS: usize = 64;
+const CLIP_MARKER: &str = "…[clipped]";
 
 /// One event in the debug page's immutable event stream. This is the schema
 /// shared with `apps/frontend/src/debug/protocol.ts` and its fixture.
@@ -242,6 +248,9 @@ pub(crate) enum DebugEvent {
 pub(crate) struct DebugRecord {
     pub seq: u64,
     pub timestamp_ms: u64,
+    /// True when a field was shortened to the record bounds.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub clipped: bool,
     #[serde(flatten)]
     pub event: DebugEvent,
 }
@@ -257,6 +266,154 @@ pub(crate) struct DebugLog {
     pub target: String,
     pub message: String,
     pub fields: Value,
+    /// True when the message or a field was shortened to the record bounds.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub clipped: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// Shortens strings and JSON values to the record bounds, marking each cut.
+struct Clip {
+    remaining: usize,
+    clipped: bool,
+}
+
+impl Clip {
+    fn new() -> Self {
+        Self {
+            remaining: MAX_RECORD_BYTES,
+            clipped: false,
+        }
+    }
+
+    fn spend(&mut self, bytes: usize) {
+        self.remaining = self.remaining.saturating_sub(bytes.max(1));
+    }
+
+    fn text(&mut self, text: &mut String) {
+        let limit = MAX_FIELD_BYTES.min(self.remaining);
+        if text.len() > limit {
+            let mut cut = limit;
+            while !text.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            text.truncate(cut);
+            text.push_str(CLIP_MARKER);
+            self.clipped = true;
+        }
+        self.spend(text.len());
+    }
+
+    fn json(&mut self, value: &mut Value) {
+        match value {
+            Value::String(text) => self.text(text),
+            Value::Array(items) => {
+                let mut kept = 0;
+                for item in items.iter_mut() {
+                    if self.remaining == 0 || kept == MAX_JSON_ITEMS {
+                        break;
+                    }
+                    self.json(item);
+                    kept += 1;
+                }
+                if kept < items.len() {
+                    let dropped = items.len() - kept;
+                    items.truncate(kept);
+                    items.push(Value::String(format!("{CLIP_MARKER} {dropped} more")));
+                    self.clipped = true;
+                }
+            }
+            Value::Object(map) => {
+                let mut kept = 0;
+                let mut dropped = 0;
+                map.retain(|key, value| {
+                    if self.remaining == 0 || kept == MAX_JSON_ITEMS {
+                        dropped += 1;
+                        return false;
+                    }
+                    self.spend(key.len());
+                    self.json(value);
+                    kept += 1;
+                    true
+                });
+                if dropped > 0 {
+                    map.insert(
+                        "…".to_owned(),
+                        Value::String(format!("{CLIP_MARKER} {dropped} more")),
+                    );
+                    self.clipped = true;
+                }
+            }
+            Value::Null | Value::Bool(_) | Value::Number(_) => self.spend(8),
+        }
+    }
+
+    fn opt_text(&mut self, text: &mut Option<String>) {
+        if let Some(text) = text {
+            self.text(text);
+        }
+    }
+
+    fn opt_json(&mut self, value: &mut Option<Value>) {
+        if let Some(value) = value {
+            self.json(value);
+        }
+    }
+
+    /// Clips the fields of `event` that can carry caller, prompt or tool text.
+    /// Names and ids are short by construction and left alone.
+    fn event(&mut self, event: &mut DebugEvent) {
+        match event {
+            DebugEvent::CallerUtterance { text, .. }
+            | DebugEvent::OperatorHop { text, .. }
+            | DebugEvent::AgentInput { text, .. }
+            | DebugEvent::AgentText { text, .. } => self.text(text),
+            DebugEvent::JevRequest { state, .. } => self.json(state),
+            DebugEvent::JevResponse { answers, error, .. } => {
+                self.opt_text(error);
+                self.json(answers);
+            }
+            DebugEvent::RouteDecision { reason, .. } | DebugEvent::PbxBranch { reason, .. } => {
+                self.text(reason)
+            }
+            DebugEvent::UtilityRequest { prompt, .. } => self.text(prompt),
+            DebugEvent::UtilityDecision { decision, .. } => self.json(decision),
+            DebugEvent::Routed { text_part, .. } => self.text(text_part),
+            DebugEvent::ToolStart { args, .. } => self.opt_json(args),
+            DebugEvent::ToolEnd { result, error, .. } => {
+                self.opt_text(error);
+                self.opt_json(result);
+            }
+            DebugEvent::ModuleCall { args, .. } => self.json(args),
+            DebugEvent::ModuleResult { detail, .. } => self.json(detail),
+            DebugEvent::Rescue { reason, .. } => self.text(reason),
+            DebugEvent::Speech { text, reason, .. } => {
+                self.opt_text(reason);
+                self.text(text);
+            }
+            DebugEvent::FloorRequest { message, .. } | DebugEvent::FloorHeld { message, .. } => {
+                self.text(message)
+            }
+            DebugEvent::FloorRewrite {
+                original,
+                rewritten,
+                ..
+            } => {
+                self.text(original);
+                self.text(rewritten);
+            }
+            DebugEvent::OperatorRouteTool { .. }
+            | DebugEvent::TurnStart { .. }
+            | DebugEvent::TurnEnd { .. }
+            | DebugEvent::FloorGate { .. }
+            | DebugEvent::FloorReleased { .. }
+            | DebugEvent::AgentsState { .. }
+            | DebugEvent::HostLink { .. } => {}
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -408,13 +565,16 @@ impl DebugBus {
     }
 
     /// Records `event` and sends it to live clients. Returns its sequence.
-    pub(crate) fn publish(&self, event: DebugEvent) -> u64 {
+    pub(crate) fn publish(&self, mut event: DebugEvent) -> u64 {
         let timestamp_ms = now_ms();
+        let mut clip = Clip::new();
+        clip.event(&mut event);
         self.locked(|rings| {
             rings.last_seq += 1;
             let record = Arc::new(DebugRecord {
                 seq: rings.last_seq,
                 timestamp_ms,
+                clipped: clip.clipped,
                 event,
             });
             push_bounded(&mut rings.events, record.clone(), EVENT_CAPACITY);
@@ -427,10 +587,13 @@ impl DebugBus {
         &self,
         level: String,
         target: String,
-        message: String,
-        fields: Value,
+        mut message: String,
+        mut fields: Value,
     ) -> u64 {
         let timestamp_ms = now_ms();
+        let mut clip = Clip::new();
+        clip.text(&mut message);
+        clip.json(&mut fields);
         self.locked(|rings| {
             rings.last_seq += 1;
             let log = Arc::new(DebugLog {
@@ -440,6 +603,7 @@ impl DebugBus {
                 target,
                 message,
                 fields,
+                clipped: clip.clipped,
             });
             push_bounded(&mut rings.logs, log.clone(), LOG_CAPACITY);
             let _ = self.0.live.send(LiveFrame::Log(log));

@@ -391,3 +391,47 @@ fn concurrent_publishers_keep_ring_and_live_order_without_gaps() {
     ring.sort_unstable();
     assert_eq!(ring, (1..=total).collect::<Vec<_>>());
 }
+
+#[test]
+fn one_record_cannot_exceed_the_size_bounds() {
+    let bus = DebugBus::new();
+    let huge = "é".repeat(MAX_FIELD_BYTES); // two bytes per char
+    bus.publish(DebugEvent::UtilityRequest {
+        utterance_id: "u".into(),
+        attempt: "first".into(),
+        prompt: huge.clone(),
+    });
+    let wide: serde_json::Map<String, Value> = (0..1_000)
+        .map(|n| (format!("k{n}"), Value::String(huge.clone())))
+        .collect();
+    bus.publish(DebugEvent::ToolEnd {
+        agent: "alpha".into(),
+        call_id: None,
+        tool: "bash".into(),
+        result: Some(json!({"items": vec![1; 1_000], "wide": wide})),
+        error: None,
+    });
+    bus.publish(host_link(1));
+    bus.publish_log("INFO".into(), "t".into(), huge.clone(), json!({"f": huge}));
+    let snapshot = bus.snapshot();
+    let DebugEvent::UtilityRequest { prompt, .. } = &snapshot.events[0].event else {
+        panic!("utility request")
+    };
+    assert!(snapshot.events[0].clipped);
+    assert!(prompt.ends_with(CLIP_MARKER));
+    assert!(prompt.len() <= MAX_FIELD_BYTES + CLIP_MARKER.len());
+    assert!(snapshot.events[1].clipped);
+    let size = serde_json::to_string(snapshot.events[1].as_ref())
+        .unwrap()
+        .len();
+    assert!(
+        size < MAX_RECORD_BYTES * 2,
+        "tool result record is {size} bytes"
+    );
+    assert!(!snapshot.events[2].clipped);
+    let frame: Value =
+        serde_json::from_str(&LiveFrame::Event(snapshot.events[2].clone()).to_json()).unwrap();
+    assert!(frame.get("clipped").is_none());
+    assert!(snapshot.logs[0].clipped);
+    assert!(snapshot.logs[0].message.ends_with(CLIP_MARKER));
+}
