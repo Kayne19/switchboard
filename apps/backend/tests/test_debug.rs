@@ -897,3 +897,77 @@ fn names_and_ids_are_scrubbed_too() {
         assert!(!wire.contains(secret), "leaked: {wire}");
     }
 }
+
+#[test]
+fn names_ids_and_keys_are_cut_and_a_record_has_a_hard_size() {
+    let bus = DebugBus::new();
+    let long = "n".repeat(100_000);
+    let mut args = serde_json::Map::new();
+    args.insert("k".repeat(1 << 20), json!("v"));
+    bus.publish(DebugEvent::ModuleCall {
+        agent: long.clone(),
+        call_id: long.clone(),
+        name: long.clone(),
+        args: Value::Object(args),
+        turn_id: Some(long.clone()),
+    });
+    // Deep and wide JSON, every string at the field bound.
+    let field = "x".repeat(MAX_FIELD_BYTES * 2);
+    let mut deep = json!(field);
+    for _ in 0..100 {
+        deep = json!([deep.clone(), {"a": field, "b": [field, field]}]);
+    }
+    bus.publish(DebugEvent::ToolEnd {
+        agent: "alpha".into(),
+        call_id: None,
+        tool: "bash".into(),
+        result: Some(deep),
+        error: Some(field.clone()),
+        turn_id: None,
+    });
+    let snapshot = bus.snapshot();
+    let DebugEvent::ModuleCall {
+        call_id,
+        name,
+        args,
+        ..
+    } = &snapshot.events[0].event
+    else {
+        panic!("module call")
+    };
+    assert!(snapshot.events[0].clipped);
+    assert!(call_id.len() <= MAX_NAME_BYTES + CLIP_MARKER.len());
+    assert!(name.ends_with(CLIP_MARKER));
+    let key = args.as_object().unwrap().keys().next().unwrap();
+    assert!(
+        key.len() <= MAX_NAME_BYTES + CLIP_MARKER.len(),
+        "{}",
+        key.len()
+    );
+    for record in &snapshot.events {
+        let size = serde_json::to_string(record.as_ref()).unwrap().len();
+        assert!(size < MAX_RECORD_BYTES * 2, "record is {size} bytes");
+    }
+}
+
+#[test]
+fn only_the_part_of_a_string_that_can_be_kept_is_scrubbed() {
+    // A 16 MiB field costs what its kept prefix costs: the rest is never
+    // scanned.
+    let huge = "word ".repeat(16 << 20 >> 2);
+    assert_eq!(
+        scrub_window(&huge, MAX_FIELD_BYTES).len(),
+        MAX_FIELD_BYTES + SCRUB_MARGIN
+    );
+    let mut text = huge;
+    Clip::new().text(&mut text);
+    assert!(text.len() <= MAX_FIELD_BYTES + CLIP_MARKER.len());
+    // A credential that runs across the cut is still redacted up to it.
+    let mut text = format!(
+        "{}API_KEY={}",
+        "a ".repeat((MAX_FIELD_BYTES - 10) / 2),
+        "s".repeat(4 * MAX_FIELD_BYTES)
+    );
+    Clip::new().text(&mut text);
+    assert!(!text.contains("sss"), "{}", &text[text.len() - 40..]);
+}

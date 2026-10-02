@@ -98,6 +98,11 @@ const LIVE_CAPACITY: usize = 256;
 const MAX_FIELD_BYTES: usize = 4 * 1024;
 const MAX_RECORD_BYTES: usize = 16 * 1024;
 const MAX_JSON_ITEMS: usize = 64;
+/// Names and ids (an agent, a tool, a call id, a JSON key) are short in
+/// practice, but they come from hosts and models, so they are cut too.
+const MAX_NAME_BYTES: usize = 256;
+/// How far past a cut `Clip` still scrubs (`scrub_window`).
+const SCRUB_MARGIN: usize = 1024;
 const CLIP_MARKER: &str = "…[clipped]";
 /// A debug client that does not take a frame within this time is dropped; it
 /// can reconnect and get a fresh snapshot.
@@ -345,15 +350,37 @@ fn is_false(value: &bool) -> bool {
 }
 
 /// Makes one record safe for the debug page, before it takes the publish
-/// lock. Every string, names and ids included, goes through `scrub_text`, a
-/// JSON value under a credential-like name (`secret_name`, `secret_value`)
-/// becomes `[redacted]`,
-/// and then strings and JSON values are shortened to the record bounds, with
-/// each cut marked. This is the only place debug records are scrubbed or
-/// clipped; producers publish raw values.
+/// lock. Each string, names and ids included, is first cut to what the
+/// record can keep (plus `SCRUB_MARGIN`), then scrubbed (`scrub_text`), then
+/// cut to its bound with a marker: 4 KiB for text, 256 bytes for a name, id
+/// or JSON key, and about 16 KiB for the whole record. A JSON value under a
+/// credential-like name (`secret_name`, `secret_value`) becomes
+/// `[redacted]`. So the cost of a record does not grow with its input. This
+/// is the only place debug records are scrubbed or clipped; producers
+/// publish raw values.
 struct Clip {
     remaining: usize,
     clipped: bool,
+}
+
+/// The longest prefix of `text` of at most `bytes` bytes.
+fn prefix(text: &str, bytes: usize) -> &str {
+    if text.len() <= bytes {
+        return text;
+    }
+    let mut cut = bytes;
+    while !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    &text[..cut]
+}
+
+/// The part of a string `Clip` scrubs when it keeps at most `limit` bytes:
+/// the kept part and `SCRUB_MARGIN` more, so a credential that runs across
+/// the cut is still recognized up to it. The rest is dropped unread, so a
+/// field's cost does not grow with its input.
+fn scrub_window(text: &str, limit: usize) -> &str {
+    prefix(text, limit.saturating_add(SCRUB_MARGIN))
 }
 
 impl Clip {
@@ -368,30 +395,45 @@ impl Clip {
         self.remaining = self.remaining.saturating_sub(bytes.max(1));
     }
 
-    fn text(&mut self, text: &mut String) {
-        *text = scrub_text(text);
-        let limit = MAX_FIELD_BYTES.min(self.remaining);
-        if text.len() > limit {
-            let mut cut = limit;
-            while !text.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            text.truncate(cut);
-            text.push_str(CLIP_MARKER);
+    /// Scrubs `text` and keeps at most `field_limit` bytes of it, and no
+    /// more than the record has left. Only the window that can be kept is
+    /// scrubbed.
+    fn bounded(&mut self, text: &mut String, field_limit: usize) {
+        let limit = field_limit.min(self.remaining);
+        let window = scrub_window(text, limit);
+        let cut_input = window.len() < text.len();
+        let mut scrubbed = scrub_text(window);
+        if cut_input || scrubbed.len() > limit {
+            let kept = prefix(&scrubbed, limit).len();
+            scrubbed.truncate(kept);
+            scrubbed.push_str(CLIP_MARKER);
             self.clipped = true;
         }
+        *text = scrubbed;
         self.spend(text.len());
     }
 
-    /// A name or id: scrubbed like text.
+    fn text(&mut self, text: &mut String) {
+        self.bounded(text, MAX_FIELD_BYTES);
+    }
+
+    /// A name or id: scrubbed like text, and cut much shorter.
     fn name(&mut self, name: &mut String) {
-        self.text(name);
+        self.bounded(name, MAX_NAME_BYTES);
+    }
+
+    fn marker(&mut self, dropped: usize) -> Value {
+        let marker = format!("{CLIP_MARKER} {dropped} more");
+        self.spend(marker.len());
+        self.clipped = true;
+        Value::String(marker)
     }
 
     fn json(&mut self, value: &mut Value) {
         match value {
             Value::String(text) => self.text(text),
             Value::Array(items) => {
+                self.spend(2);
                 let mut kept = 0;
                 for item in items.iter_mut() {
                     if self.remaining == 0 || kept == MAX_JSON_ITEMS {
@@ -403,32 +445,32 @@ impl Clip {
                 if kept < items.len() {
                     let dropped = items.len() - kept;
                     items.truncate(kept);
-                    items.push(Value::String(format!("{CLIP_MARKER} {dropped} more")));
-                    self.clipped = true;
+                    let marker = self.marker(dropped);
+                    items.push(marker);
                 }
             }
             Value::Object(map) => {
+                self.spend(2);
+                let entries = std::mem::take(map);
+                let total = entries.len();
                 let mut kept = 0;
-                let mut dropped = 0;
-                map.retain(|key, value| {
+                for (mut key, mut value) in entries {
                     if self.remaining == 0 || kept == MAX_JSON_ITEMS {
-                        dropped += 1;
-                        return false;
+                        break;
                     }
-                    self.spend(key.len());
-                    if secret_name(key) && secret_value(key, value) {
-                        *value = Value::String(REDACTED.to_owned());
+                    // Judge the name by its start: a key can be any length.
+                    let head = prefix(&key, MAX_NAME_BYTES);
+                    if secret_name(head) && secret_value(head, &value) {
+                        value = Value::String(REDACTED.to_owned());
                     }
-                    self.json(value);
+                    self.name(&mut key);
+                    self.json(&mut value);
+                    map.insert(key, value);
                     kept += 1;
-                    true
-                });
-                if dropped > 0 {
-                    map.insert(
-                        "…".to_owned(),
-                        Value::String(format!("{CLIP_MARKER} {dropped} more")),
-                    );
-                    self.clipped = true;
+                }
+                if kept < total {
+                    let marker = self.marker(total - kept);
+                    map.insert("…".to_owned(), marker);
                 }
             }
             Value::Null | Value::Bool(_) | Value::Number(_) => self.spend(8),
