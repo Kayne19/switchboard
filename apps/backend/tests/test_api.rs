@@ -4083,10 +4083,9 @@ async fn a_slow_desk_host_does_not_hold_the_pbx_lock_during_routing_summary() {
     fake.serve(host.connect_fake("scriptorium"));
 
     let routing_state = state.clone();
-    let routing =
-        tokio::spawn(
-            async move { route_transcript(&routing_state, "caller asks about alpha").await },
-        );
+    let routing = tokio::spawn(async move {
+        route_transcript(&routing_state, "clip-1", "caller asks about alpha").await
+    });
     timeout(Duration::from_secs(1), listed.notified())
         .await
         .expect("the routing summary queried the host");
@@ -4229,6 +4228,21 @@ async fn floor_good_moment_gate_does_not_query_desk_hosts() {
             .is_err(),
         "floor admission does not discover desk sessions"
     );
+    // The gate's Jev call is traced under the floor message, not an utterance.
+    let response = until_debug(&state, |event| {
+        matches!(event, crate::debug::DebugEvent::JevResponse { purpose, .. } if purpose == "good_moment")
+    })
+    .await;
+    assert!(matches!(
+        response,
+        crate::debug::DebugEvent::JevResponse { utterance_id: None, floor_id: Some(ref id), .. }
+            if id == "floor-1"
+    ));
+    assert!(debug_events(&state).iter().any(|event| matches!(
+        event,
+        crate::debug::DebugEvent::JevRequest { purpose, floor_id: Some(id), utterance_id: None, .. }
+            if purpose == "good_moment" && id == "floor-1"
+    )));
     host.disconnect_fake("scriptorium");
 }
 
@@ -6618,4 +6632,60 @@ fn floor_rewrite_context_names_who_spoke() {
         recent_floor_context(&entries),
         "caller: show me the chart\nswitchboard: Here is the diagram.\ngrape: The chart is ready."
     );
+}
+
+/// The debug events published so far, oldest first.
+fn debug_events(state: &AppState) -> Vec<crate::debug::DebugEvent> {
+    match state.0.debug.snapshot(vec![]) {
+        crate::debug::DebugFrame::Snapshot { events, .. } => {
+            events.iter().map(|record| record.event.clone()).collect()
+        }
+        _ => unreachable!("snapshot() returns a snapshot frame"),
+    }
+}
+
+/// Waits for the first debug event `want` accepts.
+async fn until_debug(
+    state: &AppState,
+    want: impl Fn(&crate::debug::DebugEvent) -> bool,
+) -> crate::debug::DebugEvent {
+    for _ in 0..500 {
+        if let Some(event) = debug_events(state).into_iter().find(|event| want(event)) {
+            return event;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("no such debug event: {:?}", debug_events(state));
+}
+
+#[tokio::test]
+async fn an_unavailable_jev_is_traced_as_the_fallback_rule() {
+    use crate::debug::DebugEvent;
+    let client = crate::jev::JevClient::new(
+        "http://unused.invalid/v1/systemone",
+        "/nonexistent/typesafe-api-key",
+        Duration::from_secs(1),
+    )
+    .expect("client")
+    .with_test_responder(|_| async {
+        Err(crate::jev::JevError::Http {
+            status: 503,
+            body: "down".into(),
+        })
+    });
+    let state = state_with_jev(client, Registry::new(vec![]));
+
+    route_transcript(&state, "clip-8", "hello").await;
+
+    let events = debug_events(&state);
+    assert!(matches!(
+        &events[1],
+        DebugEvent::JevResponse { outcome, error: Some(error), answers, .. }
+            if outcome == "error" && error.contains("503") && *answers == json!({})
+    ));
+    assert!(matches!(
+        &events[2],
+        DebugEvent::RouteDecision { rule, decided_by, reason, .. }
+            if rule == "jev_unavailable" && decided_by == "fallback" && reason.contains("Jev unavailable")
+    ));
 }

@@ -133,3 +133,36 @@ async fn malformed_response_falls_back_to_an_unsure_operator_decision() {
     assert!(decision.unsure);
     assert_eq!(decision.action, crate::router::Action::General);
 }
+
+#[tokio::test]
+async fn a_timeout_is_told_apart_from_other_failures() {
+    let decision_error = |kind| async move {
+        let client = JevClient::new(
+            "http://unused.invalid/v1/systemone",
+            "/nonexistent/typesafe-api-key",
+            Duration::from_millis(20),
+        )
+        .expect("client")
+        .with_test_responder(move |_request| async move {
+            match kind {
+                FailureResponse::Timeout => {
+                    std::future::pending::<Result<crate::jev::JevResponse, JevError>>().await
+                }
+                _ => Err(JevError::Http {
+                    status: 500,
+                    body: "jev is unavailable".into(),
+                }),
+            }
+        });
+        client
+            .decide(serde_json::json!({}), BTreeMap::new())
+            .await
+            .expect_err("failure")
+    };
+    let timeout = decision_error(FailureResponse::Timeout).await;
+    assert!(timeout.is_timeout());
+    assert_eq!(crate::router::jev_outcome(None, Some(&timeout)), "timeout");
+    let server = decision_error(FailureResponse::ServerError).await;
+    assert!(!server.is_timeout());
+    assert_eq!(crate::router::jev_outcome(None, Some(&server)), "error");
+}

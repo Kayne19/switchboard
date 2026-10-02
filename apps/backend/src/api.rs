@@ -19,7 +19,7 @@ use crate::pi_client::{
     Activity, ActivityCallback, AgentCall, LegSession, ModuleCallback, ProjectTurn, TurnCallback,
 };
 use crate::protocol::{AgentRequest, AgentState, CandidateEnd, ErrorCode, ServerMessage, Status};
-use crate::router::{Action, CallSummary, Decision};
+use crate::router::{jev_outcome, Action, CallSummary, Decision, RouteRule};
 use axum::extract::ws::{Message, WebSocket};
 use axum::{
     extract::rejection::JsonRejection,
@@ -1219,9 +1219,26 @@ fn spawn_floor_worker(state: AppState) {
                 summary.merge_live_agents(&live_agents(&state));
                 summary.queued_update = Some(crate::router::QueuedUpdate {
                     from_agent: request.project.clone(),
-                    message: request.message,
+                    message: request.message.clone(),
                 });
-                router.good_moment(&summary).await.map_err(|_| ())
+                let floor_id = request.floor_debug_id();
+                let jev_request = router.good_moment_request(&summary);
+                state.0.debug.publish(DebugEvent::JevRequest {
+                    utterance_id: None,
+                    purpose: "good_moment".into(),
+                    state: jev_request.state.clone(),
+                    floor_id: Some(floor_id.clone()),
+                });
+                let trace = router.good_moment(jev_request).await;
+                state.0.debug.publish(jev_response_event(
+                    None,
+                    Some(floor_id),
+                    "good_moment",
+                    trace.latency_ms,
+                    trace.response.as_ref(),
+                    trace.result.as_ref().err(),
+                ));
+                trace.result.map_err(|_| ())
             }) as floor::GateFuture
         }),
         rewrite: Arc::new(move |input: FloorRewriteInput| {
@@ -1915,13 +1932,29 @@ impl From<Decision> for RoutedDecision {
 
 /// Build a summary and ask Jev once for this utterance. The operator path is
 /// the only fallback for a timeout, malformed response, or missing key.
-async fn route_transcript(state: &AppState, transcript: &str) -> RoutedDecision {
+async fn route_transcript(state: &AppState, id: &str, transcript: &str) -> RoutedDecision {
     let entries = state.0.transcript_log.lock().await.entries();
     let screen = state.0.screen_state.lock().await.clone();
     let (router, summary) =
         call_summary_without_pbx_lock(state, &entries, screen, transcript.to_owned()).await;
-    let mut decision = match router.route(&summary).await {
-        Ok(decision) => decision,
+    let request = router.build_request(&summary);
+    state.0.debug.publish(DebugEvent::JevRequest {
+        utterance_id: Some(id.to_owned()),
+        purpose: "route".into(),
+        state: request.state.clone(),
+        floor_id: None,
+    });
+    let trace = router.route_request(request).await;
+    state.0.debug.publish(jev_response_event(
+        Some(id.to_owned()),
+        None,
+        "route",
+        trace.latency_ms,
+        trace.response.as_ref(),
+        trace.result.as_ref().err(),
+    ));
+    let (mut decision, rule) = match trace.result {
+        Ok(routed) => routed,
         Err(error) => {
             let decision = router.fallback(&error);
             tracing::warn!(
@@ -1931,21 +1964,64 @@ async fn route_transcript(state: &AppState, transcript: &str) -> RoutedDecision 
                 reason = %decision.reason,
                 "Jev routing unavailable; using the top-level LLM path"
             );
-            decision
+            (decision, RouteRule::JevUnavailable)
         }
     };
+    let mut reason = decision.reason.clone();
     // "Answer waiting" names the agent that is waiting. When Jev leaves the
     // target out and exactly one agent has something for the caller, that
     // agent is the target; otherwise the operator asks.
     if matches!(decision.action, Action::AnswerWaiting) && decision.target.is_none() {
         if let Some(agent) = summary.single_waiting_agent() {
             tracing::info!(target = %agent, "answer_waiting without a target; using the one waiting agent");
+            reason.push_str(&format!(
+                "; answer_waiting named no agent, so it goes to {agent}, the only one waiting"
+            ));
             decision.target = Some(agent);
         }
     }
+    state.0.debug.publish(DebugEvent::RouteDecision {
+        utterance_id: id.to_owned(),
+        rule: rule.as_str().into(),
+        reason,
+        action: decision.action.as_str().into(),
+        target: decision.target.clone(),
+        mode: decision
+            .continue_or_fresh
+            .as_ref()
+            .map_or("not_applicable", |mode| mode.as_str())
+            .into(),
+        decided_by: if matches!(rule, RouteRule::JevUnavailable) {
+            "fallback".into()
+        } else {
+            "jev".into()
+        },
+    });
     RoutedDecision {
         decision,
         call_state: summary.render_for_llm(),
+    }
+}
+
+/// Jev's raw answers and timing for one question set, for the debug page.
+fn jev_response_event(
+    utterance_id: Option<String>,
+    floor_id: Option<String>,
+    purpose: &str,
+    latency_ms: u64,
+    response: Option<&crate::jev::JevResponse>,
+    error: Option<&crate::jev::JevError>,
+) -> DebugEvent {
+    DebugEvent::JevResponse {
+        utterance_id,
+        purpose: purpose.to_owned(),
+        latency_ms,
+        outcome: jev_outcome(response, error).into(),
+        answers: response
+            .and_then(|response| serde_json::to_value(&response.answers).ok())
+            .unwrap_or_else(|| json!({})),
+        error: error.map(ToString::to_string),
+        floor_id,
     }
 }
 
@@ -1975,7 +2051,7 @@ async fn dispatch_routed_transcript(
         text: transcript.clone(),
         talking_to,
     });
-    let routed = route_transcript(state, &transcript).await;
+    let routed = route_transcript(state, id, &transcript).await;
     let decision = &routed.decision;
     let can_steer = matches!(decision.action, Action::Continue) && !decision.sends_to_operator();
     // Routing itself can span a rescue. Do not let a fallback decision queue
@@ -2201,7 +2277,7 @@ async fn process_turns(state: AppState) {
         } = if let Some(routed) = routed_decision {
             routed
         } else {
-            route_transcript(&state, &transcript).await
+            route_transcript(&state, &id, &transcript).await
         };
         let takeover = prepare_takeover_lookup(&state, &decision).await;
 

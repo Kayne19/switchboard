@@ -396,6 +396,15 @@ pub enum ConversationMode {
     Fresh,
 }
 
+impl ConversationMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Continue => "continue",
+            Self::Fresh => "fresh",
+        }
+    }
+}
+
 /// A part returned by the stateless routing utility. The background-agent
 /// slice may fan these out; this slice keeps the foreground choice explicit.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -570,6 +579,64 @@ impl Decision {
     }
 }
 
+/// The threshold rule that chose a routing decision. Reported to the debug
+/// page only; the decision itself is what routing acts on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteRule {
+    /// Stop always goes to the caller for confirmation.
+    StopConfirms,
+    /// On a project, `for_current_agent` reached the upper threshold.
+    StayedWithCurrent,
+    /// On a project, `for_current_agent` fell between the two thresholds.
+    CurrentAgentUnsure,
+    /// Jev's action confidence was below the action threshold.
+    ActionBelowThreshold,
+    /// Jev's action confidence met the action threshold.
+    JevAction,
+    /// Jev did not answer usably; the operator path decides.
+    JevUnavailable,
+}
+
+impl RouteRule {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::StopConfirms => "stop_confirms",
+            Self::StayedWithCurrent => "stayed_with_current",
+            Self::CurrentAgentUnsure => "current_agent_unsure",
+            Self::ActionBelowThreshold => "action_below_threshold",
+            Self::JevAction => "jev_action",
+            Self::JevUnavailable => "jev_unavailable",
+        }
+    }
+}
+
+/// One routing call to Jev: its raw answers (when it answered), how long it
+/// took, and the mapped decision with the rule that fired.
+#[derive(Clone, Debug)]
+pub struct RouteTrace {
+    pub latency_ms: u64,
+    pub response: Option<JevResponse>,
+    pub result: Result<(Decision, RouteRule), JevError>,
+}
+
+/// One good-moment call to Jev, kept the same way as `RouteTrace`.
+#[derive(Clone, Debug)]
+pub struct GateTrace {
+    pub latency_ms: u64,
+    pub response: Option<JevResponse>,
+    pub result: Result<bool, JevError>,
+}
+
+/// How a Jev call ended, in the debug page's words.
+pub fn jev_outcome(response: Option<&JevResponse>, error: Option<&JevError>) -> &'static str {
+    match (response, error) {
+        (_, None) => "ok",
+        (Some(_), Some(_)) => "invalid",
+        (None, Some(error)) if error.is_timeout() => "timeout",
+        (None, Some(_)) => "error",
+    }
+}
+
 #[derive(Clone)]
 pub struct Router {
     client: JevClient,
@@ -623,30 +690,58 @@ impl Router {
         }
     }
 
+    /// Ask Jev once for `summary` and map its answers. Test helper: the
+    /// service uses `route_request`, which keeps Jev's raw answers.
+    #[cfg(test)]
     pub async fn route(&self, summary: &CallSummary) -> Result<Decision, JevError> {
-        let request = self.build_request(summary);
-        let response = self
-            .client
-            .decide(request.state.clone(), request.questions.clone())
-            .await?;
-        let decision = self.map_response(response)?;
-        tracing::info!(
-            action = decision.action.as_str(),
-            target = decision.target.as_deref().unwrap_or(""),
-            confidence = decision.confidence,
-            for_current_agent = decision.for_current_agent,
-            multi_target = decision.multi_target,
-            unsure = decision.unsure,
-            reason = %decision.reason,
-            "Jev routing decision"
-        );
-        Ok(decision)
+        self.route_request(self.build_request(summary))
+            .await
+            .result
+            .map(|(decision, _)| decision)
     }
 
-    /// Ask Jev whether the caller is in a good moment for one queued floor
-    /// message. This is a separate one-question request so a routing answer
-    /// cannot accidentally release speech.
-    pub async fn good_moment(&self, summary: &CallSummary) -> Result<bool, JevError> {
+    /// Ask Jev once with a request built by `build_request`. The trace keeps
+    /// Jev's raw answers, the time it took and the threshold rule that fired,
+    /// for the debug page only; routing reads only the decision.
+    pub async fn route_request(&self, request: JevRequest) -> RouteTrace {
+        let (latency_ms, response) = self.ask(request).await;
+        let result = response
+            .as_ref()
+            .map_err(Clone::clone)
+            .and_then(|response| self.map_response_with_rule(response));
+        if let Ok((decision, rule)) = &result {
+            tracing::info!(
+                action = decision.action.as_str(),
+                target = decision.target.as_deref().unwrap_or(""),
+                confidence = decision.confidence,
+                for_current_agent = decision.for_current_agent,
+                multi_target = decision.multi_target,
+                unsure = decision.unsure,
+                rule = rule.as_str(),
+                latency_ms,
+                reason = %decision.reason,
+                "Jev routing decision"
+            );
+        }
+        RouteTrace {
+            latency_ms,
+            response: response.ok(),
+            result,
+        }
+    }
+
+    /// The one Jev round trip, timed.
+    async fn ask(&self, request: JevRequest) -> (u64, Result<JevResponse, JevError>) {
+        let started = std::time::Instant::now();
+        let response = self.client.decide(request.state, request.questions).await;
+        let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        (latency_ms, response)
+    }
+
+    /// The one-question request asking whether the caller is in a good moment
+    /// for one queued floor message. It is separate from routing so a routing
+    /// answer cannot accidentally release speech.
+    pub fn good_moment_request(&self, summary: &CallSummary) -> JevRequest {
         let mut questions = BTreeMap::new();
         questions.insert(
             "good_moment".into(),
@@ -669,32 +764,44 @@ impl Router {
         let budget = self
             .summary_token_budget
             .min(MAX_STATE_TOKENS.saturating_sub(longest_question).max(1));
-        let response = self
-            .client
-            .decide(summary.state_with_budget(budget), questions)
-            .await?;
-        let answer = response
-            .answers
-            .get("good_moment")
-            .ok_or_else(|| missing("good_moment"))?;
-        if let Some(choice) = answer.choice.as_deref() {
-            return match choice {
-                "yes" | "true" | "good" | "now" => Ok(true),
-                "no" | "false" | "hold" => Ok(false),
-                _ => Err(JevError::InvalidAnswer(format!(
-                    "unknown good_moment choice {choice:?}"
-                ))),
-            };
+        JevRequest {
+            model: self.client.model().to_owned(),
+            state: summary.state_with_budget(budget),
+            questions,
         }
-        finite_unit(answer.noul, "good_moment.noul").map(|value| value >= 0.5)
     }
 
+    /// Ask Jev the good-moment question built by `good_moment_request`.
+    pub async fn good_moment(&self, request: JevRequest) -> GateTrace {
+        let (latency_ms, response) = self.ask(request).await;
+        let result = response
+            .as_ref()
+            .map_err(Clone::clone)
+            .and_then(good_moment_answer);
+        GateTrace {
+            latency_ms,
+            response: response.ok(),
+            result,
+        }
+    }
+
+    #[cfg(test)]
     fn map_response(&self, response: JevResponse) -> Result<Decision, JevError> {
-        let action_answer = required_answer(&response, "action")?;
-        let current = required_answer(&response, "for_current_agent")?;
-        let target = required_answer(&response, "target")?;
-        let fresh = required_answer(&response, "continue_or_fresh")?;
-        let multi = required_answer(&response, "multi_target")?;
+        self.map_response_with_rule(&response)
+            .map(|(decision, _)| decision)
+    }
+
+    /// Apply the confidence policy to Jev's answers. Returns the decision and
+    /// the threshold rule that chose it.
+    fn map_response_with_rule(
+        &self,
+        response: &JevResponse,
+    ) -> Result<(Decision, RouteRule), JevError> {
+        let action_answer = required_answer(response, "action")?;
+        let current = required_answer(response, "for_current_agent")?;
+        let target = required_answer(response, "target")?;
+        let fresh = required_answer(response, "continue_or_fresh")?;
+        let multi = required_answer(response, "multi_target")?;
         let action_name = action_answer
             .choice
             .as_deref()
@@ -738,10 +845,14 @@ impl Router {
                 )));
             }
         }
+        let mut notes = Vec::new();
         if matches!(chosen, Action::GoToProject)
             && target_name.as_deref() == Some(current_route.as_str())
         {
             chosen = Action::Continue;
+            notes.push(format!(
+                "go_to_project named {current_route}, the agent already on the line, so it is continue"
+            ));
         }
         let fresh_choice = fresh.choice.as_deref().unwrap_or("not_applicable");
         let continue_or_fresh = match fresh_choice {
@@ -758,35 +869,61 @@ impl Router {
         // except that stopping a project always goes to the operator for
         // caller confirmation.
         let stop_always_confirms = matches!(chosen, Action::Stop);
-        let unsure = if stop_always_confirms {
-            false
-        } else if on_project && for_current_agent >= self.for_current_agent_upper {
+        let jev_action = chosen.as_str();
+        let lower = self.for_current_agent_lower;
+        let upper = self.for_current_agent_upper;
+        let threshold = self.action_threshold;
+        let (rule, unsure) = if stop_always_confirms {
+            (RouteRule::StopConfirms, false)
+        } else if on_project && for_current_agent >= upper {
             chosen = Action::Continue;
-            false
-        } else if on_project && for_current_agent > self.for_current_agent_lower {
-            true
+            (RouteRule::StayedWithCurrent, false)
+        } else if on_project && for_current_agent > lower {
+            (RouteRule::CurrentAgentUnsure, true)
+        } else if confidence < threshold {
+            (RouteRule::ActionBelowThreshold, true)
         } else {
-            confidence < self.action_threshold
+            (RouteRule::JevAction, false)
         };
-        let reason = if unsure {
-            format!("confidence policy requested top-level LLM (action={}, action_conf={confidence:.3}, for_current_agent={for_current_agent:.3})", chosen.as_str())
-        } else if matches!(chosen, Action::Stop) {
-            "stop always requires caller confirmation".into()
-        } else {
-            format!("Jev action confidence {confidence:.3} met threshold")
+        let mut reason = match rule {
+            RouteRule::StopConfirms => format!(
+                "stop always requires caller confirmation (action_conf={confidence:.3})"
+            ),
+            RouteRule::StayedWithCurrent => format!(
+                "stayed with {current_route}: for_current_agent={for_current_agent:.3} >= upper {upper:.3} (Jev said action={jev_action}, action_conf={confidence:.3})"
+            ),
+            RouteRule::CurrentAgentUnsure => format!(
+                "confidence policy requested top-level LLM: on {current_route}, for_current_agent={for_current_agent:.3} is between lower {lower:.3} and upper {upper:.3} (action={jev_action}, action_conf={confidence:.3})"
+            ),
+            RouteRule::ActionBelowThreshold => format!(
+                "confidence policy requested top-level LLM: action_conf={confidence:.3} < threshold {threshold:.3} (action={jev_action}, for_current_agent={for_current_agent:.3})"
+            ),
+            RouteRule::JevAction | RouteRule::JevUnavailable => format!(
+                "Jev action {jev_action}: action_conf={confidence:.3} >= threshold {threshold:.3}"
+            ),
         };
+        if multi_target {
+            notes.push("multi_target is yes, so the routing utility splits it".into());
+        }
+        for note in notes {
+            reason.push_str("; ");
+            reason.push_str(&note);
+        }
         let confirm = matches!(chosen, Action::Stop);
-        Ok(Decision {
-            action: chosen,
-            target: target_name,
-            continue_or_fresh,
-            confidence,
-            for_current_agent,
-            multi_target,
-            unsure,
-            confirm,
-            reason,
-        })
+        Ok((
+            Decision {
+                action: chosen,
+                target: target_name,
+                continue_or_fresh,
+                confidence,
+                for_current_agent,
+                multi_target,
+                unsure,
+                confirm,
+                reason,
+            },
+            rule,
+        ))
     }
 
     /// Used when a caller is routed while no Jev response is available. This
@@ -877,6 +1014,23 @@ fn build_router_questions(registry: &Registry) -> BTreeMap<String, Question> {
         ),
     );
     questions
+}
+
+fn good_moment_answer(response: &JevResponse) -> Result<bool, JevError> {
+    let answer = response
+        .answers
+        .get("good_moment")
+        .ok_or_else(|| missing("good_moment"))?;
+    if let Some(choice) = answer.choice.as_deref() {
+        return match choice {
+            "yes" | "true" | "good" | "now" => Ok(true),
+            "no" | "false" | "hold" => Ok(false),
+            _ => Err(JevError::InvalidAnswer(format!(
+                "unknown good_moment choice {choice:?}"
+            ))),
+        };
+    }
+    finite_unit(answer.noul, "good_moment.noul").map(|value| value >= 0.5)
 }
 
 fn required_answer<'a>(response: &'a JevResponse, name: &str) -> Result<&'a JevAnswer, JevError> {
