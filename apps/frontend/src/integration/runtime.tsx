@@ -16,6 +16,7 @@ import {
   INITIAL_RUNTIME_STATE,
   type RuntimeState,
 } from "../runtime/callRuntime";
+import type { HeardLine } from "../runtime/spokenLines";
 
 interface TranscriptLine {
   speaker: string;
@@ -66,6 +67,9 @@ export function RuntimeIntegration() {
   const pendingRejectionRef = useRef<{ seq: number; reason: string } | null>(null);
   const handleServerRef = useRef<(message: ServerMessage) => void>(() => {});
   const handleStateRef = useRef<(runtimeState: RuntimeState) => void>(() => {});
+  const handleHeardRef = useRef<(line: HeardLine) => void>(() => {});
+  // The order of the line the live response shows (`HeardLine.order`).
+  const heardOrderRef = useRef(Number.NEGATIVE_INFINITY);
   const [reportNonce, setReportNonce] = useState(0);
   const [runtime, setRuntime] = useState<RuntimeState>(INITIAL_RUNTIME_STATE);
 
@@ -157,6 +161,7 @@ export function RuntimeIntegration() {
         }
         case "history": {
           transcriptRef.current = normalizeHistory(message.entries);
+          heardOrderRef.current = Number.NEGATIVE_INFINITY;
           const latestVoiced = [...transcriptRef.current]
             .reverse()
             .find((entry) => entry.voiced);
@@ -181,6 +186,8 @@ export function RuntimeIntegration() {
           break;
         }
         case "spoken": {
+          // The line goes into the transcript now; the live response shows
+          // it when its audio starts (`handleHeardRef`).
           const body = message.entry.text;
           if (!body) break;
           appendTranscript({
@@ -190,13 +197,7 @@ export function RuntimeIntegration() {
             voiced: true,
             agent: message.entry.route || undefined,
           });
-          currentResponseRef.current = body;
-          showConversation(body);
-          dispatch({
-            op: "runtime_say",
-            target: RUNTIME_CONVERSATION_ID,
-            text: body,
-          });
+          showConversation();
           break;
         }
         case "reply": {
@@ -210,19 +211,11 @@ export function RuntimeIntegration() {
             voiced: message.voiced,
             agent: message.route || undefined,
           });
-          if (message.voiced) {
-            currentResponseRef.current = body;
-            showConversation(body);
-            dispatch({
-              op: "runtime_say",
-              target: RUNTIME_CONVERSATION_ID,
-              text: body,
-            });
-          } else {
-            // Unvoiced written replies belong in the transcript drawer. Keep
-            // the live response on the last line that was actually spoken.
-            showConversation();
-          }
+          // A voiced reply reaches the live response when its audio starts
+          // (`handleHeardRef`). An unvoiced written reply belongs in the
+          // transcript drawer only, and the live response stays on the last
+          // line that was actually spoken.
+          showConversation();
           break;
         }
         case "thinking":
@@ -294,6 +287,21 @@ export function RuntimeIntegration() {
       }
     };
 
+    // A spoken line's audio started: it is the line being heard (#112). A
+    // line whose text came after a later line was already heard stays in the
+    // transcript and leaves the live response on the later line.
+    handleHeardRef.current = (line: HeardLine) => {
+      if (line.order < heardOrderRef.current) return;
+      heardOrderRef.current = line.order;
+      currentResponseRef.current = line.text;
+      showConversation(line.text);
+      dispatch({
+        op: "runtime_say",
+        target: RUNTIME_CONVERSATION_ID,
+        text: line.text,
+      });
+    };
+
     handleStateRef.current = (runtimeState: RuntimeState) => {
       if (!runtimeState.connected) transportReadyRef.current = false;
       setRuntime(runtimeState);
@@ -322,6 +330,7 @@ export function RuntimeIntegration() {
       socketUrl,
       onState: (runtimeState) => handleStateRef.current(runtimeState),
       onServer: (message) => handleServerRef.current(message),
+      onHeard: (line) => handleHeardRef.current(line),
       document,
       window,
     });
