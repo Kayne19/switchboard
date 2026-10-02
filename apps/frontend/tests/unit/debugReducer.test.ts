@@ -280,4 +280,24 @@ describe('debug reducer', () => {
     // The fixture's speech names floor-7.
     expect(fixtureEvent('speech').floor_id).toBe('floor-7');
   });
+
+  it('skips a refused live frame without opening a gap', () => {
+    let state = fold([snapshot([], { last_seq: 5 })]);
+    state = reduceFrames(state, [
+      { type: 'skipped', seq: 6, error: 'speech.text is missing' },
+      event({ kind: 'host_link', host: 'h', connected: true }, 7),
+    ]);
+    expect(state.missing).toEqual([]);
+    expect(state.gaps).toBe(0);
+    expect(state.rejected).toBe(1);
+    expect(state.lastRejection).toBe('speech.text is missing');
+    expect(state.events).toHaveLength(1);
+    // A skip that fills a real hole closes it; a lost frame still opens one.
+    state = reduceFrame(state, event({ kind: 'host_link', host: 'h', connected: false }, 10));
+    expect(state.missing).toEqual([8, 9]);
+    state = reduceFrame(state, { type: 'skipped', seq: 8, error: 'bad' });
+    expect(state.missing).toEqual([9]);
+    expect(state.rejected).toBe(2);
+    expect(state.gaps).toBe(1);
+  });
 });

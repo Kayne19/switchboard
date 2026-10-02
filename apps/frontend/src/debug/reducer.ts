@@ -1,7 +1,9 @@
 // The debug page's view model: one pure reducer from debug frames to view
 // state. A snapshot replaces the whole projection (the backend also sends one
 // after a slow client lags); live frames are folded in seq order, with
-// duplicates dropped and gaps remembered so the connection can resync.
+// duplicates dropped and gaps remembered so the connection can resync. A
+// numbered frame the parser refused still takes its seq, so it never opens
+// a gap.
 import type {
   AgentState,
   DebugConfig,
@@ -291,6 +293,13 @@ export function reduceFrames(state: DebugState, frames: readonly DebugFrame[]): 
   for (const frame of frames) {
     if (frame.type === 'snapshot') {
       draft = applySnapshot(draft.state, frame);
+      continue;
+    }
+    if (frame.type === 'skipped') {
+      // A refused frame: its seq is accounted for, and the refusal counted.
+      admitSeq(draft, frame.seq);
+      draft.state.rejected += 1;
+      draft.state.lastRejection = frame.error;
       continue;
     }
     if (!admitSeq(draft, frame.seq)) continue;

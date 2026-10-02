@@ -5,7 +5,8 @@
 // `tests/fixtures/debug-events.json` holds one example of every event kind.
 // `parseDebugFrame` admits a text frame only as one of the frames below. An
 // unknown frame type or a malformed event is rejected, never guessed at; a
-// numbered event of an unknown kind is kept raw, unprojected.
+// numbered event of an unknown kind is kept raw, unprojected. A rejected
+// frame with a valid seq reports it, so the feed can skip that seq.
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -297,7 +298,17 @@ export interface UnknownEventFrame {
   kind: string;
   raw: { [key: string]: JsonValue };
 }
-export type DebugFrame = SnapshotFrame | EventFrame | LogFrame | UnknownEventFrame;
+/**
+ * A numbered live frame the parser refused. Its seq is still admitted, so a
+ * malformed frame (schema drift after a backend upgrade) is counted and
+ * skipped instead of leaving a gap that forces a resync.
+ */
+export interface SkippedFrame {
+  type: 'skipped';
+  seq: number;
+  error: string;
+}
+export type DebugFrame = SnapshotFrame | EventFrame | LogFrame | UnknownEventFrame | SkippedFrame;
 
 // --- Parsing ---------------------------------------------------------------
 
@@ -337,6 +348,8 @@ export const EVENT_FIELDS: Record<DebugEventKind, FieldSpec> = {
 };
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
+/** A refused frame keeps its `seq` when it had a valid one, so the stream can skip it. */
+export type FrameParseResult = { ok: true; value: ParsedFrame } | { ok: false; error: string; seq?: number };
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -427,7 +440,7 @@ export interface ParsedFrame {
  * snapshot is admitted with its malformed entries skipped and reported, so one
  * event from a newer backend cannot blank the page.
  */
-export function parseDebugFrame(input: unknown): ParseResult<ParsedFrame> {
+export function parseDebugFrame(input: unknown): FrameParseResult {
   let value = input;
   if (typeof input === 'string') {
     try {
@@ -451,13 +464,13 @@ export function parseDebugFrame(input: unknown): ParseResult<ParsedFrame> {
         return { ok: true, value: { frame, skipped: [] } };
       }
       const record = parseDebugRecord(value);
-      if (!record.ok) return record;
+      if (!record.ok) return withSeq(record.error, value);
       const { type: _type, ...rest } = value;
       return { ok: true, value: { frame: { type: 'event', ...(rest as unknown as DebugRecord) }, skipped: [] } };
     }
     case 'log': {
       const log = parseDebugLog(value);
-      if (!log.ok) return log;
+      if (!log.ok) return withSeq(log.error, value);
       const { type: _type, ...rest } = log.value as DebugLog & { type?: string };
       return { ok: true, value: { frame: { type: 'log', ...rest }, skipped: [] } };
     }
@@ -498,6 +511,11 @@ export function parseDebugFrame(input: unknown): ParseResult<ParsedFrame> {
       return { ok: true, value: { frame, skipped } };
     }
     default:
-      return { ok: false, error: `unknown frame type ${JSON.stringify(value.type)}` };
+      return withSeq(`unknown frame type ${JSON.stringify(value.type)}`, value);
   }
+}
+
+/** A refusal, carrying the frame's seq when the frame had a valid one. */
+function withSeq(error: string, value: Record<string, unknown>): FrameParseResult {
+  return typeof value.seq === 'number' && Number.isInteger(value.seq) && value.seq > 0 ? { ok: false, error, seq: value.seq } : { ok: false, error };
 }

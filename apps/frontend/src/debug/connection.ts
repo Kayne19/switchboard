@@ -136,7 +136,10 @@ export class SocketFeed implements Feed {
       }
       const parsed = parseDebugFrame(event.data);
       if (!parsed.ok) {
-        this.handlers.rejected(parsed.error);
+        // A numbered frame keeps its place in the stream as a skip, so it is
+        // counted without opening a gap that would force a resync.
+        if (parsed.seq !== undefined) this.batcher.push({ type: 'skipped', seq: parsed.seq, error: parsed.error });
+        else this.handlers.rejected(parsed.error);
         return;
       }
       for (const skipped of parsed.value.skipped) this.handlers.rejected(`snapshot entry skipped: ${skipped}`);
