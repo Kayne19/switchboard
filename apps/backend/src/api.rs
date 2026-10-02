@@ -2059,7 +2059,7 @@ async fn dispatch_routed_transcript(
     generation: u64,
     transcript: String,
 ) {
-    let talking_to = state.0.coordinator.status().route;
+    let talking_to = state.0.coordinator.route();
     state.0.debug.publish(DebugEvent::CallerUtterance {
         utterance_id: id.to_owned(),
         text: transcript.clone(),
