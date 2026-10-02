@@ -1637,8 +1637,19 @@ impl Switchboard {
         self.register_background_session_with(project, session.clone(), || session.close())
     }
 
-    fn spawn_background_prompt(&mut self, project: &str, session: ProjectSession, text: String) {
+    /// Prompts a background agent without waiting for its turn. `source` is
+    /// what the prompt is for the debug page (`caller` or `intro`); the
+    /// caller line it carries is read now, before the task leaves the
+    /// decision that set it.
+    fn spawn_background_prompt(
+        &mut self,
+        project: &str,
+        session: ProjectSession,
+        text: String,
+        source: &'static str,
+    ) {
         let (epoch, generation) = self.background_agents.begin_task(project);
+        let utterance = self.current_utterance();
         let token = session.token();
         let callback = self.agent_state_callback.clone();
         let closed_callback = self.session_closed_callback();
@@ -1646,7 +1657,7 @@ impl Switchboard {
         let session_id = session.session_id().to_owned();
         let instance_id = session.instance_id();
         let task = tokio::spawn(async move {
-            let result = session.prompt(&text).await;
+            let result = session.prompt_as(&text, source, utterance.as_deref()).await;
             if let Err(error) = result {
                 tracing::warn!(%error, project = %project_id, "background agent prompt failed");
                 // Prompt transport failure is terminal for this resident. Do
@@ -1696,7 +1707,7 @@ impl Switchboard {
                 return Err(format!("project {} is already busy", project.id));
             }
             self.announce_agent_state(&project.id, "busy").await;
-            self.spawn_background_prompt(&project.id, session, text.to_owned());
+            self.spawn_background_prompt(&project.id, session, text.to_owned(), "caller");
             return Ok(());
         }
         let plan = self
@@ -1728,7 +1739,7 @@ impl Switchboard {
             ));
         }
         self.announce_agent_state(&project.id, "busy").await;
-        self.spawn_background_prompt(&project.id, session, intro);
+        self.spawn_background_prompt(&project.id, session, intro, "intro");
         Ok(())
     }
 
@@ -2008,8 +2019,8 @@ impl Switchboard {
         } else {
             format!("[CALL STATE]\n{call_state}\n[END CALL STATE]\n\n{message}")
         };
-        // s2: self.current_utterance().as_deref()
-        let turn = match session.prompt_for(&message, None).await {
+        let utterance = self.current_utterance();
+        let turn = match session.prompt_for(&message, utterance.as_deref()).await {
             Ok(turn) => turn,
             Err(error) => {
                 tracing::warn!(%error, "the operator leg failed mid-prompt");
@@ -2101,9 +2112,13 @@ impl Switchboard {
             self.announce_agent_state(session.label(), "busy").await;
         }
         self.set_agent_task(session.label(), &context.exact_caller_transcript);
-        // s2: self.current_utterance().as_deref()
+        let utterance = self.current_utterance();
         let turn = match session
-            .prompt_as(&context.exact_caller_transcript, "caller", None)
+            .prompt_as(
+                &context.exact_caller_transcript,
+                "caller",
+                utterance.as_deref(),
+            )
             .await
         {
             Ok(t) => t,
@@ -2291,8 +2306,11 @@ impl Switchboard {
         let intro_prompt = build_intro_prompt(context, &project, plan.prepare_report.as_ref());
 
         self.announce_agent_state(&project.id, "busy").await;
-        // s2: self.current_utterance().as_deref()
-        let turn = match session.prompt_as(&intro_prompt, "intro", None).await {
+        let utterance = self.current_utterance();
+        let turn = match session
+            .prompt_as(&intro_prompt, "intro", utterance.as_deref())
+            .await
+        {
             Ok(t) => t,
             Err(e) => {
                 tracing::warn!(project = %project.id, error = %e, "intro prompt to project failed");
@@ -2391,8 +2409,11 @@ impl Switchboard {
         // The agent was told background rules when it was shelved. Tell it
         // they no longer apply before it answers the caller.
         let prompt = format!("{FOREGROUND_NOTICE}\n\n{}", context.exact_caller_transcript);
-        // s2: self.current_utterance().as_deref()
-        let turn = match session.prompt_as(&prompt, "foreground", None).await {
+        let utterance = self.current_utterance();
+        let turn = match session
+            .prompt_as(&prompt, "foreground", utterance.as_deref())
+            .await
+        {
             Ok(turn) => turn,
             Err(error) => Turn {
                 text: String::new(),
@@ -2613,8 +2634,11 @@ impl Switchboard {
         self.set_active_session(Some(LegSession::Project(session.clone())))
             .await;
         self.announce_agent_state(&project.id, "busy").await;
-        // s2: self.current_utterance().as_deref()
-        let turn = match session.prompt_as(text, "caller", None).await {
+        let utterance = self.current_utterance();
+        let turn = match session
+            .prompt_as(text, "caller", utterance.as_deref())
+            .await
+        {
             Ok(turn) => turn,
             Err(error) => Turn {
                 text: String::new(),

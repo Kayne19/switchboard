@@ -4304,6 +4304,39 @@ async fn a_split_retry_traces_both_attempts_and_fans_out_to_every_part() {
             "utterance:routed:beta:continue:utility",
         ]
     );
+    // Both parts' prompts carry the utterance, the background one too, which
+    // is sent from its own task after the decision has ended.
+    let inputs = || {
+        debug_events(&board)
+            .into_iter()
+            .filter_map(|event| match event {
+                crate::debug::DebugEvent::AgentInput {
+                    agent,
+                    utterance_id,
+                    ..
+                } => Some((agent, utterance_id)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !inputs().iter().any(|(agent, _)| agent == "beta") {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no beta input: {:?}",
+            inputs()
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    for agent in ["alpha", "beta"] {
+        assert!(
+            inputs()
+                .iter()
+                .any(|(name, id)| name == agent && id.as_deref() == Some("utterance")),
+            "{agent}: {:?}",
+            inputs()
+        );
+    }
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }

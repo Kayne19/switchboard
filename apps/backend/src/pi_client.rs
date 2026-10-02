@@ -1478,16 +1478,19 @@ impl ProjectSession {
         result
     }
 
-    /// Sends `message` and collects the turn until the host link says it has
-    /// settled. The voice brief goes first when it is due: on the first
-    /// prompt, and on the first after a compaction.
+    /// `prompt_as` for a caller line with no utterance id. Production code
+    /// always names the source; tests use this shorthand.
+    #[cfg(test)]
     pub async fn prompt(&self, message: &str) -> Result<Turn, PiSessionError> {
         self.prompt_as(message, "caller", None).await
     }
 
-    /// `prompt`, saying for the debug page what the message is (`source`:
-    /// `caller`, `intro`, `foreground`, `model_change`) and which caller line
-    /// it carries (`utterance_id`), if any.
+    /// Sends `message` and collects the turn until the host link says it has
+    /// settled. The voice brief goes first when it is due: on the first
+    /// prompt, and on the first after a compaction. `source` says for the
+    /// debug page what the message is (`caller`, `intro`, `foreground`,
+    /// `model_change`), and `utterance_id` names the caller line it carries,
+    /// if any.
     pub async fn prompt_as(
         &self,
         message: &str,
