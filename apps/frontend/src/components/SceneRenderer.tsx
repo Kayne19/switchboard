@@ -22,7 +22,6 @@ interface SceneContentProps {
   transcriptOpen: boolean;
   setTranscriptOpen: (open: boolean) => void;
   voiceRuntime: ReturnType<typeof useController>["voiceRuntime"];
-  voiceLevel?: () => number | null;
   onToggleListening: () => void;
 }
 
@@ -32,7 +31,6 @@ function SceneContent({
   transcriptOpen,
   setTranscriptOpen,
   voiceRuntime,
-  voiceLevel,
   onToggleListening,
 }: SceneContentProps) {
   const kind = sceneKind(state);
@@ -44,7 +42,6 @@ function SceneContent({
   // call turn; in demo mode it only toggles the visual listening state.
   const shared = {
     state,
-    voiceLevel,
     onToggleListening,
     onFocus: (id: string | null) => dispatch({ op: "focus", id }),
     // An explanation offers the history only when there is one to open.
@@ -60,7 +57,6 @@ function SceneContent({
             <IdleScene
               key="idle"
               state={state}
-              voiceLevel={voiceLevel}
               onToggleListening={shared.onToggleListening}
               setTranscriptOpen={setTranscriptOpen}
             />
@@ -100,14 +96,12 @@ function SceneContent({
 function UnavailableStage({
   state,
   onToggleListening,
-  voiceLevel,
-}: Pick<SceneContentProps, "state" | "onToggleListening" | "voiceLevel">) {
+}: Pick<SceneContentProps, "state" | "onToggleListening">) {
   return (
     <main className="stage" data-scene-kind="unavailable">
       <section className="scene scene--idle">
         <DamoclesPresence
           listening={state.listening}
-          voiceLevel={voiceLevel}
           onToggleListening={onToggleListening}
           size="idle"
           showCaption={false}
@@ -121,7 +115,6 @@ function UnavailableStage({
 export function SceneRenderer() {
   const { state, dispatch, transcriptOpen, setTranscriptOpen, voiceRuntime } =
     useController();
-  const voiceLevel = voiceRuntime?.getVoiceLevel;
   const onToggleListening = () =>
     voiceRuntime
       ? voiceRuntime.toggleTurn()
@@ -134,7 +127,6 @@ export function SceneRenderer() {
       fallback={
         <UnavailableStage
           state={state}
-          voiceLevel={voiceLevel}
           onToggleListening={onToggleListening}
         />
       }
@@ -145,7 +137,6 @@ export function SceneRenderer() {
         transcriptOpen={transcriptOpen}
         setTranscriptOpen={setTranscriptOpen}
         voiceRuntime={voiceRuntime}
-        voiceLevel={voiceLevel}
         onToggleListening={onToggleListening}
       />
     </SurfaceBoundary>

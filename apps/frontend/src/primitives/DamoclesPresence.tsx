@@ -1,4 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react';
+import { useController } from '../controller/context';
 import type { ActivityState } from '../controller/types';
 import { useFloatingMotion } from '../hooks/useFloatingMotion';
 import { ACTIVITY_LINGER_MS, ACTIVITY_MINIMUM_MS, useLingeringValue } from '../hooks/useLingeringValue';
@@ -11,7 +12,6 @@ export type PresenceSize = 'idle' | 'conversation' | 'rail' | 'compact';
 export function DamoclesPresence({
   listening,
   onToggleListening,
-  voiceLevel,
   context = 'GENERAL',
   size = 'rail',
   showCaption = true,
@@ -20,8 +20,6 @@ export function DamoclesPresence({
   activity = null,
 }: {
   listening: boolean;
-  /** Sampled on animation frames, so level changes do not rerender the scene. */
-  voiceLevel?: () => number | null;
   onToggleListening?: () => void;
   context?: string;
   size?: PresenceSize;
@@ -31,6 +29,10 @@ export function DamoclesPresence({
   /** The tool the agent is running; the caption names it in place of the voice line. */
   activity?: ActivityState | null;
 }) {
+  // The level comes from the registered voice runtime, not from the scene, so
+  // every page's presence follows the caller's voice (#120). It is sampled on
+  // animation frames, so level changes do not rerender the scene.
+  const voiceLevel = useController().voiceRuntime?.getVoiceLevel;
   const shownActivity = useLingeringValue(activity, ACTIVITY_LINGER_MS, ACTIVITY_MINIMUM_MS);
   const { y, rotate } = useFloatingMotion({ listening, amplitude: size === 'idle' ? 8.5 : size === 'conversation' ? 5.5 : 4 });
   const content = (

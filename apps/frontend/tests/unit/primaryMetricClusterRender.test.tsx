@@ -6,6 +6,7 @@ import type { ControllerAction, ControllerState, MetricData, SceneObject } from 
 import { controllerReducer, createInitialState } from '../../src/controller/reducer';
 import { MetricsPrimitive } from '../../src/primitives/MetricsPrimitive';
 import { ComposedScene } from '../../src/components/Scenes';
+import { ControllerProvider } from '../../src/controller/context';
 
 function reduceActions(state: ControllerState, actions: ControllerAction[]): ControllerState {
   return actions.reduce(controllerReducer, state);
@@ -138,12 +139,14 @@ describe('primary metric cluster rendering', () => {
 
     act(() => {
       root.render(
-        <ComposedScene
-          state={state}
-          onToggleListening={() => {}}
-          onFocus={() => {}}
-          setTranscriptOpen={() => {}}
-        />,
+        <ControllerProvider>
+          <ComposedScene
+            state={state}
+            onToggleListening={() => {}}
+            onFocus={() => {}}
+            setTranscriptOpen={() => {}}
+          />
+        </ControllerProvider>,
       );
     });
 
@@ -176,7 +179,9 @@ describe('primary metric cluster rendering', () => {
     root = createRoot(host);
     act(() => {
       root.render(
-        <ComposedScene state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} />,
+        <ControllerProvider>
+          <ComposedScene state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} />
+        </ControllerProvider>,
       );
     });
 
