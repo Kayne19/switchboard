@@ -89,3 +89,13 @@ fn floor_quiet_threshold_is_parsed_by_config_only() {
     let config = Config::for_tests(&[("SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS", "321")]);
     assert_eq!(config.floor_quiet_threshold_ms, 321);
 }
+
+#[tokio::test]
+async fn a_debug_bind_failure_leaves_the_debug_listener_off() {
+    assert!(bind_debug_listener(None).await.is_none());
+    let taken = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = taken.local_addr().unwrap().to_string();
+    assert!(bind_debug_listener(Some(&address)).await.is_none());
+    assert!(bind_debug_listener(Some("not an address")).await.is_none());
+    assert!(bind_debug_listener(Some("127.0.0.1:0")).await.is_some());
+}

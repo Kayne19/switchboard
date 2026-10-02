@@ -403,6 +403,22 @@ fn init_tracing(
     (describe, rejected)
 }
 
+/// Binds the optional debug listener. It is read-only and optional, so a
+/// failure is reported and the phone line keeps running without it.
+async fn bind_debug_listener(debug_bind: Option<&str>) -> Option<tokio::net::TcpListener> {
+    let debug_bind = debug_bind?;
+    match tokio::net::TcpListener::bind(debug_bind).await {
+        Ok(listener) => {
+            tracing::info!(%debug_bind, "switchboard debug listener listening");
+            Some(listener)
+        }
+        Err(error) => {
+            tracing::error!(%debug_bind, %error, "debug listener not started");
+            None
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let (values, env_file) = Config::values_from_env();
@@ -477,11 +493,8 @@ async fn main() {
         .await
         .expect("bind switchboard listener");
     tracing::info!(%bind, "switchboard listening");
-    let debug_task = if let Some(debug_bind) = config.debug_bind.clone() {
-        let debug_listener = tokio::net::TcpListener::bind(&debug_bind)
-            .await
-            .expect("bind switchboard debug listener");
-        tracing::info!(%debug_bind, "switchboard debug listener listening");
+    let debug_listener = bind_debug_listener(config.debug_bind.as_deref()).await;
+    let debug_task = if let Some(debug_listener) = debug_listener {
         let debug_state = state.clone();
         Some(tokio::spawn(async move {
             let debug_router = debug_state.debug_router();
