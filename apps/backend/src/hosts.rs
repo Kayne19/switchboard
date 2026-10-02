@@ -608,8 +608,11 @@ impl Hosts {
             git_sha = state.hello.as_ref().and_then(|hello| hello.git_sha.as_deref()).unwrap_or("unknown"),
             "host linked"
         );
-        drop(hosts);
+        // Published under the hosts lock, so a fast `release` of this link
+        // cannot report it down before this reports it up. Publishing takes
+        // only the debug rings' lock.
         self.trace_link(host, true);
+        drop(hosts);
         self.0.changes.send_modify(|count| *count += 1);
         epoch
     }
@@ -844,12 +847,13 @@ impl Hosts {
             }
             state.pending.retain(|_, pending| pending.epoch != epoch);
         }
-        drop(hosts);
-        tracing::info!(%host, epoch, reason, "host link closed");
         // A fenced link closing is not a disconnect: its newer link is up.
+        // Published under the hosts lock, in order with `link_up`.
         if disconnected {
             self.trace_link(host, false);
         }
+        drop(hosts);
+        tracing::info!(%host, epoch, reason, "host link closed");
         self.0.changes.send_modify(|count| *count += 1);
     }
 }
