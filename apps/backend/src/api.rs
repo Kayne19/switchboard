@@ -785,8 +785,9 @@ impl AppState {
             let turn_callback: TurnCallback = Arc::new(move |turn: ProjectTurn| {
                 let app = turn_app.upgrade();
                 Box::pin(async move {
-                    if let Some(app) = app {
-                        handle_project_turn(&AppState(app), turn).await;
+                    match app {
+                        Some(app) => handle_project_turn(&AppState(app), turn).await,
+                        None => false,
                     }
                 })
             });
@@ -2656,23 +2657,41 @@ async fn update_agent_state(state: &AppState, notice: AgentStateNotice) {
     emit_message(state, ServerMessage::AgentsState { agents });
 }
 
-/// Admit and settle host-reported autonomous turns through the one lifecycle
-/// owner. Written self-wake replies are transcript-only: `Reply` updates the
-/// caller's view without entering the speech worker.
-async fn handle_project_turn(state: &AppState, turn: ProjectTurn) {
+/// Admit and settle host-reported turns through the one lifecycle owner:
+/// autonomous turns get an operation of their own, and a caller turn's
+/// operation closes when the host reports it settled. Written self-wake
+/// replies are transcript-only: `Reply` updates the caller's view without
+/// entering the speech worker. True when an autonomous start was admitted.
+async fn handle_project_turn(state: &AppState, turn: ProjectTurn) -> bool {
     // Admission, settlement, and the transcript reply share the same turn
     // gate as caller prompt admission. This prevents a queued caller from
     // entering between autonomous finish and its written reply.
     let _transition = state.0.operation_transition.lock().await;
+    if turn.ended && turn.cause == "input" {
+        // The prompt that owns this operation returns when its collector
+        // reads the same `turn_end`, but the host can start the next run
+        // first: a resume after an external abort, or a wake queued behind
+        // the turn. Closing here lets that run be admitted (#107, #109).
+        if let Some(turn_id) = turn.turn_id.as_deref() {
+            if state.0.coordinator.settle_turn(&turn.token, turn_id) {
+                tracing::info!(
+                    instance = turn.instance_id,
+                    turn_id,
+                    "the host settled the caller's turn"
+                );
+            }
+        }
+        return false;
+    }
     if turn.ended {
         let mut operations = state.0.autonomous_operations.lock().await;
         let Some(operation) = operations.get(&turn.instance_id).cloned() else {
-            return;
+            return false;
         };
         // A late end from an older host turn must not settle a replacement
         // operation on the same resident instance.
         if operation.turn_id.as_deref() != turn.turn_id.as_deref() {
-            return;
+            return false;
         }
         let operation = operations
             .remove(&turn.instance_id)
@@ -2683,7 +2702,7 @@ async fn handle_project_turn(state: &AppState, turn: ProjectTurn) {
                 instance = turn.instance_id,
                 "ignoring autonomous turn end from a stale leg"
             );
-            return;
+            return false;
         }
         if !turn.text.trim().is_empty() {
             let route = state.0.coordinator.route();
@@ -2704,7 +2723,7 @@ async fn handle_project_turn(state: &AppState, turn: ProjectTurn) {
                 },
             );
         }
-        return;
+        return false;
     }
 
     let current = state.0.coordinator.current_identity();
@@ -2714,7 +2733,7 @@ async fn handle_project_turn(state: &AppState, turn: ProjectTurn) {
             token = %turn.token,
             "ignoring turn start from a leg that is no longer on the call"
         );
-        return;
+        return false;
     }
     if turn.cause == "input" {
         if let Some(turn_id) = turn.turn_id.as_deref() {
@@ -2722,24 +2741,24 @@ async fn handle_project_turn(state: &AppState, turn: ProjectTurn) {
                 tracing::info!(%error, "caller turn authority was stale");
             }
         }
-        return;
+        return false;
     }
     if !matches!(turn.cause.as_str(), "autonomous" | "unknown") {
-        return;
+        return false;
     }
     // An old host or a reconnect snapshot has no delivery authority. Do not
     // fabricate one: its module calls remain refused and its written text is
     // not attached to the caller's transcript.
     let Some(turn_id) = turn.turn_id else {
         tracing::info!(instance = turn.instance_id, cause = %turn.cause, "autonomous turn has no delivery authority");
-        return;
+        return false;
     };
     if turn.cause == "unknown" {
         tracing::info!(
             instance = turn.instance_id,
             "unknown reconnect turn remains fail-closed"
         );
-        return;
+        return false;
     }
     match state.0.coordinator.begin_autonomous(&current, turn_id) {
         Ok(operation) => {
@@ -2749,15 +2768,18 @@ async fn handle_project_turn(state: &AppState, turn: ProjectTurn) {
                 .lock()
                 .await
                 .insert(turn.instance_id, operation);
+            true
         }
         Err(LifecycleError::OperationActive | LifecycleError::CandidateActive) => {
             tracing::info!(
                 instance = turn.instance_id,
                 "caller operation won the autonomous-turn race"
             );
+            false
         }
         Err(error) => {
             tracing::info!(instance = turn.instance_id, %error, "autonomous turn was not admitted");
+            false
         }
     }
 }

@@ -569,6 +569,31 @@ impl Coordinator {
         })
     }
 
+    /// Closes the operation bound to host turn `turn_id` on the leg holding
+    /// `token`: the host reported that turn settled. It is the same close as
+    /// `finish_operation`, reached from the host's report instead of the
+    /// prompt's return, so a run the host starts right behind the caller's
+    /// turn (a resume after an external abort, a child's wake) is not refused
+    /// as racing a turn that is already over. False when no such operation is
+    /// open; its owner's later `finish_operation` is then a no-op.
+    pub fn settle_turn(&self, token: &str, turn_id: &str) -> bool {
+        self.linearize(|state| {
+            // A new leg's intro is closed by `finish_intro`, which also ends
+            // its startup; it is not this report's to close.
+            let bound = state.leg.token == token
+                && state.startup_rollback.is_none()
+                && state
+                    .operation
+                    .as_ref()
+                    .is_some_and(|operation| operation.turn_id.as_deref() == Some(turn_id));
+            if !bound {
+                return false;
+            }
+            self.close_operation_locked(state);
+            true
+        })
+    }
+
     pub fn attach_steer(&self, leg: &LegIdentity) -> Result<OperationIdentity, LifecycleError> {
         self.linearize(|state| {
             if state.leg != *leg {
@@ -596,14 +621,18 @@ impl Coordinator {
             if !owns {
                 return false;
             }
-            state.operation = None;
-            if state.phase == Phase::TurnRunning {
-                state.phase = state.resting_phase();
-            }
-            self.refresh_locked(state);
-            self.operation_changed.notify_waiters();
+            self.close_operation_locked(state);
             true
         })
+    }
+
+    fn close_operation_locked(&self, state: &mut CallLifecycle) {
+        state.operation = None;
+        if state.phase == Phase::TurnRunning {
+            state.phase = state.resting_phase();
+        }
+        self.refresh_locked(state);
+        self.operation_changed.notify_waiters();
     }
 
     pub fn begin_rescue(&self, reason: impl Into<String>) -> LegIdentity {
