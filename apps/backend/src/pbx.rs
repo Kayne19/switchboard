@@ -1851,12 +1851,8 @@ impl Switchboard {
     async fn handle_agent_ctx(&mut self, context: &TransferContext) -> Reply {
         let Some(session) = self.agent.clone() else {
             tracing::warn!(route = %self.coordinator.route(), "the project leg is gone; returning to the operator");
-            return self
-                .return_operator_ctx(
-                    context,
-                    "The work the caller was on stopped: its session is gone.",
-                )
-                .await;
+            let note = stopped_note(&self.route_label(), "it is no longer running");
+            return self.return_operator_ctx(context, &note).await;
         };
         // A synthetic/background token can coexist in lifecycle tests while
         // the foreground handle is still being drained. In production a
