@@ -311,6 +311,9 @@ container, and the post-deploy checklist.
 | `apps/backend/src/caller_input.rs` | clips, streamed clips, typed turns, and transcription |
 | `apps/backend/src/turns.rs` | routing a transcript, the turn worker, host-reported turns |
 | `apps/backend/src/speech.rs` | the speech worker, continuity, reply voice, and the floor release |
+| `apps/backend/src/delivery.rs` | ordered browser delivery: the event envelope, per-connection framing, and the audio queue |
+| `apps/backend/src/display.rs` | the stage projection a reconnecting browser replays, and the gate it sits behind |
+| `apps/backend/src/floor.rs` | the speech floor: the one owner of background agents' requests to speak and their release order |
 | `apps/backend/src/leg_announcer.rs` | announcing a new leg to the browser |
 | `apps/backend/src/lifecycle.rs` | the coordinator: call identity, the current route and leg, phases, candidate legs, status |
 | `apps/backend/src/pbx.rs` | the switchboard: its state, construction and callbacks, and the types its files share |
@@ -322,6 +325,8 @@ container, and the post-deploy checklist.
 | `apps/backend/src/routing_view.rs` | what routing reads without the switchboard's lock |
 | `apps/backend/src/prompts.rs` | the call's prompt text: voice block, voice brief, notices, intro |
 | `apps/backend/src/reply.rs` | the reply the switchboard hands back for a line |
+| `apps/backend/src/router.rs` | Jev-backed routing policy for a caller line, and the compact call summary it reads |
+| `apps/backend/src/jev.rs` | typed client for the hosted Jev endpoint; the key is read at request time and never retained |
 | `apps/backend/src/hosts.rs` | the host link: host agents dialling in on `/host`, their commands, events and module calls |
 | `apps/backend/src/prewarm.rs` | setup per host and project as each host links, and launch plans |
 | `apps/backend/src/pi_client.rs` | the operator's pi RPC process, and project sessions over the host link — one turn in, text and signals out |
