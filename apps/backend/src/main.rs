@@ -85,14 +85,14 @@ impl Config {
     /// it had to reject, and those warnings are worth nothing if they are
     /// emitted before a subscriber exists to record them.
     pub fn values_from_env() -> (HashMap<String, String>, PathBuf) {
-        let env_file = PathBuf::from(value(
+        let process: HashMap<String, String> = env::vars().collect();
+        let env_file = PathBuf::from(get(
+            &process,
             "SWITCHBOARD_ENV_FILE",
             "/etc/switchboard/switchboard.env",
         ));
         let mut values = load_env_file(&env_file);
-        for (key, value) in env::vars() {
-            values.insert(key, value);
-        }
+        values.extend(process);
         (values, env_file)
     }
 
@@ -203,27 +203,30 @@ impl Config {
     }
 }
 
-fn get(values: &HashMap<String, String>, name: &str, default: &str) -> String {
+/// The one lookup every setting goes through, so `docs/environment.md`'s
+/// "Blank means unset" has a single owner: a missing value and one that is
+/// blank after trimming are both `None`, and a present value comes back
+/// trimmed.
+fn setting<'a>(values: &'a HashMap<String, String>, name: &str) -> Option<&'a str> {
     values
         .get(name)
-        .map(String::as_str)
-        .unwrap_or(default)
-        .trim()
-        .to_owned()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+}
+fn get(values: &HashMap<String, String>, name: &str, default: &str) -> String {
+    setting(values, name).unwrap_or(default).to_owned()
 }
 fn optional(values: &HashMap<String, String>, name: &str) -> Option<String> {
-    let value = get(values, name, "");
-    (!value.is_empty()).then_some(value)
+    setting(values, name).map(str::to_owned)
 }
 /// A deadline the extensions also enforce, so a value the service would
 /// silently replace with its default would leave the two sides disagreeing.
 /// A malformed one stops startup instead.
 fn bounded_ms(values: &HashMap<String, String>, name: &str, default: u64) -> u64 {
     const MAX_MS: u64 = 120_000;
-    match values.get(name) {
+    match setting(values, name) {
         None => default,
         Some(raw) => raw
-            .trim()
             .parse::<u64>()
             .ok()
             .filter(|value| (1..=MAX_MS).contains(value))
@@ -231,7 +234,7 @@ fn bounded_ms(values: &HashMap<String, String>, name: &str, default: u64) -> u64
     }
 }
 fn fraction_value(values: &HashMap<String, String>, name: &str, default: f64) -> f64 {
-    let Some(raw) = values.get(name).map(|value| value.trim()) else {
+    let Some(raw) = setting(values, name) else {
         return default;
     };
     match raw.parse::<f64>() {
@@ -246,12 +249,9 @@ fn fraction_value(values: &HashMap<String, String>, name: &str, default: f64) ->
 /// A setting that must be a finite number. Blank is unset; anything else that
 /// is not a finite number is logged and replaced by the default.
 fn f32_value(values: &HashMap<String, String>, name: &str, default: f32) -> f32 {
-    let Some(raw) = values.get(name).map(|value| value.trim()) else {
+    let Some(raw) = setting(values, name) else {
         return default;
     };
-    if raw.is_empty() {
-        return default;
-    }
     match raw.parse::<f32>() {
         Ok(value) if value.is_finite() => value,
         _ => {
@@ -267,12 +267,9 @@ fn usize_value(
     default: usize,
     allow_zero: bool,
 ) -> usize {
-    let Some(raw) = values.get(name).map(|value| value.trim()) else {
+    let Some(raw) = setting(values, name) else {
         return default;
     };
-    if raw.is_empty() {
-        return default;
-    }
     match raw.parse::<usize>() {
         Ok(parsed) if allow_zero || parsed > 0 => parsed,
         _ => {
@@ -354,13 +351,6 @@ fn parse_env_value(value: &str) -> String {
         .to_owned()
 }
 
-fn value(name: &str, default: &str) -> String {
-    env::var(name)
-        .unwrap_or_else(|_| default.to_owned())
-        .trim()
-        .to_owned()
-}
-
 /// What the service logs when nothing asks for anything else.
 ///
 /// Deliberately not `RUST_LOG`'s own default. `tracing_subscriber::fmt::init()`
@@ -384,11 +374,9 @@ fn init_tracing(
     values: &HashMap<String, String>,
     debug_bus: debug::DebugBus,
 ) -> (String, Option<String>) {
-    let requested = values
-        .get("SWITCHBOARD_LOG")
-        .or_else(|| values.get("RUST_LOG"))
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty());
+    let requested = setting(values, "SWITCHBOARD_LOG")
+        .or_else(|| setting(values, "RUST_LOG"))
+        .map(str::to_owned);
     let (filter, rejected) = match &requested {
         None => (tracing_subscriber::EnvFilter::new(DEFAULT_LOG_FILTER), None),
         Some(requested) => match tracing_subscriber::EnvFilter::builder().parse(requested) {

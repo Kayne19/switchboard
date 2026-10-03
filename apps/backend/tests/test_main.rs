@@ -122,6 +122,34 @@ fn invalid_speech_deadline_stops_startup() {
 }
 
 #[test]
+fn blank_values_mean_unset() {
+    let defaults = Config::for_tests(&[]);
+    for blank in ["", "   "] {
+        let config = Config::for_tests(&[
+            ("SWITCHBOARD_PI_BINARY", blank),
+            ("SWITCHBOARD_AGENT_THINKING", blank),
+            ("SWITCHBOARD_BIND", blank),
+            ("SWITCHBOARD_CONFIG_DIR", blank),
+            ("SWITCHBOARD_JEV_ACTION_THRESHOLD", blank),
+            ("ELEVENLABS_SPEED", blank),
+            ("SWITCHBOARD_SPEECH_DEADLINE_MS", blank),
+            ("SWITCHBOARD_JEV_TIMEOUT_MS", blank),
+            ("SWITCHBOARD_HISTORY_LIMIT", blank),
+        ]);
+        assert_eq!(config.pi_binary, "pi", "{blank:?}");
+        assert_eq!(config.agent_thinking, "medium", "{blank:?}");
+        assert_eq!(config.bind, defaults.bind, "{blank:?}");
+        assert_eq!(config.projects_file, defaults.projects_file, "{blank:?}");
+        assert_eq!(config.jev_action_threshold, 0.6, "{blank:?}");
+        assert_eq!(config.tts.speed, 1.0, "{blank:?}");
+        // A blank deadline is unset, not malformed: it does not stop startup.
+        assert_eq!(config.speech_deadline_ms, 25_000, "{blank:?}");
+        assert_eq!(config.jev_timeout_ms, 2_000, "{blank:?}");
+        assert_eq!(config.history_limit, 200, "{blank:?}");
+    }
+}
+
+#[test]
 fn jev_settings_enter_only_through_config() {
     let config = Config::for_tests(&[
         ("SWITCHBOARD_JEV_KEY_FILE", "/outside/key"),
