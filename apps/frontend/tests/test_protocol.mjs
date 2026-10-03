@@ -18,6 +18,7 @@ const {
 	clipHeader,
 	decodeServerMessage,
 	helloMessage,
+	pingMessage,
 	screenStateMessage,
 	sttChunkHeader,
 	sttEndHeader,
@@ -135,17 +136,23 @@ assert.deepEqual(JSON.parse(helloMessage()).capabilities, {
 });
 if (previousMediaSource === undefined) delete globalThis.MediaSource;
 else globalThis.MediaSource = previousMediaSource;
-assert.deepEqual(
-	JSON.parse(screenStateMessage("visual", true, "diff", "Auth changes", false)),
-	{
-		type: "screen_state",
+// The report goes out as it was derived, under its type.
+assert.equal(
+	screenStateMessage({
 		view: "visual",
+		pinned: false,
 		has_visual: true,
-		visual_kind: "diff",
+		visual_kind: "chart",
+		object_ids: ["c1"],
 		title: "Auth changes",
 		stale: false,
-	},
+		generation: 3,
+	}),
+	'{"type":"screen_state","view":"visual","pinned":false,"has_visual":true,' +
+		'"visual_kind":"chart","object_ids":["c1"],"title":"Auth changes",' +
+		'"stale":false,"generation":3}',
 );
+assert.equal(pingMessage("2:5:1", 5), '{"type":"ping","nonce":"2:5:1","time":5}');
 assert.deepEqual(
 	JSON.parse(
 		sttStartHeader({ id: "abc", mime: "audio/webm;codecs=opus", epoch: 4 }),
