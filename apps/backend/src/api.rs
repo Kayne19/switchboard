@@ -3349,7 +3349,7 @@ async fn speak(state: AppState, req: Speak) -> Response {
         tracing::info!("not spoken: caller is away from background agent");
         return Json(json!({"delivered":false,"reason":"caller_away","detail":"the caller is listening to another session; use request_to_speak with the actual words they should hear. While in the background, displays are held until the caller brings you forward; never say a display is on screen."})).into_response();
     }
-    if let Err(refusal) = admit_module_call(
+    let authority = match admit_module_call(
         &state,
         &req.token,
         req.turn_id.as_deref(),
@@ -3358,8 +3358,9 @@ async fn speak(state: AppState, req: Speak) -> Response {
     )
     .await
     {
-        return refusal.into_response();
-    }
+        Ok(authority) => authority,
+        Err(refusal) => return refusal.into_response(),
+    };
     if !state.0.delivery.connected() {
         tracing::info!("not spoken: no browser is connected");
         return (
@@ -3388,8 +3389,10 @@ async fn speak(state: AppState, req: Speak) -> Response {
     // once as busy instead of waited on, so the agent hears it and goes on
     // with its turn; a reply is the turn's own output and waits for its
     // place. No audio slot (the leg changed, or the audio queue is full) is
-    // answered as undelivered, as when no browser is connected.
-    let generation = state.0.coordinator.generation();
+    // answered as undelivered, as when no browser is connected. The words
+    // are reserved at the generation they were admitted at, so a rescue
+    // since then refuses them instead of playing them to the new leg.
+    let generation = authority.generation;
     let reserved = match reserve_speech(&state, generation, WhenQueueFull::Refuse).await {
         Ok(reserved) => reserved,
         Err(ReserveFailure::WorkerUnavailable) => {
