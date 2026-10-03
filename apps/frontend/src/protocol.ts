@@ -8,8 +8,19 @@
 // itself and serialize there to exactly itself, and a type without an example
 // fails on both sides.
 //
-// Browser to server: the builders further down, one per command the service
-// handles in `handle_text_frame`.
+// Browser to server: the builders further down, one per command. The
+// service's half is `ClientMessage` in `apps/backend/src/protocol.rs`, which
+// `handle_text_frame` matches on. Both halves are held to the examples in
+// `tests/fixtures/client-messages.json`: each one must be exactly what its
+// builder sends here and read back to itself there. The round trip there is
+// what catches a renamed or wrong-kind field, in every command. The check
+// here catches a rename only in a field a builder maps by name, and checks
+// no kinds; `screenStateMessage` passes its report through, so `screen_state`
+// is held to `ScreenStateReport` by type instead. A command without an
+// example fails there, and a builder in the node test's table without one
+// fails here.
+
+import type { ScreenStateReport } from "./controller/types";
 
 // --- Server to browser -----------------------------------------------------
 
@@ -477,13 +488,8 @@ export function decodeServerMessage(text: string): ServerMessage | null {
 
 // --- Browser to server -----------------------------------------------------
 
-/// The text frame that precedes a clip's audio frame.
-///
-/// `generation` is the server's turn epoch as of when this clip started
-/// recording, and the server drops the clip if the epoch has moved on since.
-/// That is what stops speech begun before a page transfer from being acted on
-/// by the leg that replaced it, so the field has to survive every change to
-/// this frame.
+/// The first frame on a socket: the protocol version, and which optional
+/// transports this page can use.
 export function helloMessage(): string {
 	const mse =
 		typeof MediaSource !== "undefined" &&
@@ -499,31 +505,15 @@ export function helloMessage(): string {
 	});
 }
 
-export function screenStateMessage(
-	view: string,
-	hasVisual: boolean,
-	visualKind: string | null,
-	title: string,
-	stale: boolean,
-	generation?: number,
-	pinned?: boolean,
-	objectIds?: string[],
-	appliedSeq?: number,
-	rejected?: { seq: number; reason: string },
-): string {
-	return JSON.stringify({
-		type: "screen_state",
-		view,
-		has_visual: hasVisual,
-		visual_kind: visualKind,
-		title,
-		stale,
-		...(generation !== undefined ? { generation } : {}),
-		...(pinned !== undefined ? { pinned } : {}),
-		...(objectIds !== undefined ? { object_ids: objectIds } : {}),
-		...(appliedSeq !== undefined ? { applied_seq: appliedSeq } : {}),
-		...(rejected !== undefined ? { rejected } : {}),
-	});
+/// The page's heartbeat; the service echoes `nonce` and `time` in its `pong`.
+export function pingMessage(nonce: string, time: number): string {
+	return JSON.stringify({ type: "ping", nonce, time });
+}
+
+/// The page's report of what it is showing, and which display actions it
+/// applied or rejected.
+export function screenStateMessage(report: ScreenStateReport): string {
+	return JSON.stringify({ type: "screen_state", ...report });
 }
 
 export function sttStartHeader(clip: {
@@ -567,6 +557,13 @@ export function sttCancelHeader(clip: { id: string; epoch: number }): string {
 	});
 }
 
+/// The text frame that precedes a clip's audio frame.
+///
+/// `generation` is the server's turn epoch as of when this clip started
+/// recording, and the server drops the clip if the epoch has moved on since.
+/// That is what stops speech begun before a page transfer from being acted on
+/// by the leg that replaced it, so the field has to survive every change to
+/// this frame.
 export function clipHeader(clip: {
 	id: string;
 	mime: string;

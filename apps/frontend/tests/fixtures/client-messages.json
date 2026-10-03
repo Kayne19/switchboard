@@ -1,0 +1,134 @@
+{
+  "version": 1,
+  "messages": [
+    {
+      "name": "hello",
+      "message": {
+        "type": "hello",
+        "version": 1,
+        "capabilities": {
+          "stt_streaming": true,
+          "audio_streaming": true,
+          "mse_mp3": true
+        }
+      }
+    },
+    {
+      "name": "hello_without_mse",
+      "message": {
+        "type": "hello",
+        "version": 1,
+        "capabilities": {
+          "stt_streaming": true,
+          "audio_streaming": false,
+          "mse_mp3": false
+        }
+      }
+    },
+    {
+      "name": "ping",
+      "message": {
+        "type": "ping",
+        "nonce": "2:1758844800000:7",
+        "time": 1758844800000
+      }
+    },
+    {
+      "name": "clip",
+      "message": {
+        "type": "clip",
+        "id": "clip-1",
+        "mime": "audio/webm;codecs=opus",
+        "generation": 4
+      }
+    },
+    {
+      "name": "clip_at_epoch_zero",
+      "message": {
+        "type": "clip",
+        "id": "clip-0",
+        "mime": "",
+        "generation": 0
+      }
+    },
+    {
+      "name": "typed_turn",
+      "message": {
+        "type": "typed_turn",
+        "id": "turn-1",
+        "generation": 4,
+        "text": "put me through to alpha"
+      }
+    },
+    {
+      "name": "stt_start",
+      "message": {
+        "type": "stt_start",
+        "clip_id": "clip-2",
+        "generation": 4,
+        "mime": "audio/webm;codecs=opus"
+      }
+    },
+    {
+      "name": "stt_chunk",
+      "message": {
+        "type": "stt_chunk",
+        "clip_id": "clip-2",
+        "generation": 4,
+        "sequence": 3
+      }
+    },
+    {
+      "name": "stt_end",
+      "message": {
+        "type": "stt_end",
+        "clip_id": "clip-2",
+        "generation": 4
+      }
+    },
+    {
+      "name": "stt_cancel",
+      "message": {
+        "type": "stt_cancel",
+        "clip_id": "clip-2",
+        "generation": 4
+      }
+    },
+    {
+      "name": "screen_state_empty_stage",
+      "message": {
+        "type": "screen_state",
+        "view": "auto",
+        "pinned": false,
+        "has_visual": false,
+        "visual_kind": null,
+        "object_ids": [],
+        "title": "",
+        "stale": false,
+        "generation": 4
+      }
+    },
+    {
+      "name": "screen_state_applied_and_rejected",
+      "message": {
+        "type": "screen_state",
+        "view": "visual",
+        "pinned": true,
+        "has_visual": true,
+        "visual_kind": "chart",
+        "object_ids": [
+          "loss",
+          "notes"
+        ],
+        "title": "Training loss",
+        "stale": true,
+        "generation": 5,
+        "applied_seq": 12,
+        "rejected": {
+          "seq": 13,
+          "reason": "unknown chart series"
+        }
+      }
+    }
+  ]
+}

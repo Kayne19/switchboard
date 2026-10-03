@@ -21,7 +21,9 @@ import {
   clipHeader,
   decodeServerMessage,
   helloMessage,
+  pingMessage,
   postJson,
+  screenStateMessage,
   sttChunkHeader,
   sttEndHeader,
   sttStartHeader,
@@ -416,7 +418,7 @@ export class CallRuntime {
     const socket = this.openSocket();
     if (!socket) return false;
     try {
-      socket.send(JSON.stringify({ type: "screen_state", ...report }));
+      socket.send(screenStateMessage(report));
       return true;
     } catch {
       return false;
@@ -724,7 +726,7 @@ export class CallRuntime {
       const nonce = `${generation}:${Date.now()}:${++this.heartbeatSequence}`;
       this.pendingPong = nonce;
       try {
-        socket.send(JSON.stringify({ type: "ping", nonce, time: Date.now() }));
+        socket.send(pingMessage(nonce, Date.now()));
       } catch {
         socket.close();
         this.connect();

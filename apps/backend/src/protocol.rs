@@ -1,13 +1,24 @@
-//! The WebSocket protocol from the service to the browser: every message the
-//! page can receive, one variant per `type`.
+//! The WebSocket protocol between the service and the browser, both
+//! directions, one variant per `type`.
 //!
-//! The browser's half is `ServerMessage` in `apps/frontend/src/protocol.ts`,
-//! beside the commands the page sends this way. Both halves are held to the
-//! examples in `apps/frontend/tests/fixtures/server-messages.json`: each one
-//! must serialize back to itself here and decode to itself there, and a
+//! `ServerMessage` is every message the page can receive. Its browser half is
+//! `ServerMessage` in `apps/frontend/src/protocol.ts`. Both halves are held to
+//! the examples in `apps/frontend/tests/fixtures/server-messages.json`: each
+//! one must serialize back to itself here and decode to itself there, and a
 //! variant without an example fails on both sides.
+//!
+//! `ClientMessage` is every command the page sends. Its browser half is the
+//! builders in `protocol.ts`, one per command. Both halves are held to the
+//! examples in `apps/frontend/tests/fixtures/client-messages.json`: each one
+//! must be exactly what its builder sends there, and read back to itself
+//! here (null fields aside, which read as absent). The round trip here is
+//! what catches a renamed or wrong-kind field, in every command. The check
+//! there catches a rename only in a field its builder maps by name; the
+//! `screen_state` builder passes the report through, so that command is held
+//! to `ScreenStateReport` by type instead. A variant without an example
+//! fails here.
 use crate::history::TranscriptEntry;
-use serde::Serialize;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -253,6 +264,194 @@ impl ServerMessage {
         serde_json::to_value(self)
             .expect("a server message holds only string-keyed JSON, so it always serializes")
     }
+}
+
+/// A command the browser sends over the WebSocket, one variant per `type`.
+///
+/// Reading one is lenient, as the service has always been: a field that is
+/// missing or of the wrong kind is read as absent rather than refusing the
+/// frame, and a field no command declares is ignored. What an absent field
+/// means is up to the handler (`handle_text_frame` in `api.rs`), so every
+/// field here is optional except where a command has no other reading.
+#[derive(Debug, PartialEq, Deserialize)]
+#[cfg_attr(test, derive(Serialize))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ClientMessage {
+    /// The first frame on a socket: the protocol version, and which optional
+    /// transports the page can use.
+    Hello {
+        #[serde(default, deserialize_with = "lenient")]
+        version: Option<u64>,
+        #[serde(default, deserialize_with = "lenient_object")]
+        capabilities: Option<Capabilities>,
+    },
+    /// The page's heartbeat. `nonce` and `time` are echoed in the `pong` as
+    /// they came, whatever they are, or as null when absent.
+    Ping {
+        #[serde(default)]
+        nonce: Value,
+        #[serde(default)]
+        time: Value,
+    },
+    /// The header of a whole clip; its audio is the next binary frame.
+    /// `generation` is the epoch the page held when recording started.
+    Clip {
+        #[serde(default, deserialize_with = "lenient")]
+        id: Option<String>,
+        #[serde(default, deserialize_with = "lenient")]
+        mime: Option<String>,
+        #[serde(default, deserialize_with = "lenient")]
+        generation: Option<u64>,
+    },
+    /// A turn the caller typed, stamped with the epoch the page held.
+    TypedTurn {
+        #[serde(default, deserialize_with = "lenient")]
+        id: Option<String>,
+        #[serde(default, deserialize_with = "lenient")]
+        generation: Option<u64>,
+        #[serde(default, deserialize_with = "lenient")]
+        text: Option<String>,
+    },
+    /// Opens (or resumes) a streaming clip.
+    SttStart {
+        #[serde(default, deserialize_with = "lenient")]
+        clip_id: Option<String>,
+        #[serde(default, deserialize_with = "lenient")]
+        generation: Option<u64>,
+        #[serde(default, deserialize_with = "lenient")]
+        mime: Option<String>,
+    },
+    /// The header of a streaming clip's chunk; its audio is the next binary
+    /// frame.
+    SttChunk {
+        #[serde(default, deserialize_with = "lenient")]
+        clip_id: Option<String>,
+        #[serde(default, deserialize_with = "lenient")]
+        generation: Option<u64>,
+        #[serde(default, deserialize_with = "lenient")]
+        sequence: Option<u64>,
+    },
+    /// A streaming clip has no more audio.
+    SttEnd {
+        #[serde(default, deserialize_with = "lenient")]
+        clip_id: Option<String>,
+        #[serde(default, deserialize_with = "lenient")]
+        generation: Option<u64>,
+    },
+    /// A streaming clip was abandoned by the page.
+    SttCancel {
+        #[serde(default, deserialize_with = "lenient")]
+        clip_id: Option<String>,
+        #[serde(default, deserialize_with = "lenient")]
+        generation: Option<u64>,
+    },
+    /// What the page is showing, and which display actions it applied.
+    ScreenState(ScreenState),
+}
+
+/// The transports a `hello` says the page can use.
+#[derive(Debug, PartialEq, Deserialize)]
+#[cfg_attr(test, derive(Serialize))]
+pub struct Capabilities {
+    #[serde(default, deserialize_with = "lenient")]
+    pub stt_streaming: Option<bool>,
+    /// The page can play synthesized speech as it streams in.
+    #[serde(default, deserialize_with = "lenient")]
+    pub audio_streaming: Option<bool>,
+    /// The page can play `audio/mpeg` through Media Source Extensions.
+    #[serde(default, deserialize_with = "lenient")]
+    pub mse_mp3: Option<bool>,
+}
+
+/// The fields of a `screen_state` report.
+#[derive(Debug, PartialEq, Deserialize)]
+#[cfg_attr(test, derive(Serialize))]
+pub struct ScreenState {
+    #[serde(default, deserialize_with = "lenient")]
+    pub view: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    pub pinned: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
+    pub has_visual: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
+    pub visual_kind: Option<String>,
+    /// The ids of the objects on the stage, kept as the page sent them.
+    #[serde(default, deserialize_with = "lenient")]
+    pub object_ids: Option<Vec<Value>>,
+    #[serde(default, deserialize_with = "lenient")]
+    pub title: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    pub stale: Option<bool>,
+    /// The epoch the report was made under.
+    #[serde(default, deserialize_with = "lenient")]
+    pub generation: Option<u64>,
+    /// The newest display `seq` the page has applied.
+    #[serde(default, deserialize_with = "lenient")]
+    pub applied_seq: Option<u64>,
+    #[serde(default, deserialize_with = "lenient_object")]
+    pub rejected: Option<Rejection>,
+}
+
+/// A display action the page could not apply. Without a `seq` it names no
+/// action and is read as absent.
+#[derive(Debug, PartialEq, Deserialize)]
+#[cfg_attr(test, derive(Serialize))]
+pub struct Rejection {
+    pub seq: u64,
+    #[serde(default, deserialize_with = "lenient")]
+    pub reason: Option<String>,
+}
+
+/// Why a text frame is no command at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnreadableFrame {
+    /// The frame is not JSON.
+    NotJson,
+    /// The frame is JSON but not an object.
+    NotAnObject,
+    /// The object has no `type`, or one no command has.
+    UnknownType,
+}
+
+impl ClientMessage {
+    /// Reads a text frame from the browser.
+    ///
+    /// The frame is read as JSON before it is read as a command, for two
+    /// reasons: the three ways a frame can be unreadable are answered
+    /// differently, and a key the frame repeats keeps its last value (which
+    /// reading a command straight from the text would refuse as a duplicate
+    /// field). Every field is lenient, so a known type always reads.
+    pub fn parse(text: &str) -> Result<Self, UnreadableFrame> {
+        let value: Value = serde_json::from_str(text).map_err(|_| UnreadableFrame::NotJson)?;
+        if !value.is_object() {
+            return Err(UnreadableFrame::NotAnObject);
+        }
+        Self::deserialize(value).map_err(|_| UnreadableFrame::UnknownType)
+    }
+}
+
+/// A field read as `T` when it is one, and as absent when it is anything
+/// else, null included: what `Value::as_str`, `as_u64` and friends did.
+fn lenient<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    Ok(T::deserialize(Value::deserialize(deserializer)?).ok())
+}
+
+/// `lenient` for a field that is an object of its own: anything but an
+/// object (an array included, which serde would otherwise read as the
+/// struct's fields in order) is absent.
+fn lenient_object<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    Ok(match Value::deserialize(deserializer)? {
+        value @ Value::Object(_) => T::deserialize(value).ok(),
+        _ => None,
+    })
 }
 
 #[cfg(test)]

@@ -313,7 +313,7 @@ container, and the post-deploy checklist.
 | `apps/backend/src/registry.rs` | the project registry and spoken-name resolution |
 | `apps/backend/src/audio.rs` | speech-to-text sidecar, ElevenLabs, and reply-length shaping |
 | `apps/backend/src/visual_protocol.rs` | validation of display actions |
-| `apps/backend/src/protocol.rs` | every WebSocket message the service sends the browser; its browser half is `apps/frontend/src/protocol.ts` |
+| `apps/backend/src/protocol.rs` | every WebSocket message the service sends the browser, and every command the browser sends it; its browser half is `apps/frontend/src/protocol.ts` |
 | `apps/backend/src/history.rs` | the transcript kept for page reloads |
 | `apps/backend/src/debug.rs` | the optional read-only debug page: bounded event and log rings, the debug listener and its WebSocket (`docs/debug-page.md`) |
 | `apps/backend/tests/` | Rust tests, one file per source module |
