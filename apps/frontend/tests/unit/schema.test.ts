@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import Ajv, { type ValidateFunction } from 'ajv';
 import schema from '../../../../docs/display-action-v1.schema.json';
 import fixtures from '../fixtures/display-actions.json';
+import { validateControllerAction } from '../../src/controller/validation';
 
 // docs/display-action-v1.schema.json is described (docs/display-tool.md) as
 // the canonical DisplayAction contract, exercised by this same fixture file.
@@ -126,4 +127,48 @@ describe('display-action-v1.schema.json', () => {
       );
     }
   });
+});
+
+// The browser validator is held to the same source: it accepts every show type
+// the schema lists with exactly the data the schema requires, and refuses each
+// when a required key is missing.
+describe('validateControllerAction follows display-action-v1.schema.json', () => {
+  const definitions = schema.definitions as Record<string, any>;
+  const requiredByType: Record<string, string[]> = {};
+  for (const variant of schema.oneOf as Array<{ $ref: string }>) {
+    const action = definitions[variant.$ref.split('/').pop()!];
+    const kind: string | undefined = action.properties.type?.enum?.[0];
+    if (!kind) continue;
+    const dataRef: string | undefined = action.properties.data.$ref;
+    const data = dataRef ? definitions[dataRef.split('/').pop()!] : action.properties.data;
+    requiredByType[kind] = [...data.required].sort();
+  }
+  // The smallest data the validator accepts for each type; each carries
+  // exactly the schema's required keys, checked below.
+  const smallest: Record<string, Record<string, unknown>> = {
+    chart: { series: [{ name: 'a', values: [1] }] },
+    metric: { label: 'L', value: '1' },
+    progress: { label: 'L', value: 50 },
+    diagram: { mode: 'graph', nodes: [{ id: 'n', label: 'N' }], edges: [] },
+    document: { subject: 'S', paragraphs: ['p'] },
+    code: { source: { text: 'x' } },
+    note: { segments: [{ text: 't' }] },
+  };
+
+  it('knows exactly the schema\'s show types', () => {
+    expect(Object.keys(smallest).sort()).toEqual(Object.keys(requiredByType).sort());
+  });
+
+  for (const [kind, required] of Object.entries(requiredByType)) {
+    it(`accepts the smallest ${kind} and refuses it without each required key`, () => {
+      const data = smallest[kind];
+      expect(Object.keys(data).sort()).toEqual(required);
+      const action = { op: 'show', id: 'x', type: kind, data };
+      expect(validateControllerAction(action).ok, `${kind}: ${JSON.stringify(validateControllerAction(action))}`).toBe(true);
+      for (const key of required) {
+        const { [key]: _dropped, ...rest } = data;
+        expect(validateControllerAction({ ...action, data: rest }).ok, `${kind} without ${key}`).toBe(false);
+      }
+    });
+  }
 });
