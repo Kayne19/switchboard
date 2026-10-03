@@ -8,8 +8,8 @@ use crate::app_state::{
 };
 use crate::debug::DebugEvent;
 use crate::history::AGENT;
-use crate::pbx::{Redial, RedialPlan};
 use crate::protocol::{ServerMessage, Status};
+use crate::redial::{Redial, RedialPlan};
 use crate::speech::deliver_page_reply_if_current;
 #[cfg(test)]
 use crate::turns::process_turns;
