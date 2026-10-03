@@ -318,11 +318,6 @@ pub(crate) async fn handle_text_frame(
                 .as_ref()
                 .and_then(|caps| caps.mse_mp3)
                 .unwrap_or(false);
-            let audio_requested = capabilities
-                .as_ref()
-                .and_then(|caps| caps.audio_streaming)
-                .unwrap_or(false);
-            let mse_selected = version == 1 && mse_requested;
             send_message(
                 state,
                 epoch,
@@ -331,10 +326,9 @@ pub(crate) async fn handle_text_frame(
                     stt_streaming: version == 1
                         && stream_requested
                         && state.0.stt_stream.configured(),
-                    // Speech is streamed only as MSE mp3, so streaming is
-                    // offered to a page that asked for it and can play that.
-                    audio_streaming: mse_selected && audio_requested,
-                    mse_mp3: mse_selected,
+                    // Speech is streamed only as MSE mp3, so it streams to a
+                    // page that can play that and goes whole to one that cannot.
+                    mse_mp3: version == 1 && mse_requested,
                 },
             )
             .await

@@ -174,13 +174,12 @@ assert.deepEqual(
 assert.deepEqual(JSON.parse(helloMessage()), {
 	type: "hello",
 	version: 1,
-	capabilities: { stt_streaming: true, audio_streaming: false, mse_mp3: false },
+	capabilities: { stt_streaming: true, mse_mp3: false },
 });
 const previousMediaSource = globalThis.MediaSource;
 globalThis.MediaSource = { isTypeSupported: (mime) => mime === "audio/mpeg" };
 assert.deepEqual(JSON.parse(helloMessage()).capabilities, {
 	stt_streaming: true,
-	audio_streaming: true,
 	mse_mp3: true,
 });
 if (previousMediaSource === undefined) delete globalThis.MediaSource;

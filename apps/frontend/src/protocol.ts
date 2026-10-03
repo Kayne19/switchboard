@@ -50,7 +50,8 @@ export interface HelloAckMessage {
 	type: "hello_ack";
 	version: number;
 	stt_streaming: boolean;
-	audio_streaming: boolean;
+	/** Synthesized speech streams in as `audio/mpeg` over MSE; otherwise it
+	 * arrives as whole clips. */
 	mse_mp3: boolean;
 }
 
@@ -387,7 +388,6 @@ const MESSAGE_FIELDS: { [Type in MessageType]: MessageFields<Type> } = {
 	hello_ack: {
 		version: number,
 		stt_streaming: boolean,
-		audio_streaming: boolean,
 		mse_mp3: boolean,
 	},
 	pong: { nonce: string, time: number },
@@ -499,7 +499,6 @@ export function helloMessage(): string {
 		version: 1,
 		capabilities: {
 			stt_streaming: true,
-			audio_streaming: mse,
 			mse_mp3: mse,
 		},
 	});
