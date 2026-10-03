@@ -323,3 +323,48 @@ class ProgrammingErrorTest(ModuleTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DisplaySchemaTests(unittest.TestCase):
+    """The skill's display shapes are held to docs/display-action-v1.schema.json,
+    the one source for the display protocol, so the three implementations
+    (this module, the Rust validator, the browser) cannot drift apart on what
+    a show type requires or which ops and roles exist."""
+
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parents[3]
+        with open(root / "docs" / "display-action-v1.schema.json", encoding="utf-8") as fh:
+            cls.schema = json.load(fh)
+        cls.definitions = cls.schema["definitions"]
+
+    def _show_actions(self):
+        """{type: required data keys} for every Show*Action the schema lists."""
+        shapes = {}
+        for ref in self.schema["oneOf"]:
+            name = ref["$ref"].rsplit("/", 1)[1]
+            action = self.definitions[name]
+            props = action["properties"]
+            if "type" not in props:
+                continue
+            (kind,) = props["type"].get("enum") or [props["type"]["const"]]
+            data = props["data"]
+            if "$ref" in data:
+                data = self.definitions[data["$ref"].rsplit("/", 1)[1]]
+            shapes[kind] = tuple(data["required"])
+        return shapes
+
+    def test_show_types_and_required_data_keys_match_the_schema(self):
+        self.assertEqual(
+            {kind: required for kind, (required, _hint) in switchboard._SHAPES.items()},
+            self._show_actions(),
+        )
+
+    def test_ops_and_roles_match_the_schema(self):
+        ops = set()
+        for ref in self.schema["oneOf"]:
+            action = self.definitions[ref["$ref"].rsplit("/", 1)[1]]
+            op = action["properties"]["op"]
+            ops.update(op.get("enum") or [op["const"]])
+        self.assertEqual(set(switchboard._DISPLAY_OPS), ops)
+        self.assertEqual(list(switchboard._ROLES), self.definitions["Role"]["enum"])
