@@ -2667,6 +2667,100 @@ async fn a_failed_promotion_turn_gives_the_session_guard_back() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn a_promotion_and_a_transfer_commit_their_steps_in_one_order() {
+    let mut board = board_with(
+        vec![
+            project("alpha", ""),
+            project("beta", ""),
+            project("gamma", ""),
+        ],
+        false,
+    );
+    let events = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let notices = events.clone();
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        notices
+            .lock()
+            .unwrap()
+            .push(format!("{}:{}", notice.project, notice.state));
+        Box::pin(async {})
+    })));
+    let routes = events.clone();
+    let control = board.session_control();
+    let coordinator = board.coordinator();
+    board.set_route_callback(Some(Arc::new(move || {
+        // The route is announced last: the coordinator and the session
+        // guard already name the new leg.
+        let guard = control
+            .try_lock()
+            .expect("the guard is free when the route is announced")
+            .as_ref()
+            .map(|session| session.label().to_owned())
+            .unwrap_or_default();
+        routes
+            .lock()
+            .unwrap()
+            .push(format!("route:{}:{guard}", coordinator.route()));
+        Box::pin(async {})
+    })));
+    let _log = serve(&board, Box::new(|_, _| says("handled")));
+
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .start_background_part("beta", "beta chart")
+        .await
+        .expect("beta resident");
+    // Let the resident's own turn settle before recording.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| event == "beta:idle")
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the resident's turn settles");
+    events.lock().unwrap().clear();
+
+    // A background promotion: alpha is shelved before beta settles.
+    let reply = board
+        .route_project_part(
+            "show me beta",
+            "beta",
+            crate::router::ConversationMode::Continue,
+            None,
+        )
+        .await;
+    assert_eq!(reply.route, "beta", "{reply:?}");
+    let promoted = std::mem::take(&mut *events.lock().unwrap());
+
+    // A fresh transfer from a project: beta is shelved before gamma settles.
+    let reply = board
+        .transfer_ctx(&transcript("gamma"), "gamma", "", "")
+        .await;
+    assert_eq!(reply.route, "gamma", "{reply:?}");
+    let transferred = std::mem::take(&mut *events.lock().unwrap());
+
+    let committed = |from: &str, to: &str| {
+        vec![
+            format!("{to}:busy"),
+            format!("{from}:idle"),
+            format!("{to}:idle"),
+            format!("route:{to}:{to}"),
+        ]
+    };
+    assert_eq!(promoted, committed("alpha", "beta"));
+    assert_eq!(transferred, committed("beta", "gamma"));
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn background_prompt_transport_failure_evicts_the_resident_and_finishes() {
     let mut board = board_with(vec![project("alpha", "")], false);
     let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
