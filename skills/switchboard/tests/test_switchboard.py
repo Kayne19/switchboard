@@ -249,7 +249,7 @@ class CallsTest(ModuleTestCase):
 
     def test_display_describes_held_and_shown_results(self):
         mode = {"held": True}
-        host = self.host(
+        self.host(
             reply=lambda request: {
                 "status": "accepted" if mode["held"] else "delivered",
                 "reason": None,
