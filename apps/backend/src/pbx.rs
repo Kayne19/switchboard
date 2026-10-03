@@ -2939,8 +2939,12 @@ impl Switchboard {
             Ok(session) => session,
             Err(error) => {
                 tracing::error!(project = %project.id, %spec, %error, "could not change the leg's model");
-                self.rollback_startup(format!("model change failed: {error}"));
-                self.drop_agent().await;
+                self.abandon_swap(
+                    &project.id,
+                    keep_context,
+                    format!("model change failed: {error}"),
+                )
+                .await;
                 self.operator_note = Some(format!(
                     "Couldn't move {} to {spec}: {}.",
                     project.id,
@@ -2980,8 +2984,12 @@ impl Switchboard {
                 };
                 tracing::error!(project = %project.id, %spec, %detail, "the switched leg never answered");
                 session.close();
-                self.rollback_startup(format!("prompt failed: {detail}"));
-                self.drop_agent().await;
+                self.abandon_swap(
+                    &project.id,
+                    keep_context,
+                    format!("prompt failed: {detail}"),
+                )
+                .await;
                 self.operator_note = Some(format!(
                     "Couldn't move {} to {spec}: {}.",
                     project.id,
@@ -2997,9 +3005,12 @@ impl Switchboard {
             .await
         {
             session.close();
-            self.announce_agent_state(&project.id, "finished").await;
-            self.rollback_startup(format!("adoption failed: {error}"));
-            self.drop_agent().await;
+            self.abandon_swap(
+                &project.id,
+                keep_context,
+                format!("adoption failed: {error}"),
+            )
+            .await;
             return self.couldnt_bring_up_on(&project.id, &spoken, error.to_string());
         }
         match turn {
@@ -3017,6 +3028,21 @@ impl Switchboard {
                 reply
             }
         }
+    }
+
+    /// Ends a model change that failed, with exactly one `finished` for the
+    /// leg that is gone. `drop_agent` announces it for the session it holds,
+    /// which a kept-context change still has; a fresh-context change took the
+    /// old session out when it started, so that one is announced here. Before
+    /// this, a fresh change announced nothing and the page kept a state for a
+    /// leg that no longer existed, and a kept change's adoption failure
+    /// announced twice.
+    async fn abandon_swap(&mut self, project: &str, keep_context: bool, rollback: String) {
+        if !keep_context {
+            self.announce_agent_state(project, "finished").await;
+        }
+        self.rollback_startup(rollback);
+        self.drop_agent().await;
     }
 
     /// Changes the live session's model and thinking level from `from` to

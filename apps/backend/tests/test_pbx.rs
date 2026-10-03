@@ -1552,6 +1552,114 @@ async fn a_model_change_keeps_the_session_and_switches_it_live() {
     board.shutdown().await;
 }
 
+/// Records every agent-state notice as `project:state`, the way the page
+/// would see them.
+fn record_agent_states(board: &mut Switchboard) -> Arc<StdMutex<Vec<String>>> {
+    let notices = Arc::new(StdMutex::new(Vec::new()));
+    let recorded = Arc::clone(&notices);
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        recorded
+            .lock()
+            .unwrap()
+            .push(format!("{}:{}", notice.project, notice.state));
+        Box::pin(async {})
+    })));
+    notices
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_fresh_model_change_whose_prompt_fails_announces_finished_once() {
+    let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| says("On it.")));
+    // Only the switched session's first prompt fails; the transfer's intro
+    // before it goes through.
+    fake.on_command = Some(Box::new(|name, args| {
+        (name == "prompt"
+            && args["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("This session now runs on")))
+        .then(|| Some(Err(("transport".into(), "host prompt failed".into()))))
+    }));
+    let _log = fake.serve(board.hosts().connect_fake(HOST));
+    let reply = board
+        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+        .await;
+    assert_eq!(reply.route, "alpha", "{reply:?}");
+    let notices = record_agent_states(&mut board);
+
+    // A fresh-context change ends the old session before the new one is
+    // prompted. When the new one fails, the old leg is gone too, and the
+    // page must hear so exactly once; before, it heard nothing and kept a
+    // state for a leg that no longer existed.
+    let decided = board
+        .planner
+        .plan("anthropic/next", "", "do the thing", false)
+        .await;
+    let reply = redialed(&mut board, decided).await;
+
+    assert!(reply.error.is_some(), "{reply:?}");
+    let notices = notices.lock().unwrap().clone();
+    assert_eq!(
+        notices
+            .iter()
+            .filter(|notice| *notice == "alpha:finished")
+            .count(),
+        1,
+        "{notices:?}"
+    );
+    assert_eq!(board.coordinator.route(), OPERATOR);
+    assert!(!board.coordinator.is_candidate());
+    assert!(board.agent.is_none());
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_kept_model_change_whose_adoption_fails_announces_finished_once() {
+    let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
+    let coordinator = board.coordinator();
+    let _log = serve(
+        &board,
+        Box::new(move |_, message| {
+            if message.contains("This session now runs on") {
+                // A competing lifecycle owner moves the candidate before the
+                // PBX adopts it, as the promotion test does.
+                coordinator.set_candidate_token_for_test("not-the-swap-token");
+            }
+            says("On it.")
+        }),
+    );
+    let reply = board
+        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+        .await;
+    assert_eq!(reply.route, "alpha", "{reply:?}");
+    let notices = record_agent_states(&mut board);
+
+    // The kept session is still the switchboard's agent when adoption fails,
+    // so dropping it announces `finished`; the arm must not announce it a
+    // second time itself.
+    let decided = board
+        .planner
+        .plan("anthropic/next", "", "do the thing", true)
+        .await;
+    let reply = redialed(&mut board, decided).await;
+
+    assert!(reply.error.is_some(), "{reply:?}");
+    let notices = notices.lock().unwrap().clone();
+    assert_eq!(
+        notices
+            .iter()
+            .filter(|notice| *notice == "alpha:finished")
+            .count(),
+        1,
+        "{notices:?}"
+    );
+    assert_eq!(board.coordinator.route(), OPERATOR);
+    assert!(!board.coordinator.is_candidate());
+    board.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_thinking_change_keeps_the_session_and_takes_the_level_the_host_reports() {
     let (mut board, log) = on_alpha(&[], Box::new(|_, _| says("On it."))).await;
