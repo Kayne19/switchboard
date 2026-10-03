@@ -961,7 +961,7 @@ async fn release_floor(
 
 pub(crate) async fn deliver_page_reply_if_current(
     state: &AppState,
-    reply: &crate::pbx::Reply,
+    reply: &crate::reply::Reply,
     generation: u64,
 ) -> bool {
     let (voice, _transition) = match admit_reply(state, reply, generation).await {
@@ -1019,7 +1019,7 @@ enum ReplyAdmission<'a> {
 
 async fn admit_reply<'a>(
     state: &'a AppState,
-    reply: &crate::pbx::Reply,
+    reply: &crate::reply::Reply,
     generation: u64,
 ) -> ReplyAdmission<'a> {
     let voice = reserve_reply_voice(state, &reply.to_speak, generation).await;
@@ -1044,7 +1044,7 @@ async fn admit_reply<'a>(
 
 pub(crate) async fn deliver_turn_if_current(
     state: &AppState,
-    reply: &crate::pbx::Reply,
+    reply: &crate::reply::Reply,
     generation: u64,
     response_id: &str,
 ) -> bool {
@@ -1124,7 +1124,7 @@ pub(crate) fn trace_speech(
 }
 
 /// A turn's reply speech; a reply with nothing to say aloud is not speech.
-fn trace_reply_speech(state: &AppState, reply: &crate::pbx::Reply, not_delivered: Option<&str>) {
+fn trace_reply_speech(state: &AppState, reply: &crate::reply::Reply, not_delivered: Option<&str>) {
     if reply.to_speak.is_empty() {
         return;
     }

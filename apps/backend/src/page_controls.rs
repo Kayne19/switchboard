@@ -183,9 +183,9 @@ async fn deliver_page_control(
     state: &AppState,
     what: &str,
     started: std::time::Instant,
-    reply: crate::pbx::Reply,
+    reply: crate::reply::Reply,
     generation: u64,
-) -> Result<crate::pbx::Reply, Response> {
+) -> Result<crate::reply::Reply, Response> {
     let generation = reply.delivery_generation.unwrap_or(generation);
     if !deliver_page_reply_if_current(state, &reply, generation).await {
         tracing::info!(
@@ -206,9 +206,9 @@ async fn run_page_control<F>(
     state: &AppState,
     what: &str,
     operation: F,
-) -> Result<crate::pbx::Reply, Response>
+) -> Result<crate::reply::Reply, Response>
 where
-    F: Future<Output = crate::pbx::Reply> + Send + 'static,
+    F: Future<Output = crate::reply::Reply> + Send + 'static,
 {
     let started = std::time::Instant::now();
     let spawned = spawn_replacing_operation(state, operation).await;
@@ -232,7 +232,7 @@ async fn run_redial_control<D>(
     state: &AppState,
     what: &str,
     decide: D,
-) -> Result<crate::pbx::Reply, Response>
+) -> Result<crate::reply::Reply, Response>
 where
     D: Future<Output = Redial> + Send + 'static,
 {

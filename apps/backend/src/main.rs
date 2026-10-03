@@ -20,6 +20,7 @@ mod pi_client;
 mod prewarm;
 mod protocol;
 mod registry;
+mod reply;
 mod router;
 mod speech;
 mod turns;

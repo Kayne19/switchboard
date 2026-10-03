@@ -22,11 +22,11 @@ use crate::pi_client::{
 };
 use crate::prewarm::{LaunchPlan, Prewarm};
 use crate::registry::{Project, Registry};
+use crate::reply::{failure_reply, spoken_reply, Reply};
 use crate::router::{
     utility_decision, CallSummary, Decision, DeskSession, Router, UtilityDecision,
 };
 use futures_util::{future::join_all, FutureExt};
-use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -94,49 +94,6 @@ const UTILITY_SYSTEM_PROMPT: &str = "You are a background helper on a voice call
 [ROUTING REQUEST]: decide where the caller's words go. If one registered project fits, call second_opinion. Set confident only when both the project and the intent are clear. Leave target empty when the caller should be asked. If the caller asks several projects for things at once, call dispatch_parts with one part per project, each part in the caller's own words. If the caller wants to hear or see something a project has waiting, that project is the target. Use mode fresh only when the caller asks to start over. Never invent a project.
 
 [FLOOR REWRITE]: call rewrite with the message the way the caller should hear it next. The message comes from the person they have been talking to all call. Keep its voice and its first person, and never pass it on as news from someone else. Keep every fact and add none. Smooth it so it follows from what was just said, and vary how you start. If the caller has been quiet a while, ease in so they know which work it is about. Never say something is on screen. If a display is held, say it is ready when they want it.";
-#[derive(Clone, Debug, Serialize)]
-pub struct Utterance {
-    pub text: String,
-    pub synthesize: bool,
-}
-#[derive(Clone, Debug, Serialize)]
-pub struct Reply {
-    pub text: String,
-    pub route: String,
-    pub route_label: String,
-    pub error: Option<String>,
-    pub to_speak: Vec<String>,
-    /// Whether this reply contains text synthesized for the caller.
-    pub voiced: bool,
-    #[serde(skip)]
-    pub(crate) delivery_generation: Option<u64>,
-}
-impl Reply {
-    fn new(route: &str, label: &str, utterances: Vec<Utterance>, error: Option<String>) -> Self {
-        let text = utterances
-            .iter()
-            .filter(|u| !u.text.is_empty())
-            .map(|u| u.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        let to_speak = utterances
-            .iter()
-            .filter(|u| u.synthesize && !u.text.is_empty())
-            .map(|u| u.text.clone())
-            .collect::<Vec<_>>();
-        let voiced = !to_speak.is_empty();
-        Self {
-            text,
-            route: route.into(),
-            route_label: label.into(),
-            error,
-            to_speak,
-            voiced,
-            delivery_generation: None,
-        }
-    }
-}
-
 /// What the incoming project leg is told about why the caller is arriving.
 #[derive(Clone, Debug, Default)]
 pub struct TransferContext {
@@ -682,7 +639,7 @@ pub struct Switchboard {
     resume_blocked: HashSet<String>,
     /// The one owner of the leg on the line, and of the status the page is
     /// shown.
-    coordinator: Coordinator,
+    pub(crate) coordinator: Coordinator,
     /// The project hosts' links; project legs run over them.
     hosts: Hosts,
     /// The only owner of launch setup: catalogs and prepare reports are
@@ -3119,94 +3076,6 @@ impl Switchboard {
             self.announce_route().await;
         }
     }
-    fn reply<I, S>(&self, texts: I, error: Option<String>) -> Reply
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        spoken_reply(&self.coordinator, texts, error)
-    }
-
-    /// A routing outage is a page error, not a sentence synthesized into the
-    /// call. `speech.rs` turns this marker into `routing_unavailable`.
-    fn routing_unavailable(&self) -> Reply {
-        self.reply(
-            std::iter::empty::<String>(),
-            Some("routing_unavailable".into()),
-        )
-    }
-
-    fn reply_with_turn(&self, turn: Turn) -> Reply {
-        let failed = turn.failed;
-        let error = turn.error;
-        let status = self.coordinator.status();
-        let mut reply = Reply::new(
-            &status.route,
-            &status.label,
-            vec![Utterance {
-                text: turn.text,
-                synthesize: false,
-            }],
-            failed.then_some(error),
-        );
-        reply.delivery_generation = Some(self.coordinator.generation());
-        reply
-    }
-    /// A failure said aloud in plain words. The raw `detail` goes only to
-    /// the screen text and the reply's error; it is never spoken.
-    fn reply_failure(&self, spoken: String, detail: impl Into<String>) -> Reply {
-        failure_reply(&self.coordinator, spoken, detail.into())
-    }
-
-    /// Every way opening a project for the caller can fail says the same.
-    fn couldnt_open(&self, project: &str, detail: impl Into<String>) -> Reply {
-        self.reply_failure(format!("I couldn't open {project}."), detail)
-    }
-
-    /// Bringing work back from the background failed.
-    fn couldnt_bring_back(&self, project: &str, detail: impl Into<String>) -> Reply {
-        self.reply_failure(format!("I couldn't pick {project} back up."), detail)
-    }
-
-    /// A model change could not bring the project back up on the new model.
-    fn couldnt_bring_up_on(&self, project: &str, spoken: &str, detail: impl Into<String>) -> Reply {
-        self.reply_failure(
-            format!("I couldn't bring {project} back up on {spoken}."),
-            detail,
-        )
-    }
-
-    /// Taking over a session open at the caller's desk failed.
-    fn couldnt_take_over(&self, project: &str, detail: impl Into<String>) -> Reply {
-        self.reply_failure(format!("I couldn't take over {project}."), detail)
-    }
-
-    /// The caller named a project the registry does not have.
-    fn unknown_project_line(&self, spoken: &str) -> String {
-        let known = self.registry.ids();
-        if known.is_empty() {
-            format!("I don't have a project called {spoken}, and none are set up yet.")
-        } else {
-            format!(
-                "I don't have a project called {spoken}. The ones I have are {}.",
-                known.join(", ")
-            )
-        }
-    }
-
-    fn reply_transfer_error(&self, message: String, error: Option<String>) -> Reply {
-        let status = self.coordinator.status();
-        Reply::new(
-            &status.route,
-            &status.label,
-            vec![Utterance {
-                text: message,
-                synthesize: true,
-            }],
-            error,
-        )
-    }
-
     pub async fn dial(&mut self, project: &str, intent: &str) -> Reply {
         self.force_hangup().await;
         if project.eq_ignore_ascii_case(OPERATOR) {
@@ -3265,27 +3134,6 @@ fn is_confirmation(text: &str) -> bool {
     )
 }
 
-/// A failure the switchboard says itself: `spoken` is read aloud, and the
-/// raw `detail` is screen text and the reply's error, never speech.
-fn failure_reply(coordinator: &Coordinator, spoken: String, detail: String) -> Reply {
-    let status = coordinator.status();
-    Reply::new(
-        &status.route,
-        &status.label,
-        vec![
-            Utterance {
-                text: spoken,
-                synthesize: true,
-            },
-            Utterance {
-                text: detail.clone(),
-                synthesize: false,
-            },
-        ],
-        Some(detail),
-    )
-}
-
 /// What a committed leg does to the foreground it takes the line from
 /// (`Switchboard::commit_leg`).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -3330,28 +3178,6 @@ fn voice_block(persona: &str) -> String {
     } else {
         format!("{CALL_VOICE}\n\nCharacter:\n{persona}")
     }
-}
-
-/// A reply the switchboard speaks itself, labelled with the leg the
-/// coordinator names now.
-fn spoken_reply<I, S>(coordinator: &Coordinator, texts: I, error: Option<String>) -> Reply
-where
-    I: IntoIterator<Item = S>,
-    S: Into<String>,
-{
-    let status = coordinator.status();
-    Reply::new(
-        &status.route,
-        &status.label,
-        texts
-            .into_iter()
-            .map(|text| Utterance {
-                text: text.into(),
-                synthesize: true,
-            })
-            .collect(),
-        error,
-    )
 }
 
 /// The thinking level a model spec asks for: its suffix, empty for none.

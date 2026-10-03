@@ -1003,8 +1003,8 @@ async fn queue_a_clip_while_a_page_control_starts_a_leg(
     (control, turn_worker)
 }
 
-fn operator_reply() -> crate::pbx::Reply {
-    crate::pbx::Reply {
+fn operator_reply() -> crate::reply::Reply {
+    crate::reply::Reply {
         text: String::new(),
         route: OPERATOR.into(),
         route_label: "Operator".into(),
