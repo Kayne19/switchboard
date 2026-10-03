@@ -710,7 +710,6 @@ impl Switchboard {
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) fn new_with_jev(
         config: &crate::Config,
         registry: Registry,
@@ -1786,21 +1785,20 @@ impl Switchboard {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    pub async fn handle(&mut self, text: &str) -> Reply {
+    /// The tests' way onto the line without a routing decision: the words go
+    /// to whichever leg holds the route. Production always arrives through
+    /// `handle_decision` with Jev's verdict, so this is test-only; the
+    /// `allow(dead_code)` that used to sit here only hid that.
+    #[cfg(test)]
+    pub(crate) async fn handle(&mut self, text: &str) -> Reply {
         let context = TransferContext {
             exact_caller_transcript: text.to_owned(),
             derived_intent: String::new(),
         };
-        self.handle_ctx(&context).await
-    }
-
-    #[allow(dead_code)]
-    pub async fn handle_ctx(&mut self, context: &TransferContext) -> Reply {
         if self.coordinator.route() == OPERATOR {
-            self.handle_operator_ctx(context).await
+            self.handle_operator_ctx(&context).await
         } else {
-            self.handle_agent_ctx(context).await
+            self.handle_agent_ctx(&context).await
         }
     }
     async fn ensure_operator(&mut self) -> Result<&PiSession, PiSessionError> {
