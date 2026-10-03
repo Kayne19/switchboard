@@ -14,6 +14,7 @@ mod leg_announcer;
 mod lifecycle;
 mod models;
 mod module_calls;
+mod operator;
 mod page_controls;
 mod pbx;
 mod pi_client;

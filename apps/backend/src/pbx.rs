@@ -8,7 +8,6 @@
 //! only through the coordinator's transitions. A model or thinking change is
 //! decided by `RedialPlanner`, which needs no PBX lock; the switchboard runs
 //! the ones that go ahead.
-use crate::floor::FloorRewriteInput;
 use crate::hosts::Hosts;
 #[cfg(test)]
 use crate::hosts::{FakeHostAgent, FakeLog, OnPrompt, Step};
@@ -16,8 +15,8 @@ use crate::lifecycle::{CandidateLeg, Coordinator, LifecycleError, StatusConfig};
 #[cfg(test)]
 use crate::models::ModelCatalog;
 use crate::pi_client::{
-    local_argv, ActivityCallback, LegSession, ModuleCallback, PiSession, PiSessionError,
-    ProjectLaunch, ProjectSession, SessionClosedCallback, Signal, Turn, TurnCallback, ROUTE_TOOL,
+    ActivityCallback, LegSession, ModuleCallback, PiSession, PiSessionError, ProjectLaunch,
+    ProjectSession, SessionClosedCallback, Signal, Turn, TurnCallback, ROUTE_TOOL,
 };
 use crate::prewarm::{LaunchPlan, Prewarm};
 use crate::prompts::{build_intro_prompt, FOREGROUND_NOTICE};
@@ -25,7 +24,7 @@ use crate::redial::{thinking_in_spec, RedialPlanner};
 use crate::registry::{Project, Registry};
 use crate::reply::Reply;
 use crate::residents::BackgroundRegistry;
-use crate::router::{utility_decision, Decision, Router, UtilityDecision};
+use crate::router::{Decision, Router, UtilityDecision};
 use futures_util::FutureExt;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -91,24 +90,24 @@ impl Drop for UtteranceScope {
 
 pub struct Switchboard {
     pub registry: Arc<Registry>,
-    pi_binary: String,
-    operator_model: Option<String>,
-    operator_system_prompt: String,
-    operator_extension: Option<String>,
+    pub(crate) pi_binary: String,
+    pub(crate) operator_model: Option<String>,
+    pub(crate) operator_system_prompt: String,
+    pub(crate) operator_extension: Option<String>,
     pub(crate) persona: String,
-    env: HashMap<String, String>,
+    pub(crate) env: HashMap<String, String>,
     pub(crate) speech_deadline_ms: u64,
-    activity_callback: Option<ActivityCallback>,
+    pub(crate) activity_callback: Option<ActivityCallback>,
     route_callback: Option<RouteCallback>,
     pub(crate) agent_state_callback: Option<AgentStateCallback>,
     foreground_closed_callback: Option<ForegroundClosedCallback>,
     module_callback: Option<ModuleCallback>,
     turn_callback: Option<TurnCallback>,
     active_session: Arc<Mutex<Option<LegSession>>>,
-    operator: Option<PiSession>,
+    pub(crate) operator: Option<PiSession>,
     /// A separate process for second opinions and split dispatch. It must not
     /// share the operator's turn lock or conversation history.
-    utility: Option<PiSession>,
+    pub(crate) utility: Option<PiSession>,
     pub(crate) agent: Option<ProjectSession>,
     /// Resident project sessions and their guarded background prompts.
     pub(crate) background_agents: BackgroundRegistry,
@@ -119,7 +118,7 @@ pub struct Switchboard {
     pub(crate) agent_tasks: Arc<StdMutex<HashMap<String, String>>>,
     /// The call as Jev saw it for the utterance being handled, in plain text.
     /// The operator and the routing utility get the same facts.
-    call_state: String,
+    pub(crate) call_state: String,
     /// The caller line being handled, for the debug trace only. Set for one
     /// decision by `handle_decision_with_takeover`, and cleared when that
     /// decision ends or is cancelled; routing never reads it.
@@ -146,7 +145,7 @@ pub struct Switchboard {
     project_turn_timeout: Duration,
     floor_quiet_threshold: Duration,
     /// Read-only debug observer; never part of call control.
-    debug: crate::debug::DebugBus,
+    pub(crate) debug: crate::debug::DebugBus,
 }
 impl Switchboard {
     pub fn new(config: &crate::Config, registry: Registry, prewarm: Arc<Prewarm>) -> Self {
@@ -393,7 +392,7 @@ impl Switchboard {
         *self.active_session.lock().await = session;
     }
 
-    fn operator_leg(&self) -> Option<LegSession> {
+    pub(crate) fn operator_leg(&self) -> Option<LegSession> {
         self.operator.clone().map(LegSession::Operator)
     }
 
@@ -432,12 +431,6 @@ impl Switchboard {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(project.to_owned(), text.to_owned());
-    }
-
-    /// The call as Jev saw it for the utterance about to be handled. The
-    /// operator and the routing utility get it with their prompt.
-    pub fn set_call_state(&mut self, call_state: String) {
-        self.call_state = call_state;
     }
 
     /// Dispatch an utterance after Jev has made the routing decision. An
@@ -489,7 +482,7 @@ impl Switchboard {
 
     /// Publish one hop of the current utterance's routing trace. Outside a
     /// caller decision there is no utterance, and nothing is published.
-    fn trace(&self, event: impl FnOnce(String) -> crate::debug::DebugEvent) {
+    pub(crate) fn trace(&self, event: impl FnOnce(String) -> crate::debug::DebugEvent) {
         if let Some(utterance_id) = self.current_utterance() {
             self.debug.publish(event(utterance_id));
         }
@@ -935,216 +928,6 @@ impl Switchboard {
             self.handle_agent_ctx(&context).await
         }
     }
-    async fn ensure_operator(&mut self) -> Result<&PiSession, PiSessionError> {
-        let alive = match self.operator.as_ref() {
-            Some(session) => session.alive().await,
-            None => false,
-        };
-        if !alive {
-            if let Some(session) = self.operator.take() {
-                // The operator is the home base and is meant to outlive every
-                // project leg, so it dying between calls is worth a line even
-                // though the restart below hides it from the caller.
-                tracing::warn!(
-                    stderr_lines = session.stderr_tail(5).lines().count(),
-                    "operator process died; restarting"
-                );
-                session.close().await;
-            }
-        }
-        if self.operator.is_none() {
-            let appended = self.operator_prompt_suffix();
-            let argv = local_argv(
-                &self.pi_binary,
-                self.operator_model.as_deref(),
-                Some(std::path::Path::new(&self.operator_system_prompt)).filter(|p| p.exists()),
-                Some(&appended),
-                self.operator_extension.as_deref(),
-                &["--no-builtin-tools".into(), "--no-session".into()],
-            )?;
-            let session = PiSession::start(
-                argv,
-                OPERATOR,
-                OPERATOR,
-                None,
-                Some(self.env.clone()),
-                Duration::from_secs(180),
-                self.activity_callback.clone(),
-            )
-            .await?;
-            session.observe(self.debug.clone());
-            self.operator = Some(session);
-            self.set_active_session(self.operator_leg()).await;
-        }
-        self.operator
-            .as_ref()
-            .ok_or_else(|| PiSessionError("operator session was not created".into()))
-    }
-    async fn ensure_utility(&mut self) -> Result<&PiSession, PiSessionError> {
-        let alive = match self.utility.as_ref() {
-            Some(session) => session.alive().await,
-            None => false,
-        };
-        if !alive {
-            if let Some(session) = self.utility.take() {
-                tracing::warn!("routing utility process died; restarting");
-                session.close().await;
-            }
-        }
-        if self.utility.is_none() {
-            // The registry is fixed for the life of the service, so the
-            // catalog lives in the system prompt once.
-            let utility_prompt = self.utility_system_prompt();
-            let argv = local_argv(
-                &self.pi_binary,
-                self.operator_model.as_deref(),
-                None,
-                Some(&utility_prompt),
-                self.operator_extension.as_deref(),
-                &[
-                    "--no-builtin-tools".into(),
-                    "--no-session".into(),
-                    "--switchboard-utility".into(),
-                ],
-            )?;
-            let session = PiSession::start(
-                argv,
-                "routing utility",
-                "utility",
-                None,
-                Some(self.env.clone()),
-                Duration::from_secs(180),
-                None,
-            )
-            .await?;
-            session.observe(self.debug.clone());
-            self.utility = Some(session);
-        }
-        self.utility
-            .as_ref()
-            .ok_or_else(|| PiSessionError("utility process was not created".into()))
-    }
-
-    /// A routing request is data only: Jev's first read, the call state and
-    /// the caller's words. The rules and the catalog are in the utility's
-    /// system prompt.
-    fn utility_routing_request(&self, text: &str, decision: &Decision, retry: bool) -> String {
-        let target = decision.target.as_deref().unwrap_or("(none)");
-        let call_state = if self.call_state.is_empty() {
-            String::new()
-        } else {
-            format!("[CALL STATE]\n{}\n", self.call_state)
-        };
-        let retry = if retry {
-            "\nThis names more than one project. Split it with dispatch_parts, unless it really names only one."
-        } else {
-            ""
-        };
-        format!(
-            "[ROUTING REQUEST]\nFirst read: action={}, target={}, several projects={}, unsure={}.\n{}[CALLER WORDING]\n{}{}",
-            decision.action.as_str(),
-            target,
-            decision.multi_target,
-            decision.unsure,
-            call_state,
-            text,
-            retry,
-        )
-    }
-
-    /// Ask the isolated utility process. This call never touches the
-    /// conversational operator session, so an operator turn cannot block it.
-    async fn utility_decision(
-        &mut self,
-        request: &str,
-        attempt: &str,
-    ) -> Result<Option<UtilityDecision>, PiSessionError> {
-        self.trace(|utterance_id| crate::debug::DebugEvent::UtilityRequest {
-            utterance_id,
-            attempt: attempt.to_owned(),
-            prompt: request.to_owned(),
-        });
-        let started = std::time::Instant::now();
-        let decision = self.ask_utility(request).await;
-        let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        self.trace(|utterance_id| crate::debug::DebugEvent::UtilityDecision {
-            utterance_id,
-            attempt: attempt.to_owned(),
-            decision: match &decision {
-                Ok(Some(decision)) => decision.debug_value(),
-                Ok(None) => json!({"kind": "none"}),
-                Err(error) => json!({"kind": "error", "error": error.to_string()}),
-            },
-            latency_ms,
-        });
-        decision
-    }
-
-    async fn ask_utility(
-        &mut self,
-        request: &str,
-    ) -> Result<Option<UtilityDecision>, PiSessionError> {
-        let session = self.ensure_utility().await?.clone();
-        let turn = session.prompt(request).await?;
-        if turn.failed {
-            return Err(PiSessionError(if turn.error.is_empty() {
-                "routing utility failed".into()
-            } else {
-                turn.error
-            }));
-        }
-        Ok(utility_decision(&turn.signals))
-    }
-
-    /// Take a clone of the utility session while the PBX lock is held. The
-    /// caller must prompt the clone after releasing that lock: utility work is
-    /// allowed to take seconds and must not block caller turns.
-    pub async fn floor_rewrite_session(&mut self) -> Result<PiSession, PiSessionError> {
-        Ok(self.ensure_utility().await?.clone())
-    }
-
-    pub async fn rewrite_floor_with_session(
-        session: &PiSession,
-        input: &FloorRewriteInput,
-    ) -> Result<Option<String>, PiSessionError> {
-        let context = if input.context.trim().is_empty() {
-            "(none)"
-        } else {
-            input.context.trim()
-        };
-        let prompt = format!(
-            "[FLOOR REWRITE]\nWork: {project}\nKind: {reason}\nCaller quiet a while: {quiet}\nDisplay held: {held_display}\n[RECENT CONVERSATION]\n{context}\n[MESSAGE]\n{message}",
-            project = input.project,
-            reason = input.reason,
-            quiet = if input.quiet { "yes" } else { "no" },
-            held_display = if input.held_display { "yes" } else { "no" },
-            message = input.message,
-        );
-        let turn = session.prompt(&prompt).await?;
-        if turn.failed {
-            return Err(PiSessionError(if turn.error.is_empty() {
-                "floor rewrite utility failed".into()
-            } else {
-                turn.error
-            }));
-        }
-        Ok(turn
-            .signals
-            .iter()
-            .find(|signal| signal.name == crate::pi_client::REWRITE_TOOL)
-            .and_then(|signal| {
-                signal
-                    .args
-                    .get("text")
-                    .or_else(|| signal.args.get("message"))
-                    .or_else(|| signal.args.get("rewrite"))
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|text| !text.is_empty())
-                    .map(str::to_owned)
-            }))
-    }
-
     async fn handle_operator_ctx(&mut self, context: &TransferContext) -> Reply {
         let session = match self.ensure_operator().await {
             Ok(session) => session.clone(),
@@ -1937,15 +1720,6 @@ impl Switchboard {
         } else {
             reply
         }
-    }
-    async fn recover_operator(&mut self, error: String) -> Reply {
-        tracing::warn!(%error, "dropping and rebuilding the operator leg");
-        if let Some(s) = self.operator.take() {
-            s.close().await;
-        }
-        self.set_active_session(None).await;
-        tracing::error!(%error, "operator unavailable after a failed turn");
-        self.routing_unavailable()
     }
     pub(crate) async fn drop_agent(&mut self) {
         let was_on_a_project = self.coordinator.route() != OPERATOR;
