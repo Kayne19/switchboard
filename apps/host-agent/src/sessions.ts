@@ -60,6 +60,8 @@ interface Tracked {
 	turnCause: TurnCause | null;
 	call: CallState | null;
 	last: DaemonSession | null;
+	/** A kill of this host agent's own is in flight; it reports the close. */
+	killing: boolean;
 }
 
 interface StateFile {
@@ -199,6 +201,7 @@ export class SessionManager {
 				turnCause: null,
 				call: null,
 				last: null,
+				killing: false,
 			};
 			t.last = snapshot;
 			this.#tracked.set(rec.handle, t);
@@ -386,6 +389,7 @@ export class SessionManager {
 			turnCause: null,
 			call: null,
 			last: { ...session, lastText: snapshot.lastText ?? null },
+			killing: false,
 		};
 		if (t.name) this.#usedNames.add(t.name);
 		this.#tracked.set(t.handle, t);
@@ -486,8 +490,16 @@ export class SessionManager {
 		const t = this.#tracked.get(handle);
 		if (!t) throw new CommandError("refused", `session ${handle} was not created by the switchboard`);
 		if (t.provenance !== "created") throw new CommandError("refused", `session ${handle} was taken over; it can only be detached`);
-		await this.#port.kill(handle);
-		this.#untrack(t, "killed");
+		// The daemon announces the close to every attached client, this one
+		// included, before it answers; the answer is what reports `killed`.
+		t.killing = true;
+		try {
+			await this.#port.kill(handle);
+		} catch (error) {
+			t.killing = false;
+			throw error;
+		}
+		if (this.#tracked.has(handle)) this.#untrack(t, "killed");
 		return { killed: true };
 	}
 
@@ -591,6 +603,14 @@ export class SessionManager {
 		const t = this.#tracked.get(handle);
 		if (!t) return;
 		switch (event.type) {
+			// The daemon stopped running the session: another client killed
+			// it, or the daemon retired it. It is gone from this host agent
+			// too, and the service hears so now rather than at the next
+			// resync. A kill of this host agent's own reports `killed` when
+			// the daemon answers it.
+			case "session_closed":
+				if (!t.killing) this.#untrack(t, "gone");
+				return;
 			case "agent_start":
 				if (!t.turnOpen) {
 					this.#openTurn(t, t.pending > 0 ? "input" : "autonomous");

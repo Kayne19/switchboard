@@ -312,7 +312,7 @@ The host agent sends every session event with its cursor:
 | `error` | `message` | A model error, or retries exhausted. |
 | `compaction` | `phase`: `start` \| `end`, `reason` | The daemon compacted the context. The service resends the voice brief on the next routed line after `end`. |
 | `state` | `model`, `thinking` | Model and effective thinking level after `set_model` or `set_thinking`. |
-| `session_closed` | `reason`: `killed` \| `detached` \| `gone` \| `host_link_closed` | The host agent stopped tracking the session (`gone`: the daemon no longer has it). `host_link_closed` never crosses the wire: the service synthesizes it for every subscribed session when the host's link drops, so a subscriber sees the session end the same way whether the host let go of it or went away. |
+| `session_closed` | `reason`: `killed` \| `detached` \| `gone` \| `host_link_closed` | The host agent stopped tracking the session (`gone`: the daemon no longer has it — it was missing at a resync, or the daemon announced its close, as it does when another client kills it). `host_link_closed` never crosses the wire: the service synthesizes it for every subscribed session when the host's link drops, so a subscriber sees the session end the same way whether the host let go of it or went away. |
 
 A turn is not ended by `agent_end`: the daemon repeats it within one turn.
 Only `turn_end` means settled.
