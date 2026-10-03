@@ -318,7 +318,7 @@ async fn final_response_barrier_is_emitted_once_after_a_settled_turn() {
     let state = state();
     let mut events = state.0.events.subscribe();
     let generation = state.0.coordinator.generation();
-    let reply = crate::pbx::Reply {
+    let reply = crate::reply::Reply {
         text: "Final answer".into(),
         route: OPERATOR.into(),
         route_label: "Operator".into(),
@@ -353,7 +353,7 @@ async fn stale_final_response_does_not_emit_a_barrier() {
     let mut events = state.0.events.subscribe();
     let generation = state.0.coordinator.generation();
     state.0.coordinator.begin_rescue("test rescue");
-    let reply = crate::pbx::Reply {
+    let reply = crate::reply::Reply {
         text: "stale".into(),
         route: OPERATOR.into(),
         route_label: "Operator".into(),
@@ -498,7 +498,7 @@ async fn superseded_reply_is_not_logged_or_broadcast() {
     let mut events = state.0.events.subscribe();
     let generation = state.0.coordinator.generation();
     state.0.coordinator.begin_rescue("test rescue");
-    let reply = crate::pbx::Reply {
+    let reply = crate::reply::Reply {
         text: "stale result".into(),
         route: OPERATOR.into(),
         route_label: "Operator".into(),
@@ -995,7 +995,7 @@ async fn a_stale_reply_is_traced_as_speech_not_delivered() {
     let state = state();
     let generation = state.0.coordinator.generation();
     state.0.coordinator.begin_rescue("test rescue");
-    let reply = crate::pbx::Reply {
+    let reply = crate::reply::Reply {
         text: "Old news.".into(),
         to_speak: vec!["Old news.".into()],
         route: OPERATOR.into(),
@@ -1039,8 +1039,8 @@ fn speaking_state() -> AppState {
     state
 }
 
-fn voiced_reply(text: &str, to_speak: &[&str]) -> crate::pbx::Reply {
-    crate::pbx::Reply {
+fn voiced_reply(text: &str, to_speak: &[&str]) -> crate::reply::Reply {
+    crate::reply::Reply {
         text: text.into(),
         route: OPERATOR.into(),
         route_label: "Operator".into(),

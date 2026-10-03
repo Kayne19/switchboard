@@ -79,7 +79,7 @@ a reconnect restores the last voiced line without putting written text on the
 live surface.
 
 The caller hears **one person** for the whole call. A code-owned block,
-`CALL_VOICE` in `pbx.rs`, says how anyone on the call talks: one voice, say
+`CALL_VOICE` in `prompts.rs`, says how anyone on the call talks: one voice, say
 less, show rather than tell, bad news straight. The persona from
 `SWITCHBOARD_PERSONA` follows it. The operator's system prompt, the routing
 utility's system prompt and every project voice brief carry the same two
@@ -123,9 +123,9 @@ are in `docs/display-tool.md` and `docs/visual-channel.md`.
 The switchboard does — not the agents. Jev classifies each utterance first
 (`docs/jev-routing.md`), and the routing utility gives a second opinion when
 Jev is unsure or sees several projects. The operator's `route` tool only raises
-a *signal*: the tool itself does nothing but acknowledge, and `pbx.rs`, which
-picks the call out of pi's `tool_execution_start` event stream, swings the line
-over. That means a confused or wedged agent cannot strand the caller, and every
+a *signal*: the tool itself does nothing but acknowledge, and the switchboard
+(`decisions.rs`), which picks the call out of pi's `tool_execution_start` event
+stream, swings the line over. That means a confused or wedged agent cannot strand the caller, and every
 failure path (a host that is not connected, wrong `cwd`, a session that fails
 to start, a leg that dies mid-call) ends with the caller back on the operator
 being told what happened, rather than talking into a dead pipe.
@@ -148,7 +148,7 @@ left.
 
 A caller changes the model or thinking level of the project they are on with
 the page's pickers (`POST /model`, `POST /thinking`). Asking for it out loud
-reaches the operator, which points them to the picker. `pbx.rs` decides and
+reaches the operator, which points them to the picker. `redial.rs` decides and
 makes the change.
 
 The conversation survives the change. A change that keeps the context is made
@@ -313,7 +313,15 @@ container, and the post-deploy checklist.
 | `apps/backend/src/speech.rs` | the speech worker, continuity, reply voice, and the floor release |
 | `apps/backend/src/leg_announcer.rs` | announcing a new leg to the browser |
 | `apps/backend/src/lifecycle.rs` | the coordinator: call identity, the current route and leg, phases, candidate legs, status |
-| `apps/backend/src/pbx.rs` | routing: transfers, returns, redials, rescue, and the legs |
+| `apps/backend/src/pbx.rs` | the switchboard: its state, construction and callbacks, and the types its files share |
+| `apps/backend/src/decisions.rs` | what the switchboard does with a routed line: continue, transfer, split, take over, stop, or the operator |
+| `apps/backend/src/leg_transitions.rs` | transfers, promotions, takeovers, returns, hangups and stops, all committed one way |
+| `apps/backend/src/redial.rs` | model and thinking changes: deciding them, then making them |
+| `apps/backend/src/residents.rs` | project agents kept running in the background |
+| `apps/backend/src/operator.rs` | the operator's pi process and the routing utility |
+| `apps/backend/src/routing_view.rs` | what routing reads without the switchboard's lock |
+| `apps/backend/src/prompts.rs` | the call's prompt text: voice block, voice brief, notices, intro |
+| `apps/backend/src/reply.rs` | the reply the switchboard hands back for a line |
 | `apps/backend/src/hosts.rs` | the host link: host agents dialling in on `/host`, their commands, events and module calls |
 | `apps/backend/src/prewarm.rs` | setup per host and project as each host links, and launch plans |
 | `apps/backend/src/pi_client.rs` | the operator's pi RPC process, and project sessions over the host link — one turn in, text and signals out |
