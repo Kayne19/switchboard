@@ -12,8 +12,8 @@ use crate::protocol::{AgentRequest, ServerMessage};
 #[cfg(test)]
 use crate::speech::start_speech_worker_for_test;
 use crate::speech::{
-    reserve_speech, send_speech, trace_speech, ContinuationScope, ReserveFailure, SpeechAdmission,
-    SpeechFailure, WhenQueueFull,
+    reserve_speech, send_speech, trace_speech, ContinuationScope, ReserveFailure, SpeakUnder,
+    SpeechAdmission, SpeechFailure, WhenQueueFull,
 };
 use axum::extract::{State, WebSocketUpgrade};
 #[cfg(test)]
@@ -197,7 +197,13 @@ async fn speak(state: AppState, req: Speak) -> Response {
     // are reserved at the generation they were admitted at, so a rescue
     // since then refuses them instead of playing them to the new leg.
     let generation = authority.generation;
-    let reserved = match reserve_speech(&state, generation, WhenQueueFull::Refuse).await {
+    let reserved = match reserve_speech(
+        &state,
+        SpeakUnder::Generation(generation),
+        WhenQueueFull::Refuse,
+    )
+    .await
+    {
         Ok(reserved) => reserved,
         Err(ReserveFailure::WorkerUnavailable) => {
             tracing::warn!("not spoken: the speech worker is busy or gone");
