@@ -4,7 +4,7 @@ import { CodeViewport } from '../primitives/CodeViewport';
 import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
 import { answerRows, branchText, clockTime, decisionSummary, formatMs, ruleText, type AnswerRow } from './explain';
 import { JsonView } from './Json';
-import type { DebugConfig, JsonValue } from './protocol';
+import type { DebugConfig } from './protocol';
 import { routePath, type DebugState, type FloorTrace, type RouteTrace } from './reducer';
 import { RoutePathLine, type Selection } from './SwitchboardView';
 
