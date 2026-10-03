@@ -21,7 +21,6 @@ export interface HostAgentConfig {
 	daemonSocket: string;
 	primeAgentPackage: string;
 	stateDir: string;
-	skillSocket: string;
 }
 
 export const DEFAULT_CONFIG_PATH = "~/.config/switchboard/host-agent.json";
@@ -55,9 +54,17 @@ export function loadConfig(file: string, home = os.homedir()): HostAgentConfig {
 		daemonSocket: expandHome(opt("daemon_socket", path.join(os.tmpdir(), `prime-agent-${uid}`, "daemon.sock")), home),
 		primeAgentPackage: expandHome(need("prime_agent_package"), home),
 		stateDir: expandHome(opt("state_dir", "~/.local/state/switchboard/host-agent"), home),
-		skillSocket: expandHome(opt("skill_socket", "~/.cache/switchboard/host-agent.sock"), home),
 	};
 }
+
+/**
+ * Where the `switchboard` Python skill looks for the host agent. The skill
+ * (`skills/switchboard/src/switchboard/__init__.py`, `_socket_path`) has the
+ * same path built in and takes no configuration, so neither does this side: a
+ * setting the skill cannot follow would only make every call fail as if the
+ * host agent were absent.
+ */
+export const SKILL_SOCKET_PATH = "~/.cache/switchboard/host-agent.sock";
 
 export function readToken(file: string): string {
 	const token = readFileSync(file, "utf8").trim();
@@ -126,7 +133,7 @@ export async function main(argv: string[]): Promise<void> {
 	});
 
 	const socket = new SkillSocket({
-		socketPath: config.skillSocket,
+		socketPath: expandHome(SKILL_SOCKET_PATH, os.homedir()),
 		lookup: (sessionId) => manager.bySessionId(sessionId),
 		relay: (handle, callToken, call, args, timeoutMs, turnId, turnCause) => link.relayModuleCall(handle, callToken, call, args, timeoutMs, turnId, turnCause),
 	});

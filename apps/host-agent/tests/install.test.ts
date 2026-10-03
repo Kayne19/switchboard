@@ -136,7 +136,6 @@ test("installer: first install writes the files, both units and enables linger",
 		prime_agent_package: r.primePackage,
 		daemon_socket: socket,
 		state_dir: path.join(r.home, ".local/state/switchboard/host-agent"),
-		skill_socket: path.join(r.home, ".cache/switchboard/host-agent.sock"),
 	});
 
 	// The host agent in a versioned directory, as ES modules.

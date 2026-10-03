@@ -38,8 +38,7 @@ One JSON file; `main.ts` is its only reader at run time. The installer
   "prime_agent": "~/.local/npm-global/bin/prime-agent",
   "prime_agent_package": "~/.local/npm-global/lib/node_modules/prime-agent",
   "daemon_socket": "/tmp/prime-agent-1000/daemon.sock",
-  "state_dir": "~/.local/state/switchboard/host-agent",
-  "skill_socket": "~/.cache/switchboard/host-agent.sock"
+  "state_dir": "~/.local/state/switchboard/host-agent"
 }
 ```
 
@@ -53,7 +52,11 @@ One JSON file; `main.ts` is its only reader at run time. The installer
 | `git_sha` | no (`unknown`) | Commit the host agent was installed from; reported in the hello. |
 | `daemon_socket` | no | Default `$TMPDIR/prime-agent-<uid>/daemon.sock` (the daemon's default). |
 | `state_dir` | no | Default `~/.local/state/switchboard/host-agent`. Holds `sessions.json`. |
-| `skill_socket` | no | Default `~/.cache/switchboard/host-agent.sock`. |
+
+The skill socket's path is not a setting: the Python skill has
+`~/.cache/switchboard/host-agent.sock` built in and reads no configuration,
+so the host agent listens there and nowhere else (see "Skill socket"). A
+`skill_socket` key in an older config file is ignored.
 
 ### State file
 

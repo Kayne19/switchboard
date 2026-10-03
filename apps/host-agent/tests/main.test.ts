@@ -16,7 +16,6 @@ test("config: one JSON file, ~ expanded, defaults for optional paths", () => {
 	assert.equal(c.hostId, "scriptorium");
 	assert.equal(c.tokenFile, path.join(home, ".config/switchboard/host-token"));
 	assert.equal(c.primeAgentPackage, path.join(home, "pkg/prime-agent"));
-	assert.equal(c.skillSocket, path.join(home, ".cache/switchboard/host-agent.sock"));
 	assert.equal(c.stateDir, path.join(home, ".local/state/switchboard/host-agent"));
 	assert.match(c.daemonSocket, /prime-agent-\d+\/daemon\.sock$/);
 	assert.equal(c.gitSha, "abc");
