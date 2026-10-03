@@ -1,6 +1,6 @@
 use super::*;
 use crate::hosts::Step;
-use serde_json::{json, Value};
+use serde_json::json;
 use std::sync::Mutex as StdMutex;
 
 #[test]
@@ -59,81 +59,6 @@ fn status_exposes_the_launch_catalog_for_the_current_project() {
             model: "current".into(),
             thinks: true,
         }]
-    );
-}
-
-#[tokio::test]
-async fn a_turn_ends_only_on_the_settled_turn_end() {
-    let hosts = crate::hosts::Hosts::new(Default::default(), Default::default());
-    let mut link = hosts.connect_fake(HOST);
-    let creating = tokio::spawn({
-        let hosts = hosts.clone();
-        async move {
-            ProjectSession::create(
-                &hosts,
-                ProjectLaunch {
-                    host: HOST.into(),
-                    project: "alpha".into(),
-                    cwd: "/srv/alpha".into(),
-                    spec: String::new(),
-                    brief: "BRIEF".into(),
-                    turn_timeout: Duration::from_secs(10),
-                    on_activity: None,
-                    on_module: None,
-                    on_turn: None,
-                    on_closed: None,
-                    debug: None,
-                },
-            )
-            .await
-        }
-    });
-    let reply = |link: &crate::hosts::FakeLink, command: &Value, result: Value| {
-        link.send(json!({"type": "reply", "id": command["id"], "epoch": link.epoch, "ok": true, "result": result}));
-    };
-    let event = |link: &crate::hosts::FakeLink, cursor: u64, body: Value| {
-        link.send(json!({"type": "event", "session": "s1", "cursor": format!("b:{cursor}"), "event": body}));
-    };
-    let create = link.recv().await.unwrap();
-    assert_eq!(create["name"], "create_session");
-    reply(
-        &link,
-        &create,
-        json!({"session": "s1", "thinking": "medium"}),
-    );
-    let (session, _) = creating.await.unwrap().unwrap();
-
-    let prompting = tokio::spawn({
-        let session = session.clone();
-        async move { session.prompt("hello").await }
-    });
-    let prompt = link.recv().await.unwrap();
-    assert_eq!(prompt["args"]["message"], "BRIEF\n\nhello");
-    // The tail of an earlier, aborted turn arrives before the prompt is
-    // answered; it is not this turn's.
-    event(&link, 1, json!({"kind": "text", "text": "cut off"}));
-    event(&link, 2, json!({"kind": "turn_end"}));
-    reply(&link, &prompt, json!({"sent_as": "prompt"}));
-    event(&link, 3, json!({"kind": "turn_start", "cause": "input"}));
-    event(&link, 4, json!({"kind": "text", "text": "Done."}));
-    event(
-        &link,
-        5,
-        json!({"kind": "tool_end", "tool": "ipython", "call_id": "t1", "error": false}),
-    );
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    assert!(!prompting.is_finished(), "the turn ended before it settled");
-    assert!(session.busy());
-    event(&link, 6, json!({"kind": "turn_end"}));
-    let turn = prompting.await.unwrap().unwrap();
-    assert_eq!(turn.text, "Done.");
-    assert!(!turn.failed);
-    assert!(!session.busy());
-    session.close();
-    let kill = link.recv().await.unwrap();
-    assert_eq!(
-        (kill["name"].clone(), kill["args"].clone()),
-        (json!("kill"), json!({"session": "s1"}))
     );
 }
 

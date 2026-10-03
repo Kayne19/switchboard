@@ -23,8 +23,6 @@ use crate::lifecycle::CandidateLeg;
 use crate::lifecycle::{Coordinator, StatusConfig};
 #[cfg(test)]
 use crate::models::ModelCatalog;
-#[cfg(test)]
-use crate::pi_client::ProjectLaunch;
 use crate::pi_client::{
     ActivityCallback, LegSession, ModuleCallback, PiSession, ProjectSession, SessionClosedCallback,
     TurnCallback,
