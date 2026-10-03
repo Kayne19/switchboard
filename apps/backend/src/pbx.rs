@@ -2373,26 +2373,16 @@ impl Switchboard {
             return self.couldnt_open(&project.id, detail);
         }
 
-        // The leg may be adopted already: a candidate is promoted on its first
-        // sign of life, which usually arrives during the intro turn. Either
-        // way the coordinator names it from here on; the switchboard only
-        // swaps the session handles.
-        if self.coordinator.is_candidate() {
-            if let Err(error) = self.coordinator.adopt_candidate(&leg_token) {
-                session.close();
-                self.announce_agent_state(&project.id, "finished").await;
-                self.set_active_session(live_session.clone()).await;
-                self.rollback_startup(format!("adoption failed: {error}"));
-                return self.couldnt_open(&project.id, error.to_string());
-            }
+        if let Err(error) = self
+            .commit_leg(&project.id, &leg_token, &session, LegChange::NewAgent)
+            .await
+        {
+            session.close();
+            self.announce_agent_state(&project.id, "finished").await;
+            self.set_active_session(live_session.clone()).await;
+            self.rollback_startup(format!("adoption failed: {error}"));
+            return self.couldnt_open(&project.id, error.to_string());
         }
-        self.coordinator.finish_intro();
-
-        self.shelve_previous_foreground(&project.id).await;
-        self.announce_agent_state(&project.id, "idle").await;
-        self.agent = Some(session);
-        self.set_active_session(self.agent_leg()).await;
-        self.announce_route().await;
         self.reply_with_turn(turn)
     }
 
@@ -2463,21 +2453,16 @@ impl Switchboard {
             self.set_active_session(previous_foreground).await;
             return self.couldnt_bring_back(&project.id, turn.error);
         }
-        if self.coordinator.is_candidate() {
-            if let Err(error) = self.coordinator.adopt_candidate(&token) {
-                session.close();
-                self.announce_agent_state(&project.id, "finished").await;
-                self.rollback_startup(format!("background promotion adoption failed: {error}"));
-                self.set_active_session(previous_foreground).await;
-                return self.couldnt_bring_back(&project.id, error.to_string());
-            }
+        if let Err(error) = self
+            .commit_leg(&project.id, &token, &session, LegChange::NewAgent)
+            .await
+        {
+            session.close();
+            self.announce_agent_state(&project.id, "finished").await;
+            self.rollback_startup(format!("background promotion adoption failed: {error}"));
+            self.set_active_session(previous_foreground).await;
+            return self.couldnt_bring_back(&project.id, error.to_string());
         }
-        self.coordinator.finish_intro();
-        self.shelve_previous_foreground(&project.id).await;
-        self.announce_agent_state(&project.id, "idle").await;
-        self.agent = Some(session);
-        self.set_active_session(self.agent_leg()).await;
-        self.announce_route().await;
         self.reply_with_turn(turn)
     }
 
@@ -2688,22 +2673,56 @@ impl Switchboard {
             self.set_active_session(previous_foreground.clone()).await;
             return self.couldnt_take_over(&project.id, detail);
         }
+        if let Err(error) = self
+            .commit_leg(&project.id, &leg_token, &session, LegChange::NewAgent)
+            .await
+        {
+            session.close();
+            self.announce_agent_state(&project.id, "finished").await;
+            self.rollback_startup(format!("takeover adoption failed: {error}"));
+            self.set_active_session(previous_foreground).await;
+            return self.couldnt_take_over(&project.id, error.to_string());
+        }
+        self.reply_with_turn(turn)
+    }
+
+    /// Makes the staged project leg the one on the line. Every transition
+    /// that brings a project leg up (a transfer, a background promotion, a
+    /// takeover, a redial) commits through here, so none of them can skip a
+    /// step or take one out of order:
+    ///
+    /// 1. adopt the candidate under `token`. It may be adopted already: a
+    ///    candidate is promoted on its first sign of life, which usually
+    ///    arrives during its first turn. Either way the coordinator names it
+    ///    from here on; the switchboard only swaps the session handles;
+    /// 2. end the intro;
+    /// 3. on a [`LegChange::NewAgent`], shelve the previous foreground and
+    ///    settle the incoming agent, published busy for its first turn, to
+    ///    idle;
+    /// 4. name the session on the PBX and on the active-session guard;
+    /// 5. announce the route.
+    ///
+    /// A failed adoption commits nothing and is returned. Abandoning the leg
+    /// is the caller's, because where the line goes back to differs.
+    async fn commit_leg(
+        &mut self,
+        project: &str,
+        token: &str,
+        session: &ProjectSession,
+        change: LegChange,
+    ) -> Result<(), LifecycleError> {
         if self.coordinator.is_candidate() {
-            if let Err(error) = self.coordinator.adopt_candidate(&leg_token) {
-                session.close();
-                self.announce_agent_state(&project.id, "finished").await;
-                self.rollback_startup(format!("takeover adoption failed: {error}"));
-                self.set_active_session(previous_foreground).await;
-                return self.couldnt_take_over(&project.id, error.to_string());
-            }
+            self.coordinator.adopt_candidate(token)?;
         }
         self.coordinator.finish_intro();
-        self.shelve_previous_foreground(&project.id).await;
-        self.announce_agent_state(&project.id, "idle").await;
-        self.agent = Some(session);
+        if change == LegChange::NewAgent {
+            self.shelve_previous_foreground(project).await;
+            self.announce_agent_state(project, "idle").await;
+        }
+        self.agent = Some(session.clone());
         self.set_active_session(self.agent_leg()).await;
         self.announce_route().await;
-        self.reply_with_turn(turn)
+        Ok(())
     }
 
     /// Starts a project leg on its host from its launch plan and puts it on
@@ -2970,19 +2989,16 @@ impl Switchboard {
             Some(turn)
         };
 
-        if self.coordinator.is_candidate() {
-            if let Err(error) = self.coordinator.adopt_candidate(&leg_token) {
-                session.close();
-                self.announce_agent_state(&project.id, "finished").await;
-                self.rollback_startup(format!("adoption failed: {error}"));
-                self.drop_agent().await;
-                return self.couldnt_bring_up_on(&project.id, &spoken, error.to_string());
-            }
+        if let Err(error) = self
+            .commit_leg(&project.id, &leg_token, &session, LegChange::Redial)
+            .await
+        {
+            session.close();
+            self.announce_agent_state(&project.id, "finished").await;
+            self.rollback_startup(format!("adoption failed: {error}"));
+            self.drop_agent().await;
+            return self.couldnt_bring_up_on(&project.id, &spoken, error.to_string());
         }
-        self.coordinator.finish_intro();
-        self.agent = Some(session);
-        self.set_active_session(self.agent_leg()).await;
-        self.announce_route().await;
         match turn {
             Some(turn) => self.reply_with_turn(turn),
             None => {
@@ -3237,6 +3253,21 @@ fn failure_reply(coordinator: &Coordinator, spoken: String, detail: String) -> R
         ],
         Some(detail),
     )
+}
+
+/// What a committed leg does to the foreground it takes the line from
+/// (`Switchboard::commit_leg`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LegChange {
+    /// Another agent takes the line: a transfer, a background promotion, a
+    /// takeover. The previous foreground is shelved, and the incoming agent
+    /// settles to idle after its first turn.
+    NewAgent,
+    /// The project on the line is redialed onto another model or thinking
+    /// level. There is no other foreground to shelve: a session that keeps
+    /// its context is the one already on the line, and shelving it would
+    /// close it. Its state was never published busy, so it is left alone.
+    Redial,
 }
 
 /// A prompt that could not be sent, as the failed turn the leg transitions
