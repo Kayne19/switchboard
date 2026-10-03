@@ -1388,9 +1388,13 @@ async fn clear_active_operation(state: &AppState, id: TaskId) {
     state.0.active_operations.lock().await.remove(&id);
 }
 
+/// How many audio clips may wait for the browser at once. A reservation past
+/// it is refused, like one for a generation that has moved on.
+const AUDIO_SLOTS: usize = 64;
+
 async fn reserve_audio(state: &AppState, generation: u64) -> Option<u64> {
     let mut audio = state.0.audio.lock().await;
-    if generation != state.0.coordinator.generation() || audio.slots.len() >= 64 {
+    if generation != state.0.coordinator.generation() || audio.slots.len() >= AUDIO_SLOTS {
         return None;
     }
     Some(audio.reserve(generation))
@@ -3228,6 +3232,99 @@ async fn release_floor(
     }
 }
 
+/// What a module call from a leg that is no longer on the call is told. The
+/// skill prints a refusal to the agent word for word.
+const LEG_OFF_THE_CALL: &str =
+    "this leg is no longer on the call: stop retrying, nothing you send reaches the caller";
+/// What a self-woken module call with no host turn behind it is told.
+const SELF_WOKEN_WITHOUT_AUTHORITY: &str = "no switchboard turn is running for this leg; this self-woken call has no delivery authority, so put the result in the written reply instead";
+
+/// A module call's refusal: the leg it names may not act on the call. It is
+/// answered as a 409 `invalid_leg`, with these words as its detail.
+struct LegRefusal(&'static str);
+
+impl IntoResponse for LegRefusal {
+    fn into_response(self) -> Response {
+        (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({"delivered":false, "code":"invalid_leg", "detail":self.0})),
+        )
+            .into_response()
+    }
+}
+
+/// A module call admitted to act on the call: its leg was on the line, and
+/// a self-woken call carried the host turn it belongs to, at `generation`.
+/// Only `admit_module_call` makes one.
+struct ModuleAuthority<'a> {
+    token: &'a str,
+    turn_id: Option<&'a str>,
+    cause: Option<&'a str>,
+    generation: u64,
+}
+
+impl ModuleAuthority<'_> {
+    /// Checks the authority again under the display gate, the screen's side
+    /// effect boundary: a rescue or adoption that landed while the call
+    /// waited for the gate retires it.
+    fn recheck_at_the_screen(&self, state: &AppState) -> Result<(), LegRefusal> {
+        let coordinator = &state.0.coordinator;
+        if coordinator.generation() == self.generation
+            && coordinator
+                .accept_side_effect(self.token, self.turn_id, self.cause)
+                .is_ok()
+        {
+            return Ok(());
+        }
+        tracing::info!(
+            generation = self.generation,
+            "refused: the leg changed while it waited for the screen"
+        );
+        Err(LegRefusal(LEG_OFF_THE_CALL))
+    }
+}
+
+/// Admits a module call to act on the call (`docs/architecture.md`, rule 3),
+/// for every call that acts: a call from the candidate leg promotes it
+/// first, then the coordinator decides whether the leg on the line, and the
+/// host turn a self-woken call names, may act now. A refusal is the
+/// `LegRefusal` the skill shows the agent; only the transfer-in-progress
+/// wording is the call's own (`while_starting`), because what the agent
+/// should do next differs per call. What a background session's call does
+/// stays with each handler: speak refuses it, display holds it, view admits
+/// it here like any other.
+async fn admit_module_call<'a>(
+    state: &AppState,
+    token: &'a str,
+    turn_id: Option<&'a str>,
+    cause: Option<&'a str>,
+    while_starting: &'static str,
+) -> Result<ModuleAuthority<'a>, LegRefusal> {
+    promote_candidate_for_token(state, token).await;
+    if let Err(error) = state
+        .0
+        .coordinator
+        .accept_side_effect(token, turn_id, cause)
+    {
+        tracing::info!(reason = %error, "refused: the leg is not live on the call");
+        let self_woken = cause.is_some_and(|cause| cause == "autonomous" || cause == "unknown");
+        let detail = match error {
+            crate::lifecycle::LifecycleError::CandidateSideEffect => while_starting,
+            crate::lifecycle::LifecycleError::StaleLeg if self_woken => {
+                SELF_WOKEN_WITHOUT_AUTHORITY
+            }
+            _ => LEG_OFF_THE_CALL,
+        };
+        return Err(LegRefusal(detail));
+    }
+    Ok(ModuleAuthority {
+        token,
+        turn_id,
+        cause,
+        generation: state.0.coordinator.generation(),
+    })
+}
+
 /// A project session's `speak`: its words, and the call token it carried.
 struct Speak {
     text: String,
@@ -3252,36 +3349,18 @@ async fn speak(state: AppState, req: Speak) -> Response {
         tracing::info!("not spoken: caller is away from background agent");
         return Json(json!({"delivered":false,"reason":"caller_away","detail":"the caller is listening to another session; use request_to_speak with the actual words they should hear. While in the background, displays are held until the caller brings you forward; never say a display is on screen."})).into_response();
     }
-    promote_candidate_for_token(&state, &req.token).await;
-    if let Err(error) = state.0.coordinator.accept_side_effect(
+    let authority = match admit_module_call(
+        &state,
         &req.token,
         req.turn_id.as_deref(),
         req.cause.as_deref(),
-    ) {
-        tracing::info!(reason = %error, "refused: the leg is not live on the call");
-        let (code, detail) = match error {
-            crate::lifecycle::LifecycleError::CandidateSideEffect => (
-                axum::http::StatusCode::CONFLICT,
-                "the line is not live until this transfer completes: do not retry from this turn; the caller can see your written reply on screen",
-            ),
-            crate::lifecycle::LifecycleError::StaleLeg
-                if req.cause.as_deref().is_some_and(|cause| {
-                    cause == "autonomous" || cause == "unknown"
-                }) => (
-                axum::http::StatusCode::CONFLICT,
-                "no switchboard turn is running for this leg; this self-woken call has no delivery authority, so put the result in the written reply instead",
-            ),
-            _ => (
-                axum::http::StatusCode::CONFLICT,
-                "this leg is no longer on the call: stop retrying, nothing you send reaches the caller",
-            ),
-        };
-        return (
-            code,
-            Json(json!({"delivered":false, "code":"invalid_leg", "detail":detail})),
-        )
-            .into_response();
-    }
+        "the line is not live until this transfer completes: do not retry from this turn; the caller can see your written reply on screen",
+    )
+    .await
+    {
+        Ok(authority) => authority,
+        Err(refusal) => return refusal.into_response(),
+    };
     if !state.0.delivery.connected() {
         tracing::info!("not spoken: no browser is connected");
         return (
@@ -3300,90 +3379,86 @@ async fn speak(state: AppState, req: Speak) -> Response {
     }
 
     let spoken = state.0.speaker.clip_for_speech(&req.text);
-    let speech_permit = if spoken.is_empty() {
+    if spoken.is_empty() {
         tracing::info!("not spoken: nothing in the text can be said aloud");
         return Json(json!({"delivered":false, "reason":"text contained no speakable audio", "detail":"text contained no speakable audio"})).into_response();
-    } else {
-        match state.0.speech.try_reserve() {
-            Ok(permit) => Some(permit),
-            Err(_) => {
-                tracing::warn!("not spoken: the speech worker is busy or gone");
-                return (
-                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                    Json(json!({"delivered":false, "reason":"speech worker is unavailable or busy", "detail":"speech worker is unavailable or busy"})),
-                )
-                    .into_response();
-            }
+    }
+    // speak takes the same speech path as a reply, and differs from it on
+    // purpose in what it answers the agent. A line with nothing to say aloud
+    // is answered as such; a reply skips it. A full speech queue is refused at
+    // once as busy instead of waited on, so the agent hears it and goes on
+    // with its turn; a reply is the turn's own output and waits for its
+    // place. No audio slot (the leg changed, or the audio queue is full) is
+    // answered as undelivered, as when no browser is connected. The words
+    // are reserved at the generation they were admitted at, so a rescue
+    // since then refuses them instead of playing them to the new leg.
+    let generation = authority.generation;
+    let reserved = match reserve_speech(&state, generation, WhenQueueFull::Refuse).await {
+        Ok(reserved) => reserved,
+        Err(ReserveFailure::WorkerUnavailable) => {
+            tracing::warn!("not spoken: the speech worker is busy or gone");
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"delivered":false, "reason":"speech worker is unavailable or busy", "detail":"speech worker is unavailable or busy"})),
+            )
+                .into_response();
+        }
+        Err(ReserveFailure::Superseded) => {
+            tracing::info!(
+                generation,
+                "not spoken: the leg changed or the audio queue is full"
+            );
+            return Json(json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})).into_response();
         }
     };
-
-    if let Some(permit) = speech_permit {
-        let generation = state.0.coordinator.generation();
-        let sequence = match reserve_audio(&state, generation).await {
-            Some(sequence) => sequence,
-            None => {
-                tracing::info!(
-                    generation,
-                    "not spoken: the leg changed or the audio queue is full"
-                );
-                return Json(json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})).into_response();
-            }
-        };
-        let (result_tx, result_rx) = oneshot::channel();
-        let group = state.0.active_speech_group();
-        let speaker = state.0.coordinator.route();
-        permit.send(SpeechRequest {
-            text: spoken,
-            route: speaker.clone(),
-            generation,
-            sequence,
-            deadline: std::time::Instant::now() + state.0.speech_deadline,
-            scope: if group.is_some() {
-                ContinuationScope::ContinueCurrentTurn
-            } else {
-                ContinuationScope::FreshTurn
-            },
-            group: group.unwrap_or_else(|| state.0.new_speech_group()),
-            model: state.0.coordinator.status().model,
-            log_spoken: true,
-            result: result_tx,
-            span: tracing::Span::current(),
-        });
-        match result_rx.await {
-            Ok(Ok(())) => {
-                state.0.mark_foreground_audio(generation);
-                tracing::info!(generation, sequence, elapsed = ?started.elapsed(), "spoken");
-                trace_speech(&state, speaker, &req.text, None, None);
-                return Json(delivery_response(true)).into_response();
-            }
-            Ok(Err(detail)) => {
-                tracing::info!(generation, sequence, %detail, elapsed = ?started.elapsed(), "not spoken");
-                trace_speech(&state, speaker, &req.text, Some(detail.clone()), None);
-                return (
-                    axum::http::StatusCode::BAD_GATEWAY,
-                    Json(json!({"delivered":false, "reason":detail.clone(), "detail":detail})),
-                )
-                    .into_response();
-            }
-            Err(_) => {
-                tracing::warn!(elapsed = ?started.elapsed(), "not spoken: the speech worker stopped");
-                trace_speech(
-                    &state,
-                    speaker,
-                    &req.text,
-                    Some("speech worker stopped".into()),
-                    None,
-                );
-                return (
-                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                    Json(json!({"delivered":false, "reason":"speech worker stopped", "detail":"speech worker stopped"})),
-                )
-                    .into_response();
-            }
+    let sequence = reserved.sequence;
+    let group = state.0.active_speech_group();
+    let speaker = state.0.coordinator.route();
+    let admission = SpeechAdmission {
+        text: spoken,
+        route: speaker.clone(),
+        generation,
+        deadline: std::time::Instant::now() + state.0.speech_deadline,
+        scope: if group.is_some() {
+            ContinuationScope::ContinueCurrentTurn
+        } else {
+            ContinuationScope::FreshTurn
+        },
+        group: group.unwrap_or_else(|| state.0.new_speech_group()),
+        log_spoken: true,
+    };
+    match send_speech(&state, admission, reserved).await {
+        Ok(()) => {
+            state.0.mark_foreground_audio(generation);
+            tracing::info!(generation, sequence, elapsed = ?started.elapsed(), "spoken");
+            trace_speech(&state, speaker, &req.text, None, None);
+            Json(delivery_response(true)).into_response()
+        }
+        Err(SpeechFailure::NotSpoken(detail)) => {
+            tracing::info!(generation, sequence, %detail, elapsed = ?started.elapsed(), "not spoken");
+            trace_speech(&state, speaker, &req.text, Some(detail.clone()), None);
+            (
+                axum::http::StatusCode::BAD_GATEWAY,
+                Json(json!({"delivered":false, "reason":detail.clone(), "detail":detail})),
+            )
+                .into_response()
+        }
+        Err(SpeechFailure::WorkerStopped) => {
+            tracing::warn!(elapsed = ?started.elapsed(), "not spoken: the speech worker stopped");
+            trace_speech(
+                &state,
+                speaker,
+                &req.text,
+                Some("speech worker stopped".into()),
+                None,
+            );
+            (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"delivered":false, "reason":"speech worker stopped", "detail":"speech worker stopped"})),
+            )
+                .into_response()
         }
     }
-
-    Json(json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})).into_response()
 }
 fn recent_floor_context(entries: &[crate::history::TranscriptEntry]) -> String {
     entries
@@ -3565,52 +3640,23 @@ async fn display(
         }))
         .into_response();
     }
-    promote_candidate_for_token(&state, token).await;
-    if let Err(error) = state
-        .0
-        .coordinator
-        .accept_side_effect(token, turn_id, cause)
+    let authority = match admit_module_call(
+        &state,
+        token,
+        turn_id,
+        cause,
+        "the caller's screen is not live until this transfer completes: draw it again on your next turn",
+    )
+    .await
     {
-        tracing::info!(reason = %error, "refused: the leg is not live on the call");
-        let detail = match error {
-            crate::lifecycle::LifecycleError::CandidateSideEffect => {
-                "the caller's screen is not live until this transfer completes: draw it again on your next turn"
-            }
-            crate::lifecycle::LifecycleError::StaleLeg
-                if cause.is_some_and(|cause| cause == "autonomous" || cause == "unknown") => {
-                "no switchboard turn is running for this leg; this self-woken call has no delivery authority, so put the result in the written reply instead"
-            }
-            _ => "this leg is no longer on the call: stop retrying, nothing you send reaches the caller",
-        };
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({"delivered":false, "code":"invalid_leg", "detail":detail})),
-        )
-            .into_response();
-    }
-    let permit_generation = state.0.coordinator.generation();
+        Ok(authority) => authority,
+        Err(refusal) => return refusal.into_response(),
+    };
+    let permit_generation = authority.generation;
 
     let mut gate = state.0.display_gate.lock().await;
-    if state.0.coordinator.generation() != permit_generation
-        || state
-            .0
-            .coordinator
-            .accept_side_effect(token, turn_id, cause)
-            .is_err()
-    {
-        tracing::info!(
-            generation = permit_generation,
-            "refused: the leg changed while it waited for the screen"
-        );
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({
-                "delivered": false,
-                "code": "invalid_leg",
-                "detail": "this leg is no longer on the call: stop retrying, nothing you send reaches the caller"
-            })),
-        )
-            .into_response();
+    if let Err(refusal) = authority.recheck_at_the_screen(&state) {
+        return refusal.into_response();
     }
 
     let value = ServerMessage::Display {
@@ -3737,53 +3783,24 @@ async fn view(
         requested = %req.target.chars().take(64).collect::<String>(),
         "an agent asked about the caller's view"
     );
-    promote_candidate_for_token(&state, token).await;
-    if let Err(error) = state
-        .0
-        .coordinator
-        .accept_side_effect(token, turn_id, cause)
+    let authority = match admit_module_call(
+        &state,
+        token,
+        turn_id,
+        cause,
+        "the caller's screen is not live until this transfer completes: switch view again on your next turn",
+    )
+    .await
     {
-        tracing::info!(reason = %error, "refused: the leg is not live on the call");
-        let detail = match error {
-            crate::lifecycle::LifecycleError::CandidateSideEffect => {
-                "the caller's screen is not live until this transfer completes: switch view again on your next turn"
-            }
-            crate::lifecycle::LifecycleError::StaleLeg
-                if cause.is_some_and(|cause| cause == "autonomous" || cause == "unknown") => {
-                "no switchboard turn is running for this leg; this self-woken call has no delivery authority, so put the result in the written reply instead"
-            }
-            _ => "this leg is no longer on the call: stop retrying, nothing you send reaches the caller",
-        };
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({"delivered":false, "code":"invalid_leg", "detail":detail})),
-        )
-            .into_response();
-    }
-    let permit_generation = state.0.coordinator.generation();
+        Ok(authority) => authority,
+        Err(refusal) => return refusal.into_response(),
+    };
+    let permit_generation = authority.generation;
     let target = req.target.trim().to_ascii_lowercase();
 
     let gate = state.0.display_gate.lock().await;
-    if state.0.coordinator.generation() != permit_generation
-        || state
-            .0
-            .coordinator
-            .accept_side_effect(token, turn_id, cause)
-            .is_err()
-    {
-        tracing::info!(
-            generation = permit_generation,
-            "refused: the leg changed while it waited for the screen"
-        );
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({
-                "delivered": false,
-                "code": "invalid_leg",
-                "detail": "this leg is no longer on the call: stop retrying, nothing you send reaches the caller"
-            })),
-        )
-            .into_response();
+    if let Err(refusal) = authority.recheck_at_the_screen(&state) {
+        return refusal.into_response();
     }
 
     if target.is_empty() {
@@ -4171,16 +4188,44 @@ struct ReservedSpeech<'a> {
     sequence: u64,
 }
 
-async fn reserve_speech(state: &AppState, generation: u64) -> Result<ReservedSpeech<'_>, String> {
-    let permit = state
-        .0
-        .speech
-        .reserve()
-        .await
-        .map_err(|_| "speech worker is unavailable or busy".to_owned())?;
+/// What a speech request does when the speech worker's queue is full.
+#[derive(Clone, Copy)]
+enum WhenQueueFull {
+    Wait,
+    Refuse,
+}
+
+/// Why a speech request got no place in the speech order.
+enum ReserveFailure {
+    /// The speech worker is gone, or its queue is full and the request does
+    /// not wait.
+    WorkerUnavailable,
+    /// The generation moved on, or the audio queue is full.
+    Superseded,
+}
+
+impl std::fmt::Display for ReserveFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::WorkerUnavailable => "speech worker is unavailable or busy",
+            Self::Superseded => "speech generation was superseded",
+        })
+    }
+}
+
+async fn reserve_speech(
+    state: &AppState,
+    generation: u64,
+    when_full: WhenQueueFull,
+) -> Result<ReservedSpeech<'_>, ReserveFailure> {
+    let permit = match when_full {
+        WhenQueueFull::Wait => state.0.speech.reserve().await.ok(),
+        WhenQueueFull::Refuse => state.0.speech.try_reserve().ok(),
+    }
+    .ok_or(ReserveFailure::WorkerUnavailable)?;
     let sequence = reserve_audio(state, generation)
         .await
-        .ok_or_else(|| "speech generation was superseded".to_owned())?;
+        .ok_or(ReserveFailure::Superseded)?;
     Ok(ReservedSpeech { permit, sequence })
 }
 
@@ -4200,7 +4245,9 @@ async fn reserve_reply_voice<'a>(
     {
         return None;
     }
-    reserve_speech(state, generation).await.ok()
+    reserve_speech(state, generation, WhenQueueFull::Wait)
+        .await
+        .ok()
 }
 
 /// Gives back a reply's reserved first utterance that will not be spoken. Its
@@ -4212,11 +4259,31 @@ async fn release_reply_voice(state: &AppState, voice: Option<ReservedSpeech<'_>>
     }
 }
 
-async fn queue_speech(
+/// Why speech that had its place was not spoken.
+enum SpeechFailure {
+    /// The speech worker dropped the request without an answer.
+    WorkerStopped,
+    /// The speech worker's answer: synthesis failed, or no browser took the
+    /// audio.
+    NotSpoken(String),
+}
+
+impl std::fmt::Display for SpeechFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WorkerStopped => f.write_str("speech worker stopped"),
+            Self::NotSpoken(detail) => f.write_str(detail),
+        }
+    }
+}
+
+/// Hands a speech request to the speech worker in the place `reserved` holds
+/// for it, and waits for the worker's answer.
+async fn send_speech(
     state: &AppState,
     admission: SpeechAdmission,
-    reserved: Option<ReservedSpeech<'_>>,
-) -> Result<(), String> {
+    reserved: ReservedSpeech<'_>,
+) -> Result<(), SpeechFailure> {
     let SpeechAdmission {
         text,
         route,
@@ -4226,10 +4293,7 @@ async fn queue_speech(
         group,
         log_spoken,
     } = admission;
-    let ReservedSpeech { permit, sequence } = match reserved {
-        Some(reserved) => reserved,
-        None => reserve_speech(state, generation).await?,
-    };
+    let ReservedSpeech { permit, sequence } = reserved;
     let (result_tx, result_rx) = oneshot::channel();
     permit.send(SpeechRequest {
         text,
@@ -4244,9 +4308,28 @@ async fn queue_speech(
         result: result_tx,
         span: tracing::Span::current(),
     });
-    result_rx
+    match result_rx.await {
+        Ok(answer) => answer.map_err(SpeechFailure::NotSpoken),
+        Err(_) => Err(SpeechFailure::WorkerStopped),
+    }
+}
+
+/// A reply's utterance, spoken in the place reserved for it, or in one it
+/// waits for.
+async fn queue_speech(
+    state: &AppState,
+    admission: SpeechAdmission,
+    reserved: Option<ReservedSpeech<'_>>,
+) -> Result<(), String> {
+    let reserved = match reserved {
+        Some(reserved) => reserved,
+        None => reserve_speech(state, admission.generation, WhenQueueFull::Wait)
+            .await
+            .map_err(|failure| failure.to_string())?,
+    };
+    send_speech(state, admission, reserved)
         .await
-        .map_err(|_| "speech worker stopped".to_owned())?
+        .map_err(|failure| failure.to_string())
 }
 
 /// Speaks a reply's utterances in order. `first` is the slot reserved for

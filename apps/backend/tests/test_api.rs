@@ -1387,6 +1387,161 @@ async fn speak_reports_failure_and_does_not_log_transcript_when_delivery_fails()
     assert!(state.0.transcript_log.lock().await.entries().is_empty());
 }
 
+/// A module call with the host-turn fields a project session's call carries.
+async fn module_call_json(
+    state: &AppState,
+    call: &str,
+    token: &str,
+    cause: Option<&str>,
+    args: Value,
+) -> (StatusCode, Value) {
+    start_speech_worker_for_test(state);
+    let call = AgentCall {
+        call: call.to_owned(),
+        token: token.to_owned(),
+        turn_id: None,
+        cause: cause.map(str::to_owned),
+        args,
+    };
+    let response = agent_call(state, &call).await;
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+fn invalid_leg(detail: &str) -> (StatusCode, Value) {
+    (
+        StatusCode::CONFLICT,
+        json!({"delivered":false, "code":"invalid_leg", "detail":detail}),
+    )
+}
+
+const LEG_GONE: &str =
+    "this leg is no longer on the call: stop retrying, nothing you send reaches the caller";
+const SELF_WOKEN: &str = "no switchboard turn is running for this leg; this self-woken call has no delivery authority, so put the result in the written reply instead";
+
+// The skill prints these refusals to the agent word for word, so each
+// module call's refusal is pinned whole: the status, the code and the detail.
+#[tokio::test]
+async fn a_module_call_from_a_leg_off_the_call_is_refused_with_its_exact_words() {
+    let state = state();
+    state.0.coordinator.begin_rescue("operator rescue");
+    let view = json!({"target":"theater"});
+    for (call, args) in [
+        ("speak", json!({"text":"Hello."})),
+        ("display", diagram_show()),
+        ("view", view),
+    ] {
+        assert_eq!(
+            module_call_json(&state, call, "operator", None, args.clone()).await,
+            invalid_leg(LEG_GONE),
+            "{call} from a retired leg"
+        );
+        for cause in ["autonomous", "unknown"] {
+            assert_eq!(
+                module_call_json(&state, call, "operator", Some(cause), args.clone()).await,
+                invalid_leg(SELF_WOKEN),
+                "{call} self-woken ({cause}) with no turn"
+            );
+        }
+        assert_eq!(
+            module_call_json(&state, call, "operator", Some("caller"), args).await,
+            invalid_leg(LEG_GONE),
+            "{call} from a retired leg in a caller's turn"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_module_call_while_a_transfer_is_starting_is_refused_with_its_exact_words() {
+    let state = state();
+    begin_alpha_candidate(&state, "alpha-token");
+    for (call, args, detail) in [
+        (
+            "speak",
+            json!({"text":"Hello."}),
+            "the line is not live until this transfer completes: do not retry from this turn; the caller can see your written reply on screen",
+        ),
+        (
+            "display",
+            diagram_show(),
+            "the caller's screen is not live until this transfer completes: draw it again on your next turn",
+        ),
+        (
+            "view",
+            json!({"target":"theater"}),
+            "the caller's screen is not live until this transfer completes: switch view again on your next turn",
+        ),
+    ] {
+        assert_eq!(
+            module_call_json(&state, call, "operator", None, args).await,
+            invalid_leg(detail),
+            "{call} while alpha is starting"
+        );
+    }
+}
+
+// An agent's speak does not wait for room in the speech worker's queue: a
+// full queue is answered at once as busy.
+#[tokio::test]
+async fn speak_is_refused_as_busy_when_the_speech_queue_is_full() {
+    // Every place in the queue is reserved and never sent, so the worker
+    // has nothing to drain and every place stays taken.
+    let state = state();
+    let (_connection, _snapshot, _watermark) = state.register_connection().await;
+    let _taken: Vec<_> = std::iter::from_fn(|| state.0.speech.try_reserve().ok()).collect();
+    let answer = timeout(
+        Duration::from_secs(1),
+        module_call_json(&state, "speak", "operator", None, json!({"text":"Hello."})),
+    )
+    .await
+    .expect("a full speech queue is answered, not waited on");
+    assert_eq!(
+        answer,
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"delivered":false, "reason":"speech worker is unavailable or busy", "detail":"speech worker is unavailable or busy"})
+        )
+    );
+}
+
+// A speak that finds no audio slot is answered as undelivered, the way it
+// was before the speech worker existed: there is no browser to play it to.
+#[tokio::test]
+async fn speak_with_no_audio_slot_is_answered_as_undelivered() {
+    let state = state();
+    let (_connection, _snapshot, _watermark) = state.register_connection().await;
+    let generation = state.0.coordinator.generation();
+    {
+        let mut audio = state.0.audio.lock().await;
+        while audio.slots.len() < AUDIO_SLOTS {
+            audio.reserve(generation);
+        }
+    }
+    assert_eq!(
+        module_call_json(&state, "speak", "operator", None, json!({"text":"Hello."})).await,
+        (
+            StatusCode::OK,
+            json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})
+        )
+    );
+}
+
+#[tokio::test]
+async fn speak_that_fails_to_synthesize_is_answered_with_the_workers_reason() {
+    // Every synthesis fails in-process (`Speaker::offline`).
+    let state = state();
+    let (_connection, _snapshot, _watermark) = state.register_connection().await;
+    let (code, body) =
+        module_call_json(&state, "speak", "operator", None, json!({"text":"Hello."})).await;
+    assert_eq!(code, StatusCode::BAD_GATEWAY);
+    assert_eq!(body["delivered"], false);
+    assert!(body["detail"]
+        .as_str()
+        .is_some_and(|detail| !detail.is_empty()));
+    assert_eq!(body["reason"], body["detail"]);
+}
+
 #[tokio::test]
 async fn generation_mismatch_prevents_turn_spawn() {
     let state = state();

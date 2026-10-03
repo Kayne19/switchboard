@@ -470,7 +470,9 @@ Speech admissions go through the one `process_speech` worker. Production starts 
 from `spawn_workers` before the HTTP listener accepts requests. Tests that call
 reply delivery or module calls directly must start that same worker through the
 shared test setup helper; otherwise a bounded speech-channel `reserve()` has no
-receiver and waits forever. Provider response bodies drain in tracked tasks, so
+receiver and waits forever. In `apps/backend/tests/test_api.rs`, `state()` does
+not start the worker; `state_on`, `agent_call_json`, `request_json` and
+`module_call_json` do. Provider response bodies drain in tracked tasks, so
 the next ordered request may use pending `previous_text`, while a request id is
 committed only after the body reaches EOF. Lifecycle resets reject late drain
 commits.
