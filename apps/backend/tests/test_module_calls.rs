@@ -1,7 +1,7 @@
 use super::*;
-use crate::api::{
-    assert_lifecycle_consistent, begin_alpha_candidate, hold_turn_lock, request_json, state,
-    update_agent_state, AppState,
+use crate::api::{request_json, AppState};
+use crate::app_state::{
+    assert_lifecycle_consistent, begin_alpha_candidate, hold_turn_lock, state, update_agent_state,
 };
 use crate::browser::{handle_text_frame, queued_frames};
 use crate::delivery::{DeliveryFrame, Event};

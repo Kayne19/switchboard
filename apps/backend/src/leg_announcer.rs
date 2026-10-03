@@ -1,6 +1,6 @@
 //! Announces each new leg to the browser: candidate promotion, pi activity,
 //! and the route callback, with the once-per-leg scene reset they share.
-use crate::api::AgentProjection;
+use crate::app_state::AgentProjection;
 use crate::delivery::{DeliveryState, Event};
 use crate::display::{ConfirmState, DisplayGateState, SceneLeg};
 use crate::lifecycle::{ActivityDisposition, Coordinator};

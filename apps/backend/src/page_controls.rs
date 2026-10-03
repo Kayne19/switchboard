@@ -2,8 +2,9 @@
 //! `/thinking`, `/model`, `/hangup`) and the rescue each one starts with:
 //! cancel the call's work, run the control as an operation of its own, and
 //! settle the call unless a newer rescue took it over.
-use crate::api::{
-    clear_active_operation, emit_message, publish_status, spawn_registered_operation, AppState,
+use crate::api::AppState;
+use crate::app_state::{
+    clear_active_operation, emit_message, publish_status, spawn_registered_operation,
 };
 use crate::debug::DebugEvent;
 use crate::history::AGENT;

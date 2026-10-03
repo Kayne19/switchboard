@@ -1,8 +1,6 @@
 use super::*;
-use crate::api::{
-    assert_lifecycle_consistent, debug_events, spawn_workers, state, state_on, until_debug,
-    AppState,
-};
+use crate::api::{spawn_workers, AppState};
+use crate::app_state::{assert_lifecycle_consistent, debug_events, state, state_on, until_debug};
 use crate::audio::{Speaker, SttAdapter, SttStreamAdapter, TestTtsGate, TtsContinuity};
 use crate::browser::{frame_json, frames_until};
 use crate::caller_input::route_final_transcript;

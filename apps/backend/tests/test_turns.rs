@@ -1,7 +1,8 @@
 use super::*;
-use crate::api::{
+use crate::api::AppState;
+use crate::app_state::{
     assert_lifecycle_consistent, debug_events, next_event_of, scratch_root, state, state_on,
-    state_with_agents, state_with_agents_and_jev, state_with_agents_options, until_debug, AppState,
+    state_with_agents, state_with_agents_options, until_debug,
 };
 use crate::audio::{Speaker, TestTtsGate};
 use crate::browser::{frames_until, types_of};

@@ -1,7 +1,8 @@
 use super::*;
-use crate::api::{
-    begin_alpha_candidate, catalog_of, clear_active_operation, debug_events, hold_turn_lock,
-    request_json, scratch_root, state, state_on, state_with_agents, until_debug, AppState,
+use crate::api::{request_json, AppState};
+use crate::app_state::{
+    begin_alpha_candidate, catalog_of, debug_events, hold_turn_lock, scratch_root, state, state_on,
+    state_with_agents, until_debug,
 };
 use crate::audio::{Speaker, SttAdapter, SttStreamAdapter};
 use crate::browser::{frames_until, queued_frames, types_of};

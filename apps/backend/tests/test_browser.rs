@@ -1,5 +1,6 @@
 use super::*;
-use crate::api::{begin_alpha_candidate, emit, next_event_of, state, AppState};
+use crate::api::AppState;
+use crate::app_state::{begin_alpha_candidate, emit, next_event_of, state};
 use crate::caller_input::MAX_TYPED_TURN_CHARS;
 use crate::delivery::{DeliveryFrame, Event, DELIVERY_QUEUE};
 use crate::history::CALLER;

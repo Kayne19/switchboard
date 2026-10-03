@@ -1,9 +1,10 @@
 //! Speech to the caller: the one ordered speech worker, its continuity
 //! stitching, the audio slots it reserves, the voice a reply or a floor
 //! release reserves before it speaks, and the floor worker's hooks.
-use crate::api::{
+use crate::api::AppState;
+use crate::app_state::{
     clear_active_operation, emit, emit_message, publish_status, spawn_registered_operation,
-    AppInner, AppState,
+    AppInner,
 };
 use crate::audio::TtsContinuity;
 use crate::debug::DebugEvent;
