@@ -34,6 +34,26 @@ impl Drop for UtteranceScope {
     }
 }
 
+/// What decision handling carries from one caller decision to the next: the
+/// line being handled, for the debug trace only (set for one decision by
+/// `handle_decision_with_takeover`, cleared when it ends or is cancelled;
+/// routing never reads it), and the project awaiting the caller's
+/// confirmation before it is stopped. Only this module reads it;
+/// `Switchboard` holds one.
+#[derive(Default)]
+pub(crate) struct DecisionState {
+    trace_utterance: Arc<StdMutex<Option<String>>>,
+    pending_stop: Option<String>,
+}
+
+impl DecisionState {
+    /// Puts a project in the "stop me?" state a test wants to answer.
+    #[cfg(test)]
+    pub(crate) fn set_pending_stop_for_test(&mut self, project: &str) {
+        self.pending_stop = Some(project.to_owned());
+    }
+}
+
 impl Switchboard {
     /// Dispatch an utterance after Jev has made the routing decision. An
     /// unsure or unsupported action deliberately goes through the existing
@@ -65,7 +85,7 @@ impl Switchboard {
     ) -> Reply {
         // Dropped when the decision ends or a rescue aborts it part way, so
         // a cancelled utterance's id never labels later work.
-        let _scope = UtteranceScope::enter(&self.trace_utterance, utterance_id);
+        let _scope = UtteranceScope::enter(&self.decisions.trace_utterance, utterance_id);
         let reply = self
             .handle_decision_for_state(text, decision, takeover)
             .await;
@@ -76,7 +96,8 @@ impl Switchboard {
 
     /// The caller line this decision is handling; `None` outside one.
     pub(crate) fn current_utterance(&self) -> Option<String> {
-        self.trace_utterance
+        self.decisions
+            .trace_utterance
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
@@ -128,7 +149,7 @@ impl Switchboard {
         // is deliberately confirmation-only here; the next utterance must
         // confirm before a resident session is closed.
         let mut note = String::new();
-        if let Some(target) = self.pending_stop.take() {
+        if let Some(target) = self.decisions.pending_stop.take() {
             if is_confirmation(text) {
                 self.trace_branch(
                     "stop_confirmed",
@@ -158,7 +179,7 @@ impl Switchboard {
                 ),
             );
             self.trace_routed(OPERATOR, text, "continue", "pbx");
-            self.pending_stop = Some(target.clone());
+            self.decisions.pending_stop = Some(target.clone());
             return self.reply(
                 [format!(
                     "Do you want me to stop {target}? Say yes to confirm."

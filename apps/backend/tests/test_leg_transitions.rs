@@ -724,7 +724,7 @@ async fn failed_transfer_intro_publishes_finished_instead_of_stuck_busy() {
 async fn a_stopped_project_starts_fresh_after_close() {
     let (mut board, log) = on_alpha(&[], Box::new(|_, _| says("handled"))).await;
     let first = board.agent.as_ref().unwrap().session_id().to_owned();
-    board.pending_stop = Some("alpha".into());
+    board.decisions.set_pending_stop_for_test("alpha");
     let stopped = board
         .handle_decision("yes", &Decision::fallback("confirm"))
         .await;

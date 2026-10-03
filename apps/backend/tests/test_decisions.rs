@@ -1685,7 +1685,7 @@ async fn jev_branches_are_traced_and_work_outside_a_decision_is_not() {
 async fn a_cancelled_decision_leaves_no_utterance_behind() {
     let board = board_on(vec![], &[], two_model_catalog());
     {
-        let _scope = UtteranceScope::enter(&board.trace_utterance, "clip-9");
+        let _scope = UtteranceScope::enter(&board.decisions.trace_utterance, "clip-9");
         assert_eq!(board.current_utterance().as_deref(), Some("clip-9"));
     }
     assert_eq!(board.current_utterance(), None);
