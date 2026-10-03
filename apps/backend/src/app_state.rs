@@ -4,9 +4,7 @@
 //! fan-out, the operation registry rescues abort, and the projection of
 //! resident agents.
 use crate::audio::{Speaker, SttAdapter, SttStreamAdapter};
-use crate::caller_input::{
-    process_clips, process_stream_results, Clip, ClipVerdicts, StreamClipState,
-};
+use crate::caller_input::{process_clips, process_stream_results, ClipState};
 use crate::debug::{DebugBus, DebugEvent};
 use crate::delivery::{AudioQueue, DeliveryState, Event};
 use crate::display::{ConfirmState, DisplayGateState, DisplayProjection};
@@ -39,7 +37,7 @@ use crate::speech::{
 };
 use crate::turns::{handle_project_turn, process_turns, RoutedDecision};
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -197,14 +195,10 @@ pub struct AppInner {
     pub(crate) redials: RedialPlanner,
     /// The speech worker's queue and the state only `speech.rs` reads.
     pub(crate) speech: SpeechQueue,
-    pub(crate) clips: mpsc::Sender<Clip>,
-    pub(crate) clip_rx: Mutex<Option<mpsc::Receiver<Clip>>>,
+    /// Caller audio clips and the state only `caller_input.rs` reads.
+    pub(crate) clips: ClipState,
     pub turns: mpsc::Sender<(String, String, u64)>,
     pub(crate) turn_rx: Mutex<Option<mpsc::Receiver<(String, String, u64)>>>,
-    pub accepted_clips: Mutex<(HashSet<String>, VecDeque<String>)>,
-    /// The last word sent on each recent clip, replayed when it comes again.
-    pub(crate) clip_verdicts: std::sync::Mutex<ClipVerdicts>,
-    pub(crate) stream_clips: Mutex<HashMap<String, StreamClipState>>,
     pub last_display: Arc<Mutex<Option<Value>>>,
     pub screen_state: Mutex<Value>,
     pub display_gate: Arc<Mutex<DisplayGateState>>,
@@ -299,11 +293,7 @@ impl AppState {
     ) -> Self {
         let (events, _) = broadcast::channel(256);
         let speech = SpeechQueue::new();
-        // Audio frames may be up to the WebSocket limit. A small bounded queue
-        // prevents a stalled decoder from retaining roughly a gigabyte of
-        // accepted clips while still leaving ample room for one caller's
-        // retransmit/burst behavior.
-        let (clips, clip_rx) = mpsc::channel(8);
+        let clips = ClipState::new();
         let (turns, turn_rx) = mpsc::channel(64);
         let (shutdown, _) = watch::channel(false);
         let last_display = Arc::new(Mutex::new(None));
@@ -477,12 +467,8 @@ impl AppState {
                 redials,
                 speech,
                 clips,
-                clip_rx: Mutex::new(Some(clip_rx)),
                 turns,
                 turn_rx: Mutex::new(Some(turn_rx)),
-                accepted_clips: Mutex::new((HashSet::new(), VecDeque::new())),
-                clip_verdicts: std::sync::Mutex::new(ClipVerdicts::default()),
-                stream_clips: Mutex::new(HashMap::new()),
                 last_display,
                 screen_state: Mutex::new(json!({
                     "view": "auto",

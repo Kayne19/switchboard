@@ -10,7 +10,8 @@ use crate::protocol::{ErrorCode, ServerMessage};
 use crate::turns::dispatch_routed_transcript;
 #[cfg(test)]
 use serde_json::Value;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
+use tokio::sync::{mpsc, Mutex};
 use tracing::Instrument;
 
 /// How many settled clips `ClipVerdicts` remembers; the same bound as the
@@ -90,7 +91,8 @@ pub struct Clip {
 pub(crate) fn emit_clip_verdict(state: &AppState, id: &str, verdict: ServerMessage) -> bool {
     state
         .0
-        .clip_verdicts
+        .clips
+        .verdicts
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .record(id, verdict.clone());
@@ -102,7 +104,8 @@ pub(crate) fn emit_clip_verdict(state: &AppState, id: &str, verdict: ServerMessa
 async fn replay_clip_verdict(state: &AppState, epoch: u64, id: &str) -> Option<Result<(), ()>> {
     let verdict = state
         .0
-        .clip_verdicts
+        .clips
+        .verdicts
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(id)?;
@@ -128,7 +131,7 @@ pub(crate) async fn process_stream_results(state: AppState) {
             }
             StreamResult::Final(final_result) => {
                 let claim = {
-                    let mut clips = state.0.stream_clips.lock().await;
+                    let mut clips = state.0.clips.streams.lock().await;
                     match clips.get(&final_result.clip_id).copied() {
                         Some(StreamClipState::Ended { generation, .. })
                             if generation == final_result.generation =>
@@ -152,7 +155,7 @@ pub(crate) async fn process_stream_results(state: AppState) {
             StreamResult::WorkerError(error) => {
                 tracing::error!(%error, "streaming STT worker failed");
                 let abandoned = {
-                    let mut clips = state.0.stream_clips.lock().await;
+                    let mut clips = state.0.clips.streams.lock().await;
                     let mut abandoned = Vec::new();
                     for (id, clip) in clips.iter_mut() {
                         match *clip {
@@ -226,10 +229,57 @@ fn emit_transcript_verdict(state: &AppState, id: &str, transcript: &str) {
     );
 }
 
+/// Caller audio clips and the state only this module reads: the clip channel
+/// to the transcription worker, the receiver that worker takes once, the ids
+/// already accepted (so a retransmit is answered, not transcribed twice), the
+/// last word sent on each recent clip, and every streaming clip's state.
+/// `AppInner` holds one so the fields are the caller-input module's own.
+pub(crate) struct ClipState {
+    sender: mpsc::Sender<Clip>,
+    receiver: Mutex<Option<mpsc::Receiver<Clip>>>,
+    accepted: Mutex<(HashSet<String>, VecDeque<String>)>,
+    verdicts: std::sync::Mutex<ClipVerdicts>,
+    streams: Mutex<HashMap<String, StreamClipState>>,
+}
+
+impl ClipState {
+    pub(crate) fn new() -> Self {
+        // Audio frames may be up to the WebSocket limit. A small bounded queue
+        // prevents a stalled decoder from retaining roughly a gigabyte of
+        // accepted clips while still leaving ample room for one caller's
+        // retransmit/burst behavior.
+        let (sender, receiver) = mpsc::channel(8);
+        Self {
+            sender,
+            receiver: Mutex::new(Some(receiver)),
+            accepted: Mutex::new((HashSet::new(), VecDeque::new())),
+            verdicts: std::sync::Mutex::new(ClipVerdicts::default()),
+            streams: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// The clip worker's end of the channel, for a test that stands in for
+    /// the worker.
+    #[cfg(test)]
+    pub(crate) async fn take_receiver(&self) -> mpsc::Receiver<Clip> {
+        self.receiver
+            .lock()
+            .await
+            .take()
+            .expect("the clip receiver is taken once")
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn accepted_is_empty(&self) -> bool {
+        self.accepted.lock().await.0.is_empty()
+    }
+}
+
 pub(crate) async fn process_clips(state: AppState) {
     let mut receiver = state
         .0
-        .clip_rx
+        .clips
+        .receiver
         .lock()
         .await
         .take()
@@ -386,7 +436,7 @@ pub(crate) async fn start_stream_clip(
         )
         .await;
     }
-    let mut clips = state.0.stream_clips.lock().await;
+    let mut clips = state.0.clips.streams.lock().await;
     match clips.get(id).copied() {
         Some(StreamClipState::Open { connection, .. }) if connection == epoch => {
             return accept_stream_clip(state, epoch, id).await;
@@ -479,7 +529,7 @@ pub(crate) async fn end_stream_clip(
     };
     let generation = generation.unwrap_or(0);
     let valid = {
-        let mut clips = state.0.stream_clips.lock().await;
+        let mut clips = state.0.clips.streams.lock().await;
         match clips.get(id).copied() {
             Some(StreamClipState::Open {
                 generation: current,
@@ -506,7 +556,8 @@ pub(crate) async fn end_stream_clip(
         if let Err(reason) = state.0.stt_stream.try_end(id.to_owned(), generation) {
             state
                 .0
-                .stream_clips
+                .clips
+                .streams
                 .lock()
                 .await
                 .insert(id.to_owned(), StreamClipState::Abandoned);
@@ -537,7 +588,7 @@ pub(crate) async fn cancel_stream_clip(
     };
     let generation = generation.unwrap_or(0);
     let should_cancel = {
-        let mut clips = state.0.stream_clips.lock().await;
+        let mut clips = state.0.clips.streams.lock().await;
         match clips.get(id).copied() {
             Some(StreamClipState::Cancelled)
             | Some(StreamClipState::Finalized)
@@ -584,7 +635,8 @@ async fn open_worker_stream(
     {
         state
             .0
-            .stream_clips
+            .clips
+            .streams
             .lock()
             .await
             .insert(id.to_owned(), StreamClipState::Abandoned);
@@ -610,7 +662,7 @@ pub(crate) async fn handle_audio_frame(
 ) -> Result<(), ()> {
     if let Some((id, generation, sequence)) = pending_stream_chunk.take() {
         let admitted = {
-            let mut clips = state.0.stream_clips.lock().await;
+            let mut clips = state.0.clips.streams.lock().await;
             match clips.get_mut(&id) {
                 Some(StreamClipState::Open {
                     generation: current,
@@ -641,7 +693,8 @@ pub(crate) async fn handle_audio_frame(
         {
             state
                 .0
-                .stream_clips
+                .clips
+                .streams
                 .lock()
                 .await
                 .insert(id.clone(), StreamClipState::Abandoned);
@@ -671,7 +724,7 @@ pub(crate) async fn handle_audio_frame(
     }
 
     let fresh = {
-        let mut accepted = state.0.accepted_clips.lock().await;
+        let mut accepted = state.0.clips.accepted.lock().await;
         let fresh = accepted.0.insert(id.clone());
         if fresh {
             accepted.1.push_back(id.clone());
@@ -693,6 +746,7 @@ pub(crate) async fn handle_audio_frame(
         && state
             .0
             .clips
+            .sender
             .send(Clip {
                 id: id.clone(),
                 audio,
@@ -709,7 +763,7 @@ pub(crate) async fn handle_audio_frame(
     {
         // Do not acknowledge ownership the application did not actually take.
         // A reconnect must be allowed to retry this id.
-        let mut accepted = state.0.accepted_clips.lock().await;
+        let mut accepted = state.0.clips.accepted.lock().await;
         accepted.0.remove(&id);
         accepted.1.retain(|accepted_id| accepted_id != &id);
         return send_message(

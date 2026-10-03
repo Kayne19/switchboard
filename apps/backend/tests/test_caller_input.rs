@@ -94,7 +94,7 @@ async fn streaming_clip_rejects_duplicate_chunks_and_repeats_end_cancel_safely()
         .unwrap();
     }
     assert_eq!(
-        state.0.stream_clips.lock().await.get("clip"),
+        state.0.clips.streams.lock().await.get("clip"),
         Some(&StreamClipState::Cancelled)
     );
 }
@@ -147,6 +147,7 @@ async fn clip_accepted_before_a_page_rescue_is_dropped_after_transcription() {
     state
         .0
         .clips
+        .sender
         .send(Clip {
             id: "old-clip".into(),
             audio: vec![0],
@@ -341,7 +342,7 @@ async fn a_clip_keeps_the_first_stamp_the_server_saw_for_its_id() {
     upload_clip(&state, &mut connection, "sent-once", 3).await;
     upload_clip(&state, &mut connection, "sent-once", 4).await;
 
-    let mut clips = state.0.clip_rx.lock().await.take().unwrap();
+    let mut clips = state.0.clips.take_receiver().await;
     let taken = clips.try_recv().expect("the first upload is taken");
     assert_eq!((taken.id.as_str(), taken.generation), ("sent-once", 3));
     assert!(matches!(

@@ -469,7 +469,7 @@ async fn frames_the_socket_cannot_act_on_are_refused_without_hanging_up() {
     browser.send(Wire::binary(vec![1, 2, 3])).await.unwrap();
     assert_eq!(next_json(&mut browser).await, headerless);
     assert_still_answering(&mut browser, "after-bad-audio").await;
-    assert!(state.0.accepted_clips.lock().await.0.is_empty());
+    assert!(state.0.clips.accepted_is_empty().await);
 }
 
 /// A command of a known type is read field by field: a field that is missing
@@ -603,7 +603,7 @@ async fn a_clip_is_its_header_and_the_audio_frame_after_it() {
         next_json(&mut browser).await,
         json!({"type":"accepted", "id":"clip-1"})
     );
-    let mut clips = state.0.clip_rx.lock().await.take().unwrap();
+    let mut clips = state.0.clips.take_receiver().await;
     let clip = clips.try_recv().expect("the clip reached the clip worker");
     assert_eq!(
         (clip.id.as_str(), clip.audio.as_slice(), clip.generation),
