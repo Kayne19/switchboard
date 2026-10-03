@@ -4,6 +4,7 @@ mod audio;
 mod browser;
 mod caller_input;
 mod debug;
+mod decisions;
 mod delivery;
 mod display;
 mod floor;
