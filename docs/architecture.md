@@ -515,11 +515,23 @@ another callback or flag.
 
 Switchboard is not currently a perfect hexagonal implementation:
 
-- The application files share one `AppInner` and reach its fields
-  directly, so most of its fields are `pub(crate)`; the split into one file
-  per concern made that coupling visible rather than removing it. The
-  display projection and the audio queue are no longer held there directly
-  -- they moved to `display.rs` and `delivery.rs` (#60).
+    /// The tests' way onto the line without a routing decision: the words go
+    /// to whichever leg holds the route. Production always arrives through
+    /// `handle_decision` with Jev's verdict, so this is test-only; the
+    /// `allow(dead_code)` that used to sit here only hid that.
+    #[cfg(test)]
+    pub(crate) async fn handle(&mut self, text: &str) -> Reply {
+        let context = TransferContext {
+            exact_caller_transcript: text.to_owned(),
+            derived_intent: String::new(),
+        };
+        if self.coordinator.route() == OPERATOR {
+            self.handle_operator_ctx(&context).await
+        } else {
+            self.handle_agent_ctx(&context).await
+        }
+    }
+
 - The display precedence rule is implemented twice, in `DisplayProjection`
   (`display.rs`, for `/view` and the snapshot) and in the browser's
   `sceneModel.ts`, on purpose: the server answers `/view` without asking the
