@@ -4462,20 +4462,14 @@ async fn send_snapshot_sink(
 type ClipHeader = (String, String, Option<u64>);
 type StreamChunkHeader = (String, u64, u64);
 
-fn parse_clip_header(command: &serde_json::Map<String, Value>) -> Option<ClipHeader> {
-    let id = command
-        .get("id")
-        .and_then(Value::as_str)
-        .filter(|id| !id.is_empty() && id.chars().count() <= 128)?;
-    let mime = command
-        .get("mime")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .chars()
-        .take(100)
-        .collect();
-    let generation = command.get("generation").and_then(Value::as_u64);
-    Some((id.to_owned(), mime, generation))
+fn parse_clip_header(
+    id: Option<String>,
+    mime: Option<String>,
+    generation: Option<u64>,
+) -> Option<ClipHeader> {
+    let id = id.filter(|id| !id.is_empty() && id.chars().count() <= 128)?;
+    let mime = mime.unwrap_or_default().chars().take(100).collect();
+    Some((id, mime, generation))
 }
 
 /// The longest turn a caller may type, the same bound `/speak` puts on text.
@@ -4487,15 +4481,14 @@ const MAX_TYPED_TURN_CHARS: usize = 16 * 1024;
 /// send a typed turn also stamps its epoch, so there is no older client to
 /// fall back for, and a turn without one could not be checked against a
 /// transfer that landed after the caller sent it.
-fn parse_typed_turn(command: &serde_json::Map<String, Value>) -> Option<(String, u64, String)> {
-    let id = command
-        .get("id")
-        .and_then(Value::as_str)
-        .filter(|id| !id.is_empty() && id.chars().count() <= 128)?;
-    let generation = command.get("generation").and_then(Value::as_u64)?;
-    let text = command
-        .get("text")
-        .and_then(Value::as_str)
+fn parse_typed_turn(
+    id: Option<&str>,
+    generation: Option<u64>,
+    text: Option<&str>,
+) -> Option<(String, u64, String)> {
+    let id = id.filter(|id| !id.is_empty() && id.chars().count() <= 128)?;
+    let generation = generation?;
+    let text = text
         .map(str::trim)
         .filter(|text| !text.is_empty() && text.chars().count() <= MAX_TYPED_TURN_CHARS)?;
     Some((id.to_owned(), generation, text.to_owned()))
@@ -4507,11 +4500,12 @@ fn parse_typed_turn(command: &serde_json::Map<String, Value>) -> Option<(String,
 async fn start_stream_clip(
     state: &AppState,
     epoch: u64,
-    command: &serde_json::Map<String, Value>,
+    clip_id: Option<String>,
+    generation: Option<u64>,
+    mime: Option<String>,
 ) -> Result<(), ()> {
-    let Some(id) = command
-        .get("clip_id")
-        .and_then(Value::as_str)
+    let Some(id) = clip_id
+        .as_deref()
         .filter(|id| !id.is_empty() && id.len() <= 128)
     else {
         return send_message(
@@ -4524,11 +4518,8 @@ async fn start_stream_clip(
     if let Some(replayed) = replay_clip_verdict(state, epoch, id).await {
         return replayed;
     }
-    let generation = command
-        .get("generation")
-        .and_then(Value::as_u64)
-        .unwrap_or_else(|| state.0.coordinator.generation());
-    let mime = command.get("mime").and_then(Value::as_str).unwrap_or("");
+    let generation = generation.unwrap_or_else(|| state.0.coordinator.generation());
+    let mime = mime.as_deref().unwrap_or("");
     if mime != "audio/webm;codecs=opus" || !state.0.stt_stream.configured() {
         return send_message(
             state,
@@ -4669,47 +4660,32 @@ async fn open_worker_stream(
 async fn apply_screen_state(
     state: &AppState,
     epoch: u64,
-    command: &serde_json::Map<String, Value>,
+    command: crate::protocol::ScreenState,
 ) -> Result<(), ()> {
-    let Some(view) = command
-        .get("view")
-        .and_then(Value::as_str)
-        .filter(|view| matches!(*view, "auto" | "system" | "visual" | "comms" | "theater"))
-    else {
+    let Some(view) = command.view.filter(|view| {
+        matches!(
+            view.as_str(),
+            "auto" | "system" | "visual" | "comms" | "theater"
+        )
+    }) else {
         return send_message(state, epoch, ServerMessage::error("Invalid screen view.")).await;
     };
     let title = command
-        .get("title")
-        .and_then(Value::as_str)
-        .unwrap_or("")
+        .title
+        .unwrap_or_default()
         .chars()
         .take(200)
         .collect::<String>();
     let visual_kind = command
-        .get("visual_kind")
-        .and_then(Value::as_str)
-        .filter(|kind| crate::visual_protocol::CONTENT_TYPES.contains(kind))
-        .map_or(Value::Null, |kind| Value::String(kind.to_owned()));
-    let object_ids = command
-        .get("object_ids")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let pinned = command
-        .get("pinned")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let has_visual = command
-        .get("has_visual")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let stale = command
-        .get("stale")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+        .visual_kind
+        .filter(|kind| crate::visual_protocol::CONTENT_TYPES.contains(&kind.as_str()))
+        .map_or(Value::Null, Value::String);
+    let object_ids = command.object_ids.unwrap_or_default();
+    let pinned = command.pinned.unwrap_or(false);
+    let has_visual = command.has_visual.unwrap_or(false);
+    let stale = command.stale.unwrap_or(false);
     let report_gen = command
-        .get("generation")
-        .and_then(Value::as_u64)
+        .generation
         .unwrap_or_else(|| state.0.coordinator.generation());
 
     let current_gen = state.0.coordinator.generation();
@@ -4735,19 +4711,13 @@ async fn apply_screen_state(
     *state.0.screen_state.lock().await = report;
     drop(gate);
 
-    let applied_seq = command.get("applied_seq").and_then(Value::as_u64);
-    let rejected = command
-        .get("rejected")
-        .and_then(Value::as_object)
-        .and_then(|m| {
-            let seq = m.get("seq").and_then(Value::as_u64)?;
-            let reason = m
-                .get("reason")
-                .and_then(Value::as_str)
-                .unwrap_or("the caller's screen could not render it")
-                .to_string();
-            Some((seq, reason))
-        });
+    let applied_seq = command.applied_seq;
+    let rejected = command.rejected.map(|rejection| {
+        let reason = rejection
+            .reason
+            .unwrap_or_else(|| "the caller's screen could not render it".to_string());
+        (rejection.seq, reason)
+    });
     state.0.display_confirm.send_modify(|c| {
         if c.generation != current_gen {
             c.generation = current_gen;
@@ -4771,27 +4741,32 @@ async fn handle_text_frame(
     pending_stream_chunk: &mut Option<StreamChunkHeader>,
     text: &str,
 ) -> Result<(), ()> {
-    let command: Value = match serde_json::from_str(text) {
-        Ok(value) => value,
-        Err(_) => {
-            return send_message(state, epoch, ServerMessage::error("Invalid JSON frame.")).await
+    use crate::protocol::{ClientMessage, UnreadableFrame};
+    let command = match ClientMessage::parse(text) {
+        Ok(command) => command,
+        Err(unreadable) => {
+            let message = match unreadable {
+                UnreadableFrame::NotJson => "Invalid JSON frame.",
+                UnreadableFrame::NotAnObject => "Invalid command shape.",
+                UnreadableFrame::UnknownType => "Unknown websocket command.",
+            };
+            return send_message(state, epoch, ServerMessage::error(message)).await;
         }
     };
-    let Some(command) = command.as_object() else {
-        return send_message(state, epoch, ServerMessage::error("Invalid command shape.")).await;
-    };
 
-    match command.get("type").and_then(Value::as_str) {
-        Some("hello") => {
-            let version = command.get("version").and_then(Value::as_u64).unwrap_or(0);
-            let capabilities = command.get("capabilities").and_then(Value::as_object);
+    match command {
+        ClientMessage::Hello {
+            version,
+            capabilities,
+        } => {
+            let version = version.unwrap_or(0);
             let stream_requested = capabilities
-                .and_then(|caps| caps.get("stt_streaming"))
-                .and_then(Value::as_bool)
+                .as_ref()
+                .and_then(|caps| caps.stt_streaming)
                 .unwrap_or(false);
             let mse_requested = capabilities
-                .and_then(|caps| caps.get("mse_mp3"))
-                .and_then(Value::as_bool)
+                .as_ref()
+                .and_then(|caps| caps.mse_mp3)
                 .unwrap_or(false);
             let mse_selected = version == 1 && mse_requested;
             send_message(
@@ -4808,16 +4783,20 @@ async fn handle_text_frame(
             )
             .await
         }
-        Some("stt_start") => {
+        ClientMessage::SttStart {
+            clip_id,
+            generation,
+            mime,
+        } => {
             pending_header.take();
-            start_stream_clip(state, epoch, command).await
+            start_stream_clip(state, epoch, clip_id, generation, mime).await
         }
-        Some("stt_chunk") => {
-            let Some(id) = command
-                .get("clip_id")
-                .and_then(Value::as_str)
-                .filter(|id| !id.is_empty() && id.len() <= 128)
-            else {
+        ClientMessage::SttChunk {
+            clip_id,
+            generation,
+            sequence,
+        } => {
+            let Some(id) = clip_id.filter(|id| !id.is_empty() && id.len() <= 128) else {
                 return send_message(
                     state,
                     epoch,
@@ -4825,25 +4804,19 @@ async fn handle_text_frame(
                 )
                 .await;
             };
-            let generation = command
-                .get("generation")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let sequence = command
-                .get("sequence")
-                .and_then(Value::as_u64)
-                .unwrap_or(u64::MAX);
-            *pending_stream_chunk = Some((id.to_owned(), generation, sequence));
+            let generation = generation.unwrap_or(0);
+            let sequence = sequence.unwrap_or(u64::MAX);
+            *pending_stream_chunk = Some((id, generation, sequence));
             Ok(())
         }
-        Some("stt_end") => {
-            let Some(id) = command.get("clip_id").and_then(Value::as_str) else {
+        ClientMessage::SttEnd {
+            clip_id,
+            generation,
+        } => {
+            let Some(id) = clip_id.as_deref() else {
                 return Ok(());
             };
-            let generation = command
-                .get("generation")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
+            let generation = generation.unwrap_or(0);
             let valid = {
                 let mut clips = state.0.stream_clips.lock().await;
                 match clips.get(id).copied() {
@@ -4889,14 +4862,14 @@ async fn handle_text_frame(
             }
             Ok(())
         }
-        Some("stt_cancel") => {
-            let Some(id) = command.get("clip_id").and_then(Value::as_str) else {
+        ClientMessage::SttCancel {
+            clip_id,
+            generation,
+        } => {
+            let Some(id) = clip_id.as_deref() else {
                 return Ok(());
             };
-            let generation = command
-                .get("generation")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
+            let generation = generation.unwrap_or(0);
             let should_cancel = {
                 let mut clips = state.0.stream_clips.lock().await;
                 match clips.get(id).copied() {
@@ -4915,32 +4888,30 @@ async fn handle_text_frame(
             }
             Ok(())
         }
-        Some("screen_state") => apply_screen_state(state, epoch, command).await,
-        Some("ping") => {
-            send_message(
-                state,
-                epoch,
-                ServerMessage::Pong {
-                    nonce: command.get("nonce").cloned().unwrap_or(Value::Null),
-                    time: command.get("time").cloned().unwrap_or(Value::Null),
-                },
-            )
-            .await
+        ClientMessage::ScreenState(report) => apply_screen_state(state, epoch, report).await,
+        ClientMessage::Ping { nonce, time } => {
+            send_message(state, epoch, ServerMessage::Pong { nonce, time }).await
         }
-        Some("typed_turn") => {
-            let Some((id, generation, text)) = parse_typed_turn(command) else {
+        ClientMessage::TypedTurn {
+            id,
+            generation,
+            text,
+        } => {
+            let Some((turn, generation, text)) =
+                parse_typed_turn(id.as_deref(), generation, text.as_deref())
+            else {
                 return send_message(
                     state,
                     epoch,
                     ServerMessage::Error {
-                        id: command.get("id").and_then(Value::as_str).map(str::to_owned),
+                        id,
                         code: None,
                         message: "That message could not be sent.".into(),
                     },
                 )
                 .await;
             };
-            tracing::info!(turn = %id, generation, chars = text.chars().count(), "typed turn");
+            tracing::info!(turn = %turn, generation, chars = text.chars().count(), "typed turn");
             // A typed turn is a transcript that needs no transcription, so it
             // takes the same path as a streamed one: epoch check, log, echo,
             // then steer or queue. It runs off this reader because that path
@@ -4948,26 +4919,22 @@ async fn handle_text_frame(
             // seconds, and the reader must keep answering pings meanwhile.
             let state = state.clone();
             tokio::spawn(
-                async move { route_final_transcript(&state, &id, generation, text).await }
+                async move { route_final_transcript(&state, &turn, generation, text).await }
                     .in_current_span(),
             );
             Ok(())
         }
-        Some("clip") => {
-            let Some(header) = parse_clip_header(command) else {
+        ClientMessage::Clip {
+            id,
+            mime,
+            generation,
+        } => {
+            let Some(header) = parse_clip_header(id, mime, generation) else {
                 pending_header.take();
                 return send_message(state, epoch, ServerMessage::error("Invalid clip id.")).await;
             };
             *pending_header = Some(header);
             Ok(())
-        }
-        _ => {
-            send_message(
-                state,
-                epoch,
-                ServerMessage::error("Unknown websocket command."),
-            )
-            .await
         }
     }
 }

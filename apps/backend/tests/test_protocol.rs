@@ -206,3 +206,96 @@ fn the_status_examples_are_the_statuses_the_coordinator_publishes() {
         example("status_project_without_a_catalog")
     );
 }
+
+#[test]
+fn a_frame_that_is_no_command_is_unreadable_in_one_of_three_ways() {
+    for (frame, unreadable) in [
+        ("not json", UnreadableFrame::NotJson),
+        ("", UnreadableFrame::NotJson),
+        (r#"{"type":"ping""#, UnreadableFrame::NotJson),
+        ("null", UnreadableFrame::NotAnObject),
+        ("42", UnreadableFrame::NotAnObject),
+        (r#""ping""#, UnreadableFrame::NotAnObject),
+        (r#"[{"type":"ping"}]"#, UnreadableFrame::NotAnObject),
+        ("{}", UnreadableFrame::UnknownType),
+        (r#"{"type":null}"#, UnreadableFrame::UnknownType),
+        (r#"{"type":0}"#, UnreadableFrame::UnknownType),
+        (r#"{"type":"Ping"}"#, UnreadableFrame::UnknownType),
+        (r#"{"type":"dance"}"#, UnreadableFrame::UnknownType),
+        (
+            r#"{"type":"hello_ack","version":1}"#,
+            UnreadableFrame::UnknownType,
+        ),
+    ] {
+        assert_eq!(ClientMessage::parse(frame), Err(unreadable), "{frame}");
+    }
+}
+
+#[test]
+fn a_command_of_a_known_type_always_reads() {
+    let parse = |frame: Value| ClientMessage::parse(&frame.to_string()).unwrap();
+    // A field missing, null, or of the wrong kind is absent; one no command
+    // declares is ignored.
+    assert_eq!(
+        parse(json!({"type":"clip", "id":7, "mime":null, "generation":1.5, "x":1})),
+        ClientMessage::Clip {
+            id: None,
+            mime: None,
+            generation: None
+        }
+    );
+    assert_eq!(
+        parse(json!({"type":"stt_chunk", "clip_id":"c", "generation":-1, "sequence":"2"})),
+        ClientMessage::SttChunk {
+            clip_id: Some("c".into()),
+            generation: None,
+            sequence: None
+        }
+    );
+    // The echoed heartbeat fields are taken as they come.
+    assert_eq!(
+        parse(json!({"type":"ping", "nonce":[1], "time":{"t":2}})),
+        ClientMessage::Ping {
+            nonce: json!([1]),
+            time: json!({"t":2})
+        }
+    );
+    assert_eq!(
+        parse(json!({"type":"ping"})),
+        ClientMessage::Ping {
+            nonce: Value::Null,
+            time: Value::Null
+        }
+    );
+    // A nested object that is not an object, or lacks what it needs, is
+    // absent as a whole; an array is not read as the object's fields.
+    assert_eq!(
+        parse(json!({"type":"hello", "version":1, "capabilities":[true, true]})),
+        ClientMessage::Hello {
+            version: Some(1),
+            capabilities: None
+        }
+    );
+    let rejected =
+        |rejected: Value| match parse(json!({"type":"screen_state", "rejected":rejected})) {
+            ClientMessage::ScreenState(report) => report.rejected,
+            other => panic!("not a screen state: {other:?}"),
+        };
+    assert_eq!(rejected(json!([3, "why"])), None);
+    assert_eq!(rejected(json!({"reason":"why"})), None);
+    assert_eq!(
+        rejected(json!({"seq":3, "reason":4})),
+        Some(Rejection {
+            seq: 3,
+            reason: None
+        })
+    );
+    // A repeated key keeps its last value, the type included.
+    assert_eq!(
+        ClientMessage::parse(r#"{"type":"dance","type":"stt_end","clip_id":"a","clip_id":"b"}"#),
+        Ok(ClientMessage::SttEnd {
+            clip_id: Some("b".into()),
+            generation: None
+        })
+    );
+}

@@ -1788,7 +1788,14 @@ async fn malformed_typed_turns_are_refused_on_the_connection() {
 
 #[test]
 fn clip_headers_carry_an_optional_capture_epoch() {
-    let header = |value: Value| parse_clip_header(value.as_object().unwrap());
+    let header = |value: Value| match crate::protocol::ClientMessage::parse(&value.to_string()) {
+        Ok(crate::protocol::ClientMessage::Clip {
+            id,
+            mime,
+            generation,
+        }) => parse_clip_header(id, mime, generation),
+        other => panic!("{value} is not a clip header: {other:?}"),
+    };
 
     assert_eq!(
         header(json!({"type":"clip", "id":"a", "mime":"audio/webm", "generation":3})),
