@@ -50,7 +50,10 @@ arrays, are sent as lists.
   With a target, ask the screen to focus `visual` (what `display` put there),
   `comms` (the conversation and tool activity), `system` (project, model and
   route controls), `theater` (the current visual fills the screen) or `auto`
-  (the default). The caller's own choice wins until they dismiss it.
+  (the default). The caller's own choice wins until they dismiss it. From the
+  background, only the report is answered: a target is refused with
+  `caller_away`, and the screen follows your display when the caller brings
+  you forward.
 - Moving the caller, model changes and hanging up belong to the switchboard.
   This module has no functions for them.
 

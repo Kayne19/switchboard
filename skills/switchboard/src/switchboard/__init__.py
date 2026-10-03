@@ -282,6 +282,8 @@ def view(target=None):
         raise ValueError(f"unknown view target {target!r}; use one of: {', '.join(_VIEW_TARGETS)}")
 
     def describe(result):
+        if target is not None and result.reason == "caller_away":
+            return "The caller is with another session; their screen isn't yours to change. It follows your display when they bring you forward."
         if not (result.delivered or result.accepted):
             return _common(result) or _refused(result, "view request")
         if target is not None:
