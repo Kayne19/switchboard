@@ -2418,6 +2418,9 @@ impl Switchboard {
                 );
             }
         };
+        // Kept for a failed promotion, as in `take_over`: the leg the caller
+        // was on goes back on the active-session guard.
+        let previous_foreground = self.active_session.lock().await.clone();
         let token = uuid_like();
         if let Err(error) = session.set_mode("foreground").await {
             session.close();
@@ -2446,6 +2449,10 @@ impl Switchboard {
             self.announce_agent_state(&project.id, "finished").await;
             return self.couldnt_bring_back(&project.id, error.to_string());
         }
+        // Steering and a page rescue reach the leg being brought up, as they
+        // do on a transfer or a takeover.
+        self.set_active_session(Some(LegSession::Project(session.clone())))
+            .await;
         // The agent was told background rules when it was shelved. Tell it
         // they no longer apply before it answers the caller.
         let prompt = format!("{FOREGROUND_NOTICE}\n\n{}", context.exact_caller_transcript);
@@ -2466,6 +2473,7 @@ impl Switchboard {
             session.close();
             self.announce_agent_state(&project.id, "finished").await;
             self.rollback_startup(format!("background promotion failed: {}", turn.error));
+            self.set_active_session(previous_foreground).await;
             return self.couldnt_bring_back(&project.id, turn.error);
         }
         if self.coordinator.is_candidate() {
@@ -2473,6 +2481,7 @@ impl Switchboard {
                 session.close();
                 self.announce_agent_state(&project.id, "finished").await;
                 self.rollback_startup(format!("background promotion adoption failed: {error}"));
+                self.set_active_session(previous_foreground).await;
                 return self.couldnt_bring_back(&project.id, error.to_string());
             }
         }

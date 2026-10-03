@@ -2559,6 +2559,109 @@ async fn failed_background_promotion_adoption_rolls_back_the_candidate() {
         board.agent.as_ref().map(|agent| agent.label().to_owned()),
         Some("alpha".to_owned())
     );
+    assert_eq!(
+        board
+            .session_control()
+            .lock()
+            .await
+            .as_ref()
+            .map(|session| session.label().to_owned()),
+        Some("alpha".to_owned()),
+        "the leg the caller stayed on is back on the session guard"
+    );
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_promoted_agent_holds_the_session_guard_during_its_foreground_turn() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let control = board.session_control();
+    let guard_during_turn = Arc::new(StdMutex::new(None::<String>));
+    let guard_for_prompt = guard_during_turn.clone();
+    let _log = serve(
+        &board,
+        Box::new(move |_, message| {
+            if message.contains("show me beta") {
+                // What a steer or a page rescue would reach right now. A
+                // guard held across the prompt records nothing, and the
+                // assertion below says so; a panic here would only hang
+                // the prompt.
+                let label = control
+                    .try_lock()
+                    .ok()
+                    .and_then(|guard| guard.as_ref().map(|session| session.label().to_owned()));
+                *guard_for_prompt.lock().unwrap() = label;
+            }
+            says("handled")
+        }),
+    );
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .start_background_part("beta", "beta chart")
+        .await
+        .expect("beta resident");
+
+    let reply = board
+        .route_project_part(
+            "show me beta",
+            "beta",
+            crate::router::ConversationMode::Continue,
+            None,
+        )
+        .await;
+
+    assert_eq!(reply.route, "beta", "{reply:?}");
+    assert_eq!(
+        guard_during_turn.lock().unwrap().as_deref(),
+        Some("beta"),
+        "the leg being promoted is the one steering and rescue must reach \
+         (None: the guard was empty, or held across the prompt)"
+    );
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failed_promotion_turn_gives_the_session_guard_back() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| says("handled")));
+    fake.on_command = Some(Box::new(|name, args| {
+        (name == "prompt"
+            && args["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("show me beta")))
+        .then(|| Some(Err(("prompt_failed".into(), "promotion failed".into()))))
+    }));
+    fake.serve(board.hosts().connect_fake(HOST));
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .start_background_part("beta", "beta chart")
+        .await
+        .expect("beta resident");
+
+    let reply = board
+        .route_project_part(
+            "show me beta",
+            "beta",
+            crate::router::ConversationMode::Continue,
+            None,
+        )
+        .await;
+
+    assert!(reply.error.is_some(), "the promotion must fail: {reply:?}");
+    assert_eq!(board.coordinator.route(), "alpha");
+    let guard = board.session_control();
+    let guard = guard.lock().await;
+    let held = guard.as_ref().expect("alpha is back on the guard");
+    assert!(held.same_session(&LegSession::Project(
+        board.agent.clone().expect("alpha is still on the line")
+    )));
+    drop(guard);
     board.shutdown().await;
 }
 
