@@ -51,6 +51,64 @@ fn env_file_parser_keeps_audio_secrets_available() {
 }
 
 #[test]
+fn elevenlabs_settings_are_parsed_once_with_their_defaults() {
+    assert_eq!(
+        Config::for_tests(&[]).tts,
+        audio::TtsSettings {
+            api_key: String::new(),
+            voice_id: "21m00Tcm4TlvDq8ikWAM".into(),
+            model_id: "eleven_multilingual_v2".into(),
+            stability: 0.5,
+            similarity_boost: 0.75,
+            style: 0.0,
+            speed: 1.0,
+        }
+    );
+    let config = Config::for_tests(&[
+        ("ELEVENLABS_API_KEY", " key "),
+        ("ELEVENLABS_VOICE_ID", " voice "),
+        ("ELEVENLABS_MODEL_ID", " model "),
+        ("ELEVENLABS_STABILITY", " 0.25 "),
+        ("ELEVENLABS_SIMILARITY_BOOST", "0.5"),
+        ("ELEVENLABS_STYLE", "0.125"),
+        ("ELEVENLABS_SPEED", "1.5"),
+    ]);
+    assert_eq!(
+        config.tts,
+        audio::TtsSettings {
+            api_key: "key".into(),
+            voice_id: "voice".into(),
+            model_id: "model".into(),
+            stability: 0.25,
+            similarity_boost: 0.5,
+            style: 0.125,
+            speed: 1.5,
+        }
+    );
+    let printed = format!("{:?}", config.tts);
+    assert!(printed.contains("api_key_configured: true"), "{printed}");
+    assert!(!printed.contains("\"key\""), "the key is never printed");
+}
+
+#[test]
+fn non_finite_elevenlabs_numbers_fall_back_to_their_defaults() {
+    let config = Config::for_tests(&[
+        ("ELEVENLABS_STABILITY", "NaN"),
+        ("ELEVENLABS_SIMILARITY_BOOST", "inf"),
+        ("ELEVENLABS_STYLE", "1e40"),
+        ("ELEVENLABS_SPEED", "fast"),
+    ]);
+    assert_eq!(config.tts.stability, 0.5);
+    assert_eq!(config.tts.similarity_boost, 0.75);
+    assert_eq!(config.tts.style, 0.0);
+    assert_eq!(config.tts.speed, 1.0);
+    assert_eq!(
+        Config::for_tests(&[("ELEVENLABS_SPEED", "  ")]).tts.speed,
+        1.0
+    );
+}
+
+#[test]
 fn speech_deadline_is_parsed_once_with_its_default() {
     assert_eq!(Config::for_tests(&[]).speech_deadline_ms, 25_000);
     let config = Config::for_tests(&[("SWITCHBOARD_SPEECH_DEADLINE_MS", " 9000 ")]);

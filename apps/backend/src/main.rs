@@ -66,6 +66,8 @@ pub struct Config {
     /// How long the caller must be quiet before a held floor request is
     /// released with an announcement.
     pub floor_quiet_threshold_ms: u64,
+    /// The ElevenLabs settings (`ELEVENLABS_*`) the speaker uses.
+    pub tts: audio::TtsSettings,
     /// Environment values loaded from the deployment env file and inherited
     /// process environment. The operator's process receives them.
     pub environment: HashMap<String, String>,
@@ -169,6 +171,15 @@ impl Config {
                 "SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS",
                 10_000,
             ),
+            tts: audio::TtsSettings {
+                api_key: get(values, "ELEVENLABS_API_KEY", ""),
+                voice_id: get(values, "ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"),
+                model_id: get(values, "ELEVENLABS_MODEL_ID", "eleven_multilingual_v2"),
+                stability: f32_value(values, "ELEVENLABS_STABILITY", 0.5),
+                similarity_boost: f32_value(values, "ELEVENLABS_SIMILARITY_BOOST", 0.75),
+                style: f32_value(values, "ELEVENLABS_STYLE", 0.0),
+                speed: f32_value(values, "ELEVENLABS_SPEED", 1.0),
+            },
             environment: values.clone(),
         };
         assert!(
@@ -227,6 +238,24 @@ fn fraction_value(values: &HashMap<String, String>, name: &str, default: f64) ->
         Ok(value) if value.is_finite() && (0.0..=1.0).contains(&value) => value,
         _ => {
             tracing::warn!(setting = name, value = raw, %default, "setting is not a fraction from 0 to 1; using the default");
+            default
+        }
+    }
+}
+
+/// A setting that must be a finite number. Blank is unset; anything else that
+/// is not a finite number is logged and replaced by the default.
+fn f32_value(values: &HashMap<String, String>, name: &str, default: f32) -> f32 {
+    let Some(raw) = values.get(name).map(|value| value.trim()) else {
+        return default;
+    };
+    if raw.is_empty() {
+        return default;
+    }
+    match raw.parse::<f32>() {
+        Ok(value) if value.is_finite() => value,
+        _ => {
+            tracing::warn!(setting = name, value = raw, %default, "setting is not a finite number; using the default");
             default
         }
     }
@@ -481,10 +510,10 @@ async fn main() {
     let state = api::AppState::new_with_debug(
         board,
         history::TranscriptLog::new(config.history_limit),
-        audio::Speaker::from_values(
+        audio::Speaker::new(
             config.max_spoken_chars,
             config.speech_deadline(),
-            &config.environment,
+            config.tts.clone(),
         ),
         audio::SttAdapter::from_command(config.stt_command.clone()),
         audio::SttStreamAdapter::from_command(config.stt_stream_command.clone()),

@@ -8,7 +8,6 @@
 use futures_util::{Stream, StreamExt};
 use reqwest::StatusCode;
 use serde::Serialize;
-use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::process::Stdio;
@@ -897,8 +896,10 @@ async fn stream_worker_exit(
     (status, stderr)
 }
 
-#[derive(Clone)]
-pub struct Speaker {
+/// The ElevenLabs voice settings (`ELEVENLABS_*`). `Config` parses them once;
+/// the speaker only uses them.
+#[derive(Clone, PartialEq)]
+pub struct TtsSettings {
     pub api_key: String,
     pub voice_id: String,
     pub model_id: String,
@@ -906,6 +907,26 @@ pub struct Speaker {
     pub similarity_boost: f32,
     pub style: f32,
     pub speed: f32,
+}
+/// The key is reported as configured-or-not, never echoed: `Config` is
+/// printed in test failures, and the key does not belong there.
+impl std::fmt::Debug for TtsSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TtsSettings")
+            .field("api_key_configured", &!self.api_key.trim().is_empty())
+            .field("voice_id", &self.voice_id)
+            .field("model_id", &self.model_id)
+            .field("stability", &self.stability)
+            .field("similarity_boost", &self.similarity_boost)
+            .field("style", &self.style)
+            .field("speed", &self.speed)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct Speaker {
+    tts: TtsSettings,
     pub max_chars: usize,
     pub speech_deadline: Duration,
     transport: Arc<dyn TtsTransport>,
@@ -914,55 +935,30 @@ impl std::fmt::Debug for Speaker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Speaker")
             .field("api_key_configured", &self.configured())
-            .field("voice_id", &self.voice_id)
-            .field("model_id", &self.model_id)
-            .field("stability", &self.stability)
-            .field("similarity_boost", &self.similarity_boost)
-            .field("style", &self.style)
-            .field("speed", &self.speed)
+            .field("voice_id", &self.tts.voice_id)
+            .field("model_id", &self.tts.model_id)
+            .field("stability", &self.tts.stability)
+            .field("similarity_boost", &self.tts.similarity_boost)
+            .field("style", &self.tts.style)
+            .field("speed", &self.tts.speed)
             .field("max_chars", &self.max_chars)
             .field("speech_deadline", &self.speech_deadline)
             .finish()
     }
 }
 impl Speaker {
-    /// `values` supplies the ElevenLabs settings; the deadline is the parsed
+    /// `tts` is the parsed ElevenLabs settings; the deadline is the parsed
     /// `SWITCHBOARD_SPEECH_DEADLINE_MS`, shared with the project extension.
-    pub fn from_values(
-        max_chars: usize,
-        speech_deadline: Duration,
-        values: &HashMap<String, String>,
-    ) -> Self {
-        fn value(values: &HashMap<String, String>, name: &str, default: &str) -> String {
-            values
-                .get(name)
-                .map(String::as_str)
-                .unwrap_or(default)
-                .trim()
-                .to_owned()
-        }
-        fn number(values: &HashMap<String, String>, name: &str, default: f32) -> f32 {
-            values
-                .get(name)
-                .and_then(|value| value.trim().parse().ok())
-                .filter(|value: &f32| value.is_finite())
-                .unwrap_or(default)
-        }
+    pub fn new(max_chars: usize, speech_deadline: Duration, tts: TtsSettings) -> Self {
         Self {
-            api_key: value(values, "ELEVENLABS_API_KEY", ""),
-            voice_id: value(values, "ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"),
-            model_id: value(values, "ELEVENLABS_MODEL_ID", "eleven_multilingual_v2"),
-            stability: number(values, "ELEVENLABS_STABILITY", 0.5),
-            similarity_boost: number(values, "ELEVENLABS_SIMILARITY_BOOST", 0.75),
-            style: number(values, "ELEVENLABS_STYLE", 0.0),
-            speed: number(values, "ELEVENLABS_SPEED", 1.0),
+            tts,
             max_chars,
             speech_deadline,
             transport: Arc::new(HttpTtsTransport::new()),
         }
     }
     pub fn configured(&self) -> bool {
-        !self.api_key.trim().is_empty()
+        !self.tts.api_key.trim().is_empty()
     }
     pub fn clip_for_speech(&self, text: &str) -> String {
         let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -1025,7 +1021,7 @@ impl Speaker {
 
         // eleven_v3 is explicitly fresh-only.  Keep the capability policy at
         // this boundary so all callers get the same safe fallback.
-        let continuity = if self.model_id == "eleven_v3" {
+        let continuity = if self.tts.model_id == "eleven_v3" {
             TtsContinuity::Fresh
         } else {
             continuity
@@ -1033,12 +1029,12 @@ impl Speaker {
         let base_body = || {
             let mut body = serde_json::json!({
                 "text": text,
-                "model_id": self.model_id,
+                "model_id": self.tts.model_id,
                 "voice_settings": Settings {
-                    stability: self.stability,
-                    similarity_boost: self.similarity_boost,
-                    style: self.style,
-                    speed: self.speed,
+                    stability: self.tts.stability,
+                    similarity_boost: self.tts.similarity_boost,
+                    style: self.tts.style,
+                    speed: self.tts.speed,
                 }
             });
             if let Some((name, value)) = continuity.body_fields() {
@@ -1049,9 +1045,9 @@ impl Speaker {
         let request = TtsRequest {
             url: format!(
                 "{}/stream?output_format=mp3_44100_128",
-                ELEVENLABS_TTS_URL.replace("{voice_id}", &self.voice_id)
+                ELEVENLABS_TTS_URL.replace("{voice_id}", &self.tts.voice_id)
             ),
-            api_key: self.api_key.clone(),
+            api_key: self.tts.api_key.clone(),
             body: base_body(),
             deadline,
         };
@@ -1060,8 +1056,8 @@ impl Speaker {
         let chars = text.chars().count();
         let started = Instant::now();
         tracing::debug!(
-            voice = %self.voice_id,
-            model = %self.model_id,
+            voice = %self.tts.voice_id,
+            model = %self.tts.model_id,
             chars,
             "requesting speech from ElevenLabs"
         );
@@ -1069,8 +1065,8 @@ impl Speaker {
             Ok(response) => response,
             Err(error) => {
                 tracing::warn!(
-                    voice = %self.voice_id,
-                    model = %self.model_id,
+                    voice = %self.tts.voice_id,
+                    model = %self.tts.model_id,
                     chars,
                     elapsed = ?started.elapsed(),
                     %error,
@@ -1109,8 +1105,8 @@ impl Speaker {
         let elapsed = started.elapsed();
         if response.status != StatusCode::OK {
             tracing::warn!(
-                voice = %self.voice_id,
-                model = %self.model_id,
+                voice = %self.tts.voice_id,
+                model = %self.tts.model_id,
                 chars,
                 status = %response.status,
                 ?elapsed,
@@ -1127,8 +1123,8 @@ impl Speaker {
             )));
         }
         tracing::info!(
-            voice = %self.voice_id,
-            model = %self.model_id,
+            voice = %self.tts.voice_id,
+            model = %self.tts.model_id,
             chars,
             status = %response.status,
             ?elapsed,
@@ -1262,21 +1258,30 @@ impl TtsTransport for OfflineTtsTransport {
 
 #[cfg(test)]
 impl Speaker {
+    /// A configured speaker with the default voice settings and `transport`.
+    fn with_test_transport(
+        max_chars: usize,
+        speech_deadline: Duration,
+        transport: Arc<dyn TtsTransport>,
+    ) -> Self {
+        let tts = TtsSettings {
+            api_key: "offline-test-key".into(),
+            ..crate::Config::for_tests(&[]).tts
+        };
+        Self {
+            transport,
+            ..Self::new(max_chars, speech_deadline, tts)
+        }
+    }
     /// A configured speaker whose every request fails in-process, so callers
     /// exercise the synthesis path and its failure without a network.
     pub(crate) fn offline(max_chars: usize, speech_deadline: Duration) -> Self {
-        let values = HashMap::from([("ELEVENLABS_API_KEY".into(), "offline-test-key".into())]);
-        let mut speaker = Self::from_values(max_chars, speech_deadline, &values);
-        speaker.transport = Arc::new(OfflineTtsTransport);
-        speaker
+        Self::with_test_transport(max_chars, speech_deadline, Arc::new(OfflineTtsTransport))
     }
     /// A successful in-process transport for application floor tests. It never
     /// reaches ElevenLabs and emits one tiny audio chunk.
     pub(crate) fn test_success(max_chars: usize, speech_deadline: Duration) -> Self {
-        let values = HashMap::from([("ELEVENLABS_API_KEY".into(), "offline-test-key".into())]);
-        let mut speaker = Self::from_values(max_chars, speech_deadline, &values);
-        speaker.transport = Arc::new(ImmediateTtsTransport);
-        speaker
+        Self::with_test_transport(max_chars, speech_deadline, Arc::new(ImmediateTtsTransport))
     }
 
     pub(crate) fn test_gated(
@@ -1284,10 +1289,11 @@ impl Speaker {
         speech_deadline: Duration,
         gate: TestTtsGate,
     ) -> Self {
-        let values = HashMap::from([("ELEVENLABS_API_KEY".into(), "offline-test-key".into())]);
-        let mut speaker = Self::from_values(max_chars, speech_deadline, &values);
-        speaker.transport = Arc::new(GatedTtsTransport { gate });
-        speaker
+        Self::with_test_transport(
+            max_chars,
+            speech_deadline,
+            Arc::new(GatedTtsTransport { gate }),
+        )
     }
 }
 
