@@ -79,7 +79,6 @@ export class DisplayFixtureServer {
                 type: 'hello_ack',
                 version: 1,
                 stt_streaming: true,
-                audio_streaming: false,
                 mse_mp3: false,
               }));
               ws.send(JSON.stringify({

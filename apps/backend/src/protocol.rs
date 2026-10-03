@@ -30,7 +30,8 @@ pub enum ServerMessage {
     HelloAck {
         version: u64,
         stt_streaming: bool,
-        audio_streaming: bool,
+        /// Synthesized speech streams in as `audio/mpeg` over Media Source
+        /// Extensions; a page that cannot play that gets whole clips.
         mse_mp3: bool,
     },
     /// The answer to `ping`, echoing its `nonce` and `time` as they came, or
@@ -355,10 +356,8 @@ pub enum ClientMessage {
 pub struct Capabilities {
     #[serde(default, deserialize_with = "lenient")]
     pub stt_streaming: Option<bool>,
-    /// The page can play synthesized speech as it streams in.
-    #[serde(default, deserialize_with = "lenient")]
-    pub audio_streaming: Option<bool>,
-    /// The page can play `audio/mpeg` through Media Source Extensions.
+    /// The page can play `audio/mpeg` through Media Source Extensions, which
+    /// is the only way synthesized speech is streamed to it.
     #[serde(default, deserialize_with = "lenient")]
     pub mse_mp3: Option<bool>,
 }

@@ -484,11 +484,10 @@ async fn a_known_command_reads_each_field_it_can_and_ignores_the_rest() {
     json_until(&mut browser, "history").await;
     let hello_ack = |mse: bool| {
         json!({
-            "type":"hello_ack", "version":1, "stt_streaming":false,
-            "audio_streaming":mse, "mse_mp3":mse,
+            "type":"hello_ack", "version":1, "stt_streaming":false, "mse_mp3":mse,
         })
     };
-    let both = json!({"audio_streaming":true, "mse_mp3":true});
+    let both = json!({"stt_streaming":true, "mse_mp3":true});
 
     send_json_frame(
         &mut browser,
@@ -505,7 +504,7 @@ async fn a_known_command_reads_each_field_it_can_and_ignores_the_rest() {
     assert_eq!(next_json(&mut browser).await, hello_ack(false));
     send_json_frame(
         &mut browser,
-        json!({"type":"hello", "version":1, "capabilities":{"audio_streaming":true, "mse_mp3":1}}),
+        json!({"type":"hello", "version":1, "capabilities":{"stt_streaming":true, "mse_mp3":1}}),
     )
     .await;
     assert_eq!(next_json(&mut browser).await, hello_ack(false));
@@ -555,34 +554,34 @@ async fn a_known_command_reads_each_field_it_can_and_ignores_the_rest() {
 }
 
 /// `hello` is answered capability by capability. Speech is streamed only as
-/// MSE mp3, so audio streaming is offered only to a page that asks for it and
-/// can play MSE mp3; every page so far asks for both or neither.
+/// MSE mp3, so it streams to a page that says it can play that and goes whole
+/// to one that cannot; `mse_mp3` is the one flag for it (#132 item 3 retired
+/// `audio_streaming`, which every page sent equal to it and never read back).
 #[tokio::test]
-async fn hello_offers_audio_streaming_only_to_a_page_that_asks_for_it() {
+async fn hello_streams_speech_only_to_a_page_that_plays_mse_mp3() {
     let state = state();
     let served = Served::start(&state).await;
     let mut browser = served.connect().await;
     json_until(&mut browser, "history").await;
 
-    for (audio_streaming, mse_mp3, offered) in [
-        (true, true, (true, true)),
-        (false, true, (false, true)),
-        (true, false, (false, false)),
-        (false, false, (false, false)),
-    ] {
+    for (mse_mp3, offered) in [(true, true), (false, false)] {
         send_json_frame(
             &mut browser,
             json!({
                 "type":"hello", "version":1,
-                "capabilities":{"audio_streaming":audio_streaming, "mse_mp3":mse_mp3},
+                "capabilities":{"stt_streaming":false, "mse_mp3":mse_mp3},
             }),
         )
         .await;
         let ack = next_json(&mut browser).await;
         assert_eq!(
-            (ack["audio_streaming"].as_bool(), ack["mse_mp3"].as_bool()),
-            (Some(offered.0), Some(offered.1)),
-            "asked for audio_streaming {audio_streaming}, mse_mp3 {mse_mp3}: {ack}"
+            ack["mse_mp3"].as_bool(),
+            Some(offered),
+            "asked for mse_mp3 {mse_mp3}: {ack}"
+        );
+        assert!(
+            ack.get("audio_streaming").is_none(),
+            "the retired flag is not sent: {ack}"
         );
     }
 }
