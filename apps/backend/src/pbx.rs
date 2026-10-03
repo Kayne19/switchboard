@@ -2354,12 +2354,7 @@ impl Switchboard {
             Ok(t) => t,
             Err(e) => {
                 tracing::warn!(project = %project.id, error = %e, "intro prompt to project failed");
-                Turn {
-                    text: String::new(),
-                    signals: vec![],
-                    failed: true,
-                    error: e.to_string(),
-                }
+                failed_turn(e)
             }
         };
 
@@ -2457,18 +2452,10 @@ impl Switchboard {
         // they no longer apply before it answers the caller.
         let prompt = format!("{FOREGROUND_NOTICE}\n\n{}", context.exact_caller_transcript);
         let utterance = self.current_utterance();
-        let turn = match session
+        let turn = session
             .prompt_as(&prompt, "foreground", utterance.as_deref())
             .await
-        {
-            Ok(turn) => turn,
-            Err(error) => Turn {
-                text: String::new(),
-                signals: vec![],
-                failed: true,
-                error: error.to_string(),
-            },
-        };
+            .unwrap_or_else(failed_turn);
         if turn.failed && turn.text.is_empty() {
             session.close();
             self.announce_agent_state(&project.id, "finished").await;
@@ -2685,18 +2672,10 @@ impl Switchboard {
             .await;
         self.announce_agent_state(&project.id, "busy").await;
         let utterance = self.current_utterance();
-        let turn = match session
+        let turn = session
             .prompt_as(text, "caller", utterance.as_deref())
             .await
-        {
-            Ok(turn) => turn,
-            Err(error) => Turn {
-                text: String::new(),
-                signals: vec![],
-                failed: true,
-                error: error.to_string(),
-            },
-        };
+            .unwrap_or_else(failed_turn);
         if turn.failed && turn.text.is_empty() {
             let detail = if turn.error.is_empty() {
                 "the desk session did not answer".to_owned()
@@ -2967,15 +2946,10 @@ impl Switchboard {
                 },
                 intent.trim().trim_end_matches('.')
             );
-            let turn = match session.prompt_as(&prompt, "model_change", None).await {
-                Ok(turn) => turn,
-                Err(error) => Turn {
-                    text: String::new(),
-                    signals: vec![],
-                    failed: true,
-                    error: error.to_string(),
-                },
-            };
+            let turn = session
+                .prompt_as(&prompt, "model_change", None)
+                .await
+                .unwrap_or_else(failed_turn);
             if turn.failed && turn.text.is_empty() {
                 let detail = if turn.error.is_empty() {
                     "the agent never answered".to_owned()
@@ -3263,6 +3237,17 @@ fn failure_reply(coordinator: &Coordinator, spoken: String, detail: String) -> R
         ],
         Some(detail),
     )
+}
+
+/// A prompt that could not be sent, as the failed turn the leg transitions
+/// check for: no text, no signals, and the error as its detail.
+fn failed_turn(error: PiSessionError) -> Turn {
+    Turn {
+        text: String::new(),
+        signals: vec![],
+        failed: true,
+        error: error.to_string(),
+    }
 }
 
 /// The operator's note when work on `name` stopped under the caller.
