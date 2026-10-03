@@ -7,15 +7,65 @@
 use crate::hosts::Hosts;
 use crate::lifecycle::{CandidateLeg, LifecycleError};
 use crate::pbx::{uuid_like, Switchboard, TransferContext, OPERATOR};
-use crate::pi_client::{LegSession, PiSessionError, ProjectLaunch, ProjectSession, Turn};
+use crate::pi_client::{
+    LegSession, ModuleCallback, PiSessionError, ProjectLaunch, ProjectSession, Turn, TurnCallback,
+};
 use crate::prewarm::LaunchPlan;
 use crate::prompts::{build_intro_prompt, FOREGROUND_NOTICE};
 use crate::redial::thinking_in_spec;
 use crate::registry::{Project, Registry};
 use crate::reply::Reply;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::time::Duration;
+
+/// How long a project leg may go silent inside one turn, its intro included,
+/// before it is dropped as wedged.
+const PROJECT_TURN_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// What a project leg is launched with: the callbacks it reports turns and
+/// module calls through, the projects the caller stopped (which must start
+/// fresh once), and the silent-turn deadline. Only this module reads it;
+/// `Switchboard` holds one.
+pub(crate) struct LegLaunch {
+    module_callback: Option<ModuleCallback>,
+    turn_callback: Option<TurnCallback>,
+    /// Projects explicitly stopped by the caller must start fresh once.
+    resume_blocked: HashSet<String>,
+    /// `PROJECT_TURN_TIMEOUT`, held per switchboard so a test can wait out a
+    /// silent leg without waiting ten minutes.
+    turn_timeout: Duration,
+}
+
+impl Default for LegLaunch {
+    fn default() -> Self {
+        Self {
+            module_callback: None,
+            turn_callback: None,
+            resume_blocked: HashSet::new(),
+            turn_timeout: PROJECT_TURN_TIMEOUT,
+        }
+    }
+}
+
+impl Switchboard {
+    /// Receives project turn boundaries from host agents.
+    pub fn set_turn_callback(&mut self, callback: Option<TurnCallback>) {
+        self.legs.turn_callback = callback;
+    }
+
+    /// What answers a project session's `speak`, `display` and `view`.
+    pub fn set_module_callback(&mut self, callback: Option<ModuleCallback>) {
+        self.legs.module_callback = callback;
+    }
+
+    /// Shortens the silent-turn deadline so a test can wait it out.
+    #[cfg(test)]
+    pub(crate) fn set_project_turn_timeout_for_test(&mut self, timeout: Duration) {
+        self.legs.turn_timeout = timeout;
+    }
+}
 
 impl Switchboard {
     pub async fn transfer_ctx(
@@ -454,10 +504,10 @@ impl Switchboard {
             cwd: project.cwd.clone(),
             spec,
             brief: self.agent_brief(&project),
-            turn_timeout: self.project_turn_timeout,
+            turn_timeout: self.legs.turn_timeout,
             on_activity: self.activity_callback.clone(),
-            on_module: self.module_callback.clone(),
-            on_turn: self.turn_callback.clone(),
+            on_module: self.legs.module_callback.clone(),
+            on_turn: self.legs.turn_callback.clone(),
             on_closed: Some(self.session_closed_callback()),
             debug: Some(self.debug.clone()),
         };
@@ -584,16 +634,16 @@ impl Switchboard {
             cwd: project.cwd.clone(),
             spec: model.to_owned(),
             brief: self.agent_brief(project),
-            turn_timeout: self.project_turn_timeout,
+            turn_timeout: self.legs.turn_timeout,
             on_activity: self.activity_callback.clone(),
-            on_module: self.module_callback.clone(),
-            on_turn: self.turn_callback.clone(),
+            on_module: self.legs.module_callback.clone(),
+            on_turn: self.legs.turn_callback.clone(),
             on_closed: Some(self.session_closed_callback()),
             debug: Some(self.debug.clone()),
         };
         // A host-agent restart keeps resident sessions alive. Prefer the
         // matching service-created session rather than creating a duplicate.
-        let resume_blocked = self.resume_blocked.remove(&project.id);
+        let resume_blocked = self.legs.resume_blocked.remove(&project.id);
         let resumed_id = if !resume_blocked && self.hosts.link_epoch(&plan.host).is_some() {
             self.hosts
                 .command(
@@ -691,12 +741,12 @@ impl Switchboard {
 
     pub(crate) async fn stop_project(&mut self, target: &str) -> Reply {
         if self.coordinator.route() == target {
-            self.resume_blocked.insert(target.to_owned());
+            self.legs.resume_blocked.insert(target.to_owned());
             self.drop_agent().await;
             return self.reply([format!("Stopped {target}.")], None);
         }
         if self.background_agents.contains_key(target) {
-            self.resume_blocked.insert(target.to_owned());
+            self.legs.resume_blocked.insert(target.to_owned());
             self.background_agents.cancel_task(target).await;
             let session = self
                 .background_agents

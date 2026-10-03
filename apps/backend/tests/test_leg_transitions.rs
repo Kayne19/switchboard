@@ -494,7 +494,7 @@ async fn an_intro_that_never_settles_is_dropped_at_the_turn_deadline() {
     // The intro never settles, so the only thing that ends the transfer is
     // the deadline. Reaching it is the outcome under test, not a wait for
     // something else, so it can be short.
-    board.project_turn_timeout = Duration::from_millis(200);
+    board.set_project_turn_timeout_for_test(Duration::from_millis(200));
     board.handle("hello").await;
     let generation = coordinator.generation();
 
