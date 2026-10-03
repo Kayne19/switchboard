@@ -40,7 +40,7 @@ impl Default for BackgroundRegistry {
 
 impl BackgroundRegistry {
     #[cfg(test)]
-    pub(crate) fn sessions_snapshot_for_test(&self) -> Vec<(String, ProjectSession)> {
+    fn sessions_snapshot_for_test(&self) -> Vec<(String, ProjectSession)> {
         self.sessions
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())

@@ -23,8 +23,6 @@ use crate::lifecycle::CandidateLeg;
 use crate::lifecycle::{Coordinator, StatusConfig};
 #[cfg(test)]
 use crate::models::ModelCatalog;
-#[cfg(test)]
-use crate::pi_client::ProjectLaunch;
 use crate::pi_client::{
     ActivityCallback, LegSession, ModuleCallback, PiSession, ProjectSession, SessionClosedCallback,
     TurnCallback,
@@ -178,13 +176,13 @@ impl Switchboard {
             config.agent_thinking.clone(),
         );
         let registry = Arc::new(registry);
-        let planner = RedialPlanner {
-            coordinator: coordinator.clone(),
-            registry: Arc::clone(&registry),
-            prewarm: Arc::clone(&prewarm),
-            agent_model: config.agent_model.clone(),
-            model_swaps: config.model_swaps,
-        };
+        let planner = RedialPlanner::new(
+            coordinator.clone(),
+            Arc::clone(&registry),
+            Arc::clone(&prewarm),
+            config.agent_model.clone(),
+            config.model_swaps,
+        );
         let router = Router::new(
             jev,
             Arc::clone(&registry),
