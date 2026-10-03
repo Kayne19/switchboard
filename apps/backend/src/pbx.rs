@@ -23,6 +23,7 @@ use crate::lifecycle::CandidateLeg;
 use crate::lifecycle::{Coordinator, StatusConfig};
 #[cfg(test)]
 use crate::models::ModelCatalog;
+use crate::operator::OperatorLaunch;
 use crate::pi_client::{
     ActivityCallback, LegSession, ModuleCallback, PiSession, ProjectSession, SessionClosedCallback,
     TurnCallback,
@@ -82,12 +83,10 @@ pub struct TransferContext {
 
 pub struct Switchboard {
     pub registry: Arc<Registry>,
-    pub(crate) pi_binary: String,
-    pub(crate) operator_model: Option<String>,
-    pub(crate) operator_system_prompt: String,
-    pub(crate) operator_extension: Option<String>,
+    /// How the operator and utility processes are launched; `operator.rs`
+    /// owns it.
+    pub(crate) launch: OperatorLaunch,
     pub(crate) persona: String,
-    pub(crate) env: HashMap<String, String>,
     pub(crate) speech_deadline_ms: u64,
     pub(crate) activity_callback: Option<ActivityCallback>,
     route_callback: Option<RouteCallback>,
@@ -194,12 +193,8 @@ impl Switchboard {
         );
         Self {
             registry,
-            pi_binary: config.pi_binary.clone(),
-            operator_model: config.operator_model.clone(),
-            operator_system_prompt: config.operator_prompt.to_string_lossy().into_owned(),
-            operator_extension: config.operator_extension.clone(),
+            launch: OperatorLaunch::from_config(config),
             persona: config.persona.clone(),
-            env: config.environment.clone(),
             speech_deadline_ms: config.speech_deadline_ms,
             activity_callback: None,
             route_callback: None,
