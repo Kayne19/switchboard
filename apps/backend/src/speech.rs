@@ -16,9 +16,9 @@ use crate::pbx::Switchboard;
 use crate::protocol::ServerMessage;
 use crate::turns::{jev_response_event, live_agents};
 use futures_util::StreamExt;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::Instrument;
 
 /// The call-scoped continuity context for the next ElevenLabs request.
@@ -306,7 +306,7 @@ impl AppInner {
     }
 
     pub(crate) fn new_speech_group(&self) -> SpeechGroup {
-        SpeechGroup(self.next_speech_group.fetch_add(1, Ordering::Relaxed))
+        SpeechGroup(self.speech.next_group.fetch_add(1, Ordering::Relaxed))
     }
 
     pub(crate) fn set_active_speech_group(&self, group: SpeechGroup) {
@@ -357,7 +357,8 @@ impl AppInner {
 pub(crate) fn ensure_speech_worker(state: &AppState) {
     if state
         .0
-        .speech_worker_started
+        .speech
+        .worker_started
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
     {
@@ -664,7 +665,8 @@ async fn complete_speech_request(
 async fn process_speech(state: AppState) {
     let mut receiver = state
         .0
-        .speech_rx
+        .speech
+        .receiver
         .lock()
         .await
         .take()
@@ -872,7 +874,7 @@ async fn release_floor(
     if spoken.is_empty() {
         return ReleaseOutcome::Played;
     }
-    let permit = match state.0.speech.reserve().await {
+    let permit = match state.0.speech.sender.reserve().await {
         Ok(permit) => permit,
         Err(_) => return ReleaseOutcome::Retry,
     };
@@ -1155,6 +1157,35 @@ pub(crate) struct SpeechAdmission {
     pub(crate) log_spoken: bool,
 }
 
+/// The speech worker's queue and the state only this module reads: the
+/// request channel, the receiver the worker takes once, the once-flag that
+/// starts it, and the counter behind speech groups. `AppInner` holds one so
+/// the fields are the speech module's own.
+pub(crate) struct SpeechQueue {
+    sender: mpsc::Sender<SpeechRequest>,
+    receiver: Mutex<Option<mpsc::Receiver<SpeechRequest>>>,
+    worker_started: AtomicBool,
+    next_group: AtomicU64,
+}
+
+impl SpeechQueue {
+    pub(crate) fn new() -> Self {
+        let (sender, receiver) = mpsc::channel(64);
+        Self {
+            sender,
+            receiver: Mutex::new(Some(receiver)),
+            worker_started: AtomicBool::new(false),
+            next_group: AtomicU64::new(1),
+        }
+    }
+
+    /// A place in the speech order, when the queue has one now.
+    #[cfg(test)]
+    pub(crate) fn try_reserve(&self) -> Result<mpsc::Permit<'_, SpeechRequest>, ()> {
+        self.sender.try_reserve().map_err(|_| ())
+    }
+}
+
 /// A speech request's place in the speech worker and the audio order, taken
 /// before the request itself is made. The permit comes first and then the
 /// audio slot, as for every speech request.
@@ -1194,8 +1225,8 @@ pub(crate) async fn reserve_speech(
     when_full: WhenQueueFull,
 ) -> Result<ReservedSpeech<'_>, ReserveFailure> {
     let permit = match when_full {
-        WhenQueueFull::Wait => state.0.speech.reserve().await.ok(),
-        WhenQueueFull::Refuse => state.0.speech.try_reserve().ok(),
+        WhenQueueFull::Wait => state.0.speech.sender.reserve().await.ok(),
+        WhenQueueFull::Refuse => state.0.speech.sender.try_reserve().ok(),
     }
     .ok_or(ReserveFailure::WorkerUnavailable)?;
     let sequence = reserve_audio(state, generation)

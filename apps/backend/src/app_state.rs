@@ -35,7 +35,7 @@ use crate::registry::Registry;
 #[cfg(test)]
 use crate::speech::start_speech_worker_for_test;
 use crate::speech::{
-    ensure_speech_worker, spawn_floor_worker, SpeechContinuity, SpeechGroup, SpeechRequest,
+    ensure_speech_worker, spawn_floor_worker, SpeechContinuity, SpeechGroup, SpeechQueue,
 };
 use crate::turns::{handle_project_turn, process_turns, RoutedDecision};
 use serde_json::{json, Value};
@@ -186,7 +186,6 @@ pub struct AppInner {
     /// The active model-turn group lets several `/speak` calls share one
     /// continuity chain without carrying that state in the host protocol.
     pub(crate) active_speech_group: Arc<StdMutex<Option<SpeechGroup>>>,
-    pub(crate) next_speech_group: AtomicU64,
     /// Set after foreground audio is admitted. A floor release consumes it so
     /// only an immediate same-generation update can continue that clip.
     pub(crate) foreground_audio_generation: Arc<StdMutex<Option<u64>>>,
@@ -196,9 +195,8 @@ pub struct AppInner {
     pub coordinator: Coordinator,
     /// Decides the pickers' redials without the PBX lock.
     pub(crate) redials: RedialPlanner,
-    pub(crate) speech: mpsc::Sender<SpeechRequest>,
-    pub(crate) speech_rx: Mutex<Option<mpsc::Receiver<SpeechRequest>>>,
-    pub(crate) speech_worker_started: AtomicBool,
+    /// The speech worker's queue and the state only `speech.rs` reads.
+    pub(crate) speech: SpeechQueue,
     pub(crate) clips: mpsc::Sender<Clip>,
     pub(crate) clip_rx: Mutex<Option<mpsc::Receiver<Clip>>>,
     pub turns: mpsc::Sender<(String, String, u64)>,
@@ -300,7 +298,7 @@ impl AppState {
         debug: DebugBus,
     ) -> Self {
         let (events, _) = broadcast::channel(256);
-        let (speech, speech_rx) = mpsc::channel(64);
+        let speech = SpeechQueue::new();
         // Audio frames may be up to the WebSocket limit. A small bounded queue
         // prevents a stalled decoder from retaining roughly a gigabyte of
         // accepted clips while still leaving ample room for one caller's
@@ -471,7 +469,6 @@ impl AppState {
                 speaker,
                 continuity,
                 active_speech_group,
-                next_speech_group: AtomicU64::new(1),
                 foreground_audio_generation,
                 stt,
                 stt_stream,
@@ -479,8 +476,6 @@ impl AppState {
                 coordinator,
                 redials,
                 speech,
-                speech_rx: Mutex::new(Some(speech_rx)),
-                speech_worker_started: AtomicBool::new(false),
                 clips,
                 clip_rx: Mutex::new(Some(clip_rx)),
                 turns,
