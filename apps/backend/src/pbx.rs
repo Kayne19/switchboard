@@ -15,6 +15,7 @@
 //! `leg_transitions.rs`, `redial.rs`, `residents.rs`, `operator.rs` and
 //! `routing_view.rs`; the prompt text is in `prompts.rs` and the reply shape
 //! in `reply.rs`.
+use crate::decisions::DecisionState;
 use crate::hosts::Hosts;
 #[cfg(test)]
 use crate::hosts::{FakeHostAgent, FakeLog, OnPrompt, Step};
@@ -107,12 +108,8 @@ pub struct Switchboard {
     /// The call as Jev saw it for the utterance being handled, in plain text.
     /// The operator and the routing utility get the same facts.
     pub(crate) call_state: String,
-    /// The caller line being handled, for the debug trace only. Set for one
-    /// decision by `handle_decision_with_takeover`, and cleared when that
-    /// decision ends or is cancelled; routing never reads it.
-    pub(crate) trace_utterance: Arc<StdMutex<Option<String>>>,
-    /// Project awaiting a caller confirmation before it is stopped.
-    pub(crate) pending_stop: Option<String>,
+    /// What decision handling carries between decisions; `decisions.rs` owns it.
+    pub(crate) decisions: DecisionState,
     /// The one owner of the leg on the line, and of the status the page is
     /// shown.
     pub(crate) coordinator: Coordinator,
@@ -201,8 +198,7 @@ impl Switchboard {
             operator_note: None,
             agent_tasks: Arc::new(StdMutex::new(HashMap::new())),
             call_state: String::new(),
-            trace_utterance: Arc::new(StdMutex::new(None)),
-            pending_stop: None,
+            decisions: DecisionState::default(),
             coordinator,
             hosts,
             prewarm,
