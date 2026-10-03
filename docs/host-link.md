@@ -246,7 +246,11 @@ model does not have). `call_mode` is `null` when the session is not on a call.
   daemon runs the reopened session in its own working directory, not the
   project folder (measured against a real daemon). Only names starting `sb-` (or
   `sb-<project>-` when `project` is given) are accepted; others are refused.
-  Reopening a live session returns it.
+  The name is checked on the saved record *before* the session is reopened:
+  a daemon `create` with a session path makes the session live (or returns
+  it, if another client has it open), so a refusal after that step would
+  leave a stranger's session running unseen, and killing it would be wrong
+  in the already-open case (#162). Reopening a live session returns it.
 - **`list_sessions`** lists live top-level daemon sessions (subagents are
   left out): `{session, session_id, name, cwd, busy, provenance, project,
   model, thinking}`. `provenance` is `"created"`, `"taken_over"`, or `null`
@@ -338,7 +342,11 @@ A snapshot replaces what the service knows about a session:
 ```
 
 The host agent sends one after the welcome when it cannot replay (see
-above), and after it reconnects to a replaced daemon. After a host-agent
+above), and after it reconnects to a replaced daemon. Its cursor is taken
+before the session is described, and an event published while it is being
+described is sent after it: the snapshot is the baseline for everything up
+to its cursor, so an event sent before it but not reflected in it would be
+lost (#164). After a host-agent
 restart it rebuilds each tracked session from the daemon: sessions the
 daemon still has are reattached (a busy one gets an open turn, settled by
 `wait_for_idle`); sessions it no longer has get `session_closed`. The

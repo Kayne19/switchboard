@@ -60,10 +60,16 @@ commit.
 - Every gate CI runs: `cargo fmt --all -- --check`, `cargo test --locked`,
   `cargo clippy --locked --all-targets -- -D warnings`, and `npm test` followed
   by `git diff --exit-code -- static static-debug` — the compiled browser output
-  is committed, so rebuild it in the same change.
+  is committed, so rebuild it in the same change. `npm test` ends with
+  `scripts/check_hygiene.mjs`, which enforces the structural rules below that
+  a grep can check (private modules, no lint allowances, one `Config`, a
+  documented environment, one fake-executable writer, one skill socket path,
+  live paths in the docs); a new rule of that kind gets a check there.
 - A `static/` or `static-debug/` merge conflict is resolved by rebuilding from the merged source
   (`npm ci && npm run build`), never by picking a side (see #37).
-- `master` requires a passing CI `test` check on an up-to-date head. A head
+- `master` requires a passing CI `test` check on an up-to-date head. If
+  `master` moved while a PR was in CI, rebase and wait for the run on the new
+  head; a merge attempted before it is refused. A head
   pushed by the Copilot agent gets no CI jobs until a maintainer approves its
   workflow runs on the pull request. An unapproved run has zero jobs and can
   end as a failure that GitHub blames on the workflow file; it is not (see
@@ -84,9 +90,28 @@ commit.
   rustc then stops reporting it when unused; that is how two dozen dead
   functions and a parallel lifecycle accumulated unnoticed. With private
   modules, clippy's `-D warnings` fails on dead code.
+- No `#[allow(...)]` in the backend. An unused item is deleted or made
+  `#[cfg(test)]`; an import one `cfg` block needs is written inside that
+  block; a lint that is wrong is argued with in the commit, not silenced in
+  the code. An allowance is a place the compiler was told to stop looking,
+  and the last one here hid a dead import for months.
 - Only `Config` (`apps/backend/src/main.rs`) reads the environment; modules
   take their settings from it. A second reader is a second parser of the same
   contract, and they drift.
+- State that one module reads lives in a struct that module owns, with
+  private fields and the narrowest setters its siblings need (`SpeechQueue`,
+  `ClipState`, `TurnState` on `AppInner`; `OperatorLaunch`, `LegLaunch`,
+  `DecisionState` on `Switchboard`). A field two modules read stays
+  `pub(crate)` on the shared struct with both readers named in its comment.
+  Do not add a `pub(crate)` field for one reader: nobody is holding that
+  boundary.
+- A browser command that acts carries its `generation`; one without is
+  refused (if it would start something) or ignored (if it would end
+  something), and the handler says which. It is never defaulted to the
+  current generation: that is how a stale page acts on a new call
+  (`docs/architecture.md`, rule 7).
+- A bug fix lands with a test that fails on `master`: stash the source change
+  and run the test once to see it fail. Say so in the PR.
 - One implementation per lifecycle. A fallback is an adapter or an explicit
   refusal, not a second copy of the path kept for "when the real one is
   absent" (see rule 9 in `docs/architecture.md`).
