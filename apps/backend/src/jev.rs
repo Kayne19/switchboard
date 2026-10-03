@@ -112,13 +112,6 @@ impl JevClient {
         })
     }
 
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub fn with_model(mut self, model: impl Into<String>) -> Self {
-        self.model = model.into();
-        self
-    }
-
     /// Installs an in-process responder for tests. This keeps Jev coverage
     /// deterministic without binding a local socket or touching a network.
     #[cfg(test)]
