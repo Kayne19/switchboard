@@ -5591,16 +5591,6 @@ done
         .0
         .projection
         .hold_display("grapes".into(), json!({"op":"show","id":"doc"}));
-    let rewrite_started = std::sync::Arc::new(tokio::sync::Notify::new());
-    let rewrite_notice = rewrite_started.clone();
-    let rewrite_prompt = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-    let rewrite_prompt_seen = rewrite_prompt.clone();
-    crate::pi_client::set_prompt_hook_for_test(Some(std::sync::Arc::new(move |message| {
-        if message.contains("[FLOOR REWRITE]") {
-            *rewrite_prompt_seen.lock().unwrap() = message.to_owned();
-            rewrite_notice.notify_one();
-        }
-    })));
     spawn_workers(state.clone());
     state.0.floor.force_quiet_for_test().await;
     let accepted = request_to_speak(
@@ -5610,15 +5600,25 @@ done
     )
     .await;
     assert_eq!(accepted.status(), StatusCode::OK);
-    timeout(Duration::from_secs(1), rewrite_started.notified())
-        .await
-        .expect("rewrite reached the utility");
-    let prompt = rewrite_prompt.lock().unwrap().clone();
+    // The rewrite is watched on this test's own debug bus: the utility leg
+    // publishes its prompt once the utility has it, and the utility then
+    // waits. A process-global hook saw every test's utility, and a parallel
+    // test's rewrite used to land here in this one's place (#126).
+    let crate::debug::DebugEvent::AgentInput { text: prompt, .. } = until_debug(&state, |event| {
+        matches!(
+            event,
+            crate::debug::DebugEvent::AgentInput { agent, source, .. }
+                if agent == "utility" && source == "floor_rewrite"
+        )
+    })
+    .await
+    else {
+        unreachable!("until_debug returns the event it matched");
+    };
     assert!(prompt.contains("Display held: yes"), "{prompt}");
     // The rules for a held display live in the utility's system prompt; the
     // request carries only the data.
     assert!(!prompt.contains("on screen"), "{prompt}");
-    crate::pi_client::set_prompt_hook_for_test(None);
 
     // The foreground turn path can acquire the PBX lock while the utility is
     // still waiting. This is the caller-audible-delay regression guard.
