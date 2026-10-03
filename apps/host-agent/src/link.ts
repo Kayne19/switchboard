@@ -100,6 +100,9 @@ export class HostLink {
 	#epoch: number | null = null;
 	#seq = 0;
 	#buffers = new Map<string, SessionBuffer>();
+	/** Events published while a snapshot of the same session is being taken;
+	 * they go out after it. */
+	#heldBehindSnapshot = new Map<string, Buffered[]>();
 	#missed = 0;
 	#heartbeat: ReturnType<typeof setInterval> | null = null;
 	#reconnect: ReturnType<typeof setTimeout> | null = null;
@@ -154,17 +157,34 @@ export class HostLink {
 			const dropped = buffer.events.shift() as Buffered;
 			buffer.evictedThrough = dropped.seq;
 		}
-		if (this.#epoch !== null) this.#send({ type: "event", session: handle, cursor: formatCursor(this.bootId, seq), event });
+		const held = this.#heldBehindSnapshot.get(handle);
+		if (held) held.push({ seq, event });
+		else if (this.#epoch !== null) this.#send({ type: "event", session: handle, cursor: formatCursor(this.bootId, seq), event });
 		return formatCursor(this.bootId, seq);
 	}
 
-	/** Send a fresh snapshot of one session (after a daemon resync, for example). */
+	/**
+	 * Send a fresh snapshot of one session (after a daemon resync, for
+	 * example). The snapshot's cursor is taken before the session is
+	 * described, and an event published while it is being described is sent
+	 * after it: the service replaces what it knows with a snapshot, so an
+	 * event sent before one but not reflected in it would be lost.
+	 */
 	async sendSnapshot(handle: string): Promise<void> {
-		const info = await this.#o.describe(handle);
-		if (!info || this.#epoch === null) return;
-		const buffer = this.#buffers.get(handle);
-		const last = buffer?.events.at(-1)?.seq ?? this.#seq;
-		this.#send({ type: "snapshot", session: handle, cursor: formatCursor(this.bootId, last), info });
+		if (this.#heldBehindSnapshot.has(handle)) return;
+		const cursor = this.#buffers.get(handle)?.events.at(-1)?.seq ?? this.#seq;
+		this.#heldBehindSnapshot.set(handle, []);
+		let info: Record<string, unknown> | null = null;
+		try {
+			info = await this.#o.describe(handle);
+		} finally {
+			const held = this.#heldBehindSnapshot.get(handle) ?? [];
+			this.#heldBehindSnapshot.delete(handle);
+			if (this.#epoch !== null) {
+				if (info) this.#send({ type: "snapshot", session: handle, cursor: formatCursor(this.bootId, cursor), info });
+				for (const b of held) this.#send({ type: "event", session: handle, cursor: formatCursor(this.bootId, b.seq), event: b.event });
+			}
+		}
 	}
 
 	/** Relay a module call to the service and wait for its reply, bounded. */

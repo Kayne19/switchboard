@@ -215,6 +215,57 @@ test("reconnect with cursor: buffered events after the service's cursor are repl
 	}
 });
 
+test("snapshot order: an event published while the session is described goes out after the snapshot", async () => {
+	const service = await FakeService.start();
+	let release: (() => void) | null = null;
+	const describing = new Promise<void>((r) => (release = r));
+	let describes = 0;
+	const { link } = makeLink(service, {
+		sessions: () => ["a1"],
+		describe: async (h) => {
+			describes += 1;
+			// The first describe (the welcome sync) answers at once; the
+			// second holds until the test has published behind it.
+			if (describes === 2) await describing;
+			return { session: h, busy: describes === 2 };
+		},
+	});
+	try {
+		link.start();
+		const l0 = await service.link(0);
+		await l0.next((m) => m.type === "synced");
+		await l0.next((m) => m.type === "snapshot"); // the welcome sync's
+		const before = link.publish("a1", { kind: "text", text: "settled" });
+		await l0.next((m) => m.type === "event");
+		const sending = link.sendSnapshot("a1");
+		await until(() => describes === 2);
+		// Published while the snapshot is being taken: with the old order
+		// this event went out first and the snapshot, carrying its cursor,
+		// then replaced it on the service.
+		const seen = l0.received.length;
+		const during = link.publish("a1", { kind: "turn_start", cause: "input" });
+		await new Promise((r) => setTimeout(r, 20));
+		// Heartbeat pings aside, nothing goes out until the snapshot is ready.
+		assert.deepEqual(
+			l0.received
+				.slice(seen)
+				.filter((m) => m.type !== "ping")
+				.map((m) => m.type),
+			[],
+		);
+		(release as unknown as () => void)();
+		await sending;
+		const snap = await l0.next((m) => m.type === "snapshot");
+		assert.equal(snap.cursor, before, "the snapshot claims only what was published before it was taken");
+		const event = await l0.next((m) => m.type === "event");
+		assert.equal(event.cursor, during);
+		assert.equal((event.event as Message).kind, "turn_start");
+	} finally {
+		link.stop();
+		await service.close();
+	}
+});
+
 test("reconnect: a cursor from another boot or beyond the buffer gets a fresh snapshot", async () => {
 	const service = await FakeService.start();
 	const { link } = makeLink(service, { sessions: () => ["a1", "a2"], bufferLimit: 2, describe: async (h) => ({ session: h, busy: false }) });
