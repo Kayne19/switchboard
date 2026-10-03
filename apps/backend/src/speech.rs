@@ -972,23 +972,11 @@ pub(crate) async fn deliver_page_reply_if_current(
     reply: &crate::pbx::Reply,
     generation: u64,
 ) -> bool {
-    let voice = reserve_reply_voice(state, &reply.to_speak, generation).await;
-    let _transition = state.0.operation_transition.lock().await;
-    if generation != state.0.coordinator.generation() {
-        release_reply_voice(state, voice, generation).await;
-        return false;
-    }
-    if reply.error.as_deref() == Some("routing_unavailable") {
-        emit_message(
-            state,
-            ServerMessage::RoutingUnavailable {
-                message: "Routing is unavailable. Please try again.".into(),
-            },
-        );
-        publish_status(state);
-        release_reply_voice(state, voice, generation).await;
-        return true;
-    }
+    let (voice, _transition) = match admit_reply(state, reply, generation).await {
+        ReplyAdmission::Stale => return false,
+        ReplyAdmission::RoutingUnavailable => return true,
+        ReplyAdmission::Deliver { voice, transition } => (voice, transition),
+    };
     if !reply.text.is_empty() {
         if let Some(entry) =
             state
@@ -1020,18 +1008,33 @@ pub(crate) async fn deliver_page_reply_if_current(
     generation == state.0.coordinator.generation()
 }
 
-pub(crate) async fn deliver_turn_if_current(
-    state: &AppState,
+/// What a reply may do once it reaches the line. Both delivery paths (the
+/// caller's turn and a page-initiated reply) open the same way: reserve the
+/// reply's voice, take the operation transition, and refuse a reply whose
+/// generation has passed or whose routing was unavailable. What they show on
+/// the page differs, so that stays with each caller.
+enum ReplyAdmission<'a> {
+    /// The generation moved on; nothing was shown or spoken.
+    Stale,
+    /// Routing was unavailable; the page has been told and the reply is done.
+    RoutingUnavailable,
+    /// Deliver it. The transition lock is held until the caller drops it.
+    Deliver {
+        voice: Option<ReservedSpeech<'a>>,
+        transition: tokio::sync::MutexGuard<'a, ()>,
+    },
+}
+
+async fn admit_reply<'a>(
+    state: &'a AppState,
     reply: &crate::pbx::Reply,
     generation: u64,
-    response_id: &str,
-) -> bool {
+) -> ReplyAdmission<'a> {
     let voice = reserve_reply_voice(state, &reply.to_speak, generation).await;
-    let _transition = state.0.operation_transition.lock().await;
+    let transition = state.0.operation_transition.lock().await;
     if generation != state.0.coordinator.generation() {
         release_reply_voice(state, voice, generation).await;
-        trace_reply_speech(state, reply, Some("stale_generation"));
-        return false;
+        return ReplyAdmission::Stale;
     }
     if reply.error.as_deref() == Some("routing_unavailable") {
         emit_message(
@@ -1042,8 +1045,25 @@ pub(crate) async fn deliver_turn_if_current(
         );
         publish_status(state);
         release_reply_voice(state, voice, generation).await;
-        return true;
+        return ReplyAdmission::RoutingUnavailable;
     }
+    ReplyAdmission::Deliver { voice, transition }
+}
+
+pub(crate) async fn deliver_turn_if_current(
+    state: &AppState,
+    reply: &crate::pbx::Reply,
+    generation: u64,
+    response_id: &str,
+) -> bool {
+    let (voice, _transition) = match admit_reply(state, reply, generation).await {
+        ReplyAdmission::Stale => {
+            trace_reply_speech(state, reply, Some("stale_generation"));
+            return false;
+        }
+        ReplyAdmission::RoutingUnavailable => return true,
+        ReplyAdmission::Deliver { voice, transition } => (voice, transition),
+    };
     if !reply.text.is_empty() {
         state.0.transcript_log.lock().await.add_with_id_and_voiced(
             AGENT,
