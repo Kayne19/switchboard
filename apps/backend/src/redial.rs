@@ -3,9 +3,10 @@
 //! so a refused page swap never rescues the live leg; `Switchboard::redial`
 //! runs a plan only while the leg it was made for is still on the line, either
 //! on the live session (`switch_live`) or on a fresh one.
+use crate::leg_transitions::{failed_turn, LegChange};
 use crate::lifecycle::{CandidateLeg, Coordinator, LifecycleError, ProjectLeg};
 use crate::models::{normalize_thinking, parse_spec, pin_thinking, ModelCatalog};
-use crate::pbx::{failed_turn, uuid_like, LegChange, Switchboard, OPERATOR};
+use crate::pbx::{uuid_like, Switchboard, OPERATOR};
 use crate::pi_client::{LegSession, PiSessionError, ProjectSession, SessionState};
 use crate::prewarm::{LaunchPlan, Prewarm};
 use crate::registry::{Project, Registry};

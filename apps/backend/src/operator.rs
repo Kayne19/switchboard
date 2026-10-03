@@ -285,6 +285,34 @@ fi
     path
 }
 
+/// An operator stand-in: its first prompt puts the caller through to alpha
+/// (with `intent` "inspect it"), later ones answer "Operator has you again.",
+/// or "NOTE_DELIVERED" when the prompt carries "work complete".
+#[cfg(unix)]
+#[cfg(test)]
+pub(crate) fn fake_operator(root: &std::path::Path) -> std::path::PathBuf {
+    let operator = root.join("fake-operator");
+    crate::pi_client::write_executable_script(
+        &operator,
+        r##"count=0
+while IFS= read -r line; do
+count=$((count + 1))
+if [ "$count" -eq 1 ]; then
+    printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Connecting now."}}'
+    printf '%s\n' '{"type":"tool_execution_start","toolName":"route","args":{"target":"alpha","mode":"fresh"}}'
+else
+    case "$line" in
+        *"work complete"*) printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"NOTE_DELIVERED"}}' ;;
+        *) printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Operator has you again."}}' ;;
+    esac
+fi
+printf '%s\n' '{"type":"agent_settled"}'
+done
+"##,
+    );
+    operator
+}
+
 #[cfg(test)]
 #[path = "../tests/test_operator.rs"]
 mod tests;

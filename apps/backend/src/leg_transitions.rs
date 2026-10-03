@@ -1,0 +1,765 @@
+//! Leg transitions: every way a project leg comes onto the line or leaves it.
+//! A transfer, a background promotion and a takeover of a desk session all
+//! start a candidate leg and commit it through `Switchboard::commit_leg`, so
+//! each takes the same steps in the same order; a failure rolls the candidate
+//! back and leaves the caller where they were. Dropping the agent, hanging up,
+//! stopping a project and returning to the operator end a leg.
+use crate::hosts::Hosts;
+use crate::lifecycle::{CandidateLeg, LifecycleError};
+use crate::pbx::{uuid_like, Switchboard, TransferContext, OPERATOR};
+use crate::pi_client::{LegSession, PiSessionError, ProjectLaunch, ProjectSession, Turn};
+use crate::prewarm::LaunchPlan;
+use crate::prompts::{build_intro_prompt, FOREGROUND_NOTICE};
+use crate::redial::thinking_in_spec;
+use crate::registry::{Project, Registry};
+use crate::reply::Reply;
+use serde_json::{json, Value};
+use std::sync::Arc;
+use tokio::time::Duration;
+
+impl Switchboard {
+    pub async fn transfer_ctx(
+        &mut self,
+        context: &TransferContext,
+        spoken: &str,
+        requested_model: &str,
+        requested_thinking: &str,
+    ) -> Reply {
+        let project = match self.registry.resolve_detailed(spoken) {
+            crate::registry::ResolveResult::Exact(project) => project.clone(),
+            crate::registry::ResolveResult::Ambiguous(candidates) => {
+                let candidates_text = candidates.join(", ");
+                let from = (self.coordinator.route() != OPERATOR).then(|| self.route_label());
+                if from.is_some() {
+                    self.drop_agent().await;
+                }
+                self.operator_note = Some(format!(
+                    "Couldn't tell which project {spoken:?} meant: {candidates_text}.{}",
+                    from.map(|name| format!(" The caller was on {name}."))
+                        .unwrap_or_default()
+                ));
+                return self.reply_transfer_error(
+                    format!(
+                        "Which project did you mean by {spoken}? It could be {candidates_text}."
+                    ),
+                    Some(format!("ambiguous project {spoken:?}: {candidates_text}")),
+                );
+            }
+            crate::registry::ResolveResult::Unknown => {
+                let known = self.registry.ids();
+                let known_text = if known.is_empty() {
+                    "nothing yet".to_owned()
+                } else {
+                    known.join(", ")
+                };
+                let from = (self.coordinator.route() != OPERATOR).then(|| self.route_label());
+                if from.is_some() {
+                    self.drop_agent().await;
+                }
+                self.operator_note = Some(format!(
+                    "No project matches {spoken:?}. Registered: {known_text}.{}",
+                    from.map(|name| format!(" The caller was on {name}."))
+                        .unwrap_or_default()
+                ));
+                return self.reply_transfer_error(
+                    self.unknown_project_line(spoken),
+                    Some(format!("unknown project {spoken:?}")),
+                );
+            }
+        };
+
+        tracing::info!(
+            from = %self.coordinator.route(),
+            to = %project.id,
+            host = project.canonical_host().unwrap_or("<local>"),
+            cwd = %project.cwd,
+            transcript_len = context.exact_caller_transcript.len(),
+            "transferring caller"
+        );
+
+        // Reuse a resident before creating a candidate. This is the direct
+        // transfer/dial path, which otherwise only checked the foreground
+        // handle and could create a second live session for this project.
+        if self.coordinator.route() != project.id {
+            if self.remove_dead_background(&project.id).await {
+                self.announce_agent_state(&project.id, "finished").await;
+            }
+            if self.background_agents.contains_key(&project.id) {
+                let session = self
+                    .take_background(&project.id)
+                    .await
+                    .expect("background session exists");
+                return self.promote_background(session, context.clone()).await;
+            }
+        }
+
+        // The leg the caller is on now, which every failure below hands the
+        // line back to: the project leg on an agent-to-agent transfer, else
+        // the operator, as in `drop_agent`.
+        let live_session = self.agent_leg().or_else(|| self.operator_leg());
+
+        let plan = match self.prewarm.launch_plan(&project).await {
+            Ok(plan) => plan,
+            Err(err) => {
+                tracing::warn!(project = %project.id, error = %err, "the project's host is not ready");
+                self.operator_note = Some(open_failed_note(&project.id, &err));
+                return self.couldnt_open(&project.id, err);
+            }
+        };
+
+        let model = match self.select_transfer_model(
+            &project,
+            &plan.catalog,
+            requested_model,
+            requested_thinking,
+        ) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(project = %project.id, error = %e, "transfer model selection failed");
+                self.operator_note = Some(open_failed_note(&project.id, &e.to_string()));
+                return self.couldnt_open(&project.id, e);
+            }
+        };
+
+        let session_id = uuid_like();
+        let leg_token = uuid_like();
+
+        let candidate = CandidateLeg::new(
+            project.id.clone(),
+            project.id.clone(),
+            session_id.clone(),
+            leg_token.clone(),
+            model.clone(),
+            thinking_in_spec(&model),
+        )
+        .with_catalog(plan.catalog.clone());
+        if let Err(error) = self.coordinator.begin_candidate(candidate) {
+            tracing::warn!(project = %project.id, %error, "candidate startup was refused");
+            return self.couldnt_open(&project.id, error.to_string());
+        }
+
+        // At most one session per project: one the caller is on is ended
+        // before another is made for the same project.
+        if self
+            .agent
+            .as_ref()
+            .is_some_and(|agent| agent.label() == project.id)
+        {
+            if let Some(previous) = self.agent.take() {
+                previous.close();
+            }
+        }
+
+        let session = match self.start_agent(&project, &model, &leg_token, &plan).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(
+                    project = %project.id,
+                    host = %plan.host,
+                    error = %e,
+                    "could not connect to project"
+                );
+                self.rollback_startup(format!("startup failed: {e}"));
+                self.set_active_session(live_session.clone()).await;
+                self.operator_note = Some(open_failed_note(&project.id, &e.to_string()));
+                return self.couldnt_open(&project.id, e.to_string());
+            }
+        };
+
+        self.set_active_session(Some(LegSession::Project(session.clone())))
+            .await;
+
+        let intro_prompt = build_intro_prompt(context, &project, plan.prepare_report.as_ref());
+
+        self.announce_agent_state(&project.id, "busy").await;
+        let utterance = self.current_utterance();
+        let turn = match session
+            .prompt_as(&intro_prompt, "intro", utterance.as_deref())
+            .await
+        {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(project = %project.id, error = %e, "intro prompt to project failed");
+                failed_turn(e)
+            }
+        };
+
+        if turn.failed && turn.text.is_empty() {
+            let detail = if turn.error.trim().is_empty() {
+                "the agent never answered".to_owned()
+            } else {
+                turn.error
+            };
+            tracing::error!(project = %project.id, %detail, "project intro turn failed");
+            session.close();
+            self.announce_agent_state(&project.id, "finished").await;
+            self.set_active_session(live_session.clone()).await;
+            self.rollback_startup(format!("intro failed: {detail}"));
+            self.operator_note = Some(open_failed_note(&project.id, &detail));
+            return self.couldnt_open(&project.id, detail);
+        }
+
+        if let Err(error) = self
+            .commit_leg(&project.id, &leg_token, &session, LegChange::NewAgent)
+            .await
+        {
+            session.close();
+            self.announce_agent_state(&project.id, "finished").await;
+            self.set_active_session(live_session.clone()).await;
+            self.rollback_startup(format!("adoption failed: {error}"));
+            return self.couldnt_open(&project.id, error.to_string());
+        }
+        self.reply_with_turn(turn)
+    }
+
+    pub(crate) async fn promote_background(
+        &mut self,
+        session: ProjectSession,
+        context: TransferContext,
+    ) -> Reply {
+        let project = match self.registry.resolve_detailed(session.label()) {
+            crate::registry::ResolveResult::Exact(project) => project.clone(),
+            _ => {
+                let project = session.label().to_owned();
+                session.close();
+                self.announce_agent_state(&project, "finished").await;
+                return self.reply_transfer_error(
+                    format!("{project} isn't registered any more."),
+                    Some("project is no longer registered".into()),
+                );
+            }
+        };
+        // Kept for a failed promotion, as in `take_over`: the leg the caller
+        // was on goes back on the active-session guard.
+        let previous_foreground = self.active_session.lock().await.clone();
+        let token = uuid_like();
+        if let Err(error) = session.set_mode("foreground").await {
+            session.close();
+            self.announce_agent_state(&project.id, "finished").await;
+            return self.couldnt_bring_back(&project.id, error.to_string());
+        }
+        if let Err(error) = session
+            .join_call_mode(&token, &self.persona, self.speech_deadline_ms, "foreground")
+            .await
+        {
+            session.close();
+            self.announce_agent_state(&project.id, "finished").await;
+            return self.couldnt_bring_back(&project.id, error.to_string());
+        }
+        self.announce_agent_state(&project.id, "busy").await;
+        let candidate = CandidateLeg::new(
+            project.id.clone(),
+            project.id.clone(),
+            session.session_id(),
+            token.clone(),
+            "",
+            self.coordinator.thinking_default(),
+        );
+        if let Err(error) = self.coordinator.begin_candidate(candidate) {
+            session.close();
+            self.announce_agent_state(&project.id, "finished").await;
+            return self.couldnt_bring_back(&project.id, error.to_string());
+        }
+        // Steering and a page rescue reach the leg being brought up, as they
+        // do on a transfer or a takeover.
+        self.set_active_session(Some(LegSession::Project(session.clone())))
+            .await;
+        // The agent was told background rules when it was shelved. Tell it
+        // they no longer apply before it answers the caller.
+        let prompt = format!("{FOREGROUND_NOTICE}\n\n{}", context.exact_caller_transcript);
+        let utterance = self.current_utterance();
+        let turn = session
+            .prompt_as(&prompt, "foreground", utterance.as_deref())
+            .await
+            .unwrap_or_else(failed_turn);
+        if turn.failed && turn.text.is_empty() {
+            let detail = if turn.error.trim().is_empty() {
+                "the agent never answered".to_owned()
+            } else {
+                turn.error
+            };
+            session.close();
+            self.announce_agent_state(&project.id, "finished").await;
+            self.rollback_startup(format!("background promotion failed: {detail}"));
+            self.set_active_session(previous_foreground).await;
+            return self.couldnt_bring_back(&project.id, detail);
+        }
+        if let Err(error) = self
+            .commit_leg(&project.id, &token, &session, LegChange::NewAgent)
+            .await
+        {
+            session.close();
+            self.announce_agent_state(&project.id, "finished").await;
+            self.rollback_startup(format!("background promotion adoption failed: {error}"));
+            self.set_active_session(previous_foreground).await;
+            return self.couldnt_bring_back(&project.id, error.to_string());
+        }
+        self.reply_with_turn(turn)
+    }
+
+    /// Find one untracked top-level desk session for a registered project.
+    /// Service-created sessions are returned as a refusal, not silently reused
+    /// by takeover: only their original lifecycle may own them.
+    #[cfg(test)]
+    async fn desk_session_for_takeover(&self, project: &Project) -> Result<Option<Value>, String> {
+        Self::desk_session_for_takeover_from_project(self.hosts.clone(), project).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn desk_session_for_takeover_target(
+        &self,
+        target: &str,
+    ) -> Result<Option<Value>, String> {
+        let Some(project) = self.registry.get(target).cloned() else {
+            return Err(format!("unknown project {target:?}"));
+        };
+        self.desk_session_for_takeover(&project).await
+    }
+
+    /// Performs the host-owned part of takeover discovery without requiring a
+    /// switchboard lock. The caller must validate the returned handle and
+    /// provenance again before attaching it.
+    pub(crate) async fn desk_session_for_takeover_from(
+        hosts: Hosts,
+        registry: Arc<Registry>,
+        target: &str,
+    ) -> Result<Option<Value>, String> {
+        let Some(project) = registry.get(target).cloned() else {
+            return Err(format!("unknown project {target:?}"));
+        };
+        Self::desk_session_for_takeover_from_project(hosts, &project).await
+    }
+
+    async fn desk_session_for_takeover_from_project(
+        hosts: Hosts,
+        project: &Project,
+    ) -> Result<Option<Value>, String> {
+        let Some(host) = project.canonical_host() else {
+            return Err(format!("{} has no project host configured", project.id));
+        };
+        let reply = hosts
+            .command(host, "list_sessions", json!({}), Duration::from_secs(5))
+            .await
+            .map_err(|error| format!("could not inspect {} sessions: {error}", project.id))?;
+        let sessions = reply.result["sessions"]
+            .as_array()
+            .ok_or_else(|| format!("host {host} returned no session list"))?;
+        if sessions.iter().any(|session| {
+            session["cwd"] == project.cwd
+                && session["provenance"].as_str() == Some("created")
+                && (session["project"].is_null()
+                    || session["project"].as_str() == Some(project.id.as_str()))
+        }) {
+            return Err(format!(
+                "{} already has a live service-created agent; stop it first",
+                project.id
+            ));
+        }
+        Ok(sessions
+            .iter()
+            .find(|session| session["cwd"] == project.cwd && session["provenance"].is_null())
+            .cloned())
+    }
+
+    /// Route the caller onto a live desk session without creating a second
+    /// agent. The takeover request is the first routed line, so `prompt`
+    /// carries the normal voice brief in front of it.
+    pub(crate) async fn take_over(
+        &mut self,
+        text: &str,
+        target: &str,
+        takeover: Result<Option<Value>, String>,
+    ) -> Reply {
+        let Some(project) = self.registry.get(target).cloned() else {
+            return self.reply_transfer_error(
+                self.unknown_project_line(target),
+                Some(format!("unknown project {target:?}")),
+            );
+        };
+        // Keep the exact foreground owner across a failed takeover. The
+        // coordinator rolls its route back, but the active-session guard is a
+        // separate lifecycle handoff and must follow the same previous leg.
+        let previous_foreground = self.active_session.lock().await.clone();
+        if self
+            .agent
+            .as_ref()
+            .is_some_and(|agent| agent.label() == project.id)
+            || self.background_agents.contains_key(&project.id)
+        {
+            return self.reply_transfer_error(
+                format!(
+                    "{} is already open on the call. Stop it before I take over the one at your desk.",
+                    project.id
+                ),
+                Some("project already has a live switchboard agent".into()),
+            );
+        }
+        let desk = match takeover {
+            Ok(Some(session)) => session,
+            Ok(None) => {
+                return self.reply_transfer_error(
+                    format!("Nothing is open at your desk for {}.", project.id),
+                    Some("no matching desk session".into()),
+                )
+            }
+            Err(error) => return self.couldnt_take_over(&project.id, error),
+        };
+        // This is the lock-held recheck after the host listing. A stale
+        // discovery result must never be attached to another project or a
+        // session the host has already registered for the service.
+        if desk["cwd"].as_str() != Some(project.cwd.as_str()) || !desk["provenance"].is_null() {
+            return self.reply_transfer_error(
+                format!(
+                    "What's open at your desk for {} changed before I could take it over. Try again.",
+                    project.id
+                ),
+                Some("desk session changed during takeover".into()),
+            );
+        }
+        let Some(session_handle) = desk["session"].as_str() else {
+            return self.couldnt_take_over(&project.id, "desk session had no handle");
+        };
+        let model = desk["model"].as_str().unwrap_or_default().to_owned();
+        let thinking = desk["thinking"].as_str().unwrap_or_default().to_owned();
+        let spec = if model.is_empty() {
+            String::new()
+        } else if thinking.is_empty() {
+            model.clone()
+        } else {
+            format!("{model}:{thinking}")
+        };
+        let leg_token = uuid_like();
+        let candidate = CandidateLeg::new(
+            project.id.clone(),
+            project.id.clone(),
+            desk["session_id"].as_str().unwrap_or_default(),
+            leg_token.clone(),
+            spec.clone(),
+            if thinking.is_empty() {
+                self.coordinator.thinking_default()
+            } else {
+                thinking.clone()
+            },
+        );
+        if let Err(error) = self.coordinator.begin_candidate(candidate) {
+            return self.couldnt_take_over(&project.id, error.to_string());
+        }
+        let host = match project.canonical_host() {
+            Some(host) => host.to_owned(),
+            None => unreachable!("desk_session_for_takeover checked project host"),
+        };
+        let launch = ProjectLaunch {
+            host,
+            project: project.id.clone(),
+            cwd: project.cwd.clone(),
+            spec,
+            brief: self.agent_brief(&project),
+            turn_timeout: self.project_turn_timeout,
+            on_activity: self.activity_callback.clone(),
+            on_module: self.module_callback.clone(),
+            on_turn: self.turn_callback.clone(),
+            on_closed: Some(self.session_closed_callback()),
+            debug: Some(self.debug.clone()),
+        };
+        let session = match ProjectSession::attach(&self.hosts, launch, session_handle).await {
+            Ok((session, state)) => {
+                self.confirm_thinking(&leg_token, &state);
+                session
+            }
+            Err(error) => {
+                self.rollback_startup(format!("takeover failed: {error}"));
+                return self.couldnt_take_over(&project.id, error.to_string());
+            }
+        };
+        if let Err(error) = session
+            .join_call_mode(
+                &leg_token,
+                &self.persona,
+                self.speech_deadline_ms,
+                "foreground",
+            )
+            .await
+        {
+            session.close();
+            self.rollback_startup(format!("takeover call registration failed: {error}"));
+            return self.couldnt_take_over(&project.id, error.to_string());
+        }
+        self.set_active_session(Some(LegSession::Project(session.clone())))
+            .await;
+        self.announce_agent_state(&project.id, "busy").await;
+        let utterance = self.current_utterance();
+        let turn = session
+            .prompt_as(text, "caller", utterance.as_deref())
+            .await
+            .unwrap_or_else(failed_turn);
+        if turn.failed && turn.text.is_empty() {
+            let detail = if turn.error.is_empty() {
+                "the desk session did not answer".to_owned()
+            } else {
+                turn.error.clone()
+            };
+            session.close();
+            self.announce_agent_state(&project.id, "finished").await;
+            self.rollback_startup(format!("takeover turn failed: {detail}"));
+            self.set_active_session(previous_foreground.clone()).await;
+            return self.couldnt_take_over(&project.id, detail);
+        }
+        if let Err(error) = self
+            .commit_leg(&project.id, &leg_token, &session, LegChange::NewAgent)
+            .await
+        {
+            session.close();
+            self.announce_agent_state(&project.id, "finished").await;
+            self.rollback_startup(format!("takeover adoption failed: {error}"));
+            self.set_active_session(previous_foreground).await;
+            return self.couldnt_take_over(&project.id, error.to_string());
+        }
+        self.reply_with_turn(turn)
+    }
+
+    /// Makes the staged project leg the one on the line. Every transition
+    /// that brings a project leg up (a transfer, a background promotion, a
+    /// takeover, a redial) commits through here, so none of them can skip a
+    /// step or take one out of order:
+    ///
+    /// 1. adopt the candidate under `token`. It may be adopted already: a
+    ///    candidate is promoted on its first sign of life, which usually
+    ///    arrives during its first turn. Either way the coordinator names it
+    ///    from here on; the switchboard only swaps the session handles;
+    /// 2. end the intro;
+    /// 3. on a [`LegChange::NewAgent`], shelve the previous foreground and
+    ///    settle the incoming agent, published busy for its first turn, to
+    ///    idle;
+    /// 4. name the session on the PBX and on the active-session guard;
+    /// 5. announce the route.
+    ///
+    /// A failed adoption commits nothing and is returned. Abandoning the leg
+    /// is the caller's, because where the line goes back to differs.
+    pub(crate) async fn commit_leg(
+        &mut self,
+        project: &str,
+        token: &str,
+        session: &ProjectSession,
+        change: LegChange,
+    ) -> Result<(), LifecycleError> {
+        if self.coordinator.is_candidate() {
+            self.coordinator.adopt_candidate(token)?;
+        }
+        self.coordinator.finish_intro();
+        if change == LegChange::NewAgent {
+            self.shelve_previous_foreground(project).await;
+            self.announce_agent_state(project, "idle").await;
+        }
+        self.agent = Some(session.clone());
+        self.set_active_session(self.agent_leg()).await;
+        self.announce_route().await;
+        Ok(())
+    }
+
+    /// Starts a project leg on its host from its launch plan and puts it on
+    /// the call with `leg_token`. Nothing here sets anything up: the host's
+    /// catalog and the prepare report were settled by prewarm.
+    pub(crate) async fn start_agent(
+        &mut self,
+        project: &Project,
+        model: &str,
+        leg_token: &str,
+        plan: &LaunchPlan,
+    ) -> Result<ProjectSession, PiSessionError> {
+        self.start_agent_mode(project, model, leg_token, plan, "foreground")
+            .await
+    }
+
+    pub(crate) async fn start_agent_mode(
+        &mut self,
+        project: &Project,
+        model: &str,
+        leg_token: &str,
+        plan: &LaunchPlan,
+        mode: &str,
+    ) -> Result<ProjectSession, PiSessionError> {
+        let launch = ProjectLaunch {
+            host: plan.host.clone(),
+            project: project.id.clone(),
+            cwd: project.cwd.clone(),
+            spec: model.to_owned(),
+            brief: self.agent_brief(project),
+            turn_timeout: self.project_turn_timeout,
+            on_activity: self.activity_callback.clone(),
+            on_module: self.module_callback.clone(),
+            on_turn: self.turn_callback.clone(),
+            on_closed: Some(self.session_closed_callback()),
+            debug: Some(self.debug.clone()),
+        };
+        // A host-agent restart keeps resident sessions alive. Prefer the
+        // matching service-created session rather than creating a duplicate.
+        let resume_blocked = self.resume_blocked.remove(&project.id);
+        let resumed_id = if !resume_blocked && self.hosts.link_epoch(&plan.host).is_some() {
+            self.hosts
+                .command(
+                    &plan.host,
+                    "list_sessions",
+                    json!({}),
+                    std::time::Duration::from_secs(5),
+                )
+                .await
+                .ok()
+                .and_then(|reply| {
+                    reply.result["sessions"].as_array().and_then(|sessions| {
+                        sessions.iter().find_map(|session| {
+                            (session["project"].as_str() == Some(project.id.as_str())
+                                && session["cwd"].as_str() == Some(project.cwd.as_str())
+                                && session["provenance"].as_str().unwrap_or("created") == "created")
+                                .then(|| {
+                                    session["session_id"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .to_owned()
+                                })
+                                .filter(|id| !id.is_empty())
+                        })
+                    })
+                })
+        } else {
+            None
+        };
+        let (session, state) = if let Some(session_id) = resumed_id {
+            ProjectSession::open(&self.hosts, launch.clone(), &session_id).await?
+        } else {
+            ProjectSession::create(&self.hosts, launch).await?
+        };
+        if let Err(error) = session
+            .join_call_mode(leg_token, &self.persona, self.speech_deadline_ms, mode)
+            .await
+        {
+            session.close();
+            return Err(error);
+        }
+        self.confirm_thinking(leg_token, &state);
+        Ok(session)
+    }
+
+    pub(crate) async fn return_operator_ctx(
+        &mut self,
+        context: &TransferContext,
+        note: &str,
+    ) -> Reply {
+        self.drop_agent().await;
+        let note = note.to_owned();
+        self.operator_note = Some(note.clone());
+        let reply = self.handle_operator_ctx(context).await;
+        if reply.error.is_some() {
+            self.operator_note = Some(note);
+        }
+        if reply.text.is_empty() {
+            self.reply(["That work stopped."], reply.error)
+        } else {
+            reply
+        }
+    }
+
+    pub(crate) async fn drop_agent(&mut self) {
+        let was_on_a_project = self.coordinator.route() != OPERATOR;
+        let project = self
+            .agent
+            .as_ref()
+            .map(|session| session.label().to_owned());
+        if let Some(s) = self.agent.take() {
+            s.close();
+        }
+        if let Some(project) = project {
+            self.announce_agent_state(&project, "finished").await;
+        }
+        self.set_active_session(self.operator_leg()).await;
+        self.coordinator.return_to_operator();
+        if was_on_a_project {
+            self.announce_route().await;
+        }
+    }
+
+    pub async fn dial(&mut self, project: &str, intent: &str) -> Reply {
+        self.force_hangup().await;
+        if project.eq_ignore_ascii_case(OPERATOR) {
+            return self.reply(["Back at the front desk."], None);
+        }
+        let context = TransferContext {
+            derived_intent: intent.to_owned(),
+            ..TransferContext::default()
+        };
+        self.transfer_ctx(&context, project, "", "").await
+    }
+
+    pub(crate) async fn stop_project(&mut self, target: &str) -> Reply {
+        if self.coordinator.route() == target {
+            self.resume_blocked.insert(target.to_owned());
+            self.drop_agent().await;
+            return self.reply([format!("Stopped {target}.")], None);
+        }
+        if self.background_agents.contains_key(target) {
+            self.resume_blocked.insert(target.to_owned());
+            self.background_agents.cancel_task(target).await;
+            let session = self
+                .background_agents
+                .remove(target)
+                .expect("background session exists");
+            self.coordinator.remove_background(&session.token());
+            session.close();
+            self.announce_agent_state(target, "finished").await;
+            return self.reply([format!("Stopped {target}.")], None);
+        }
+        self.reply([format!("{target} isn't running.")], None)
+    }
+
+    pub async fn force_hangup(&mut self) -> Option<String> {
+        let route = self.coordinator.route();
+        if route == OPERATOR {
+            if let Some(session) = self.operator.take() {
+                tracing::info!("caller hung up a wedged operator turn from the page");
+                session.close().await;
+                self.set_active_session(None).await;
+                return Some(OPERATOR.into());
+            }
+            return None;
+        }
+        let left = route;
+        tracing::info!(%left, "caller hung up the project leg from the page");
+        self.drop_agent().await;
+        self.operator_note = Some(format!("The caller hung up {left} from the page."));
+        Some(left)
+    }
+}
+
+/// What a committed leg does to the foreground it takes the line from
+/// (`Switchboard::commit_leg`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LegChange {
+    /// Another agent takes the line: a transfer, a background promotion, a
+    /// takeover. The previous foreground is shelved, and the incoming agent
+    /// settles to idle after its first turn.
+    NewAgent,
+    /// The project on the line is redialed onto another model or thinking
+    /// level. There is no other foreground to shelve: a session that keeps
+    /// its context is the one already on the line, and shelving it would
+    /// close it. Its state was never published busy, so it is left alone.
+    Redial,
+}
+
+/// A prompt that could not be sent, as the failed turn the leg transitions
+/// check for: no text, no signals, and the error as its detail.
+pub(crate) fn failed_turn(error: PiSessionError) -> Turn {
+    Turn {
+        text: String::new(),
+        signals: vec![],
+        failed: true,
+        error: error.to_string(),
+    }
+}
+
+/// The operator's note when `project` could not be opened for the caller.
+fn open_failed_note(project: &str, error: &str) -> String {
+    format!("Couldn't open {project}: {}.", error.trim_end_matches('.'))
+}
+
+#[cfg(test)]
+#[path = "../tests/test_leg_transitions.rs"]
+mod tests;

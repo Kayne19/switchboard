@@ -11,6 +11,7 @@ mod history;
 mod hosts;
 mod jev;
 mod leg_announcer;
+mod leg_transitions;
 mod lifecycle;
 mod models;
 mod module_calls;
