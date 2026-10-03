@@ -128,6 +128,12 @@ test("calls: token check, then delivery decided from session state", async () =>
 		assert.deepEqual(await call("view", {}), { status: "failed", reason: "failed" });
 		assert.deepEqual(await call("launch_missiles", {}), { status: "refused", reason: "unknown_call" });
 		assert.deepEqual(await ask("not json"), { status: "refused", reason: "bad_request" });
+		// Valid JSON that is not an object is refused the same way, and the
+		// connection keeps answering afterwards: a `null` used to throw inside
+		// the handler and leave every later line on the connection unanswered.
+		assert.deepEqual(await ask("null"), { status: "refused", reason: "bad_request" });
+		assert.deepEqual(await ask("[1]"), { status: "refused", reason: "bad_request" });
+		assert.deepEqual(await ask({ op: "hello", session_id: sessionId, depth: 0 }), { on_call: true, ...CALL });
 	});
 });
 

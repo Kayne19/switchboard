@@ -83,8 +83,10 @@ export class SkillSocket {
 				conn.destroy();
 				return;
 			}
+			// A handler failure answers that one request and leaves the
+			// connection's queue alive for the next line.
 			queue = queue.then(async () => {
-				const reply = await this.handle(line);
+				const reply = await this.handle(line).catch(() => ({ status: "refused", reason: "bad_request" }));
 				if (!conn.destroyed) conn.write(`${JSON.stringify(reply)}\n`);
 			});
 		});
@@ -94,7 +96,12 @@ export class SkillSocket {
 	async handle(line: string): Promise<Record<string, unknown>> {
 		let request: Record<string, unknown>;
 		try {
-			request = JSON.parse(line) as Record<string, unknown>;
+			const parsed: unknown = JSON.parse(line);
+			// JSON.parse accepts `null`, numbers and arrays; a request is an object.
+			if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+				return { status: "refused", reason: "bad_request" };
+			}
+			request = parsed as Record<string, unknown>;
 		} catch {
 			return { status: "refused", reason: "bad_request" };
 		}
