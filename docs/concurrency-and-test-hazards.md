@@ -374,6 +374,38 @@ failures legible:
 All fake executables must go through this helper. It owns the `#!/bin/sh`
 preamble so that no caller can forget the probe guard.
 
+## A test hook that every test shares
+
+Tests run on many threads inside one process, so anything process-global is
+shared by every test that runs at the same time. `pi_client` used to have a
+test-only prompt hook: one global slot that a test filled with a closure, and
+that every `PiSession::prompt` in the process called. Only
+`floor_rewrite_does_not_hold_the_pbx_lock_across_utility_wait` filled it. It
+waited for the first `[FLOOR REWRITE]` prompt and checked that it said
+`Display held: yes`.
+
+Other tests run floor rewrites too, on their own utility processes. When one of
+them prompted while the hook was installed, the hook took that prompt in place
+of this test's own, and the check failed on `Display held: no` from a project
+the test never registered (#126). That prompt came from
+`floor_good_moment_gate_does_not_query_desk_hosts`. Measured on master with six
+full runs in parallel: 7 of 300 runs failed, every one that way. No other test
+installed or cleared the hook; the race was that the hook watched every test's
+processes at once. After the change: 0 of 200 under the same load.
+
+The test now reads its prompt from the `AgentInput` event on its own
+`AppState`'s debug bus. The utility publishes that event in production too,
+after the prompt is written, so the test watches the real path and sees only
+its own utility. The global hook and its call in `prompt_for` are gone.
+
+The rule: a test observes the code under test through something the test owns
+(its `AppState`, its debug bus, its fake executable, its temporary directory),
+never through a process-global slot. A global that a test writes is shared with
+every test that runs alongside it, and filtering on message content does not
+make it private: another test can send the same kind of message. If no
+per-test seam exists, add one that production also uses, as the debug bus is,
+rather than a `#[cfg(test)]` global.
+
 ## A broken pipe reported instead of the error that caused it
 
 With the `ETXTBSY` noise gone, a second failure appeared at roughly two runs in
