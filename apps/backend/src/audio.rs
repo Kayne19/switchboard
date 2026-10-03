@@ -258,15 +258,19 @@ pub struct TtsChunkStream {
     metadata: TtsResponseMetadata,
 }
 
-#[allow(dead_code)]
 impl TtsChunkStream {
+    /// The request id is safe to commit for a later request only after the
+    /// stream has been read to its end, which is the provider's stream
+    /// stitching requirement; the speech worker does that.
     pub(crate) fn metadata(&self) -> &TtsResponseMetadata {
         &self.metadata
     }
+}
 
-    /// Consume and fully read a response.  The returned request id is safe to
-    /// commit only after this future succeeds, which is the provider's stream
-    /// stitching requirement.
+#[cfg(test)]
+impl TtsChunkStream {
+    /// Consume and fully read a response.  The speech worker reads its own
+    /// streams chunk by chunk; tests read a whole one with this.
     pub(crate) async fn drain(mut self) -> Result<TtsResponseMetadata, AudioError> {
         while let Some(chunk) = self.next().await {
             chunk?;
@@ -979,16 +983,6 @@ impl Speaker {
         format!("{} — there's more on screen.", clipped.trim_end())
     }
 
-    #[allow(dead_code)]
-    pub async fn stream_until(
-        &self,
-        text: &str,
-        deadline: Instant,
-    ) -> Result<TtsChunkStream, AudioError> {
-        self.stream_until_with_continuity(text, deadline, TtsContinuity::Fresh)
-            .await
-    }
-
     /// Start a streamed request with optional ElevenLabs stitching context.
     ///
     /// A request-id response is metadata on the returned stream.  Callers must
@@ -1292,6 +1286,17 @@ impl Speaker {
             speech_deadline,
             Arc::new(GatedTtsTransport { gate }),
         )
+    }
+
+    /// A request with no stitching context. The speech worker always says
+    /// what context it has, so only tests ask for a fresh stream directly.
+    pub(crate) async fn stream_until(
+        &self,
+        text: &str,
+        deadline: Instant,
+    ) -> Result<TtsChunkStream, AudioError> {
+        self.stream_until_with_continuity(text, deadline, TtsContinuity::Fresh)
+            .await
     }
 }
 
