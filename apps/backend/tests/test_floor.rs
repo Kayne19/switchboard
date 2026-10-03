@@ -21,7 +21,7 @@ fn hooks(
     connected: Arc<AtomicBool>,
     live: Arc<AtomicBool>,
     gate: Arc<AtomicUsize>,
-    released: mpsc::UnboundedSender<(String, bool)>,
+    released: mpsc::UnboundedSender<String>,
 ) -> FloorHooks {
     FloorHooks {
         connected: Arc::new(move || connected.load(Ordering::SeqCst)),
@@ -37,11 +37,11 @@ fn hooks(
             let text = input.message.clone();
             Box::pin(async move { Ok(text) }) as RewriteFuture
         }),
-        release: Arc::new(move |request, text, announce| {
+        release: Arc::new(move |request, text| {
             let released = released.clone();
             Box::pin(async move {
                 released
-                    .send((format!("{text}:{}", request.message), announce))
+                    .send(format!("{text}:{}", request.message))
                     .unwrap();
                 ReleaseOutcome::Played
             }) as ReleaseFuture
@@ -76,8 +76,8 @@ async fn queue_order_and_one_speaker_at_a_time() {
     });
     yield_worker().await;
     assert_eq!(gates.load(Ordering::SeqCst), 2);
-    assert_eq!(results.recv().await.unwrap().0, "update 1:update 1");
-    assert_eq!(results.recv().await.unwrap().0, "update 2:update 2");
+    assert_eq!(results.recv().await.unwrap(), "update 1:update 1");
+    assert_eq!(results.recv().await.unwrap(), "update 2:update 2");
     assert_eq!(floor.queue_len().await, 0);
     worker.abort();
 }
@@ -99,7 +99,7 @@ async fn releases_record_no_overlapping_speakers() {
         mpsc::unbounded_channel().0,
     );
     let maximum_for_release = maximum.clone();
-    h.release = Arc::new(move |request, _text, _announce| {
+    h.release = Arc::new(move |request, _text| {
         let events = events.clone();
         let active = active.clone();
         let maximum = maximum_for_release.clone();
@@ -162,7 +162,7 @@ async fn gate_negative_answer_holds_until_the_next_quiet_moment() {
     assert!(results.try_recv().is_err());
     floor.force_quiet_for_test().await;
     yield_worker().await;
-    assert_eq!(results.recv().await.unwrap().0, "update 1:update 1");
+    assert_eq!(results.recv().await.unwrap(), "update 1:update 1");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     worker.abort();
 }
@@ -193,7 +193,7 @@ async fn gate_rejection_requires_a_new_quiet_period() {
     assert!(results.try_recv().is_err());
     floor.force_quiet_for_test().await;
     yield_worker().await;
-    assert_eq!(results.recv().await.unwrap().0, "update 1:update 1");
+    assert_eq!(results.recv().await.unwrap(), "update 1:update 1");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     worker.abort();
 }
@@ -228,7 +228,7 @@ async fn gate_timeout_is_treated_as_a_hold_then_quiet_releases() {
     assert!(results.try_recv().is_err());
     floor.force_quiet_for_test().await;
     yield_worker().await;
-    assert_eq!(results.recv().await.unwrap().0, "update 1:update 1");
+    assert_eq!(results.recv().await.unwrap(), "update 1:update 1");
     worker.abort();
 }
 
@@ -253,7 +253,7 @@ async fn rewrite_receives_held_display_status() {
         async move { floor.run(h).await }
     });
     assert_eq!(flags_rx.recv().await, Some(true));
-    assert_eq!(results.recv().await.unwrap().0, "update 1:update 1");
+    assert_eq!(results.recv().await.unwrap(), "update 1:update 1");
     worker.abort();
 }
 
@@ -270,7 +270,7 @@ async fn rewrite_error_uses_the_original_message() {
     let floor_worker = floor.clone();
     let worker = tokio::spawn(async move { floor_worker.run(h).await });
     yield_worker().await;
-    assert_eq!(results.recv().await.unwrap().0, "update 1:update 1");
+    assert_eq!(results.recv().await.unwrap(), "update 1:update 1");
     worker.abort();
 }
 
@@ -304,7 +304,7 @@ async fn rewrite_timeout_uses_the_original_message() {
     assert!(results.try_recv().is_err());
     timeout_events.recv().await.unwrap();
     yield_worker().await;
-    assert_eq!(results.recv().await.unwrap().0, "update 1:update 1");
+    assert_eq!(results.recv().await.unwrap(), "update 1:update 1");
     worker.abort();
 }
 
@@ -318,26 +318,31 @@ async fn announcement_is_first_only_after_quiet_threshold() {
     floor.caller_spoke().await;
     floor.force_not_quiet_for_test().await;
     floor.enqueue(request(1)).await;
-    let floor_worker = floor.clone();
-    let worker = tokio::spawn(async move {
-        floor_worker
-            .run(hooks(
-                connected.clone(),
-                live.clone(),
-                Arc::new(AtomicUsize::new(0)),
-                released,
-            ))
-            .await;
+    // The quiet flag reaches the rewrite, which decides whether to ease in;
+    // release is only handed the finished line.
+    let mut h = hooks(
+        connected.clone(),
+        live.clone(),
+        Arc::new(AtomicUsize::new(0)),
+        released,
+    );
+    let (rewrites, mut rewrite_inputs) = mpsc::unbounded_channel();
+    h.rewrite = Arc::new(move |input| {
+        rewrites.send(input.quiet).unwrap();
+        let text = input.message.clone();
+        Box::pin(async move { Ok(text) }) as RewriteFuture
     });
+    let floor_worker = floor.clone();
+    let worker = tokio::spawn(async move { floor_worker.run(h).await });
     yield_worker().await;
-    let (_, announce) = results.recv().await.unwrap();
-    assert!(!announce);
+    assert_eq!(results.recv().await.unwrap(), "update 1:update 1");
+    assert!(!rewrite_inputs.recv().await.unwrap());
     floor.enqueue(request(2)).await;
     floor.caller_spoke().await;
     floor.force_quiet_for_test().await;
     yield_worker().await;
-    let (_, announce) = results.recv().await.unwrap();
-    assert!(announce);
+    assert_eq!(results.recv().await.unwrap(), "update 2:update 2");
+    assert!(rewrite_inputs.recv().await.unwrap());
     worker.abort();
 }
 
@@ -358,14 +363,12 @@ async fn queued_work_waits_without_a_page_and_disconnect_holds_the_rest() {
     let release_floor = floor.clone();
     let release_connected = connected.clone();
     let (actual, mut actual_results) = mpsc::unbounded_channel();
-    h.release = Arc::new(move |request, text, announce| {
+    h.release = Arc::new(move |request, text| {
         let release_floor = release_floor.clone();
         let release_connected = release_connected.clone();
         let actual = actual.clone();
         Box::pin(async move {
-            actual
-                .send((format!("{text}:{}", request.message), announce))
-                .unwrap();
+            actual.send(format!("{text}:{}", request.message)).unwrap();
             if request.message == "update 1" {
                 release_connected.store(false, Ordering::SeqCst);
                 release_floor.set_page_connected(false).await;
@@ -380,12 +383,12 @@ async fn queued_work_waits_without_a_page_and_disconnect_holds_the_rest() {
     connected.store(true, Ordering::SeqCst);
     floor.set_page_connected(true).await;
     yield_worker().await;
-    assert_eq!(actual_results.recv().await.unwrap().0, "update 1:update 1");
+    assert_eq!(actual_results.recv().await.unwrap(), "update 1:update 1");
     yield_worker().await;
     assert!(actual_results.try_recv().is_err());
     connected.store(true, Ordering::SeqCst);
     floor.set_page_connected(true).await;
-    assert_eq!(actual_results.recv().await.unwrap().0, "update 2:update 2");
+    assert_eq!(actual_results.recv().await.unwrap(), "update 2:update 2");
     worker.abort();
 }
 
@@ -447,7 +450,7 @@ async fn rewrite_receives_conversation_project_quiet_and_message() {
             "update 1".to_owned()
         )
     );
-    assert_eq!(results.recv().await.unwrap().0, "spoken result:update 1");
+    assert_eq!(results.recv().await.unwrap(), "spoken result:update 1");
     worker.abort();
 }
 
@@ -479,7 +482,7 @@ async fn the_floor_traces_one_message_from_request_to_release_under_one_id() {
     let worker_floor = floor.clone();
     let worker = tokio::spawn(async move { worker_floor.run(h).await });
     assert_eq!(
-        results.recv().await.unwrap().0,
+        results.recv().await.unwrap(),
         "Grape says: update 1:update 1"
     );
     worker.abort();

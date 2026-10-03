@@ -462,13 +462,11 @@ pub(crate) fn spawn_floor_worker(state: AppState) {
                     })?
             }) as floor::RewriteFuture
         }),
-        release: Arc::new(
-            move |request: FloorRequest, rewritten: String, announce: bool| {
-                let state = release_state.clone();
-                Box::pin(async move { release_floor(&state, request, rewritten, announce).await })
-                    as floor::ReleaseFuture
-            },
-        ),
+        release: Arc::new(move |request: FloorRequest, rewritten: String| {
+            let state = release_state.clone();
+            Box::pin(async move { release_floor(&state, request, rewritten).await })
+                as floor::ReleaseFuture
+        }),
     };
     tokio::spawn(async move { floor.run(hooks).await });
 }
@@ -850,7 +848,6 @@ async fn release_floor(
     state: &AppState,
     request: FloorRequest,
     rewritten: String,
-    announce: bool,
 ) -> ReleaseOutcome {
     if !state.0.delivery.connected() {
         return ReleaseOutcome::Retry;
@@ -868,9 +865,9 @@ async fn release_floor(
     if text.is_empty() {
         text = request.message.clone();
     }
-    // The rewrite owns any natural conversational lead-in. On rewrite failure
-    // the floor supplied the minimal project-labelled fallback.
-    let _ = announce;
+    // The rewrite owns any natural conversational lead-in (it is told whether
+    // the line has been quiet); on rewrite failure the floor supplied the
+    // minimal project-labelled fallback. Release only speaks what it is given.
     let spoken = state.0.speaker.clip_for_speech(&text);
     if spoken.is_empty() {
         return ReleaseOutcome::Played;

@@ -77,7 +77,7 @@ pub(crate) struct FloorHooks {
     pub live: Arc<dyn Fn(&FloorRequest) -> bool + Send + Sync>,
     pub gate: Arc<dyn Fn(&FloorRequest) -> GateFuture + Send + Sync>,
     pub rewrite: Arc<dyn Fn(FloorRewriteInput) -> RewriteFuture + Send + Sync>,
-    pub release: Arc<dyn Fn(FloorRequest, String, bool) -> ReleaseFuture + Send + Sync>,
+    pub release: Arc<dyn Fn(FloorRequest, String) -> ReleaseFuture + Send + Sync>,
 }
 
 #[derive(Clone)]
@@ -184,7 +184,7 @@ impl Floor {
     /// owned by a live background session.
     pub(crate) async fn run(&self, hooks: FloorHooks) {
         loop {
-            let (entry, announce) = self.next_ready(&hooks).await;
+            let (entry, quiet) = self.next_ready(&hooks).await;
             if !(hooks.live)(&entry.request) {
                 self.trace_released(&entry.request, "dropped_agent_gone");
                 self.drop_front(&entry.request).await;
@@ -193,7 +193,7 @@ impl Floor {
             let input = FloorRewriteInput {
                 context: entry.request.context.clone(),
                 project: entry.request.project.clone(),
-                quiet: announce,
+                quiet,
                 message: entry.request.message.clone(),
                 reason: entry.request.reason.clone(),
                 held_display: entry.request.held_display,
@@ -216,7 +216,7 @@ impl Floor {
                 self.drop_front(&entry.request).await;
                 continue;
             }
-            let outcome = (hooks.release)(entry.request.clone(), rewritten, announce).await;
+            let outcome = (hooks.release)(entry.request.clone(), rewritten).await;
             match outcome {
                 ReleaseOutcome::Played | ReleaseOutcome::Drop => {
                     let how = match outcome {
@@ -236,9 +236,12 @@ impl Floor {
         }
     }
 
+    /// The next request that may be spoken, and whether the line has been
+    /// quiet for the threshold (the rewrite eases in with the project name
+    /// when it has).
     async fn next_ready(&self, hooks: &FloorHooks) -> (QueuedRequest, bool) {
         loop {
-            let (entry, wait_until, announce, blocked_by_page) = {
+            let (entry, wait_until, quiet, blocked_by_page) = {
                 let state = self.state.lock().await;
                 let Some(entry) = state.queue.front().cloned() else {
                     drop(state);
@@ -318,7 +321,7 @@ impl Floor {
                     }
                 }
             }
-            return (entry, announce);
+            return (entry, quiet);
         }
     }
 

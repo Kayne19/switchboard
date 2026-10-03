@@ -939,7 +939,6 @@ async fn stale_floor_request_is_dropped_before_audio_reservation() {
             held_display: false,
         },
         "stale update".into(),
-        false,
     )
     .await;
     assert_eq!(outcome, ReleaseOutcome::Drop);
