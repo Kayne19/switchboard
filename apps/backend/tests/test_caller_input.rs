@@ -132,10 +132,14 @@ fn clip_headers_carry_an_optional_capture_epoch() {
 
     assert_eq!(header(json!({"type":"clip", "id":""})), None);
     assert_eq!(
-        header(json!({"type":"clip", "id":"x".repeat(129)})),
+        header(json!({"type":"clip", "id":"x".repeat(MAX_CLIP_ID_CHARS + 1)})),
         None,
         "an oversized id is still refused"
     );
+    // One rule for every command that names a clip, counted in characters.
+    assert!(is_clip_id(&"é".repeat(MAX_CLIP_ID_CHARS)));
+    assert!(!is_clip_id(&"é".repeat(MAX_CLIP_ID_CHARS + 1)));
+    assert!(!is_clip_id(""));
     let long_mime = header(json!({"type":"clip", "id":"a", "mime":"m".repeat(400)}));
     assert_eq!(long_mime.unwrap().1.chars().count(), 100);
 }
