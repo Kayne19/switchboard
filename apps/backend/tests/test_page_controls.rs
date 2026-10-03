@@ -1,10 +1,10 @@
 use super::*;
 use crate::api::{
-    begin_alpha_candidate, catalog_of, clear_active_operation, debug_events, frames_until,
-    hold_turn_lock, queued_frames, request_json, scratch_root, state, state_on, state_with_agents,
-    types_of, until_debug, AppState,
+    begin_alpha_candidate, catalog_of, clear_active_operation, debug_events, hold_turn_lock,
+    request_json, scratch_root, state, state_on, state_with_agents, until_debug, AppState,
 };
 use crate::audio::{Speaker, SttAdapter, SttStreamAdapter};
+use crate::browser::{frames_until, queued_frames, types_of};
 use crate::caller_input::assert_dropped_with_notice;
 use crate::history::TranscriptLog;
 use crate::hosts::{FakeHostAgent, FakeLog, Step};

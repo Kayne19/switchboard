@@ -1,8 +1,9 @@
 use super::*;
 use crate::api::{
-    assert_lifecycle_consistent, begin_alpha_candidate, handle_text_frame, hold_turn_lock,
-    queued_frames, request_json, state, update_agent_state, AppState,
+    assert_lifecycle_consistent, begin_alpha_candidate, hold_turn_lock, request_json, state,
+    update_agent_state, AppState,
 };
+use crate::browser::{handle_text_frame, queued_frames};
 use crate::delivery::{DeliveryFrame, Event};
 use crate::pbx::{AgentStateNotice, OPERATOR};
 use crate::pi_client::AgentCall;

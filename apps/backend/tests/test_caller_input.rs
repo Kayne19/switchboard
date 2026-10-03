@@ -1,8 +1,8 @@
 use super::*;
 use crate::api::{
-    begin_alpha_candidate, frames_until, handle_text_frame, next_delivery, next_event_of, state,
-    state_with_stream, state_with_stt, types_of, AppState,
+    begin_alpha_candidate, next_event_of, state, state_with_stream, state_with_stt, AppState,
 };
+use crate::browser::{frames_until, handle_text_frame, next_delivery, types_of};
 use crate::delivery::{DeliveryConnection, Event};
 use crate::pi_client::{LegSession, PiSession};
 use crate::protocol::ServerMessage;

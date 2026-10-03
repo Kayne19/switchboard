@@ -1,7 +1,5 @@
-use crate::api::{
-    begin_alpha_candidate, frames_until, handle_text_frame, queued_frames, state, types_of,
-    AppState,
-};
+use crate::api::{begin_alpha_candidate, state, AppState};
+use crate::browser::{frames_until, handle_text_frame, queued_frames, types_of};
 use crate::module_calls::{agent_call_json, diagram_show, post_display_in_task};
 use crate::pbx::OPERATOR;
 use crate::pi_client::Activity;

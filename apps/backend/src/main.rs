@@ -1,5 +1,6 @@
 mod api;
 mod audio;
+mod browser;
 mod caller_input;
 mod debug;
 mod delivery;
