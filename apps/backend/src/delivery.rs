@@ -1,9 +1,10 @@
 //! Ordered browser delivery: the event envelope, per-connection framing, and
 //! the audio queue that orders synthesized speech ahead of the browser.
 //!
-//! `api.rs` is the only caller: it registers and retires connections, drives
-//! the audio queue around every speech/reply path, and matches `Event` to
-//! build the message the socket writer sends. Nothing here knows about routes,
+//! The application files are the only callers: `browser.rs` registers and
+//! retires connections and matches `Event` to build the message the socket
+//! writer sends, and `speech.rs` drives the audio queue around every
+//! speech/reply path. Nothing here knows about routes,
 //! generations, or the coordinator; a caller checks the generation before it
 //! reserves or finishes a slot.
 use axum::extract::ws::Message;

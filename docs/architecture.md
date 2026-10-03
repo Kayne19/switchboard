@@ -39,10 +39,14 @@ boundary or needs an explicit event/state transition.
 browser mic / page controls
           |
           v
-  WebSocket and HTTP adapters
+  WebSocket and HTTP adapters: api.rs (router, /healthz), browser.rs (/ws),
+  page_controls.rs (page HTTP controls), module_calls.rs (/host module calls)
           |
           v
-  api.rs: application coordination
+  application coordination: app_state.rs (shared state, workers, shutdown),
+  caller_input.rs (clips, streams, typed turns), turns.rs (routing, turn
+  dispatch), speech.rs (the speech worker and reply voice),
+  leg_announcer.rs (a new leg's announcement and scene reset)
           |
           +--> lifecycle.rs: the coordinator -- call identity, the current
           |       route and leg, phases, freshness, the status
@@ -156,23 +160,27 @@ responses, tool calls, and project work. It does not own:
 A future model-text-to-TTS stream belongs at the Pi event boundary, not as a
 special case hidden in browser code or PBX mutation.
 
-### 3. `api.rs` coordinates application behavior
+### 3. The application files coordinate application behavior
 
-`apps/backend/src/api.rs` is the application boundary for HTTP, WebSocket, turn dispatch,
-audio delivery, generation checks, and worker coordination. It may coordinate
-these concerns, but it must not become the owner of provider-specific speech
+The application boundary for HTTP, WebSocket, turn dispatch, audio delivery,
+generation checks, and worker coordination is a set of files in
+`apps/backend/src/`, one concern each: `api.rs` (the router), `app_state.rs`,
+`browser.rs`, `page_controls.rs`, `module_calls.rs`, `caller_input.rs`,
+`turns.rs`, `speech.rs`, and `leg_announcer.rs`. They may coordinate these
+concerns, but they must not become the owner of provider-specific speech
 protocols or Pi routing policy.
 
 Important application behavior must remain visible through named operations,
 events, or state transitions. Do not hide a route change, persistence action,
 or cancellation side effect inside an unrelated helper.
 
-Host-reported project turns are admitted here through the coordinator. A
+Host-reported project turns are admitted through the coordinator
+(`handle_project_turn` in `turns.rs`). A
 `turn_start` with `cause: autonomous` opens a server-owned operation with the
 host's `turn_id`; caller prompts wait behind it. A caller prompt's operation
 closes when the host reports its bound turn settled (`turn_end` with that
 `turn_id`), even if the prompt has not returned yet, so a run the host starts
-right behind it gets an operation of its own. Module calls must carry the
+right behind it gets an operation of its own. Module calls (`module_calls.rs`) must carry the
 same authority, and a stale or authority-less self-wake call is refused rather
 than attached to whichever caller operation won the race. An old host may omit
 these additive fields for ordinary caller turns, but its self-wake effects
@@ -227,8 +235,8 @@ reconnected, discarded, or replayed.
 The browser/server WebSocket protocol is the contract between
 `apps/frontend/src/protocol.ts` and the service. Each message the service
 sends the browser is a variant of `ServerMessage`, defined once in
-`apps/backend/src/protocol.rs` and once in `protocol.ts`, and `api.rs` builds
-every one through it. Both definitions are held to the same examples,
+`apps/backend/src/protocol.rs` and once in `protocol.ts`, and the service
+builds every one through it. Both definitions are held to the same examples,
 `apps/frontend/tests/fixtures/server-messages.json`: each example must
 serialize to itself in Rust and decode to itself in the browser, and a type
 with no example fails on both sides. The browser admits a text frame only as
@@ -392,7 +400,15 @@ removes the real coupling; do not create interfaces for ceremony.
 | Area | Owns | Must not own |
 |---|---|---|
 | `apps/backend/src/main.rs` | composition root; `Config`, the only reader of the environment | turn policy |
-| `api.rs` | HTTP/WebSocket coordination, turn dispatch, workers, generation checks | provider wire formats, PBX policy, the display projection, the audio queue |
+| `api.rs` | the primary router, `/healthz`, the debug listener's router, and the names `main.rs` starts the service with | anything a handler does |
+| `app_state.rs` | `AppState`/`AppInner` and their construction (the callbacks installed into the PBX and coordinator), the workers, shutdown, the event fan-out, the operation registry, the resident-agent projection | provider wire formats, PBX policy |
+| `browser.rs` | the `/ws` connection: registration, snapshot, the frame multiplexer, screen state, frame writes | what a command does once parsed |
+| `page_controls.rs` | `/status`, `/connect`, `/thinking`, `/model`, `/hangup`, and the rescue each control starts with | leg lifecycle (the PBX's), redial decisions (`RedialPlanner`'s) |
+| `module_calls.rs` | the `/host` upgrade and a project session's `speak`, `request_to_speak`, `display`, `view`, with the one admission every acting call passes | the host link itself (`hosts.rs`), the display projection |
+| `caller_input.rs` | clips, streamed clips, typed turns, transcription, and each clip's verdict, up to a logged transcript | routing that transcript |
+| `turns.rs` | routing a transcript through Jev without the PBX lock, the turn worker, host-reported turns | speech synthesis, PBX policy |
+| `speech.rs` | the one ordered speech worker, its continuity, audio slots, reply voice, and the floor release | the TTS provider's wire format, the audio queue itself |
+| `leg_announcer.rs` | announcing a new leg to the browser and its once-per-leg scene reset | which leg is current (the coordinator's) |
 | `floor.rs` | ordered background request queue, Jev good-moment holds, stateless rewrites, announce-first release | lifecycle membership, agent-state projection, route authority, TTS provider wire format |
 | `lifecycle.rs` | call identity, the current route and the leg on it, phases, candidate legs, operations, the status | async work or I/O |
 | `pbx.rs` | leg lifecycle: transfer, takeover, return, rescue, redial and its decision; the operator process and project sessions | host setup, browser rendering, TTS encoding, a copy of the route |
@@ -499,11 +515,11 @@ another callback or flag.
 
 Switchboard is not currently a perfect hexagonal implementation:
 
-- `apps/backend/src/api.rs` is still a thick application coordinator: HTTP and
-  WebSocket handling, turn dispatch, and the workers that drive `display.rs`
-  and `delivery.rs` through their own public methods. It no longer holds the
-  display projection or the audio queue directly -- those moved to
-  `display.rs` and `delivery.rs` (#60).
+- The application files share one `AppInner` and reach its fields
+  directly, so most of its fields are `pub(crate)`; the split into one file
+  per concern made that coupling visible rather than removing it. The
+  display projection and the audio queue are no longer held there directly
+  -- they moved to `display.rs` and `delivery.rs` (#60).
 - The display precedence rule is implemented twice, in `DisplayProjection`
   (`display.rs`, for `/view` and the snapshot) and in the browser's
   `sceneModel.ts`, on purpose: the server answers `/view` without asking the

@@ -110,7 +110,7 @@ promotion when the incoming agent first shows life, and by the route callback
 when the PBX settles after the intro turn — and only the first announcement
 resets the scene and sends the `epoch`. The second restates the status and
 leaves the new agent's first drawing, and its confirmation, alone. See
-`LegAnnouncer` in `apps/backend/src/api.rs`.
+`LegAnnouncer` in `apps/backend/src/leg_announcer.rs`.
 
 **`POST /display`'s result.** After publishing the action and stamping its
 `seq`, the handler waits up to ~2.5s (`DISPLAY_CONFIRM_DEADLINE_MS`) for that

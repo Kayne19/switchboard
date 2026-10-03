@@ -120,11 +120,13 @@ ID-bearing `stale_epoch` error, which the browser shows:
 
 In the first two rows the words were already logged and echoed as the caller's,
 so they stay in the conversation; only acting on them is refused.
-The tests in `apps/backend/tests/test_api.rs` that follow
+The tests in `apps/backend/tests/test_caller_input.rs` that follow
 `clip_accepted_before_a_page_rescue_is_dropped_after_transcription` drive each
-row, with a gated sidecar or a held session guard deciding the order. A startup
-that is rolled back does not move the generation, so a clip queued during it
-goes to the leg the caller never left.
+row, with a gated sidecar or a held session guard deciding the order; the
+two `speech_queued_while_a_page_control_starts_a_leg_*` tests in
+`apps/backend/tests/test_page_controls.rs` do the same for a leg a page
+control starts. A startup that is rolled back does not move the generation,
+so a clip queued during it goes to the leg the caller never left.
 
 Delivering the clip to the new leg was the alternative, and it was rejected.
 The epoch does not move when a candidate starts, so a clip recorded just before
@@ -152,7 +154,7 @@ with. The server used to take such a resend as the duplicate it was and say
 nothing, so the clip sat at "Transcribing" (#71).
 
 It now remembers the message that settled each recent clip (`ClipVerdicts` in
-`apps/backend/src/api.rs`, bounded like the accepted-clip window) and answers
+`apps/backend/src/caller_input.rs`, bounded like the accepted-clip window) and answers
 a resend of a settled clip with it, on the connection that sent it. A verdict
 is recorded before it is sent, so a resend that races it either finds it or is
 registered in time to receive it live. A clip still in the pipeline is
@@ -184,7 +186,7 @@ under it, and made the browser drop the audio of the new agent's first words
 unmount the conversation, so the caller watched conversation, idle page,
 conversation (issue #22).
 
-`LegAnnouncer` in `apps/backend/src/api.rs` owns both paths now. The scene is
+`LegAnnouncer` in `apps/backend/src/leg_announcer.rs` owns both paths now. The scene is
 reset once per leg, keyed by route and generation, by whichever announcement
 gets there first; the later one only restates the status. Route is part of the
 key because a return to the operator keeps the generation and must still clear
@@ -267,7 +269,7 @@ session stays up.
 They now decide first. `RedialPlanner` in `apps/backend/src/pbx.rs` makes every
 refusal from the leg the coordinator names (`project_leg`, read once) and the
 launch plan prewarm holds, so it needs no PBX lock and a wedged turn cannot hold
-it up. `run_redial_control` in `apps/backend/src/api.rs` runs that decision as a
+it up. `run_redial_control` in `apps/backend/src/page_controls.rs` runs that decision as a
 registered operation that leaves running work alone. A refusal is delivered at
 the generation the decision started on; nothing is cancelled and no epoch is
 sent. Only a plan that will go ahead is followed by a rescue and then
@@ -328,7 +330,7 @@ close it.
 
 `a_turn_resumed_after_an_external_abort_can_speak` and
 `a_caller_message_steers_a_turn_woken_as_the_caller_turn_settles` in
-`apps/backend/tests/test_api.rs` send the two frames back to back.
+`apps/backend/tests/test_turns.rs` send the two frames back to back.
 `a_self_woken_start_before_the_caller_turn_settles_stays_the_callers` checks
 that a start with no settle report before it stays with the caller's turn.
 
@@ -470,9 +472,10 @@ Speech admissions go through the one `process_speech` worker. Production starts 
 from `spawn_workers` before the HTTP listener accepts requests. Tests that call
 reply delivery or module calls directly must start that same worker through the
 shared test setup helper; otherwise a bounded speech-channel `reserve()` has no
-receiver and waits forever. In `apps/backend/tests/test_api.rs`, `state()` does
-not start the worker; `state_on`, `agent_call_json`, `request_json` and
-`module_call_json` do. Provider response bodies drain in tracked tasks, so
+receiver and waits forever. Of the shared test helpers, `state()`
+(`app_state.rs`) does not start the worker; `state_on` (`app_state.rs`),
+`agent_call_json` (`module_calls.rs`), `request_json` (`api.rs`) and
+`module_call_json` (`tests/test_module_calls.rs`) do. Provider response bodies drain in tracked tasks, so
 the next ordered request may use pending `previous_text`, while a request id is
 committed only after the body reaches EOF. Lifecycle resets reject late drain
 commits.

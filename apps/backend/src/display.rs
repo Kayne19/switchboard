@@ -2,11 +2,11 @@
 //!
 //! `DisplayProjection` folds the agent's `display` actions into the objects,
 //! order, focus, and speech a reconnecting browser replays; `DisplayGateState`
-//! is what `api.rs` holds the projection behind, alongside the confirmation
+//! is what `AppInner` holds the projection behind, alongside the confirmation
 //! channel (`ConfirmState`) and the leg a scene belongs to (`SceneLeg`). None
-//! of it is async or generation-aware on its own -- `api.rs` checks the
-//! coordinator's generation at the boundary and holds the gate's lock around
-//! each apply.
+//! of it is async or generation-aware on its own -- the application files
+//! check the coordinator's generation at the boundary and hold the gate's lock
+//! around each apply.
 use crate::delivery::Event;
 use serde_json::{json, Value};
 use std::collections::HashMap;

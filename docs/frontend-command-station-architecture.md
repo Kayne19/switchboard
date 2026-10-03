@@ -212,7 +212,7 @@ The running client architecture:
 - `apps/frontend/src/runtime/`: backend WebSocket, push-to-talk, playback, and hands-free wiring; audio levels feed the presence indicator through requestAnimationFrame without React state updates
 - `apps/frontend/src/protocol.ts`: the WebSocket protocol in both directions; `apps/backend/src/protocol.rs` is the service's half, both directions
 - `skills/switchboard/`: agent-facing `display` and `view` tools (the `switchboard` skill module)
-- `apps/backend/src/api.rs`: WebSocket state, page controls, and the handlers for the agent's module calls
+- `apps/backend/src/browser.rs`, `page_controls.rs`, `module_calls.rs`: the WebSocket, the page controls, and the handlers for the agent's module calls
 
 The compiled browser output in `static/` is committed. Do not introduce a UI
 framework, state library, shader stack, or fake instrumentation unless a real

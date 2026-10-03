@@ -3,7 +3,7 @@ import type { DebugConfig, JsonValue } from './protocol';
 
 // One sentence for every value the service emits. The lists are the Rust
 // `RouteRule::as_str` (router.rs) and the `pbx_branch` branches (pbx.rs,
-// api.rs); `debugExplain.test.ts` reads those sources and fails on a gap.
+// turns.rs); `debugExplain.test.ts` reads those sources and fails on a gap.
 export const RULES: Record<string, string> = {
   stop_confirms: 'Stopping a project always asks the caller to confirm, whatever the confidence.',
   stayed_with_current:

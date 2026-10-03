@@ -271,7 +271,7 @@ impl ServerMessage {
 /// Reading one is lenient, as the service has always been: a field that is
 /// missing or of the wrong kind is read as absent rather than refusing the
 /// frame, and a field no command declares is ignored. What an absent field
-/// means is up to the handler (`handle_text_frame` in `api.rs`), so every
+/// means is up to the handler (`handle_text_frame` in `browser.rs`), so every
 /// field here is optional except where a command has no other reading.
 #[derive(Debug, PartialEq, Deserialize)]
 #[cfg_attr(test, derive(Serialize))]
