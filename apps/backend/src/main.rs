@@ -23,6 +23,7 @@ mod protocol;
 mod redial;
 mod registry;
 mod reply;
+mod residents;
 mod router;
 mod speech;
 mod turns;
