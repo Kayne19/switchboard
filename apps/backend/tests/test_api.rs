@@ -1387,6 +1387,100 @@ async fn speak_reports_failure_and_does_not_log_transcript_when_delivery_fails()
     assert!(state.0.transcript_log.lock().await.entries().is_empty());
 }
 
+/// A module call with the host-turn fields a project session's call carries.
+async fn module_call_json(
+    state: &AppState,
+    call: &str,
+    token: &str,
+    cause: Option<&str>,
+    args: Value,
+) -> (StatusCode, Value) {
+    start_speech_worker_for_test(state);
+    let call = AgentCall {
+        call: call.to_owned(),
+        token: token.to_owned(),
+        turn_id: None,
+        cause: cause.map(str::to_owned),
+        args,
+    };
+    let response = agent_call(state, &call).await;
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+fn invalid_leg(detail: &str) -> (StatusCode, Value) {
+    (
+        StatusCode::CONFLICT,
+        json!({"delivered":false, "code":"invalid_leg", "detail":detail}),
+    )
+}
+
+const LEG_GONE: &str =
+    "this leg is no longer on the call: stop retrying, nothing you send reaches the caller";
+const SELF_WOKEN: &str = "no switchboard turn is running for this leg; this self-woken call has no delivery authority, so put the result in the written reply instead";
+
+// The skill prints these refusals to the agent word for word, so each
+// module call's refusal is pinned whole: the status, the code and the detail.
+#[tokio::test]
+async fn a_module_call_from_a_leg_off_the_call_is_refused_with_its_exact_words() {
+    let state = state();
+    state.0.coordinator.begin_rescue("operator rescue");
+    let view = json!({"target":"theater"});
+    for (call, args) in [
+        ("speak", json!({"text":"Hello."})),
+        ("display", diagram_show()),
+        ("view", view),
+    ] {
+        assert_eq!(
+            module_call_json(&state, call, "operator", None, args.clone()).await,
+            invalid_leg(LEG_GONE),
+            "{call} from a retired leg"
+        );
+        for cause in ["autonomous", "unknown"] {
+            assert_eq!(
+                module_call_json(&state, call, "operator", Some(cause), args.clone()).await,
+                invalid_leg(SELF_WOKEN),
+                "{call} self-woken ({cause}) with no turn"
+            );
+        }
+        assert_eq!(
+            module_call_json(&state, call, "operator", Some("caller"), args).await,
+            invalid_leg(LEG_GONE),
+            "{call} from a retired leg in a caller's turn"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_module_call_while_a_transfer_is_starting_is_refused_with_its_exact_words() {
+    let state = state();
+    begin_alpha_candidate(&state, "alpha-token");
+    for (call, args, detail) in [
+        (
+            "speak",
+            json!({"text":"Hello."}),
+            "the line is not live until this transfer completes: do not retry from this turn; the caller can see your written reply on screen",
+        ),
+        (
+            "display",
+            diagram_show(),
+            "the caller's screen is not live until this transfer completes: draw it again on your next turn",
+        ),
+        (
+            "view",
+            json!({"target":"theater"}),
+            "the caller's screen is not live until this transfer completes: switch view again on your next turn",
+        ),
+    ] {
+        assert_eq!(
+            module_call_json(&state, call, "operator", None, args).await,
+            invalid_leg(detail),
+            "{call} while alpha is starting"
+        );
+    }
+}
+
 #[tokio::test]
 async fn generation_mismatch_prevents_turn_spawn() {
     let state = state();
