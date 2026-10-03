@@ -1388,9 +1388,13 @@ async fn clear_active_operation(state: &AppState, id: TaskId) {
     state.0.active_operations.lock().await.remove(&id);
 }
 
+/// How many audio clips may wait for the browser at once. A reservation past
+/// it is refused, like one for a generation that has moved on.
+const AUDIO_SLOTS: usize = 64;
+
 async fn reserve_audio(state: &AppState, generation: u64) -> Option<u64> {
     let mut audio = state.0.audio.lock().await;
-    if generation != state.0.coordinator.generation() || audio.slots.len() >= 64 {
+    if generation != state.0.coordinator.generation() || audio.slots.len() >= AUDIO_SLOTS {
         return None;
     }
     Some(audio.reserve(generation))

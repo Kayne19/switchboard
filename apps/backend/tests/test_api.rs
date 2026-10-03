@@ -1481,6 +1481,67 @@ async fn a_module_call_while_a_transfer_is_starting_is_refused_with_its_exact_wo
     }
 }
 
+// An agent's speak does not wait for room in the speech worker's queue: a
+// full queue is answered at once as busy.
+#[tokio::test]
+async fn speak_is_refused_as_busy_when_the_speech_queue_is_full() {
+    // Every place in the queue is reserved and never sent, so the worker
+    // has nothing to drain and every place stays taken.
+    let state = state();
+    let (_connection, _snapshot, _watermark) = state.register_connection().await;
+    let _taken: Vec<_> = std::iter::from_fn(|| state.0.speech.try_reserve().ok()).collect();
+    let answer = timeout(
+        Duration::from_secs(1),
+        module_call_json(&state, "speak", "operator", None, json!({"text":"Hello."})),
+    )
+    .await
+    .expect("a full speech queue is answered, not waited on");
+    assert_eq!(
+        answer,
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"delivered":false, "reason":"speech worker is unavailable or busy", "detail":"speech worker is unavailable or busy"})
+        )
+    );
+}
+
+// A speak that finds no audio slot is answered as undelivered, the way it
+// was before the speech worker existed: there is no browser to play it to.
+#[tokio::test]
+async fn speak_with_no_audio_slot_is_answered_as_undelivered() {
+    let state = state();
+    let (_connection, _snapshot, _watermark) = state.register_connection().await;
+    let generation = state.0.coordinator.generation();
+    {
+        let mut audio = state.0.audio.lock().await;
+        while audio.slots.len() < AUDIO_SLOTS {
+            audio.reserve(generation);
+        }
+    }
+    assert_eq!(
+        module_call_json(&state, "speak", "operator", None, json!({"text":"Hello."})).await,
+        (
+            StatusCode::OK,
+            json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})
+        )
+    );
+}
+
+#[tokio::test]
+async fn speak_that_fails_to_synthesize_is_answered_with_the_workers_reason() {
+    // Every synthesis fails in-process (`Speaker::offline`).
+    let state = state();
+    let (_connection, _snapshot, _watermark) = state.register_connection().await;
+    let (code, body) =
+        module_call_json(&state, "speak", "operator", None, json!({"text":"Hello."})).await;
+    assert_eq!(code, StatusCode::BAD_GATEWAY);
+    assert_eq!(body["delivered"], false);
+    assert!(body["detail"]
+        .as_str()
+        .is_some_and(|detail| !detail.is_empty()));
+    assert_eq!(body["reason"], body["detail"]);
+}
+
 #[tokio::test]
 async fn generation_mismatch_prevents_turn_spawn() {
     let state = state();
