@@ -71,7 +71,11 @@ export interface ModelInfo {
 	reasoning: boolean;
 }
 
-/** One daemon `session_event`. `event.type` is the daemon's event type. */
+/**
+ * One daemon `session_event`, or the daemon's own `session_closed` message
+ * for a session it stopped running, delivered the same way with
+ * `event.type` `"session_closed"`. `event.type` is the daemon's event type.
+ */
 export interface DaemonEvent {
 	handle: string;
 	event: { type: string; [key: string]: unknown };
@@ -231,10 +235,19 @@ export class PrimeDaemonPort implements DaemonPort {
 			throw error;
 		}
 		client.onMessage((message) => {
-			if (message.type !== "session_event") return;
 			const handle = str(message.activeSessionId);
+			if (!handle) return;
+			// The daemon tells attached clients when it stops running a
+			// session (a kill by any client, or its own housekeeping) with a
+			// top-level message, not a session_event.
+			if (message.type === "session_closed") {
+				const event = { type: "session_closed", reason: str(message.reason) ?? "closed" };
+				for (const l of this.#eventListeners) l({ handle, event });
+				return;
+			}
+			if (message.type !== "session_event") return;
 			const event = message.event as DaemonEvent["event"] | undefined;
-			if (!handle || !event || typeof event.type !== "string") return;
+			if (!event || typeof event.type !== "string") return;
 			for (const l of this.#eventListeners) l({ handle, event });
 		});
 		client.onClose((error) => {

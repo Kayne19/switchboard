@@ -276,6 +276,23 @@ test("set_thinking reports the effective (clamped) level; set_model reads back t
 	assert.deepEqual(await manager.handle("set_model", { session: s, provider: "openai", model: "gpt-z" }), { model: "openai/gpt-z", thinking: "high" });
 });
 
+test("a session the daemon stops running is dropped now, not at the next resync", async () => {
+	const { daemon, manager, events } = setup();
+	const s = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
+	const other = String(((await manager.createSession("notes", CONFIG)) as Message).session);
+	// Another daemon client killed it: the daemon's own session_closed is
+	// all this host agent hears, and it is enough.
+	daemon.closeSession(s, "killed");
+	assert.deepEqual(manager.handles(), [other]);
+	assert.deepEqual(events.filter((e) => e.handle === s).at(-1)?.event, { kind: "session_closed", reason: "gone" });
+	assert.equal(manager.bySessionId("s1"), null);
+	await assert.rejects(manager.handle("prompt", { session: s, message: "hi" }), (e: Error & { code?: string }) => e.code === "not_found");
+	// Reopening it later is a fresh track, not a leftover.
+	daemon.saved.get("s1")!.cwd = "/srv/homelab";
+	const reopened = (await manager.handle("open_session", { session_id: "s1", cwd: "/srv/homelab", project: "homelab" })) as Message;
+	assert.notEqual(reopened.session, s);
+});
+
 test("compaction, errors and session_closed are forwarded as events", async () => {
 	const { daemon, manager, events } = setup();
 	const s = String(((await manager.createSession("homelab", CONFIG)) as Message).session);

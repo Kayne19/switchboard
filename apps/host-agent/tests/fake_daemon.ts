@@ -180,9 +180,19 @@ export class FakeDaemon implements DaemonPort {
 
 	async kill(handle: string): Promise<void> {
 		this.#record("kill", handle);
+		this.closeSession(handle, "killed");
+	}
+
+	/**
+	 * Like the daemon: a session it stops running is announced to every
+	 * attached client with a `session_closed` before the kill is answered,
+	 * whoever asked for it. Called directly, it is a kill by another client.
+	 */
+	closeSession(handle: string, reason: string): void {
 		const s = this.#session(handle);
 		this.live.delete(handle);
 		this.saved.set(s.sessionId, s);
+		this.emit(handle, { type: "session_closed", reason });
 	}
 
 	async detach(handle: string): Promise<void> {
