@@ -354,7 +354,17 @@ pub(crate) async fn handle_text_frame(
                 )
                 .await;
             };
-            let generation = generation.unwrap_or(0);
+            // A chunk header without a generation is refused like one without
+            // a usable id; the audio frame that follows it then arrives
+            // without a header and is answered as such.
+            let Some(generation) = generation else {
+                return send_message(
+                    state,
+                    epoch,
+                    ServerMessage::error_for(id, "Streaming chunk has no generation."),
+                )
+                .await;
+            };
             let sequence = sequence.unwrap_or(u64::MAX);
             *pending_stream_chunk = Some((id, generation, sequence));
             Ok(())

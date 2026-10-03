@@ -99,6 +99,81 @@ async fn streaming_clip_rejects_duplicate_chunks_and_repeats_end_cancel_safely()
     );
 }
 
+/// Every streaming command carries the call generation; #132 item 1. A start
+/// or chunk header without one is refused like one without a usable id, and
+/// an end or cancel without one is ignored like a stale clip. Before this,
+/// `stt_start` fell back to the current generation and the other three to
+/// zero, so a client that omitted it opened a stream whose every chunk was
+/// then out of order.
+#[tokio::test]
+async fn streaming_commands_require_the_generation() {
+    let state = state_with_stream(None, Some("true".into()));
+    let mut connection = state.0.delivery.register();
+    let epoch = connection.epoch;
+    let mut pending_header = None;
+    let mut pending_chunk = None;
+
+    handle_text_frame(
+        &state,
+        epoch,
+        &mut pending_header,
+        &mut pending_chunk,
+        r#"{"type":"stt_start","clip_id":"clip","mime":"audio/webm;codecs=opus"}"#,
+    )
+    .await
+    .unwrap();
+    let refused = next_delivery(&mut connection).await;
+    assert_eq!(refused["type"], "error");
+    assert_eq!(refused["id"], "clip");
+    assert!(state.0.clips.streams.lock().await.get("clip").is_none());
+
+    handle_text_frame(
+        &state,
+        epoch,
+        &mut pending_header,
+        &mut pending_chunk,
+        r#"{"type":"stt_chunk","clip_id":"clip","sequence":0}"#,
+    )
+    .await
+    .unwrap();
+    assert_eq!(next_delivery(&mut connection).await["type"], "error");
+    assert!(
+        pending_chunk.is_none(),
+        "no header is kept for the audio frame"
+    );
+
+    // An open clip is left exactly as it was by an end or cancel that names
+    // no generation.
+    handle_text_frame(
+        &state,
+        epoch,
+        &mut pending_header,
+        &mut pending_chunk,
+        r#"{"type":"stt_start","clip_id":"clip","generation":1,"mime":"audio/webm;codecs=opus"}"#,
+    )
+    .await
+    .unwrap();
+    assert_eq!(next_delivery(&mut connection).await["type"], "accepted");
+    for command in [
+        r#"{"type":"stt_end","clip_id":"clip"}"#,
+        r#"{"type":"stt_cancel","clip_id":"clip"}"#,
+    ] {
+        handle_text_frame(
+            &state,
+            epoch,
+            &mut pending_header,
+            &mut pending_chunk,
+            command,
+        )
+        .await
+        .unwrap();
+    }
+    assert!(matches!(
+        state.0.clips.streams.lock().await.get("clip"),
+        Some(StreamClipState::Open { generation: 1, .. })
+    ));
+}
+
 #[test]
 fn clip_headers_carry_an_optional_capture_epoch() {
     let header = |value: Value| match crate::protocol::ClientMessage::parse(&value.to_string()) {
