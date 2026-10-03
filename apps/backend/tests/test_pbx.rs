@@ -1,86 +1,8 @@
 use super::*;
-use crate::hosts::{FakeHostAgent, FakeLog, OnPrompt, Step};
+use crate::hosts::{FakeHostAgent, Step};
 use crate::router::{Action, ConversationMode};
 use serde_json::{json, Value};
 use std::sync::Mutex as StdMutex;
-
-/// The host every project in these tests runs on.
-const HOST: &str = "scriptorium";
-
-fn board_with(projects: Vec<Project>, model_swaps: bool) -> Switchboard {
-    let swaps = if model_swaps { "1" } else { "0" };
-    board_on(
-        projects,
-        &[("SWITCHBOARD_MODEL_SWAPS", swaps)],
-        two_model_catalog(),
-    )
-}
-
-/// A switchboard over a prewarm that has already settled, every host's
-/// catalog being `catalog`.
-fn board_on(
-    projects: Vec<Project>,
-    settings: &[(&str, &str)],
-    catalog: ModelCatalog,
-) -> Switchboard {
-    let config = crate::Config::for_tests(settings);
-    let registry = Registry::new(projects);
-    let prewarm = crate::prewarm::Prewarm::settled(&config, &registry, catalog);
-    let mut board = Switchboard::new(&config, registry, Arc::new(prewarm));
-    board.set_debug_bus(crate::debug::DebugBus::new());
-    board
-}
-
-/// Links `HOST` to `board` with a fake host agent that runs `on_prompt` for
-/// every prompt.
-fn serve(board: &Switchboard, on_prompt: OnPrompt) -> FakeLog {
-    FakeHostAgent::new(on_prompt).serve(board.hosts().connect_fake(HOST))
-}
-
-/// A turn that says `text` and settles.
-fn says(text: &str) -> Vec<Step> {
-    vec![Step::Event(json!({"kind": "text", "text": text}))]
-}
-
-/// A project on `HOST`.
-fn project(id: &str, description: &str) -> Project {
-    Project {
-        id: id.into(),
-        description: description.into(),
-        aliases: vec![],
-        host: Some(HOST.into()),
-        cwd: format!("/srv/{id}"),
-        model: Some("anthropic/current".into()),
-        prepare: String::new(),
-    }
-}
-
-/// The messages `log`'s host agent was prompted with, oldest first.
-fn prompts(log: &FakeLog) -> Vec<String> {
-    log.named("prompt")
-        .iter()
-        .map(|args| args["message"].as_str().unwrap().to_owned())
-        .collect()
-}
-
-/// Waits until `log`'s host agent was sent a `name` command.
-async fn until_named(log: &FakeLog, name: &str) -> Vec<Value> {
-    for _ in 0..500 {
-        let named = log.named(name);
-        if !named.is_empty() {
-            return named;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    panic!("the host agent was never sent {name}: {:?}", log.names());
-}
-
-#[cfg(unix)]
-fn scratch_dir(label: &str) -> std::path::PathBuf {
-    let root = std::env::temp_dir().join(format!("switchboard-{label}-{}", uuid_like()));
-    std::fs::create_dir_all(&root).unwrap();
-    root
-}
 
 /// An operator stand-in: its first prompt puts the caller through to alpha
 /// (with `intent` "inspect it"), later ones answer "Operator has you again.",
@@ -197,27 +119,6 @@ fi
     (path, calls)
 }
 
-/// Puts the call on `project` the way a transfer leaves it, without launching
-/// anything: a candidate on `spec` and `catalog`, adopted, its intro finished.
-fn put_on(board: &Switchboard, project: &str, spec: &str, catalog: ModelCatalog) {
-    board
-        .coordinator
-        .begin_candidate(
-            CandidateLeg::new(
-                project,
-                project,
-                "live-session",
-                "live-leg",
-                spec,
-                thinking_in_spec(spec),
-            )
-            .with_catalog(catalog),
-        )
-        .unwrap();
-    board.coordinator.adopt_candidate("live-leg").unwrap();
-    assert!(board.coordinator.finish_intro());
-}
-
 /// A model or thinking change as the switchboard makes one: decided without
 /// the PBX lock, then run if it goes ahead.
 async fn redialed(board: &mut Switchboard, decided: Redial) -> Reply {
@@ -227,28 +128,6 @@ async fn redialed(board: &mut Switchboard, decided: Redial) -> Reply {
             .redial(*plan)
             .await
             .expect("the leg the redial was planned for is still on the line"),
-    }
-}
-
-fn two_model_catalog() -> ModelCatalog {
-    ModelCatalog {
-        entries: ["current", "next"]
-            .into_iter()
-            .map(|model| crate::models::CatalogEntry {
-                provider: "anthropic".into(),
-                model: model.into(),
-                thinks: true,
-            })
-            .collect(),
-        available: true,
-        diagnostic: None,
-    }
-}
-
-fn transcript(text: &str) -> TransferContext {
-    TransferContext {
-        exact_caller_transcript: text.into(),
-        ..TransferContext::default()
     }
 }
 
@@ -265,17 +144,6 @@ fn read_lines(path: &std::path::Path) -> Vec<String> {
         .lines()
         .map(str::to_owned)
         .collect()
-}
-
-/// A switchboard with the caller on alpha, whose host agent runs `on_prompt`.
-async fn on_alpha(settings: &[(&str, &str)], on_prompt: OnPrompt) -> (Switchboard, FakeLog) {
-    let mut board = board_on(vec![project("alpha", "")], settings, two_model_catalog());
-    let log = serve(&board, on_prompt);
-    let reply = board
-        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
-        .await;
-    assert_eq!(reply.route, "alpha", "{reply:?}");
-    (board, log)
 }
 
 #[test]
@@ -4228,24 +4096,6 @@ async fn host_loss_closes_a_taken_over_session_without_killing_the_desk_process(
     assert!(!session.alive());
     session.close();
     assert!(!log.names().contains(&"kill".into()));
-}
-
-fn decision(
-    action: crate::router::Action,
-    target: Option<&str>,
-    mode: Option<crate::router::ConversationMode>,
-) -> Decision {
-    Decision {
-        action,
-        target: target.map(str::to_owned),
-        continue_or_fresh: mode,
-        confidence: 0.9,
-        for_current_agent: 0.1,
-        multi_target: false,
-        unsure: false,
-        confirm: false,
-        reason: "test".into(),
-    }
 }
 
 #[cfg(unix)]
