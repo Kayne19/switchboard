@@ -16,6 +16,7 @@ mod prewarm;
 mod protocol;
 mod registry;
 mod router;
+mod speech;
 mod visual_protocol;
 
 use std::collections::HashMap;

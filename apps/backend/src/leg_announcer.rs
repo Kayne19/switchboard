@@ -1,11 +1,12 @@
 //! Announces each new leg to the browser: candidate promotion, pi activity,
 //! and the route callback, with the once-per-leg scene reset they share.
-use crate::api::{AgentProjection, SpeechContinuity, SpeechGroup};
+use crate::api::AgentProjection;
 use crate::delivery::{DeliveryState, Event};
 use crate::display::{ConfirmState, DisplayGateState, SceneLeg};
 use crate::lifecycle::{ActivityDisposition, Coordinator};
 use crate::pi_client::Activity;
 use crate::protocol::ServerMessage;
+use crate::speech::{SpeechContinuity, SpeechGroup};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{broadcast, watch, Mutex};
