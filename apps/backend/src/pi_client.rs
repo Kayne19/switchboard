@@ -2003,8 +2003,6 @@ pub(crate) fn isolate_process(command: &mut Command) {
         command.process_group(0);
         #[cfg(target_os = "linux")]
         {
-            #[allow(unused_imports)]
-            use std::os::unix::process::CommandExt;
             unsafe {
                 command.pre_exec(|| {
                     libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
