@@ -83,7 +83,6 @@ trait TtsTransport: Send + Sync {
 /// exactly one of `previous_request_ids` and `previous_text`; the text kept
 /// alongside ids is only the deterministic fallback for an expired/rejected
 /// id request.
-#[allow(dead_code)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) enum TtsContinuity {
     #[default]
@@ -95,7 +94,6 @@ pub(crate) enum TtsContinuity {
     },
 }
 
-#[allow(dead_code)]
 impl TtsContinuity {
     pub(crate) fn previous_request_ids<I, S>(ids: I, fallback_text: Option<String>) -> Self
     where
