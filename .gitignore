@@ -12,6 +12,7 @@ target/
 .pi-workflow/
 .pi/
 .claude/worktrees/
+.scratch/
 
 # Playwright output.
 test-results/
