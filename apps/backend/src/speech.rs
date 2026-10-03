@@ -39,7 +39,6 @@ pub(crate) struct SpeechContinuity {
     pub(crate) last_sequence: Option<u64>,
 }
 
-#[allow(dead_code)]
 impl SpeechContinuity {
     pub(crate) fn clear(&mut self, generation: u64, model: &str) {
         self.last_request_id = None;
@@ -52,6 +51,7 @@ impl SpeechContinuity {
         self.last_sequence = None;
     }
 
+    #[cfg(test)]
     pub(crate) fn mark_pending(&mut self, generation: u64, model: &str, text: String) -> bool {
         self.mark_pending_ordered(generation, model, None, text)
     }
@@ -108,6 +108,7 @@ impl SpeechContinuity {
 
     /// Commit only a fully drained response from the lifecycle that admitted it.
     /// A newer pending clip is retained when an older drain completes later.
+    #[cfg(test)]
     pub(crate) fn commit(
         &mut self,
         generation: u64,
@@ -188,7 +189,6 @@ pub(crate) struct SpeechRequest {
     span: tracing::Span,
 }
 
-#[allow(dead_code)]
 impl AppInner {
     pub(crate) fn continuity_snapshot(&self) -> SpeechContinuity {
         self.continuity
@@ -235,6 +235,7 @@ impl AppInner {
             .clear(generation, model);
     }
 
+    #[cfg(test)]
     pub(crate) fn mark_continuity_pending(
         &self,
         generation: u64,
@@ -274,6 +275,7 @@ impl AppInner {
             .clear_pending_if_matching(generation, model, epoch, sequence, text)
     }
 
+    #[cfg(test)]
     pub(crate) fn commit_continuity(
         &self,
         generation: u64,
