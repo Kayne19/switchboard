@@ -47,6 +47,55 @@ assert.deepEqual(
 	"every server message type has an example in server-messages.json",
 );
 
+// The shared examples of every browser-to-server command, which the Rust
+// reader is held to as well (apps/backend/tests/test_protocol.rs). Each one
+// must be exactly what its builder sends, and every command has a builder
+// and an example. The screen-state report's fields are held to its examples
+// by type as well, in tests/unit/clientMessages.test.ts.
+const withMediaSource = (mse, build) => {
+	const previous = globalThis.MediaSource;
+	globalThis.MediaSource = { isTypeSupported: (mime) => mse && mime === "audio/mpeg" };
+	try {
+		return build();
+	} finally {
+		if (previous === undefined) delete globalThis.MediaSource;
+		else globalThis.MediaSource = previous;
+	}
+};
+const CLIENT_BUILDERS = {
+	hello: (m) => withMediaSource(m.capabilities.mse_mp3, helloMessage),
+	ping: (m) => pingMessage(m.nonce, m.time),
+	clip: (m) => clipHeader({ id: m.id, mime: m.mime, epoch: m.generation }),
+	typed_turn: (m) =>
+		typedTurnMessage({ id: m.id, epoch: m.generation, text: m.text }),
+	stt_start: (m) =>
+		sttStartHeader({ id: m.clip_id, mime: m.mime, epoch: m.generation }),
+	stt_chunk: (m) =>
+		sttChunkHeader({ id: m.clip_id, epoch: m.generation }, m.sequence),
+	stt_end: (m) => sttEndHeader({ id: m.clip_id, epoch: m.generation }),
+	stt_cancel: (m) => sttCancelHeader({ id: m.clip_id, epoch: m.generation }),
+	screen_state: ({ type: _type, ...report }) => screenStateMessage(report),
+};
+const clientFixture = JSON.parse(
+	readFileSync("apps/frontend/tests/fixtures/client-messages.json", "utf8"),
+);
+const clientExemplified = new Set();
+for (const { name, message } of clientFixture.messages) {
+	const build = CLIENT_BUILDERS[message.type];
+	assert.ok(build, `example ${name} is a command with a builder`);
+	assert.deepEqual(
+		JSON.parse(build(message)),
+		message,
+		`example ${name} is what its builder sends`,
+	);
+	clientExemplified.add(message.type);
+}
+assert.deepEqual(
+	Object.keys(CLIENT_BUILDERS).filter((type) => !clientExemplified.has(type)),
+	[],
+	"every command has an example in client-messages.json",
+);
+
 // A frame is admitted only as a whole message of the protocol.
 for (const [frame, why] of [
 	["not json", "not JSON"],

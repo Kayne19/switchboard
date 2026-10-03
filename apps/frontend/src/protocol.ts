@@ -10,7 +10,10 @@
 //
 // Browser to server: the builders further down, one per command. The
 // service's half is `ClientMessage` in `apps/backend/src/protocol.rs`, which
-// `handle_text_frame` matches on.
+// `handle_text_frame` matches on. Both halves are held to the examples in
+// `tests/fixtures/client-messages.json`: each one must be exactly what its
+// builder sends here and read back to itself there, and a command without an
+// example fails on both sides.
 
 import type { ScreenStateReport } from "./controller/types";
 

@@ -27,13 +27,14 @@ fn example(name: &str) -> Value {
         .unwrap_or_else(|| panic!("the fixture has no example named {name}"))
 }
 
-/// Every `type` a `ServerMessage` can be sent as, as serde itself knows them.
+/// Every `type` a message of the enum `M` can have, as serde itself knows
+/// them.
 ///
 /// Asked to read a tag it does not know, serde reports the whole list of
 /// variants through `serde::de::Error::unknown_variant`. This error type keeps
 /// that list rather than formatting it into a message, so the list cannot fall
 /// behind the enum.
-fn message_types() -> &'static [&'static str] {
+fn message_types<M: Deserialize<'static> + std::fmt::Debug>() -> &'static [&'static str] {
     #[derive(Debug)]
     struct Variants(&'static [&'static str]);
     impl std::fmt::Display for Variants {
@@ -54,7 +55,7 @@ fn message_types() -> &'static [&'static str] {
         "type",
         "not a message type",
     )));
-    match ServerMessage::deserialize(probe) {
+    match M::deserialize(probe) {
         Err(Variants(expected)) => expected,
         Ok(message) => panic!("an unknown type decoded as {message:?}"),
     }
@@ -75,7 +76,7 @@ fn every_example_serializes_back_to_itself() {
 
 #[test]
 fn every_message_type_has_an_example() {
-    let known: BTreeSet<&str> = message_types().iter().copied().collect();
+    let known: BTreeSet<&str> = message_types::<ServerMessage>().iter().copied().collect();
     assert!(known.contains("epoch") && known.contains("screen_state_ack"));
     let examples = examples();
     let exemplified: BTreeSet<&str> = examples
@@ -297,5 +298,74 @@ fn a_command_of_a_known_type_always_reads() {
             clip_id: Some("b".into()),
             generation: None
         })
+    );
+}
+
+/// The examples of the browser's commands, as `(name, message)`. The browser
+/// builds each with its builder in `protocol.ts` and must get exactly the
+/// example (`apps/frontend/tests/test_protocol.mjs`).
+fn client_examples() -> Vec<(String, Value)> {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../frontend/tests/fixtures/client-messages.json"
+    ))
+    .expect("client-messages.json is JSON");
+    fixture["messages"]
+        .as_array()
+        .expect("the fixture holds a `messages` array")
+        .iter()
+        .map(|example| {
+            let name = example["name"].as_str().expect("every example is named");
+            (name.to_owned(), example["message"].clone())
+        })
+        .collect()
+}
+
+/// `value` without its null fields, at any depth. A command's fields are
+/// read leniently, so a null one reads as absent, the same as a missing one.
+fn without_nulls(value: Value) -> Value {
+    match value {
+        Value::Object(fields) => Value::Object(
+            fields
+                .into_iter()
+                .filter(|(_, field)| !field.is_null())
+                .map(|(name, field)| (name, without_nulls(field)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.into_iter().map(without_nulls).collect()),
+        other => other,
+    }
+}
+
+/// Each example reads as a command, and writing that command back gives the
+/// example: every field the browser sends is one the service reads, under
+/// that name and as that kind. A field read as anything else (renamed, or of
+/// the wrong kind) reads as absent and is missing from what is written back.
+#[test]
+fn every_client_example_reads_back_to_itself() {
+    for (name, example) in client_examples() {
+        let command = ClientMessage::parse(&example.to_string())
+            .unwrap_or_else(|unreadable| panic!("example {name} is unreadable: {unreadable:?}"));
+        let written = serde_json::to_value(&command).expect("a command serializes");
+        assert_eq!(
+            without_nulls(written),
+            without_nulls(example),
+            "example {name} does not read back to itself as {command:?}"
+        );
+    }
+}
+
+#[test]
+fn every_client_message_type_has_an_example() {
+    let known: BTreeSet<&str> = message_types::<ClientMessage>().iter().copied().collect();
+    assert!(known.contains("hello") && known.contains("screen_state"));
+    let examples = client_examples();
+    let exemplified: BTreeSet<&str> = examples
+        .iter()
+        .filter_map(|(_, message)| message["type"].as_str())
+        .collect();
+    let missing: Vec<&str> = known.difference(&exemplified).copied().collect();
+    assert!(
+        missing.is_empty(),
+        "these command types have no example in client-messages.json: {missing:?}"
     );
 }

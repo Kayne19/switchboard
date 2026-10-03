@@ -8,7 +8,11 @@
 //! variant without an example fails on both sides.
 //!
 //! `ClientMessage` is every command the page sends. Its browser half is the
-//! builders in `protocol.ts`, one per command.
+//! builders in `protocol.ts`, one per command. Both halves are held to the
+//! examples in `apps/frontend/tests/fixtures/client-messages.json`: each one
+//! must be exactly what its builder sends there, and read back to itself
+//! here (null fields aside, which read as absent), so a field one side
+//! renames fails on both sides; a variant without an example fails here.
 use crate::history::TranscriptEntry;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -272,17 +276,9 @@ pub enum ClientMessage {
     /// The first frame on a socket: the protocol version, and which optional
     /// transports the page can use.
     Hello {
-        #[serde(
-            default,
-            deserialize_with = "lenient",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, deserialize_with = "lenient")]
         version: Option<u64>,
-        #[serde(
-            default,
-            deserialize_with = "lenient_object",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, deserialize_with = "lenient_object")]
         capabilities: Option<Capabilities>,
     },
     /// The page's heartbeat. `nonce` and `time` are echoed in the `pong` as
@@ -296,117 +292,53 @@ pub enum ClientMessage {
     /// The header of a whole clip; its audio is the next binary frame.
     /// `generation` is the epoch the page held when recording started.
     Clip {
-        #[serde(
-            default,
-            deserialize_with = "lenient",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, deserialize_with = "lenient")]
         id: Option<String>,
-        #[serde(
-            default,
-            deserialize_with = "lenient",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, deserialize_with = "lenient")]
         mime: Option<String>,
-        #[serde(
-            default,
-            deserialize_with = "lenient",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, deserialize_with = "lenient")]
         generation: Option<u64>,
     },
     /// A turn the caller typed, stamped with the epoch the page held.
     TypedTurn {
-        #[serde(
-            default,
-            deserialize_with = "lenient",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, deserialize_with = "lenient")]
         id: Option<String>,
-        #[serde(
-            default,
-            deserialize_with = "lenient",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, deserialize_with = "lenient")]
         generation: Option<u64>,
-        #[serde(
-            default,
-            deserialize_with = "lenient",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, deserialize_with = "lenient")]
         text: Option<String>,
     },
     /// Opens (or resumes) a streaming clip.
     SttStart {
-        #[serde(
-            default,
-            deserialize_with = "lenient",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, deserialize_with = "lenient")]
         clip_id: Option<String>,
-        #[serde(
-            default,
-            deserialize_with = "lenient",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, deserialize_with = "lenient")]
         generation: Option<u64>,
-        #[serde(
-            default,
-            deserialize_with = "lenient",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, deserialize_with = "lenient")]
         mime: Option<String>,
     },
     /// The header of a streaming clip's chunk; its audio is the next binary
     /// frame.
     SttChunk {
-        #[serde(
-            default,
-            deserialize_with = "lenient",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, deserialize_with = "lenient")]
         clip_id: Option<String>,
-        #[serde(
-            default,
-            deserialize_with = "lenient",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, deserialize_with = "lenient")]
         generation: Option<u64>,
-        #[serde(
-            default,
-            deserialize_with = "lenient",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, deserialize_with = "lenient")]
         sequence: Option<u64>,
     },
     /// A streaming clip has no more audio.
     SttEnd {
-        #[serde(
-            default,
-            deserialize_with = "lenient",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, deserialize_with = "lenient")]
         clip_id: Option<String>,
-        #[serde(
-            default,
-            deserialize_with = "lenient",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, deserialize_with = "lenient")]
         generation: Option<u64>,
     },
     /// A streaming clip was abandoned by the page.
     SttCancel {
-        #[serde(
-            default,
-            deserialize_with = "lenient",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, deserialize_with = "lenient")]
         clip_id: Option<String>,
-        #[serde(
-            default,
-            deserialize_with = "lenient",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, deserialize_with = "lenient")]
         generation: Option<u64>,
     },
     /// What the page is showing, and which display actions it applied.
@@ -417,25 +349,13 @@ pub enum ClientMessage {
 #[derive(Debug, PartialEq, Deserialize)]
 #[cfg_attr(test, derive(Serialize))]
 pub struct Capabilities {
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, deserialize_with = "lenient")]
     pub stt_streaming: Option<bool>,
     /// The page can play synthesized speech as it streams in.
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, deserialize_with = "lenient")]
     pub audio_streaming: Option<bool>,
     /// The page can play `audio/mpeg` through Media Source Extensions.
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, deserialize_with = "lenient")]
     pub mse_mp3: Option<bool>,
 }
 
@@ -443,66 +363,28 @@ pub struct Capabilities {
 #[derive(Debug, PartialEq, Deserialize)]
 #[cfg_attr(test, derive(Serialize))]
 pub struct ScreenState {
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, deserialize_with = "lenient")]
     pub view: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, deserialize_with = "lenient")]
     pub pinned: Option<bool>,
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, deserialize_with = "lenient")]
     pub has_visual: Option<bool>,
-    /// Sent as null when nothing is on the stage, so it is written as null
-    /// rather than left out.
     #[serde(default, deserialize_with = "lenient")]
     pub visual_kind: Option<String>,
     /// The ids of the objects on the stage, kept as the page sent them.
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, deserialize_with = "lenient")]
     pub object_ids: Option<Vec<Value>>,
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, deserialize_with = "lenient")]
     pub title: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, deserialize_with = "lenient")]
     pub stale: Option<bool>,
     /// The epoch the report was made under.
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, deserialize_with = "lenient")]
     pub generation: Option<u64>,
     /// The newest display `seq` the page has applied.
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, deserialize_with = "lenient")]
     pub applied_seq: Option<u64>,
-    #[serde(
-        default,
-        deserialize_with = "lenient_object",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, deserialize_with = "lenient_object")]
     pub rejected: Option<Rejection>,
 }
 
@@ -512,11 +394,7 @@ pub struct ScreenState {
 #[cfg_attr(test, derive(Serialize))]
 pub struct Rejection {
     pub seq: u64,
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, deserialize_with = "lenient")]
     pub reason: Option<String>,
 }
 
