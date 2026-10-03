@@ -593,6 +593,14 @@ async fn view(
         requested = %req.target.chars().take(64).collect::<String>(),
         "an agent asked about the caller's view"
     );
+    let target = req.target.trim().to_ascii_lowercase();
+    // A background agent may ask what the caller sees, not change it: its
+    // displays are held until the caller brings it forward, and the screen
+    // belongs to whoever the caller is with.
+    if !target.is_empty() && state.0.coordinator.is_background(token) {
+        tracing::info!("not changed: caller is away from background agent");
+        return Json(json!({"delivered":false,"reason":"caller_away","detail":"the caller is with another session, so their screen is not yours to change; it follows your display when they bring you forward. view() with no target still reports what they see."})).into_response();
+    }
     let authority = match admit_module_call(
         &state,
         token,
@@ -606,7 +614,6 @@ async fn view(
         Err(refusal) => return refusal.into_response(),
     };
     let permit_generation = authority.generation;
-    let target = req.target.trim().to_ascii_lowercase();
 
     let gate = state.0.display_gate.lock().await;
     if let Err(refusal) = authority.recheck_at_the_screen(&state) {

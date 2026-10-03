@@ -422,6 +422,10 @@ A request that is not JSON gets `refused`, `bad_request`.
 |---|---|---|
 | `speak` | relayed | `refused`, `caller_away` |
 | `request_to_speak` | `refused`, `caller_listening` | relayed |
-| `display`, `view` | relayed | relayed |
+| `display` | relayed | held until the caller brings the agent forward |
+| `view` (no target) | relayed | relayed |
+| `view` (target) | relayed | `refused`, `caller_away` |
 
-`active` currently delivers like `foreground`.
+`active` currently delivers like `foreground`. A background agent may ask
+what the caller sees, not change it: the screen belongs to whoever the caller
+is with, and its own displays wait for the promotion (#135).

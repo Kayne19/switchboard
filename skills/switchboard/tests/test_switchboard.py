@@ -275,6 +275,12 @@ class CallsTest(ModuleTestCase):
         self.assertIn("nothing was played", away)
         self.assertIn("request_to_speak", away)
 
+        # A view target from the background is a screen change, not speech:
+        # the line says whose screen it is, not what to do with words (#135).
+        _, screen = self.run_call(switchboard.view, "theater")
+        self.assertIn("isn't yours to change", screen)
+        self.assertNotIn("request_to_speak", screen)
+
     def test_display_rejection_carries_the_service_reason(self):
         self.host(reply=lambda request: {"status": "refused", "reason": "metric value must be a string"})
         result, line = self.run_call(switchboard.display, op="show", id="m", type="metric", data={"label": "L", "value": 3})

@@ -956,6 +956,42 @@ async fn a_module_call_carrying_a_retired_token_is_refused() {
 }
 
 #[tokio::test]
+async fn background_view_reports_but_does_not_change_the_screen() {
+    let state = state();
+    let (mut connection, _, _) = state.register_connection().await;
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "background-token");
+
+    // The caller's screen is not a background agent's to steer; #135.
+    let (code, refused) = agent_call_json(
+        &state,
+        "/view",
+        json!({"token":"background-token", "target":"theater"}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(refused["delivered"], false);
+    assert_eq!(refused["reason"], "caller_away");
+    assert!(refused["detail"]
+        .as_str()
+        .unwrap()
+        .contains("not yours to change"));
+    assert!(
+        connection.receiver.try_recv().is_err(),
+        "no view message reached the page"
+    );
+
+    // Asking what the caller sees still works from the background.
+    let (code, reported) =
+        agent_call_json(&state, "/view", json!({"token":"background-token"})).await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(reported["delivered"], true);
+    assert!(reported["screen"].is_object());
+}
+
+#[tokio::test]
 async fn background_speak_is_refused_and_latest_display_is_released_on_promotion() {
     let state = state();
     let (mut connection, _, _) = state.register_connection().await;
