@@ -841,7 +841,7 @@ impl Hosts {
                 for subscriber in state.subscribers.values() {
                     let _ = subscriber.send(SessionFrame::Event {
                         seq,
-                        event: json!({"kind": "session_closed", "reason": "host link closed"}),
+                        event: json!({"kind": "session_closed", "reason": "host_link_closed"}),
                     });
                 }
             }
