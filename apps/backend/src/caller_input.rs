@@ -463,6 +463,98 @@ pub(crate) async fn start_stream_clip(
     open_worker_stream(state, epoch, id, generation, mime).await
 }
 
+/// `stt_end`: the page has sent the clip's last chunk. The clip is marked
+/// ended for this connection and generation and the worker stream is told to
+/// finish; a worker that cannot answers `abandoned` with its reason. Anything
+/// else (an unknown, cancelled, finished or other connection's clip) is
+/// ignored, as a stale clip is.
+pub(crate) async fn end_stream_clip(
+    state: &AppState,
+    epoch: u64,
+    clip_id: Option<String>,
+    generation: Option<u64>,
+) -> Result<(), ()> {
+    let Some(id) = clip_id.as_deref() else {
+        return Ok(());
+    };
+    let generation = generation.unwrap_or(0);
+    let valid = {
+        let mut clips = state.0.stream_clips.lock().await;
+        match clips.get(id).copied() {
+            Some(StreamClipState::Open {
+                generation: current,
+                connection,
+                ..
+            }) if current == generation && connection == epoch => {
+                clips.insert(
+                    id.to_owned(),
+                    StreamClipState::Ended {
+                        generation,
+                        connection,
+                    },
+                );
+                true
+            }
+            Some(StreamClipState::Ended { .. })
+            | Some(StreamClipState::Cancelled)
+            | Some(StreamClipState::Abandoned)
+            | Some(StreamClipState::Finalized) => false,
+            _ => false,
+        }
+    };
+    if valid {
+        if let Err(reason) = state.0.stt_stream.try_end(id.to_owned(), generation) {
+            state
+                .0
+                .stream_clips
+                .lock()
+                .await
+                .insert(id.to_owned(), StreamClipState::Abandoned);
+            return send_message(
+                state,
+                epoch,
+                ServerMessage::Abandoned {
+                    id: id.to_owned(),
+                    reason: reason.into(),
+                },
+            )
+            .await;
+        }
+    }
+    Ok(())
+}
+
+/// `stt_cancel`: the page gave up on the clip. An open or ended clip is marked
+/// cancelled and its worker stream told so; a clip already past that point is
+/// left alone.
+pub(crate) async fn cancel_stream_clip(
+    state: &AppState,
+    clip_id: Option<String>,
+    generation: Option<u64>,
+) -> Result<(), ()> {
+    let Some(id) = clip_id.as_deref() else {
+        return Ok(());
+    };
+    let generation = generation.unwrap_or(0);
+    let should_cancel = {
+        let mut clips = state.0.stream_clips.lock().await;
+        match clips.get(id).copied() {
+            Some(StreamClipState::Cancelled)
+            | Some(StreamClipState::Finalized)
+            | Some(StreamClipState::Abandoned)
+            | None => false,
+            Some(_) => {
+                clips.insert(id.to_owned(), StreamClipState::Cancelled);
+                true
+            }
+        }
+    };
+    if should_cancel {
+        let _ = state.0.stt_stream.try_cancel(id.to_owned(), generation);
+    }
+    Ok(())
+}
+
 async fn accept_stream_clip(state: &AppState, epoch: u64, id: &str) -> Result<(), ()> {
     send_message(
         state,

@@ -4,8 +4,8 @@
 //! writes.
 use crate::app_state::AppState;
 use crate::caller_input::{
-    handle_audio_frame, parse_clip_header, parse_typed_turn, route_final_transcript,
-    start_stream_clip, ClipHeader, StreamChunkHeader, StreamClipState,
+    cancel_stream_clip, end_stream_clip, handle_audio_frame, parse_clip_header, parse_typed_turn,
+    route_final_transcript, start_stream_clip, ClipHeader, StreamChunkHeader,
 };
 use crate::delivery::{DeliveryConnection, DeliveryFrame, Event};
 use crate::display::{is_display_event, stamp_display_seq};
@@ -368,82 +368,11 @@ pub(crate) async fn handle_text_frame(
         ClientMessage::SttEnd {
             clip_id,
             generation,
-        } => {
-            let Some(id) = clip_id.as_deref() else {
-                return Ok(());
-            };
-            let generation = generation.unwrap_or(0);
-            let valid = {
-                let mut clips = state.0.stream_clips.lock().await;
-                match clips.get(id).copied() {
-                    Some(StreamClipState::Open {
-                        generation: current,
-                        connection,
-                        ..
-                    }) if current == generation && connection == epoch => {
-                        clips.insert(
-                            id.to_owned(),
-                            StreamClipState::Ended {
-                                generation,
-                                connection,
-                            },
-                        );
-                        true
-                    }
-                    Some(StreamClipState::Ended { .. })
-                    | Some(StreamClipState::Cancelled)
-                    | Some(StreamClipState::Abandoned)
-                    | Some(StreamClipState::Finalized) => false,
-                    _ => false,
-                }
-            };
-            if valid {
-                if let Err(reason) = state.0.stt_stream.try_end(id.to_owned(), generation) {
-                    state
-                        .0
-                        .stream_clips
-                        .lock()
-                        .await
-                        .insert(id.to_owned(), StreamClipState::Abandoned);
-                    return send_message(
-                        state,
-                        epoch,
-                        ServerMessage::Abandoned {
-                            id: id.to_owned(),
-                            reason: reason.into(),
-                        },
-                    )
-                    .await;
-                }
-            }
-            Ok(())
-        }
+        } => end_stream_clip(state, epoch, clip_id, generation).await,
         ClientMessage::SttCancel {
             clip_id,
             generation,
-        } => {
-            let Some(id) = clip_id.as_deref() else {
-                return Ok(());
-            };
-            let generation = generation.unwrap_or(0);
-            let should_cancel = {
-                let mut clips = state.0.stream_clips.lock().await;
-                match clips.get(id).copied() {
-                    Some(StreamClipState::Cancelled)
-                    | Some(StreamClipState::Finalized)
-                    | Some(StreamClipState::Abandoned)
-                    | None => false,
-                    Some(_) => {
-                        clips.insert(id.to_owned(), StreamClipState::Cancelled);
-                        true
-                    }
-                }
-            };
-            if should_cancel {
-                let _ = state.0.stt_stream.try_cancel(id.to_owned(), generation);
-            }
-            Ok(())
-        }
+        } => cancel_stream_clip(state, clip_id, generation).await,
         ClientMessage::ScreenState(report) => apply_screen_state(state, epoch, report).await,
         ClientMessage::Ping { nonce, time } => {
             send_message(state, epoch, ServerMessage::Pong { nonce, time }).await
