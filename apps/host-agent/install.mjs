@@ -94,7 +94,6 @@ function layout(home = os.homedir(), tmpdir = os.tmpdir()) {
 		skillDir: path.join(home, ".prime", "agent", "skills", "switchboard"),
 		unitDir: path.join(home, ".config", "systemd", "user"),
 		stateDir: path.join(home, ".local", "state", "switchboard", "host-agent"),
-		skillSocket: path.join(home, ".cache", "switchboard", "host-agent.sock"),
 		daemonSocket: path.join(tmpdir, `prime-agent-${uid}`, "daemon.sock"),
 	};
 }
@@ -343,7 +342,6 @@ function install(argv) {
 		prime_agent_package: primePackage,
 		daemon_socket: L.daemonSocket,
 		state_dir: L.stateDir,
-		skill_socket: L.skillSocket,
 	};
 	writeIfChanged(L.configFile, `${JSON.stringify(config, null, 2)}\n`, 0o600);
 
