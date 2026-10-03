@@ -3228,6 +3228,99 @@ async fn release_floor(
     }
 }
 
+/// What a module call from a leg that is no longer on the call is told. The
+/// skill prints a refusal to the agent word for word.
+const LEG_OFF_THE_CALL: &str =
+    "this leg is no longer on the call: stop retrying, nothing you send reaches the caller";
+/// What a self-woken module call with no host turn behind it is told.
+const SELF_WOKEN_WITHOUT_AUTHORITY: &str = "no switchboard turn is running for this leg; this self-woken call has no delivery authority, so put the result in the written reply instead";
+
+/// A module call's refusal: the leg it names may not act on the call. It is
+/// answered as a 409 `invalid_leg`, with these words as its detail.
+struct LegRefusal(&'static str);
+
+impl IntoResponse for LegRefusal {
+    fn into_response(self) -> Response {
+        (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({"delivered":false, "code":"invalid_leg", "detail":self.0})),
+        )
+            .into_response()
+    }
+}
+
+/// A module call admitted to act on the call: its leg was on the line, and
+/// a self-woken call carried the host turn it belongs to, at `generation`.
+/// Only `admit_module_call` makes one.
+struct ModuleAuthority<'a> {
+    token: &'a str,
+    turn_id: Option<&'a str>,
+    cause: Option<&'a str>,
+    generation: u64,
+}
+
+impl ModuleAuthority<'_> {
+    /// Checks the authority again under the display gate, the screen's side
+    /// effect boundary: a rescue or adoption that landed while the call
+    /// waited for the gate retires it.
+    fn recheck_at_the_screen(&self, state: &AppState) -> Result<(), LegRefusal> {
+        let coordinator = &state.0.coordinator;
+        if coordinator.generation() == self.generation
+            && coordinator
+                .accept_side_effect(self.token, self.turn_id, self.cause)
+                .is_ok()
+        {
+            return Ok(());
+        }
+        tracing::info!(
+            generation = self.generation,
+            "refused: the leg changed while it waited for the screen"
+        );
+        Err(LegRefusal(LEG_OFF_THE_CALL))
+    }
+}
+
+/// Admits a module call to act on the call (`docs/architecture.md`, rule 3),
+/// for every call that acts: a call from the candidate leg promotes it
+/// first, then the coordinator decides whether the leg on the line, and the
+/// host turn a self-woken call names, may act now. A refusal is the
+/// `LegRefusal` the skill shows the agent; only the transfer-in-progress
+/// wording is the call's own (`while_starting`), because what the agent
+/// should do next differs per call. What a background session's call does
+/// stays with each handler: speak refuses it, display holds it, view admits
+/// it here like any other.
+async fn admit_module_call<'a>(
+    state: &AppState,
+    token: &'a str,
+    turn_id: Option<&'a str>,
+    cause: Option<&'a str>,
+    while_starting: &'static str,
+) -> Result<ModuleAuthority<'a>, LegRefusal> {
+    promote_candidate_for_token(state, token).await;
+    if let Err(error) = state
+        .0
+        .coordinator
+        .accept_side_effect(token, turn_id, cause)
+    {
+        tracing::info!(reason = %error, "refused: the leg is not live on the call");
+        let self_woken = cause.is_some_and(|cause| cause == "autonomous" || cause == "unknown");
+        let detail = match error {
+            crate::lifecycle::LifecycleError::CandidateSideEffect => while_starting,
+            crate::lifecycle::LifecycleError::StaleLeg if self_woken => {
+                SELF_WOKEN_WITHOUT_AUTHORITY
+            }
+            _ => LEG_OFF_THE_CALL,
+        };
+        return Err(LegRefusal(detail));
+    }
+    Ok(ModuleAuthority {
+        token,
+        turn_id,
+        cause,
+        generation: state.0.coordinator.generation(),
+    })
+}
+
 /// A project session's `speak`: its words, and the call token it carried.
 struct Speak {
     text: String,
@@ -3252,35 +3345,16 @@ async fn speak(state: AppState, req: Speak) -> Response {
         tracing::info!("not spoken: caller is away from background agent");
         return Json(json!({"delivered":false,"reason":"caller_away","detail":"the caller is listening to another session; use request_to_speak with the actual words they should hear. While in the background, displays are held until the caller brings you forward; never say a display is on screen."})).into_response();
     }
-    promote_candidate_for_token(&state, &req.token).await;
-    if let Err(error) = state.0.coordinator.accept_side_effect(
+    if let Err(refusal) = admit_module_call(
+        &state,
         &req.token,
         req.turn_id.as_deref(),
         req.cause.as_deref(),
-    ) {
-        tracing::info!(reason = %error, "refused: the leg is not live on the call");
-        let (code, detail) = match error {
-            crate::lifecycle::LifecycleError::CandidateSideEffect => (
-                axum::http::StatusCode::CONFLICT,
-                "the line is not live until this transfer completes: do not retry from this turn; the caller can see your written reply on screen",
-            ),
-            crate::lifecycle::LifecycleError::StaleLeg
-                if req.cause.as_deref().is_some_and(|cause| {
-                    cause == "autonomous" || cause == "unknown"
-                }) => (
-                axum::http::StatusCode::CONFLICT,
-                "no switchboard turn is running for this leg; this self-woken call has no delivery authority, so put the result in the written reply instead",
-            ),
-            _ => (
-                axum::http::StatusCode::CONFLICT,
-                "this leg is no longer on the call: stop retrying, nothing you send reaches the caller",
-            ),
-        };
-        return (
-            code,
-            Json(json!({"delivered":false, "code":"invalid_leg", "detail":detail})),
-        )
-            .into_response();
+        "the line is not live until this transfer completes: do not retry from this turn; the caller can see your written reply on screen",
+    )
+    .await
+    {
+        return refusal.into_response();
     }
     if !state.0.delivery.connected() {
         tracing::info!("not spoken: no browser is connected");
@@ -3565,52 +3639,23 @@ async fn display(
         }))
         .into_response();
     }
-    promote_candidate_for_token(&state, token).await;
-    if let Err(error) = state
-        .0
-        .coordinator
-        .accept_side_effect(token, turn_id, cause)
+    let authority = match admit_module_call(
+        &state,
+        token,
+        turn_id,
+        cause,
+        "the caller's screen is not live until this transfer completes: draw it again on your next turn",
+    )
+    .await
     {
-        tracing::info!(reason = %error, "refused: the leg is not live on the call");
-        let detail = match error {
-            crate::lifecycle::LifecycleError::CandidateSideEffect => {
-                "the caller's screen is not live until this transfer completes: draw it again on your next turn"
-            }
-            crate::lifecycle::LifecycleError::StaleLeg
-                if cause.is_some_and(|cause| cause == "autonomous" || cause == "unknown") => {
-                "no switchboard turn is running for this leg; this self-woken call has no delivery authority, so put the result in the written reply instead"
-            }
-            _ => "this leg is no longer on the call: stop retrying, nothing you send reaches the caller",
-        };
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({"delivered":false, "code":"invalid_leg", "detail":detail})),
-        )
-            .into_response();
-    }
-    let permit_generation = state.0.coordinator.generation();
+        Ok(authority) => authority,
+        Err(refusal) => return refusal.into_response(),
+    };
+    let permit_generation = authority.generation;
 
     let mut gate = state.0.display_gate.lock().await;
-    if state.0.coordinator.generation() != permit_generation
-        || state
-            .0
-            .coordinator
-            .accept_side_effect(token, turn_id, cause)
-            .is_err()
-    {
-        tracing::info!(
-            generation = permit_generation,
-            "refused: the leg changed while it waited for the screen"
-        );
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({
-                "delivered": false,
-                "code": "invalid_leg",
-                "detail": "this leg is no longer on the call: stop retrying, nothing you send reaches the caller"
-            })),
-        )
-            .into_response();
+    if let Err(refusal) = authority.recheck_at_the_screen(&state) {
+        return refusal.into_response();
     }
 
     let value = ServerMessage::Display {
@@ -3737,53 +3782,24 @@ async fn view(
         requested = %req.target.chars().take(64).collect::<String>(),
         "an agent asked about the caller's view"
     );
-    promote_candidate_for_token(&state, token).await;
-    if let Err(error) = state
-        .0
-        .coordinator
-        .accept_side_effect(token, turn_id, cause)
+    let authority = match admit_module_call(
+        &state,
+        token,
+        turn_id,
+        cause,
+        "the caller's screen is not live until this transfer completes: switch view again on your next turn",
+    )
+    .await
     {
-        tracing::info!(reason = %error, "refused: the leg is not live on the call");
-        let detail = match error {
-            crate::lifecycle::LifecycleError::CandidateSideEffect => {
-                "the caller's screen is not live until this transfer completes: switch view again on your next turn"
-            }
-            crate::lifecycle::LifecycleError::StaleLeg
-                if cause.is_some_and(|cause| cause == "autonomous" || cause == "unknown") => {
-                "no switchboard turn is running for this leg; this self-woken call has no delivery authority, so put the result in the written reply instead"
-            }
-            _ => "this leg is no longer on the call: stop retrying, nothing you send reaches the caller",
-        };
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({"delivered":false, "code":"invalid_leg", "detail":detail})),
-        )
-            .into_response();
-    }
-    let permit_generation = state.0.coordinator.generation();
+        Ok(authority) => authority,
+        Err(refusal) => return refusal.into_response(),
+    };
+    let permit_generation = authority.generation;
     let target = req.target.trim().to_ascii_lowercase();
 
     let gate = state.0.display_gate.lock().await;
-    if state.0.coordinator.generation() != permit_generation
-        || state
-            .0
-            .coordinator
-            .accept_side_effect(token, turn_id, cause)
-            .is_err()
-    {
-        tracing::info!(
-            generation = permit_generation,
-            "refused: the leg changed while it waited for the screen"
-        );
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({
-                "delivered": false,
-                "code": "invalid_leg",
-                "detail": "this leg is no longer on the call: stop retrying, nothing you send reaches the caller"
-            })),
-        )
-            .into_response();
+    if let Err(refusal) = authority.recheck_at_the_screen(&state) {
+        return refusal.into_response();
     }
 
     if target.is_empty() {
