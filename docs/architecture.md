@@ -236,13 +236,17 @@ variant of `ClientMessage` in `protocol.rs`, built by one builder in
 `protocol.ts`, and `handle_text_frame` reads every text frame as one and
 matches on it. Both are held to
 `apps/frontend/tests/fixtures/client-messages.json`: each example must be
-exactly what its builder sends and read back to itself in Rust, and a
-command with no example fails. The service reads a command's fields
-leniently, as it always has: a field missing or of the wrong kind is absent,
-and the handler decides what absent means; the fixture, not the reader, is
-what catches a field one side renamed. A frame that is not JSON, not an
-object, or of no known type is answered with an `error` and the socket stays
-open.
+exactly what its builder sends (in the browser) and read back to itself (in
+Rust), and a command with no example fails. The Rust round trip is what
+catches a renamed or wrong-kind field, in every command. The browser check
+catches a rename only in a field a builder maps by name, and checks no
+kinds; the `screen_state` builder passes the report through, so that command
+is held to `ScreenStateReport` by type instead. The service reads a
+command's fields leniently, as it always has: a field missing or of the
+wrong kind is absent, and the handler decides what absent means; so the
+fixture, not the reader, is what catches a field one side renamed. A frame
+that is not JSON, not an object, or of no known type is answered with an
+`error` and the socket stays open.
 
 Changes to message types, framing, MIME rules, sequence numbers, generations,
 or environment variables are public contract changes. A new or changed

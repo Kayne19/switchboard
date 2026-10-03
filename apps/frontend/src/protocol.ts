@@ -12,8 +12,13 @@
 // service's half is `ClientMessage` in `apps/backend/src/protocol.rs`, which
 // `handle_text_frame` matches on. Both halves are held to the examples in
 // `tests/fixtures/client-messages.json`: each one must be exactly what its
-// builder sends here and read back to itself there, and a command without an
-// example fails on both sides.
+// builder sends here and read back to itself there. The round trip there is
+// what catches a renamed or wrong-kind field, in every command. The check
+// here catches a rename only in a field a builder maps by name, and checks
+// no kinds; `screenStateMessage` passes its report through, so `screen_state`
+// is held to `ScreenStateReport` by type instead. A command without an
+// example fails there, and a builder in the node test's table without one
+// fails here.
 
 import type { ScreenStateReport } from "./controller/types";
 

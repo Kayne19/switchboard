@@ -11,8 +11,12 @@
 //! builders in `protocol.ts`, one per command. Both halves are held to the
 //! examples in `apps/frontend/tests/fixtures/client-messages.json`: each one
 //! must be exactly what its builder sends there, and read back to itself
-//! here (null fields aside, which read as absent), so a field one side
-//! renames fails on both sides; a variant without an example fails here.
+//! here (null fields aside, which read as absent). The round trip here is
+//! what catches a renamed or wrong-kind field, in every command. The check
+//! there catches a rename only in a field its builder maps by name; the
+//! `screen_state` builder passes the report through, so that command is held
+//! to `ScreenStateReport` by type instead. A variant without an example
+//! fails here.
 use crate::history::TranscriptEntry;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
