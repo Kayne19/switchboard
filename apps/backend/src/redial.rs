@@ -62,14 +62,30 @@ impl RedialPlan {
 /// for the pickers: one set of checks for both.
 #[derive(Clone)]
 pub struct RedialPlanner {
-    pub(crate) coordinator: Coordinator,
-    pub(crate) registry: Arc<Registry>,
-    pub(crate) prewarm: Arc<Prewarm>,
-    pub(crate) agent_model: Option<String>,
-    pub(crate) model_swaps: bool,
+    coordinator: Coordinator,
+    registry: Arc<Registry>,
+    prewarm: Arc<Prewarm>,
+    agent_model: Option<String>,
+    model_swaps: bool,
 }
 
 impl RedialPlanner {
+    pub(crate) fn new(
+        coordinator: Coordinator,
+        registry: Arc<Registry>,
+        prewarm: Arc<Prewarm>,
+        agent_model: Option<String>,
+        model_swaps: bool,
+    ) -> Self {
+        Self {
+            coordinator,
+            registry,
+            prewarm,
+            agent_model,
+            model_swaps,
+        }
+    }
+
     /// The model a leg asks for when the caller named none: the project's
     /// own, else the deployment default.
     fn default_model<'a>(&'a self, project: &'a Project) -> &'a str {
