@@ -9,7 +9,32 @@ use crate::pi_client::{local_argv, PiSession, PiSessionError};
 use crate::reply::Reply;
 use crate::router::{utility_decision, Decision, UtilityDecision};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use tokio::time::Duration;
+
+/// What the switchboard launches the operator and the routing utility with:
+/// the `pi` binary, the model, the operator's system prompt file, the
+/// extension, and the environment the processes inherit. Read from `Config`
+/// once; only this module uses it.
+pub(crate) struct OperatorLaunch {
+    pi_binary: String,
+    model: Option<String>,
+    system_prompt: String,
+    extension: Option<String>,
+    env: HashMap<String, String>,
+}
+
+impl OperatorLaunch {
+    pub(crate) fn from_config(config: &crate::Config) -> Self {
+        Self {
+            pi_binary: config.pi_binary.clone(),
+            model: config.operator_model.clone(),
+            system_prompt: config.operator_prompt.to_string_lossy().into_owned(),
+            extension: config.operator_extension.clone(),
+            env: config.environment.clone(),
+        }
+    }
+}
 
 impl Switchboard {
     /// The call as Jev saw it for the utterance about to be handled. The
@@ -38,11 +63,11 @@ impl Switchboard {
         if self.operator.is_none() {
             let appended = self.operator_prompt_suffix();
             let argv = local_argv(
-                &self.pi_binary,
-                self.operator_model.as_deref(),
-                Some(std::path::Path::new(&self.operator_system_prompt)).filter(|p| p.exists()),
+                &self.launch.pi_binary,
+                self.launch.model.as_deref(),
+                Some(std::path::Path::new(&self.launch.system_prompt)).filter(|p| p.exists()),
                 Some(&appended),
-                self.operator_extension.as_deref(),
+                self.launch.extension.as_deref(),
                 &["--no-builtin-tools".into(), "--no-session".into()],
             )?;
             let session = PiSession::start(
@@ -50,7 +75,7 @@ impl Switchboard {
                 OPERATOR,
                 OPERATOR,
                 None,
-                Some(self.env.clone()),
+                Some(self.launch.env.clone()),
                 Duration::from_secs(180),
                 self.activity_callback.clone(),
             )
@@ -80,11 +105,11 @@ impl Switchboard {
             // catalog lives in the system prompt once.
             let utility_prompt = self.utility_system_prompt();
             let argv = local_argv(
-                &self.pi_binary,
-                self.operator_model.as_deref(),
+                &self.launch.pi_binary,
+                self.launch.model.as_deref(),
                 None,
                 Some(&utility_prompt),
-                self.operator_extension.as_deref(),
+                self.launch.extension.as_deref(),
                 &[
                     "--no-builtin-tools".into(),
                     "--no-session".into(),
@@ -96,7 +121,7 @@ impl Switchboard {
                 "routing utility",
                 "utility",
                 None,
-                Some(self.env.clone()),
+                Some(self.launch.env.clone()),
                 Duration::from_secs(180),
                 None,
             )
