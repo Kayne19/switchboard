@@ -400,9 +400,9 @@ removes the real coupling; do not create interfaces for ceremony.
 | Area | Owns | Must not own |
 |---|---|---|
 | `apps/backend/src/main.rs` | composition root; `Config`, the only reader of the environment | turn policy |
-| `api.rs` | the primary router, `/healthz`, the debug listener's router, and the names `main.rs` starts the service with | anything a handler does |
+| `api.rs` | the primary router, `/healthz`, and the debug listener's router | anything a handler does |
 | `app_state.rs` | `AppState`/`AppInner` and their construction (the callbacks installed into the PBX and coordinator), the workers, shutdown, the event fan-out, the operation registry, the resident-agent projection | provider wire formats, PBX policy |
-| `browser.rs` | the `/ws` connection: registration, snapshot, the frame multiplexer, screen state, frame writes | what a command does once parsed |
+| `browser.rs` | the `/ws` connection and its size bound: registration, snapshot, the frame multiplexer, screen state, frame writes | what a command does once parsed |
 | `page_controls.rs` | `/status`, `/connect`, `/thinking`, `/model`, `/hangup`, and the rescue each control starts with | leg lifecycle (the PBX's), redial decisions (`RedialPlanner`'s) |
 | `module_calls.rs` | the `/host` upgrade and a project session's `speak`, `request_to_speak`, `display`, `view`, with the one admission every acting call passes | the host link itself (`hosts.rs`), the display projection |
 | `caller_input.rs` | clips, streamed clips, typed turns, transcription, and each clip's verdict, up to a logged transcript | routing that transcript |

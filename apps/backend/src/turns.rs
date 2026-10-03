@@ -1,9 +1,9 @@
 //! Turn dispatch: routing a caller's transcript through Jev without the PBX
 //! lock, the turn worker that steers or prompts the leg and settles its
 //! operation, and the turns a project host reports on its own.
-use crate::api::AppState;
 #[cfg(test)]
 use crate::app_state::state_with_agents_and_jev;
+use crate::app_state::AppState;
 use crate::app_state::{
     clear_active_operation, emit_message, spawn_registered_operation, update_agent_state_if_current,
 };

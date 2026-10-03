@@ -2,7 +2,7 @@
 //! connection, the snapshot it starts with, the frames it reads (the
 //! command multiplexer and the screen state it reports), and the frames it
 //! writes.
-use crate::api::{AppState, MAX_WEBSOCKET_MESSAGE_BYTES};
+use crate::app_state::AppState;
 use crate::caller_input::{
     handle_audio_frame, parse_clip_header, parse_typed_turn, route_final_transcript,
     start_stream_clip, ClipHeader, StreamChunkHeader, StreamClipState,
@@ -52,6 +52,8 @@ impl AppState {
         }
     }
 }
+
+pub(crate) const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
 pub(crate) async fn ws(
     State(state): State<AppState>,

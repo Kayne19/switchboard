@@ -1,5 +1,6 @@
-//! The HTTP surface: the primary listener's router, `/healthz`, the debug
-//! listener's router, and the names `main.rs` starts the service with.
+//! The HTTP surface: the primary listener's router, `/healthz`, and the
+//! debug listener's router.
+use crate::app_state::AppState;
 use crate::browser::ws;
 use crate::module_calls::host_link;
 use crate::page_controls::{connect, current_status, hangup, model, status, thinking};
@@ -21,10 +22,6 @@ use serde_json::Value;
 #[cfg(test)]
 use tower::ServiceExt;
 use tower_http::services::ServeDir;
-
-pub(crate) use crate::app_state::{shutdown, spawn_workers, AppState};
-
-pub(crate) const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
 impl AppState {
     pub fn router(self, static_dir: Option<ServeDir>) -> Router {

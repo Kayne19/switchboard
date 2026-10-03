@@ -1,5 +1,5 @@
 use super::*;
-use crate::api::AppState;
+use crate::app_state::AppState;
 use crate::app_state::{
     begin_alpha_candidate, next_event_of, state, state_with_stream, state_with_stt,
 };

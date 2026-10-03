@@ -1,8 +1,9 @@
 //! A project session's module calls over the host link: the `/host`
 //! upgrade, the admission every acting call passes, and `speak`,
 //! `request_to_speak`, `display` and `view`.
-use crate::api::{AppState, MAX_WEBSOCKET_MESSAGE_BYTES};
 use crate::app_state::emit_message;
+use crate::app_state::AppState;
+use crate::browser::MAX_WEBSOCKET_MESSAGE_BYTES;
 use crate::delivery::Event;
 use crate::display::DISPLAY_CONFIRM_DEADLINE_MS;
 use crate::floor::FloorRequest;

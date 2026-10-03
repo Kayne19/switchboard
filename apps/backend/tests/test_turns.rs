@@ -1,5 +1,5 @@
 use super::*;
-use crate::api::AppState;
+use crate::app_state::AppState;
 use crate::app_state::{
     assert_lifecycle_consistent, debug_events, next_event_of, scratch_root, state, state_on,
     state_with_agents, state_with_agents_options, until_debug,

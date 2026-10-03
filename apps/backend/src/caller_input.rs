@@ -1,8 +1,8 @@
 //! What the caller says, from the browser's frame to a logged transcript:
 //! complete clips and the clip worker's transcription, streamed clips and
 //! their results, typed turns, and the verdict each clip is settled with.
-use crate::api::AppState;
 use crate::app_state::emit_message;
+use crate::app_state::AppState;
 use crate::audio::StreamResult;
 use crate::browser::send_message;
 use crate::history::CALLER;

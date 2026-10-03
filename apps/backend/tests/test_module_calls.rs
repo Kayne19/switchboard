@@ -1,5 +1,6 @@
 use super::*;
-use crate::api::{request_json, AppState};
+use crate::api::request_json;
+use crate::app_state::AppState;
 use crate::app_state::{
     assert_lifecycle_consistent, begin_alpha_candidate, hold_turn_lock, state, update_agent_state,
 };
