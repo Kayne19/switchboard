@@ -1,14 +1,15 @@
 use super::*;
 use crate::api::{
-    assert_lifecycle_consistent, debug_events, diagram_show, frames_until, module_call,
-    next_event_of, request_to_speak, scratch_root, state, state_on, state_with_agents,
-    state_with_agents_and_jev, state_with_agents_options, types_of, until_debug, AppState,
+    assert_lifecycle_consistent, debug_events, frames_until, next_event_of, scratch_root, state,
+    state_on, state_with_agents, state_with_agents_and_jev, state_with_agents_options, types_of,
+    until_debug, AppState,
 };
 use crate::audio::{Speaker, TestTtsGate};
 use crate::caller_input::assert_dropped_with_notice;
 use crate::delivery::Event;
 use crate::hosts::{FakeHostAgent, Step};
 use crate::jev::fake_jev_client;
+use crate::module_calls::{diagram_show, module_call, request_to_speak};
 use crate::pbx::{Switchboard, OPERATOR};
 use crate::pi_client::{AgentCall, LegSession, PiSession, ProjectTurn};
 use crate::registry::Registry;

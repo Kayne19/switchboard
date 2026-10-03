@@ -1,7 +1,8 @@
 use crate::api::{
-    agent_call_json, begin_alpha_candidate, diagram_show, frames_until, handle_text_frame,
-    post_display_in_task, queued_frames, state, types_of, AppState,
+    begin_alpha_candidate, frames_until, handle_text_frame, queued_frames, state, types_of,
+    AppState,
 };
+use crate::module_calls::{agent_call_json, diagram_show, post_display_in_task};
 use crate::pbx::OPERATOR;
 use crate::pi_client::Activity;
 use axum::http::StatusCode;

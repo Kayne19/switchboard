@@ -1,8 +1,7 @@
 use super::*;
 use crate::api::{
-    agent_call_json, assert_lifecycle_consistent, cancel_active_operations, debug_events,
-    frame_json, frames_until, request_to_speak, spawn_workers, state, state_on, until_debug,
-    AppState,
+    assert_lifecycle_consistent, cancel_active_operations, debug_events, frame_json, frames_until,
+    spawn_workers, state, state_on, until_debug, AppState,
 };
 use crate::audio::{Speaker, SttAdapter, SttStreamAdapter, TestTtsGate, TtsContinuity};
 use crate::caller_input::route_final_transcript;
@@ -11,6 +10,7 @@ use crate::floor::{FloorRequest, ReleaseOutcome};
 use crate::history::TranscriptLog;
 use crate::hosts::{FakeHostAgent, Step};
 use crate::jev::fake_jev_client;
+use crate::module_calls::{agent_call_json, request_to_speak};
 use crate::pbx::{Switchboard, OPERATOR};
 use crate::registry::{Project, Registry};
 use axum::http::StatusCode;

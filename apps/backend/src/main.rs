@@ -11,6 +11,7 @@ mod jev;
 mod leg_announcer;
 mod lifecycle;
 mod models;
+mod module_calls;
 mod pbx;
 mod pi_client;
 mod prewarm;
