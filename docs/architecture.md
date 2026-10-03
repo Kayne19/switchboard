@@ -124,9 +124,11 @@ file and never appears in logs or errors.
 ### 1. Switchboard owns the call lifecycle
 
 The switchboard and the coordinator (`lifecycle.rs`) own the call. The
-switchboard is the `Switchboard` in `apps/backend/src/pbx.rs`; its methods sit
-with their concern in `leg_transitions.rs`, `redial.rs`, `residents.rs`,
-`decisions.rs` and `operator.rs`, all one owner of the same state.
+switchboard is the `Switchboard` in `apps/backend/src/pbx.rs`, which holds
+the struct, its construction and callbacks; its methods sit with their concern
+in `decisions.rs`, `leg_transitions.rs`, `operator.rs`, `prompts.rs`,
+`redial.rs`, `reply.rs`, `residents.rs` and `routing_view.rs` (every
+`impl Switchboard` block outside `pbx.rs`), all one owner of the same state.
 The coordinator owns which leg is on the line (route, project, model, session,
 thinking, catalog) and builds the status from it alone; the PBX owns the
 processes and changes the leg only through the coordinator's named transitions
