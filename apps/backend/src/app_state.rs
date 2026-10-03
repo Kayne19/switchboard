@@ -16,14 +16,12 @@ use crate::hosts::{FakeHostAgent, FakeLog, Step};
 #[cfg(test)]
 use crate::jev::fake_jev_client;
 use crate::leg_announcer::LegAnnouncer;
-use crate::lifecycle::{Coordinator, OperationIdentity};
+use crate::lifecycle::Coordinator;
 use crate::module_calls::module_call;
 use crate::page_controls::interrupt_active_turn;
 #[cfg(test)]
 use crate::pbx::OPERATOR;
-use crate::pbx::{
-    AgentStateCallback, AgentStateNotice, RedialPlanner, RouteCallback, RoutingView, Switchboard,
-};
+use crate::pbx::{AgentStateCallback, AgentStateNotice, RedialPlanner, RouteCallback, Switchboard};
 use crate::pi_client::{
     Activity, ActivityCallback, AgentCall, LegSession, ModuleCallback, ProjectTurn, TurnCallback,
 };
@@ -35,7 +33,7 @@ use crate::speech::start_speech_worker_for_test;
 use crate::speech::{
     ensure_speech_worker, spawn_floor_worker, SpeechContinuity, SpeechGroup, SpeechQueue,
 };
-use crate::turns::{handle_project_turn, process_turns, RoutedDecision};
+use crate::turns::{handle_project_turn, process_turns, TurnState};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::future::Future;
@@ -43,7 +41,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 #[cfg(test)]
 use tokio::sync::oneshot;
-use tokio::sync::{broadcast, mpsc, watch, Mutex};
+use tokio::sync::{broadcast, watch, Mutex};
 use tokio::task::{AbortHandle, Id as TaskId, JoinHandle};
 #[cfg(test)]
 use tokio::time::{timeout, Duration};
@@ -171,10 +169,9 @@ pub struct AppInner {
     /// The call the debug page groups events under, while a page is on it.
     debug_call: std::sync::Mutex<Option<String>>,
     next_debug_call: AtomicU64,
-    /// What routing reads about the call. Routing must never wait on the PBX
-    /// lock: the turn worker holds it for a whole prompt, and an utterance
-    /// routed only after the prompt ends can no longer steer it.
-    pub(crate) routing: RoutingView,
+    /// Queued caller turns, their routing decisions, and the autonomous
+    /// turns in flight: the state only `turns.rs` reads.
+    pub(crate) turns: TurnState,
     pub(crate) delivery: DeliveryState,
     pub transcript_log: Mutex<TranscriptLog>,
     pub speaker: Speaker,
@@ -197,8 +194,6 @@ pub struct AppInner {
     pub(crate) speech: SpeechQueue,
     /// Caller audio clips and the state only `caller_input.rs` reads.
     pub(crate) clips: ClipState,
-    pub turns: mpsc::Sender<(String, String, u64)>,
-    pub(crate) turn_rx: Mutex<Option<mpsc::Receiver<(String, String, u64)>>>,
     pub last_display: Arc<Mutex<Option<Value>>>,
     pub screen_state: Mutex<Value>,
     pub display_gate: Arc<Mutex<DisplayGateState>>,
@@ -211,15 +206,8 @@ pub struct AppInner {
     pub(crate) leg_announcer: LegAnnouncer,
     pub(crate) operation_transition: Mutex<()>,
     pub(crate) active_operations: Mutex<HashMap<TaskId, AbortHandle>>,
-    /// Autonomous host turns admitted by the lifecycle, keyed by resident
-    /// instance so a stale turn_end cannot finish a newer operation.
-    pub(crate) autonomous_operations: Mutex<HashMap<u64, OperationIdentity>>,
     pub queued_turns: AtomicU64,
     pub turn_in_flight: AtomicBool,
-    /// Decisions made before a queued turn reaches the PBX lock. Keeping the
-    /// decision with the clip prevents a second Jev request while preserving
-    /// steering for a turn that was already active.
-    pub(crate) routed_decisions: Mutex<HashMap<String, RoutedDecision>>,
     pub(crate) shutdown: watch::Sender<bool>,
     pub(crate) audio: Mutex<AudioQueue>,
     pub(crate) speech_deadline: std::time::Duration,
@@ -294,7 +282,6 @@ impl AppState {
         let (events, _) = broadcast::channel(256);
         let speech = SpeechQueue::new();
         let clips = ClipState::new();
-        let (turns, turn_rx) = mpsc::channel(64);
         let (shutdown, _) = watch::channel(false);
         let last_display = Arc::new(Mutex::new(None));
         let background_displays = Arc::new(StdMutex::new(HashMap::new()));
@@ -381,7 +368,7 @@ impl AppState {
         let redials = switchboard.redial_planner();
         let hosts = switchboard.hosts();
         hosts.set_debug_bus(debug.clone());
-        let routing = switchboard.routing_view();
+        let turns = TurnState::new(switchboard.routing_view());
         let mut switchboard = switchboard;
         switchboard.set_activity_callback(Some(activity_callback));
         switchboard.set_route_callback(Some(route_callback));
@@ -453,7 +440,6 @@ impl AppState {
                 debug,
                 debug_call: std::sync::Mutex::new(None),
                 next_debug_call: AtomicU64::new(1),
-                routing,
                 delivery,
                 transcript_log: Mutex::new(transcript_log),
                 speaker,
@@ -468,7 +454,6 @@ impl AppState {
                 speech,
                 clips,
                 turns,
-                turn_rx: Mutex::new(Some(turn_rx)),
                 last_display,
                 screen_state: Mutex::new(json!({
                     "view": "auto",
@@ -488,10 +473,8 @@ impl AppState {
                 leg_announcer,
                 operation_transition: Mutex::new(()),
                 active_operations: Mutex::new(HashMap::new()),
-                autonomous_operations: Mutex::new(HashMap::new()),
                 queued_turns: AtomicU64::new(0),
                 turn_in_flight: AtomicBool::new(false),
-                routed_decisions: Mutex::new(HashMap::new()),
                 shutdown,
                 audio: Mutex::new(AudioQueue::new()),
                 speech_deadline,

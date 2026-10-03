@@ -985,7 +985,7 @@ async fn queue_a_clip_while_a_page_control_starts_a_leg(
     state
         .0
         .turns
-        .send((
+        .enqueue_for_test((
             id.into(),
             "and check the logs".into(),
             state.0.coordinator.generation(),

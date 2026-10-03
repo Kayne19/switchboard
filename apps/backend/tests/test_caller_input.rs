@@ -171,7 +171,7 @@ async fn clip_accepted_before_a_page_rescue_is_dropped_after_transcription() {
     let stale = next_event_of(&mut events, "error").await;
     assert_eq!(stale["code"], "stale_epoch");
     assert_eq!(state.0.queued_turns.load(Ordering::Acquire), 0);
-    let mut turns = state.0.turn_rx.lock().await.take().unwrap();
+    let mut turns = state.0.turns.take_receiver().await;
     assert!(matches!(
         turns.try_recv(),
         Err(mpsc::error::TryRecvError::Empty)
@@ -477,7 +477,7 @@ async fn upload_clip(
 /// Asserts the clip never became a turn: nothing waits in the turn queue.
 async fn assert_never_queued(state: &AppState) {
     assert_eq!(state.0.queued_turns.load(Ordering::Acquire), 0);
-    let mut turns = state.0.turn_rx.lock().await.take().unwrap();
+    let mut turns = state.0.turns.take_receiver().await;
     assert!(matches!(
         turns.try_recv(),
         Err(mpsc::error::TryRecvError::Empty)
