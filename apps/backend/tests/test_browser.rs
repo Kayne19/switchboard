@@ -39,7 +39,7 @@ async fn typed_turn_is_logged_echoed_and_queued_like_a_transcript() {
     assert_eq!(entries[0].text, "deploy it");
     assert_eq!(entries[0].role, CALLER);
     assert_eq!(entries[0].id.as_deref(), Some("typed-1"));
-    let mut turns = state.0.turn_rx.lock().await.take().unwrap();
+    let mut turns = state.0.turns.take_receiver().await;
     let (id, text, turn_generation) = turns.try_recv().expect("typed turn is queued");
     assert_eq!(
         (id.as_str(), text.as_str(), turn_generation),

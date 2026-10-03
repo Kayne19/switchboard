@@ -32,6 +32,7 @@ async fn queued_turn_from_before_page_rescue_never_reaches_the_new_leg() {
     state
         .0
         .turns
+        .sender
         .send(("old-clip".into(), "stale words".into(), old_generation))
         .await
         .unwrap();
@@ -57,7 +58,13 @@ async fn a_non_steered_continue_uses_one_jev_decision_for_one_utterance() {
     let generation = state.0.coordinator.generation();
 
     dispatch_routed_transcript(&state, "once", generation, "hello".into()).await;
-    assert!(state.0.routed_decisions.lock().await.contains_key("once"));
+    assert!(state
+        .0
+        .turns
+        .routed_decisions
+        .lock()
+        .await
+        .contains_key("once"));
 
     let worker = tokio::spawn(process_turns(state.clone()));
     let thinking = next_event_of(&mut events, "thinking").await;
@@ -75,6 +82,7 @@ async fn a_stale_queued_turn_removes_its_retained_jev_decision() {
     let mut events = state.0.events.subscribe();
     state
         .0
+        .turns
         .routed_decisions
         .lock()
         .await
@@ -86,6 +94,7 @@ async fn a_stale_queued_turn_removes_its_retained_jev_decision() {
     state
         .0
         .turns
+        .sender
         .send(("stale".into(), "old words".into(), old_generation))
         .await
         .expect("queued turn");
@@ -93,7 +102,13 @@ async fn a_stale_queued_turn_removes_its_retained_jev_decision() {
     let stale = next_event_of(&mut events, "error").await;
     assert_eq!(stale["id"], "stale");
     assert_eq!(stale["code"], "stale_epoch");
-    assert!(!state.0.routed_decisions.lock().await.contains_key("stale"));
+    assert!(!state
+        .0
+        .turns
+        .routed_decisions
+        .lock()
+        .await
+        .contains_key("stale"));
 
     worker.abort();
     let _ = worker.await;
@@ -228,6 +243,7 @@ async fn a_turn_dropped_by_a_rescue_before_it_is_registered_is_dropped_with_noti
     state
         .0
         .turns
+        .sender
         .send((
             "just-dispatched".into(),
             "and check the logs".into(),
@@ -270,7 +286,7 @@ async fn both_routing_authorities_down_emit_a_page_error_without_audio() {
     ));
     let (mut connection, _snapshot, _watermark) = state.register_connection().await;
     let generation = state.0.coordinator.generation();
-    state.0.routed_decisions.lock().await.insert(
+    state.0.turns.routed_decisions.lock().await.insert(
         "down".into(),
         crate::router::Decision::fallback("Jev unavailable: test").into(),
     );
@@ -279,6 +295,7 @@ async fn both_routing_authorities_down_emit_a_page_error_without_audio() {
     state
         .0
         .turns
+        .sender
         .send(("down".into(), "hello".into(), generation))
         .await
         .unwrap();
@@ -362,7 +379,7 @@ async fn takeover_desk_listing_does_not_hold_the_pbx_lock() {
     }));
     fake.serve(host.connect_fake("scriptorium"));
 
-    state.0.routed_decisions.lock().await.insert(
+    state.0.turns.routed_decisions.lock().await.insert(
         "takeover-lock".into(),
         crate::router::Decision {
             action: crate::router::Action::TakeOver,
@@ -383,6 +400,7 @@ async fn takeover_desk_listing_does_not_hold_the_pbx_lock() {
     state
         .0
         .turns
+        .sender
         .send(("takeover-lock".into(), "take over alpha".into(), generation))
         .await
         .unwrap();
@@ -490,6 +508,7 @@ async fn a_self_woken_start_before_the_caller_turn_settles_stays_the_callers() {
     }
     assert!(!state
         .0
+        .turns
         .autonomous_operations
         .lock()
         .await
@@ -577,7 +596,7 @@ async fn caller_turn_waits_behind_an_autonomous_project_turn() {
     let mut events = state.0.events.subscribe();
     while events.try_recv().is_ok() {}
     let generation = state.0.coordinator.generation();
-    state.0.routed_decisions.lock().await.insert(
+    state.0.turns.routed_decisions.lock().await.insert(
         "caller-waits".into(),
         crate::router::Decision {
             action: crate::router::Action::Continue,
@@ -597,6 +616,7 @@ async fn caller_turn_waits_behind_an_autonomous_project_turn() {
     state
         .0
         .turns
+        .sender
         .send(("caller-waits".into(), "continue alpha".into(), generation))
         .await
         .unwrap();
@@ -606,6 +626,7 @@ async fn caller_turn_waits_behind_an_autonomous_project_turn() {
     assert!(!state.0.turn_in_flight.load(Ordering::Acquire));
     assert!(state
         .0
+        .turns
         .autonomous_operations
         .lock()
         .await
@@ -823,7 +844,7 @@ async fn process_turns_settlement_preserves_a_waiting_request() {
     let mut events = state.0.events.subscribe();
     let id = "settled-waiting";
     let generation = state.0.coordinator.generation();
-    state.0.routed_decisions.lock().await.insert(
+    state.0.turns.routed_decisions.lock().await.insert(
         id.into(),
         crate::router::Decision {
             action: crate::router::Action::Continue,
@@ -843,6 +864,7 @@ async fn process_turns_settlement_preserves_a_waiting_request() {
     state
         .0
         .turns
+        .sender
         .send((id.into(), "continue alpha".into(), generation))
         .await
         .unwrap();
@@ -912,7 +934,7 @@ async fn process_turns_settles_foreground_idle_once() {
     while events.try_recv().is_ok() {}
     let id = "settled-idle-once";
     let generation = state.0.coordinator.generation();
-    state.0.routed_decisions.lock().await.insert(
+    state.0.turns.routed_decisions.lock().await.insert(
         id.into(),
         crate::router::Decision {
             action: crate::router::Action::Continue,
@@ -932,6 +954,7 @@ async fn process_turns_settles_foreground_idle_once() {
     state
         .0
         .turns
+        .sender
         .send((id.into(), "continue alpha".into(), generation))
         .await
         .unwrap();
@@ -1246,6 +1269,7 @@ async fn until_autonomous(state: &AppState, instance_id: u64) {
     timeout(Duration::from_secs(1), async {
         while !state
             .0
+            .turns
             .autonomous_operations
             .lock()
             .await

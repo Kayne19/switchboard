@@ -12,14 +12,16 @@ use crate::debug::DebugEvent;
 use crate::history::AGENT;
 #[cfg(test)]
 use crate::hosts::{FakeHostAgent, FakeLog, Step};
-use crate::lifecycle::LifecycleError;
-use crate::pbx::{AgentStateNotice, Switchboard};
+use crate::lifecycle::{LifecycleError, OperationIdentity};
+use crate::pbx::{AgentStateNotice, RoutingView, Switchboard};
 use crate::pi_client::ProjectTurn;
 use crate::protocol::ServerMessage;
 use crate::router::{jev_outcome, Action, CallSummary, Decision, RouteRule};
 use crate::speech::deliver_turn_if_current;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
+use tokio::sync::{mpsc, Mutex};
 #[cfg(test)]
 use tokio::time::{timeout, Duration};
 use tracing::Instrument;
@@ -35,7 +37,7 @@ async fn call_summary_without_pbx_lock(
     screen: Value,
     utterance: String,
 ) -> (crate::router::Router, CallSummary) {
-    let routing = &state.0.routing;
+    let routing = &state.0.turns.routing;
     let live_desk_sessions =
         Switchboard::live_desk_sessions_from(routing.hosts(), routing.registry()).await;
     let mut summary = routing.call_summary(entries, screen, utterance);
@@ -55,7 +57,7 @@ async fn prepare_takeover_lookup(
         .target
         .as_deref()
         .filter(|_| matches!(decision.action, Action::TakeOver))?;
-    let routing = &state.0.routing;
+    let routing = &state.0.turns.routing;
     Some(
         Switchboard::desk_session_for_takeover_from(routing.hosts(), routing.registry(), target)
             .await,
@@ -313,6 +315,7 @@ pub(crate) async fn dispatch_routed_transcript(
     // called again for the same utterance.
     state
         .0
+        .turns
         .routed_decisions
         .lock()
         .await
@@ -330,6 +333,7 @@ pub(crate) async fn dispatch_routed_transcript(
     if state
         .0
         .turns
+        .sender
         .send((id.to_owned(), transcript, generation))
         .await
         .is_ok()
@@ -346,7 +350,7 @@ pub(crate) async fn dispatch_routed_transcript(
         }
     } else {
         state.0.queued_turns.fetch_sub(1, Ordering::AcqRel);
-        state.0.routed_decisions.lock().await.remove(id);
+        state.0.turns.routed_decisions.lock().await.remove(id);
         emit_clip_verdict(
             state,
             id,
@@ -355,10 +359,65 @@ pub(crate) async fn dispatch_routed_transcript(
     }
 }
 
+/// Queued caller turns and the state only this module reads: the turn
+/// channel and the receiver the turn worker takes once, what routing reads
+/// about the call, the decisions made for turns still in the queue, and the
+/// autonomous turns in flight. `AppInner` holds one so the fields are the
+/// turns module's own.
+pub(crate) struct TurnState {
+    sender: mpsc::Sender<(String, String, u64)>,
+    receiver: Mutex<Option<mpsc::Receiver<(String, String, u64)>>>,
+    /// What routing reads about the call. Routing must never wait on the PBX
+    /// lock: the turn worker holds it for a whole prompt, and an utterance
+    /// routed only after the prompt ends can no longer steer it.
+    routing: RoutingView,
+    /// Decisions made before a queued turn reaches the PBX lock. Keeping the
+    /// decision with the clip prevents a second Jev request while preserving
+    /// steering for a turn that was already active.
+    routed_decisions: Mutex<HashMap<String, RoutedDecision>>,
+    /// Autonomous host turns admitted by the lifecycle, keyed by resident
+    /// instance so a stale turn_end cannot finish a newer operation.
+    autonomous_operations: Mutex<HashMap<u64, OperationIdentity>>,
+}
+
+impl TurnState {
+    pub(crate) fn new(routing: RoutingView) -> Self {
+        let (sender, receiver) = mpsc::channel(64);
+        Self {
+            sender,
+            receiver: Mutex::new(Some(receiver)),
+            routing,
+            routed_decisions: Mutex::new(HashMap::new()),
+            autonomous_operations: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// The turn worker's end of the channel, for a test that stands in for
+    /// the worker.
+    #[cfg(test)]
+    pub(crate) async fn take_receiver(&self) -> mpsc::Receiver<(String, String, u64)> {
+        self.receiver
+            .lock()
+            .await
+            .take()
+            .expect("the turn receiver is taken once")
+    }
+
+    /// Queues a raw turn, as a test does in place of a transcribed clip.
+    #[cfg(test)]
+    pub(crate) async fn enqueue_for_test(
+        &self,
+        turn: (String, String, u64),
+    ) -> Result<(), mpsc::error::SendError<(String, String, u64)>> {
+        self.sender.send(turn).await
+    }
+}
+
 pub(crate) async fn process_turns(state: AppState) {
     let mut receiver = state
         .0
-        .turn_rx
+        .turns
+        .receiver
         .lock()
         .await
         .take()
@@ -374,7 +433,7 @@ pub(crate) async fn process_turns(state: AppState) {
         // Normal clip processing stores the decision beside the queued clip.
         // Tests and internal callers may enqueue a raw turn, so route that
         // compatibility path here without changing the public channel shape.
-        let routed_decision = state.0.routed_decisions.lock().await.remove(&id);
+        let routed_decision = state.0.turns.routed_decisions.lock().await.remove(&id);
         if generation != state.0.coordinator.generation() {
             tracing::info!(clip = %id, stamped = generation, current = state.0.coordinator.generation(), "dropping a queued turn before Jev routing");
             trace_stale_utterance(&state, &id, generation);
@@ -599,7 +658,7 @@ pub(crate) async fn handle_project_turn(state: &AppState, turn: ProjectTurn) -> 
         return false;
     }
     if turn.ended {
-        let mut operations = state.0.autonomous_operations.lock().await;
+        let mut operations = state.0.turns.autonomous_operations.lock().await;
         let Some(operation) = operations.get(&turn.instance_id).cloned() else {
             return false;
         };
@@ -699,6 +758,7 @@ pub(crate) async fn handle_project_turn(state: &AppState, turn: ProjectTurn) -> 
             });
             state
                 .0
+                .turns
                 .autonomous_operations
                 .lock()
                 .await
@@ -774,6 +834,7 @@ pub(crate) async fn alpha_caller_turn_in_flight(
     state
         .0
         .turns
+        .sender
         .send(("caller-held".into(), "run the tests".into(), generation))
         .await
         .unwrap();
