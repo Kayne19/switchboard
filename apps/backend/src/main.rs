@@ -1,5 +1,8 @@
 mod api;
+mod app_state;
 mod audio;
+mod browser;
+mod caller_input;
 mod debug;
 mod delivery;
 mod display;
@@ -7,14 +10,19 @@ mod floor;
 mod history;
 mod hosts;
 mod jev;
+mod leg_announcer;
 mod lifecycle;
 mod models;
+mod module_calls;
+mod page_controls;
 mod pbx;
 mod pi_client;
 mod prewarm;
 mod protocol;
 mod registry;
 mod router;
+mod speech;
+mod turns;
 mod visual_protocol;
 
 use std::collections::HashMap;
@@ -495,7 +503,7 @@ async fn main() {
     // on it rather than doing any of it itself.
     let prewarm = std::sync::Arc::new(prewarm::Prewarm::start(&registry, hosts));
     let board = pbx::Switchboard::new(&config, registry, prewarm);
-    let state = api::AppState::new_with_debug(
+    let state = app_state::AppState::new_with_debug(
         board,
         history::TranscriptLog::new(config.history_limit),
         audio::Speaker::new(
@@ -507,7 +515,7 @@ async fn main() {
         audio::SttStreamAdapter::from_command(config.stt_stream_command.clone()),
         debug_bus.clone(),
     );
-    api::spawn_workers(state.clone());
+    app_state::spawn_workers(state.clone());
     let bind = config.bind.clone();
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
@@ -544,7 +552,7 @@ async fn main() {
     let result = server.await;
     // Also covers listener/server failures that did not arrive through the
     // signal future. Shutdown is intentionally idempotent.
-    api::shutdown(&state).await;
+    app_state::shutdown(&state).await;
     if let Some(debug_task) = debug_task {
         let _ = debug_task.await;
     }
@@ -553,7 +561,7 @@ async fn main() {
     }
 }
 
-async fn shutdown_signal(state: api::AppState) {
+async fn shutdown_signal(state: app_state::AppState) {
     #[cfg(unix)]
     {
         let mut terminate =
@@ -575,7 +583,7 @@ async fn shutdown_signal(state: api::AppState) {
     }
 
     tracing::info!("shutdown requested");
-    api::shutdown(&state).await;
+    app_state::shutdown(&state).await;
 }
 
 #[cfg(test)]

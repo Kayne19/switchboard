@@ -3100,7 +3100,7 @@ impl Switchboard {
     }
 
     /// A routing outage is a page error, not a sentence synthesized into the
-    /// call. `api.rs` turns this marker into `routing_unavailable`.
+    /// call. `speech.rs` turns this marker into `routing_unavailable`.
     fn routing_unavailable(&self) -> Reply {
         self.reply(
             std::iter::empty::<String>(),

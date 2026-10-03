@@ -211,7 +211,7 @@ describe('Primary Metric Cluster semantics (#38)', () => {
 
   it('replaying the backend snapshot rebuilds show order and cluster order', () => {
     // Each case is a live action sequence and the snapshot the backend's
-    // DisplayProjection replays for it; apps/backend/tests/test_api.rs
+    // DisplayProjection replays for it; apps/backend/tests/test_display.rs
     // asserts the same snapshots.
     const metric = (id: string, role?: 'primary' | 'secondary'): ControllerAction => ({
       op: 'show', id, type: 'metric', ...(role ? { role } : {}), data: { label: id, value: '1' },

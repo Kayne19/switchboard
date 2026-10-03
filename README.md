@@ -303,7 +303,15 @@ container, and the post-deploy checklist.
 | path | what it is |
 | --- | --- |
 | `apps/backend/src/main.rs` | composition root, and `Config`: the one reader of the environment |
-| `apps/backend/src/api.rs` | HTTP and WebSocket endpoints, turn and speech workers, delivery to the browser |
+| `apps/backend/src/api.rs` | the HTTP router, `/healthz`, and the debug listener's router |
+| `apps/backend/src/app_state.rs` | the state every handler and worker shares, its construction, the workers, shutdown |
+| `apps/backend/src/browser.rs` | the caller page's WebSocket: snapshot, incoming frames, delivery to the browser |
+| `apps/backend/src/page_controls.rs` | the page's HTTP controls (connect, model, thinking, hangup) and the rescue they start with |
+| `apps/backend/src/module_calls.rs` | a project session's `speak`, `request_to_speak`, `display` and `view`, and their admission |
+| `apps/backend/src/caller_input.rs` | clips, streamed clips, typed turns, and transcription |
+| `apps/backend/src/turns.rs` | routing a transcript, the turn worker, host-reported turns |
+| `apps/backend/src/speech.rs` | the speech worker, continuity, reply voice, and the floor release |
+| `apps/backend/src/leg_announcer.rs` | announcing a new leg to the browser |
 | `apps/backend/src/lifecycle.rs` | the coordinator: call identity, the current route and leg, phases, candidate legs, status |
 | `apps/backend/src/pbx.rs` | routing: transfers, returns, redials, rescue, and the legs |
 | `apps/backend/src/hosts.rs` | the host link: host agents dialling in on `/host`, their commands, events and module calls |

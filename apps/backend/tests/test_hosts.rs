@@ -1,7 +1,7 @@
 //! The host link over a real socket: an in-process service on 127.0.0.1 and
 //! a tungstenite client standing in for the host agent.
 use super::*;
-use crate::api::AppState;
+use crate::app_state::AppState;
 use crate::registry::Registry;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
@@ -514,7 +514,7 @@ async fn hosts_heartbeat_drops_a_link_that_misses_three_pongs() {
 async fn hosts_close_links_on_shutdown() {
     let served = Served::start(slow()).await;
     let (mut agent, _) = served.hello("scriptorium", TOKEN, json!(1)).await;
-    crate::api::shutdown(&served.state).await;
+    crate::app_state::shutdown(&served.state).await;
     assert_eq!(close_code(&mut agent).await, Some(CLOSE_GOING_AWAY));
 }
 
