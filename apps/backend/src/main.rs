@@ -18,6 +18,7 @@ mod page_controls;
 mod pbx;
 mod pi_client;
 mod prewarm;
+mod prompts;
 mod protocol;
 mod registry;
 mod reply;
