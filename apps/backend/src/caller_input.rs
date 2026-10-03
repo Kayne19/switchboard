@@ -411,6 +411,11 @@ pub(crate) fn parse_typed_turn(
 /// `stt_start`: opens a streaming clip for this connection, or resumes one it
 /// already holds, and starts its worker stream. Answers `accepted`, or
 /// `abandoned` with the reason the clip must go the complete-clip way instead.
+///
+/// The generation is required, as it is for a typed turn: every page that
+/// streams stamps it, and a stream without one could not be checked against
+/// a transfer that landed while the caller was still talking. A start
+/// without one is refused like one without a usable clip id.
 pub(crate) async fn start_stream_clip(
     state: &AppState,
     epoch: u64,
@@ -426,10 +431,17 @@ pub(crate) async fn start_stream_clip(
         )
         .await;
     };
+    let Some(generation) = generation else {
+        return send_message(
+            state,
+            epoch,
+            ServerMessage::error_for(id.to_owned(), "Streaming clip has no generation."),
+        )
+        .await;
+    };
     if let Some(replayed) = replay_clip_verdict(state, epoch, id).await {
         return replayed;
     }
-    let generation = generation.unwrap_or_else(|| state.0.coordinator.generation());
     let mime = mime.as_deref().unwrap_or("");
     if mime != "audio/webm;codecs=opus" || !state.0.stt_stream.configured() {
         return send_message(
@@ -522,18 +534,17 @@ pub(crate) async fn start_stream_clip(
 /// `stt_end`: the page has sent the clip's last chunk. The clip is marked
 /// ended for this connection and generation and the worker stream is told to
 /// finish; a worker that cannot answers `abandoned` with its reason. Anything
-/// else (an unknown, cancelled, finished or other connection's clip) is
-/// ignored, as a stale clip is.
+/// else (an unknown, cancelled, finished or other connection's clip, or a
+/// command naming no clip or no generation) is ignored, as a stale clip is.
 pub(crate) async fn end_stream_clip(
     state: &AppState,
     epoch: u64,
     clip_id: Option<String>,
     generation: Option<u64>,
 ) -> Result<(), ()> {
-    let Some(id) = clip_id.as_deref() else {
+    let (Some(id), Some(generation)) = (clip_id.as_deref(), generation) else {
         return Ok(());
     };
-    let generation = generation.unwrap_or(0);
     let valid = {
         let mut clips = state.0.clips.streams.lock().await;
         match clips.get(id).copied() {
@@ -589,10 +600,9 @@ pub(crate) async fn cancel_stream_clip(
     clip_id: Option<String>,
     generation: Option<u64>,
 ) -> Result<(), ()> {
-    let Some(id) = clip_id.as_deref() else {
+    let (Some(id), Some(generation)) = (clip_id.as_deref(), generation) else {
         return Ok(());
     };
-    let generation = generation.unwrap_or(0);
     let should_cancel = {
         let mut clips = state.0.clips.streams.lock().await;
         match clips.get(id).copied() {
