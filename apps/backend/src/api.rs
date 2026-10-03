@@ -4,13 +4,14 @@ use crate::debug::{DebugBus, DebugEvent};
 use crate::delivery::{AudioQueue, DeliveryConnection, DeliveryFrame, DeliveryState, Event};
 use crate::display::{
     is_display_event, stamp_display_seq, ConfirmState, DisplayGateState, DisplayProjection,
-    SceneLeg, DISPLAY_CONFIRM_DEADLINE_MS,
+    DISPLAY_CONFIRM_DEADLINE_MS,
 };
 use crate::floor;
 use crate::floor::{Floor, FloorHooks, FloorRequest, FloorRewriteInput, ReleaseOutcome};
 use crate::history::{TranscriptLog, AGENT, CALLER};
 use crate::hosts::Hosts;
-use crate::lifecycle::{ActivityDisposition, Coordinator, LifecycleError, OperationIdentity};
+use crate::leg_announcer::LegAnnouncer;
+use crate::lifecycle::{Coordinator, LifecycleError, OperationIdentity};
 use crate::pbx::{
     AgentStateCallback, AgentStateNotice, Redial, RedialPlan, RedialPlanner, RouteCallback,
     RoutingView, Switchboard,
@@ -19,8 +20,12 @@ use crate::pi_client::{
     Activity, ActivityCallback, AgentCall, LegSession, ModuleCallback, ProjectTurn, TurnCallback,
 };
 use crate::protocol::{AgentRequest, AgentState, CandidateEnd, ErrorCode, ServerMessage, Status};
+#[cfg(test)]
+use crate::registry::Registry;
 use crate::router::{jev_outcome, Action, CallSummary, Decision, RouteRule};
 use axum::extract::ws::{Message, WebSocket};
+#[cfg(test)]
+use axum::http::StatusCode;
 use axum::{
     extract::rejection::JsonRejection,
     extract::{State, WebSocketUpgrade},
@@ -29,6 +34,8 @@ use axum::{
     Json, Router,
 };
 use futures_util::{SinkExt, StreamExt};
+#[cfg(test)]
+use http_body_util::BodyExt;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
@@ -41,6 +48,8 @@ use std::{
 };
 use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex};
 use tokio::task::{AbortHandle, Id as TaskId, JoinHandle};
+#[cfg(test)]
+use tokio::time::{timeout, Duration};
 use tower_http::services::ServeDir;
 use tracing::Instrument;
 
@@ -50,7 +59,7 @@ const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 /// PBX transitions and turn settlement feed it notices; no caller edits either
 /// projection directly, so waiting requests cannot be lost by a late idle.
 #[derive(Clone)]
-struct AgentProjection {
+pub(crate) struct AgentProjection {
     // These are deliberately synchronous locks. Coordinator's background
     // owner holds its lifecycle mutex while it validates a resident and
     // applies a waiting/display mutation, so the check and write cannot be
@@ -142,7 +151,7 @@ impl AgentProjection {
             .contains_key(project)
     }
 
-    fn take_display(&self, project: &str) -> Option<Value> {
+    pub(crate) fn take_display(&self, project: &str) -> Option<Value> {
         self.displays
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -289,157 +298,6 @@ impl SpeechContinuity {
     }
 }
 
-/// Tells the browser the call has moved to a new leg.
-///
-/// A transfer is announced from two places: candidate promotion, when the
-/// incoming agent first shows life or acts, and the route callback, when the
-/// PBX finishes the transfer after the intro turn. Both hold one of these, and
-/// both announce the leg the coordinator names. They are built before
-/// `AppInner` exists, which is why this holds clones rather than the state.
-#[derive(Clone)]
-struct LegAnnouncer {
-    coordinator: Coordinator,
-    events: broadcast::Sender<Event>,
-    delivery: DeliveryState,
-    display_gate: Arc<Mutex<DisplayGateState>>,
-    display_confirm: watch::Sender<ConfirmState>,
-    last_display: Arc<Mutex<Option<Value>>>,
-    projection: AgentProjection,
-    continuity: Arc<StdMutex<SpeechContinuity>>,
-    active_speech_group: Arc<StdMutex<Option<SpeechGroup>>>,
-    foreground_audio_generation: Arc<StdMutex<Option<u64>>>,
-}
-
-impl LegAnnouncer {
-    fn publish(&self, message: ServerMessage) {
-        let event = Event::Json(message.to_value());
-        let _ = self.events.send(event.clone());
-        self.delivery.publish(event);
-    }
-
-    /// Adopts the candidate leg `token` names and announces it. False when
-    /// that leg is not the one staged.
-    async fn promote_candidate(&self, token: &str) -> bool {
-        // Held from adoption until the epoch is out, so a display from the
-        // new leg cannot be applied ahead of its own scene reset.
-        let mut gate = self.display_gate.lock().await;
-        let Ok(identity) = self.coordinator.adopt_candidate(token) else {
-            return false;
-        };
-        let status = self.coordinator.status();
-        self.begin_scene(
-            &mut gate,
-            SceneLeg {
-                route: status.route.clone(),
-                generation: identity.generation,
-            },
-        )
-        .await;
-        self.publish(ServerMessage::Status(status));
-        true
-    }
-
-    /// RPC activity from a pi process. Only the leg on the line is shown, and
-    /// only the starting candidate's own activity promotes it; anything else
-    /// comes from a leg the call has left, or never joined, and is dropped.
-    async fn on_activity(&self, activity: Activity) {
-        let disposition = self.coordinator.classify_activity(&activity.leg);
-        let current = match disposition {
-            ActivityDisposition::Promote => self.promote_candidate(&activity.leg).await,
-            ActivityDisposition::Publish => true,
-            ActivityDisposition::Discard => false,
-        };
-        if !current {
-            tracing::debug!(
-                leg = %activity.leg,
-                label = %activity.label,
-                state = %activity.state,
-                tool = %activity.tool,
-                ?disposition,
-                "dropping activity from a leg that is not on the line"
-            );
-            return;
-        }
-        if activity.state == "life" {
-            return;
-        }
-        self.publish(ServerMessage::Activity {
-            state: activity.state,
-            tool: activity.tool,
-            detail: activity.detail,
-            label: activity.label,
-        });
-    }
-
-    /// The route callback: the PBX has settled on a leg, which the
-    /// coordinator names.
-    async fn announce_route(&self) {
-        let mut gate = self.display_gate.lock().await;
-        let (route, generation) = self.coordinator.route_and_generation();
-        self.begin_scene(&mut gate, SceneLeg { route, generation })
-            .await;
-        self.publish(ServerMessage::Status(self.coordinator.status()));
-    }
-
-    /// Clears the scene for `leg` and sends the epoch that tells the browser
-    /// to do the same, once per leg. Whichever announcement arrives second
-    /// finds the scene already belongs to that leg and leaves it alone: by
-    /// then it may hold the new agent's first drawing, and the browser may be
-    /// playing its first words.
-    async fn begin_scene(&self, gate: &mut DisplayGateState, leg: SceneLeg) {
-        if gate.scene_leg.as_ref() == Some(&leg) {
-            tracing::debug!(route = %leg.route, generation = leg.generation, "leg already announced; restating its status only");
-            return;
-        }
-        tracing::info!(route = %leg.route, generation = leg.generation, "the caller's screen moves to a new leg");
-        let model = self.coordinator.status().model;
-        self.continuity
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clear(leg.generation, &model);
-        *self
-            .active_speech_group
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-        *self
-            .foreground_audio_generation
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-        gate.projection.clear();
-        gate.screen_state["stale"] = json!(true);
-        gate.report_epoch = None;
-        gate.report_generation = None;
-        *self.last_display.lock().await = None;
-        self.display_confirm.send_modify(|confirm| {
-            confirm.generation = leg.generation;
-            confirm.watermark = None;
-            confirm.rejection = None;
-        });
-        self.publish(ServerMessage::Epoch {
-            generation: leg.generation,
-        });
-        gate.scene_leg = Some(leg.clone());
-        if leg.route != crate::pbx::OPERATOR {
-            if let Some(action) = self.projection.take_display(&leg.route) {
-                let event = Event::Json(
-                    ServerMessage::Display {
-                        action: action.clone(),
-                        seq: None,
-                    }
-                    .to_value(),
-                );
-                let (delivered, sequence) = self.delivery.publish_sequenced(event.clone());
-                let _ = self.events.send(event);
-                gate.projection.apply(&action, sequence);
-                gate.watermark = sequence;
-                *self.last_display.lock().await =
-                    Some(ServerMessage::Display { action, seq: None }.to_value());
-                tracing::info!(route = %leg.route, delivered, "released the final background display on foreground");
-            }
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct AppState(pub Arc<AppInner>);
 pub struct AppInner {
@@ -494,7 +352,7 @@ pub struct AppInner {
     projection: AgentProjection,
     /// One owner of queued background speech and its release order.
     floor: Floor,
-    leg_announcer: LegAnnouncer,
+    pub(crate) leg_announcer: LegAnnouncer,
     operation_transition: Mutex<()>,
     active_operations: Mutex<HashMap<TaskId, AbortHandle>>,
     /// Autonomous host turns admitted by the lifecycle, keyed by resident
@@ -577,7 +435,7 @@ enum ContinuationScope {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct SpeechGroup(u64);
+pub(crate) struct SpeechGroup(u64);
 
 struct SpeechRequest {
     text: String,
@@ -4817,7 +4675,7 @@ async fn apply_screen_state(
     send_message(state, epoch, ServerMessage::ScreenStateAck).await
 }
 
-async fn handle_text_frame(
+pub(crate) async fn handle_text_frame(
     state: &AppState,
     epoch: u64,
     pending_header: &mut Option<ClipHeader>,
@@ -5202,6 +5060,159 @@ async fn send_event_sink(
                 .await
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn state() -> AppState {
+    state_with_stt(None)
+}
+
+#[cfg(test)]
+pub(crate) fn state_with_stt(stt: Option<String>) -> AppState {
+    state_with_stream(stt, None)
+}
+
+#[cfg(test)]
+pub(crate) fn state_with_stream(stt: Option<String>, stream: Option<String>) -> AppState {
+    let config = crate::Config::for_tests(&[]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    let board = Switchboard::new(&config, registry, std::sync::Arc::new(prewarm));
+    state_on_with_stream(board, stt, stream)
+}
+
+#[cfg(test)]
+pub(crate) fn state_on_with_stream(
+    board: Switchboard,
+    stt: Option<String>,
+    stream: Option<String>,
+) -> AppState {
+    AppState::new(
+        board,
+        TranscriptLog::new(10),
+        Speaker::offline(100, std::time::Duration::from_millis(25_000)),
+        SttAdapter::from_command(stt),
+        SttStreamAdapter::from_command(stream),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn start_speech_worker_for_test(state: &AppState) {
+    ensure_speech_worker(state);
+}
+
+/// A project session's module call, as the host link delivers it and the
+/// application answers it: `path` names the call the way the agent callback
+/// routes once did, and a `token` in `body` is the call token it carries.
+#[cfg(test)]
+pub(crate) async fn agent_call_json(
+    state: &AppState,
+    path: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    start_speech_worker_for_test(state);
+    let mut args = body;
+    let token = args
+        .as_object_mut()
+        .and_then(|args| args.remove("token"))
+        .and_then(|token| token.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    let call = AgentCall {
+        call: path.trim_start_matches('/').to_owned(),
+        token,
+        turn_id: None,
+        cause: None,
+        args,
+    };
+    let response = agent_call(state, &call).await;
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+#[cfg(test)]
+pub(crate) async fn post_display_in_task(
+    state: &AppState,
+    body: Value,
+) -> tokio::task::JoinHandle<(StatusCode, Value)> {
+    let state = state.clone();
+    tokio::spawn(async move { agent_call_json(&state, "/display", body).await })
+}
+
+#[cfg(test)]
+pub(crate) fn diagram_show() -> Value {
+    json!({"action":{"op":"show","id":"d1","type":"diagram","data":{
+        "mode":"graph","nodes":[{"id":"a","label":"A"}],"edges":[]}}})
+}
+
+#[cfg(test)]
+pub(crate) fn begin_alpha_candidate(state: &AppState, token: &str) {
+    state
+        .0
+        .coordinator
+        .begin_candidate(crate::lifecycle::CandidateLeg::new(
+            "alpha",
+            "alpha",
+            "pi-session",
+            token,
+            "anthropic/opus",
+            "medium",
+        ))
+        .unwrap();
+}
+
+/// A delivery frame as the browser would read it; display frames carry the
+/// sequence the socket writer stamps on them.
+#[cfg(test)]
+pub(crate) fn frame_json(frame: DeliveryFrame) -> Option<Value> {
+    match frame {
+        DeliveryFrame::Event { sequence, event } => match stamp_display_seq(event, sequence) {
+            Event::Json(value) => Some(value),
+            _ => None,
+        },
+        DeliveryFrame::Message(Message::Text(text)) => Some(serde_json::from_str(&text).unwrap()),
+        DeliveryFrame::Message(_) => None,
+    }
+}
+
+/// Receives frames up to and including the first of type `until`.
+#[cfg(test)]
+pub(crate) async fn frames_until(connection: &mut DeliveryConnection, until: &str) -> Vec<Value> {
+    let mut frames = Vec::new();
+    loop {
+        let frame = timeout(Duration::from_secs(2), connection.receiver.recv())
+            .await
+            .expect("a frame before the deadline")
+            .expect("an open connection");
+        let Some(value) = frame_json(frame) else {
+            continue;
+        };
+        let done = value["type"] == until;
+        frames.push(value);
+        if done {
+            return frames;
+        }
+    }
+}
+
+/// Every frame already waiting on the connection.
+#[cfg(test)]
+pub(crate) fn queued_frames(connection: &mut DeliveryConnection) -> Vec<Value> {
+    std::iter::from_fn(|| connection.receiver.try_recv().ok())
+        .filter_map(frame_json)
+        .collect()
+}
+
+#[cfg(test)]
+pub(crate) fn types_of(frames: &[Value]) -> Vec<&str> {
+    frames
+        .iter()
+        .filter_map(|frame| frame["type"].as_str())
+        .collect()
 }
 
 #[cfg(test)]

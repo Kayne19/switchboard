@@ -7,6 +7,7 @@ mod floor;
 mod history;
 mod hosts;
 mod jev;
+mod leg_announcer;
 mod lifecycle;
 mod models;
 mod pbx;
