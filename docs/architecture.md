@@ -118,7 +118,10 @@ The coordinator owns which leg is on the line (route, project, model, session,
 thinking, catalog) and builds the status from it alone; the PBX owns the
 processes and changes the leg only through the coordinator's named transitions
 (`begin_candidate`, `adopt_candidate`, `rollback_startup`,
-`return_to_operator`). A rescue ends in `settle`, which every page control and
+`return_to_operator`). Every transition that brings a project leg up (a
+transfer, a background promotion, a takeover, a redial) commits it through
+`Switchboard::commit_leg`, so each takes the same steps in the same order. A
+rescue ends in `settle`, which every page control and
 delivered turn passes through. A model or thinking redial is decided before
 anything is torn down: `RedialPlanner` (`pbx.rs`) makes every refusal from the
 coordinator's leg and prewarm's launch plan, without the PBX lock, so a refused
