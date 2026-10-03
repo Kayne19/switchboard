@@ -874,19 +874,22 @@ async fn release_floor(
     if spoken.is_empty() {
         return ReleaseOutcome::Played;
     }
-    let permit = match state.0.speech.sender.reserve().await {
-        Ok(permit) => permit,
-        Err(_) => return ReleaseOutcome::Retry,
-    };
+    // The release speaks under whatever generation is current once the
+    // worker has room for it; its own check below drops a request whose leg
+    // changed meanwhile.
+    let reserved =
+        match reserve_speech(state, SpeakUnder::CurrentWhenPlaced, WhenQueueFull::Wait).await {
+            Ok(reserved) => reserved,
+            Err(_) => return ReleaseOutcome::Retry,
+        };
+    let generation = reserved.generation;
+    let sequence = reserved.sequence;
+    // The page may have gone while the request waited for its place; the
+    // place is given back and the request waits for the page.
     if !state.0.delivery.connected() {
-        drop(permit);
+        release_reply_voice(state, Some(reserved), generation).await;
         return ReleaseOutcome::Retry;
     }
-    let generation = state.0.coordinator.generation();
-    let Some(sequence) = reserve_audio(state, generation).await else {
-        drop(permit);
-        return ReleaseOutcome::Retry;
-    };
     // Promotion or host loss may have happened while the audio slot was
     // reserved. Do not let a stale background request cross the final speech
     // side-effect boundary.
@@ -897,50 +900,37 @@ async fn release_floor(
             .with_background(&request.token, |project| project == request.project)
             .is_none()
     {
-        finish_audio(state, sequence, generation, Vec::new()).await;
-        drop(permit);
+        release_reply_voice(state, Some(reserved), generation).await;
         return ReleaseOutcome::Drop;
     }
-    let (result_tx, result_rx) = oneshot::channel();
     let scope = if state.0.take_foreground_audio(generation) {
         ContinuationScope::ContinueAfterForeground
     } else {
         ContinuationScope::FreshTurn
     };
-    permit.send(SpeechRequest {
+    let admission = SpeechAdmission {
         text: spoken,
         route: request.project.clone(),
         generation,
-        sequence,
         deadline: std::time::Instant::now() + state.0.speech_deadline,
         scope,
         group: state.0.new_speech_group(),
-        model: state.0.coordinator.status().model,
         log_spoken: true,
-        result: result_tx,
-        span: tracing::Span::current(),
-    });
+    };
     let floor_id = Some(request.floor_debug_id());
-    let result = result_rx.await;
+    let result = send_speech(state, admission, reserved).await;
     match &result {
-        Ok(Ok(())) => trace_speech(state, request.project.clone(), &text, None, floor_id),
-        Ok(Err(detail)) => trace_speech(
+        Ok(()) => trace_speech(state, request.project.clone(), &text, None, floor_id),
+        Err(failure) => trace_speech(
             state,
             request.project.clone(),
             &text,
-            Some(detail.clone()),
-            floor_id,
-        ),
-        Err(_) => trace_speech(
-            state,
-            request.project.clone(),
-            &text,
-            Some("speech worker stopped".into()),
+            Some(failure.to_string()),
             floor_id,
         ),
     }
     match result {
-        Ok(Ok(())) => {
+        Ok(()) => {
             if let Some(agents) = state
                 .0
                 .coordinator
@@ -957,7 +947,7 @@ async fn release_floor(
                 ReleaseOutcome::Drop
             }
         }
-        Ok(Err(_)) => {
+        Err(SpeechFailure::NotSpoken(_)) => {
             finish_audio(state, sequence, generation, Vec::new()).await;
             if state.0.delivery.connected() {
                 ReleaseOutcome::Drop
@@ -965,7 +955,7 @@ async fn release_floor(
                 ReleaseOutcome::Retry
             }
         }
-        Err(_) => ReleaseOutcome::Retry,
+        Err(SpeechFailure::WorkerStopped) => ReleaseOutcome::Retry,
     }
 }
 
@@ -1192,6 +1182,19 @@ impl SpeechQueue {
 pub(crate) struct ReservedSpeech<'a> {
     permit: mpsc::Permit<'a, SpeechRequest>,
     pub(crate) sequence: u64,
+    /// The generation the audio slot was reserved under.
+    pub(crate) generation: u64,
+}
+
+/// The generation a speech request speaks under. A reply knows its delivery
+/// generation up front; a floor release speaks under whatever generation is
+/// current once the worker has room for it, so a leg change during the wait
+/// is seen by the release's own staleness check rather than refused as a
+/// superseded reservation it would only retry.
+#[derive(Clone, Copy)]
+pub(crate) enum SpeakUnder {
+    Generation(u64),
+    CurrentWhenPlaced,
 }
 
 /// What a speech request does when the speech worker's queue is full.
@@ -1221,7 +1224,7 @@ impl std::fmt::Display for ReserveFailure {
 
 pub(crate) async fn reserve_speech(
     state: &AppState,
-    generation: u64,
+    under: SpeakUnder,
     when_full: WhenQueueFull,
 ) -> Result<ReservedSpeech<'_>, ReserveFailure> {
     let permit = match when_full {
@@ -1229,10 +1232,18 @@ pub(crate) async fn reserve_speech(
         WhenQueueFull::Refuse => state.0.speech.sender.try_reserve().ok(),
     }
     .ok_or(ReserveFailure::WorkerUnavailable)?;
+    let generation = match under {
+        SpeakUnder::Generation(generation) => generation,
+        SpeakUnder::CurrentWhenPlaced => state.0.coordinator.generation(),
+    };
     let sequence = reserve_audio(state, generation)
         .await
         .ok_or(ReserveFailure::Superseded)?;
-    Ok(ReservedSpeech { permit, sequence })
+    Ok(ReservedSpeech {
+        permit,
+        sequence,
+        generation,
+    })
 }
 
 /// The first utterance of a reply that will be spoken, reserved before the
@@ -1251,15 +1262,22 @@ async fn reserve_reply_voice<'a>(
     {
         return None;
     }
-    reserve_speech(state, generation, WhenQueueFull::Wait)
-        .await
-        .ok()
+    reserve_speech(
+        state,
+        SpeakUnder::Generation(generation),
+        WhenQueueFull::Wait,
+    )
+    .await
+    .ok()
 }
 
 /// Gives back a reply's reserved first utterance that will not be spoken. Its
 /// audio slot is closed, or every later utterance would wait behind it.
 async fn release_reply_voice(state: &AppState, voice: Option<ReservedSpeech<'_>>, generation: u64) {
-    if let Some(ReservedSpeech { permit, sequence }) = voice {
+    if let Some(ReservedSpeech {
+        permit, sequence, ..
+    }) = voice
+    {
         drop(permit);
         finish_audio(state, sequence, generation, Vec::new()).await;
     }
@@ -1299,7 +1317,9 @@ pub(crate) async fn send_speech(
         group,
         log_spoken,
     } = admission;
-    let ReservedSpeech { permit, sequence } = reserved;
+    let ReservedSpeech {
+        permit, sequence, ..
+    } = reserved;
     let (result_tx, result_rx) = oneshot::channel();
     permit.send(SpeechRequest {
         text,
@@ -1329,9 +1349,13 @@ async fn queue_speech(
 ) -> Result<(), String> {
     let reserved = match reserved {
         Some(reserved) => reserved,
-        None => reserve_speech(state, admission.generation, WhenQueueFull::Wait)
-            .await
-            .map_err(|failure| failure.to_string())?,
+        None => reserve_speech(
+            state,
+            SpeakUnder::Generation(admission.generation),
+            WhenQueueFull::Wait,
+        )
+        .await
+        .map_err(|failure| failure.to_string())?,
     };
     send_speech(state, admission, reserved)
         .await

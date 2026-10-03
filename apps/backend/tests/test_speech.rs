@@ -944,6 +944,52 @@ async fn stale_floor_request_is_dropped_before_audio_reservation() {
     assert_eq!(outcome, ReleaseOutcome::Drop);
 }
 
+/// A release that waits for its place in the worker's queue speaks under the
+/// generation current once it has it. A leg change during the wait is then
+/// its own staleness check's to drop at once, not a superseded reservation
+/// to retry and leave at the head of the floor's queue (#136).
+#[tokio::test]
+async fn a_floor_release_that_waited_for_its_place_drops_a_leg_change_at_once() {
+    let state = state();
+    let (_connection, _, _) = state.register_connection().await;
+    state
+        .0
+        .coordinator
+        .register_background("grapes", "grapes-token");
+    let generation = state.0.coordinator.generation();
+    // Every place in the worker's queue is taken, so the release must wait.
+    let taken: Vec<_> = std::iter::from_fn(|| state.0.speech.try_reserve().ok()).collect();
+    assert!(!taken.is_empty());
+    let release_state = state.clone();
+    let release = tokio::spawn(async move {
+        release_floor(
+            &release_state,
+            FloorRequest {
+                floor_id: 0,
+                project: "grapes".into(),
+                token: "grapes-token".into(),
+                generation,
+                context: "caller: previous line".into(),
+                message: "late update".into(),
+                reason: "finished".into(),
+                held_display: false,
+            },
+            "late update".into(),
+        )
+        .await
+    });
+    tokio::task::yield_now().await;
+    assert!(!release.is_finished(), "the release waits for a place");
+    // The leg changes while it waits; then the queue has room.
+    state.0.coordinator.begin_rescue("new foreground leg");
+    drop(taken);
+    let outcome = tokio::time::timeout(Duration::from_secs(5), release)
+        .await
+        .expect("the release settles once it has its place")
+        .unwrap();
+    assert_eq!(outcome, ReleaseOutcome::Drop);
+}
+
 #[tokio::test]
 async fn a_stale_reply_is_traced_as_speech_not_delivered() {
     let state = state();
