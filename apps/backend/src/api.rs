@@ -3378,90 +3378,84 @@ async fn speak(state: AppState, req: Speak) -> Response {
     }
 
     let spoken = state.0.speaker.clip_for_speech(&req.text);
-    let speech_permit = if spoken.is_empty() {
+    if spoken.is_empty() {
         tracing::info!("not spoken: nothing in the text can be said aloud");
         return Json(json!({"delivered":false, "reason":"text contained no speakable audio", "detail":"text contained no speakable audio"})).into_response();
-    } else {
-        match state.0.speech.try_reserve() {
-            Ok(permit) => Some(permit),
-            Err(_) => {
-                tracing::warn!("not spoken: the speech worker is busy or gone");
-                return (
-                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                    Json(json!({"delivered":false, "reason":"speech worker is unavailable or busy", "detail":"speech worker is unavailable or busy"})),
-                )
-                    .into_response();
-            }
+    }
+    // speak takes the same speech path as a reply, and differs from it on
+    // purpose in what it answers the agent. A line with nothing to say aloud
+    // is answered as such; a reply skips it. A full speech queue is refused at
+    // once as busy instead of waited on, so the agent hears it and goes on
+    // with its turn; a reply is the turn's own output and waits for its
+    // place. No audio slot (the leg changed, or the audio queue is full) is
+    // answered as undelivered, as when no browser is connected.
+    let generation = state.0.coordinator.generation();
+    let reserved = match reserve_speech(&state, generation, WhenQueueFull::Refuse).await {
+        Ok(reserved) => reserved,
+        Err(ReserveFailure::WorkerUnavailable) => {
+            tracing::warn!("not spoken: the speech worker is busy or gone");
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"delivered":false, "reason":"speech worker is unavailable or busy", "detail":"speech worker is unavailable or busy"})),
+            )
+                .into_response();
+        }
+        Err(ReserveFailure::Superseded) => {
+            tracing::info!(
+                generation,
+                "not spoken: the leg changed or the audio queue is full"
+            );
+            return Json(json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})).into_response();
         }
     };
-
-    if let Some(permit) = speech_permit {
-        let generation = state.0.coordinator.generation();
-        let sequence = match reserve_audio(&state, generation).await {
-            Some(sequence) => sequence,
-            None => {
-                tracing::info!(
-                    generation,
-                    "not spoken: the leg changed or the audio queue is full"
-                );
-                return Json(json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})).into_response();
-            }
-        };
-        let (result_tx, result_rx) = oneshot::channel();
-        let group = state.0.active_speech_group();
-        let speaker = state.0.coordinator.route();
-        permit.send(SpeechRequest {
-            text: spoken,
-            route: speaker.clone(),
-            generation,
-            sequence,
-            deadline: std::time::Instant::now() + state.0.speech_deadline,
-            scope: if group.is_some() {
-                ContinuationScope::ContinueCurrentTurn
-            } else {
-                ContinuationScope::FreshTurn
-            },
-            group: group.unwrap_or_else(|| state.0.new_speech_group()),
-            model: state.0.coordinator.status().model,
-            log_spoken: true,
-            result: result_tx,
-            span: tracing::Span::current(),
-        });
-        match result_rx.await {
-            Ok(Ok(())) => {
-                state.0.mark_foreground_audio(generation);
-                tracing::info!(generation, sequence, elapsed = ?started.elapsed(), "spoken");
-                trace_speech(&state, speaker, &req.text, None, None);
-                return Json(delivery_response(true)).into_response();
-            }
-            Ok(Err(detail)) => {
-                tracing::info!(generation, sequence, %detail, elapsed = ?started.elapsed(), "not spoken");
-                trace_speech(&state, speaker, &req.text, Some(detail.clone()), None);
-                return (
-                    axum::http::StatusCode::BAD_GATEWAY,
-                    Json(json!({"delivered":false, "reason":detail.clone(), "detail":detail})),
-                )
-                    .into_response();
-            }
-            Err(_) => {
-                tracing::warn!(elapsed = ?started.elapsed(), "not spoken: the speech worker stopped");
-                trace_speech(
-                    &state,
-                    speaker,
-                    &req.text,
-                    Some("speech worker stopped".into()),
-                    None,
-                );
-                return (
-                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                    Json(json!({"delivered":false, "reason":"speech worker stopped", "detail":"speech worker stopped"})),
-                )
-                    .into_response();
-            }
+    let sequence = reserved.sequence;
+    let group = state.0.active_speech_group();
+    let speaker = state.0.coordinator.route();
+    let admission = SpeechAdmission {
+        text: spoken,
+        route: speaker.clone(),
+        generation,
+        deadline: std::time::Instant::now() + state.0.speech_deadline,
+        scope: if group.is_some() {
+            ContinuationScope::ContinueCurrentTurn
+        } else {
+            ContinuationScope::FreshTurn
+        },
+        group: group.unwrap_or_else(|| state.0.new_speech_group()),
+        log_spoken: true,
+    };
+    match send_speech(&state, admission, reserved).await {
+        Ok(()) => {
+            state.0.mark_foreground_audio(generation);
+            tracing::info!(generation, sequence, elapsed = ?started.elapsed(), "spoken");
+            trace_speech(&state, speaker, &req.text, None, None);
+            Json(delivery_response(true)).into_response()
+        }
+        Err(SpeechFailure::NotSpoken(detail)) => {
+            tracing::info!(generation, sequence, %detail, elapsed = ?started.elapsed(), "not spoken");
+            trace_speech(&state, speaker, &req.text, Some(detail.clone()), None);
+            (
+                axum::http::StatusCode::BAD_GATEWAY,
+                Json(json!({"delivered":false, "reason":detail.clone(), "detail":detail})),
+            )
+                .into_response()
+        }
+        Err(SpeechFailure::WorkerStopped) => {
+            tracing::warn!(elapsed = ?started.elapsed(), "not spoken: the speech worker stopped");
+            trace_speech(
+                &state,
+                speaker,
+                &req.text,
+                Some("speech worker stopped".into()),
+                None,
+            );
+            (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"delivered":false, "reason":"speech worker stopped", "detail":"speech worker stopped"})),
+            )
+                .into_response()
         }
     }
-
-    Json(json!({"delivered":false, "reason":"no browser connected", "detail":"no browser connected"})).into_response()
 }
 fn recent_floor_context(entries: &[crate::history::TranscriptEntry]) -> String {
     entries
@@ -4191,16 +4185,44 @@ struct ReservedSpeech<'a> {
     sequence: u64,
 }
 
-async fn reserve_speech(state: &AppState, generation: u64) -> Result<ReservedSpeech<'_>, String> {
-    let permit = state
-        .0
-        .speech
-        .reserve()
-        .await
-        .map_err(|_| "speech worker is unavailable or busy".to_owned())?;
+/// What a speech request does when the speech worker's queue is full.
+#[derive(Clone, Copy)]
+enum WhenQueueFull {
+    Wait,
+    Refuse,
+}
+
+/// Why a speech request got no place in the speech order.
+enum ReserveFailure {
+    /// The speech worker is gone, or its queue is full and the request does
+    /// not wait.
+    WorkerUnavailable,
+    /// The generation moved on, or the audio queue is full.
+    Superseded,
+}
+
+impl std::fmt::Display for ReserveFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::WorkerUnavailable => "speech worker is unavailable or busy",
+            Self::Superseded => "speech generation was superseded",
+        })
+    }
+}
+
+async fn reserve_speech(
+    state: &AppState,
+    generation: u64,
+    when_full: WhenQueueFull,
+) -> Result<ReservedSpeech<'_>, ReserveFailure> {
+    let permit = match when_full {
+        WhenQueueFull::Wait => state.0.speech.reserve().await.ok(),
+        WhenQueueFull::Refuse => state.0.speech.try_reserve().ok(),
+    }
+    .ok_or(ReserveFailure::WorkerUnavailable)?;
     let sequence = reserve_audio(state, generation)
         .await
-        .ok_or_else(|| "speech generation was superseded".to_owned())?;
+        .ok_or(ReserveFailure::Superseded)?;
     Ok(ReservedSpeech { permit, sequence })
 }
 
@@ -4220,7 +4242,9 @@ async fn reserve_reply_voice<'a>(
     {
         return None;
     }
-    reserve_speech(state, generation).await.ok()
+    reserve_speech(state, generation, WhenQueueFull::Wait)
+        .await
+        .ok()
 }
 
 /// Gives back a reply's reserved first utterance that will not be spoken. Its
@@ -4232,11 +4256,31 @@ async fn release_reply_voice(state: &AppState, voice: Option<ReservedSpeech<'_>>
     }
 }
 
-async fn queue_speech(
+/// Why speech that had its place was not spoken.
+enum SpeechFailure {
+    /// The speech worker dropped the request without an answer.
+    WorkerStopped,
+    /// The speech worker's answer: synthesis failed, or no browser took the
+    /// audio.
+    NotSpoken(String),
+}
+
+impl std::fmt::Display for SpeechFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WorkerStopped => f.write_str("speech worker stopped"),
+            Self::NotSpoken(detail) => f.write_str(detail),
+        }
+    }
+}
+
+/// Hands a speech request to the speech worker in the place `reserved` holds
+/// for it, and waits for the worker's answer.
+async fn send_speech(
     state: &AppState,
     admission: SpeechAdmission,
-    reserved: Option<ReservedSpeech<'_>>,
-) -> Result<(), String> {
+    reserved: ReservedSpeech<'_>,
+) -> Result<(), SpeechFailure> {
     let SpeechAdmission {
         text,
         route,
@@ -4246,10 +4290,7 @@ async fn queue_speech(
         group,
         log_spoken,
     } = admission;
-    let ReservedSpeech { permit, sequence } = match reserved {
-        Some(reserved) => reserved,
-        None => reserve_speech(state, generation).await?,
-    };
+    let ReservedSpeech { permit, sequence } = reserved;
     let (result_tx, result_rx) = oneshot::channel();
     permit.send(SpeechRequest {
         text,
@@ -4264,9 +4305,28 @@ async fn queue_speech(
         result: result_tx,
         span: tracing::Span::current(),
     });
-    result_rx
+    match result_rx.await {
+        Ok(answer) => answer.map_err(SpeechFailure::NotSpoken),
+        Err(_) => Err(SpeechFailure::WorkerStopped),
+    }
+}
+
+/// A reply's utterance, spoken in the place reserved for it, or in one it
+/// waits for.
+async fn queue_speech(
+    state: &AppState,
+    admission: SpeechAdmission,
+    reserved: Option<ReservedSpeech<'_>>,
+) -> Result<(), String> {
+    let reserved = match reserved {
+        Some(reserved) => reserved,
+        None => reserve_speech(state, admission.generation, WhenQueueFull::Wait)
+            .await
+            .map_err(|failure| failure.to_string())?,
+    };
+    send_speech(state, admission, reserved)
         .await
-        .map_err(|_| "speech worker stopped".to_owned())?
+        .map_err(|failure| failure.to_string())
 }
 
 /// Speaks a reply's utterances in order. `first` is the slot reserved for
