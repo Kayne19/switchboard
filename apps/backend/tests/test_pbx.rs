@@ -2667,6 +2667,44 @@ async fn a_failed_promotion_turn_gives_the_session_guard_back() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn a_promotion_whose_turn_fails_without_detail_reports_the_fallback() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| says("handled")));
+    fake.on_command = Some(Box::new(|name, args| {
+        (name == "prompt"
+            && args["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("show me beta")))
+        .then(|| Some(Err(("prompt_failed".into(), String::new()))))
+    }));
+    fake.serve(board.hosts().connect_fake(HOST));
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .start_background_part("beta", "beta chart")
+        .await
+        .expect("beta resident");
+
+    let reply = board
+        .route_project_part(
+            "show me beta",
+            "beta",
+            crate::router::ConversationMode::Continue,
+            None,
+        )
+        .await;
+
+    assert_eq!(
+        reply.error.as_deref(),
+        Some("the agent never answered"),
+        "{reply:?}"
+    );
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn a_promotion_and_a_transfer_commit_their_steps_in_one_order() {
     let mut board = board_with(
         vec![

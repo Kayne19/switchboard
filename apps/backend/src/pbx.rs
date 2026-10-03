@@ -2447,11 +2447,16 @@ impl Switchboard {
             .await
             .unwrap_or_else(failed_turn);
         if turn.failed && turn.text.is_empty() {
+            let detail = if turn.error.trim().is_empty() {
+                "the agent never answered".to_owned()
+            } else {
+                turn.error
+            };
             session.close();
             self.announce_agent_state(&project.id, "finished").await;
-            self.rollback_startup(format!("background promotion failed: {}", turn.error));
+            self.rollback_startup(format!("background promotion failed: {detail}"));
             self.set_active_session(previous_foreground).await;
-            return self.couldnt_bring_back(&project.id, turn.error);
+            return self.couldnt_bring_back(&project.id, detail);
         }
         if let Err(error) = self
             .commit_leg(&project.id, &token, &session, LegChange::NewAgent)
