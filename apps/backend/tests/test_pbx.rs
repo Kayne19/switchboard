@@ -2516,6 +2516,54 @@ async fn failed_background_promotion_closes_the_resident_and_finishes_its_state(
 
 #[cfg(unix)]
 #[tokio::test]
+async fn failed_background_promotion_adoption_rolls_back_the_candidate() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let coordinator = board.coordinator();
+    let _log = serve(
+        &board,
+        Box::new(move |_, message| {
+            if message.contains("show me beta") {
+                // The candidate is staged before the foreground prompt.
+                // Simulate a competing lifecycle owner changing it before
+                // the PBX adopts it, as the transfer test does.
+                coordinator.set_candidate_token_for_test("not-the-promotion-token");
+            }
+            says("handled")
+        }),
+    );
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .start_background_part("beta", "beta chart")
+        .await
+        .expect("beta resident");
+    let resident = board.background_agents.get("beta").unwrap().clone();
+
+    let reply = board
+        .route_project_part(
+            "show me beta",
+            "beta",
+            crate::router::ConversationMode::Continue,
+            None,
+        )
+        .await;
+
+    assert!(reply.error.is_some(), "adoption must fail: {reply:?}");
+    assert!(!resident.alive());
+    // A candidate left staged would hold the call in `Starting`, where the
+    // coordinator refuses every later prompt.
+    assert!(!board.coordinator.is_candidate());
+    assert_eq!(board.coordinator.route(), "alpha");
+    assert_eq!(
+        board.agent.as_ref().map(|agent| agent.label().to_owned()),
+        Some("alpha".to_owned())
+    );
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn background_prompt_transport_failure_evicts_the_resident_and_finishes() {
     let mut board = board_with(vec![project("alpha", "")], false);
     let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();

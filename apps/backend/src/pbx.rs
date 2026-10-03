@@ -2472,6 +2472,7 @@ impl Switchboard {
             if let Err(error) = self.coordinator.adopt_candidate(&token) {
                 session.close();
                 self.announce_agent_state(&project.id, "finished").await;
+                self.rollback_startup(format!("background promotion adoption failed: {error}"));
                 return self.couldnt_bring_back(&project.id, error.to_string());
             }
         }
