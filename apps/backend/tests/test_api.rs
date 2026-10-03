@@ -3882,6 +3882,20 @@ async fn frames_the_socket_cannot_act_on_are_refused_without_hanging_up() {
         next_json(&mut browser).await,
         error("Unknown websocket command.")
     );
+    browser.send(Wire::text("null")).await.unwrap();
+    assert_eq!(
+        next_json(&mut browser).await,
+        error("Invalid command shape.")
+    );
+    // A type is a name: not a number standing for one, and not a name in
+    // another case.
+    for frame in [json!({"type":7}), json!({"type":"Ping", "nonce":"n"})] {
+        send_json_frame(&mut browser, frame).await;
+        assert_eq!(
+            next_json(&mut browser).await,
+            error("Unknown websocket command.")
+        );
+    }
     assert_still_answering(&mut browser, "after-bad-commands").await;
 
     // Audio is only taken after the header that names it. A header that is
@@ -3895,6 +3909,87 @@ async fn frames_the_socket_cannot_act_on_are_refused_without_hanging_up() {
     assert_eq!(next_json(&mut browser).await, headerless);
     assert_still_answering(&mut browser, "after-bad-audio").await;
     assert!(state.0.accepted_clips.lock().await.0.is_empty());
+}
+
+/// A command of a known type is read field by field: a field that is missing
+/// or of the wrong kind is taken as absent, a field no command declares is
+/// ignored, and a key given twice keeps its last value. None of these refuses
+/// the frame as a whole; each command decides what an absent field means.
+#[tokio::test]
+async fn a_known_command_reads_each_field_it_can_and_ignores_the_rest() {
+    let state = state();
+    let served = Served::start(&state).await;
+    let mut browser = served.connect().await;
+    json_until(&mut browser, "history").await;
+    let hello_ack = |mse: bool| {
+        json!({
+            "type":"hello_ack", "version":1, "stt_streaming":false,
+            "audio_streaming":mse, "mse_mp3":mse,
+        })
+    };
+
+    send_json_frame(
+        &mut browser,
+        json!({"type":"hello", "version":1, "capabilities":{"mse_mp3":true}, "extra":[1]}),
+    )
+    .await;
+    assert_eq!(next_json(&mut browser).await, hello_ack(true));
+    // A version or capability of the wrong kind is no version or capability.
+    send_json_frame(
+        &mut browser,
+        json!({"type":"hello", "version":"1", "capabilities":{"mse_mp3":true}}),
+    )
+    .await;
+    assert_eq!(next_json(&mut browser).await, hello_ack(false));
+    send_json_frame(
+        &mut browser,
+        json!({"type":"hello", "version":1, "capabilities":{"mse_mp3":1}}),
+    )
+    .await;
+    assert_eq!(next_json(&mut browser).await, hello_ack(false));
+    send_json_frame(
+        &mut browser,
+        json!({"type":"hello", "version":1, "capabilities":[true, true, true]}),
+    )
+    .await;
+    assert_eq!(next_json(&mut browser).await, hello_ack(false));
+
+    // The last of a repeated key wins, the type included.
+    browser
+        .send(Wire::text(
+            r#"{"type":"dance","type":"ping","nonce":"first","nonce":"last","time":5}"#,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        next_json(&mut browser).await,
+        json!({"type":"pong", "nonce":"last", "time":5})
+    );
+
+    // Each command answers an unusable field its own way.
+    send_json_frame(
+        &mut browser,
+        json!({"type":"typed_turn", "id":"t1", "generation":"0", "text":"hi"}),
+    )
+    .await;
+    assert_eq!(
+        next_json(&mut browser).await,
+        json!({"type":"error", "id":"t1", "message":"That message could not be sent."})
+    );
+    send_json_frame(&mut browser, json!({"type":"screen_state", "view":7})).await;
+    assert_eq!(
+        next_json(&mut browser).await,
+        json!({"type":"error", "message":"Invalid screen view."})
+    );
+    send_json_frame(&mut browser, json!({"type":"stt_chunk", "clip_id":7})).await;
+    assert_eq!(
+        next_json(&mut browser).await,
+        json!({"type":"error", "message":"Invalid streaming clip id."})
+    );
+    // Ending or cancelling a stream that names no clip is not answered.
+    send_json_frame(&mut browser, json!({"type":"stt_end"})).await;
+    send_json_frame(&mut browser, json!({"type":"stt_cancel", "clip_id":7})).await;
+    assert_still_answering(&mut browser, "after-nameless-stream-commands").await;
 }
 
 #[tokio::test]
