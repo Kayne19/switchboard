@@ -167,8 +167,13 @@ test("resume: open_session reopens a saved sb- session; a desk session is refuse
 	// The project folder reaches the daemon: a reopen without it runs in the daemon's own directory.
 	assert.deepEqual(daemon.calls.find((c) => c.op === "open")?.args, ["old1", "/srv/homelab"]);
 	assert.equal(info.cwd, "/srv/homelab");
+	const opensBefore = daemon.calls.filter((c) => c.op === "open").length;
 	await assert.rejects(manager.handle("open_session", { session_id: "desk", cwd: "/srv/homelab" }), (e: Error & { code?: string }) => e.code === "refused");
 	assert.deepEqual(manager.handles(), [info.session]);
+	// The refusal happened on the saved record: the desk session was never
+	// made live, where a refused-but-opened session would run unseen.
+	assert.equal(daemon.calls.filter((c) => c.op === "open").length, opensBefore);
+	assert.equal([...daemon.live.values()].some((s) => s.sessionId === "desk"), false);
 });
 
 test("a turn settles on wait_for_idle after the last input, not on agent_end", async () => {

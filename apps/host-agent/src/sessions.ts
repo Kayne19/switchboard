@@ -338,14 +338,22 @@ export class SessionManager {
 
 	async openSession(sessionId: string, cwd: string, project: string | undefined): Promise<Record<string, unknown>> {
 		for (const t of this.#tracked.values()) if (t.sessionId === sessionId) return this.#info(t);
+		const expected = project ? `${SESSION_NAME_PREFIX}${project}-` : SESSION_NAME_PREFIX;
+		const refuse = (name: string | null) => new CommandError("refused", `session ${sessionId} (${name || "unnamed"}) was not created by the switchboard`);
+		// The name is checked on the saved record before anything is made
+		// live: a daemon `create` with a session path reopens the session (or
+		// returns it, if someone else has it open), and a desk session the
+		// switchboard then refused would be left running where nothing can
+		// see it.
+		const saved = (await this.#port.listSaved(cwd)).find((s) => s.sessionId === sessionId || s.path === sessionId);
+		if (saved && !(saved.name ?? "").startsWith(expected)) throw refuse(saved.name);
 		// The daemon runs a reopened session in its own directory unless told
 		// otherwise, so the project folder is passed again.
 		const opened = await this.#port.open(sessionId, cwd);
+		// A session not in the saved listing (a path outside `cwd`, or a
+		// rename since) is still held to the name it opens with.
 		const name = opened.name ?? "";
-		const expected = project ? `${SESSION_NAME_PREFIX}${project}-` : SESSION_NAME_PREFIX;
-		if (!name.startsWith(expected)) {
-			throw new CommandError("refused", `session ${sessionId} (${name || "unnamed"}) was not created by the switchboard`);
-		}
+		if (!name.startsWith(expected)) throw refuse(opened.name);
 		const projectId = project ?? name.slice(SESSION_NAME_PREFIX.length).replace(/-[^-]+$/, "");
 		return this.#adopt(opened, projectId, cwd, "created");
 	}
