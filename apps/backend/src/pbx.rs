@@ -18,6 +18,7 @@
 use crate::hosts::Hosts;
 #[cfg(test)]
 use crate::hosts::{FakeHostAgent, FakeLog, OnPrompt, Step};
+use crate::leg_transitions::LegLaunch;
 #[cfg(test)]
 use crate::lifecycle::CandidateLeg;
 use crate::lifecycle::{Coordinator, StatusConfig};
@@ -25,8 +26,7 @@ use crate::lifecycle::{Coordinator, StatusConfig};
 use crate::models::ModelCatalog;
 use crate::operator::OperatorLaunch;
 use crate::pi_client::{
-    ActivityCallback, LegSession, ModuleCallback, PiSession, ProjectSession, SessionClosedCallback,
-    TurnCallback,
+    ActivityCallback, LegSession, PiSession, ProjectSession, SessionClosedCallback,
 };
 use crate::prewarm::Prewarm;
 #[cfg(test)]
@@ -42,7 +42,7 @@ use crate::router::Router;
 use futures_util::FutureExt;
 #[cfg(test)]
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
@@ -51,9 +51,6 @@ use tokio::sync::Mutex;
 use tokio::time::Duration;
 
 pub const OPERATOR: &str = "operator";
-/// How long a project leg may go silent inside one turn, its intro included,
-/// before it is dropped as wedged.
-const PROJECT_TURN_TIMEOUT: Duration = Duration::from_secs(600);
 /// Told the switchboard has settled on a leg; it reads which one from the
 /// coordinator.
 pub type RouteCallback = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
@@ -92,8 +89,8 @@ pub struct Switchboard {
     route_callback: Option<RouteCallback>,
     pub(crate) agent_state_callback: Option<AgentStateCallback>,
     foreground_closed_callback: Option<ForegroundClosedCallback>,
-    pub(crate) module_callback: Option<ModuleCallback>,
-    pub(crate) turn_callback: Option<TurnCallback>,
+    /// What a project leg is launched with; `leg_transitions.rs` owns it.
+    pub(crate) legs: LegLaunch,
     pub(crate) active_session: Arc<Mutex<Option<LegSession>>>,
     pub(crate) operator: Option<PiSession>,
     /// A separate process for second opinions and split dispatch. It must not
@@ -116,8 +113,6 @@ pub struct Switchboard {
     pub(crate) trace_utterance: Arc<StdMutex<Option<String>>>,
     /// Project awaiting a caller confirmation before it is stopped.
     pub(crate) pending_stop: Option<String>,
-    /// Projects explicitly stopped by the caller must start fresh once.
-    pub(crate) resume_blocked: HashSet<String>,
     /// The one owner of the leg on the line, and of the status the page is
     /// shown.
     pub(crate) coordinator: Coordinator,
@@ -131,9 +126,6 @@ pub struct Switchboard {
     /// The sole utterance routing decider. The operator remains the fallback
     /// conversation when this client is unavailable or unsure.
     pub(crate) router: Router,
-    /// `PROJECT_TURN_TIMEOUT`, held per switchboard so a test can wait out a
-    /// silent leg without waiting ten minutes.
-    pub(crate) project_turn_timeout: Duration,
     floor_quiet_threshold: Duration,
     /// Read-only debug observer; never part of call control.
     pub(crate) debug: crate::debug::DebugBus,
@@ -200,8 +192,7 @@ impl Switchboard {
             route_callback: None,
             agent_state_callback: None,
             foreground_closed_callback: None,
-            module_callback: None,
-            turn_callback: None,
+            legs: LegLaunch::default(),
             active_session: Arc::new(Mutex::new(None)),
             operator: None,
             utility: None,
@@ -212,13 +203,11 @@ impl Switchboard {
             call_state: String::new(),
             trace_utterance: Arc::new(StdMutex::new(None)),
             pending_stop: None,
-            resume_blocked: HashSet::new(),
             coordinator,
             hosts,
             prewarm,
             planner,
             router,
-            project_turn_timeout: PROJECT_TURN_TIMEOUT,
             floor_quiet_threshold: Duration::from_millis(config.floor_quiet_threshold_ms),
             debug: crate::debug::DebugBus::off(),
         }
@@ -342,16 +331,6 @@ impl Switchboard {
             "Work on {project} stopped: its session closed on the host."
         ));
         true
-    }
-
-    /// Receives project turn boundaries from host agents.
-    pub fn set_turn_callback(&mut self, callback: Option<TurnCallback>) {
-        self.turn_callback = callback;
-    }
-
-    /// What answers a project session's `speak`, `display` and `view`.
-    pub fn set_module_callback(&mut self, callback: Option<ModuleCallback>) {
-        self.module_callback = callback;
     }
 
     pub async fn announce_route(&self) {
