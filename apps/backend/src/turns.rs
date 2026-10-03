@@ -13,10 +13,11 @@ use crate::history::AGENT;
 #[cfg(test)]
 use crate::hosts::{FakeHostAgent, FakeLog, Step};
 use crate::lifecycle::{LifecycleError, OperationIdentity};
-use crate::pbx::{AgentStateNotice, RoutingView, Switchboard};
+use crate::pbx::{AgentStateNotice, Switchboard};
 use crate::pi_client::ProjectTurn;
 use crate::protocol::ServerMessage;
 use crate::router::{jev_outcome, Action, CallSummary, Decision, RouteRule};
+use crate::routing_view::RoutingView;
 use crate::speech::deliver_turn_if_current;
 use serde_json::{json, Value};
 use std::collections::HashMap;

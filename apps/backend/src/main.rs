@@ -25,6 +25,7 @@ mod registry;
 mod reply;
 mod residents;
 mod router;
+mod routing_view;
 mod speech;
 mod turns;
 mod visual_protocol;
