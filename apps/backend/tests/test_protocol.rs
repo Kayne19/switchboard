@@ -369,3 +369,17 @@ fn every_client_message_type_has_an_example() {
         "these command types have no example in client-messages.json: {missing:?}"
     );
 }
+
+/// `parse` answers every error from the enum as an unknown type, which is
+/// right only while every field is lenient: a variant that gained a required
+/// field would refuse a frame of a known type as unknown.
+#[test]
+fn every_known_command_type_reads_with_no_other_field() {
+    for kind in message_types::<ClientMessage>() {
+        let frame = json!({ "type": kind }).to_string();
+        assert!(
+            ClientMessage::parse(&frame).is_ok(),
+            "{frame} is unreadable"
+        );
+    }
+}
