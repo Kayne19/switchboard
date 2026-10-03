@@ -367,12 +367,21 @@ pub(crate) fn emit_stale_clip(state: &AppState, id: &str) {
 pub(crate) type ClipHeader = (String, String, Option<u64>);
 pub(crate) type StreamChunkHeader = (String, u64, u64);
 
+/// The longest clip id a page may send. One rule for every command that names
+/// a clip: the complete-clip header, a typed turn, and the streaming commands.
+pub(crate) const MAX_CLIP_ID_CHARS: usize = 128;
+
+/// Whether `id` may name a clip: not empty and within `MAX_CLIP_ID_CHARS`.
+pub(crate) fn is_clip_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().count() <= MAX_CLIP_ID_CHARS
+}
+
 pub(crate) fn parse_clip_header(
     id: Option<String>,
     mime: Option<String>,
     generation: Option<u64>,
 ) -> Option<ClipHeader> {
-    let id = id.filter(|id| !id.is_empty() && id.chars().count() <= 128)?;
+    let id = id.filter(|id| is_clip_id(id))?;
     let mime = mime.unwrap_or_default().chars().take(100).collect();
     Some((id, mime, generation))
 }
@@ -391,7 +400,7 @@ pub(crate) fn parse_typed_turn(
     generation: Option<u64>,
     text: Option<&str>,
 ) -> Option<(String, u64, String)> {
-    let id = id.filter(|id| !id.is_empty() && id.chars().count() <= 128)?;
+    let id = id.filter(|id| is_clip_id(id))?;
     let generation = generation?;
     let text = text
         .map(str::trim)
@@ -409,10 +418,7 @@ pub(crate) async fn start_stream_clip(
     generation: Option<u64>,
     mime: Option<String>,
 ) -> Result<(), ()> {
-    let Some(id) = clip_id
-        .as_deref()
-        .filter(|id| !id.is_empty() && id.len() <= 128)
-    else {
+    let Some(id) = clip_id.as_deref().filter(|id| is_clip_id(id)) else {
         return send_message(
             state,
             epoch,

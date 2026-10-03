@@ -4,8 +4,8 @@
 //! writes.
 use crate::app_state::AppState;
 use crate::caller_input::{
-    cancel_stream_clip, end_stream_clip, handle_audio_frame, parse_clip_header, parse_typed_turn,
-    route_final_transcript, start_stream_clip, ClipHeader, StreamChunkHeader,
+    cancel_stream_clip, end_stream_clip, handle_audio_frame, is_clip_id, parse_clip_header,
+    parse_typed_turn, route_final_transcript, start_stream_clip, ClipHeader, StreamChunkHeader,
 };
 use crate::delivery::{DeliveryConnection, DeliveryFrame, Event};
 use crate::display::{is_display_event, stamp_display_seq};
@@ -352,7 +352,7 @@ pub(crate) async fn handle_text_frame(
             generation,
             sequence,
         } => {
-            let Some(id) = clip_id.filter(|id| !id.is_empty() && id.len() <= 128) else {
+            let Some(id) = clip_id.filter(|id| is_clip_id(id)) else {
                 return send_message(
                     state,
                     epoch,
