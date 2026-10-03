@@ -2311,10 +2311,10 @@ done
     let state = AppState::new(
         Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
         TranscriptLog::new(10),
-        Speaker::from_values(
+        Speaker::new(
             100,
             std::time::Duration::from_millis(25_000),
-            &HashMap::new(),
+            crate::Config::for_tests(&[]).tts,
         ),
         SttAdapter::from_command(None),
         SttStreamAdapter::from_command(None),

@@ -40,17 +40,23 @@ impl TtsTransport for FakeTtsTransport {
     }
 }
 
+/// The settings the request-contract tests assert on, parsed the way the
+/// service parses them.
+fn test_settings() -> TtsSettings {
+    crate::Config::for_tests(&[
+        ("ELEVENLABS_API_KEY", "test-secret"),
+        ("ELEVENLABS_VOICE_ID", "voice-a"),
+        ("ELEVENLABS_MODEL_ID", "model-a"),
+    ])
+    .tts
+}
+
 fn speaker_with_response(
     status: StatusCode,
     bytes: &[u8],
 ) -> (Speaker, Arc<StdMutex<Option<TtsRequest>>>) {
-    let values = HashMap::from([
-        ("ELEVENLABS_API_KEY".into(), "test-secret".into()),
-        ("ELEVENLABS_VOICE_ID".into(), "voice-a".into()),
-        ("ELEVENLABS_MODEL_ID".into(), "model-a".into()),
-    ]);
     let request = Arc::new(StdMutex::new(None));
-    let mut speaker = Speaker::from_values(100, Duration::from_millis(25_000), &values);
+    let mut speaker = Speaker::new(100, Duration::from_millis(25_000), test_settings());
     speaker.transport = Arc::new(FakeTtsTransport {
         responses: Arc::new(StdMutex::new(vec![(
             status,
@@ -66,18 +72,13 @@ fn speaker_with_response(
 fn speaker_with_responses(
     responses: Vec<(StatusCode, Option<&str>, &[u8])>,
 ) -> (Speaker, Arc<StdMutex<Vec<TtsRequest>>>) {
-    let values = HashMap::from([
-        ("ELEVENLABS_API_KEY".into(), "test-secret".into()),
-        ("ELEVENLABS_VOICE_ID".into(), "voice-a".into()),
-        ("ELEVENLABS_MODEL_ID".into(), "model-a".into()),
-    ]);
     let request = Arc::new(StdMutex::new(None));
     let requests = Arc::new(StdMutex::new(Vec::new()));
     let responses = responses
         .into_iter()
         .map(|(status, request_id, bytes)| (status, request_id.map(str::to_owned), bytes.to_vec()))
         .collect();
-    let mut speaker = Speaker::from_values(100, Duration::from_millis(25_000), &values);
+    let mut speaker = Speaker::new(100, Duration::from_millis(25_000), test_settings());
     speaker.transport = Arc::new(FakeTtsTransport {
         responses: Arc::new(StdMutex::new(responses)),
         request,
@@ -437,7 +438,7 @@ async fn tts_retry_is_not_used_for_server_failure_and_v3_is_fresh_only() {
 
     let (mut v3, requests) =
         speaker_with_responses(vec![(StatusCode::OK, Some("v3-id"), b"audio")]);
-    v3.model_id = "eleven_v3".into();
+    v3.tts.model_id = "eleven_v3".into();
     let stream = v3
         .stream_until_with_continuity(
             "fresh",
