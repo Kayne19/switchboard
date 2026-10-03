@@ -3934,23 +3934,24 @@ async fn a_known_command_reads_each_field_it_can_and_ignores_the_rest() {
             "audio_streaming":mse, "mse_mp3":mse,
         })
     };
+    let both = json!({"audio_streaming":true, "mse_mp3":true});
 
     send_json_frame(
         &mut browser,
-        json!({"type":"hello", "version":1, "capabilities":{"mse_mp3":true}, "extra":[1]}),
+        json!({"type":"hello", "version":1, "capabilities":both, "extra":[1]}),
     )
     .await;
     assert_eq!(next_json(&mut browser).await, hello_ack(true));
     // A version or capability of the wrong kind is no version or capability.
     send_json_frame(
         &mut browser,
-        json!({"type":"hello", "version":"1", "capabilities":{"mse_mp3":true}}),
+        json!({"type":"hello", "version":"1", "capabilities":both}),
     )
     .await;
     assert_eq!(next_json(&mut browser).await, hello_ack(false));
     send_json_frame(
         &mut browser,
-        json!({"type":"hello", "version":1, "capabilities":{"mse_mp3":1}}),
+        json!({"type":"hello", "version":1, "capabilities":{"audio_streaming":true, "mse_mp3":1}}),
     )
     .await;
     assert_eq!(next_json(&mut browser).await, hello_ack(false));
@@ -3997,6 +3998,39 @@ async fn a_known_command_reads_each_field_it_can_and_ignores_the_rest() {
     send_json_frame(&mut browser, json!({"type":"stt_end"})).await;
     send_json_frame(&mut browser, json!({"type":"stt_cancel", "clip_id":7})).await;
     assert_still_answering(&mut browser, "after-nameless-stream-commands").await;
+}
+
+/// `hello` is answered capability by capability. Speech is streamed only as
+/// MSE mp3, so audio streaming is offered only to a page that asks for it and
+/// can play MSE mp3; every page so far asks for both or neither.
+#[tokio::test]
+async fn hello_offers_audio_streaming_only_to_a_page_that_asks_for_it() {
+    let state = state();
+    let served = Served::start(&state).await;
+    let mut browser = served.connect().await;
+    json_until(&mut browser, "history").await;
+
+    for (audio_streaming, mse_mp3, offered) in [
+        (true, true, (true, true)),
+        (false, true, (false, true)),
+        (true, false, (false, false)),
+        (false, false, (false, false)),
+    ] {
+        send_json_frame(
+            &mut browser,
+            json!({
+                "type":"hello", "version":1,
+                "capabilities":{"audio_streaming":audio_streaming, "mse_mp3":mse_mp3},
+            }),
+        )
+        .await;
+        let ack = next_json(&mut browser).await;
+        assert_eq!(
+            (ack["audio_streaming"].as_bool(), ack["mse_mp3"].as_bool()),
+            (Some(offered.0), Some(offered.1)),
+            "asked for audio_streaming {audio_streaming}, mse_mp3 {mse_mp3}: {ack}"
+        );
+    }
 }
 
 #[tokio::test]

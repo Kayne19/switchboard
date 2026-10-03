@@ -423,6 +423,14 @@ pub struct Capabilities {
         skip_serializing_if = "Option::is_none"
     )]
     pub stt_streaming: Option<bool>,
+    /// The page can play synthesized speech as it streams in.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub audio_streaming: Option<bool>,
+    /// The page can play `audio/mpeg` through Media Source Extensions.
     #[serde(
         default,
         deserialize_with = "lenient",
