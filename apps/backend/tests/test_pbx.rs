@@ -2516,6 +2516,289 @@ async fn failed_background_promotion_closes_the_resident_and_finishes_its_state(
 
 #[cfg(unix)]
 #[tokio::test]
+async fn failed_background_promotion_adoption_rolls_back_the_candidate() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let coordinator = board.coordinator();
+    let _log = serve(
+        &board,
+        Box::new(move |_, message| {
+            if message.contains("show me beta") {
+                // The candidate is staged before the foreground prompt.
+                // Simulate a competing lifecycle owner changing it before
+                // the PBX adopts it, as the transfer test does.
+                coordinator.set_candidate_token_for_test("not-the-promotion-token");
+            }
+            says("handled")
+        }),
+    );
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .start_background_part("beta", "beta chart")
+        .await
+        .expect("beta resident");
+    let resident = board.background_agents.get("beta").unwrap().clone();
+
+    let reply = board
+        .route_project_part(
+            "show me beta",
+            "beta",
+            crate::router::ConversationMode::Continue,
+            None,
+        )
+        .await;
+
+    assert!(reply.error.is_some(), "adoption must fail: {reply:?}");
+    assert!(!resident.alive());
+    // A candidate left staged would hold the call in `Starting`, where the
+    // coordinator refuses every later prompt.
+    assert!(!board.coordinator.is_candidate());
+    assert_eq!(board.coordinator.route(), "alpha");
+    assert_eq!(
+        board.agent.as_ref().map(|agent| agent.label().to_owned()),
+        Some("alpha".to_owned())
+    );
+    assert_eq!(
+        board
+            .session_control()
+            .lock()
+            .await
+            .as_ref()
+            .map(|session| session.label().to_owned()),
+        Some("alpha".to_owned()),
+        "the leg the caller stayed on is back on the session guard"
+    );
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_promoted_agent_holds_the_session_guard_during_its_foreground_turn() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let control = board.session_control();
+    let guard_during_turn = Arc::new(StdMutex::new(None::<String>));
+    let guard_for_prompt = guard_during_turn.clone();
+    let _log = serve(
+        &board,
+        Box::new(move |_, message| {
+            if message.contains("show me beta") {
+                // What a steer or a page rescue would reach right now. A
+                // guard held across the prompt records nothing, and the
+                // assertion below says so; a panic here would only hang
+                // the prompt.
+                let label = control
+                    .try_lock()
+                    .ok()
+                    .and_then(|guard| guard.as_ref().map(|session| session.label().to_owned()));
+                *guard_for_prompt.lock().unwrap() = label;
+            }
+            says("handled")
+        }),
+    );
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .start_background_part("beta", "beta chart")
+        .await
+        .expect("beta resident");
+
+    let reply = board
+        .route_project_part(
+            "show me beta",
+            "beta",
+            crate::router::ConversationMode::Continue,
+            None,
+        )
+        .await;
+
+    assert_eq!(reply.route, "beta", "{reply:?}");
+    assert_eq!(
+        guard_during_turn.lock().unwrap().as_deref(),
+        Some("beta"),
+        "the leg being promoted is the one steering and rescue must reach \
+         (None: the guard was empty, or held across the prompt)"
+    );
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failed_promotion_turn_gives_the_session_guard_back() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| says("handled")));
+    fake.on_command = Some(Box::new(|name, args| {
+        (name == "prompt"
+            && args["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("show me beta")))
+        .then(|| Some(Err(("prompt_failed".into(), "promotion failed".into()))))
+    }));
+    fake.serve(board.hosts().connect_fake(HOST));
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .start_background_part("beta", "beta chart")
+        .await
+        .expect("beta resident");
+
+    let reply = board
+        .route_project_part(
+            "show me beta",
+            "beta",
+            crate::router::ConversationMode::Continue,
+            None,
+        )
+        .await;
+
+    assert!(reply.error.is_some(), "the promotion must fail: {reply:?}");
+    assert_eq!(board.coordinator.route(), "alpha");
+    let guard = board.session_control();
+    let guard = guard.lock().await;
+    let held = guard.as_ref().expect("alpha is back on the guard");
+    assert!(held.same_session(&LegSession::Project(
+        board.agent.clone().expect("alpha is still on the line")
+    )));
+    drop(guard);
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_promotion_whose_turn_fails_without_detail_reports_the_fallback() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| says("handled")));
+    fake.on_command = Some(Box::new(|name, args| {
+        (name == "prompt"
+            && args["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("show me beta")))
+        .then(|| Some(Err(("prompt_failed".into(), String::new()))))
+    }));
+    fake.serve(board.hosts().connect_fake(HOST));
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .start_background_part("beta", "beta chart")
+        .await
+        .expect("beta resident");
+
+    let reply = board
+        .route_project_part(
+            "show me beta",
+            "beta",
+            crate::router::ConversationMode::Continue,
+            None,
+        )
+        .await;
+
+    assert_eq!(
+        reply.error.as_deref(),
+        Some("the agent never answered"),
+        "{reply:?}"
+    );
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_promotion_and_a_transfer_commit_their_steps_in_one_order() {
+    let mut board = board_with(
+        vec![
+            project("alpha", ""),
+            project("beta", ""),
+            project("gamma", ""),
+        ],
+        false,
+    );
+    let events = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let notices = events.clone();
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        notices
+            .lock()
+            .unwrap()
+            .push(format!("{}:{}", notice.project, notice.state));
+        Box::pin(async {})
+    })));
+    let routes = events.clone();
+    let control = board.session_control();
+    let coordinator = board.coordinator();
+    board.set_route_callback(Some(Arc::new(move || {
+        // The route is announced last: the coordinator and the session
+        // guard already name the new leg.
+        let guard = control
+            .try_lock()
+            .expect("the guard is free when the route is announced")
+            .as_ref()
+            .map(|session| session.label().to_owned())
+            .unwrap_or_default();
+        routes
+            .lock()
+            .unwrap()
+            .push(format!("route:{}:{guard}", coordinator.route()));
+        Box::pin(async {})
+    })));
+    let _log = serve(&board, Box::new(|_, _| says("handled")));
+
+    board
+        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
+        .await;
+    board
+        .start_background_part("beta", "beta chart")
+        .await
+        .expect("beta resident");
+    // Let the resident's own turn settle before recording.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| event == "beta:idle")
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the resident's turn settles");
+    events.lock().unwrap().clear();
+
+    // A background promotion: alpha is shelved before beta settles.
+    let reply = board
+        .route_project_part(
+            "show me beta",
+            "beta",
+            crate::router::ConversationMode::Continue,
+            None,
+        )
+        .await;
+    assert_eq!(reply.route, "beta", "{reply:?}");
+    let promoted = std::mem::take(&mut *events.lock().unwrap());
+
+    // A fresh transfer from a project: beta is shelved before gamma settles.
+    let reply = board
+        .transfer_ctx(&transcript("gamma"), "gamma", "", "")
+        .await;
+    assert_eq!(reply.route, "gamma", "{reply:?}");
+    let transferred = std::mem::take(&mut *events.lock().unwrap());
+
+    let committed = |from: &str, to: &str| {
+        vec![
+            format!("{to}:busy"),
+            format!("{from}:idle"),
+            format!("{to}:idle"),
+            format!("route:{to}:{to}"),
+        ]
+    };
+    assert_eq!(promoted, committed("alpha", "beta"));
+    assert_eq!(transferred, committed("beta", "gamma"));
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn background_prompt_transport_failure_evicts_the_resident_and_finishes() {
     let mut board = board_with(vec![project("alpha", "")], false);
     let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
