@@ -8,6 +8,13 @@
 //! only through the coordinator's transitions. A model or thinking change is
 //! decided by `RedialPlanner`, which needs no PBX lock; the switchboard runs
 //! the ones that go ahead.
+//!
+//! This file holds the `Switchboard`'s state, its construction, callbacks and
+//! shutdown, and the types the rest of it shares. The methods live with their
+//! concern, each an `impl Switchboard` of its own: `decisions.rs`,
+//! `leg_transitions.rs`, `redial.rs`, `residents.rs`, `operator.rs` and
+//! `routing_view.rs`; the prompt text is in `prompts.rs` and the reply shape
+//! in `reply.rs`.
 use crate::hosts::Hosts;
 #[cfg(test)]
 use crate::hosts::{FakeHostAgent, FakeLog, OnPrompt, Step};

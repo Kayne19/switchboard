@@ -51,7 +51,13 @@ browser mic / page controls
           +--> lifecycle.rs: the coordinator -- call identity, the current
           |       route and leg, phases, freshness, the status
           |
-          +--> pbx.rs: leg lifecycle and what is behind each leg
+          +--> pbx.rs: the Switchboard -- leg lifecycle and what is behind
+          |       each leg, one concern per file: decisions.rs (what a line's
+          |       Jev decision does), leg_transitions.rs (legs on and off the
+          |       line), redial.rs (model/thinking changes), residents.rs
+          |       (background agents), operator.rs (operator and utility
+          |       processes), routing_view.rs (routing's lock-free view),
+          |       prompts.rs, reply.rs
           |       |
           |       +--> operator Pi process (local)
           |       +--> project session on a host's prime-agent daemon,
@@ -117,17 +123,20 @@ file and never appears in logs or errors.
 
 ### 1. Switchboard owns the call lifecycle
 
-`apps/backend/src/pbx.rs` and the coordinator (`lifecycle.rs`) own the call.
+The switchboard and the coordinator (`lifecycle.rs`) own the call. The
+switchboard is the `Switchboard` in `apps/backend/src/pbx.rs`; its methods sit
+with their concern in `leg_transitions.rs`, `redial.rs`, `residents.rs`,
+`decisions.rs` and `operator.rs`, all one owner of the same state.
 The coordinator owns which leg is on the line (route, project, model, session,
 thinking, catalog) and builds the status from it alone; the PBX owns the
 processes and changes the leg only through the coordinator's named transitions
 (`begin_candidate`, `adopt_candidate`, `rollback_startup`,
 `return_to_operator`). Every transition that brings a project leg up (a
 transfer, a background promotion, a takeover, a redial) commits it through
-`Switchboard::commit_leg`, so each takes the same steps in the same order. A
+`Switchboard::commit_leg` (`leg_transitions.rs`), so each takes the same steps in the same order. A
 rescue ends in `settle`, which every page control and
 delivered turn passes through. A model or thinking redial is decided before
-anything is torn down: `RedialPlanner` (`pbx.rs`) makes every refusal from the
+anything is torn down: `RedialPlanner` (`redial.rs`) makes every refusal from the
 coordinator's leg and prewarm's launch plan, without the PBX lock, so a refused
 page swap never rescues the live leg; `Switchboard::redial` runs a plan only
 while the leg it was made for is still on the line. Between them they own:
@@ -411,7 +420,15 @@ removes the real coupling; do not create interfaces for ceremony.
 | `leg_announcer.rs` | announcing a new leg to the browser and its once-per-leg scene reset | which leg is current (the coordinator's) |
 | `floor.rs` | ordered background request queue, Jev good-moment holds, stateless rewrites, announce-first release | lifecycle membership, agent-state projection, route authority, TTS provider wire format |
 | `lifecycle.rs` | call identity, the current route and the leg on it, phases, candidate legs, operations, the status | async work or I/O |
-| `pbx.rs` | leg lifecycle: transfer, takeover, return, rescue, redial and its decision; the operator process and project sessions | host setup, browser rendering, TTS encoding, a copy of the route |
+| `pbx.rs` | the `Switchboard`: its state, construction, callbacks, shared session guard and shutdown; the call types the other files share (`OPERATOR`, `TransferContext`, `AgentStateNotice`) | host setup, browser rendering, TTS encoding, a copy of the route |
+| `decisions.rs` | what a Jev decision does with a caller's line: continue, go to a project, split, take over, stop on confirmation, the utility's second opinion, the operator fallback; the routing trace | Jev's classification (`router.rs`), a second commit path |
+| `leg_transitions.rs` | transfer, background promotion, takeover, return, hangup and stop; the one commit path (`commit_leg`) and its rollbacks | which leg is on the line (the coordinator's), redial decisions |
+| `redial.rs` | model and thinking changes: `RedialPlanner`'s decision without the PBX lock, and `Switchboard::redial` | a second commit path |
+| `residents.rs` | background residents: `BackgroundRegistry`, shelving, split-part starts, detached prompts, eviction on host loss | which leg is on the line, promotion (`leg_transitions.rs`) |
+| `operator.rs` | the operator's Pi process and the routing utility process: startup, recovery, utility requests, floor rewrites | routing policy |
+| `routing_view.rs` | `RoutingView`, what routing reads without the PBX lock, and the desk-session listing | any change to the call |
+| `prompts.rs` | the call's prompt text: the voice block, the voice brief, the foreground and background notices, the utility's rules, the intro prompt | when or to whom a prompt is sent |
+| `reply.rs` | `Reply` and the switchboard's reply and failure builders | routing or lifecycle policy |
 | `hosts.rs` | the host link: admission by token, heartbeats, commands and replies, session subscriptions, module calls | routing decisions, leg lifecycle |
 | `prewarm.rs` | per-host setup and launch plans: catalogs, prepare | routing decisions, model policy |
 | `pi_client.rs` | the operator's Pi process/RPC transport, project sessions over the host link, process-tree cleanup | route authority or deployment registry |

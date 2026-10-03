@@ -266,7 +266,7 @@ the operator (#63). A swap
 that keeps the conversation now only aborts the turn in flight, and the
 session stays up.
 
-They now decide first. `RedialPlanner` in `apps/backend/src/pbx.rs` makes every
+They now decide first. `RedialPlanner` in `apps/backend/src/redial.rs` makes every
 refusal from the leg the coordinator names (`project_leg`, read once) and the
 launch plan prewarm holds, so it needs no PBX lock and a wedged turn cannot hold
 it up. `run_redial_control` in `apps/backend/src/page_controls.rs` runs that decision as a
