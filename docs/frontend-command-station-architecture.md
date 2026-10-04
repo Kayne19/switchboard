@@ -183,8 +183,10 @@ The visual channel supports nine content types: chart, metric, progress,
 diagram, document, code, table, note, and image (raster bytes inline; see
 `docs/visual-channel.md`).
 
-Artifacts arrive during an agent turn over `POST /display` and the existing
-WebSocket, so they can appear while work is still in progress. Lifecycle
+Artifacts arrive during an agent turn as `display` calls from the
+`switchboard` skill module, which the host agent relays over the host link,
+and reach the page over the existing WebSocket, so they can appear while
+work is still in progress. Lifecycle
 generation changes mark the previous artifact stale rather than silently
 presenting it as current.
 
