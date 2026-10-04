@@ -97,7 +97,7 @@ Notes have their own display lifecycle. A chat or spoken response does not updat
 - `rows`: 0 to 200 items. Every row is an array of exactly `columns.length` cells; a ragged row is rejected with its index.
 - A cell is a string (<= 256 UTF-16 code units), a finite number, or `{ text, semantic?, bold? }` with `text` <= 256. A number is shown as its text.
 - `highlight`: row indices (integers in `0..rows.length`) the page draws with the accent. An index naming no row is rejected.
-- There is no `align`: the page right-aligns a column whose cells are all numeric (a number, or text that reads as one with a unit, such as `12.4s` or `91%`), and left-aligns the rest.
+- There is no `align`: the page right-aligns a column whose cells are all numeric (a number, or text that reads as one with a unit or a currency sign, such as `12.4s`, `91%` or `$1,200`), and left-aligns the rest.
 
 ## Canonical schema & validation rules
 

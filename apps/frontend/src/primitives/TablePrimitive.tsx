@@ -10,10 +10,11 @@ export function cellText(cell: TableCell): string {
   return cell.text;
 }
 
-// Text that reads as a quantity: a sign, digits with separators, a fraction
-// or exponent, then a short unit such as `s`, `ms`, `%`, `GB`, `req/s`;
-// a compound duration such as `1m 48s`; or a clock time such as `01:42:18`.
-const QUANTITY = /^(?:[-+\u2212]?(?:\d[\d,_ ]*(?:\.\d+)?|\.\d+)(?:e[-+]?\d+)?\s*(?:[%\u2030\u00b0]|[a-z\u00b5]{1,4}(?:\/[a-z]{1,4})?)?(?:\s+\d+(?:\.\d+)?\s*[a-z\u00b5]{1,4})*|\d{1,2}(?::\d{2}){1,2})$/i;
+// Text that reads as a quantity: a sign, a currency symbol, digits with
+// separators, a fraction or exponent, then a short unit such as `s`, `ms`,
+// `%`, `GB`, `req/s`; a compound duration such as `1m 48s`; or a clock time
+// such as `01:42:18`.
+const QUANTITY = /^(?:[-+\u2212]?(?:[$\u20ac\u00a3\u00a5\u20b9]\s?)?(?:\d[\d,_ ]*(?:\.\d+)?|\.\d+)(?:e[-+]?\d+)?\s*(?:[%\u2030\u00b0]|[a-z\u00b5]{1,4}(?:\/[a-z]{1,4})?)?(?:\s+\d+(?:\.\d+)?\s*[a-z\u00b5]{1,4})*|\d{1,2}(?::\d{2}){1,2})$/i;
 // A cell with nothing to align: empty, a dash, or a placeholder.
 const BLANK = /^(?:|[-\u2013\u2014]|n\/a|\u2026)$/i;
 
