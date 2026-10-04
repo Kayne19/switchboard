@@ -321,7 +321,7 @@
       ],
       "additionalProperties": false
     },
-    "DiagramData": {
+    "GraphDiagramData": {
       "type": "object",
       "properties": {
         "title": {
@@ -368,6 +368,126 @@
         "edges"
       ],
       "additionalProperties": false
+    },
+    "SequenceActor": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "sub": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "semantic": {
+          "$ref": "#/definitions/Semantic"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "additionalProperties": false
+    },
+    "SequenceMessage": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "to": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "call",
+            "return",
+            "async"
+          ]
+        },
+        "active": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "label"
+      ],
+      "additionalProperties": false
+    },
+    "SequenceDiagramData": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "subtitle": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "context": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "sequence"
+          ]
+        },
+        "actors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SequenceActor"
+          },
+          "minItems": 1,
+          "maxItems": 12
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SequenceMessage"
+          },
+          "maxItems": 100
+        }
+      },
+      "required": [
+        "mode",
+        "actors",
+        "messages"
+      ],
+      "additionalProperties": false
+    },
+    "DiagramData": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/GraphDiagramData"
+        },
+        {
+          "$ref": "#/definitions/SequenceDiagramData"
+        }
+      ]
     },
     "DocumentData": {
       "type": "object",

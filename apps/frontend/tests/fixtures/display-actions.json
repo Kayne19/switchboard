@@ -249,6 +249,127 @@
       }
     },
     {
+      "name": "show_diagram_sequence",
+      "action": {
+        "op": "show",
+        "id": "handoff-seq",
+        "type": "diagram",
+        "role": "primary",
+        "data": {
+          "title": "Call handoff",
+          "mode": "sequence",
+          "caption": "TRACE / HANDOFF",
+          "actors": [
+            {
+              "id": "caller",
+              "label": "Caller"
+            },
+            {
+              "id": "pbx",
+              "label": "PBX",
+              "sub": "Routing",
+              "semantic": "cyan"
+            },
+            {
+              "id": "agent",
+              "label": "Project agent",
+              "semantic": "green"
+            }
+          ],
+          "messages": [
+            {
+              "from": "caller",
+              "to": "pbx",
+              "label": "route"
+            },
+            {
+              "from": "pbx",
+              "to": "agent",
+              "label": "launch",
+              "kind": "async"
+            },
+            {
+              "from": "agent",
+              "to": "agent",
+              "label": "load context"
+            },
+            {
+              "from": "agent",
+              "to": "pbx",
+              "label": "ready",
+              "kind": "return"
+            },
+            {
+              "from": "pbx",
+              "to": "caller",
+              "label": "transferred",
+              "kind": "call",
+              "active": true
+            }
+          ]
+        }
+      },
+      "normalized": {
+        "op": "show",
+        "id": "handoff-seq",
+        "type": "diagram",
+        "role": "primary",
+        "data": {
+          "title": "Call handoff",
+          "mode": "sequence",
+          "caption": "TRACE / HANDOFF",
+          "actors": [
+            {
+              "id": "caller",
+              "label": "Caller"
+            },
+            {
+              "id": "pbx",
+              "label": "PBX",
+              "sub": "Routing",
+              "semantic": "cyan"
+            },
+            {
+              "id": "agent",
+              "label": "Project agent",
+              "semantic": "green"
+            }
+          ],
+          "messages": [
+            {
+              "from": "caller",
+              "to": "pbx",
+              "label": "route"
+            },
+            {
+              "from": "pbx",
+              "to": "agent",
+              "label": "launch",
+              "kind": "async"
+            },
+            {
+              "from": "agent",
+              "to": "agent",
+              "label": "load context"
+            },
+            {
+              "from": "agent",
+              "to": "pbx",
+              "label": "ready",
+              "kind": "return"
+            },
+            {
+              "from": "pbx",
+              "to": "caller",
+              "label": "transferred",
+              "kind": "call",
+              "active": true
+            }
+          ]
+        }
+      }
+    },
+    {
       "name": "show_document_email",
       "action": {
         "op": "show",
@@ -705,7 +826,7 @@
           "edges": []
         }
       },
-      "reason": "missing mode: graph"
+      "reason": "missing mode"
     },
     {
       "name": "diagram_mode_not_graph",
@@ -724,7 +845,7 @@
           "edges": []
         }
       },
-      "reason": "mode must be graph"
+      "reason": "mode must be graph or sequence"
     },
     {
       "name": "diagram_source_forbidden",
@@ -894,6 +1015,997 @@
         }
       },
       "reason": "duplicate edge pair"
+    },
+    {
+      "name": "diagram_mode_unknown",
+      "action": {
+        "op": "show",
+        "id": "d",
+        "type": "diagram",
+        "data": {
+          "mode": "timeline",
+          "actors": [
+            {
+              "id": "a",
+              "label": "A"
+            },
+            {
+              "id": "b",
+              "label": "B"
+            }
+          ],
+          "messages": []
+        }
+      },
+      "reason": "mode must be graph or sequence"
+    },
+    {
+      "name": "diagram_sequence_rejects_nodes",
+      "action": {
+        "op": "show",
+        "id": "d",
+        "type": "diagram",
+        "data": {
+          "mode": "sequence",
+          "actors": [
+            {
+              "id": "a",
+              "label": "A"
+            },
+            {
+              "id": "b",
+              "label": "B"
+            }
+          ],
+          "messages": [],
+          "nodes": [
+            {
+              "id": "a",
+              "label": "A"
+            }
+          ]
+        }
+      },
+      "reason": "nodes belong to graph mode"
+    },
+    {
+      "name": "diagram_sequence_rejects_edges",
+      "action": {
+        "op": "show",
+        "id": "d",
+        "type": "diagram",
+        "data": {
+          "mode": "sequence",
+          "actors": [
+            {
+              "id": "a",
+              "label": "A"
+            },
+            {
+              "id": "b",
+              "label": "B"
+            }
+          ],
+          "messages": [],
+          "edges": []
+        }
+      },
+      "reason": "edges belong to graph mode"
+    },
+    {
+      "name": "diagram_graph_rejects_actors",
+      "action": {
+        "op": "show",
+        "id": "d",
+        "type": "diagram",
+        "data": {
+          "mode": "graph",
+          "nodes": [
+            {
+              "id": "a",
+              "label": "A"
+            }
+          ],
+          "edges": [],
+          "actors": [
+            {
+              "id": "a",
+              "label": "A"
+            },
+            {
+              "id": "b",
+              "label": "B"
+            }
+          ]
+        }
+      },
+      "reason": "actors belong to sequence mode"
+    },
+    {
+      "name": "diagram_graph_rejects_messages",
+      "action": {
+        "op": "show",
+        "id": "d",
+        "type": "diagram",
+        "data": {
+          "mode": "graph",
+          "nodes": [
+            {
+              "id": "a",
+              "label": "A"
+            }
+          ],
+          "edges": [],
+          "messages": []
+        }
+      },
+      "reason": "messages belong to sequence mode"
+    },
+    {
+      "name": "diagram_sequence_source_forbidden",
+      "action": {
+        "op": "show",
+        "id": "d",
+        "type": "diagram",
+        "data": {
+          "mode": "sequence",
+          "actors": [
+            {
+              "id": "a",
+              "label": "A"
+            },
+            {
+              "id": "b",
+              "label": "B"
+            }
+          ],
+          "messages": [],
+          "source": "sequenceDiagram"
+        }
+      },
+      "reason": "source field forbidden"
+    },
+    {
+      "name": "diagram_sequence_empty_actors",
+      "action": {
+        "op": "show",
+        "id": "d",
+        "type": "diagram",
+        "data": {
+          "mode": "sequence",
+          "actors": [],
+          "messages": []
+        }
+      },
+      "reason": "actors must be at least 1"
+    },
+    {
+      "name": "diagram_sequence_too_many_actors",
+      "action": {
+        "op": "show",
+        "id": "d",
+        "type": "diagram",
+        "data": {
+          "mode": "sequence",
+          "actors": [
+            {
+              "id": "a0",
+              "label": "A0"
+            },
+            {
+              "id": "a1",
+              "label": "A1"
+            },
+            {
+              "id": "a2",
+              "label": "A2"
+            },
+            {
+              "id": "a3",
+              "label": "A3"
+            },
+            {
+              "id": "a4",
+              "label": "A4"
+            },
+            {
+              "id": "a5",
+              "label": "A5"
+            },
+            {
+              "id": "a6",
+              "label": "A6"
+            },
+            {
+              "id": "a7",
+              "label": "A7"
+            },
+            {
+              "id": "a8",
+              "label": "A8"
+            },
+            {
+              "id": "a9",
+              "label": "A9"
+            },
+            {
+              "id": "a10",
+              "label": "A10"
+            },
+            {
+              "id": "a11",
+              "label": "A11"
+            },
+            {
+              "id": "a12",
+              "label": "A12"
+            }
+          ],
+          "messages": []
+        }
+      },
+      "reason": "actors must be at most 12"
+    },
+    {
+      "name": "diagram_sequence_too_many_messages",
+      "action": {
+        "op": "show",
+        "id": "d",
+        "type": "diagram",
+        "data": {
+          "mode": "sequence",
+          "actors": [
+            {
+              "id": "a",
+              "label": "A"
+            },
+            {
+              "id": "b",
+              "label": "B"
+            }
+          ],
+          "messages": [
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            },
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m"
+            }
+          ]
+        }
+      },
+      "reason": "messages must be at most 100"
+    },
+    {
+      "name": "diagram_sequence_missing_messages",
+      "action": {
+        "op": "show",
+        "id": "d",
+        "type": "diagram",
+        "data": {
+          "mode": "sequence",
+          "actors": [
+            {
+              "id": "a",
+              "label": "A"
+            },
+            {
+              "id": "b",
+              "label": "B"
+            }
+          ]
+        }
+      },
+      "reason": "missing messages"
+    },
+    {
+      "name": "diagram_sequence_duplicate_actor_id",
+      "action": {
+        "op": "show",
+        "id": "d",
+        "type": "diagram",
+        "data": {
+          "mode": "sequence",
+          "actors": [
+            {
+              "id": "dup",
+              "label": "First"
+            },
+            {
+              "id": "dup",
+              "label": "Second"
+            }
+          ],
+          "messages": []
+        }
+      },
+      "reason": "duplicate actor ID"
+    },
+    {
+      "name": "diagram_sequence_actor_unknown_field",
+      "action": {
+        "op": "show",
+        "id": "d",
+        "type": "diagram",
+        "data": {
+          "mode": "sequence",
+          "actors": [
+            {
+              "id": "a",
+              "label": "A",
+              "state": "active"
+            }
+          ],
+          "messages": []
+        }
+      },
+      "reason": "unknown field in actor"
+    },
+    {
+      "name": "diagram_sequence_actor_bad_semantic",
+      "action": {
+        "op": "show",
+        "id": "d",
+        "type": "diagram",
+        "data": {
+          "mode": "sequence",
+          "actors": [
+            {
+              "id": "a",
+              "label": "A",
+              "semantic": "purple"
+            }
+          ],
+          "messages": []
+        }
+      },
+      "reason": "invalid actor semantic"
+    },
+    {
+      "name": "diagram_sequence_message_missing_endpoint",
+      "action": {
+        "op": "show",
+        "id": "d",
+        "type": "diagram",
+        "data": {
+          "mode": "sequence",
+          "actors": [
+            {
+              "id": "a",
+              "label": "A"
+            },
+            {
+              "id": "b",
+              "label": "B"
+            }
+          ],
+          "messages": [
+            {
+              "from": "a",
+              "to": "missing",
+              "label": "m"
+            }
+          ]
+        }
+      },
+      "reason": "message endpoint missing"
+    },
+    {
+      "name": "diagram_sequence_message_missing_label",
+      "action": {
+        "op": "show",
+        "id": "d",
+        "type": "diagram",
+        "data": {
+          "mode": "sequence",
+          "actors": [
+            {
+              "id": "a",
+              "label": "A"
+            },
+            {
+              "id": "b",
+              "label": "B"
+            }
+          ],
+          "messages": [
+            {
+              "from": "a",
+              "to": "b"
+            }
+          ]
+        }
+      },
+      "reason": "message label required"
+    },
+    {
+      "name": "diagram_sequence_message_bad_kind",
+      "action": {
+        "op": "show",
+        "id": "d",
+        "type": "diagram",
+        "data": {
+          "mode": "sequence",
+          "actors": [
+            {
+              "id": "a",
+              "label": "A"
+            },
+            {
+              "id": "b",
+              "label": "B"
+            }
+          ],
+          "messages": [
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m",
+              "kind": "reply"
+            }
+          ]
+        }
+      },
+      "reason": "invalid message kind"
+    },
+    {
+      "name": "diagram_sequence_message_active_not_boolean",
+      "action": {
+        "op": "show",
+        "id": "d",
+        "type": "diagram",
+        "data": {
+          "mode": "sequence",
+          "actors": [
+            {
+              "id": "a",
+              "label": "A"
+            },
+            {
+              "id": "b",
+              "label": "B"
+            }
+          ],
+          "messages": [
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m",
+              "active": "yes"
+            }
+          ]
+        }
+      },
+      "reason": "message active must be boolean"
+    },
+    {
+      "name": "diagram_sequence_message_unknown_field",
+      "action": {
+        "op": "show",
+        "id": "d",
+        "type": "diagram",
+        "data": {
+          "mode": "sequence",
+          "actors": [
+            {
+              "id": "a",
+              "label": "A"
+            },
+            {
+              "id": "b",
+              "label": "B"
+            }
+          ],
+          "messages": [
+            {
+              "from": "a",
+              "to": "b",
+              "label": "m",
+              "semantic": "red"
+            }
+          ]
+        }
+      },
+      "reason": "unknown field in message"
     },
     {
       "name": "html_injection_script",
