@@ -4,7 +4,16 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { ChartData } from '../../src/controller/types';
 import { ChartPrimitive, chartSeriesColor, chartXTicks } from '../../src/primitives/ChartPrimitive';
-import { CHART_LEGEND_ROW_HEIGHT, CHART_LEGEND_STEP, chartLegendLayout, chartPad, chartSeriesPoint } from '../../src/primitives/chartGeometry';
+import {
+  CHART_LEGEND_ROW_HEIGHT,
+  CHART_LEGEND_STEP,
+  CHART_TICK_ROW_HEIGHT,
+  chartBars,
+  chartLegendLayout,
+  chartPad,
+  chartScales,
+  chartSeriesPoint,
+} from '../../src/primitives/chartGeometry';
 
 const data: ChartData = {
   series: [
@@ -296,5 +305,144 @@ describe('chart legend layout (#54)', () => {
     const layout = chartLegendLayout({ series: [{ name: longName, values: [] }] });
     const plotWidth = 1000 - 74 - 28;
     expect(layout.items[0].x + 34 + layout.items[0].text.length * 7.5).toBeLessThanOrEqual(plotWidth + 0.01);
+  });
+});
+
+// A chart's kind says how its series are drawn; the labels replace the
+// numeric x ticks. The geometry behind both is tested in
+// chartCategoryLayout.test.ts; here is what the primitive draws from it.
+describe('chart kinds', () => {
+  const labelled: ChartData = {
+    labels: ['backend', 'frontend', 'skill'],
+    series: [
+      { name: 'THIS RUN', semantic: 'green', values: [41.2, 18.7, 3.1] },
+      { name: 'PREVIOUS', semantic: 'muted', values: [44.0, 19.9] },
+    ],
+  };
+
+  it('draws a line by default, and says so', () => {
+    renderWith(labelled);
+    expect(host.querySelector('.chart-primitive')!.getAttribute('data-kind')).toBe('line');
+    expect(host.querySelectorAll('.chart-series')).toHaveLength(2);
+    expect(host.querySelectorAll('.chart-bar, .chart-point, .chart-area')).toHaveLength(0);
+  });
+
+  it('draws grouped bars per category, each in its series colour, with a legend key to match', () => {
+    renderWith({ ...labelled, kind: 'bar' });
+    expect(host.querySelector('.chart-primitive')!.getAttribute('data-kind')).toBe('bar');
+    expect(host.querySelector('.chart-primitive')!.getAttribute('data-orientation')).toBe('upright');
+    expect(host.querySelectorAll('.chart-series')).toHaveLength(0);
+    const groups = [...host.querySelectorAll<SVGGElement>('.chart-series-group')];
+    expect(groups.map((group) => group.querySelectorAll('.chart-bar').length)).toEqual([3, 2]);
+    const fills = groups.map((group) => group.querySelector('.chart-bar')!.getAttribute('fill'));
+    expect(fills).toEqual(['var(--green)', 'var(--muted)']);
+    const keys = [...host.querySelectorAll<SVGRectElement>('.chart-legend__key')];
+    expect(keys.map((key) => key.tagName.toLowerCase())).toEqual(['rect', 'rect']);
+    expect(keys.map((key) => key.getAttribute('fill'))).toEqual(fills);
+    // The bars stand on the baseline, which is drawn.
+    expect(host.querySelector('.chart-baseline')).not.toBeNull();
+    const bars = chartBars({ ...labelled, kind: 'bar' });
+    const drawn = [...host.querySelectorAll<SVGRectElement>('.chart-bar')];
+    drawn.forEach((rect, index) => {
+      expect(Number(rect.getAttribute('x'))).toBeCloseTo(bars[index].rect.left, 1);
+      expect(Number(rect.getAttribute('y'))).toBeCloseTo(bars[index].rect.top, 1);
+    });
+  });
+
+  it('fills an area from the line down to the baseline', () => {
+    renderWith({ ...labelled, kind: 'area' });
+    const areas = [...host.querySelectorAll<SVGPathElement>('.chart-area')];
+    const lines = [...host.querySelectorAll<SVGPathElement>('.chart-series')];
+    expect(areas).toHaveLength(2);
+    expect(lines).toHaveLength(2);
+    areas.forEach((area, index) => {
+      expect(area.getAttribute('fill')).toBe(lines[index].getAttribute('stroke'));
+      expect(Number(area.getAttribute('fill-opacity'))).toBeLessThan(0.5);
+      // The fill's outline is the line's path, closed down to the baseline.
+      expect(area.getAttribute('d')!.startsWith(lines[index].getAttribute('d')!)).toBe(true);
+      expect(area.getAttribute('d')!.endsWith('Z')).toBe(true);
+    });
+    expect(host.querySelector('.chart-baseline')).not.toBeNull();
+  });
+
+  it('draws a scatter chart as points alone, one per sample', () => {
+    renderWith({ ...labelled, kind: 'scatter' });
+    expect(host.querySelectorAll('.chart-series, .chart-area, .chart-bar, .chart-baseline')).toHaveLength(0);
+    const groups = [...host.querySelectorAll<SVGGElement>('.chart-series-group')];
+    expect(groups.map((group) => group.querySelectorAll('.chart-point').length)).toEqual([3, 2]);
+    const scales = chartScales({ ...labelled, kind: 'scatter' });
+    const first = groups[0].querySelector<SVGCircleElement>('.chart-point')!;
+    expect(Number(first.getAttribute('cx'))).toBeCloseTo(scales.plot.left, 1);
+    expect(Number(first.getAttribute('cy'))).toBeCloseTo(scales.valueAt(41.2), 1);
+    expect(host.querySelector('.chart-legend__key')!.tagName.toLowerCase()).toBe('circle');
+  });
+
+  it('labels the x axis with the categories instead of numbers', () => {
+    renderWith(labelled);
+    const ticks = [...host.querySelectorAll<SVGTextElement>('.chart-grid text[text-anchor="middle"]')];
+    expect(ticks.map((tick) => tick.textContent)).toEqual(['backend', 'frontend', 'skill']);
+    const scales = chartScales(labelled);
+    expect(Number(ticks[1].getAttribute('x'))).toBeCloseTo(scales.xAt(1), 1);
+  });
+
+  it('staggers category labels onto a second row when a row is too narrow for them', () => {
+    const months = ['JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE', 'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER'];
+    renderWith({ labels: months, series: [{ name: 'A', values: months.map((_, index) => index) }] });
+    const ticks = [...host.querySelectorAll<SVGTextElement>('.chart-grid__category')];
+    expect(ticks).toHaveLength(12);
+    const ys = ticks.map((tick) => Number(tick.getAttribute('y')));
+    expect(ys[1] - ys[0]).toBe(CHART_TICK_ROW_HEIGHT);
+    expect(ys[2]).toBe(ys[0]);
+  });
+
+  it('draws a bar chart with long labels on its side, the labels down the left', () => {
+    const chart: ChartData = {
+      kind: 'bar',
+      labels: ['unit/transcriptSpeaker.test.ts', 'unit/displayRobustness.test.tsx', 'unit/debugPage.test.tsx', 'unit/documentViewport.test.tsx', 'unit/scenePage.test.tsx'],
+      xLabel: 'TEST FILE',
+      yLabel: 'MS',
+      series: [{ name: 'MS', values: [467, 390, 330, 280, 260] }],
+      marker: { x: 1 },
+    };
+    renderWith(chart);
+    expect(host.querySelector('.chart-primitive')!.getAttribute('data-orientation')).toBe('horizontal');
+    const scales = chartScales(chart);
+    const labels = [...host.querySelectorAll<SVGTextElement>('.chart-grid__category')];
+    expect(labels.map((label) => label.textContent)).toEqual(chart.labels);
+    for (const label of labels) {
+      expect(label.getAttribute('text-anchor')).toBe('end');
+      expect(Number(label.getAttribute('x'))).toBeLessThan(scales.plot.left);
+    }
+    // The value ticks run along the bottom, and the axis names follow their axes.
+    const valueTicks = [...host.querySelectorAll<SVGTextElement>('.chart-grid text[text-anchor="middle"]')];
+    expect(valueTicks.map((tick) => tick.textContent)).toContain('0.00');
+    const axisLabels = [...host.querySelectorAll<SVGTextElement>('.chart-axis-label')].map((label) => label.textContent);
+    expect(axisLabels).toEqual(['MS', 'TEST FILE']);
+    // The bars run from the left, and the marker rings the named bar's end.
+    const bar = host.querySelector<SVGRectElement>('.chart-bar')!;
+    expect(Number(bar.getAttribute('x'))).toBeCloseTo(scales.plot.left, 1);
+    const marker = host.querySelector<SVGCircleElement>('.chart-marker__point')!;
+    const end = chartSeriesPoint(chart, 1, undefined, scales)!;
+    expect(Number(marker.getAttribute('cx'))).toBeCloseTo(end.x, 1);
+    expect(Number(marker.getAttribute('cy'))).toBeCloseTo(end.y, 1);
+  });
+
+  it('never prints a value tick as negative zero', () => {
+    renderWith({ kind: 'bar', labels: ['a', 'b'], series: [{ name: 'A', values: [102.9, 1] }] });
+    const ticks = [...host.querySelectorAll<SVGTextElement>('.chart-grid text[text-anchor="end"]')].map((tick) => tick.textContent);
+    expect(ticks).toContain('0.00');
+    expect(ticks).not.toContain('-0.00');
+  });
+
+  it('resolves every kind in with the same widening clip, and not at all under reduced motion', () => {
+    for (const kind of ['bar', 'area', 'scatter'] as const) {
+      renderWith({ ...labelled, kind });
+      const groups = [...host.querySelectorAll<SVGGElement>('.chart-series-group')];
+      expect(groups).toHaveLength(2);
+      groups.forEach((group, index) => expect(group.getAttribute('clip-path')).toContain(`-trace-${index}`));
+      expect(host.querySelectorAll('svg > defs > clipPath > rect')).toHaveLength(3);
+      act(() => root.unmount());
+      host.remove();
+    }
   });
 });

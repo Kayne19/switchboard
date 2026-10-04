@@ -863,6 +863,13 @@ button {
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
+/* Bars and areas rise from their baseline, drawn a shade firmer than the
+   grid so the eye reads the ground they stand on. */
+.chart-baseline {
+  stroke: rgba(232, 230, 223, 0.32);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
 .chart-grid text,
 .chart-legend text,
 .chart-axis-label {

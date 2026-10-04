@@ -1,18 +1,21 @@
 import { motion, useReducedMotion } from 'motion/react';
 import { useId, useMemo } from 'react';
-import type { ChartData, ChartSeries, Semantic } from '../controller/types';
+import type { ChartData, ChartKind, ChartSeries, Semantic } from '../controller/types';
 import {
   CHART_LEGEND_KEY_WIDTH,
   CHART_LEGEND_ROW_HEIGHT,
   CHART_LEGEND_TEXT_X,
   CHART_PAD,
+  CHART_POINT_RADIUS,
+  CHART_TICK_BASELINE,
+  CHART_TICK_ROW_HEIGHT,
   CHART_VIEW_HEIGHT,
   CHART_VIEW_WIDTH,
+  chartBars,
   chartLegendLayout,
-  chartPad,
   chartScales,
   chartSeriesPoint,
-  chartTraces,
+  type ChartScales,
 } from './chartGeometry';
 
 const semanticColor: Record<Semantic,string> = {
@@ -46,6 +49,82 @@ function formatXTick(value: number): string {
   return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(2)));
 }
 
+// A tick computed down from the top of the domain can land a rounding
+// error below zero, which would print as "-0.00".
+function formatValueTick(value: number): string {
+  return (Math.abs(value) < 1e-9 ? 0 : value).toFixed(2);
+}
+
+const point = (p: { x: number; y: number }) => `${p.x.toFixed(2)} ${p.y.toFixed(2)}`;
+
+function linePath(points: Array<{ x: number; y: number }>): string {
+  return points.map((p, index) => `${index === 0 ? 'M' : 'L'} ${point(p)}`).join(' ');
+}
+
+// The line's path closed down to the baseline and back, for the fill.
+function areaPath(points: Array<{ x: number; y: number }>, baseY: number): string {
+  if (points.length === 0) return '';
+  const first = points[0];
+  const last = points[points.length - 1];
+  return `${linePath(points)} L ${last.x.toFixed(2)} ${baseY.toFixed(2)} L ${first.x.toFixed(2)} ${baseY.toFixed(2)} Z`;
+}
+
+// The legend's key for a series: the stroke of a line chart, the fill of a
+// bar or an area, the dot of a scatter chart.
+function LegendKey({ kind, color }: { kind: ChartKind; color: string }) {
+  if (kind === 'line') return <line className="chart-legend__key" x1="0" y1="0" x2={CHART_LEGEND_KEY_WIDTH} y2="0" stroke={color} strokeWidth="2"/>;
+  if (kind === 'scatter') return <circle className="chart-legend__key" cx={CHART_LEGEND_KEY_WIDTH / 2} cy="0" r={CHART_POINT_RADIUS} fill={color}/>;
+  return <rect className="chart-legend__key" x="0" y="-4" width={CHART_LEGEND_KEY_WIDTH} height="8" fill={color} fillOpacity={kind === 'area' ? 0.5 : 1}/>;
+}
+
+// The gridlines and tick labels along the category (or numeric x) axis and
+// the value axis, whichever way the chart runs.
+function Grid({ scales }: { scales: ChartScales }) {
+  const { plot, categories, horizontal, yMin, yMax, xMax, xAt, valueAt, kind } = scales;
+  const valueTicks = niceTicks(yMin, yMax);
+  const categorical = categories.categories !== undefined;
+  // Category gridlines belong to a line through the categories; bars stand
+  // in their bands with no line between them.
+  const categoryLines = categorical && kind !== 'bar';
+  if (horizontal) {
+    return <g className="chart-grid" data-axis="horizontal">
+      {valueTicks.map((tick) => {
+        const x = valueAt(tick);
+        return <g key={tick}><line x1={x} y1={plot.top} x2={x} y2={plot.bottom}/><text x={x} y={plot.bottom + CHART_TICK_BASELINE} textAnchor="middle">{formatValueTick(tick)}</text></g>;
+      })}
+      <line x1={plot.left} y1={plot.top} x2={plot.right} y2={plot.top}/>
+      <line x1={plot.left} y1={plot.bottom} x2={plot.right} y2={plot.bottom}/>
+      {categories.ticks.map((tick) => <text key={tick.index} className="chart-grid__category" x={plot.left - 14} y={xAt(tick.index) + 4} textAnchor="end">{tick.text}{tick.truncated ? <title>{categories.categories![tick.index]}</title> : null}</text>)}
+    </g>;
+  }
+  const xTicks = categorical ? [] : chartXTicks(xMax);
+  // The plot's right edge keeps its gridline even when no round value lands
+  // on it, so the grid stays closed; it is labelled only when one does. A
+  // categorical axis closes the grid at both edges and labels neither.
+  const xGrid = categorical ? [] : xMax > 0 && xTicks[xTicks.length - 1] < xMax ? [...xTicks, xMax] : xTicks;
+  return <g className="chart-grid">
+    {valueTicks.map((tick) => {
+      const y = valueAt(tick);
+      return <g key={tick}><line x1={plot.left} y1={y} x2={plot.right} y2={y}/><text x={plot.left - 14} y={y + 4} textAnchor="end">{formatValueTick(tick)}</text></g>;
+    })}
+    {xGrid.map((value) => {
+      const x = xAt(value);
+      return <g key={value}><line x1={x} y1={plot.top} x2={x} y2={plot.bottom}/>{xTicks.includes(value) ? <text x={x} y={plot.bottom + CHART_TICK_BASELINE} textAnchor="middle">{formatXTick(value)}</text> : null}</g>;
+    })}
+    {categorical ? <>
+      <line x1={plot.left} y1={plot.top} x2={plot.left} y2={plot.bottom}/>
+      <line x1={plot.right} y1={plot.top} x2={plot.right} y2={plot.bottom}/>
+    </> : null}
+    {categories.ticks.map((tick) => {
+      const x = xAt(tick.index);
+      return <g key={tick.index}>
+        {categoryLines ? <line x1={x} y1={plot.top} x2={x} y2={plot.bottom}/> : null}
+        <text className="chart-grid__category" x={x} y={plot.bottom + CHART_TICK_BASELINE + tick.row * CHART_TICK_ROW_HEIGHT} textAnchor="middle">{tick.text}</text>
+      </g>;
+    })}
+  </g>;
+}
+
 export function ChartPrimitive({
   data,
   focused = false,
@@ -56,60 +135,77 @@ export function ChartPrimitive({
   const reduced = useReducedMotion();
   const clipId = useId().replace(/:/g,'');
   const width=CHART_VIEW_WIDTH,height=CHART_VIEW_HEIGHT;
-  // The legend can wrap onto further rows than a one-row chart needs, so the
-  // plot's own top padding grows to clear it; `CHART_PAD` (below, for the
-  // legend's own anchor) never does -- its rows grow downward from there
-  // instead, and the padding grows to keep the last of them off the plot.
-  const pad=chartPad(data);
-  const plotWidth=width-pad.left-pad.right;
-  const scales=chartScales(data);
-  const {yMin,yMax,xMax,xAtEpoch,yAt}=scales;
+  const scales=useMemo(()=>chartScales(data),[data]);
+  const {plot,kind,horizontal,baseline,valueAt}=scales;
+  // The plot's own padding grows to clear a legend that wraps, a second
+  // row of category labels, and a horizontal bar chart's labels down the
+  // left; the legend's own anchor (`CHART_PAD.top`) never does -- its rows
+  // grow downward from there instead.
+  const plotWidth=plot.right-plot.left;
   const legend=useMemo(()=>chartLegendLayout(data,plotWidth),[data,plotWidth]);
-  const seriesPaths=useMemo(()=>{
-    const traces=chartTraces(data);
-    return data.series.map((series,index)=>({...series,path:traces[index].map((point,pointIndex)=>`${pointIndex===0?'M':'L'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(' ')}));
-  },[data]);
-  const xTicks=chartXTicks(xMax);
-  // The plot's right edge keeps its gridline even when no round value lands
-  // on it, so the grid stays closed; it is labelled only when one does.
-  const xGrid=xMax>0 && xTicks[xTicks.length-1]<xMax ? [...xTicks,xMax] : xTicks;
-  // A marker is a ring on the point it names, on the drawn line itself: the
-  // same interpolated point a note's leader reaches. It draws no guide of its
-  // own -- a full-height dashed rule read as a stray line through the plot,
-  // and ran on past the point beneath any leader that met it there.
+  const drawn=useMemo(()=>{
+    const bars=chartBars(data,scales);
+    const baseY=valueAt(baseline);
+    return data.series.map((series,index)=>{
+      const points=series.values.map((value,sample)=>scales.pointAt(scales.sampleX(series,sample),value));
+      return {...series,points,path:linePath(points),area:areaPath(points,baseY),bars:bars.filter((bar)=>bar.series===index)};
+    });
+  },[data,scales,baseline,valueAt]);
+  // A marker is a ring on the point it names, on the drawn series itself:
+  // the same interpolated point a note's leader reaches. It draws no guide
+  // of its own -- a full-height dashed rule read as a stray line through
+  // the plot, and ran on past the point beneath any leader that met it
+  // there.
   const markerPoint=data.marker ? chartSeriesPoint(data,data.marker.x,data.marker.series,scales) : undefined;
+  const grounded=kind==='bar'||kind==='area';
+  const base=valueAt(baseline);
+  const reach=kind==='scatter'?CHART_POINT_RADIUS+1:0;
 
-  return <div className={`chart-primitive${focused?' chart-primitive--focused':''}`} data-testid="chart">
+  return <div className={`chart-primitive${focused?' chart-primitive--focused':''}`} data-testid="chart" data-kind={kind} data-orientation={horizontal?'horizontal':'upright'}>
     <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label={data.title ?? 'Chart'}>
       <defs>
-        <clipPath id={clipId}><rect x={pad.left} y={pad.top} width={plotWidth} height={height-pad.top-pad.bottom}/></clipPath>
-        {/* Each trace resolves left to right behind a widening clip. The
-            strokes are non-scaling, so a path-length trace -- whose dash
-            pattern is measured in user space but laid in screen space --
-            would stop short of the last point whenever the chart is drawn
-            larger than its viewBox. */}
-        {seriesPaths.map((series,index)=><clipPath key={series.name} id={`${clipId}-trace-${index}`}>
-          <motion.rect x={0} y={0} height={height} width={width} initial={reduced?false:{width:pad.left}} animate={{width}} transition={{duration:.62,delay:index*.08,ease:[.22,.61,.36,1]}}/>
+        {/* A scatter chart's points at the ends of its domain sit on the
+            plot's edges, so its clip lets a point's radius through. */}
+        <clipPath id={clipId}><rect x={plot.left-reach} y={plot.top-reach} width={plotWidth+2*reach} height={plot.bottom-plot.top+2*reach}/></clipPath>
+        {/* Each series resolves left to right behind a widening clip: a
+            line draws itself, bars and points appear in order, and a
+            horizontal bar grows from its baseline. The strokes are
+            non-scaling, so a path-length trace -- whose dash pattern is
+            measured in user space but laid in screen space -- would stop
+            short of the last point whenever the chart is drawn larger than
+            its viewBox. */}
+        {drawn.map((series,index)=><clipPath key={series.name} id={`${clipId}-trace-${index}`}>
+          <motion.rect x={0} y={0} height={height} width={width} initial={reduced?false:{width:plot.left}} animate={{width}} transition={{duration:.62,delay:index*.08,ease:[.22,.61,.36,1]}}/>
         </clipPath>)}
       </defs>
-      <g className="chart-grid">
-        {niceTicks(yMin,yMax).map(tick=><g key={tick}><line x1={pad.left} y1={yAt(tick)} x2={width-pad.right} y2={yAt(tick)}/><text x={pad.left-14} y={yAt(tick)+4} textAnchor="end">{tick.toFixed(2)}</text></g>)}
-        {xGrid.map(value=>{const x=xAtEpoch(value);return <g key={value}><line x1={x} y1={pad.top} x2={x} y2={height-pad.bottom}/>{xTicks.includes(value)?<text x={x} y={height-20} textAnchor="middle">{formatXTick(value)}</text>:null}</g>;})}
-      </g>
+      <Grid scales={scales}/>
       <g clipPath={`url(#${clipId})`}>
-        {seriesPaths.map((series,index)=><g key={series.name} clipPath={`url(#${clipId}-trace-${index})`}><motion.path className="chart-series" d={series.path} fill="none" stroke={chartSeriesColor(series, index)} strokeWidth={focused?3:2.3} vectorEffect="non-scaling-stroke" initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{duration:.3,delay:index*.08}}/></g>)}
+        {grounded ? (horizontal
+          ? <line className="chart-baseline" x1={base} y1={plot.top} x2={base} y2={plot.bottom}/>
+          : <line className="chart-baseline" x1={plot.left} y1={base} x2={plot.right} y2={base}/>) : null}
+        {drawn.map((series,index)=>{
+          const color=chartSeriesColor(series,index);
+          return <motion.g key={series.name} className="chart-series-group" data-series={series.name} clipPath={`url(#${clipId}-trace-${index})`} initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{duration:.3,delay:index*.08}}>
+            {kind==='area' ? <path className="chart-area" d={series.area} fill={color} fillOpacity={0.16} stroke="none"/> : null}
+            {kind==='line'||kind==='area' ? <path className="chart-series" d={series.path} fill="none" stroke={color} strokeWidth={focused?3:2.3} vectorEffect="non-scaling-stroke"/> : null}
+            {kind==='scatter' ? series.points.map((p,sample)=><circle key={sample} className="chart-point" cx={p.x} cy={p.y} r={focused?CHART_POINT_RADIUS+1:CHART_POINT_RADIUS} fill={color}/>) : null}
+            {kind==='bar' ? series.bars.map((bar)=><rect key={bar.index} className="chart-bar" x={bar.rect.left} y={bar.rect.top} width={Math.max(0.5,bar.rect.right-bar.rect.left)} height={Math.max(0.5,bar.rect.bottom-bar.rect.top)} fill={color}/>) : null}
+          </motion.g>;
+        })}
         {markerPoint ? (
           <motion.g className="chart-marker" initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}>
             <circle className="chart-marker__point" cx={markerPoint.x} cy={markerPoint.y} r={focused?7:5} fill="#000" stroke="var(--orange)" strokeWidth="2"/>
           </motion.g>
         ) : null}
       </g>
-      <text className="chart-axis-label" x={width/2} y={height-2} textAnchor="middle">{data.xLabel ?? 'X'}</text>
-      <text className="chart-axis-label" transform={`translate(17 ${height/2}) rotate(-90)`} textAnchor="middle">{data.yLabel ?? 'Y'}</text>
-      {/* Rows grow downward from the one-row anchor (`CHART_PAD`, not the
-          possibly-grown `pad`): `chartPad` already grew the plot's own top
-          padding to keep the last row clear of it. */}
-      <g className="chart-legend" transform={`translate(${CHART_PAD.left+8} ${CHART_PAD.top+12})`}>{legend.items.map((item,index)=><g transform={`translate(${item.x} ${item.row*CHART_LEGEND_ROW_HEIGHT})`} key={item.name}><line className="chart-legend__key" x1="0" y1="0" x2={CHART_LEGEND_KEY_WIDTH} y2="0" stroke={chartSeriesColor(data.series[index], index)} strokeWidth="2"/><text x={CHART_LEGEND_TEXT_X} y="4">{item.text}</text>{item.truncated?<title>{item.name}</title>:null}</g>)}</g>
+      {/* The axis names follow their axes: a horizontal bar chart's
+          categories run down the left and its values along the bottom. */}
+      <text className="chart-axis-label" x={(plot.left+plot.right)/2} y={height-2} textAnchor="middle">{(horizontal ? data.yLabel : data.xLabel) ?? (horizontal ? 'Y' : 'X')}</text>
+      <text className="chart-axis-label" transform={`translate(17 ${(plot.top+plot.bottom)/2}) rotate(-90)`} textAnchor="middle">{(horizontal ? data.xLabel : data.yLabel) ?? (horizontal ? 'X' : 'Y')}</text>
+      {/* Rows grow downward from the one-row anchor (`CHART_PAD.top`, not
+          the possibly-grown plot top): `chartPad` already grew the plot's
+          own top padding to keep the last row clear of it. */}
+      <g className="chart-legend" transform={`translate(${plot.left+8} ${CHART_PAD.top+12})`}>{legend.items.map((item,index)=><g transform={`translate(${item.x} ${item.row*CHART_LEGEND_ROW_HEIGHT})`} key={item.name}><LegendKey kind={kind} color={chartSeriesColor(data.series[index], index)}/><text x={CHART_LEGEND_TEXT_X} y="4">{item.text}</text>{item.truncated?<title>{item.name}</title>:null}</g>)}</g>
     </svg>
   </div>;
 }
