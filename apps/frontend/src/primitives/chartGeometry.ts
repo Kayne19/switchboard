@@ -168,6 +168,17 @@ function upright(categories: string[] | undefined, ticks: ChartTick[], rows: num
   return { categories, horizontal: false, ticks, rows, step };
 }
 
+/**
+ * Where an upright chart draws a category label along its x axis: centred
+ * on its category at `x`, but held inside the viewBox. A line's first and
+ * last categories sit on the plot's edges, and a long label centred there
+ * would run past them.
+ */
+export function chartCategoryLabelX(x: number, text: string): number {
+  const half = (text.length * CHART_TICK_CHAR_ADVANCE) / 2;
+  return Math.min(CHART_VIEW_WIDTH - half, Math.max(half, x));
+}
+
 // How many legend rows the plot's top padding grows by. A line passes
 // under the legend's one row where it must; a bar standing at the first
 // category would run through it, so a bar chart's plot starts below the
@@ -187,7 +198,10 @@ function legendRowsAbovePlot(kind: ChartKind, legendRows: number): number {
  * label may take up to `CHART_CATEGORY_PAD_MAX` of the width before it is
  * truncated. The height is judged with the legend as laid out for an
  * upright chart; a legend that wraps one row further on the narrower
- * horizontal plot costs each row a unit or so, not the decision.
+ * horizontal plot costs each row a unit or so, not the decision. An upright
+ * layout is taken only when its labels, held inside the viewBox where they
+ * are drawn (`chartCategoryLabelX`), still clear each other on every row:
+ * an edge label held in moves toward its neighbour.
  */
 export function chartCategoryLayout(data: ChartData): ChartCategoryLayout {
   const categories = chartCategories(data);
@@ -200,8 +214,26 @@ export function chartCategoryLayout(data: ChartData): ChartCategoryLayout {
   const widest = Math.max(...categories.map((label) => label.length)) * CHART_TICK_CHAR_ADVANCE + CHART_TICK_GAP;
   // Bars take a band each; the other kinds spread their categories edge to edge.
   const slot = kind === 'bar' ? plotWidth / count : count > 1 ? plotWidth / (count - 1) : plotWidth;
-  const tick = (index: number, row: number): ChartTick => ({ index, text: categories[index], truncated: false, row });
-  if (widest <= slot) return upright(categories, categories.map((_, index) => tick(index, 0)), 1, 1);
+  // Every `step`-th category labelled, the labels taking `rows` rows in turn.
+  const laid = (rows: number, step: number): ChartTick[] => {
+    const ticks: ChartTick[] = [];
+    for (let index = 0; index < count; index += step) ticks.push({ index, text: categories[index], truncated: false, row: (index / step) % rows });
+    return ticks;
+  };
+  // Where an upright chart puts each category along its x axis (`xAt`).
+  const centre = (index: number) => CHART_PAD.left + (kind === 'bar' ? (index + 0.5) * slot : count > 1 ? index * slot : 0);
+  const clear = (ticks: ChartTick[]): boolean => {
+    const ends = new Map<number, number>();
+    for (const tick of ticks) {
+      const half = (tick.text.length * CHART_TICK_CHAR_ADVANCE) / 2;
+      const x = chartCategoryLabelX(centre(tick.index), tick.text);
+      const end = ends.get(tick.row);
+      if (end !== undefined && x - half - end < CHART_TICK_GAP) return false;
+      ends.set(tick.row, x + half);
+    }
+    return true;
+  };
+  if (widest <= slot && clear(laid(1, 1))) return upright(categories, laid(1, 1), 1, 1);
   if (kind === 'bar' && count * CHART_TICK_ROW_HEIGHT <= plotHeight) {
     const ticks = categories.map((label, index) => ({
       index,
@@ -210,14 +242,14 @@ export function chartCategoryLayout(data: ChartData): ChartCategoryLayout {
     }));
     return { categories, horizontal: true, ticks, rows: 1, step: 1 };
   }
-  if (widest <= 2 * slot) return upright(categories, categories.map((_, index) => tick(index, index % 2)), 2, 1);
+  if (widest <= 2 * slot && clear(laid(2, 1))) return upright(categories, laid(2, 1), 2, 1);
   const step = Math.ceil(widest / slot);
   const staggeredStep = Math.ceil(widest / (2 * slot));
   const rows = staggeredStep < step ? 2 : 1;
-  const chosen = rows === 2 ? staggeredStep : step;
-  const ticks: ChartTick[] = [];
-  for (let index = 0; index < count; index += chosen) ticks.push(tick(index, (index / chosen) % rows));
-  return upright(categories, ticks, rows, chosen);
+  let chosen = rows === 2 ? staggeredStep : step;
+  // A wider step until the edge labels clear too; one label alone always does.
+  while (!clear(laid(rows, chosen))) chosen += 1;
+  return upright(categories, laid(rows, chosen), rows, chosen);
 }
 
 /**
@@ -335,7 +367,7 @@ export interface ChartBar {
   index: number;
   value: number;
   rect: ViewRect;
-  /** The bar's far end, mid-width: the point a marker or a note's leader reaches. */
+  /** The bar's far end, mid-width, held inside the plot: the point a marker or a note's leader reaches. */
   end: ViewPoint;
 }
 
@@ -360,7 +392,10 @@ export function chartBars(data: ChartData, scales: ChartScales = chartScales(dat
         ? { left: Math.min(base, far), right: Math.max(base, far), top: start, bottom: stop }
         : { left: start, right: stop, top: Math.min(base, far), bottom: Math.max(base, far) };
       const mid = (start + stop) / 2;
-      bars.push({ series: seriesIndex, index, value, rect, end: scales.horizontal ? { x: far, y: mid } : { x: mid, y: far } });
+      // A bar past an explicit end of the domain is clipped at the plot's
+      // edge, so its end is held there, as a line's point is.
+      const reach = scales.valueAt(Math.min(scales.yMax, Math.max(scales.yMin, value)));
+      bars.push({ series: seriesIndex, index, value, rect, end: scales.horizontal ? { x: reach, y: mid } : { x: mid, y: reach } });
     });
   });
   return bars;

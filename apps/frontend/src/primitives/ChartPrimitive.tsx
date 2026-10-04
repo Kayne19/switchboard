@@ -8,11 +8,11 @@ import {
   CHART_PAD,
   CHART_POINT_RADIUS,
   CHART_TICK_BASELINE,
-  CHART_TICK_CHAR_ADVANCE,
   CHART_TICK_ROW_HEIGHT,
   CHART_VIEW_HEIGHT,
   CHART_VIEW_WIDTH,
   chartBars,
+  chartCategoryLabelX,
   chartLegendLayout,
   chartScales,
   chartSeriesPoint,
@@ -118,13 +118,9 @@ function Grid({ scales }: { scales: ChartScales }) {
     </> : null}
     {categories.ticks.map((tick) => {
       const x = xAt(tick.index);
-      // The first and last categories of a line sit on the plot's edges;
-      // their labels are centred there but held inside the viewBox.
-      const half = (tick.text.length * CHART_TICK_CHAR_ADVANCE) / 2;
-      const labelX = Math.min(CHART_VIEW_WIDTH - half, Math.max(half, x));
       return <g key={tick.index}>
         {categoryLines ? <line x1={x} y1={plot.top} x2={x} y2={plot.bottom}/> : null}
-        <text className="chart-grid__category" x={labelX} y={plot.bottom + CHART_TICK_BASELINE + tick.row * CHART_TICK_ROW_HEIGHT} textAnchor="middle">{tick.text}</text>
+        <text className="chart-grid__category" x={chartCategoryLabelX(x, tick.text)} y={plot.bottom + CHART_TICK_BASELINE + tick.row * CHART_TICK_ROW_HEIGHT} textAnchor="middle">{tick.text}</text>
       </g>;
     })}
   </g>;

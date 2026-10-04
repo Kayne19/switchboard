@@ -63,7 +63,7 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
     },
   ],
   training: [
-    { op: 'show', id: 'loss', type: 'chart', role: 'primary', data: { ...trainingSeries, title: 'RUN / GRAPE-AMODAL-04', subtitle: 'TRAINING / LOSS TRACE / LIVE', context: 'TRAINING RUN' } },
+    { op: 'show', id: 'loss', type: 'chart', role: 'primary', data: { ...trainingSeries, title: 'RUN / GRAPE-AMODAL-04', subtitle: 'TRAINING / LOSS TRACE / LIVE', context: 'TRAINING RUN', caption: 'PRIMARY / LOSS TRACE' } },
     { op: 'show', id: 'val-loss', type: 'metric', data: { label: 'VAL LOSS', value: '0.1832', semantic: 'orange', trend: 'up', delta: '+0.0138' } },
     { op: 'show', id: 'train-loss', type: 'metric', data: { label: 'TRAIN LOSS', value: '0.1041', semantic: 'green', trend: 'down', delta: '-0.0009' } },
     { op: 'show', id: 'learning-rate', type: 'metric', data: { label: 'LEARNING RATE', value: '1.2e-4' } },

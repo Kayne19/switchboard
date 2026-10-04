@@ -227,4 +227,30 @@ describe('chart series point on a labelled chart', () => {
     expect(chartSeriesPoint(chart, 1.4, 'TWO', scales)).toEqual(bars.find((bar) => bar.series === 1 && bar.index === 1)!.end);
     expect(chartSeriesPoint(chart, 9, 'ONE', scales)).toEqual(bars.find((bar) => bar.series === 0 && bar.index === 2)!.end);
   });
+
+  // A line's point is held inside the plot, as its clip holds the line. A
+  // bar that runs past an explicit end of the domain is clipped at the
+  // plot's edge too, so its marker and a note's leader meet it there; left
+  // past the edge, the marker was clipped away and a leader ran off the plot.
+  it('holds the end of a bar that runs past the domain at the plot edge', () => {
+    const charts: ChartData[] = [
+      { kind: 'bar', labels: ['a', 'b', 'c'], yMax: 50, series: [{ name: 'S', values: [20, 80, 30] }] },
+      { kind: 'bar', labels: ['a', 'b', 'c'], yMin: -10, series: [{ name: 'S', values: [20, -40, 30] }] },
+      { ...labelled(5, 40, 'bar'), yMax: 2 },
+    ];
+    for (const chart of charts) {
+      const scales = chartScales(chart);
+      const { plot } = scales;
+      for (const bar of chartBars(chart, scales)) {
+        expect(bar.end.x).toBeGreaterThanOrEqual(plot.left - 1e-9);
+        expect(bar.end.x).toBeLessThanOrEqual(plot.right + 1e-9);
+        expect(bar.end.y).toBeGreaterThanOrEqual(plot.top - 1e-9);
+        expect(bar.end.y).toBeLessThanOrEqual(plot.bottom + 1e-9);
+      }
+      const point = chartSeriesPoint(chart, 1, undefined, scales)!;
+      expect(point.y).toBeGreaterThanOrEqual(plot.top - 1e-9);
+      expect(point.y).toBeLessThanOrEqual(plot.bottom + 1e-9);
+      expect(point.x).toBeLessThanOrEqual(plot.right + 1e-9);
+    }
+  });
 });

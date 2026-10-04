@@ -18,6 +18,7 @@ import { RUNTIME_CONVERSATION_ID } from '../controller/types';
 import { buildCompositionModel, cast, objectsOfType, primaryObject, type SceneKind } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
+import { chartKind } from '../primitives/chartGeometry';
 import { CodeViewport } from '../primitives/CodeViewport';
 import { DamoclesPresence } from '../primitives/DamoclesPresence';
 import { DocumentViewport } from '../primitives/DocumentViewport';
@@ -277,12 +278,15 @@ function trainingContent({ state, onFocus, onOpenHistory }: SceneProps): SceneCo
   // band that shrinks it; the layer keeps them clear of one another, of the
   // points they name, and of the traces wherever the panel has the room.
   const notesByPanel = chartNotesByPanel(state, charts, primary);
+  // Frame text the chart leaves out names what it is -- its kind -- and
+  // nothing more: a bar chart of test durations is not a training run.
+  const kind = chartKind(primary.data).toUpperCase();
   return {
-    title: primary.data.title ?? 'TRAINING / RUN',
-    subtitle: primary.data.subtitle ?? 'LOSS TRACE / LIVE',
-    context: primary.data.context ?? 'TRAINING RUN',
+    title: primary.data.title ?? `CHART / ${kind}`,
+    subtitle: primary.data.subtitle ?? 'SERIES / COMPOSED',
+    context: primary.data.context ?? 'CHART',
     footer: 'DISPLAY / COMPOSED',
-    caption: sceneCaption(primary, 'PRIMARY / LOSS TRACE'),
+    caption: sceneCaption(primary, `PRIMARY / ${kind} CHART`),
     metrics: objectsOfType<MetricData>(state, 'metric'),
     // The notes sit on the charts here, so the rail carries none.
     note: null,
