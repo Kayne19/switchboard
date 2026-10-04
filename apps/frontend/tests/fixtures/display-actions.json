@@ -521,6 +521,108 @@
       "normalized": {
         "op": "clear"
       }
+    },
+    {
+      "name": "show_image_png_minimal",
+      "action": {
+        "op": "show",
+        "id": "fig-1",
+        "type": "image",
+        "data": {
+          "format": "png",
+          "bytes": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mN48ew+AAVnAq5EDgAUAAAAAElFTkSuQmCC",
+          "alt": "One paper pixel"
+        }
+      },
+      "normalized": {
+        "op": "show",
+        "id": "fig-1",
+        "type": "image",
+        "data": {
+          "format": "png",
+          "bytes": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mN48ew+AAVnAq5EDgAUAAAAAElFTkSuQmCC",
+          "alt": "One paper pixel"
+        }
+      }
+    },
+    {
+      "name": "show_image_png_full",
+      "action": {
+        "op": "show",
+        "id": "fig-2",
+        "type": "image",
+        "role": "primary",
+        "data": {
+          "format": "png",
+          "bytes": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mN48ew+AAVnAq5EDgAUAAAAAElFTkSuQmCC",
+          "alt": "A single pixel test image",
+          "title": "FIGURE / PIXEL",
+          "subtitle": "TEST PATTERN",
+          "context": "FIGURE",
+          "caption": "IMAGE / PNG"
+        }
+      },
+      "normalized": {
+        "op": "show",
+        "id": "fig-2",
+        "type": "image",
+        "role": "primary",
+        "data": {
+          "format": "png",
+          "bytes": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mN48ew+AAVnAq5EDgAUAAAAAElFTkSuQmCC",
+          "alt": "A single pixel test image",
+          "title": "FIGURE / PIXEL",
+          "subtitle": "TEST PATTERN",
+          "context": "FIGURE",
+          "caption": "IMAGE / PNG"
+        }
+      }
+    },
+    {
+      "name": "show_image_jpeg_signature",
+      "action": {
+        "op": "show",
+        "id": "photo",
+        "type": "image",
+        "data": {
+          "format": "jpeg",
+          "bytes": "/9j/4AAAAAAAAAAAAAAAAA==",
+          "alt": "JPEG header bytes"
+        }
+      },
+      "normalized": {
+        "op": "show",
+        "id": "photo",
+        "type": "image",
+        "data": {
+          "format": "jpeg",
+          "bytes": "/9j/4AAAAAAAAAAAAAAAAA==",
+          "alt": "JPEG header bytes"
+        }
+      }
+    },
+    {
+      "name": "show_image_webp_signature",
+      "action": {
+        "op": "show",
+        "id": "still",
+        "type": "image",
+        "data": {
+          "format": "webp",
+          "bytes": "UklGRgAAAABXRUJQAAAAAAAAAAA=",
+          "alt": "WebP header bytes"
+        }
+      },
+      "normalized": {
+        "op": "show",
+        "id": "still",
+        "type": "image",
+        "data": {
+          "format": "webp",
+          "bytes": "UklGRgAAAABXRUJQAAAAAAAAAAA=",
+          "alt": "WebP header bytes"
+        }
+      }
     }
   ],
   "invalid": [
@@ -1005,6 +1107,147 @@
         }
       },
       "reason": "action exceeds 48000 UTF-8 bytes limit"
+    },
+    {
+      "name": "image_format_svg",
+      "action": {
+        "op": "show",
+        "id": "fig",
+        "type": "image",
+        "data": {
+          "format": "svg",
+          "bytes": "PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnPjxzY3JpcHQ+MTwvc2NyaXB0Pjwvc3ZnPg==",
+          "alt": "an svg"
+        }
+      },
+      "reason": "svg is markup, not raster bytes"
+    },
+    {
+      "name": "image_format_unknown",
+      "action": {
+        "op": "show",
+        "id": "fig",
+        "type": "image",
+        "data": {
+          "format": "gif",
+          "bytes": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mN48ew+AAVnAq5EDgAUAAAAAElFTkSuQmCC",
+          "alt": "a gif"
+        }
+      },
+      "reason": "format must be png, jpeg or webp"
+    },
+    {
+      "name": "image_signature_mismatch",
+      "action": {
+        "op": "show",
+        "id": "fig",
+        "type": "image",
+        "data": {
+          "format": "jpeg",
+          "bytes": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mN48ew+AAVnAq5EDgAUAAAAAElFTkSuQmCC",
+          "alt": "png bytes called jpeg"
+        }
+      },
+      "reason": "bytes do not start with the jpeg signature"
+    },
+    {
+      "name": "image_missing_alt",
+      "action": {
+        "op": "show",
+        "id": "fig",
+        "type": "image",
+        "data": {
+          "format": "png",
+          "bytes": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mN48ew+AAVnAq5EDgAUAAAAAElFTkSuQmCC"
+        }
+      },
+      "reason": "alt is required"
+    },
+    {
+      "name": "image_empty_alt",
+      "action": {
+        "op": "show",
+        "id": "fig",
+        "type": "image",
+        "data": {
+          "format": "png",
+          "bytes": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mN48ew+AAVnAq5EDgAUAAAAAElFTkSuQmCC",
+          "alt": "   "
+        }
+      },
+      "reason": "alt must not be blank"
+    },
+    {
+      "name": "image_bad_base64",
+      "action": {
+        "op": "show",
+        "id": "fig",
+        "type": "image",
+        "data": {
+          "format": "png",
+          "bytes": "iVBORw0KGgo!!!",
+          "alt": "garbage"
+        }
+      },
+      "reason": "bytes are not standard base64"
+    },
+    {
+      "name": "image_data_url_prefix",
+      "action": {
+        "op": "show",
+        "id": "fig",
+        "type": "image",
+        "data": {
+          "format": "png",
+          "bytes": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mN48ew+AAVnAq5EDgAUAAAAAElFTkSuQmCC",
+          "alt": "prefixed"
+        }
+      },
+      "reason": "bytes carry a data: prefix"
+    },
+    {
+      "name": "image_too_short",
+      "action": {
+        "op": "show",
+        "id": "fig",
+        "type": "image",
+        "data": {
+          "format": "png",
+          "bytes": "iVBORw0K",
+          "alt": "eight bytes"
+        }
+      },
+      "reason": "too few bytes to carry a png signature"
+    },
+    {
+      "name": "image_width_field",
+      "action": {
+        "op": "show",
+        "id": "fig",
+        "type": "image",
+        "data": {
+          "format": "png",
+          "bytes": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mN48ew+AAVnAq5EDgAUAAAAAElFTkSuQmCC",
+          "alt": "sized",
+          "width": 640
+        }
+      },
+      "reason": "layout fields are forbidden; the page reads the intrinsic size"
+    },
+    {
+      "name": "image_unknown_field",
+      "action": {
+        "op": "show",
+        "id": "fig",
+        "type": "image",
+        "data": {
+          "format": "png",
+          "bytes": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mN48ew+AAVnAq5EDgAUAAAAAElFTkSuQmCC",
+          "alt": "zoomed",
+          "zoom": 2
+        }
+      },
+      "reason": "unknown field in image data"
     }
   ],
   "nonFiniteMutations": [

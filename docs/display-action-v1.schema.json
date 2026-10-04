@@ -26,6 +26,9 @@
       "$ref": "#/definitions/ShowNoteAction"
     },
     {
+      "$ref": "#/definitions/ShowImageAction"
+    },
+    {
       "$ref": "#/definitions/HideAction"
     },
     {
@@ -727,6 +730,87 @@
         },
         "data": {
           "$ref": "#/definitions/CodeData"
+        }
+      },
+      "required": [
+        "op",
+        "id",
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "ImageData": {
+      "description": "A raster image carried inline as standard base64. The bytes must start with the format's file signature (checked by both validators, not expressible here), decode to at most 8 MiB, and the whole action to at most 12 MiB. SVG is refused: it is markup, not raster bytes.",
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "enum": [
+            "png",
+            "jpeg",
+            "webp"
+          ]
+        },
+        "bytes": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 11184812,
+          "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{4}|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)$"
+        },
+        "alt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "\\S"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "subtitle": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "context": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "format",
+        "bytes",
+        "alt"
+      ],
+      "additionalProperties": false
+    },
+    "ShowImageAction": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "show"
+          ]
+        },
+        "id": {
+          "$ref": "#/definitions/Identifier"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "image"
+          ]
+        },
+        "role": {
+          "$ref": "#/definitions/Role"
+        },
+        "data": {
+          "$ref": "#/definitions/ImageData"
         }
       },
       "required": [
