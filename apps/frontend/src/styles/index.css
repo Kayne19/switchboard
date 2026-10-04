@@ -1613,6 +1613,9 @@ button {
     transform: scale(0.94);
   }
 }
+/* The layout sizes each node's box from its text in these three faces at
+   these sizes (diagramLayout.ts, NODE_TEXT); change one and the other must
+   follow. */
 .diagram-node-label {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 15px;
@@ -1631,10 +1634,13 @@ button {
   font-size: 7px;
   letter-spacing: 0.08em;
 }
-.diagram-node__body--anchored .diagram-node__frame {
-  stroke: var(--orange);
-  stroke-width: 2.2px;
-  stroke-opacity: 1;
+/* Node state: a done node recedes and carries a check in its corner tag; an
+   active one is lit by the same glow as an active edge; a blocked one is
+   framed in red with a cross in its tag. A todo node is the plain frame.
+   The frame's stroke (colour, width, opacity) is drawn by
+   DiagramPrimitive alone: a rule here would outrank its attributes. */
+.diagram-node__body--done {
+  opacity: 0.52;
 }
 
 /* A diagram in sequence mode shares the diagram slot and its motion; its
