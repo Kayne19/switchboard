@@ -91,6 +91,18 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
     expect(image.image!.bottom).toBeLessThanOrEqual(image.cell.bottom);
     expect(image.caption!.bottom).toBeLessThanOrEqual(image.cell.bottom);
   });
+
+  test(`a visual primary keeps the larger share over a table and an image beside it / ${viewport.width}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.goto('/?scene=composed&chrome=0');
+    await expect(page.locator('[data-scene="architecture"] .composed-aux [data-testid="table"]')).toBeVisible();
+    await expect(page.locator('.composed-aux [data-testid="image"]')).toHaveAttribute('data-state', 'ready');
+    const shares = await page.evaluate(() => {
+      const height = (selector: string) => document.querySelector(selector)!.getBoundingClientRect().height;
+      return { main: height('.content-grid > .content-main'), diagram: height('.diagram-object'), aux: height('.composed-aux') };
+    });
+    expect(shares.diagram).toBeGreaterThan(shares.aux);
+  });
 }
 
 // In a narrow aux cell a table scrolls sideways inside its viewport; it

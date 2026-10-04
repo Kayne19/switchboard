@@ -14,6 +14,7 @@ const expected = {
   results: 'table',
   comparison: 'training',
   figure: 'image',
+  composed: 'architecture',
 } as const;
 
 describe('scene classification', () => {

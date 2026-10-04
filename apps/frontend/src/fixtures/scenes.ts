@@ -225,6 +225,47 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
       { text: ' It keeps the whole figure in view and reads its size on decode.' },
     ] } },
   ],
+  // A visual primary with visuals beside it: the diagram keeps the main
+  // slot, the table and the figure share the aux row under it, and the
+  // note and the metrics sit in the rail.
+  composed: [
+    { op: 'show', id: 'call-route', type: 'diagram', role: 'primary', data: {
+      mode: 'graph', title: 'CALL / ROUTE', subtitle: 'CALLER -> PROJECT AGENT / LEGS', context: 'CALL TRACE',
+      nodes: [
+        { id: 'caller', label: 'CALLER', sub: 'BROWSER / VOICE', state: 'done' },
+        { id: 'operator', label: 'OPERATOR', sub: 'DAMOCLES / FRONT DESK', semantic: 'orange', state: 'done' },
+        { id: 'pbx', label: 'PBX', sub: 'SWITCHBOARD / ROUTING', semantic: 'cyan', state: 'active' },
+        { id: 'agent', label: 'PROJECT AGENT', sub: 'HEADLESS PI / SSH', semantic: 'green', state: 'todo' },
+      ],
+      edges: [
+        { from: 'caller', to: 'operator', label: 'voice', semantic: 'orange' },
+        { from: 'operator', to: 'pbx', label: 'route', semantic: 'orange' },
+        { from: 'pbx', to: 'agent', label: 'launch', semantic: 'cyan', active: true },
+      ],
+    } },
+    { op: 'show', id: 'leg-latency', type: 'table', role: 'secondary', data: {
+      title: 'LEGS / LATENCY', caption: 'LEGS / LAST 20 CALLS',
+      columns: [{ label: 'LEG' }, { label: 'P50' }, { label: 'P95' }, { label: 'STATE' }],
+      rows: [
+        ['caller -> operator', '120 ms', '180 ms', { text: 'OK', semantic: 'green' }],
+        ['operator -> pbx', '40 ms', '65 ms', { text: 'OK', semantic: 'green' }],
+        ['pbx -> agent', '0.9 s', { text: '2.1 s', semantic: 'amber', bold: true }, { text: 'SLOW', semantic: 'amber' }],
+      ],
+      highlight: [2],
+    } },
+    { op: 'show', id: 'route-figure', type: 'image', role: 'secondary', data: {
+      format: 'png', bytes: FIGURE_PNG_BASE64,
+      alt: 'Test card: seven palette bars under a crosshair, over a grey step ramp',
+      title: 'FIGURE / TEST CARD',
+    } },
+    { op: 'show', id: 'live-calls', type: 'metric', data: { label: 'CALLS / LIVE', value: '3' } },
+    { op: 'show', id: 'handoff-p95', type: 'metric', data: { label: 'HANDOFF P95', value: '2.1 s', semantic: 'amber', trend: 'up', delta: '+0.4 s' } },
+    { op: 'show', id: 'route-note', type: 'note', data: { tag: 'OBSERVATION / PBX LEG', anchor: { target: 'call-route', node: 'pbx' }, segments: [
+      { text: 'The slow leg is the launch. ' },
+      { text: 'The PBX waits on the project session', accent: true, bold: true },
+      { text: ' before it transfers the caller; the other legs are well under a quarter second.' },
+    ] } },
+  ],
 };
 
 export const previousRunAction: ControllerAction = {

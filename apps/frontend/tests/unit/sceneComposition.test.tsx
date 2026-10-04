@@ -10,6 +10,7 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { SceneRenderer } from '../../src/components/SceneRenderer';
 import { ControllerProvider, useController } from '../../src/controller/context';
 import type { ControllerAction, SceneObjectRole, SceneObjectType } from '../../src/controller/types';
+import { validateControllerAction } from '../../src/controller/validation';
 import { fixtures } from '../../src/fixtures/scenes';
 
 // A 1x1 PNG: the smallest picture both validators accept.
@@ -151,7 +152,7 @@ describe('a visual beside the primary', () => {
 });
 
 describe('a primary alone', () => {
-  const alone = (Object.keys(fixtures) as Array<keyof typeof fixtures>).filter((name) => name !== 'idle' && name !== 'conversation');
+  const alone = (Object.keys(fixtures) as Array<keyof typeof fixtures>).filter((name) => name !== 'composed' && name !== 'idle' && name !== 'conversation');
 
   it.each(alone)('the %s fixture draws no aux row', (name) => {
     const page = render(fixtures[name]);
@@ -165,5 +166,22 @@ describe('a primary alone', () => {
     act(() => runActions([show('matrix', 'table', 'secondary')]));
     expect(page.querySelector('.composed-aux [data-testid="table"]')).not.toBeNull();
     expect(page.querySelector('[data-testid="diagram"]')).toBe(diagram);
+  });
+});
+
+describe('the composed fixture', () => {
+  it('is a diagram primary with a table and a figure under it, a note and two metrics beside it', () => {
+    const page = render(fixtures.composed);
+    expect(page.getAttribute('data-scene')).toBe('architecture');
+    expect(drawn(page, 'diagram')).toBe(1);
+    expect(inAux(page, 'table')).toBe(1);
+    expect(inAux(page, 'image')).toBe(1);
+    expect(page.querySelectorAll('.content-rail .metric-row')).toHaveLength(2);
+  });
+
+  it('holds only actions the validators accept', () => {
+    for (const action of fixtures.composed) {
+      expect(validateControllerAction(action)).toMatchObject({ ok: true });
+    }
   });
 });

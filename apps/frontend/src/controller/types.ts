@@ -407,4 +407,4 @@ export type ControllerAction =
   | { op: 'focus'; id?: string | null }
   | { op: 'listen'; on: boolean };
 
-export type FixtureName = 'idle' | 'conversation' | 'training' | 'architecture' | 'email' | 'code' | 'results' | 'handoff' | 'comparison' | 'figure';
+export type FixtureName = 'idle' | 'conversation' | 'training' | 'architecture' | 'email' | 'code' | 'results' | 'handoff' | 'comparison' | 'figure' | 'composed';
