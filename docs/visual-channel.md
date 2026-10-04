@@ -35,6 +35,7 @@ agent sends semantics. See `docs/display-tool.md` for the full action protocol.
 | `code` | code and diff views (`add`/`del`/`ctx` lines) |
 | `table` | rows of named columns: results, comparisons, inventories; cells carry semantic colour and rows can be highlighted |
 | `note` | a persistent annotation, independent from the live transcript |
+| `image` | a raster figure (PNG, JPEG or WebP bytes, inline) the agent already has: a plot, a screenshot, a photo |
 
 Diagram node styling stays restricted to semantic classes and states, enforced server-side.
 
@@ -214,12 +215,42 @@ so `stale` tracks confirmation only, and `connected` is reported alongside
 it so the agent still learns the browser is gone and can judge what that
 means for a caller who might reconnect.
 
-## Deferred Payload Types
+## Implemented: inline raster images
 
-### Direct Binary Image Payload
-- **Purpose**: transfer PNG/JPEG bytes directly over the socket for the stage.
-- **Status**: deferred. Structured types cover the current needs; a binary image
-  channel would expand the wire surface and is not required.
+The `image` type carries a picture the agent already has (a matplotlib plot, a
+screenshot, a photo) as `{format, bytes, alt}`: `format` is `png`, `jpeg` or
+`webp`, `bytes` is standard base64. It was deferred while the structured types
+covered every need; it exists because an agent often holds a figure that no
+structured type can redraw. The rules are in `docs/display-tool.md` ("Image v1
+rules"); the reasons are these.
+
+- **Raster bytes are not markup.** The structured types are safe because the
+  page draws them from data with text nodes. A raster image is pixels the
+  browser's decoder reads, never parsed as a document, so it adds no script
+  surface. SVG is refused for exactly that reason: it is markup and can carry
+  script. `format` cannot smuggle it in, because both validators
+  (`validation.ts`, `visual_protocol.rs`) decode the head of `bytes` and check
+  it starts with the signature `format` names.
+- **The page builds the source.** The `img` source is
+  `data:image/<format>;base64,<bytes>`, built by `ImagePrimitive` from the two
+  validated fields; there is no URL field, so nothing is fetched and no other
+  source can reach an `img`. The agent sends no size: the page reads the
+  intrinsic size on decode and fits the figure to its slot (contained, never
+  cropped or zoomed). `alt` is required; it is the alt text, and the title
+  when there is none.
+- **One transport, a per-type cap.** An image travels in the ordinary display
+  action, through the same validation, projection, confirmation and replay as
+  every other type. There is no second upload path; instead an image `show`
+  has its own size cap (8 MiB raw, 12 MiB action) where every other action
+  keeps 48,000 bytes. The links it crosses all fit it: the skill socket takes
+  request lines up to 13 MiB, and the host link and the browser socket take
+  frames up to 16 MiB.
+- **Replay.** A reconnect snapshot replays every object, images included, and
+  sends each replayed action as its own WebSocket frame, so two images on stage
+  (up to 24 MiB together) never share one 16 MiB frame
+  (`browser::send_snapshot_sink`; tested with two 8 MiB images). The debug
+  feed keeps an image display call as one record with `bytes` clipped to a
+  field's 4 KiB bound.
 
 ## Explicitly Refused Patterns
 

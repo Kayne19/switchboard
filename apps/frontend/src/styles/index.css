@@ -1769,6 +1769,89 @@ button {
   overflow-wrap: anywhere;
 }
 
+/* Image: a raster figure contained on the black field, never cropped or
+   zoomed; its alt text and decoded size sit on the caption line at the
+   bottom edge, on the metadata baseline. The picture fades in once it has
+   decoded (the object itself resolves in through ObjectMotion). */
+.image-object {
+  background: #000;
+}
+.image-primitive {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: clamp(8px, 1.4cqh, 16px);
+  background: #000;
+}
+/* The panel frame is drawn behind the content, so the figure sits inside
+   its outline rather than over it. */
+.image-object .focusable-content {
+  position: relative;
+  z-index: 1;
+  padding: clamp(22px, 3.6cqh, 42px) clamp(22px, 2.6cqw, 42px) clamp(16px, 2.6cqh, 30px);
+}
+.image-primitive__field {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+/* Out of flow, so the decoded size never stretches the grid row: the
+   figure is fitted to the field, whatever its own proportions. */
+.image-primitive__img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  opacity: 0;
+  transition: opacity 0.28s ease-out;
+}
+.image-primitive[data-state="ready"] .image-primitive__img {
+  opacity: 1;
+}
+.image-primitive__empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: rgba(var(--orange-rgb), 0.6);
+}
+.image-primitive__caption {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  padding-top: clamp(6px, 1cqh, 10px);
+  border-top: 1px solid rgba(232, 230, 223, 0.12);
+  color: rgba(232, 230, 223, 0.37);
+}
+.image-primitive__alt {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.image-primitive__size {
+  color: rgba(var(--orange-rgb), 0.62);
+}
+/* The aux row is as tall as its content, and the picture is out of flow,
+   so there the field takes the figure's decoded proportions, held to a
+   share of the stage's height. */
+.composed-aux-object--image .image-primitive__field {
+  width: 100%;
+  aspect-ratio: var(--image-aspect, 16 / 10);
+  max-height: 34cqh;
+}
+.focus-layer__content > .image-primitive {
+  padding: 3cqh 2cqw 2cqh;
+}
+
 /* Code */
 .code-object {
   background: #000;
@@ -2019,7 +2102,8 @@ button {
 .focus-layer__content > .sequence-primitive,
 .focus-layer__content > .document-viewport,
 .focus-layer__content > .code-viewport,
-.focus-layer__content > .table-viewport {
+.focus-layer__content > .table-viewport,
+.focus-layer__content > .image-primitive {
   width: 100%;
   height: 100%;
 }

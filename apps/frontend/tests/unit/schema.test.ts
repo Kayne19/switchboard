@@ -81,6 +81,13 @@ const KNOWN_SCHEMA_GAPS: Record<string, string> = {
   // depend on a specific validator's non-default configuration. Left as an
   // open contract question rather than silently patched over.
   oversized_id_astral_utf16: 'maxLength is Unicode-code-point-based per spec; the app caps UTF-16 code units',
+  // An image's `bytes` must start with the file signature its `format`
+  // names (PNG, JPEG or WebP). That is a relationship between two sibling
+  // fields read through a base64 decode; JSON Schema has neither the
+  // decoder nor a cross-field keyword. The schema pins the alphabet, the
+  // padding and the length; the sniff stays in validation.ts and
+  // visual_protocol.rs, where both validators decode the same head bytes.
+  image_signature_mismatch: 'the format/signature match is a cross-field check over decoded bytes',
 };
 
 describe('display-action-v1.schema.json', () => {
@@ -177,6 +184,8 @@ describe('validateControllerAction follows display-action-v1.schema.json', () =>
     code: { source: { text: 'x' } },
     table: { columns: [{ label: 'c' }], rows: [] },
     note: { segments: [{ text: 't' }] },
+    // A real 1x1 PNG: the validator sniffs the bytes, so a placeholder would not do.
+    image: { format: 'png', bytes: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mN48ew+AAVnAq5EDgAUAAAAAElFTkSuQmCC', alt: 'a' },
   };
 
   it('knows exactly the schema\'s show types and their shapes', () => {

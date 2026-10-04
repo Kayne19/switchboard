@@ -12,6 +12,7 @@ const expected = {
   code: 'code',
   results: 'table',
   comparison: 'training',
+  figure: 'image',
 } as const;
 
 describe('scene classification', () => {

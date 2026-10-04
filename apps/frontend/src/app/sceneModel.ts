@@ -5,6 +5,7 @@ import type {
   ControllerState,
   DiagramObjectData,
   DocumentData,
+  ImageData,
   MessageData,
   MetricData,
   NoteData,
@@ -154,6 +155,7 @@ export type SceneKind =
   | 'document'
   | 'code'
   | 'table'
+  | 'image'
   | 'composed';
 
 export function sceneKind(state: ControllerState): SceneKind {
@@ -177,6 +179,7 @@ export function sceneKind(state: ControllerState): SceneKind {
   if (primary.type === 'document') return 'document';
   if (primary.type === 'code') return 'code';
   if (primary.type === 'table') return 'table';
+  if (primary.type === 'image') return 'image';
   return 'composed';
 }
 
@@ -198,6 +201,9 @@ export function deriveScreenState(
       title = data.subject;
     } else if (typeof data.label === 'string') {
       title = data.label;
+    } else if (typeof data.alt === 'string') {
+      // An image's alt text is its title when it has none.
+      title = data.alt;
     }
   }
 
@@ -221,6 +227,7 @@ export const cast = {
   document: (object: SceneObject) => object as SceneObject<DocumentData>,
   code: (object: SceneObject) => object as SceneObject<CodeData>,
   table: (object: SceneObject) => object as SceneObject<TableData>,
+  image: (object: SceneObject) => object as SceneObject<ImageData>,
   message: (object: SceneObject) => object as SceneObject<MessageData>,
   note: (object: SceneObject) => object as SceneObject<NoteData>,
 };

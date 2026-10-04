@@ -58,6 +58,9 @@ npm run build:cdn        # dependency-light browser preview using pinned CDN mod
 | Tap Damocles | Toggle listening without replacing the current scene |
 | Tap primary content | Focus that object |
 
+The tenth fixture, `figure` (an inline PNG test card: the image type), has no
+number key. Reach it with `/?scene=figure` or by swiping past `comparison`.
+
 Direct fixture URLs are also supported:
 
 ```text
@@ -67,6 +70,7 @@ Direct fixture URLs are also supported:
 /?scene=results
 /?scene=handoff
 /?scene=comparison
+/?scene=figure
 ```
 
 ## Runtime API

@@ -1046,6 +1046,36 @@ fn names_ids_and_keys_are_cut_and_a_record_has_a_hard_size() {
 }
 
 #[test]
+fn an_image_display_call_is_kept_as_a_clipped_record() {
+    // An image action carries up to ~11 MiB of base64. The feed keeps the
+    // call, with the image's bytes cut to one field's bound.
+    let bus = DebugBus::new();
+    let bytes = format!("iVBORw0KGgo{}", "A".repeat(11 << 20));
+    bus.publish(DebugEvent::ModuleCall {
+        agent: "alpha".into(),
+        call_id: "m1".into(),
+        name: "display".into(),
+        args: json!({"action": {"op": "show", "id": "fig", "type": "image",
+            "data": {"format": "png", "bytes": bytes, "alt": "a figure"}}}),
+        turn_id: None,
+    });
+    let snapshot = bus.snapshot();
+    let record = &snapshot.events[0];
+    assert!(record.clipped);
+    let DebugEvent::ModuleCall { args, .. } = &record.event else {
+        panic!("module call")
+    };
+    let data = &args["action"]["data"];
+    let kept = data["bytes"].as_str().unwrap();
+    assert!(kept.starts_with("iVBORw0KGgo"));
+    assert!(kept.ends_with(CLIP_MARKER));
+    assert!(kept.len() <= MAX_FIELD_BYTES + CLIP_MARKER.len());
+    assert_eq!(data["alt"], "a figure");
+    let size = serde_json::to_string(record.as_ref()).unwrap().len();
+    assert!(size < MAX_RECORD_BYTES * 2, "record is {size} bytes");
+}
+
+#[test]
 fn only_the_part_of_a_string_that_can_be_kept_is_scrubbed() {
     // A 16 MiB field costs what its kept prefix costs: the rest is never
     // scanned.

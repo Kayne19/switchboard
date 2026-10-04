@@ -6,6 +6,7 @@ import type {
   ControllerState,
   DiagramObjectData,
   DocumentData,
+  ImageData,
   MessageData,
   MetricData,
   NoteData,
@@ -20,6 +21,7 @@ import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { CodeViewport } from '../primitives/CodeViewport';
 import { DamoclesPresence } from '../primitives/DamoclesPresence';
 import { DocumentViewport } from '../primitives/DocumentViewport';
+import { ImagePrimitive } from '../primitives/ImagePrimitive';
 import { LiveChatCard } from '../primitives/LiveChatCard';
 import { SpokenLog } from '../primitives/SpokenLog';
 import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
@@ -214,6 +216,8 @@ function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux') {
       return <CodeViewport data={(object as SceneObject<CodeData>).data} />;
     case 'table':
       return <TablePrimitive data={(object as SceneObject<TableData>).data} />;
+    case 'image':
+      return <ImagePrimitive data={(object as SceneObject<ImageData>).data} />;
     case 'metric':
       return <MetricsPrimitive metrics={[object as SceneObject<MetricData>]} variant={slot === 'primary' ? 'primary' : undefined} />;
     case 'progress':
@@ -320,8 +324,9 @@ function trainingContent({ state, onFocus, onOpenHistory }: SceneProps): SceneCo
   };
 }
 
-// A diagram, document, code, or table object fills the main slot alone, its
-// note in the rail -- unless the diagram places the note as its own callout.
+// A diagram, document, code, table, or image object fills the main slot
+// alone, its note in the rail -- unless the diagram places the note as its
+// own callout.
 function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed: boolean) => void): SceneContent | null {
   const primary = primaryObject(state);
   if (!primary) return null;
@@ -397,12 +402,26 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         main: slot('table-object', <TablePrimitive data={data} />),
       };
     }
+    case 'image': {
+      // The figure's own words head the scene; its alt text stands in for
+      // a title it was not given.
+      const { data } = cast.image(primary);
+      return {
+        ...rail,
+        title: data.title ?? data.alt,
+        subtitle: data.subtitle ?? `IMAGE / ${data.format.toUpperCase()}`,
+        context: data.context ?? 'FIGURE',
+        footer: 'DISPLAY / FIGURE',
+        caption: sceneCaption(primary, `FIGURE / ${data.format.toUpperCase()}`),
+        main: slot('image-object', <ImagePrimitive data={data} />, <TechFrame variant="panel" />),
+      };
+    }
     default:
       return null;
   }
 }
 
-const AUX_VISUAL_TYPES = new Set(['chart', 'diagram', 'document', 'code', 'table']);
+const AUX_VISUAL_TYPES = new Set(['chart', 'diagram', 'document', 'code', 'table', 'image']);
 
 // Any mix of objects: the primary, or a cluster of primary metrics, over an
 // aux row of everything the rail does not carry.

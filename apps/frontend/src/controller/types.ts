@@ -193,6 +193,25 @@ export interface TableData {
   highlight?: number[];
 }
 
+/** A raster image's encoded format; SVG is markup, so it is not one. */
+export type ImageFormat = 'png' | 'jpeg' | 'webp';
+
+/**
+ * A raster image, carried as standard base64 inside the action. The page
+ * builds the only `img` source there is from these two validated fields
+ * (`imageDataUrl`); the intrinsic size is read on decode, never sent.
+ */
+export interface ImageData {
+  format: ImageFormat;
+  bytes: string;
+  /** Required: the alt text, and the title fallback. */
+  alt: string;
+  title?: string;
+  subtitle?: string;
+  context?: string;
+  caption?: string;
+}
+
 /** A line the caller heard, in the live response's log (#113). */
 export interface SpokenLine {
   /** Stable across updates, for rendering. */
@@ -236,7 +255,8 @@ export type AgentObjectType =
   | 'document'
   | 'code'
   | 'table'
-  | 'note';
+  | 'note'
+  | 'image';
 
 export type SceneObjectType = AgentObjectType | 'message';
 
@@ -354,6 +374,7 @@ export type DisplayAction =
   | { op: 'show'; id: string; type: 'code'; role?: SceneObjectRole; data: CodeData }
   | { op: 'show'; id: string; type: 'table'; role?: SceneObjectRole; data: TableData }
   | { op: 'show'; id: string; type: 'note'; role?: SceneObjectRole; data: NoteData }
+  | { op: 'show'; id: string; type: 'image'; role?: SceneObjectRole; data: ImageData }
   | { op: 'hide'; id: string }
   | { op: 'say'; text: string; target?: string | null; at?: SpeechState['at'] }
   | { op: 'focus'; id: string }
@@ -386,4 +407,4 @@ export type ControllerAction =
   | { op: 'focus'; id?: string | null }
   | { op: 'listen'; on: boolean };
 
-export type FixtureName = 'idle' | 'conversation' | 'training' | 'architecture' | 'email' | 'code' | 'results' | 'handoff' | 'comparison';
+export type FixtureName = 'idle' | 'conversation' | 'training' | 'architecture' | 'email' | 'code' | 'results' | 'handoff' | 'comparison' | 'figure';

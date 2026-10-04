@@ -2,6 +2,15 @@ use serde_json::{Map, Value};
 use std::collections::HashSet;
 
 pub const MAX_ACTION_BYTES: usize = 48_000;
+/// An image action carries raster bytes, so it gets its own cap: the raw
+/// image is at most 8 MiB, and the action around its base64 at most 12 MiB.
+/// Every other type keeps `MAX_ACTION_BYTES`. The host link and the browser
+/// socket both allow 16 MiB frames (`hosts::MAX_HOST_FRAME_BYTES`,
+/// `browser::MAX_WEBSOCKET_MESSAGE_BYTES`), so one image action always fits
+/// one frame; the reconnect snapshot sends each action as its own frame for
+/// the same reason. The browser's `validation.ts` holds the same two numbers.
+pub const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_IMAGE_ACTION_BYTES: usize = 12 * 1024 * 1024;
 pub const MAX_ID_UTF16: usize = 128;
 pub const MAX_TEXT_UTF16: usize = 50_000;
 pub const RESERVED_ID_PREFIX: &str = "__runtime/";
@@ -12,8 +21,8 @@ const MAX_PROGRESS_STEPS: usize = 30;
 const MAX_METRIC_DELTA_UTF16: usize = 32;
 /// What an agent may `show`. The browser reports the same kinds back in its
 /// screen state, so this list is the one both directions are checked against.
-pub const CONTENT_TYPES: [&str; 8] = [
-    "chart", "metric", "progress", "diagram", "document", "code", "table", "note",
+pub const CONTENT_TYPES: [&str; 9] = [
+    "chart", "metric", "progress", "diagram", "document", "code", "table", "note", "image",
 ];
 
 // The table contract (docs/display-tool.md, "Table v1 rules"); the browser's
@@ -1138,6 +1147,166 @@ fn validate_table_data(data: &Map<String, Value>) -> Result<Value, String> {
     Ok(Value::Object(out))
 }
 
+// ---- image -----------------------------------------------------------------
+
+/// The fewest bytes a signature check needs: WebP's `WEBP` ends at byte 12.
+const IMAGE_SIGNATURE_BYTES: usize = 12;
+
+/// The index of `byte` in the standard base64 alphabet.
+fn base64_index(byte: u8) -> Option<u8> {
+    match byte {
+        b'A'..=b'Z' => Some(byte - b'A'),
+        b'a'..=b'z' => Some(byte - b'a' + 26),
+        b'0'..=b'9' => Some(byte - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    }
+}
+
+/// The decoded length of `text` when it is strict standard base64 -- the
+/// `A-Za-z0-9+/` alphabet, a multiple of four characters long, at most two
+/// `=` at the end and nothing else (no whitespace, no URL-safe variant) --
+/// or `None` when it is not. The browser's `base64DecodedLength` applies the
+/// same rule, so the two validators accept the same strings.
+fn base64_decoded_length(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    if bytes.is_empty() || !bytes.len().is_multiple_of(4) {
+        return None;
+    }
+    let padding = bytes
+        .iter()
+        .rev()
+        .take(2)
+        .take_while(|b| **b == b'=')
+        .count();
+    let body = &bytes[..bytes.len() - padding];
+    if !body.iter().all(|b| base64_index(*b).is_some()) {
+        return None;
+    }
+    Some(bytes.len() / 4 * 3 - padding)
+}
+
+/// Decodes strict standard base64 (`base64_decoded_length`'s rule). The
+/// crate has no base64 dependency and an image check needs only its first
+/// bytes, so this stays a small decoder of its own.
+fn decode_base64(text: &str) -> Result<Vec<u8>, String> {
+    let length = base64_decoded_length(text).ok_or("not standard base64")?;
+    let mut out = Vec::with_capacity(length);
+    for group in text.as_bytes().chunks(4) {
+        let sextet = |at: usize| -> Option<u32> {
+            let byte = group[at];
+            if byte == b'=' {
+                None
+            } else {
+                base64_index(byte).map(u32::from)
+            }
+        };
+        let (Some(a), Some(b)) = (sextet(0), sextet(1)) else {
+            return Err("not standard base64".into());
+        };
+        let c = sextet(2);
+        let d = sextet(3);
+        out.push(((a << 2) | (b >> 4)) as u8);
+        if let Some(c) = c {
+            out.push((((b & 0xf) << 4) | (c >> 2)) as u8);
+        }
+        if let (Some(c), Some(d)) = (c, d) {
+            out.push((((c & 0x3) << 6) | d) as u8);
+        }
+    }
+    Ok(out)
+}
+
+/// The first `count` bytes `text` decodes to, at most.
+fn decode_base64_head(text: &str, count: usize) -> Result<Vec<u8>, String> {
+    let chars = count.div_ceil(3) * 4;
+    let head = text.get(..chars).unwrap_or(text);
+    let mut bytes = decode_base64(head)?;
+    bytes.truncate(count);
+    Ok(bytes)
+}
+
+/// Whether `bytes` start with `format`'s file signature: PNG
+/// `89 50 4E 47 0D 0A 1A 0A`, JPEG `FF D8 FF`, WebP `RIFF....WEBP`. The
+/// browser's `imageSignatureMatches` sniffs the same bytes.
+fn image_signature_matches(format: &str, bytes: &[u8]) -> bool {
+    match format {
+        "png" => bytes.starts_with(&[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        "jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]),
+        "webp" => bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"),
+        _ => false,
+    }
+}
+
+/// Raster only: the format names the bytes' encoding, and the bytes must
+/// carry that encoding's signature, so `format` can never label markup (an
+/// SVG) or anything else as an image. The page builds the only `img` source
+/// there is from these two fields once they have passed here.
+fn validate_image_data(data: &Map<String, Value>) -> Result<Value, String> {
+    check_unknown_keys(
+        data,
+        &[
+            "format", "bytes", "alt", "title", "subtitle", "context", "caption",
+        ],
+        "image data",
+    )?;
+
+    let format = data.get("format").and_then(Value::as_str);
+    if matches!(format, Some("svg") | Some("svg+xml")) {
+        return Err("image.format svg is refused: an image is raster bytes, not markup".into());
+    }
+    let format = format
+        .filter(|f| matches!(*f, "png" | "jpeg" | "webp"))
+        .ok_or("image.format must be one of png, jpeg, webp")?;
+
+    let bytes = data
+        .get("bytes")
+        .and_then(Value::as_str)
+        .ok_or("image.bytes must be a base64 string")?;
+    let decoded_length = base64_decoded_length(bytes).ok_or(
+        "image.bytes must be standard base64: the A-Za-z0-9+/ alphabet, padded with =, no data: prefix",
+    )?;
+    if decoded_length > MAX_IMAGE_BYTES {
+        return Err(format!(
+            "image.bytes decode to more than {MAX_IMAGE_BYTES} bytes"
+        ));
+    }
+    if decoded_length < IMAGE_SIGNATURE_BYTES {
+        return Err(format!("image.bytes are too short to be a {format}"));
+    }
+    let head = decode_base64_head(bytes, IMAGE_SIGNATURE_BYTES)?;
+    if !image_signature_matches(format, &head) {
+        return Err(format!(
+            "image.bytes do not start with the {format} signature"
+        ));
+    }
+
+    let alt = data
+        .get("alt")
+        .and_then(Value::as_str)
+        .ok_or("image.alt must be a string")?;
+    if utf16_len(alt) > 256 {
+        return Err("image.alt exceeds maximum length of 256 UTF-16 code units".into());
+    }
+    // Unicode White_Space only; the browser's `isBlank` uses the same set.
+    if alt.chars().all(char::is_whitespace) {
+        return Err("image.alt must not be empty".into());
+    }
+
+    let mut out = Map::new();
+    out.insert("format".into(), format.into());
+    out.insert("bytes".into(), bytes.into());
+    out.insert("alt".into(), alt.into());
+    for k in ["title", "subtitle", "context"] {
+        copy_optional_string(data, &mut out, k, 256, &format!("image.{k}"))?;
+    }
+    copy_optional_string(data, &mut out, "caption", 128, "image.caption")?;
+    Ok(Value::Object(out))
+}
+
+// ---- note ------------------------------------------------------------------
+
 fn validate_note_data(data: &Map<String, Value>) -> Result<Value, String> {
     check_unknown_keys(data, &["tag", "segments", "caption", "anchor"], "note data")?;
     let segs_arr = data
@@ -1227,9 +1396,22 @@ fn validate_note_data(data: &Map<String, Value>) -> Result<Value, String> {
     Ok(Value::Object(out))
 }
 
+/// The byte cap an action is held to: an image action is the one kind
+/// allowed past the general cap, and its own fields are capped in
+/// `validate_image_data`, so nothing else can ride in under its limit.
+fn action_size_cap(action: &Value) -> usize {
+    let is_image_show = action.get("op").and_then(Value::as_str) == Some("show")
+        && action.get("type").and_then(Value::as_str) == Some("image");
+    if is_image_show {
+        MAX_IMAGE_ACTION_BYTES
+    } else {
+        MAX_ACTION_BYTES
+    }
+}
+
 pub fn validate_action(action: &Value) -> Result<Value, String> {
     let bytes = serde_json::to_vec(action).map_err(|_| "action must be valid JSON".to_string())?;
-    if bytes.len() > MAX_ACTION_BYTES {
+    if bytes.len() > action_size_cap(action) {
         return Err("action exceeds size limit".into());
     }
 
@@ -1294,6 +1476,7 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
                 "code" => validate_code_data(data_obj)?,
                 "table" => validate_table_data(data_obj)?,
                 "note" => validate_note_data(data_obj)?,
+                "image" => validate_image_data(data_obj)?,
                 _ => return Err("show.type is unknown".into()),
             };
 

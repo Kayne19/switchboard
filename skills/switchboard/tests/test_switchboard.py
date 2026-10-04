@@ -1,5 +1,6 @@
 """The switchboard skill module against a fake host-agent skill socket (docs/host-link.md)."""
 
+import base64
 import contextlib
 import io
 import json
@@ -370,6 +371,76 @@ class ProgrammingErrorTest(ModuleTestCase):
             {"label": "L", "steps": [{"label": "Fetch", "state": "done"}, {"label": "Link"}]},
             {"label": "L", "value": 50, "steps": [{"label": "Fetch"}]},
         ])
+
+
+PNG_1X1 = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mN48ew+AAVnAq5EDgAUAAAAAElFTkSuQmCC"
+)
+
+
+class ImageTest(ModuleTestCase):
+    """An image goes on the wire as format and base64 bytes, made here from a
+    path or raw bytes; the path itself never leaves the host."""
+
+    def sent_data(self, host):
+        return host.calls()[-1]["args"]["action"]["data"]
+
+    def test_a_path_is_read_sniffed_and_sent_as_base64(self):
+        host = self.host()
+        path = os.path.join(self.home, "fig.png")
+        with open(path, "wb") as fh:
+            fh.write(PNG_1X1)
+        data = {"path": path, "alt": "One pixel", "title": "FIGURE"}
+        result, _ = self.run_call(switchboard.display, op="show", id="fig", type="image", data=data)
+        self.assertTrue(result.delivered)
+        self.assertEqual(
+            self.sent_data(host),
+            {"format": "png", "bytes": base64.b64encode(PNG_1X1).decode(), "alt": "One pixel", "title": "FIGURE"},
+        )
+        self.assertEqual(data, {"path": path, "alt": "One pixel", "title": "FIGURE"}, "the caller's dict is left alone")
+
+    def test_raw_bytes_are_sniffed_for_each_raster_format(self):
+        host = self.host()
+        for fmt, raw in (
+            ("png", PNG_1X1),
+            ("jpeg", b"\xff\xd8\xff\xe0" + bytes(32)),
+            ("webp", b"RIFF\x00\x00\x00\x00WEBPVP8 " + bytes(32)),
+        ):
+            for wrapped in (raw, bytearray(raw), memoryview(raw)):
+                with self.subTest(format=fmt, kind=type(wrapped).__name__):
+                    self.run_call(switchboard.display, {"op": "show", "id": "fig", "type": "image", "data": {"bytes": wrapped, "alt": "a"}})
+                    self.assertEqual(self.sent_data(host), {"format": fmt, "bytes": base64.b64encode(raw).decode(), "alt": "a"})
+
+    def test_wire_shaped_data_is_sent_as_it_is(self):
+        host = self.host()
+        data = {"format": "png", "bytes": base64.b64encode(PNG_1X1).decode(), "alt": "a"}
+        self.run_call(switchboard.display, op="show", id="fig", type="image", data=data)
+        self.assertEqual(self.sent_data(host), data)
+        self.run_call(switchboard.display, op="show", id="fig", type="image", data={**data, "path": None})
+        self.assertEqual(self.sent_data(host), data, "a path of None is not sent")
+
+    def test_what_cannot_be_shown_raises_before_anything_is_sent(self):
+        host = self.host()
+        too_big = os.path.join(self.home, "big.png")
+        with open(too_big, "wb") as fh:
+            fh.write(PNG_1X1[:8] + bytes(8 * 1024 * 1024))
+        cases = [
+            ({"bytes": b"<svg xmlns='http://www.w3.org/2000/svg'/>", "alt": "a"}, "not a PNG, JPEG or WebP"),
+            ({"bytes": b"GIF89a" + bytes(16), "alt": "a"}, "not a PNG, JPEG or WebP"),
+            ({"path": os.path.join(self.home, "missing.png"), "alt": "a"}, "cannot read image path"),
+            ({"path": too_big, "alt": "a"}, "over 8388608 bytes"),
+            ({"path": too_big, "bytes": PNG_1X1, "alt": "a"}, "a path or bytes, not both"),
+            ({"bytes": PNG_1X1, "format": "jpeg", "alt": "a"}, "are a png, not a jpeg"),
+            ({"bytes": PNG_1X1}, "image data is missing alt"),
+        ]
+        for data, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaises(ValueError) as caught, contextlib.redirect_stdout(io.StringIO()):
+                    switchboard.display(op="show", id="fig", type="image", data=data)
+                self.assertIn(message, str(caught.exception))
+        with self.assertRaises(TypeError):
+            switchboard.display(op="show", id="fig", type="image", data={"path": 7, "alt": "a"})
+        self.assertEqual(host.connections, 0)
 
 
 if __name__ == "__main__":
