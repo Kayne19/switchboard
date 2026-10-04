@@ -541,6 +541,48 @@ test('a primary progress keeps its text under the bar on a portrait phone, with 
   }
 });
 
+// The step list stretches to the primary cell so a long plan scrolls inside
+// it. A short plan must not spread over that height: its rows keep their own
+// height at the top of the list, each glyph on its label's line.
+for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+  test(`a primary progress with a short plan lists its steps at their own height at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await openController(page);
+    await page.evaluate(() => {
+      const dispatch = window.SwitchboardController?.dispatch;
+      if (!dispatch) throw new Error('controller unavailable');
+      dispatch({ op: 'clear' });
+      dispatch({
+        op: 'show', id: 'release', type: 'progress', role: 'primary',
+        data: {
+          label: 'RELEASE', value: 40,
+          steps: [
+            { label: 'BUILD', state: 'done' },
+            { label: 'TEST', state: 'done', detail: 'ALL SUITES' },
+            { label: 'REVIEW', state: 'active' },
+            { label: 'MERGE', state: 'blocked', detail: 'WAITS ON REVIEW' },
+            { label: 'DEPLOY' },
+          ],
+        },
+      });
+    });
+    const rows = page.locator('.composed-primary-object--progress .progress-step');
+    await expect(rows).toHaveCount(5);
+    const geometry = await rows.evaluateAll((items) => items.map((item) => {
+      const label = item.querySelector<HTMLElement>('.progress-step__label')!.getBoundingClientRect();
+      const glyph = item.querySelector<SVGElement>('.progress-step__glyph')!.getBoundingClientRect();
+      const row = item.getBoundingClientRect();
+      return { row: { top: row.top, bottom: row.bottom }, label: { top: label.top, bottom: label.bottom }, glyphMiddle: (glyph.top + glyph.bottom) / 2 };
+    }));
+    for (const [index, step] of geometry.entries()) {
+      expect(step.glyphMiddle, `step ${index} glyph on its label's line`).toBeGreaterThanOrEqual(step.label.top);
+      expect(step.glyphMiddle, `step ${index} glyph on its label's line`).toBeLessThanOrEqual(step.label.bottom);
+      expect(step.row.bottom - step.row.top, `step ${index} keeps its own height`).toBeLessThan((step.label.bottom - step.label.top) * 2);
+      if (index > 0) expect(step.row.top - geometry[index - 1].row.bottom, `step ${index} follows the one before`).toBeLessThan(12);
+    }
+  });
+}
+
 test('compare progress renders once in the composed aux row', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openController(page);
