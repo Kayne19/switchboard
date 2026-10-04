@@ -8,6 +8,7 @@ import {
   CHART_PAD,
   CHART_POINT_RADIUS,
   CHART_TICK_BASELINE,
+  CHART_TICK_CHAR_ADVANCE,
   CHART_TICK_ROW_HEIGHT,
   CHART_VIEW_HEIGHT,
   CHART_VIEW_WIDTH,
@@ -88,9 +89,9 @@ function Grid({ scales }: { scales: ChartScales }) {
   const categoryLines = categorical && kind !== 'bar';
   if (horizontal) {
     return <g className="chart-grid" data-axis="horizontal">
-      {valueTicks.map((tick) => {
+      {valueTicks.map((tick, index) => {
         const x = valueAt(tick);
-        return <g key={tick}><line x1={x} y1={plot.top} x2={x} y2={plot.bottom}/><text x={x} y={plot.bottom + CHART_TICK_BASELINE} textAnchor="middle">{formatValueTick(tick)}</text></g>;
+        return <g key={index}><line x1={x} y1={plot.top} x2={x} y2={plot.bottom}/><text x={x} y={plot.bottom + CHART_TICK_BASELINE} textAnchor="middle">{formatValueTick(tick)}</text></g>;
       })}
       <line x1={plot.left} y1={plot.top} x2={plot.right} y2={plot.top}/>
       <line x1={plot.left} y1={plot.bottom} x2={plot.right} y2={plot.bottom}/>
@@ -103,9 +104,9 @@ function Grid({ scales }: { scales: ChartScales }) {
   // categorical axis closes the grid at both edges and labels neither.
   const xGrid = categorical ? [] : xMax > 0 && xTicks[xTicks.length - 1] < xMax ? [...xTicks, xMax] : xTicks;
   return <g className="chart-grid">
-    {valueTicks.map((tick) => {
+    {valueTicks.map((tick, index) => {
       const y = valueAt(tick);
-      return <g key={tick}><line x1={plot.left} y1={y} x2={plot.right} y2={y}/><text x={plot.left - 14} y={y + 4} textAnchor="end">{formatValueTick(tick)}</text></g>;
+      return <g key={index}><line x1={plot.left} y1={y} x2={plot.right} y2={y}/><text x={plot.left - 14} y={y + 4} textAnchor="end">{formatValueTick(tick)}</text></g>;
     })}
     {xGrid.map((value) => {
       const x = xAt(value);
@@ -117,9 +118,13 @@ function Grid({ scales }: { scales: ChartScales }) {
     </> : null}
     {categories.ticks.map((tick) => {
       const x = xAt(tick.index);
+      // The first and last categories of a line sit on the plot's edges;
+      // their labels are centred there but held inside the viewBox.
+      const half = (tick.text.length * CHART_TICK_CHAR_ADVANCE) / 2;
+      const labelX = Math.min(CHART_VIEW_WIDTH - half, Math.max(half, x));
       return <g key={tick.index}>
         {categoryLines ? <line x1={x} y1={plot.top} x2={x} y2={plot.bottom}/> : null}
-        <text className="chart-grid__category" x={x} y={plot.bottom + CHART_TICK_BASELINE + tick.row * CHART_TICK_ROW_HEIGHT} textAnchor="middle">{tick.text}</text>
+        <text className="chart-grid__category" x={labelX} y={plot.bottom + CHART_TICK_BASELINE + tick.row * CHART_TICK_ROW_HEIGHT} textAnchor="middle">{tick.text}</text>
       </g>;
     })}
   </g>;
@@ -169,7 +174,7 @@ export function ChartPrimitive({
         <clipPath id={clipId}><rect x={plot.left-reach} y={plot.top-reach} width={plotWidth+2*reach} height={plot.bottom-plot.top+2*reach}/></clipPath>
         {/* Each series resolves left to right behind a widening clip: a
             line draws itself, bars and points appear in order, and a
-            horizontal bar grows from its baseline. The strokes are
+            horizontal bar is revealed along its length. The strokes are
             non-scaling, so a path-length trace -- whose dash pattern is
             measured in user space but laid in screen space -- would stop
             short of the last point whenever the chart is drawn larger than
@@ -200,8 +205,8 @@ export function ChartPrimitive({
       </g>
       {/* The axis names follow their axes: a horizontal bar chart's
           categories run down the left and its values along the bottom. */}
-      <text className="chart-axis-label" x={(plot.left+plot.right)/2} y={height-2} textAnchor="middle">{(horizontal ? data.yLabel : data.xLabel) ?? (horizontal ? 'Y' : 'X')}</text>
-      <text className="chart-axis-label" transform={`translate(17 ${(plot.top+plot.bottom)/2}) rotate(-90)`} textAnchor="middle">{(horizontal ? data.xLabel : data.yLabel) ?? (horizontal ? 'X' : 'Y')}</text>
+      <text className="chart-axis-label" x={width/2} y={height-2} textAnchor="middle">{(horizontal ? data.yLabel : data.xLabel) ?? (horizontal ? 'Y' : 'X')}</text>
+      <text className="chart-axis-label" transform={`translate(17 ${height/2}) rotate(-90)`} textAnchor="middle">{(horizontal ? data.xLabel : data.yLabel) ?? (horizontal ? 'X' : 'Y')}</text>
       {/* Rows grow downward from the one-row anchor (`CHART_PAD.top`, not
           the possibly-grown plot top): `chartPad` already grew the plot's
           own top padding to keep the last row clear of it. */}

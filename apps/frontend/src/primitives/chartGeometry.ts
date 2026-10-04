@@ -287,13 +287,16 @@ export function chartScales(data: ChartData): ChartScales {
   const count = categories.categories?.length;
   const maxCount = Math.max(2, ...data.series.map((series) => series.values.length));
   const xMax = count !== undefined ? count - 1 : (data.xMax ?? maxCount - 1);
+  // A numeric chart with no positive x domain still spreads its samples
+  // edge to edge; it is its ticks, markers and notes that have nowhere to
+  // go (`chartSeriesPoint`).
+  const spread = xMax > 0 ? xMax : maxCount - 1;
   const axisStart = horizontal ? plot.top : plot.left;
   const axisLength = horizontal ? plotHeight : plotWidth;
   const band = kind === 'bar' && count ? axisLength / count : 0;
   const xAt = (x: number): number => {
     if (band > 0) return axisStart + (x + 0.5) * band;
-    // A chart with no positive x domain draws everything at its start.
-    return axisStart + (xMax > 0 ? x / xMax : 0) * axisLength;
+    return axisStart + (spread > 0 ? x / spread : 0) * axisLength;
   };
   const share = (value: number) => (value - yMin) / Math.max(0.000001, yMax - yMin);
   const valueAt = (value: number): number =>
@@ -311,7 +314,7 @@ export function chartScales(data: ChartData): ChartScales {
     valueAt,
     pointAt: (x, value) => (horizontal ? { x: valueAt(value), y: xAt(x) } : { x: xAt(x), y: valueAt(value) }),
     // Categories are the sample indices; numeric samples spread over the domain.
-    sampleX: (series, index) => (count !== undefined ? index : (index / Math.max(1, series.values.length - 1)) * xMax),
+    sampleX: (series, index) => (count !== undefined ? index : (index / Math.max(1, series.values.length - 1)) * spread),
     plot,
   };
 }

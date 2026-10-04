@@ -7,6 +7,7 @@ import { ChartPrimitive, chartSeriesColor, chartXTicks } from '../../src/primiti
 import {
   CHART_LEGEND_ROW_HEIGHT,
   CHART_LEGEND_STEP,
+  CHART_TICK_CHAR_ADVANCE,
   CHART_TICK_ROW_HEIGHT,
   chartBars,
   chartLegendLayout,
@@ -444,5 +445,36 @@ describe('chart kinds', () => {
       act(() => root.unmount());
       host.remove();
     }
+  });
+});
+
+describe('chart kinds keep the line chart as it was', () => {
+  it('anchors the axis names where they have always been, on every kind', () => {
+    for (const kind of ['line', 'bar', 'area', 'scatter'] as const) {
+      renderWith({ kind, xLabel: 'EPOCH', yLabel: 'LOSS', series: [{ name: 'A', values: [1, 2, 3] }] });
+      const labels = [...host.querySelectorAll<SVGTextElement>('.chart-axis-label')];
+      expect(labels[0].getAttribute('x')).toBe('500');
+      expect(labels[1].getAttribute('transform')).toBe('translate(17 250) rotate(-90)');
+      act(() => root.unmount());
+      host.remove();
+    }
+  });
+
+  it('still spreads a numeric series edge to edge when its x domain is not positive', () => {
+    renderWith({ series: [{ name: 'A', values: [1, 2, 3] }], xMax: 0 });
+    const d = host.querySelector('.chart-series')!.getAttribute('d')!;
+    const xs = [...d.matchAll(/[ML] ([\d.]+) /g)].map((match) => Number(match[1]));
+    expect(xs[0]).toBeCloseTo(74);
+    expect(xs[2]).toBeCloseTo(1000 - 28);
+    expect(host.querySelector('.chart-marker')).toBeNull();
+  });
+
+  it('holds the last category label inside the viewBox', () => {
+    const labels = ['ONE', 'TWO', 'A RATHER LONG LAST LABEL'];
+    renderWith({ labels, series: [{ name: 'A', values: [1, 2, 3] }] });
+    const last = [...host.querySelectorAll<SVGTextElement>('.chart-grid__category')].pop()!;
+    const half = (labels[2].length * CHART_TICK_CHAR_ADVANCE) / 2;
+    expect(Number(last.getAttribute('x')) + half).toBeLessThanOrEqual(1000);
+    expect(Number(last.getAttribute('x'))).toBeLessThan(1000 - 28);
   });
 });
