@@ -75,7 +75,9 @@ Remove content and return to the Damocles presence.
 and values are rounded to two decimal places. A value of `1` means 1%, not
 complete. The fill and `aria-valuenow` derive directly from this percentage.
 The display tool asks models for `value (percent, 0-100)`. Non-finite numbers
-are rejected.
+are rejected. A progress that carries `steps` may omit `value`; the validator
+then fills it in as the share of steps whose state is `done`, so the reducer
+and the primitive always see a number.
 
 ## Runtime boundary
 

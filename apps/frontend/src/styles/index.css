@@ -1106,12 +1106,25 @@ button {
   color: rgba(232, 230, 223, 0.4);
 }
 .metric-row__value {
+  display: flex;
+  align-items: baseline;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: clamp(15px, 1.28cqw, 23px);
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* The number and the move beside it share the value's width. The number
+   never shrinks for the move's sake (shrink 0), so the move is what gives
+   way, down to a floor that still shows the arrow and the start of the
+   delta; a number wider than the cell is capped at the cell and truncates
+   as it always did. */
+.metric-row__number {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* Which way the value moved, beside it in the value's own colour: a small
    arrow and the delta as the agent worded it, sized against the value so
@@ -1119,12 +1132,18 @@ button {
 .metric-row__trend {
   display: inline-flex;
   align-items: baseline;
+  flex: 0 1 auto;
   gap: 0.35em;
   margin-left: 0.55em;
+  min-width: 6ch;
   font-size: clamp(9px, 0.46em, 30px);
   letter-spacing: 0.08em;
-  vertical-align: baseline;
   opacity: 0.86;
+}
+.metric-row__delta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .metric-row__arrow {
   width: 1em;

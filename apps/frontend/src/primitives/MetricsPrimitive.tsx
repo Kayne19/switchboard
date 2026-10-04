@@ -77,7 +77,7 @@ export function MetricsPrimitive({ metrics, variant = 'list', onFocus }: Metrics
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.22 }}
             >
-              {metric.data.value}
+              <span className="metric-row__number">{metric.data.value}</span>
               <MetricTrend data={metric.data} />
             </motion.span>
           </motion.div>

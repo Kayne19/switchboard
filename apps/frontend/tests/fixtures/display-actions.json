@@ -318,6 +318,45 @@
       }
     },
     {
+      "name": "show_progress_zero_value_with_steps",
+      "action": {
+        "op": "show",
+        "id": "reset",
+        "type": "progress",
+        "data": {
+          "label": "Reset",
+          "value": 0,
+          "steps": [
+            {
+              "label": "Wipe",
+              "state": "done"
+            },
+            {
+              "label": "Reseed"
+            }
+          ]
+        }
+      },
+      "normalized": {
+        "op": "show",
+        "id": "reset",
+        "type": "progress",
+        "data": {
+          "label": "Reset",
+          "value": 0,
+          "steps": [
+            {
+              "label": "Wipe",
+              "state": "done"
+            },
+            {
+              "label": "Reseed"
+            }
+          ]
+        }
+      }
+    },
+    {
       "name": "show_diagram_graph",
       "action": {
         "op": "show",
@@ -1121,6 +1160,25 @@
         }
       },
       "reason": "progress requires value or steps"
+    },
+    {
+      "name": "progress_null_value_with_steps",
+      "action": {
+        "op": "show",
+        "id": "p",
+        "type": "progress",
+        "data": {
+          "label": "L",
+          "value": null,
+          "steps": [
+            {
+              "label": "S",
+              "state": "done"
+            }
+          ]
+        }
+      },
+      "reason": "a null value is not left out; it must be a finite number"
     },
     {
       "name": "metric_bad_trend",
