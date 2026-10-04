@@ -110,6 +110,9 @@ const graphs: Record<string, DiagramData> = {
     edges: Array.from({ length: 9 }, (_, index) => ({ from: 'root', to: `w${index}`, label: index % 3 === 0 ? 'high' : undefined })),
   },
 };
+// The fan-out with every edge labelled, and with one edge coming back.
+graphs.wideLabelled = { ...graphs.wide, edges: graphs.wide.edges.map((edge) => ({ ...edge, label: 'go' })) };
+graphs.wideBack = { ...graphs.wide, edges: [...graphs.wide.edges, { from: 'w6', to: 'root', label: 'retry' }] };
 
 const overlaps = (a: Box, b: Box) =>
   a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
@@ -325,7 +328,7 @@ describe('edge labels in landscape', () => {
   // label never does. (A pair of opposite edges between the same two
   // nodes, carrying a two-line label, can leave none: the pipeline's
   // "transfer signal" still covers its partner.)
-  for (const name of ['chain', 'skip', 'fan', 'cycle', 'states', 'wide']) {
+  for (const name of ['chain', 'skip', 'fan', 'cycle', 'states', 'wide', 'wideLabelled']) {
     it(`${name}: no label hides another edge's line`, () => {
       const layout = layoutDiagram(graphs[name], 'landscape');
       for (const edge of layout.edges) {
@@ -337,6 +340,26 @@ describe('edge labels in landscape', () => {
             expect(overlaps(segmentBox(other.points[index], end), label.box), `${label.text} over ${other.edge.from}->${other.edge.to}`).toBe(false);
           });
         }
+      }
+    });
+  }
+});
+
+describe('a label on a shared trunk', () => {
+  // Edges leaving one port share a trunk until they part. A label on the
+  // trunk would hide every edge on it and seem to name them all; with an
+  // edge coming back into the crowded side, the trunk is where a label
+  // with nowhere better used to go.
+  for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
+    it(`${orientation}: hides at most one other edge, never the trunk`, () => {
+      const layout = layoutDiagram(graphs.wideBack, orientation);
+      for (const edge of layout.edges) {
+        const label = edge.label;
+        if (!label) continue;
+        const hidden = layout.edges.filter(
+          (other) => other !== edge && other.points.slice(1).some((end, index) => overlaps(segmentBox(other.points[index], end), label.box)),
+        );
+        expect(hidden.length, `${label.text} on ${edge.edge.from}->${edge.edge.to}`).toBeLessThanOrEqual(1);
       }
     });
   }

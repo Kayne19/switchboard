@@ -79,6 +79,36 @@ describe('diagram layout stays quick at the largest allowed graph', () => {
   });
 });
 
+// The worst case for label placement: every edge labelled, all of them in
+// the one gap between fifty sources and fifty sinks.
+function crowdedGap(seed: number): DiagramData {
+  const next = random(seed);
+  const nodes = Array.from({ length: 100 }, (_, index) => ({ id: `n${index}`, label: `${index < 50 ? 'source' : 'sink'} ${index}` }));
+  const seen = new Set<string>();
+  const edges: DiagramData['edges'] = [];
+  while (edges.length < 200) {
+    const from = Math.floor(next() * 50);
+    const to = 50 + Math.floor(next() * 50);
+    if (seen.has(`${from}-${to}`)) continue;
+    seen.add(`${from}-${to}`);
+    edges.push({ from: `n${from}`, to: `n${to}`, label: `edge ${edges.length}` });
+  }
+  return { mode: 'graph', nodes, edges };
+}
+
+describe('diagram layout stays quick when one gap holds every label', () => {
+  it('lays out 200 labelled edges in one gap within a frame budget', () => {
+    for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
+      const data = crowdedGap(3);
+      layoutDiagram(data, orientation);
+      const started = performance.now();
+      const layout = layoutDiagram(data, orientation);
+      expect(performance.now() - started).toBeLessThan(150);
+      expect(layout.edges.filter((edge) => edge.label)).toHaveLength(200);
+    }
+  });
+});
+
 describe('diagram layout holds its invariants on random graphs', () => {
   for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
     it(`${orientation}: sixty seeds`, () => {

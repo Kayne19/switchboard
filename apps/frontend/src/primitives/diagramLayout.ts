@@ -21,8 +21,9 @@
 // 6. Routes are axis-aligned and bend in the gap between layers; bends that
 //    would otherwise be ambiguous take their own track, and the gap grows to
 //    hold its tracks and its labels. A label sits on its own route in the
-//    gap, clear of the other labels, of the other edges' lines, and of the
-//    arrowheads at the gap's ends.
+//    gap, clear of the other labels and of the arrowheads at the gap's
+//    ends, and clear of the other edges' lines where the gap leaves a spot
+//    (otherwise on the spot that hides fewest).
 // The drawing grows when the approved canvas is too small, and the SVG
 // scales it to fit, rather than letting anything overlap.
 
@@ -137,6 +138,8 @@ const LABEL_MAX_LINES = 2;
 // a line passing a label keeps a little room from its backing too.
 const CLEARANCE = 6;
 const LINE_CLEARANCE = 2;
+// How many spots a label tries on each run before settling.
+const LABEL_STOPS = 24;
 // An edge's arrowhead, in user units: the renderer draws it this long, and a
 // label keeps clear of the gap's ends by this much so its backing never
 // covers an arrowhead.
@@ -833,22 +836,27 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
     ];
   };
   const gapLines = gaps.map((_, gap) => segments.filter((segment) => segment.from.layer === gap).flatMap(linesOf));
+  // Each gap's lines and placed labels, sorted by where they sit, so a spot
+  // is checked only against the few near it: a crowded gap holds hundreds.
+  const lowerBound = <T>(items: T[], value: number, key: (item: T) => number) => {
+    let low = 0;
+    let high = items.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (key(items[middle]) < value) low = middle + 1;
+      else high = middle;
+    }
+    return low;
+  };
+  const byAt = (lines: GapLine[]) => [...lines].sort((a, b) => a.at - b.at);
+  const gapIndex = gapLines.map((lines) => ({
+    alongMain: byAt(lines.filter((line) => line.alongMain)),
+    alongCross: byAt(lines.filter((line) => !line.alongMain)),
+    /** By main offset. */
+    labels: [] as PlacedLabel[],
+    widest: 0,
+  }));
   const placedLabels: PlacedLabel[] = [];
-  const clashes = (candidate: PlacedLabel) =>
-    placedLabels.some(
-      (other) =>
-        other.gap === candidate.gap &&
-        Math.abs(other.mainOffset - candidate.mainOffset) < (other.extent.main + candidate.extent.main) / 2 &&
-        Math.abs(other.cross - candidate.cross) < (other.extent.cross + candidate.extent.cross) / 2,
-    );
-  const covers = (candidate: PlacedLabel, line: GapLine) =>
-    line.alongMain
-      ? Math.abs(candidate.cross - line.at) < candidate.extent.cross / 2 + LINE_CLEARANCE &&
-        candidate.mainOffset + candidate.extent.main / 2 > line.low &&
-        candidate.mainOffset - candidate.extent.main / 2 < line.high
-      : Math.abs(candidate.mainOffset - line.at) < candidate.extent.main / 2 + LINE_CLEARANCE &&
-        candidate.cross + candidate.extent.cross / 2 > line.low &&
-        candidate.cross - candidate.extent.cross / 2 < line.high;
   const labelOf = new Map<Route, PlacedLabel>();
   routes.forEach((route, routeIndex) => {
     const text = route.directed.edge.label;
@@ -857,67 +865,146 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
     const mid = route.segments[gap - route.segments[0].from.layer];
     const extent = labelExtent(text);
     const place = (mainOffset: number, cross: number): PlacedLabel => ({ text, gap, mainOffset, cross, extent });
-    const own = linesOf(mid);
-    // Another route's line that runs along one of this route's own (both
-    // leave one shared port) is drawn under the label either way.
-    const others = gapLines[gap].filter(
-      (line) =>
-        line.route !== routeIndex &&
-        !own.some((mine) => mine.alongMain === line.alongMain && Math.abs(mine.at - line.at) < 1e-6 && mine.low < line.high && line.low < mine.high),
-    );
-    const neighbours = placedLabels.filter((other) => other.gap === gap);
-    // Spots on a run along the main axis, nearest `start` first: the start
-    // itself, and just past each line crossing the run and each label
-    // beside it (with a hair of room, so two never meet in floating point).
-    // `direction` keeps them to one side of the start, or 0 for both.
-    const alongRun = (cross: number, start: number, direction: -1 | 0 | 1): PlacedLabel[] => {
-      const stops = [start];
-      for (const line of others) {
-        if (!line.alongMain) stops.push(line.at + extent.main / 2 + LINE_CLEARANCE + 1, line.at - extent.main / 2 - LINE_CLEARANCE - 1);
+    const index = gapIndex[gap];
+    const neighbours = index.labels;
+    const clashes = (candidate: PlacedLabel) => {
+      const reach = (index.widest + extent.main) / 2;
+      for (let k = lowerBound(neighbours, candidate.mainOffset - reach, (other) => other.mainOffset); k < neighbours.length; k += 1) {
+        const other = neighbours[k];
+        if (other.mainOffset >= candidate.mainOffset + reach) break;
+        if (
+          Math.abs(other.mainOffset - candidate.mainOffset) < (other.extent.main + extent.main) / 2 &&
+          Math.abs(other.cross - candidate.cross) < (other.extent.cross + extent.cross) / 2
+        ) {
+          return true;
+        }
       }
+      return false;
+    };
+    // Every other route's line counts, a trunk this route shares included:
+    // a label on a shared run would read as naming every route on it. A
+    // line passes under a label when it runs within the label's reach and
+    // its span meets the label's.
+    const hidden = (candidate: PlacedLabel, enough: number) => {
+      let count = 0;
+      const halfMain = extent.main / 2;
+      const halfCross = extent.cross / 2;
+      const along = index.alongMain;
+      for (let k = lowerBound(along, candidate.cross - halfCross - LINE_CLEARANCE, (line) => line.at); k < along.length; k += 1) {
+        const line = along[k];
+        if (line.at >= candidate.cross + halfCross + LINE_CLEARANCE) break;
+        if (line.route === routeIndex || Math.abs(line.at - candidate.cross) >= halfCross + LINE_CLEARANCE) continue;
+        if (candidate.mainOffset + halfMain > line.low && candidate.mainOffset - halfMain < line.high && ++count >= enough) return count;
+      }
+      const across = index.alongCross;
+      for (let k = lowerBound(across, candidate.mainOffset - halfMain - LINE_CLEARANCE, (line) => line.at); k < across.length; k += 1) {
+        const line = across[k];
+        if (line.at >= candidate.mainOffset + halfMain + LINE_CLEARANCE) break;
+        if (line.route === routeIndex || Math.abs(line.at - candidate.mainOffset) >= halfMain + LINE_CLEARANCE) continue;
+        if (candidate.cross + halfCross > line.low && candidate.cross - halfCross < line.high && ++count >= enough) return count;
+      }
+      return count;
+    };
+    // Stops are tried nearest `start` first, a bounded number of them, so a
+    // crowded gap costs a few dozen tries per label rather than thousands.
+    // `direction` keeps them to one side of the start, or 0 for both.
+    const nearest = (stops: number[], start: number, direction: -1 | 0 | 1) => {
+      const before = (a: number, b: number) => Math.abs(a - start) - Math.abs(b - start) || b - a;
+      const kept: number[] = [];
+      for (const stop of stops) {
+        if (direction !== 0 && (stop - start) * direction < -1e-9) continue;
+        if (kept.length === LABEL_STOPS && before(stop, kept[kept.length - 1]) >= 0) continue;
+        let at = kept.length;
+        while (at > 0 && before(stop, kept[at - 1]) < 0) at -= 1;
+        kept.splice(at, 0, stop);
+        if (kept.length > LABEL_STOPS) kept.pop();
+      }
+      return kept;
+    };
+    // Spots on a run along the main axis at `cross`: the start, and just
+    // past each line crossing the run, each end of a line running along it,
+    // and each label beside it (with a hair of room, so two never meet in
+    // floating point). The last is past every label in the gap, so some
+    // spot on the run is always clear of them.
+    const alongRun = (cross: number, start: number, direction: -1 | 0 | 1): Array<[number, number]> => {
+      const half = extent.main / 2 + LINE_CLEARANCE + 1;
+      const stops = [start];
+      for (const line of index.alongCross) {
+        if (line.route !== routeIndex) stops.push(line.at + half, line.at - half);
+      }
+      const along = index.alongMain;
+      for (let k = lowerBound(along, cross - extent.cross / 2 - LINE_CLEARANCE, (line) => line.at); k < along.length; k += 1) {
+        const line = along[k];
+        if (line.at >= cross + extent.cross / 2 + LINE_CLEARANCE) break;
+        if (line.route === routeIndex) continue;
+        if (Number.isFinite(line.high)) stops.push(line.high + half);
+        if (Number.isFinite(line.low)) stops.push(line.low - half);
+      }
+      let beyond = start;
       for (const other of neighbours) {
         const apart = (other.extent.main + extent.main) / 2 + 2;
         stops.push(other.mainOffset + apart, other.mainOffset - apart);
+        beyond = direction < 0 ? Math.min(beyond, other.mainOffset - apart) : Math.max(beyond, other.mainOffset + apart);
       }
-      return stops
-        .filter((main) => direction === 0 || (main - start) * direction >= -1e-9)
-        .sort((a, b) => Math.abs(a - start) - Math.abs(b - start) || b - a)
-        .map((main) => place(main, cross));
+      return [...nearest(stops, start, direction), beyond].map((main): [number, number] => [main, cross]);
     };
-    let candidates: PlacedLabel[];
+    let spots: Array<[number, number]>;
     if (mid.track === null) {
-      candidates = alongRun(mid.fromCross, 0, 0);
+      spots = alongRun(mid.fromCross, 0, 0);
     } else {
       const track = trackOffset(mid);
       const low = Math.min(mid.fromCross, mid.toCross);
       const high = Math.max(mid.fromCross, mid.toCross);
       const anchor = (low + high) / 2;
+      const half = extent.cross / 2 + LINE_CLEARANCE + 1;
       const crosses = [anchor];
-      for (const line of others) {
-        if (line.alongMain) crosses.push(line.at + extent.cross / 2 + LINE_CLEARANCE + 1, line.at - extent.cross / 2 - LINE_CLEARANCE - 1);
+      for (const line of index.alongMain) {
+        if (line.route !== routeIndex) crosses.push(line.at + half, line.at - half);
+      }
+      const across = index.alongCross;
+      for (let k = lowerBound(across, track - extent.main / 2 - LINE_CLEARANCE, (line) => line.at); k < across.length; k += 1) {
+        const line = across[k];
+        if (line.at >= track + extent.main / 2 + LINE_CLEARANCE) break;
+        if (line.route !== routeIndex) crosses.push(line.high + half, line.low - half);
       }
       for (const other of neighbours) {
         const apart = (other.extent.cross + extent.cross) / 2 + 2;
         crosses.push(other.cross + apart, other.cross - apart);
       }
-      const onBend = crosses
-        .map((cross) => Math.min(high, Math.max(low, cross)))
-        .sort((a, b) => Math.abs(a - anchor) - Math.abs(b - anchor) || a - b)
-        .map((cross) => place(track, cross));
+      const onBend = nearest(
+        crosses.map((cross) => Math.min(high, Math.max(low, cross))),
+        anchor,
+        0,
+      ).map((cross): [number, number] => [track, cross]);
       // Beside the bend: on the run toward the target, or back toward the
       // source, whichever is nearer the bend (the target's side on a tie).
       const reach = extent.main / 2 + CLEARANCE;
       const beside = [...alongRun(mid.toCross, track + reach, 1), ...alongRun(mid.fromCross, track - reach, -1)].sort(
-        (a, b) => Math.abs(a.mainOffset - track) - Math.abs(b.mainOffset - track) || b.mainOffset - a.mainOffset,
+        (a, b) => Math.abs(a[0] - track) - Math.abs(b[0] - track) || b[0] - a[0],
       );
-      candidates = [...onBend, ...beside];
+      spots = [...onBend, ...beside];
     }
-    // The last spot on a run is past every label in the gap, so some spot
-    // is always clear of them.
-    const label =
-      candidates.find((candidate) => !clashes(candidate) && !others.some((line) => covers(candidate, line))) ??
-      candidates.find((candidate) => !clashes(candidate)) ??
-      candidates[0];
+    // The first spot clear of the other labels and of every other line
+    // wins; failing that, the spot clear of the labels that hides fewest.
+    let label: PlacedLabel | null = null;
+    let fallback: PlacedLabel | null = null;
+    let fewest = Infinity;
+    for (const [main, cross] of spots) {
+      const candidate = place(main, cross);
+      if (clashes(candidate)) continue;
+      const count = hidden(candidate, fewest);
+      if (count === 0) {
+        label = candidate;
+        break;
+      }
+      if (count < fewest) {
+        fewest = count;
+        fallback = candidate;
+      }
+    }
+    label ??= fallback ?? place(...spots[0]);
+    neighbours.splice(lowerBound(neighbours, label.mainOffset, (other) => other.mainOffset), 0, label);
+    index.widest = Math.max(index.widest, extent.main);
     placedLabels.push(label);
     labelOf.set(route, label);
   });
