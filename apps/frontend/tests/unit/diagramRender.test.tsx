@@ -188,6 +188,29 @@ describe('diagram node state', () => {
     expect(blocked.querySelector('.diagram-node-label')?.getAttribute('fill')).toBe('var(--orange)');
   });
 
+  it('leaves room for both corner tags beside the label of an anchored done node', () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    const label = 'COMPILE ASSETS';
+    const long = 'A note far too long to fit the callout box, so it stays in the rail and the node carries the badge beside its check.';
+    act(() =>
+      root.render(
+        <DiagramPrimitive
+          data={{ mode: 'graph', nodes: [{ id: 'build', label, state: 'done' }], edges: [] }}
+          id="test-diagram"
+          note={{ segments: [{ text: long }], anchor: { target: 'test-diagram', node: 'build' } }}
+        />,
+      ),
+    );
+    expect(host.querySelector('.diagram-node__marker')).not.toBeNull();
+    const tag = host.querySelector('.diagram-node__tag--done');
+    const tagX = parseFloat(/translate\(([-\d.]+)/.exec(tag?.getAttribute('transform') ?? '')?.[1] ?? 'NaN');
+    // The label starts 18 units in, each character 10.8 units wide
+    // (.diagram-node-label: 15px monospace, 0.6em advance plus 0.1em tracking).
+    expect(tagX).toBeGreaterThanOrEqual(18 + label.length * 10.8);
+  });
+
   it('gives a lit node its glow on every side of the frame', () => {
     host = document.createElement('div');
     document.body.append(host);

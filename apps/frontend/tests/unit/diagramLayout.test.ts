@@ -344,8 +344,8 @@ describe('edge labels in landscape', () => {
 
 describe('node measurement', () => {
   it('sizes a box to its wrapped text', () => {
-    const short = measureNode({ id: 'a', label: 'PBX' }, false);
-    const long = measureNode({ id: 'b', label: 'Worker 1 with a fairly long label', sub: 'review round 1', detail: 'apps/backend/src/ws.rs' }, false);
+    const short = measureNode({ id: 'a', label: 'PBX' }, 0);
+    const long = measureNode({ id: 'b', label: 'Worker 1 with a fairly long label', sub: 'review round 1', detail: 'apps/backend/src/ws.rs' }, 0);
     expect(short.width).toBe(140);
     expect(short.lines.map((line) => line.kind)).toEqual(['label']);
     expect(long.lines.filter((line) => line.kind === 'label').map((line) => line.text)).toEqual(['Worker 1 with', 'a fairly long label']);
@@ -355,10 +355,12 @@ describe('node measurement', () => {
     expect(long.lines.every((line) => line.y < long.height)).toBe(true);
   });
 
-  it('reserves room for a corner tag beside the label', () => {
-    const plain = measureNode({ id: 'a', label: 'Operator agent' }, false);
-    const tagged = measureNode({ id: 'a', label: 'Operator agent' }, true);
+  it('reserves room for its corner tags beside the label', () => {
+    const plain = measureNode({ id: 'a', label: 'Operator agent' }, 0);
+    const tagged = measureNode({ id: 'a', label: 'Operator agent' }, 1);
+    const both = measureNode({ id: 'a', label: 'Operator agent' }, 2);
     expect(tagged.width - plain.width).toBe(30);
+    expect(both.width - plain.width).toBe(46);
   });
 });
 

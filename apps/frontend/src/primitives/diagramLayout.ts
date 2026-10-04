@@ -119,8 +119,10 @@ const NODE_RULE_DROP = 11;
 const NODE_SUB_DROP = 19;
 const NODE_DETAIL_DROP = 18;
 const NODE_PAD_BOTTOM = 12;
-// Room for the corner tag (a state glyph or the note badge) beside the label.
-const NODE_TAG_ROOM = 30;
+// Room beside the label for the corner tags: none, one (a state glyph or
+// the note badge), or both side by side (the renderer draws the glyph left
+// of the badge, 60 units in from the box's right edge).
+const NODE_TAG_ROOM = [0, 30, 46] as const;
 
 // Edge labels are set in the monospace face at 11 user units with 0.06em
 // tracking (.diagram-edge-label), so a label's width is known before it is
@@ -195,7 +197,7 @@ interface NodeText {
   ruleY: number;
 }
 
-export function measureNode(node: DiagramNode, reserveTag: boolean): NodeText {
+export function measureNode(node: DiagramNode, cornerTags: 0 | 1 | 2): NodeText {
   const labelLines = wrapLine(node.label, NODE_TEXT.label.wrapAt, NODE_TEXT.label.maxLines);
   const subLines = node.sub ? wrapLine(node.sub, NODE_TEXT.sub.wrapAt, NODE_TEXT.sub.maxLines) : [];
   const detailLines = node.detail ? wrapLine(node.detail, NODE_TEXT.detail.wrapAt, NODE_TEXT.detail.maxLines) : [];
@@ -226,7 +228,7 @@ export function measureNode(node: DiagramNode, reserveTag: boolean): NodeText {
   }
 
   const textWidth = Math.max(
-    ...labelLines.map((line) => line.length * NODE_TEXT.label.advance + (reserveTag ? NODE_TAG_ROOM : 0)),
+    ...labelLines.map((line) => line.length * NODE_TEXT.label.advance + NODE_TAG_ROOM[cornerTags]),
     ...subLines.map((line) => line.length * NODE_TEXT.sub.advance),
     ...detailLines.map((line) => line.length * NODE_TEXT.detail.advance),
   );
@@ -699,8 +701,15 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
   const layerCount = data.nodes.length ? Math.max(...layerOf.values()) + 1 : 0;
   const layers: Item[][] = Array.from({ length: layerCount }, () => []);
   const itemOf = new Map<string, Item>();
+  // A done or blocked node carries its state glyph in its corner, and the
+  // anchored node may carry the note badge there too.
+  const cornerTagsOf = (node: DiagramNode): 0 | 1 | 2 => {
+    const glyph = node.state === 'done' || node.state === 'blocked';
+    const badge = node.id === anchorNodeId;
+    return glyph && badge ? 2 : glyph || badge ? 1 : 0;
+  };
   const makeItem = (layer: number, node: DiagramNode | null): Item => {
-    const text = node ? measureNode(node, Boolean(node.state === 'done' || node.state === 'blocked' || node.id === anchorNodeId)) : null;
+    const text = node ? measureNode(node, cornerTagsOf(node)) : null;
     const item: Item = {
       layer,
       index: layers[layer].length,
