@@ -71,8 +71,12 @@ markup, CSS, pixel geometry or styling.
 Types and their `data` shapes (each type takes only its own shape):
 
 - chart: `{series: [{name, values: [n]}]}`
-- metric: `{label, value}`
-- progress: `{label, value}` (value is a percent, 0-100)
+- metric: `{label, value}`, plus `trend` (`up`, `down` or `flat`) and
+  `delta` (a short string such as `-12 ms`) to show how it moved
+- progress: `{label, value}` (value is a percent, 0-100) and/or
+  `steps: [{label, state?, detail?}]` (1 to 30; state is `done`, `active`,
+  `todo` or `blocked`). With steps, value may be left out: the bar then
+  shows the share of steps done.
 - diagram: `{mode: "graph", nodes: [{id, label}], edges: [{from, to}]}`
 - document: `{subject, paragraphs: [str]}` (each paragraph reads Markdown:
   headings, bold, italic, inline code, lists, fenced code; no HTML)

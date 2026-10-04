@@ -73,8 +73,8 @@ type DisplayAction =
 | type | `data` shape (`additionalProperties: false`) | what the page renders |
 | --- | --- | --- |
 | `chart` | `{ series: [{ name, values[], semantic? }], title?, subtitle?, context?, caption?, xLabel?, yLabel?, xMax?, yMin?, yMax?, marker?, compareLabel? }` | SVG chart |
-| `metric` | `{ label, value, semantic?, caption? }` | numeric gauge |
-| `progress` | `{ label, value, detail?, text?, caption? }`; `value` is a percent, 0–100 | progress indicator |
+| `metric` | `{ label, value, semantic?, caption?, trend?: "up"\|"down"\|"flat", delta? }` | numeric gauge; `trend` draws an arrow and `delta` (<= 32) the change beside the value, both in the value's colour |
+| `progress` | `{ label, value?, detail?, text?, caption?, steps?: [{ label, state?: "done"\|"active"\|"todo"\|"blocked", detail? }] }`; `value` is a percent, 0–100; at least one of `value`/`steps` | progress bar, with the step list under it (see below) |
 | `diagram` | `{ mode: "graph", nodes: [{ id, label, sub?, detail?, semantic?, state? }], edges: [{ from, to, label?, semantic?, active? }], title?, subtitle?, context?, caption? }` | SVG semantic graph |
 | `document` | `{ subject, paragraphs: string[], kind?: "email"\|"document", context?, caption?, source?, from?, timestamp? }` | document reader; each paragraph is read as Markdown (see below) |
 | `code` | `{ source: { text, language?, highlight? }, title?, file?, context?, caption? }` | syntax/diff view |
@@ -85,6 +85,11 @@ Each document paragraph is read as the same small Markdown subset the conversati
 A composed scene is built from multiple `show` actions with distinct `id`s and roles (e.g. `diagram` as `primary`, `note` as `secondary`, `metric` as `ambient`). The page owns layout, geometry, and styling.
 
 Notes have their own display lifecycle. A chat or spoken response does not update an existing note; only another `show` using the note's stable id, `hide`, or `clear` changes it. An anchored note is selected for the visual object it targets and, when the target exposes the requested semantic coordinate, is placed near that location by the page.
+
+### Progress steps
+- `steps`: 1 to 30 items, each `{ label (<= 128), state?, detail? (<= 256) }`. A step without a `state` reads as `todo`.
+- When `steps` is present, `value` may be left out: both validators fill it in as the share of steps whose state is `done` (`done / total * 100`, rounded to two decimals), so the normalized action and the page always carry a value. A `value` sent beside `steps` is kept as sent. A progress with neither is rejected (`progress requires value or steps`).
+- The page draws the bar as before and lists the steps under it with a glyph per state. A compact slot (the rail, a cell in the aux row) shows a window of a few steps around the first step still open and counts the rest; the main slot and focus list the whole plan, scrolling inside the frame when it is long.
 
 ### Diagram v1 rules
 - Diagram data requires `mode: "graph"`. Mermaid source (`source`) is rejected/deferred in v1.
@@ -103,6 +108,6 @@ The canonical contract is defined in `docs/display-action-v1.schema.json` and ex
 - **Safety**: Raw HTML/JS markup (`<script`, `<iframe`, `javascript:`, etc.) and external resource URLs (`http://`, `https://`, `//`) are rejected.
 - **Unknown fields**: All schema branches specify `additionalProperties: false`; unexpected fields are rejected.
 
-`docs/display-action-v1.schema.json` encodes as much of this as declarative JSON Schema can express, and `apps/frontend/tests/unit/schema.test.ts` holds it to `display-actions.json` fixture-by-fixture so it cannot drift from the two validators unnoticed. Three things it cannot express, so it does not attempt to: diagram invariants that span sibling array items (duplicate node IDs, an edge endpoint naming no node, a self-loop, a duplicate edge pair — each a relationship between items, not one item's shape); the 48,000-byte action-size cap, which bounds the serialized envelope on the wire rather than the parsed instance; and the UTF-16-code-unit string caps above for content containing astral characters, since JSON Schema's `maxLength` counts Unicode code points. Those stay enforced only by `validation.ts` and `visual_protocol.rs`; the test names each as a documented, asserted exception (`KNOWN_SCHEMA_GAPS`) rather than silently passing.
+`docs/display-action-v1.schema.json` encodes as much of this as declarative JSON Schema can express (the progress rule "one of `value`/`steps`" is its `anyOf`), and `apps/frontend/tests/unit/schema.test.ts` holds it to `display-actions.json` fixture-by-fixture so it cannot drift from the two validators unnoticed. Three things it cannot express, so it does not attempt to: diagram invariants that span sibling array items (duplicate node IDs, an edge endpoint naming no node, a self-loop, a duplicate edge pair — each a relationship between items, not one item's shape); the 48,000-byte action-size cap, which bounds the serialized envelope on the wire rather than the parsed instance; and the UTF-16-code-unit string caps above for content containing astral characters, since JSON Schema's `maxLength` counts Unicode code points. Those stay enforced only by `validation.ts` and `visual_protocol.rs`; the test names each as a documented, asserted exception (`KNOWN_SCHEMA_GAPS`) rather than silently passing.
 
 Rejections return `{"delivered":false,"detail":"<reason>"}` and are neither stored in display state nor broadcast.

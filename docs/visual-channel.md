@@ -29,13 +29,19 @@ agent sends semantics. See `docs/display-tool.md` for the full action protocol.
 | --- | --- |
 | `diagram` | relationships and structure — structured graph data (`mode: "graph"`, nodes and edges with semantic states) |
 | `chart` | quantitative trends (`bar`, `line`, `pie`, `spark`) |
-| `metric` | a single tracked value with trend |
-| `progress` | checklists, steps, states, and optional durations |
+| `metric` | a single tracked value, with the way it moved (`trend` arrow, `delta` text) when that matters |
+| `progress` | a bar, and under it the plan it measures: `steps` with a state each (`done`, `active`, `todo`, `blocked`) and a detail |
 | `document` | headings, paragraphs, bullets, code blocks |
 | `code` | code and diff views (`add`/`del`/`ctx` lines) |
 | `note` | a persistent annotation, independent from the live transcript |
 
 Diagram node styling stays restricted to semantic classes and states, enforced server-side.
+
+A progress object with `steps` may omit `value`: the service fills in the
+share of steps done, so "I am on step three of five" is spoken while the
+screen shows the five, their states, and a bar that agrees with them. The
+page decides how much of a long plan each slot shows; the whole plan is a
+focus away.
 
 ### Composition & focus
 
