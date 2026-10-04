@@ -31,11 +31,16 @@ _SHAPES = {
     "chart": (("series",), "{series:[{name, values:[n]}]}"),
     "metric": (("label", "value"), "{label, value}"),
     "progress": (("label", "value"), "{label, value (percent, 0-100)}"),
-    "diagram": (("mode", "nodes", "edges"), '{mode:"graph", nodes:[{id, label}], edges:[{from, to}]}'),
+    "diagram": (
+        ("mode",),
+        '{mode:"graph", nodes:[{id, label}], edges:[{from, to}]} or {mode:"sequence", actors:[{id, label}], messages:[{from, to, label}]}',
+    ),
     "document": (("subject", "paragraphs"), "{subject, paragraphs:[str]}"),
     "code": (("source",), "{source:{text}}"),
     "note": (("segments",), "{segments:[{text}]}"),
 }
+# A diagram's other required keys depend on its mode.
+_DIAGRAM_MODES = {"graph": ("nodes", "edges"), "sequence": ("actors", "messages")}
 
 
 class _Result:
@@ -240,6 +245,11 @@ def _check_display_action(action):
     if not isinstance(data, dict):
         raise TypeError(f"data must be a dict, not {type(data).__name__}")
     required, hint = _SHAPES[kind]
+    if kind == "diagram" and "mode" in data:
+        mode = data["mode"]
+        if mode not in _DIAGRAM_MODES:
+            raise ValueError(f"unknown diagram mode {mode!r}; use one of: {', '.join(_DIAGRAM_MODES)}")
+        required += _DIAGRAM_MODES[mode]
     missing = [key for key in required if key not in data]
     if missing:
         raise ValueError(f"{kind} data is missing {', '.join(missing)}; its shape is {hint}")

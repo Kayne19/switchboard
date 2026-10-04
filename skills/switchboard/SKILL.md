@@ -73,7 +73,10 @@ Types and their `data` shapes (each type takes only its own shape):
 - chart: `{series: [{name, values: [n]}]}`
 - metric: `{label, value}`
 - progress: `{label, value}` (value is a percent, 0-100)
-- diagram: `{mode: "graph", nodes: [{id, label}], edges: [{from, to}]}`
+- diagram: `{mode: "graph", nodes: [{id, label}], edges: [{from, to}]}` for
+  structure, or `{mode: "sequence", actors: [{id, label}], messages: [{from,
+  to, label}]}` for an exchange over time (a message's `kind` is `call`,
+  `return` or `async`; `active: true` lights the one happening now)
 - document: `{subject, paragraphs: [str]}` (each paragraph reads Markdown:
   headings, bold, italic, inline code, lists, fenced code; no HTML)
 - code: `{source: {text}}`

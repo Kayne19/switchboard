@@ -306,6 +306,10 @@ class ProgrammingErrorTest(ModuleTestCase):
             (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "table", "data": {}}),
             (ValueError, switchboard.display, (), {"op": "explode"}),
             (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "metric", "data": {"label": "L"}}),
+            (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "diagram", "data": {"nodes": [], "edges": []}}),
+            (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "diagram", "data": {"mode": "graph", "nodes": []}}),
+            (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "diagram", "data": {"mode": "sequence", "actors": []}}),
+            (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "diagram", "data": {"mode": "timeline", "actors": [], "messages": []}}),
             (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "note", "role": "hero", "data": {"segments": []}}),
             (TypeError, switchboard.display, ("show",), {}),
             (TypeError, switchboard.display, (), {"op": "show", "id": "x", "type": "chart", "data": {"series": [object()]}}),
@@ -326,6 +330,23 @@ class ProgrammingErrorTest(ModuleTestCase):
             switchboard.display(op="show", id="x", type="table", data={})
         self.assertIn("chart: {series:[{name, values:[n]}]}", str(caught.exception))
 
+    def test_a_diagram_outline_is_judged_by_its_mode(self):
+        host = self.host()
+        graph = {"mode": "graph", "nodes": [{"id": "a", "label": "A"}], "edges": []}
+        sequence = {"mode": "sequence", "actors": [{"id": "a", "label": "A"}], "messages": []}
+        for data in (graph, sequence):
+            result, _ = self.run_call(switchboard.display, op="show", id="d", type="diagram", data=data)
+            self.assertTrue(result.delivered)
+        self.assertEqual([call["args"]["action"]["data"] for call in host.calls()], [graph, sequence])
+        # Each mode's arrays are required only under that mode; the hint names both shapes.
+        with self.assertRaises(ValueError) as caught:
+            switchboard.display(op="show", id="d", type="diagram", data={"mode": "sequence", "actors": []})
+        self.assertIn("missing messages", str(caught.exception))
+        self.assertIn('mode:"sequence", actors:', str(caught.exception))
+        with self.assertRaises(ValueError) as caught:
+            switchboard.display(op="show", id="d", type="diagram", data={"mode": "timeline"})
+        self.assertIn("unknown diagram mode 'timeline'", str(caught.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -344,27 +365,41 @@ class DisplaySchemaTests(unittest.TestCase):
             cls.schema = json.load(fh)
         cls.definitions = cls.schema["definitions"]
 
+    def _resolve(self, node):
+        return self.definitions[node["$ref"].rsplit("/", 1)[1]] if "$ref" in node else node
+
     def _show_actions(self):
-        """{type: required data keys} for every Show*Action the schema lists."""
+        """{type: {required data keys, one set per shape}} for every Show*Action the
+        schema lists; a diagram has one shape per mode."""
         shapes = {}
         for ref in self.schema["oneOf"]:
-            name = ref["$ref"].rsplit("/", 1)[1]
-            action = self.definitions[name]
+            action = self._resolve(ref)
             props = action["properties"]
             if "type" not in props:
                 continue
             (kind,) = props["type"].get("enum") or [props["type"]["const"]]
-            data = props["data"]
-            if "$ref" in data:
-                data = self.definitions[data["$ref"].rsplit("/", 1)[1]]
-            shapes[kind] = tuple(data["required"])
+            data = self._resolve(props["data"])
+            branches = [self._resolve(branch) for branch in data["oneOf"]] if "oneOf" in data else [data]
+            shapes[kind] = {frozenset(branch["required"]) for branch in branches}
         return shapes
 
     def test_show_types_and_required_data_keys_match_the_schema(self):
-        self.assertEqual(
-            {kind: required for kind, (required, _hint) in switchboard._SHAPES.items()},
-            self._show_actions(),
-        )
+        module = {}
+        for kind, (required, _hint) in switchboard._SHAPES.items():
+            if kind == "diagram":
+                module[kind] = {frozenset(required + keys) for keys in switchboard._DIAGRAM_MODES.values()}
+            else:
+                module[kind] = {frozenset(required)}
+        self.assertEqual(module, self._show_actions())
+
+    def test_diagram_modes_match_the_schema(self):
+        data = self._resolve(self._resolve(self.definitions["ShowDiagramAction"]["properties"]["data"]))
+        modes = {}
+        for branch in data["oneOf"]:
+            shape = self._resolve(branch)
+            (mode,) = shape["properties"]["mode"]["enum"]
+            modes[mode] = tuple(key for key in shape["required"] if key != "mode")
+        self.assertEqual(switchboard._DIAGRAM_MODES, modes)
 
     def test_ops_and_roles_match_the_schema(self):
         ops = set()
