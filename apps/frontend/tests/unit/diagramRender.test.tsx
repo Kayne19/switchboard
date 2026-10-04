@@ -165,6 +165,29 @@ describe('diagram node state', () => {
     expect(todo.querySelector('.diagram-node__tag')).toBeNull();
   });
 
+  it('keeps a blocked node framed in red when a note anchors it', () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() =>
+      root.render(
+        <DiagramPrimitive
+          data={stateful}
+          id="test-diagram"
+          note={{ segments: [{ text: 'x' }], anchor: { target: 'test-diagram', node: 'blocked' } }}
+        />,
+      ),
+    );
+    const blocked = nodeOf('blocked');
+    expect(blocked.querySelector('.diagram-node__body--anchored')).not.toBeNull();
+    // The stylesheet's blocked rule outranks the anchored one; the drawn
+    // frame, its rule and its tag agree with it.
+    expect(blocked.querySelector('.diagram-node__frame')?.getAttribute('stroke')).toBe('var(--red)');
+    expect(blocked.querySelector('.diagram-node__body > line')?.getAttribute('stroke')).toBe('var(--red)');
+    expect(blocked.querySelector('.diagram-node__tag--blocked rect')?.getAttribute('stroke')).toBe('var(--red)');
+    expect(blocked.querySelector('.diagram-node-label')?.getAttribute('fill')).toBe('var(--orange)');
+  });
+
   it('gives a lit node its glow on every side of the frame', () => {
     host = document.createElement('div');
     document.body.append(host);

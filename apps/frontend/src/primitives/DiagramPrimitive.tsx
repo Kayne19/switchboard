@@ -188,7 +188,11 @@ export function DiagramPrimitive({
             const isAnchored = hasAnchoredNode && node.id === anchoredNodeId;
             const state = node.state ?? 'todo';
             const color = isAnchored ? 'var(--orange)' : colors[node.semantic ?? 'paper'];
-            const frameColor = state === 'blocked' && !isAnchored ? 'var(--red)' : color;
+            // A blocked node is framed in red even when a note anchors it, as
+            // the stylesheet's blocked rule (which outranks the anchored one)
+            // draws it: the anchor still shows in the label, the glow, and
+            // the badge or leader.
+            const frameColor = state === 'blocked' ? 'var(--red)' : color;
             const lit = isAnchored || state === 'active';
             const noteBadge = isAnchored && !calloutPlaced;
             const tagged = state === 'done' || state === 'blocked';
