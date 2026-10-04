@@ -3,7 +3,7 @@ import type { MouseEvent } from 'react';
 import type {
   ChartData,
   CodeData,
-  DiagramData,
+  DiagramObjectData,
   DocumentData,
   MetricData,
   NoteData,
@@ -13,7 +13,7 @@ import type {
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { CodeViewport } from '../primitives/CodeViewport';
-import { DiagramPrimitive } from '../primitives/DiagramPrimitive';
+import { DiagramObject } from './DiagramObject';
 import { DocumentViewport } from '../primitives/DocumentViewport';
 import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
 import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
@@ -24,7 +24,7 @@ function FocusedObject({ object }: { object: SceneObject }) {
     case 'chart':
       return <ChartPrimitive data={object.data as ChartData} focused />;
     case 'diagram':
-      return <DiagramPrimitive data={object.data as DiagramData} id={object.id} focused />;
+      return <DiagramObject data={object.data as DiagramObjectData} id={object.id} focused />;
     case 'document':
       return <DocumentViewport data={object.data as DocumentData} focused />;
     case 'code':

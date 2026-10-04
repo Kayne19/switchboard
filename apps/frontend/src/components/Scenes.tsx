@@ -4,7 +4,7 @@ import type {
   ChartData,
   CodeData,
   ControllerState,
-  DiagramData,
+  DiagramObjectData,
   DocumentData,
   MessageData,
   MetricData,
@@ -18,7 +18,6 @@ import { AnnotationCard } from '../primitives/AnnotationCard';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { CodeViewport } from '../primitives/CodeViewport';
 import { DamoclesPresence } from '../primitives/DamoclesPresence';
-import { DiagramPrimitive } from '../primitives/DiagramPrimitive';
 import { DocumentViewport } from '../primitives/DocumentViewport';
 import { LiveChatCard } from '../primitives/LiveChatCard';
 import { SpokenLog } from '../primitives/SpokenLog';
@@ -31,6 +30,7 @@ import { TechFrame } from '../primitives/TechFrame';
 import { ToolActivity } from '../primitives/ToolActivity';
 import { TranscriptToggle } from '../primitives/TranscriptToggle';
 import { ChartNotes, type ChartNote } from './ChartNotes';
+import { DiagramObject } from './DiagramObject';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
 /** A text field an object's data may carry for the scene frame, or undefined
@@ -204,7 +204,7 @@ function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux') {
     case 'chart':
       return <ChartPrimitive data={(object as SceneObject<ChartData>).data} />;
     case 'diagram':
-      return <DiagramPrimitive data={(object as SceneObject<DiagramData>).data} id={object.id} />;
+      return <DiagramObject data={(object as SceneObject<DiagramObjectData>).data} id={object.id} />;
     case 'document':
       return <DocumentViewport data={(object as SceneObject<DocumentData>).data} />;
     case 'code':
@@ -341,16 +341,17 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
   switch (primary.type) {
     case 'diagram': {
       const { data } = cast.diagram(primary);
+      const sequence = data.mode === 'sequence';
       return {
         ...rail,
-        title: data.title ?? 'SYSTEM / DIAGRAM',
-        subtitle: data.subtitle ?? 'GRAPH / COMPOSED',
-        context: data.context ?? 'SYSTEM MAP',
-        footer: 'DISPLAY / SYSTEM MAP',
-        caption: sceneCaption(primary, 'TRACE / ACTIVE ROUTE'),
+        title: data.title ?? (sequence ? 'SYSTEM / SEQUENCE' : 'SYSTEM / DIAGRAM'),
+        subtitle: data.subtitle ?? (sequence ? 'SEQUENCE / COMPOSED' : 'GRAPH / COMPOSED'),
+        context: data.context ?? (sequence ? 'SEQUENCE' : 'SYSTEM MAP'),
+        footer: sequence ? 'DISPLAY / SEQUENCE' : 'DISPLAY / SYSTEM MAP',
+        caption: sceneCaption(primary, sequence ? 'TRACE / MESSAGE ORDER' : 'TRACE / ACTIVE ROUTE'),
         main: slot(
           'diagram-object',
-          <DiagramPrimitive data={data} id={primary.id} note={note} onCalloutChange={onCalloutChange} />,
+          <DiagramObject data={data} id={primary.id} note={note} onCalloutChange={onCalloutChange} />,
           <TechFrame variant="rails" />,
         ),
       };
