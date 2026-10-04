@@ -12,6 +12,16 @@ const colors: Record<Semantic, string> = {
   paper: 'var(--paper)',
   muted: 'var(--muted)',
 };
+const SEMANTICS = Object.keys(colors) as Semantic[];
+
+// The arrowhead at an edge's target, in user units: it scales with the
+// drawing, as the node frames do, while the stroke itself does not.
+const ARROW = 11;
+// Edge label line pitch, in user units (.diagram-edge-label is 11 units).
+const LABEL_LINE = 14;
+// The small tag in a node's top-right corner that carries its state glyph.
+const TAG_WIDTH = 18;
+const TAG_HEIGHT = 15;
 
 const pathThrough = (points: Point[]) =>
   points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
@@ -72,7 +82,6 @@ export function DiagramPrimitive({
     () => layoutDiagram(data, portrait ? 'portrait' : 'landscape', hasAnchoredNode ? anchoredNodeId : undefined),
     [data, portrait, hasAnchoredNode, anchoredNodeId],
   );
-  const { nodeWidth, nodeHeight } = layout;
   // The callout box fits three wrapped lines and a one-line tag. A longer
   // note — or a word or tag too wide for the box — is not truncated or
   // spilled over the diagram: it is treated as not fitting, so the note
@@ -125,68 +134,97 @@ export function DiagramPrimitive({
               <feMergeNode in="SourceGraphic" />
             </feMerge>
           </filter>
+          {/* One arrowhead per colour: a marker cannot take its fill from the
+              path it ends, so each edge points at the marker of its own hue. */}
+          {SEMANTICS.map((semantic) => (
+            <marker
+              key={semantic}
+              id={`diagram-arrow-${semantic}`}
+              className="diagram-arrow"
+              viewBox="0 0 10 10"
+              refX="10"
+              refY="5"
+              markerWidth={ARROW}
+              markerHeight={ARROW}
+              markerUnits="userSpaceOnUse"
+              orient="auto"
+            >
+              <path d="M 0 0 L 10 5 L 0 10 Z" fill={colors[semantic]} />
+            </marker>
+          ))}
         </defs>
         <g className="diagram-edges">
-          {edges.map((edge, index) => {
-            const end = edge.points[edge.points.length - 1];
-            return (
-              <g key={edge.key}>
-                <path
-                  className={`diagram-edge${edge.active ? ' diagram-edge--active' : ''}`}
-                  style={{ animationDelay: `${index * 60}ms` }}
-                  d={pathThrough(edge.points)}
-                  fill="none"
-                  stroke={edge.color}
-                  strokeOpacity={edge.active ? 0.85 : 0.48}
-                  strokeWidth={edge.active ? 2 : 1.25}
-                  strokeDasharray={edge.active ? '10 8' : undefined}
-                  vectorEffect="non-scaling-stroke"
-                  filter={edge.active ? 'url(#active-edge-glow)' : undefined}
-                />
-                <circle cx={end.x} cy={end.y} r="3" fill={edge.color} opacity=".9" />
-              </g>
-            );
-          })}
+          {edges.map((edge, index) => (
+            <path
+              key={edge.key}
+              className={`diagram-edge${edge.active ? ' diagram-edge--active' : ''}`}
+              style={{ animationDelay: `${index * 60}ms` }}
+              d={pathThrough(edge.points)}
+              fill="none"
+              stroke={edge.color}
+              strokeOpacity={edge.active ? 0.85 : 0.48}
+              strokeWidth={edge.active ? 2 : 1.25}
+              strokeDasharray={edge.active ? '10 8' : undefined}
+              vectorEffect="non-scaling-stroke"
+              filter={edge.active ? 'url(#active-edge-glow)' : undefined}
+              markerEnd={`url(#diagram-arrow-${edge.edge.semantic ?? 'paper'})`}
+            />
+          ))}
         </g>
         <g className="diagram-nodes">
-          {layout.nodes.map(({ node, box }, index) => {
+          {layout.nodes.map(({ node, box, lines, ruleY }, index) => {
             const isAnchored = hasAnchoredNode && node.id === anchoredNodeId;
+            const state = node.state ?? 'todo';
             const color = isAnchored ? 'var(--orange)' : colors[node.semantic ?? 'paper'];
+            const frameColor = state === 'blocked' && !isAnchored ? 'var(--red)' : color;
+            const lit = isAnchored || state === 'active';
+            const noteBadge = isAnchored && !calloutPlaced;
+            const tagged = state === 'done' || state === 'blocked';
+            // The tag sits left of the corner cut, and left of the note badge
+            // when that is shown too.
+            const tagX = box.width - (noteBadge ? 36 + 6 : 22 + 6) - TAG_WIDTH;
             return (
-              <g key={node.id} transform={`translate(${box.x} ${box.y})`}>
-                <g className={`diagram-node__body${isAnchored ? ' diagram-node__body--anchored' : ''}`} style={{ animationDelay: `${120 + index * 50}ms` }}>
+              <g key={node.id} transform={`translate(${box.x} ${box.y})`} data-state={state}>
+                <g
+                  className={`diagram-node__body diagram-node__body--${state}${isAnchored ? ' diagram-node__body--anchored' : ''}`}
+                  style={{ animationDelay: `${120 + index * 50}ms` }}
+                >
                   <path
                     className="diagram-node__frame"
-                    d={`M 0 14 L 14 0 H ${nodeWidth - 22} L ${nodeWidth} 22 V ${nodeHeight} H 18 L 0 ${nodeHeight - 18} Z`}
+                    d={`M 0 14 L 14 0 H ${box.width - 22} L ${box.width} 22 V ${box.height} H 18 L 0 ${box.height - 18} Z`}
                     fill="var(--black, #000000)"
-                    stroke={color}
-                    strokeOpacity={isAnchored ? '1' : '.64'}
-                    strokeWidth={isAnchored ? '2.2' : '1.3'}
+                    stroke={frameColor}
+                    strokeOpacity={lit || state === 'blocked' ? '1' : '.64'}
+                    strokeWidth={lit ? '2.2' : '1.3'}
                     vectorEffect="non-scaling-stroke"
-                    filter={isAnchored ? 'url(#active-edge-glow)' : undefined}
+                    filter={lit ? 'url(#active-edge-glow)' : undefined}
                   />
                   <line
                     x1="16"
-                    y1="39"
-                    x2={nodeWidth - 16}
-                    y2="39"
-                    stroke={color}
-                    strokeOpacity={isAnchored ? '.45' : '.23'}
+                    y1={ruleY}
+                    x2={box.width - 16}
+                    y2={ruleY}
+                    stroke={frameColor}
+                    strokeOpacity={lit ? '.45' : '.23'}
                     vectorEffect="non-scaling-stroke"
                   />
-                  <text x="18" y="28" className="diagram-node-label" fill={color}>
-                    {node.label}
-                  </text>
-                  <text x="18" y="58" className="diagram-node-sub">
-                    {node.sub}
-                  </text>
-                  {node.detail ? (
-                    <text x="18" y="76" className="diagram-node-detail">
-                      {node.detail}
+                  {lines.map((line, lineIndex) => (
+                    <text key={lineIndex} x="18" y={line.y} className={`diagram-node-${line.kind}`} fill={line.kind === 'label' ? color : undefined}>
+                      {line.text}
                     </text>
+                  ))}
+                  {tagged ? (
+                    <g className={`diagram-node__tag diagram-node__tag--${state}`} transform={`translate(${tagX}, 6)`}>
+                      <rect width={TAG_WIDTH} height={TAG_HEIGHT} fill="#000" stroke={frameColor} strokeOpacity=".7" strokeWidth="1" />
+                      {state === 'done' ? (
+                        <polyline points="4,8 7.5,11.5 14,4" fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="square" />
+                      ) : (
+                        <path d="M 5 4 L 13 11 M 13 4 L 5 11" fill="none" stroke="var(--red)" strokeWidth="1.6" strokeLinecap="square" />
+                      )}
+                    </g>
                   ) : null}
-                  {isAnchored && !calloutPlaced ? (
-                    <g className="diagram-node__marker" transform={`translate(${nodeWidth - 36}, 6)`}>
+                  {noteBadge ? (
+                    <g className="diagram-node__marker" transform={`translate(${box.width - 36}, 6)`}>
                       <rect width="30" height="15" rx="2" fill="rgba(var(--orange-rgb), 0.25)" stroke="var(--orange)" strokeWidth="1" />
                       <text x="15" y="11" textAnchor="middle" fill="var(--orange)" fontSize="8.5" fontWeight="700" fontFamily="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" letterSpacing="0.05em">
                         NOTE
@@ -247,7 +285,11 @@ export function DiagramPrimitive({
               <g key={edge.key} className="diagram-edge-label-group" style={{ animationDelay: `${120 + edges.length * 50}ms` }}>
                 <rect className="diagram-edge-label__backing" {...edge.label.box} />
                 <text x={edge.label.x} y={edge.label.y} textAnchor="middle" dominantBaseline="central" className="diagram-edge-label" fill={edge.color}>
-                  {edge.label.text}
+                  {edge.label.lines.map((line, lineIndex) => (
+                    <tspan key={lineIndex} x={edge.label!.x} dy={lineIndex === 0 ? `${-(edge.label!.lines.length - 1) * 0.5 * LABEL_LINE}` : LABEL_LINE}>
+                      {line}
+                    </tspan>
+                  ))}
                 </text>
               </g>
             ) : null,

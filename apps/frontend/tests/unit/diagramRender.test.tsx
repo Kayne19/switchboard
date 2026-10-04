@@ -86,6 +86,84 @@ describe('diagram rendering', () => {
     const glow = host.querySelector('#active-edge-glow');
     expect(glow?.getAttribute('filterUnits')).toBe('userSpaceOnUse');
   });
+
+  it('ends every edge in an arrowhead of its own colour, not a dot', () => {
+    render();
+    const edges = [...host.querySelectorAll<SVGPathElement>('.diagram-edges path')];
+    for (const edge of edges) expect(edge.getAttribute('marker-end')).toBe('url(#diagram-arrow-paper)');
+    expect(host.querySelector('.diagram-edges circle')).toBeNull();
+    const markers = [...host.querySelectorAll('defs marker')].map((marker) => marker.id);
+    expect(markers).toContain('diagram-arrow-paper');
+    expect(markers).toContain('diagram-arrow-red');
+    // The arrowhead scales with the drawing, as the frames do.
+    expect(host.querySelector('#diagram-arrow-paper')?.getAttribute('markerUnits')).toBe('userSpaceOnUse');
+  });
+
+  it('sizes each node box to its text and wraps a long label', () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    const sized: DiagramData = {
+      mode: 'graph',
+      nodes: [
+        { id: 'short', label: 'PBX' },
+        { id: 'long', label: 'Speech-to-text sidecar for the call', sub: 'whisper', detail: 'apps/backend/src/stt.rs' },
+      ],
+      edges: [{ from: 'short', to: 'long' }],
+    };
+    act(() => root.render(<DiagramPrimitive data={sized} id="test-diagram" />));
+    const [short, long] = [...host.querySelectorAll<SVGGElement>('.diagram-nodes > g')];
+    const widthOf = (node: SVGGElement) => Number(node.querySelector('.diagram-node__frame')?.getAttribute('d')?.match(/H ([\d.]+) L/)?.[1]);
+    expect(widthOf(long)).toBeGreaterThan(widthOf(short));
+    expect(long.querySelectorAll('.diagram-node-label')).toHaveLength(2);
+    expect(long.querySelector('.diagram-node-sub')?.textContent).toBe('whisper');
+    expect(long.querySelector('.diagram-node-detail')?.textContent).toBe('apps/backend/src/stt.rs');
+    expect(short.querySelector('.diagram-node-sub')).toBeNull();
+  });
+});
+
+describe('diagram node state', () => {
+  const stateful: DiagramData = {
+    mode: 'graph',
+    nodes: [
+      { id: 'done', label: 'FETCH', state: 'done' },
+      { id: 'active', label: 'BUILD', state: 'active' },
+      { id: 'todo', label: 'SHIP', state: 'todo' },
+      { id: 'blocked', label: 'AUDIT', state: 'blocked' },
+    ],
+    edges: [
+      { from: 'done', to: 'active' },
+      { from: 'active', to: 'todo' },
+      { from: 'active', to: 'blocked' },
+    ],
+  };
+  // Nodes render in data order.
+  const nodeOf = (id: string) => [...host.querySelectorAll<SVGGElement>('.diagram-nodes > g')][stateful.nodes.findIndex((node) => node.id === id)];
+
+  it('shows each state on its node: done dimmed with a check, active lit, blocked framed red with a cross', () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root.render(<DiagramPrimitive data={stateful} id="test-diagram" />));
+    const done = nodeOf('done');
+    expect(done.querySelector('.diagram-node__body--done')).not.toBeNull();
+    expect(done.querySelector('.diagram-node__tag--done polyline')).not.toBeNull();
+
+    const active = nodeOf('active');
+    expect(active.querySelector('.diagram-node__body--active')).not.toBeNull();
+    expect(active.querySelector('.diagram-node__frame')?.getAttribute('filter')).toBe('url(#active-edge-glow)');
+    expect(active.querySelector('.diagram-node__tag')).toBeNull();
+
+    const blocked = nodeOf('blocked');
+    expect(blocked.querySelector('.diagram-node__body--blocked')).not.toBeNull();
+    expect(blocked.querySelector('.diagram-node__frame')?.getAttribute('stroke')).toBe('var(--red)');
+    expect(blocked.querySelector('.diagram-node__tag--blocked path')).not.toBeNull();
+
+    const todo = nodeOf('todo');
+    expect(todo.querySelector('.diagram-node__body--todo')).not.toBeNull();
+    expect(todo.querySelector('.diagram-node__frame')?.getAttribute('filter')).toBeNull();
+    expect(todo.querySelector('.diagram-node__tag')).toBeNull();
+  });
 });
 
 

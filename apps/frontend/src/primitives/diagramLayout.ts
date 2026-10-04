@@ -2,16 +2,28 @@
 // edge is routed, and where its label sits. Pure, so the rules below can be
 // checked without a browser.
 //
-// Layout is layered along a main axis (x in landscape, y in portrait) and
-// spread along the cross axis. Two rules keep a diagram readable:
-// - Every gap between layers is wide enough for the labels that sit in it.
-//   When the approved spacing is too tight, the drawing grows and the SVG
-//   scales it to fit, rather than letting labels slide under nodes.
-// - An edge between adjacent layers bends in the gap between them. Any other
-//   edge -- one that skips a layer, stays in its layer, or runs backwards --
-//   leaves through the gap beside its source, runs along its own lane
-//   outside the node band, and comes back in through the gap before its
-//   target, so it never passes through a node.
+// The layout is layered (Sugiyama-style) along a main axis (x in landscape,
+// y in portrait) and spread along the cross axis:
+// 1. Cycles are broken by reversing the back edges of a depth-first walk.
+//    A reversed edge is laid out the other way round but drawn toward its
+//    true target, so a feedback loop reads as a loop.
+// 2. Each node takes the longest path from a source as its layer; a node
+//    whose edges would get shorter is then pulled toward its successors.
+// 3. An edge that spans more than one layer is routed through a dummy in
+//    each layer it crosses, so it threads the gaps between that layer's
+//    nodes and never passes through one.
+// 4. Barycenter sweeps and adjacent swaps order each layer to reduce
+//    crossings.
+// 5. Each node's box is sized from its text (a monospace estimate, the same
+//    way edge labels are measured); a layer stacks its boxes along the cross
+//    axis, grows with them, and each node then settles toward its
+//    neighbours as far as the ones beside it allow.
+// 6. Routes are axis-aligned and bend in the gap between layers; bends that
+//    would otherwise be ambiguous take their own track, and the gap grows to
+//    hold its tracks and its labels. Labels sit mid-route in the gap and
+//    slide along their bend when two meet.
+// The drawing grows when the approved canvas is too small, and the SVG
+// scales it to fit, rather than letting anything overlap.
 
 import type { DiagramData, DiagramEdge, DiagramNode } from '../controller/types';
 
@@ -29,14 +41,27 @@ export interface Box {
   height: number;
 }
 
+export interface NodeLine {
+  kind: 'label' | 'sub' | 'detail';
+  text: string;
+  /** Baseline, relative to the box's top-left corner. */
+  y: number;
+}
+
 export interface LaidOutNode {
   node: DiagramNode;
   layer: number;
   box: Box;
+  /** The node's text, wrapped to the box; the renderer draws exactly these. */
+  lines: NodeLine[];
+  /** The rule under the label, relative to the box's top. */
+  ruleY: number;
 }
 
 export interface EdgeLabel {
   text: string;
+  /** The text as drawn: one or two lines, stacked about the centre. */
+  lines: string[];
   /** The centre of the label's text. */
   x: number;
   y: number;
@@ -49,6 +74,8 @@ export interface LaidOutEdge {
   /** Axis-aligned route from the source's outline to the target's. */
   points: Point[];
   label: EdgeLabel | null;
+  /** Laid out against its direction to break a cycle; still drawn from `edge.from` to `edge.to`. */
+  reversed: boolean;
 }
 
 export interface DiagramCallout {
@@ -61,295 +88,863 @@ export interface DiagramCallout {
 export interface DiagramLayout {
   width: number;
   height: number;
-  nodeWidth: number;
-  nodeHeight: number;
   nodes: LaidOutNode[];
   edges: LaidOutEdge[];
   callout?: DiagramCallout | null;
 }
 
-// The approved geometry, in main/cross terms.
-const GEOMETRY = {
-  landscape: { main: 1000, cross: 620, nodeMain: 182, nodeCross: 88, padMain: 112, padCross: 82 },
-  portrait: { main: 1000, cross: 700, nodeMain: 98, nodeCross: 244, padMain: 110, padCross: 96 },
+// The approved canvas, in main/cross terms; the drawing grows past it when
+// it must.
+const CANVAS = {
+  landscape: { main: 1000, cross: 620 },
+  portrait: { main: 1000, cross: 700 },
 } as const;
+const PAD_MAIN = 28;
+const PAD_CROSS = 32;
+
+// Node text is set in the monospace face (.diagram-node-label, -sub,
+// -detail); each line's advance is 0.6em plus its tracking, so a box's
+// width is known before it is drawn. A line longer than its wrap width
+// breaks at a space; a word longer than that widens the box instead.
+const NODE_TEXT = {
+  label: { advance: 10.8, lineHeight: 19, wrapAt: 14, maxLines: 2 },
+  sub: { advance: 6.3, lineHeight: 13, wrapAt: 26, maxLines: 2 },
+  detail: { advance: 4.8, lineHeight: 11, wrapAt: 36, maxLines: 2 },
+} as const;
+const NODE_PAD_SIDE = 18;
+const NODE_MIN_WIDTH = 140;
+const NODE_LABEL_BASELINE = 28;
+const NODE_RULE_DROP = 11;
+const NODE_SUB_DROP = 19;
+const NODE_DETAIL_DROP = 18;
+const NODE_PAD_BOTTOM = 12;
+// Room for the corner tag (a state glyph or the note badge) beside the label.
+const NODE_TAG_ROOM = 30;
 
 // Edge labels are set in the monospace face at 11 user units with 0.06em
 // tracking (.diagram-edge-label), so a label's width is known before it is
-// drawn: 0.6em advance plus the tracking, rounded up.
+// drawn: 0.6em advance plus the tracking, rounded up. A long label wraps to
+// two lines so it costs its gap less room.
 const LABEL_ADVANCE = 7.3;
 const LABEL_HEIGHT = 14;
 const LABEL_BACKING = 4;
+const LABEL_WRAP_AT = 14;
+const LABEL_MAX_LINES = 2;
 // Space kept clear between a label's backing and anything else in its gap.
 const CLEARANCE = 6;
 // The narrowest gap between layers, labelled or not.
-const MIN_GAP = 40;
-// Space between the node band and the first lane.
-const LANE_GAP = 10;
-const MIN_LANE_PITCH = 26;
+const MIN_GAP = 48;
+// Distance between two bend tracks sharing a gap.
+const TRACK_PITCH = 12;
+// Space between boxes along the cross axis, and the most a sparse layer is
+// spread beyond it to use the canvas.
+const NODE_SPACING = 28;
+const DUMMY_SPACING = 22;
+const MAX_STRETCH = 72;
+// A layer too crowded for the canvas is staggered into two rows along the
+// main axis, its boxes interleaved so each back-row box sits behind the
+// gap between two front-row boxes and its edges pass through that gap.
+const STAGGER_FROM = 4;
+const STAGGER_CLEARANCE = 12;
+const ROW_GAP = 24;
+// Where edges leave and enter a box: ports spread along its side.
+const PORT_PITCH = 16;
+const PORT_INSET = 14;
+const SELF_LOOP = 18;
 
-interface Placed {
-  node: DiagramNode;
-  layer: number;
-  main: number;
-  cross: number;
+const EPSILON = 0.5;
+
+// --- Text ------------------------------------------------------------------
+
+function wrapLine(text: string, wrapAt: number, maxLines: number): string[] {
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let current = '';
+  for (const word of words) {
+    if (!current) {
+      current = word;
+    } else if (current.length + 1 + word.length <= wrapAt) {
+      current += ' ' + word;
+    } else {
+      lines.push(current);
+      current = word;
+    }
+  }
+  if (current) lines.push(current);
+  if (lines.length > maxLines) {
+    const head = lines.slice(0, maxLines - 1);
+    head.push(lines.slice(maxLines - 1).join(' '));
+    return head;
+  }
+  return lines.length ? lines : [''];
+}
+
+interface NodeText {
+  width: number;
+  height: number;
+  lines: NodeLine[];
+  ruleY: number;
+}
+
+export function measureNode(node: DiagramNode, reserveTag: boolean): NodeText {
+  const labelLines = wrapLine(node.label, NODE_TEXT.label.wrapAt, NODE_TEXT.label.maxLines);
+  const subLines = node.sub ? wrapLine(node.sub, NODE_TEXT.sub.wrapAt, NODE_TEXT.sub.maxLines) : [];
+  const detailLines = node.detail ? wrapLine(node.detail, NODE_TEXT.detail.wrapAt, NODE_TEXT.detail.maxLines) : [];
+
+  const lines: NodeLine[] = [];
+  let y = NODE_LABEL_BASELINE;
+  labelLines.forEach((text, index) => {
+    if (index > 0) y += NODE_TEXT.label.lineHeight;
+    lines.push({ kind: 'label', text, y });
+  });
+  const ruleY = y + NODE_RULE_DROP;
+  let last = ruleY;
+  if (subLines.length) {
+    y = ruleY + NODE_SUB_DROP;
+    subLines.forEach((text, index) => {
+      if (index > 0) y += NODE_TEXT.sub.lineHeight;
+      lines.push({ kind: 'sub', text, y });
+    });
+    last = y;
+  }
+  if (detailLines.length) {
+    y = subLines.length ? y + NODE_DETAIL_DROP : ruleY + NODE_SUB_DROP;
+    detailLines.forEach((text, index) => {
+      if (index > 0) y += NODE_TEXT.detail.lineHeight;
+      lines.push({ kind: 'detail', text, y });
+    });
+    last = y;
+  }
+
+  const textWidth = Math.max(
+    ...labelLines.map((line) => line.length * NODE_TEXT.label.advance + (reserveTag ? NODE_TAG_ROOM : 0)),
+    ...subLines.map((line) => line.length * NODE_TEXT.sub.advance),
+    ...detailLines.map((line) => line.length * NODE_TEXT.detail.advance),
+  );
+  return {
+    width: Math.max(NODE_MIN_WIDTH, Math.ceil(textWidth + 2 * NODE_PAD_SIDE)),
+    height: last + NODE_PAD_BOTTOM,
+    lines,
+    ruleY,
+  };
+}
+
+export function wrapEdgeLabel(text: string): string[] {
+  return wrapLine(text, LABEL_WRAP_AT, LABEL_MAX_LINES);
+}
+
+function labelBacking(text: string) {
+  const lines = wrapEdgeLabel(text);
+  return {
+    width: Math.max(...lines.map((line) => line.length)) * LABEL_ADVANCE + 2 * LABEL_BACKING,
+    height: lines.length * LABEL_HEIGHT + 2 * LABEL_BACKING,
+  };
+}
+
+// --- Cycle removal ---------------------------------------------------------
+
+export interface DirectedEdge {
+  edge: DiagramEdge;
+  /** Where the edge is laid out from: `edge.from`, or `edge.to` when reversed. */
+  from: string;
+  to: string;
+  reversed: boolean;
+}
+
+/**
+ * Orients every edge so the graph is acyclic: a depth-first walk from each
+ * node in order reverses the edges that would close a loop. Self-loops are
+ * left out; they span no layers.
+ */
+export function breakCycles(nodes: DiagramNode[], edges: DiagramEdge[]): DirectedEdge[] {
+  const ids = new Set(nodes.map((node) => node.id));
+  const outgoing = new Map<string, number[]>(nodes.map((node) => [node.id, []]));
+  const directed: DirectedEdge[] = [];
+  edges.forEach((edge, index) => {
+    if (!ids.has(edge.from) || !ids.has(edge.to) || edge.from === edge.to) return;
+    outgoing.get(edge.from)?.push(index);
+    directed[index] = { edge, from: edge.from, to: edge.to, reversed: false };
+  });
+
+  const state = new Map<string, 'open' | 'done'>();
+  const visit = (id: string) => {
+    state.set(id, 'open');
+    for (const index of outgoing.get(id) ?? []) {
+      const target = directed[index].to;
+      const seen = state.get(target);
+      if (seen === 'open') {
+        directed[index] = { ...directed[index], from: target, to: id, reversed: true };
+      } else if (seen === undefined) {
+        visit(target);
+      }
+    }
+    state.set(id, 'done');
+  };
+  for (const node of nodes) {
+    if (!state.has(node.id)) visit(node.id);
+  }
+  return directed.filter(Boolean);
+}
+
+// --- Layering --------------------------------------------------------------
+
+/** Each node's layer: its longest path from a source, then pulled toward its successors where that shortens edges. */
+function assignLayers(nodes: DiagramNode[], edges: DirectedEdge[]): Map<string, number> {
+  const preds = new Map<string, string[]>(nodes.map((node) => [node.id, []]));
+  const succs = new Map<string, string[]>(nodes.map((node) => [node.id, []]));
+  for (const edge of edges) {
+    preds.get(edge.to)?.push(edge.from);
+    succs.get(edge.from)?.push(edge.to);
+  }
+
+  const indegree = new Map(nodes.map((node) => [node.id, preds.get(node.id)?.length ?? 0]));
+  const order: string[] = nodes.filter((node) => indegree.get(node.id) === 0).map((node) => node.id);
+  for (let cursor = 0; cursor < order.length; cursor += 1) {
+    for (const child of succs.get(order[cursor]) ?? []) {
+      const remaining = (indegree.get(child) ?? 0) - 1;
+      indegree.set(child, remaining);
+      if (remaining === 0) order.push(child);
+    }
+  }
+
+  const layer = new Map(nodes.map((node) => [node.id, 0]));
+  for (const id of order) {
+    for (const child of succs.get(id) ?? []) {
+      layer.set(child, Math.max(layer.get(child) ?? 0, (layer.get(id) ?? 0) + 1));
+    }
+  }
+  // A node moves up to sit just before its nearest successor when that
+  // shortens more edges than it lengthens.
+  for (const id of [...order].reverse()) {
+    const out = succs.get(id) ?? [];
+    const into = preds.get(id) ?? [];
+    if (out.length === 0 || (into.length > 0 && out.length <= into.length)) continue;
+    const candidate = Math.min(...out.map((child) => layer.get(child) ?? 0)) - 1;
+    if (candidate > (layer.get(id) ?? 0)) layer.set(id, candidate);
+  }
+  // Drop any layer left empty by the move.
+  const used = [...new Set(layer.values())].sort((a, b) => a - b);
+  const compact = new Map(used.map((value, index) => [value, index]));
+  for (const [id, value] of layer) layer.set(id, compact.get(value) ?? 0);
+  return layer;
 }
 
 export function createLayers(nodes: DiagramNode[], edges: DiagramEdge[]): DiagramNode[][] {
   if (nodes.length === 0) return [];
-
-  const outgoing = new Map(nodes.map((node) => [node.id, [] as string[]]));
-  for (const edge of edges) {
-    if (outgoing.has(edge.from) && outgoing.has(edge.to)) {
-      outgoing.get(edge.from)?.push(edge.to);
-    }
-  }
-
-  // Collapse every feedback loop into one component before assigning depth.
-  // The resulting component graph is a DAG, so longest-path layering is both
-  // bounded and deterministic even for pure cycles and self-loops.
-  const visitIndex = new Map<string, number>();
-  const lowLink = new Map<string, number>();
-  const stack: string[] = [];
-  const onStack = new Set<string>();
-  const components: string[][] = [];
-  let nextVisitIndex = 0;
-
-  const findComponent = (id: string) => {
-    visitIndex.set(id, nextVisitIndex);
-    lowLink.set(id, nextVisitIndex);
-    nextVisitIndex += 1;
-    stack.push(id);
-    onStack.add(id);
-
-    for (const child of outgoing.get(id) ?? []) {
-      if (!visitIndex.has(child)) {
-        findComponent(child);
-        lowLink.set(id, Math.min(lowLink.get(id) ?? 0, lowLink.get(child) ?? 0));
-      } else if (onStack.has(child)) {
-        lowLink.set(id, Math.min(lowLink.get(id) ?? 0, visitIndex.get(child) ?? 0));
-      }
-    }
-
-    if (lowLink.get(id) !== visitIndex.get(id)) return;
-
-    const component: string[] = [];
-    while (stack.length > 0) {
-      const member = stack.pop();
-      if (!member) break;
-      onStack.delete(member);
-      component.push(member);
-      if (member === id) break;
-    }
-    components.push(component);
-  };
-
-  for (const node of nodes) {
-    if (!visitIndex.has(node.id)) findComponent(node.id);
-  }
-
-  const componentByNode = new Map<string, number>();
-  components.forEach((component, componentIndex) => {
-    for (const id of component) componentByNode.set(id, componentIndex);
-  });
-
-  const componentOutgoing = components.map(() => new Set<number>());
-  const componentIncoming = components.map(() => 0);
-  for (const [from, children] of outgoing) {
-    const fromComponent = componentByNode.get(from);
-    if (fromComponent === undefined) continue;
-    for (const child of children) {
-      const toComponent = componentByNode.get(child);
-      if (
-        toComponent === undefined ||
-        toComponent === fromComponent ||
-        componentOutgoing[fromComponent].has(toComponent)
-      ) {
-        continue;
-      }
-      componentOutgoing[fromComponent].add(toComponent);
-      componentIncoming[toComponent] += 1;
-    }
-  }
-
-  const componentDepth = components.map(() => 0);
-  const queue = componentIncoming.flatMap((count, index) => (count === 0 ? [index] : []));
-  for (let cursor = 0; cursor < queue.length; cursor += 1) {
-    const component = queue[cursor];
-    for (const child of componentOutgoing[component]) {
-      componentDepth[child] = Math.max(componentDepth[child], componentDepth[component] + 1);
-      componentIncoming[child] -= 1;
-      if (componentIncoming[child] === 0) queue.push(child);
-    }
-  }
-
-  const maxDepth = Math.max(...componentDepth);
-  const layers = Array.from({ length: maxDepth + 1 }, () => [] as DiagramNode[]);
-  for (const node of nodes) {
-    const component = componentByNode.get(node.id);
-    layers[component === undefined ? 0 : componentDepth[component]].push(node);
-  }
+  const layer = assignLayers(nodes, breakCycles(nodes, edges));
+  const count = Math.max(...layer.values()) + 1;
+  const layers = Array.from({ length: count }, () => [] as DiagramNode[]);
+  for (const node of nodes) layers[layer.get(node.id) ?? 0].push(node);
   return layers;
 }
 
-function labelBacking(text: string) {
-  return {
-    width: text.length * LABEL_ADVANCE + 2 * LABEL_BACKING,
-    height: LABEL_HEIGHT + 2 * LABEL_BACKING,
+// --- The layered graph -----------------------------------------------------
+
+interface Item {
+  layer: number;
+  index: number;
+  /** Which row of a staggered layer the item sits in; a dummy spans both. */
+  row: 0 | 1;
+  staggered: boolean;
+  /** The node, or null for a dummy an edge passes through. */
+  node: DiagramNode | null;
+  text: NodeText | null;
+  mainExtent: number;
+  crossExtent: number;
+  main: number;
+  cross: number;
+  preds: Item[];
+  succs: Item[];
+}
+
+interface Segment {
+  edge: number;
+  from: Item;
+  to: Item;
+  /** Where the segment leaves `from` and enters `to`, along the cross axis. */
+  fromCross: number;
+  toCross: number;
+  /** The main coordinate of its bend, when it has one. */
+  track: number | null;
+}
+
+interface Route {
+  directed: DirectedEdge;
+  segments: Segment[];
+}
+
+function meanOf(values: number[], fallback: number) {
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : fallback;
+}
+
+// --- Ordering --------------------------------------------------------------
+
+function crossingsBetween(upper: Item[]): number {
+  const segments: Array<[number, number]> = [];
+  for (const item of upper) for (const succ of item.succs) segments.push([item.index, succ.index]);
+  let crossings = 0;
+  for (let a = 0; a < segments.length; a += 1) {
+    for (let b = a + 1; b < segments.length; b += 1) {
+      if ((segments[a][0] - segments[b][0]) * (segments[a][1] - segments[b][1]) < 0) crossings += 1;
+    }
+  }
+  return crossings;
+}
+
+function totalCrossings(layers: Item[][]): number {
+  let total = 0;
+  for (let index = 1; index < layers.length; index += 1) total += crossingsBetween(layers[index - 1]);
+  return total;
+}
+
+function reindex(layer: Item[]) {
+  layer.forEach((item, index) => {
+    item.index = index;
+  });
+}
+
+function barycenterSort(layer: Item[], neighbours: (item: Item) => Item[]) {
+  const keyed = layer.map((item) => {
+    const around = neighbours(item);
+    return { item, key: around.length ? meanOf(around.map((n) => n.index), item.index) : item.index };
+  });
+  keyed.sort((a, b) => a.key - b.key || a.item.index - b.item.index);
+  layer.splice(0, layer.length, ...keyed.map((entry) => entry.item));
+  reindex(layer);
+}
+
+/** Crossings among the edges of two items in one layer, counting `v` as placed before `w`. */
+function pairCrossings(v: Item, w: Item): number {
+  let count = 0;
+  for (const side of ['preds', 'succs'] as const) {
+    for (const p of v[side]) for (const q of w[side]) if (p.index > q.index) count += 1;
+  }
+  return count;
+}
+
+function transpose(layer: Item[]) {
+  let improved = true;
+  while (improved) {
+    improved = false;
+    for (let index = 0; index + 1 < layer.length; index += 1) {
+      const v = layer[index];
+      const w = layer[index + 1];
+      if (pairCrossings(w, v) < pairCrossings(v, w)) {
+        layer[index] = w;
+        layer[index + 1] = v;
+        reindex(layer);
+        improved = true;
+      }
+    }
+  }
+}
+
+function orderLayers(layers: Item[][]) {
+  for (const layer of layers) reindex(layer);
+  let best = layers.map((layer) => [...layer]);
+  let bestCrossings = totalCrossings(layers);
+  for (let round = 0; round < 8 && bestCrossings > 0; round += 1) {
+    const down = round % 2 === 0;
+    if (down) {
+      for (let index = 1; index < layers.length; index += 1) barycenterSort(layers[index], (item) => item.preds);
+    } else {
+      for (let index = layers.length - 2; index >= 0; index -= 1) barycenterSort(layers[index], (item) => item.succs);
+    }
+    for (const layer of layers) transpose(layer);
+    const crossings = totalCrossings(layers);
+    if (crossings < bestCrossings) {
+      bestCrossings = crossings;
+      best = layers.map((layer) => [...layer]);
+    }
+  }
+  best.forEach((layer, index) => {
+    layers[index].splice(0, layers[index].length, ...layer);
+    reindex(layers[index]);
+  });
+}
+
+// --- Cross coordinates -----------------------------------------------------
+
+function separation(a: Item, b: Item, stretch: number) {
+  if (a.node && b.node && a.staggered && a.row !== b.row) {
+    // Boxes in different rows may overlap along the cross axis; what must
+    // stay clear is each box's centre line, where its edges run through
+    // the other row.
+    return Math.max(a.crossExtent, b.crossExtent) / 2 + STAGGER_CLEARANCE;
+  }
+  const spacing = a.node && b.node ? NODE_SPACING + stretch : DUMMY_SPACING;
+  return a.crossExtent / 2 + spacing + b.crossExtent / 2;
+}
+
+/**
+ * Settles each item of a layer toward its wanted position, as far as the
+ * items beside it allow: an item already placed is a wall, one not yet
+ * placed is pushed aside. Dummies go first so long edges stay straight,
+ * then the nodes with most edges.
+ */
+function settleLayer(layer: Item[], wantedOf: (item: Item) => number | null, stretch: number) {
+  const sep = (index: number) => separation(layer[index], layer[index + 1], stretch);
+  // Neighbours that want the same spot (siblings of one parent) are centred
+  // on it as a block rather than queueing behind the first of them.
+  const targets = layer.map(wantedOf);
+  for (let start = 0; start < layer.length; ) {
+    let end = start;
+    while (end + 1 < layer.length && targets[end + 1] !== null && targets[start] !== null && Math.abs((targets[end + 1] ?? 0) - (targets[start] ?? 0)) < EPSILON) end += 1;
+    const centre = targets[start];
+    if (end > start && centre !== null) {
+      const offsets = [0];
+      for (let k = start; k < end; k += 1) offsets.push(offsets[offsets.length - 1] + sep(k));
+      const extent = offsets[offsets.length - 1];
+      offsets.forEach((offset, k) => {
+        targets[start + k] = centre - extent / 2 + offset;
+      });
+    }
+    start = end + 1;
+  }
+  const wanted = (item: Item) => targets[item.index];
+  const order = [...layer].sort((a, b) => {
+    const dummy = Number(Boolean(b.node === null)) - Number(Boolean(a.node === null));
+    if (dummy) return dummy;
+    const degree = b.preds.length + b.succs.length - (a.preds.length + a.succs.length);
+    return degree || a.index - b.index;
+  });
+  const fixed = layer.map(() => false);
+  for (const item of order) {
+    const i = item.index;
+    const target = wanted(item);
+    if (target !== null) {
+      let low = -Infinity;
+      let span = 0;
+      for (let k = i - 1; k >= 0; k -= 1) {
+        span += sep(k);
+        if (fixed[k]) {
+          low = layer[k].cross + span;
+          break;
+        }
+      }
+      let high = Infinity;
+      span = 0;
+      for (let k = i + 1; k < layer.length; k += 1) {
+        span += sep(k - 1);
+        if (fixed[k]) {
+          high = layer[k].cross - span;
+          break;
+        }
+      }
+      item.cross = Math.min(high, Math.max(low, target));
+      for (let k = i - 1; k >= 0 && !fixed[k]; k -= 1) layer[k].cross = Math.min(layer[k].cross, layer[k + 1].cross - sep(k));
+      for (let k = i + 1; k < layer.length && !fixed[k]; k += 1) layer[k].cross = Math.max(layer[k].cross, layer[k - 1].cross + sep(k - 1));
+    }
+    fixed[i] = true;
+  }
+}
+
+function assignCross(layers: Item[][], usableCross: number) {
+  const stretches = layers.map((layer) => {
+    const real = layer.filter((item) => item.node);
+    if (real.length < 2) return 0;
+    const natural = real.reduce((sum, item) => sum + item.crossExtent, 0) + NODE_SPACING * (real.length - 1);
+    if (real.length >= STAGGER_FROM && natural > usableCross) {
+      real.forEach((item, index) => {
+        item.row = index % 2 === 0 ? 0 : 1;
+      });
+      for (const item of layer) item.staggered = true;
+      return 0;
+    }
+    return Math.max(0, Math.min(MAX_STRETCH, (usableCross - natural) / (real.length - 1)));
+  });
+  layers.forEach((layer, index) => {
+    const stretch = stretches[index];
+    // Stack the layer from zero, then centre the stack on zero.
+    let cursor = 0;
+    layer.forEach((item, k) => {
+      if (k > 0) cursor += separation(layer[k - 1], item, stretch);
+      item.cross = cursor;
+    });
+    if (layer.length) {
+      const first = layer[0];
+      const last = layer[layer.length - 1];
+      const shift = (first.cross - first.crossExtent / 2 + last.cross + last.crossExtent / 2) / 2;
+      for (const item of layer) item.cross -= shift;
+    }
+  });
+
+  // A node lines up with the nodes it is joined to; the dummies of edges
+  // passing by only count when it has no such neighbour, so a long edge
+  // skirting a node does not drag it off its line.
+  const toward = (neighbours: Item[], item: Item) => {
+    if (!neighbours.length) return null;
+    const real = neighbours.filter((neighbour) => neighbour.node);
+    return meanOf((real.length ? real : neighbours).map((neighbour) => neighbour.cross), item.cross);
   };
+  const towardPreds = (item: Item) => toward(item.preds, item);
+  const towardSuccs = (item: Item) => toward(item.succs, item);
+  for (let round = 0; round < 2; round += 1) {
+    for (let index = 1; index < layers.length; index += 1) settleLayer(layers[index], towardPreds, stretches[index]);
+    for (let index = layers.length - 2; index >= 0; index -= 1) settleLayer(layers[index], towardSuccs, stretches[index]);
+  }
+}
+
+// --- Ports and tracks ------------------------------------------------------
+
+/** Spreads the segments leaving (or entering) each node along its side, in the order of their far ends. */
+function assignPorts(layers: Item[][], segments: Segment[]) {
+  for (const layer of layers) {
+    for (const item of layer) {
+      if (!item.node) continue;
+      for (const side of ['out', 'in'] as const) {
+        const ends = segments.filter((segment) => (side === 'out' ? segment.from : segment.to) === item);
+        ends.sort((a, b) => {
+          const farA = side === 'out' ? a.to.cross : a.from.cross;
+          const farB = side === 'out' ? b.to.cross : b.from.cross;
+          return farA - farB || a.edge - b.edge;
+        });
+        const count = ends.length;
+        // A staggered box's edges run through the other row at its centre
+        // line, so they share one port.
+        const pitch = count > 1 && !item.staggered ? Math.min(PORT_PITCH, (item.crossExtent - 2 * PORT_INSET) / (count - 1)) : 0;
+        ends.forEach((segment, index) => {
+          const cross = item.cross + (index - (count - 1) / 2) * pitch;
+          if (side === 'out') segment.fromCross = cross;
+          else segment.toCross = cross;
+        });
+      }
+    }
+  }
+}
+
+/**
+ * Gives every bend in a gap a track. Two bends whose cross runs overlap
+ * take different tracks, ordered so an edge that starts nearer the far
+ * side of its run bends nearer its target: then its stubs cross no other
+ * run. Returns the track count.
+ */
+function assignTracks(segments: Segment[]): number {
+  const bent = segments.filter((segment) => Math.abs(segment.fromCross - segment.toCross) > 1e-6);
+  const keyed = bent.map((segment) => ({
+    segment,
+    key: segment.toCross > segment.fromCross ? -segment.fromCross : segment.fromCross,
+    low: Math.min(segment.fromCross, segment.toCross),
+    high: Math.max(segment.fromCross, segment.toCross),
+    track: 0,
+  }));
+  keyed.sort((a, b) => a.key - b.key || a.segment.edge - b.segment.edge);
+  let count = 0;
+  keyed.forEach((entry, index) => {
+    let track = 0;
+    for (let other = 0; other < index; other += 1) {
+      const earlier = keyed[other];
+      if (earlier.low < entry.high && entry.low < earlier.high) track = Math.max(track, earlier.track + 1);
+    }
+    entry.track = track;
+    entry.segment.track = track;
+    count = Math.max(count, track + 1);
+  });
+  return count;
+}
+
+// --- Layout ----------------------------------------------------------------
+
+type MainCross = [number, number];
+
+function simplify(points: MainCross[]): MainCross[] {
+  const out: MainCross[] = [];
+  for (const point of points) {
+    const last = out[out.length - 1];
+    if (last && Math.abs(last[0] - point[0]) < 1e-6 && Math.abs(last[1] - point[1]) < 1e-6) continue;
+    const before = out[out.length - 2];
+    if (
+      last &&
+      before &&
+      ((Math.abs(before[0] - last[0]) < 1e-6 && Math.abs(last[0] - point[0]) < 1e-6) ||
+        (Math.abs(before[1] - last[1]) < 1e-6 && Math.abs(last[1] - point[1]) < 1e-6))
+    ) {
+      out[out.length - 1] = point;
+      continue;
+    }
+    out.push(point);
+  }
+  return out;
 }
 
 export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation, anchorNodeId?: string): DiagramLayout {
-  const geometry = GEOMETRY[orientation];
+  const canvas = CANVAS[orientation];
   const landscape = orientation === 'landscape';
-  const layers = createLayers(data.nodes, data.edges);
-  const lastLayer = layers.length - 1;
-
-  // A label's extent along each axis, in main/cross terms. Text is always
-  // horizontal, so which of its sides runs along the main axis depends on
-  // the orientation.
+  const point = (main: number, cross: number): Point => (landscape ? { x: main, y: cross } : { x: cross, y: main });
+  // A label's extent along each axis. Text is always horizontal, so which
+  // of its sides runs along the main axis depends on the orientation.
   const labelExtent = (text: string) => {
     const backing = labelBacking(text);
-    return landscape
-      ? { main: backing.width, cross: backing.height }
-      : { main: backing.height, cross: backing.width };
+    return landscape ? { main: backing.width, cross: backing.height } : { main: backing.height, cross: backing.width };
   };
 
-  // --- Layers along the main axis -------------------------------------------
-  const placed = new Map<string, Placed>();
-  layers.forEach((layerNodes, layer) => {
-    const usable = geometry.cross - geometry.padCross * 2;
-    const step = layerNodes.length <= 1 ? 0 : usable / (layerNodes.length - 1);
-    layerNodes.forEach((node, index) => {
-      const cross = layerNodes.length === 1 ? geometry.cross / 2 : geometry.padCross + index * step;
-      placed.set(node.id, { node, layer, main: 0, cross });
-    });
-  });
-  const resolved = data.edges.flatMap((edge) => {
-    const from = placed.get(edge.from);
-    const to = placed.get(edge.to);
-    return from && to ? [{ edge, from, to }] : [];
-  });
-  const adjacent = (entry: (typeof resolved)[number]) => entry.to.layer - entry.from.layer === 1;
-
-  let widestGap = MIN_GAP;
-  for (const entry of resolved) {
-    if (adjacent(entry) && entry.edge.label) {
-      widestGap = Math.max(widestGap, labelExtent(entry.edge.label).main + 2 * CLEARANCE);
-    }
-  }
-  const approvedStep = layers.length <= 1 ? 0 : (geometry.main - geometry.padMain * 2) / (layers.length - 1);
-  const step = layers.length <= 1 ? 0 : Math.max(approvedStep, geometry.nodeMain + widestGap);
-  const mainSize = Math.max(geometry.main, geometry.padMain * 2 + step * Math.max(0, lastLayer));
-  const mainOf = (layer: number) => geometry.padMain + layer * step;
-  for (const entry of placed.values()) entry.main = mainOf(entry.layer);
-
-  const outerMargin = (geometry.padMain - geometry.nodeMain / 2) / 2;
-  const channelAfter = (layer: number) =>
-    layer < lastLayer ? mainOf(layer) + step / 2 : mainOf(layer) + geometry.nodeMain / 2 + outerMargin;
-  const channelBefore = (layer: number) =>
-    layer > 0 ? mainOf(layer) - step / 2 : mainOf(layer) - geometry.nodeMain / 2 - outerMargin;
-
-  // --- Lanes outside the node band ------------------------------------------
-  const laneEdges = resolved.filter((entry) => !adjacent(entry));
-  const pitches = laneEdges.map((entry) =>
-    Math.max(MIN_LANE_PITCH, entry.edge.label ? labelExtent(entry.edge.label).cross + 2 * CLEARANCE : 0),
-  );
-  const laneSpace = laneEdges.length ? LANE_GAP + pitches.reduce((sum, pitch) => sum + pitch, 0) : 0;
-  const nodeCrossMin = Math.min(...[...placed.values()].map((entry) => entry.cross - geometry.nodeCross / 2));
-  const crossShift = laneEdges.length ? laneSpace + Math.max(0, -nodeCrossMin) : 0;
-  for (const entry of placed.values()) entry.cross += crossShift;
-  const laneCross = new Map<(typeof resolved)[number], number>();
-  let cursor = nodeCrossMin + crossShift - LANE_GAP;
-  laneEdges.forEach((entry, index) => {
-    laneCross.set(entry, cursor - pitches[index] / 2);
-    cursor -= pitches[index];
-  });
-  const crossSize = geometry.cross + crossShift;
-
-  // --- Mapping main/cross to x/y --------------------------------------------
-  const point = (main: number, cross: number): Point => (landscape ? { x: main, y: cross } : { x: cross, y: main });
-  const box = (main: number, cross: number, mainExtent: number, crossExtent: number): Box =>
-    landscape
-      ? { x: main - mainExtent / 2, y: cross - crossExtent / 2, width: mainExtent, height: crossExtent }
-      : { x: cross - crossExtent / 2, y: main - mainExtent / 2, width: crossExtent, height: mainExtent };
-
-  const nodes: LaidOutNode[] = [...placed.values()].map((entry) => ({
-    node: entry.node,
-    layer: entry.layer,
-    box: box(entry.main, entry.cross, geometry.nodeMain, geometry.nodeCross),
-  }));
-
-  // --- Routes and label anchors ---------------------------------------------
-  const anchors = resolved.map((entry) => {
-    const { from, to } = entry;
-    const exit = from.main + geometry.nodeMain / 2;
-    const entrance = to.main - geometry.nodeMain / 2;
-    if (adjacent(entry)) {
-      const channel = channelAfter(from.layer);
-      return {
-        entry,
-        route: [[exit, from.cross], [channel, from.cross], [channel, to.cross], [entrance, to.cross]],
-        anchor: { main: channel, cross: (from.cross + to.cross) / 2 },
-        // Where along its bend the label may slide if it meets another.
-        slide: [Math.min(from.cross, to.cross), Math.max(from.cross, to.cross)] as const,
-      };
-    }
-    const lane = laneCross.get(entry) ?? 0;
-    const out = channelAfter(from.layer);
-    const back = channelBefore(to.layer);
-    return {
-      entry,
-      route: [[exit, from.cross], [out, from.cross], [out, lane], [back, lane], [back, to.cross], [entrance, to.cross]],
-      anchor: { main: (out + back) / 2, cross: lane },
-      slide: [lane, lane] as const,
-    };
-  });
-
-  // Labels that share a gap can meet when their bends overlap; move the later
-  // one along its own bend until it clears.
-  const placedLabels: Array<{ main: number; cross: number; extent: { main: number; cross: number } }> = [];
-  const labelFor = (item: (typeof anchors)[number]): EdgeLabel | null => {
-    const text = item.entry.edge.label;
-    if (!text) return null;
-    const extent = labelExtent(text);
-    let { cross } = item.anchor;
-    for (const other of [...placedLabels].sort((a, b) => a.cross - b.cross)) {
-      const clash =
-        Math.abs(other.main - item.anchor.main) < (other.extent.main + extent.main) / 2 &&
-        Math.abs(other.cross - cross) < (other.extent.cross + extent.cross) / 2;
-      if (clash) cross = Math.min(item.slide[1], other.cross + (other.extent.cross + extent.cross) / 2);
-    }
-    placedLabels.push({ main: item.anchor.main, cross, extent });
-    const centre = point(item.anchor.main, cross);
-    const backing = labelBacking(text);
-    return {
+  // --- Nodes, layers, dummies ---------------------------------------------
+  const directed = breakCycles(data.nodes, data.edges);
+  const layerOf = assignLayers(data.nodes, directed);
+  const layerCount = data.nodes.length ? Math.max(...layerOf.values()) + 1 : 0;
+  const layers: Item[][] = Array.from({ length: layerCount }, () => []);
+  const itemOf = new Map<string, Item>();
+  const makeItem = (layer: number, node: DiagramNode | null): Item => {
+    const text = node ? measureNode(node, Boolean(node.state === 'done' || node.state === 'blocked' || node.id === anchorNodeId)) : null;
+    const item: Item = {
+      layer,
+      index: layers[layer].length,
+      row: 0,
+      staggered: false,
+      node,
       text,
-      x: centre.x,
-      y: centre.y,
-      box: { x: centre.x - backing.width / 2, y: centre.y - backing.height / 2, ...backing },
+      mainExtent: text ? (landscape ? text.width : text.height) : 0,
+      crossExtent: text ? (landscape ? text.height : text.width) : 0,
+      main: 0,
+      cross: 0,
+      preds: [],
+      succs: [],
     };
+    layers[layer].push(item);
+    return item;
   };
+  for (const node of data.nodes) itemOf.set(node.id, makeItem(layerOf.get(node.id) ?? 0, node));
 
-  const edges: LaidOutEdge[] = anchors.map((item) => ({
-    edge: item.entry.edge,
-    points: item.route.map(([main, cross]) => point(main, cross)),
-    label: labelFor(item),
-  }));
+  const routes: Route[] = [];
+  const segments: Segment[] = [];
+  const directedByEdge = new Map(directed.map((entry) => [entry.edge, entry]));
+  data.edges.forEach((edge) => {
+    const entry = directedByEdge.get(edge);
+    if (!entry) return;
+    const from = itemOf.get(entry.from);
+    const to = itemOf.get(entry.to);
+    if (!from || !to) return;
+    const route: Route = { directed: entry, segments: [] };
+    const routeIndex = routes.length;
+    routes.push(route);
+    let previous = from;
+    for (let layer = from.layer + 1; layer <= to.layer; layer += 1) {
+      const next = layer === to.layer ? to : makeItem(layer, null);
+      const segment: Segment = { edge: routeIndex, from: previous, to: next, fromCross: 0, toCross: 0, track: null };
+      previous.succs.push(next);
+      next.preds.push(previous);
+      route.segments.push(segment);
+      segments.push(segment);
+      previous = next;
+    }
+  });
+
+  // --- Order and settle each layer -----------------------------------------
+  orderLayers(layers);
+  assignCross(layers, canvas.cross - 2 * PAD_CROSS);
+  // A dummy that settled a hair off the line of its segment snaps onto it:
+  // a route is straight or it bends, never a sliver of diagonal.
+  for (const segment of segments) {
+    if (Math.abs(segment.from.cross - segment.to.cross) > EPSILON) continue;
+    if (!segment.to.node) segment.to.cross = segment.from.cross;
+    else if (!segment.from.node) segment.from.cross = segment.to.cross;
+  }
+  for (const segment of segments) {
+    segment.fromCross = segment.from.cross;
+    segment.toCross = segment.to.cross;
+  }
+  assignPorts(layers, segments);
+
+  // --- Gaps: tracks and labels, relative to each gap's centre -------------
+  const gapIndexOf = (route: Route) => route.segments[0].from.layer + Math.floor((route.segments.length - 1) / 2);
+  const gaps = Array.from({ length: Math.max(0, layerCount - 1) }, (_, gap) => {
+    const own = segments.filter((segment) => segment.from.layer === gap);
+    return { tracks: assignTracks(own), size: MIN_GAP, centre: 0 };
+  });
+  const trackOffset = (segment: Segment) => ((segment.track ?? 0) - (gaps[segment.from.layer].tracks - 1) / 2) * TRACK_PITCH;
+
+  // A label sits mid-route in its gap, on its bend's track. Labels that
+  // share a gap can meet: the later one slides along its own bend until it
+  // clears, and when its bend has no room it takes the next row of the
+  // gap instead, which the gap then grows to hold.
+  interface PlacedLabel {
+    text: string;
+    gap: number;
+    mainOffset: number;
+    cross: number;
+    extent: { main: number; cross: number };
+  }
+  const placedLabels: PlacedLabel[] = [];
+  const clashes = (candidate: PlacedLabel) =>
+    placedLabels.some(
+      (other) =>
+        other.gap === candidate.gap &&
+        Math.abs(other.mainOffset - candidate.mainOffset) < (other.extent.main + candidate.extent.main) / 2 &&
+        Math.abs(other.cross - candidate.cross) < (other.extent.cross + candidate.extent.cross) / 2,
+    );
+  const labelOf = new Map<Route, PlacedLabel>();
+  for (const route of routes) {
+    const text = route.directed.edge.label;
+    if (!text) continue;
+    const gap = gapIndexOf(route);
+    const mid = route.segments[gap - route.segments[0].from.layer];
+    const extent = labelExtent(text);
+    const anchorMain = mid.track !== null ? trackOffset(mid) : 0;
+    const anchorCross = (mid.fromCross + mid.toCross) / 2;
+    const slide: [number, number] = [Math.min(mid.fromCross, mid.toCross), Math.max(mid.fromCross, mid.toCross)];
+    const neighbours = placedLabels.filter((other) => other.gap === gap);
+    const crossCandidates = [
+      anchorCross,
+      ...neighbours.flatMap((other) => {
+        // Just past the other label, with a hair of room so the two never
+        // meet even in floating point.
+        const apart = (other.extent.cross + extent.cross) / 2 + 2;
+        return [other.cross + apart, other.cross - apart];
+      }),
+    ]
+      .map((cross) => Math.min(slide[1], Math.max(slide[0], cross)))
+      .sort((a, b) => Math.abs(a - anchorCross) - Math.abs(b - anchorCross) || a - b);
+    let chosen: PlacedLabel | null = null;
+    for (let row = 0; row <= 8 && !chosen; row += 1) {
+      for (const sign of row === 0 ? [1] : [1, -1]) {
+        const mainOffset = anchorMain + sign * row * (extent.main + CLEARANCE);
+        for (const cross of crossCandidates) {
+          const candidate = { text, gap, mainOffset, cross, extent };
+          if (!clashes(candidate)) {
+            chosen = candidate;
+            break;
+          }
+        }
+        if (chosen) break;
+      }
+    }
+    const label = chosen ?? { text, gap, mainOffset: anchorMain, cross: anchorCross, extent };
+    placedLabels.push(label);
+    labelOf.set(route, label);
+  }
+  for (const label of placedLabels) {
+    const gap = gaps[label.gap];
+    gap.size = Math.max(gap.size, 2 * (Math.abs(label.mainOffset) + label.extent.main / 2 + CLEARANCE));
+  }
+  for (const gap of gaps) {
+    gap.size = Math.max(gap.size, (gap.tracks - 1) * TRACK_PITCH + 2 * (TRACK_PITCH + CLEARANCE));
+  }
+
+  // --- The main axis -------------------------------------------------------
+  const rowExtent = (layer: Item[], row: 0 | 1) => Math.max(0, ...layer.filter((item) => item.row === row).map((item) => item.mainExtent));
+  const bands = layers.map((layer) =>
+    layer[0]?.staggered ? rowExtent(layer, 0) + ROW_GAP + rowExtent(layer, 1) : Math.max(0, ...layer.map((item) => item.mainExtent)),
+  );
+  const natural = bands.reduce((sum, band) => sum + band, 0) + gaps.reduce((sum, gap) => sum + gap.size, 0) + 2 * PAD_MAIN;
+  const stretch = gaps.length ? Math.max(0, (canvas.main - natural) / gaps.length) : 0;
+  let cursor = PAD_MAIN;
+  layers.forEach((layer, index) => {
+    const front = rowExtent(layer, 0);
+    for (const item of layer) {
+      item.main = !item.staggered || !item.node ? cursor + bands[index] / 2 : item.row === 0 ? cursor + front / 2 : cursor + front + ROW_GAP + rowExtent(layer, 1) / 2;
+    }
+    cursor += bands[index];
+    if (index < gaps.length) {
+      gaps[index].size += stretch;
+      gaps[index].centre = cursor + gaps[index].size / 2;
+      cursor += gaps[index].size;
+    }
+  });
+  const mainSize = Math.max(canvas.main, layerCount ? cursor + PAD_MAIN : canvas.main);
+  const trackMain = (segment: Segment) => gaps[segment.from.layer].centre + trackOffset(segment);
+
+  // --- Routes ----------------------------------------------------------------
+  const laidOut = routes.map((route) => {
+    const points: MainCross[] = [];
+    route.segments.forEach((segment, index) => {
+      const exit = segment.from.node ? segment.from.main + segment.from.mainExtent / 2 : segment.from.main;
+      const entrance = segment.to.node ? segment.to.main - segment.to.mainExtent / 2 : segment.to.main;
+      if (index === 0) points.push([exit, segment.fromCross]);
+      if (segment.track !== null) {
+        const track = trackMain(segment);
+        points.push([track, segment.fromCross], [track, segment.toCross]);
+      }
+      points.push([entrance, segment.toCross]);
+    });
+    const placed = labelOf.get(route);
+    const label = placed ? { text: placed.text, main: gaps[placed.gap].centre + placed.mainOffset, cross: placed.cross } : null;
+    return { route, points: simplify(points), label };
+  });
+
+  // Self-loops span no layers (and are refused upstream); one is drawn as a
+  // small loop on its node's far side so it is not lost.
+  const loopPoints = (edge: DiagramEdge): MainCross[] => {
+    const item = itemOf.get(edge.from);
+    if (!item) return [];
+    const far = item.main + item.mainExtent / 2;
+    return [
+      [far, item.cross - 10],
+      [far + SELF_LOOP, item.cross - 10],
+      [far + SELF_LOOP, item.cross + 10],
+      [far, item.cross + 10],
+    ];
+  };
+  const loops = data.edges.filter((edge) => edge.from === edge.to && itemOf.has(edge.from)).map((edge) => ({ edge, points: loopPoints(edge) }));
+
+  // --- Bounds and the canvas ----------------------------------------------
+  let crossMin = Infinity;
+  let crossMax = -Infinity;
+  const include = (cross: number, extent = 0) => {
+    crossMin = Math.min(crossMin, cross - extent / 2);
+    crossMax = Math.max(crossMax, cross + extent / 2);
+  };
+  for (const layer of layers) for (const item of layer) if (item.node) include(item.cross, item.crossExtent);
+  for (const { points, label } of laidOut) {
+    for (const [, cross] of points) include(cross);
+    if (label) include(label.cross, labelExtent(label.text).cross);
+  }
+  for (const loop of loops) for (const [, cross] of loop.points) include(cross);
+  if (!Number.isFinite(crossMin)) {
+    crossMin = 0;
+    crossMax = 0;
+  }
+  const crossSize = Math.max(canvas.cross, crossMax - crossMin + 2 * PAD_CROSS);
+  const crossShift = (crossSize - (crossMax - crossMin)) / 2 - crossMin;
+  const place = (main: number, cross: number) => point(main, cross + crossShift);
 
   const width = landscape ? mainSize : crossSize;
   const height = landscape ? crossSize : mainSize;
+
+  const nodes: LaidOutNode[] = data.nodes.flatMap((node) => {
+    const item = itemOf.get(node.id);
+    if (!item?.text) return [];
+    const centre = place(item.main, item.cross);
+    return [
+      {
+        node,
+        layer: item.layer,
+        box: { x: centre.x - item.text.width / 2, y: centre.y - item.text.height / 2, width: item.text.width, height: item.text.height },
+        lines: item.text.lines,
+        ruleY: item.text.ruleY,
+      },
+    ];
+  });
+
+  const laidOutByEdge = new Map<DiagramEdge, LaidOutEdge>();
+  for (const { route, points, label } of laidOut) {
+    const placed = points.map(([main, cross]) => place(main, cross));
+    let edgeLabel: EdgeLabel | null = null;
+    if (label) {
+      const centre = place(label.main, label.cross);
+      const backing = labelBacking(label.text);
+      edgeLabel = {
+        text: label.text,
+        lines: wrapEdgeLabel(label.text),
+        x: centre.x,
+        y: centre.y,
+        box: { x: centre.x - backing.width / 2, y: centre.y - backing.height / 2, ...backing },
+      };
+    }
+    laidOutByEdge.set(route.directed.edge, {
+      edge: route.directed.edge,
+      points: route.directed.reversed ? placed.reverse() : placed,
+      label: edgeLabel,
+      reversed: route.directed.reversed,
+    });
+  }
+  for (const loop of loops) {
+    laidOutByEdge.set(loop.edge, { edge: loop.edge, points: loop.points.map(([main, cross]) => place(main, cross)), label: null, reversed: false });
+  }
+  const edges = data.edges.flatMap((edge) => laidOutByEdge.get(edge) ?? []);
+
   const callout = anchorNodeId ? placeCallout(nodes, edges, anchorNodeId, width, height, orientation) : null;
 
-  return {
-    width,
-    height,
-    nodeWidth: landscape ? geometry.nodeMain : geometry.nodeCross,
-    nodeHeight: landscape ? geometry.nodeCross : geometry.nodeMain,
-    nodes,
-    edges,
-    callout,
-  };
+  return { width, height, nodes, edges, callout };
 }
 
 function boxesOverlap(a: Box, b: Box, clearance = 10): boolean {
@@ -376,66 +971,37 @@ export function placeCallout(
 
   const calloutWidth = 240;
   const calloutHeight = 80;
-  const gap = 20;
+  const { box } = target;
+  const centreX = box.x + box.width / 2;
+  const centreY = box.y + box.height / 2;
+  const clampX = (x: number) => Math.max(10, Math.min(diagramWidth - calloutWidth - 10, x));
+  const clampY = (y: number) => Math.max(10, Math.min(diagramHeight - calloutHeight - 10, y));
 
-  const candidates: Array<{
-    placement: 'above' | 'below' | 'left' | 'right';
-    box: Box;
-    leader: Point[];
-  }> = [
-    {
-      placement: 'above',
-      box: {
-        x: Math.max(10, Math.min(diagramWidth - calloutWidth - 10, target.box.x + (target.box.width - calloutWidth) / 2)),
-        y: target.box.y - gap - calloutHeight,
-        width: calloutWidth,
-        height: calloutHeight,
-      },
-      leader: [
-        { x: target.box.x + target.box.width / 2, y: target.box.y - gap },
-        { x: target.box.x + target.box.width / 2, y: target.box.y },
-      ],
-    },
-    {
-      placement: 'below',
-      box: {
-        x: Math.max(10, Math.min(diagramWidth - calloutWidth - 10, target.box.x + (target.box.width - calloutWidth) / 2)),
-        y: target.box.y + target.box.height + gap,
-        width: calloutWidth,
-        height: calloutHeight,
-      },
-      leader: [
-        { x: target.box.x + target.box.width / 2, y: target.box.y + target.box.height + gap },
-        { x: target.box.x + target.box.width / 2, y: target.box.y + target.box.height },
-      ],
-    },
-    {
-      placement: 'right',
-      box: {
-        x: target.box.x + target.box.width + gap,
-        y: Math.max(10, Math.min(diagramHeight - calloutHeight - 10, target.box.y + (target.box.height - calloutHeight) / 2)),
-        width: calloutWidth,
-        height: calloutHeight,
-      },
-      leader: [
-        { x: target.box.x + target.box.width + gap, y: target.box.y + target.box.height / 2 },
-        { x: target.box.x + target.box.width, y: target.box.y + target.box.height / 2 },
-      ],
-    },
-    {
-      placement: 'left',
-      box: {
-        x: target.box.x - gap - calloutWidth,
-        y: Math.max(10, Math.min(diagramHeight - calloutHeight - 10, target.box.y + (target.box.height - calloutHeight) / 2)),
-        width: calloutWidth,
-        height: calloutHeight,
-      },
-      leader: [
-        { x: target.box.x - gap, y: target.box.y + target.box.height / 2 },
-        { x: target.box.x, y: target.box.y + target.box.height / 2 },
-      ],
-    },
-  ];
+  // Each side of the node is tried centred first, then with the callout
+  // slid to the node's start or end, then again on a longer leader, so a
+  // crowded neighbour on one side does not send the note back to the rail
+  // while another spot is free.
+  type Placement = DiagramCallout['placement'];
+  const candidates: Array<{ placement: Placement; box: Box; leader: Point[] }> = [];
+  for (const [gap, align] of [20, 64, 112].flatMap((distance) => (['centre', 'start', 'end'] as const).map((side) => [distance, side] as const))) {
+    const alongX =
+      align === 'centre' ? clampX(box.x + (box.width - calloutWidth) / 2) : align === 'start' ? box.x : box.x + box.width - calloutWidth;
+    const alongY =
+      align === 'centre' ? clampY(box.y + (box.height - calloutHeight) / 2) : align === 'start' ? box.y : box.y + box.height - calloutHeight;
+    const vertical = (placement: 'above' | 'below') => {
+      const y = placement === 'above' ? box.y - gap - calloutHeight : box.y + box.height + gap;
+      const edge = placement === 'above' ? box.y : box.y + box.height;
+      const outer = placement === 'above' ? y + calloutHeight : y;
+      return { placement, box: { x: alongX, y, width: calloutWidth, height: calloutHeight }, leader: [{ x: centreX, y: outer }, { x: centreX, y: edge }] };
+    };
+    const horizontal = (placement: 'left' | 'right') => {
+      const x = placement === 'left' ? box.x - gap - calloutWidth : box.x + box.width + gap;
+      const edge = placement === 'left' ? box.x : box.x + box.width;
+      const outer = placement === 'left' ? x + calloutWidth : x;
+      return { placement, box: { x, y: alongY, width: calloutWidth, height: calloutHeight }, leader: [{ x: outer, y: centreY }, { x: edge, y: centreY }] };
+    };
+    candidates.push(vertical('above'), vertical('below'), horizontal('right'), horizontal('left'));
+  }
 
   for (const cand of candidates) {
     if (
