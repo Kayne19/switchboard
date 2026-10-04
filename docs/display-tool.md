@@ -91,6 +91,8 @@ Notes have their own display lifecycle. A chat or spoken response does not updat
 - `nodes`: 1 to 100 items. Node IDs must be unique strings (1-128 UTF-16 code units).
 - `edges`: 0 to 200 items. Both `from` and `to` endpoints must exist in `nodes`. Self-loops (`from === to`) and duplicate `(from, to)` pairs are rejected.
 
+The page lays a graph out in layers along the reading axis (left to right in landscape, top to bottom in portrait) and owns every pixel of it: cycles are fine (a feedback edge is drawn back toward its target), a long edge threads between the nodes of the layers it skips, each node's box grows to its text, a crowded layer is staggered into two rows, and every edge ends in an arrowhead. A node's `state` is visible: `done` recedes with a check in its corner tag, `active` is lit, `blocked` is framed in red with a cross, and `todo` is the plain frame.
+
 ## Canonical schema & validation rules
 
 The canonical contract is defined in `docs/display-action-v1.schema.json` and exercised by `apps/frontend/tests/fixtures/display-actions.json`. Both the TypeScript frontend validator (`apps/frontend/src/controller/validation.ts`) and the Rust backend validator (`apps/backend/src/visual_protocol.rs`) enforce identical rules:
