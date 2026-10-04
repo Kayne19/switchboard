@@ -1131,6 +1131,40 @@
       "reason": "unknown field in progress step"
     },
     {
+      "name": "progress_step_missing_label",
+      "action": {
+        "op": "show",
+        "id": "p",
+        "type": "progress",
+        "data": {
+          "label": "L",
+          "steps": [
+            {
+              "state": "done"
+            }
+          ]
+        }
+      },
+      "reason": "progress step.label is required"
+    },
+    {
+      "name": "progress_step_label_too_long",
+      "action": {
+        "op": "show",
+        "id": "p",
+        "type": "progress",
+        "data": {
+          "label": "L",
+          "steps": [
+            {
+              "label": "sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"
+            }
+          ]
+        }
+      },
+      "reason": "progress step.label exceeds 128 UTF-16 code units"
+    },
+    {
       "name": "progress_step_detail_too_long",
       "action": {
         "op": "show",
