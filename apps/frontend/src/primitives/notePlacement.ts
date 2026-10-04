@@ -6,11 +6,18 @@
 // over it. Either way a card sits in a row along the top or the bottom of
 // the layer, and a later card takes the next row in, or the space beside an
 // earlier one, rather than covering it. Among those places each card takes
-// the one that hides the least: never its own point or another note's, then
-// as little as it can of the traces and of the other notes' leaders, and
-// never runs its own leader under another card; then the legend and axis
-// labels, then the grid; and, for a note with a point, as close over it as
-// that allows.
+// the one that hides the least: never its own point or another note's, and
+// never level with its own point, so that its leader leaves by the top or
+// bottom border however short the chart; then as little as it can of the
+// traces and of the other notes' leaders, and never runs its own leader
+// under another card; then the legend and axis labels, then the grid; and,
+// for a note with a point, as close over it as that allows.
+//
+// A card sits level with its point, just beside it with its leader leaving
+// by a side, only where every place above and below it is taken: the card
+// is too tall to clear the point either way inside the layer, or each such
+// place covers another card or another note's point. Beside the point is
+// still better than over it.
 
 export interface Point {
   x: number;
@@ -50,6 +57,7 @@ const COST = {
   ownPoint: 1e9,
   otherPoint: 1e8,
   cardOverlap: 1e7,
+  levelWithPoint: 1e6,
   cardOverlapArea: 100,
   traceLength: 40,
   leaderLength: 80,
@@ -62,6 +70,10 @@ const COST = {
 };
 
 const POINT_CLEARANCE = 6;
+
+// How far from its point a card beside it sits: room for the leader to
+// leave the card, step across and arrive.
+const BESIDE_POINT = 24;
 
 function overlapArea(a: Rect, b: Rect): number {
   const width = Math.min(a.right, b.right) - Math.max(a.left, b.left);
@@ -76,6 +88,12 @@ function covers(rect: Rect, point: Point, clearance = POINT_CLEARANCE): boolean 
     point.y > rect.top - clearance &&
     point.y < rect.bottom + clearance
   );
+}
+
+// Whether a card that does not cover a point sits level with it, so that a
+// leader to it would leave by a side, or run along the top or bottom border.
+function level(rect: Rect, point: Point, clearance = POINT_CLEARANCE): boolean {
+  return point.y > rect.top - clearance && point.y < rect.bottom + clearance;
 }
 
 // The length of the segment from `a` to `b` that falls inside `rect`
@@ -149,7 +167,7 @@ export function placeNotes(notes: NoteToPlace[], field: NoteField, gap = NOTE_GA
 
     const lefts = unique(
       [
-        ...(point ? [point.x - width / 2] : [minLeft, maxLeft]),
+        ...(point ? [point.x - width / 2, point.x - BESIDE_POINT - width, point.x + BESIDE_POINT] : [minLeft, maxLeft]),
         ...[...others, ...labels].flatMap((other) => [other.left - gap - width, other.right + gap]),
       ].map((left) => clamp(left, minLeft, maxLeft)),
     );
@@ -165,6 +183,7 @@ export function placeNotes(notes: NoteToPlace[], field: NoteField, gap = NOTE_GA
         const rect = { left, top, right: left + width, bottom: top + height };
         let cost = 0;
         if (point && covers(rect, point)) cost += COST.ownPoint;
+        else if (point && level(rect, point)) cost += COST.levelWithPoint;
         for (const other of points) {
           if (other.id !== note.id && covers(rect, other.point)) cost += COST.otherPoint;
         }

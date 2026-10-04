@@ -154,6 +154,36 @@ describe('note placement', () => {
     expect(placed.get('a')!.bottom).toBe(600);
   });
 
+  // A short chart, as under a stepped plan: the card is too tall to sit
+  // above its point, and the bottom row would hide the trace. A place level
+  // with the point hides nothing, but its leader would leave by a side.
+  const shortField = { area: box(0, 0, 1000, 300), traces: [[{ x: 0, y: 150 }, { x: 1000, y: 240 }]] };
+  const shortNotes: NoteToPlace[] = [
+    { id: 'general', width: 250, height: 50 },
+    { id: 'pointed', width: 400, height: 70, point: { x: 900, y: 60 } },
+  ];
+
+  it('keeps a note above or below the point it names on a short chart, so its leader leaves by the top or bottom border', () => {
+    const card = placeNotes(shortNotes, shortField).get('pointed')!;
+    const point = shortNotes[1].point!;
+    const leader = routeLeader(card, point);
+    expect(leader.length).toBeGreaterThan(1);
+    expect([card.top, card.bottom]).toContain(leader[0].y);
+    const [out] = segments(leader);
+    expect(out.dx).toBe(0);
+    expect(out.dy).not.toBe(0);
+  });
+
+  it('sits beside its point, not over it, only where it cannot clear the point above or below', () => {
+    // 60 tall in a field 100 tall, its point at the middle: no place above or below.
+    const point = { x: 500, y: 50 };
+    const card = placeNotes([{ id: 'a', width: 400, height: 60, point }], { area: box(0, 0, 1000, 100) }).get('a')!;
+    expect(inside(point, card)).toBe(false);
+    const leader = routeLeader(card, point);
+    expect([card.left, card.right]).toContain(leader[0].x);
+    expect(leader[leader.length - 1]).toEqual(point);
+  });
+
   it('steps clear of an axis label rather than cover it, staying near its point', () => {
     const label = box(0, 60, 70, 400);
     const placed = placeNotes([{ id: 'a', width: 300, height: 80, point: { x: 120, y: 300 } }], { area, labels: [label] });

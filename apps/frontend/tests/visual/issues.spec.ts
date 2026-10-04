@@ -176,12 +176,37 @@ test('explicit anchored note survives later chat messages', async ({ page }) => 
 
 // #49 and #26: every note on a chart is shown over the plot, clear of the
 // others, and the chart keeps its size for them; a note that names a point
-// runs its leader out of its card's border.
-for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }, { width: 2560, height: 1080 }]) {
-  test(`every note on a chart shows over it without covering another at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+// runs its leader out of its card's border. A stepped plan under the chart
+// leaves it short, and the rule holds there too: a card that could sit
+// level with its point, its leader leaving by a side, sits above or below.
+const stepsUnderTheChart = [
+  { label: 'WARMUP', state: 'done', detail: 'EPOCHS 1-5 / LR RAMP' },
+  { label: 'STAGE 1 / FULL RES', state: 'done', detail: 'EPOCHS 6-30' },
+  { label: 'LR TRANSITION', state: 'done', detail: 'EPOCH 31 / COSINE DECAY' },
+  { label: 'STAGE 2 / FINE', state: 'active', detail: 'EPOCHS 32-70 / VAL DIVERGING' },
+  { label: 'EVAL / HELD-OUT SEEDS', detail: 'EPOCHS 71-80' },
+  { label: 'EXPORT CHECKPOINT' },
+];
+const chartNoteCases = ['', ' on a short chart'].flatMap((chart) =>
+  [{ width: 1440, height: 900 }, { width: 390, height: 844 }, { width: 2560, height: 1080 }].map((viewport) => ({ chart, viewport })),
+);
+for (const { chart, viewport } of chartNoteCases) {
+  test(`every note on a chart shows over it without covering another${chart} at ${viewport.width}x${viewport.height}`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.goto('/?scene=training&chrome=0');
     await expect(page.locator('.chart-note')).toHaveCount(1);
+    if (chart) {
+      await page.evaluate((steps) => {
+        const run = window.SwitchboardController?.run;
+        if (!run) throw new Error('controller unavailable');
+        run([{
+          op: 'show', id: 'progress', type: 'progress',
+          data: { label: 'EPOCH 41 / 80', detail: 'ACTIVE / OPTIMIZER STEP 18442', value: 51.25, text: '51.25% COMPLETE', steps },
+        }]);
+      }, stepsUnderTheChart);
+      await expect(page.locator('.progress-step[data-state]')).toHaveCount(stepsUnderTheChart.length);
+      await page.waitForTimeout(400);
+    }
     const chartBox = async () => page.locator('.chart-object[data-chart-id="loss"] .chart-primitive > svg').evaluate((svg) => {
       const box = svg.getBoundingClientRect();
       return { width: box.width, height: box.height };
