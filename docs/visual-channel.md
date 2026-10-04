@@ -27,7 +27,7 @@ agent sends semantics. See `docs/display-tool.md` for the full action protocol.
 
 | type | use |
 | --- | --- |
-| `diagram` | relationships and structure — structured graph data (`mode: "graph"`, nodes and edges with semantic states) — or an exchange over time (`mode: "sequence"`, actors across the top and messages between them in order, each a `call`, `return` or `async`, one of them `active`) |
+| `diagram` | relationships and structure — structured graph data (`mode: "graph"`, nodes and edges with semantic states) — or an exchange over time (`mode: "sequence"`, actors across the top and messages between them in order, each a `call`, `return` or `async`, any of them marked `active`) |
 | `chart` | quantitative series — `kind` is `line` (default), `bar`, `area` or `scatter`, over a numeric x or categorical `labels` |
 | `metric` | a single tracked value, with the way it moved (`trend` arrow, `delta` text) when that matters |
 | `progress` | a bar, and under it the plan it measures: `steps` with a state each (`done`, `active`, `todo`, `blocked`) and a detail |
@@ -43,8 +43,8 @@ A sequence diagram is the same `diagram` type under `mode: "sequence"`: the
 agent names the actors and the messages in order, and the page sizes the
 columns to the labels, wraps a long message over its span, and scales the
 drawing to the stage as the exchange grows. A self-message draws as a loop;
-a `return` is dashed; an `async` message has an open arrowhead; the `active`
-message glows like the active edge of a graph.
+a `return` is dashed; an `async` message has an open arrowhead; an `active`
+message glows like an active edge of a graph.
 
 A chart's `kind` says how its series are drawn, and the page decides the rest
 from geometry. Categorical `labels` replace the numeric x ticks; when a row of

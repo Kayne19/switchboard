@@ -99,6 +99,23 @@ describe('sequence rendering', () => {
     render(<SequencePrimitive data={data} id="seq" note={{ segments: [{ text: 'x' }], anchor: { target: 'other', node: 'pbx' } }} />);
     expect(host.querySelector('.sequence-actor__body--anchored')).toBeNull();
   });
+
+  it('gives an anchored actor its glow on every side of the frame', () => {
+    render(<SequencePrimitive data={data} id="seq" note={{ segments: [{ text: 'x' }], anchor: { target: 'seq', node: 'pbx' } }} />);
+    const frame = host.querySelector('.sequence-actor__body--anchored .sequence-actor__frame');
+    const filterId = /^url\(#(.+)\)$/.exec(frame?.getAttribute('filter') ?? '')?.[1];
+    const filter = host.querySelector(`filter[id="${filterId}"]`);
+    expect(filter).not.toBeNull();
+    // The frame is drawn inside its header's translated group. A region in
+    // user space from (0, 0) would begin at the frame's own corner and cut
+    // the glow, and half the stroke, off its top and left edges; the region
+    // has to be the frame's box with room around it.
+    expect(filter?.getAttribute('filterUnits') ?? 'objectBoundingBox').toBe('objectBoundingBox');
+    expect(parseFloat(filter?.getAttribute('x') ?? '0')).toBeLessThan(0);
+    expect(parseFloat(filter?.getAttribute('y') ?? '0')).toBeLessThan(0);
+    expect(parseFloat(filter?.getAttribute('width') ?? '100')).toBeGreaterThan(100);
+    expect(parseFloat(filter?.getAttribute('height') ?? '100')).toBeGreaterThan(100);
+  });
 });
 
 describe('DiagramObject', () => {
