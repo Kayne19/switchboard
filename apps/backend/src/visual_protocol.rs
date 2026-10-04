@@ -853,7 +853,8 @@ fn validate_image_data(data: &Map<String, Value>) -> Result<Value, String> {
     if utf16_len(alt) > 256 {
         return Err("image.alt exceeds maximum length of 256 UTF-16 code units".into());
     }
-    if alt.trim().is_empty() {
+    // Unicode White_Space only; the browser's `isBlank` uses the same set.
+    if alt.chars().all(char::is_whitespace) {
         return Err("image.alt must not be empty".into());
     }
 

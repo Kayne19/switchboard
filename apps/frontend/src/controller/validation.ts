@@ -622,6 +622,17 @@ export function imageSignatureMatches(format: ImageFormat, bytes: Uint8Array): b
   }
 }
 
+/**
+ * Unicode White_Space, the set Rust's `char::is_whitespace` uses. Not
+ * `String.prototype.trim`: that also strips U+FEFF and keeps U+0085, so the
+ * two validators would disagree on what a blank alt is.
+ */
+const NOT_WHITE_SPACE = /[^\t\n\u000b\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/u;
+
+function isBlank(text: string): boolean {
+  return !NOT_WHITE_SPACE.test(text);
+}
+
 // Raster only: the format names the bytes' encoding, and the bytes must
 // carry that encoding's signature, so `format` can never label markup (an
 // SVG) or anything else as an image. The page builds the only `img` source
@@ -656,7 +667,7 @@ function validateImageData(data: Record<string, unknown>): { ok: true; data: Ima
 
   const altErr = checkString(data.alt, 256, 'image.alt');
   if (altErr) return { ok: false, error: altErr };
-  if ((data.alt as string).trim().length === 0) return { ok: false, error: 'image.alt must not be empty' };
+  if (isBlank(data.alt as string)) return { ok: false, error: 'image.alt must not be empty' };
 
   const result: ImageData = { format, bytes: data.bytes, alt: data.alt as string };
   for (const k of ['title', 'subtitle', 'context'] as const) {
