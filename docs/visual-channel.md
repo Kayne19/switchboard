@@ -71,6 +71,33 @@ the whole stage — one action per call. The old bespoke `plan`/`timeline`/`diff
 renderers are gone; `progress`, `document`, and `code` are the general primitives
 that subsume them.
 
+Any primary can have visuals beside it, so the agent can show a diagram with
+the table it summarises, a chart with the image it came from, or code with a
+review document. The primary takes the main slot, drawn the way its type is
+drawn alone. Every other visual on stage (`chart`, `diagram`, `document`,
+`code`, `table`, `image`) is drawn once:
+
+- A chart beside a chart primary shares the chart row with it; a `compare`
+  chart is labelled as the comparison. This is the one scene that has a place
+  for a visual beside its primary.
+- Every other visual takes a framed cell in the **aux row** under the primary:
+  `compare` objects first, then `secondary`, then `ambient` (the rail has no
+  room for a visual), each in the order shown.
+- Metrics, notes and progress stay in the rail beside the content. Under a
+  primary that is itself a metric, a progress or a note, the aux row also
+  holds the progress objects and every `compare` object.
+
+The aux row takes what its cells need, up to two fifths of the main column, so
+the primary keeps the larger share. Each visual keeps a readable floor in its
+cell (the head of a table and its first rows, a chart's plot, a figure and its
+caption). When the row has no room for every cell at its floor, it scrolls
+inside itself; it never shrinks a visual to nothing. A figure in a short cell is
+drawn smaller, never cropped, and a table in a narrow cell scrolls sideways
+rather than breaking a word. The cells sit side by side when the column is
+wide and stack when it is narrow, from the column's own width. A visual that
+arrives beside the primary resizes the primary in place; it does not redraw
+it.
+
 Notes are durable objects rather than a mirror of the latest chat response.
 They change only through an explicit `show` update to their stable id, `hide`,
 or `clear`. A note may carry a semantic `anchor` naming another object's id and
