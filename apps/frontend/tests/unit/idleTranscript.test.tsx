@@ -224,7 +224,7 @@ describe('the transcript toggle on the idle stage', () => {
     expect(document.activeElement).toBe(input());
   });
 
-  it.each(['training', 'architecture', 'email', 'code'] as const)('never appears on the %s scene', (fixture) => {
+  it.each(['training', 'architecture', 'email', 'code', 'results'] as const)('never appears on the %s scene', (fixture) => {
     render(<SceneRenderer />);
     act(() => controller.loadFixture(fixture));
     const scene = host.querySelector('.scene--content');

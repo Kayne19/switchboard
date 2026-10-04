@@ -23,6 +23,7 @@ const scenes: Array<[SceneKind, ControllerAction[]]> = [
   ['architecture', fixtures.architecture],
   ['document', fixtures.email],
   ['code', fixtures.code],
+  ['table', fixtures.results],
   ['composed', composed],
 ];
 

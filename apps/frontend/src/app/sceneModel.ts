@@ -12,6 +12,7 @@ import type {
   SceneObject,
   SceneObjectType,
   ScreenStateReport,
+  TableData,
 } from '../controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
 
@@ -152,6 +153,7 @@ export type SceneKind =
   | 'architecture'
   | 'document'
   | 'code'
+  | 'table'
   | 'composed';
 
 export function sceneKind(state: ControllerState): SceneKind {
@@ -174,6 +176,7 @@ export function sceneKind(state: ControllerState): SceneKind {
   if (primary.type === 'diagram') return 'architecture';
   if (primary.type === 'document') return 'document';
   if (primary.type === 'code') return 'code';
+  if (primary.type === 'table') return 'table';
   return 'composed';
 }
 
@@ -217,6 +220,7 @@ export const cast = {
   diagram: (object: SceneObject) => object as SceneObject<DiagramData>,
   document: (object: SceneObject) => object as SceneObject<DocumentData>,
   code: (object: SceneObject) => object as SceneObject<CodeData>,
+  table: (object: SceneObject) => object as SceneObject<TableData>,
   message: (object: SceneObject) => object as SceneObject<MessageData>,
   note: (object: SceneObject) => object as SceneObject<NoteData>,
 };

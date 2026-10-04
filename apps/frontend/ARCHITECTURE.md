@@ -51,6 +51,7 @@ The renderer does not load bespoke route pages. It derives a broad composition f
 | diagram | architecture and flow |
 | document | email and document reader |
 | code | source and diff analysis |
+| table | ruled rows of named columns |
 
 Additional metrics, progress, notes, comparisons, and speech modify that composition incrementally.
 

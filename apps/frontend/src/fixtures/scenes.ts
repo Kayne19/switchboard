@@ -122,6 +122,31 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
       { text: ' The rest of the function is transport plumbing.' },
     ] } },
   ],
+  results: [
+    { op: 'show', id: 'test-matrix', type: 'table', role: 'primary', data: {
+      title: 'TESTS / MATRIX', subtitle: 'CI RUN 4182 / MASTER', context: 'TEST RESULTS', caption: 'RESULTS / 5 SUITES',
+      columns: [
+        { label: 'SUITE' },
+        { label: 'PASSED', semantic: 'green' },
+        { label: 'FAILED', semantic: 'red' },
+        { label: 'SKIPPED', semantic: 'muted' },
+        { label: 'DURATION' },
+      ],
+      rows: [
+        ['backend / unit', 442, 0, 3, '38.4s'],
+        ['backend / pbx', 61, 0, 0, '12.1s'],
+        ['frontend / unit', 318, { text: '2', semantic: 'red', bold: true }, 0, '9.7s'],
+        ['frontend / visual', 24, 0, { text: '6', semantic: 'muted' }, '1m 48s'],
+        ['skill', 25, 0, 0, '0.1s'],
+      ],
+      highlight: [2],
+    } },
+    { op: 'show', id: 'results-note', type: 'note', data: { tag: 'DAMOCLES / FAILURES', segments: [
+      { text: 'Two frontend unit failures, both in ' },
+      { text: 'notePlacement.test.ts', accent: true, bold: true },
+      { text: ': the leader now clears the trace by two more pixels than the test expects. Nothing else moved.' },
+    ] } },
+  ],
 };
 
 export const previousRunAction: ControllerAction = {
