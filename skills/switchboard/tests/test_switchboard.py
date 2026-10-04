@@ -310,6 +310,7 @@ class ProgrammingErrorTest(ModuleTestCase):
             (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "diagram", "data": {"mode": "graph", "nodes": []}}),
             (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "diagram", "data": {"mode": "sequence", "actors": []}}),
             (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "diagram", "data": {"mode": "timeline", "actors": [], "messages": []}}),
+            (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "diagram", "data": {"mode": ["graph"], "nodes": [], "edges": []}}),
             (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "note", "role": "hero", "data": {"segments": []}}),
             (TypeError, switchboard.display, ("show",), {}),
             (TypeError, switchboard.display, (), {"op": "show", "id": "x", "type": "chart", "data": {"series": [object()]}}),

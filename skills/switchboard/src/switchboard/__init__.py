@@ -247,7 +247,7 @@ def _check_display_action(action):
     required, hint = _SHAPES[kind]
     if kind == "diagram" and "mode" in data:
         mode = data["mode"]
-        if mode not in _DIAGRAM_MODES:
+        if not isinstance(mode, str) or mode not in _DIAGRAM_MODES:
             raise ValueError(f"unknown diagram mode {mode!r}; use one of: {', '.join(_DIAGRAM_MODES)}")
         required += _DIAGRAM_MODES[mode]
     missing = [key for key in required if key not in data]
