@@ -32,7 +32,7 @@ type DisplayAction =
 ```
 
 - **ops** (one per call): `show | focus | hide | clear | say`. There is **no** `listen` on this public channel (`listen` is internal-only).
-- **content types** (for `show`): `chart | metric | progress | diagram | document | code | note`. `message` is a runtime-owned transcript, **not** an agent display type.
+- **content types** (for `show`): `chart | metric | progress | diagram | document | code | note | image`. `message` is a runtime-owned transcript, **not** an agent display type.
 - **roles** (composition slot): `primary | compare | secondary | ambient`.
 - **`id`**: agent-owned and stable across updates (re-sending the same `id` replaces the object in place). Agent IDs must not begin with the reserved `__runtime/` namespace.
 - **`target`**: the object id to anchor a `say` action (must not begin with `__runtime/`).
@@ -79,6 +79,7 @@ type DisplayAction =
 | `document` | `{ subject, paragraphs: string[], kind?: "email"\|"document", context?, caption?, source?, from?, timestamp? }` | document reader; each paragraph is read as Markdown (see below) |
 | `code` | `{ source: { text, language?, highlight? }, title?, file?, context?, caption? }` | syntax/diff view |
 | `note` | `{ segments: [{ text, accent?, bold?, semantic? }], tag?, caption?, anchor?: { target, x?, series?, node? } }` | persistent annotation |
+| `image` | `{ format: "png"\|"jpeg"\|"webp", bytes: <standard base64>, alt, title?, subtitle?, context?, caption? }` | raster figure, contained, with its alt text and decoded size |
 
 Each document paragraph is read as the same small Markdown subset the conversation surfaces use (`apps/frontend/src/primitives/markdown.ts`): `#` headings (shown as a bold line), `**bold**`, `*italic*`, `` `inline code` ``, `-` and `1.` lists, and fenced code blocks. A newline inside a paragraph is a line break; a blank line starts a new paragraph. It is never HTML: markup stays literal text, and a link shows only its label.
 
@@ -91,11 +92,19 @@ Notes have their own display lifecycle. A chat or spoken response does not updat
 - `nodes`: 1 to 100 items. Node IDs must be unique strings (1-128 UTF-16 code units).
 - `edges`: 0 to 200 items. Both `from` and `to` endpoints must exist in `nodes`. Self-loops (`from === to`) and duplicate `(from, to)` pairs are rejected.
 
+### Image v1 rules
+- `format` is `png`, `jpeg` or `webp`. `svg` is refused: SVG is markup and can carry script, and an image here is raster bytes only.
+- `bytes` is strict standard base64 (`A-Za-z0-9+/`, `=` padding, length a multiple of 4, no whitespace, no `data:` prefix) and decodes to at most **8 MiB**. Both validators decode its first 12 bytes and check that they carry `format`'s file signature (PNG `89 50 4E 47 0D 0A 1A 0A`, JPEG `FF D8 FF`, WebP `RIFF....WEBP`).
+- `alt` is required (non-blank, <= 256). It is the image's alt text and its title when `title` is absent (in the scene heading and in `/view`).
+- No `width`, `height`, zoom or crop: the page reads the intrinsic size when the bytes decode and fits the figure to its slot.
+- The page builds `data:image/<format>;base64,<bytes>` itself from the validated fields; no other `img` source exists, and nothing is fetched.
+- The skill module takes a file or raw bytes: `display(op="show", id="fig", type="image", data={"path": "/tmp/fig.png", "alt": "..."})` (or `data={"bytes": <bytes>, "alt": ...}`) sniffs the format, base64-encodes the bytes and sends `format`/`bytes`; the path is never sent.
+
 ## Canonical schema & validation rules
 
 The canonical contract is defined in `docs/display-action-v1.schema.json` and exercised by `apps/frontend/tests/fixtures/display-actions.json`. Both the TypeScript frontend validator (`apps/frontend/src/controller/validation.ts`) and the Rust backend validator (`apps/backend/src/visual_protocol.rs`) enforce identical rules:
 
-- **Action size**: Serialized action JSON must not exceed **48,000 UTF-8 bytes** (HTTP request body <= 64 KiB).
+- **Action size**: Serialized action JSON must not exceed **48,000 UTF-8 bytes**, except a `show` of type `image`, whose cap is **12 MiB** (`MAX_IMAGE_ACTION_BYTES`; its raw bytes are capped at 8 MiB). A display action reaches the service as a module call over the host link, whose frames are at most 16 MiB; the host agent's skill socket accepts request lines up to the same 16 MiB.
 - **String caps (UTF-16 code units)**: `id` <= 128; `text` <= 50,000; short labels/tags <= 128; titles/details <= 256. Astral Unicode characters (such as emojis) count as 2 UTF-16 code units.
 - **Numbers**: All numbers must be finite; `NaN`, `Infinity`, and `-Infinity` are rejected.
 - **Layout rejection**: Recursive rejection of `layout`, `style`, `css`, `className`, `width`, `height`, `left`, `right`, `top`, `bottom`.
@@ -103,6 +112,6 @@ The canonical contract is defined in `docs/display-action-v1.schema.json` and ex
 - **Safety**: Raw HTML/JS markup (`<script`, `<iframe`, `javascript:`, etc.) and external resource URLs (`http://`, `https://`, `//`) are rejected.
 - **Unknown fields**: All schema branches specify `additionalProperties: false`; unexpected fields are rejected.
 
-`docs/display-action-v1.schema.json` encodes as much of this as declarative JSON Schema can express, and `apps/frontend/tests/unit/schema.test.ts` holds it to `display-actions.json` fixture-by-fixture so it cannot drift from the two validators unnoticed. Three things it cannot express, so it does not attempt to: diagram invariants that span sibling array items (duplicate node IDs, an edge endpoint naming no node, a self-loop, a duplicate edge pair — each a relationship between items, not one item's shape); the 48,000-byte action-size cap, which bounds the serialized envelope on the wire rather than the parsed instance; and the UTF-16-code-unit string caps above for content containing astral characters, since JSON Schema's `maxLength` counts Unicode code points. Those stay enforced only by `validation.ts` and `visual_protocol.rs`; the test names each as a documented, asserted exception (`KNOWN_SCHEMA_GAPS`) rather than silently passing.
+`docs/display-action-v1.schema.json` encodes as much of this as declarative JSON Schema can express, and `apps/frontend/tests/unit/schema.test.ts` holds it to `display-actions.json` fixture-by-fixture so it cannot drift from the two validators unnoticed. Four things it cannot express, so it does not attempt to: diagram invariants that span sibling array items (duplicate node IDs, an edge endpoint naming no node, a self-loop, a duplicate edge pair — each a relationship between items, not one item's shape); the 48,000-byte action-size cap, which bounds the serialized envelope on the wire rather than the parsed instance; the UTF-16-code-unit string caps above for content containing astral characters, since JSON Schema's `maxLength` counts Unicode code points; and an image's format/signature match, a cross-field check over decoded bytes (the schema pins the base64 alphabet, padding and length only). Those stay enforced only by `validation.ts` and `visual_protocol.rs`; the test names each as a documented, asserted exception (`KNOWN_SCHEMA_GAPS`) rather than silently passing.
 
 Rejections return `{"delivered":false,"detail":"<reason>"}` and are neither stored in display state nor broadcast.

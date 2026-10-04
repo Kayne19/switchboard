@@ -78,6 +78,12 @@ Types and their `data` shapes (each type takes only its own shape):
   headings, bold, italic, inline code, lists, fenced code; no HTML)
 - code: `{source: {text}}`
 - note: `{segments: [{text}]}`
+- image: `{path: "/tmp/fig.png", alt}` or `{bytes: <raw bytes>, alt}`, for a
+  picture you already have (a saved plot, a screenshot). The module reads the
+  file, checks it is a PNG, JPEG or WebP (not SVG) of at most 8 MiB, and
+  sends it inline; the path is never sent and no URL is ever fetched. `alt`
+  says what the picture shows; add `title` for the heading. Prefer a
+  structured type when it can say the same thing.
 
 Every `data` shape also takes an optional `caption`, a short supporting label.
 Compose a scene with roles: `primary`, `compare`, `secondary`, `ambient`.
