@@ -77,4 +77,18 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
     expect(geometry.row.bottom).toBeLessThanOrEqual(geometry.main!.bottom + 8);
     if (viewport.width < viewport.height) expect(geometry.row.scrollHeight).toBeGreaterThan(geometry.row.clientHeight);
   });
+
+  test(`an image in a crowded aux row is contained, not cropped / ${viewport.width}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    // The mix that cropped the picture to its top band at 390x844.
+    await show(page, crowded.filter((action) => ['latency', 'figure', 'trend', 'deploy'].includes(action.id)));
+    await expect(page.locator('.composed-aux [data-testid="image"]')).toHaveAttribute('data-state', 'ready');
+    const image = (await auxGeometry(page)).cells.find((cell) => cell.kind === 'composed-aux-object--image')!;
+    // The picture is fitted (object-fit: contain) to its box; the box and
+    // the caption under it lie inside the cell.
+    expect(image.image!.height).toBeGreaterThan(0);
+    expect(image.image!.top).toBeGreaterThanOrEqual(image.cell.top);
+    expect(image.image!.bottom).toBeLessThanOrEqual(image.cell.bottom);
+    expect(image.caption!.bottom).toBeLessThanOrEqual(image.cell.bottom);
+  });
 }

@@ -93,4 +93,9 @@ describe('the aux row', () => {
     // Alone, the main slot fills the column: no empty aux row is reserved.
     expect(topLevel('.composed-main', 'grid-template-rows')).toBe('minmax(0, 1fr)');
   });
+
+  it('contains an image in its cell instead of cropping it', () => {
+    expect(topLevel('.composed-aux-object--image .image-primitive__field', 'height')).toBe('100%');
+    expect(topLevel('.image-primitive__img', 'object-fit')).toBe('contain');
+  });
 });

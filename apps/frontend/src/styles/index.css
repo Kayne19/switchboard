@@ -1896,10 +1896,13 @@ button {
   color: rgba(var(--orange-rgb), 0.62);
 }
 /* The aux row is as tall as its content, and the picture is out of flow,
-   so there the field takes the figure's decoded proportions, held to a
-   share of the stage's height. */
+   so there the field asks for the figure's decoded proportions, held to a
+   share of the stage's height. A row given less than that still bounds the
+   field (the height resolves once the row is sized), so the picture is
+   contained in a smaller field rather than cropped by its cell. */
 .composed-aux-object--image .image-primitive__field {
   width: 100%;
+  height: 100%;
   aspect-ratio: var(--image-aspect, 16 / 10);
   max-height: 34cqh;
 }
