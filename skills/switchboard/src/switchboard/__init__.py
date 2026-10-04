@@ -244,7 +244,8 @@ def _image_data(data):
     path = data.get("path")
     raw = data.get("bytes")
     if path is None and not isinstance(raw, (bytes, bytearray, memoryview)):
-        return data
+        # Already the wire shape; an explicit `path=None` is no path at all.
+        return {key: value for key, value in data.items() if key != "path"}
     if path is not None and raw is not None:
         raise ValueError("image data takes a path or bytes, not both")
     if path is not None:

@@ -371,6 +371,8 @@ class ImageTest(ModuleTestCase):
         data = {"format": "png", "bytes": base64.b64encode(PNG_1X1).decode(), "alt": "a"}
         self.run_call(switchboard.display, op="show", id="fig", type="image", data=data)
         self.assertEqual(self.sent_data(host), data)
+        self.run_call(switchboard.display, op="show", id="fig", type="image", data={**data, "path": None})
+        self.assertEqual(self.sent_data(host), data, "a path of None is not sent")
 
     def test_what_cannot_be_shown_raises_before_anything_is_sent(self):
         host = self.host()
