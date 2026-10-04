@@ -994,6 +994,91 @@ button {
   color: rgba(232, 230, 223, 0.4);
   white-space: nowrap;
 }
+/* The plan under the bar: one line per step, a square glyph for its state,
+   its detail in the muted face after it. The list is the frame's scroll
+   region, so it scrolls inside the frame only once it outgrows the room
+   the slot gives it (the same viewport treatment as a document body or a
+   code pane) and never crosses the frame geometry. */
+.progress-primitive--stepped {
+  /* The bar's row keeps its own height; a slot taller than the two rows
+     leaves the room under the list instead of opening a gap between them,
+     and the wide column gap of the bar row is not the gap to the list. */
+  align-content: start;
+  row-gap: 0;
+}
+.progress-primitive__steps {
+  grid-column: 1 / -1;
+  /* Stretched to its row, not centred in it: a row bounded by the slot
+     (the primary cell) then bounds the list, and the list scrolls. */
+  align-self: stretch;
+  min-width: 0;
+  min-height: 0;
+  margin: clamp(4px, 0.8cqh, 10px) 0 0;
+  padding: clamp(6px, 0.9cqh, 10px) clamp(6px, 0.6cqw, 10px) 0 0;
+  border-top: 1px solid rgba(232, 230, 223, 0.13);
+  list-style: none;
+  display: grid;
+  gap: clamp(3px, 0.6cqh, 7px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
+}
+.progress-step {
+  display: grid;
+  grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: clamp(8px, 0.8cqw, 14px);
+  min-width: 0;
+  color: rgba(232, 230, 223, 0.5);
+  line-height: 1.5;
+}
+.progress-step__glyph {
+  width: 0.95em;
+  height: 0.95em;
+  align-self: center;
+}
+.progress-step__label,
+.progress-step__detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.progress-step--done {
+  color: rgba(232, 230, 223, 0.62);
+}
+.progress-step--done .progress-step__glyph {
+  color: var(--green);
+}
+.progress-step--active {
+  color: var(--paper);
+}
+.progress-step--active .progress-step__glyph {
+  color: var(--orange);
+}
+.progress-step--todo .progress-step__glyph {
+  color: rgba(232, 230, 223, 0.4);
+}
+.progress-step--blocked {
+  color: var(--paper);
+}
+.progress-step--blocked .progress-step__glyph,
+.progress-step--blocked .progress-step__label {
+  color: var(--red);
+}
+/* The steps a compact slot leaves out, counted on one line in their place. */
+.progress-step--elided {
+  grid-template-columns: 1fr;
+  padding-left: calc(0.95em + clamp(6px, 0.7cqw, 12px));
+  color: rgba(232, 230, 223, 0.35);
+}
+/* The training page's progress sits under its charts in an auto row: the
+   list is capped so a long plan scrolls here rather than squeezing the
+   chart out. */
+.training-progress .progress-primitive__steps {
+  max-height: clamp(72px, 20cqh, 220px);
+}
 .metrics {
   width: 100%;
   align-self: start;
@@ -1027,6 +1112,29 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* Which way the value moved, beside it in the value's own colour: a small
+   arrow and the delta as the agent worded it, sized against the value so
+   they read the same in a rail row and on a primary card. */
+.metric-row__trend {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35em;
+  margin-left: 0.55em;
+  font-size: clamp(9px, 0.46em, 30px);
+  letter-spacing: 0.08em;
+  vertical-align: baseline;
+  opacity: 0.86;
+}
+.metric-row__arrow {
+  width: 1em;
+  height: 1em;
+  align-self: center;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
 }
 
 /* Generic composed workspaces */
@@ -1742,6 +1850,18 @@ button {
 .focus-layer__content--progress .progress-primitive {
   margin-top: 5cqh;
 }
+/* Focus lists every step; a plan longer than the screen scrolls inside. */
+.focus-layer__content--progress .progress-primitive__steps {
+  max-height: 52vh;
+  font-size: clamp(11px, 0.85cqw, 15px);
+}
+/* A progress holding the primary slot fills it: the bar at the top, the
+   list taking the rest and scrolling inside it. */
+.composed-primary-object--progress .progress-primitive {
+  height: 100%;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: start;
+}
 
 /* Development controls */
 .dev-toggle {
@@ -2069,6 +2189,11 @@ button {
   .progress-primitive__text {
     grid-column: 2;
     justify-self: end;
+  }
+  /* The main row is a fixed share of a portrait stage: the list takes
+     less of it so the chart above keeps its height. */
+  .training-progress .progress-primitive__steps {
+    max-height: clamp(56px, 12cqh, 140px);
   }
   .metric-row {
     min-height: 0;

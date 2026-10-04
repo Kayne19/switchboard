@@ -72,6 +72,36 @@ describe('MetricsPrimitive', () => {
     expect(host.textContent).toBe('LATENCY182 ms');
   });
 
+  it('draws a trend arrow and the delta beside the value, in the value\'s colour', () => {
+    const moved: SceneObject<MetricData> = {
+      ...metric1,
+      data: { label: 'P95', value: '182 ms', semantic: 'cyan', trend: 'down', delta: '-12 ms' },
+    };
+    const host = renderMetrics([moved], 'rail');
+    const value = host.querySelector('.metric-row__value')!;
+    expect(value.classList.contains('semantic-cyan')).toBe(true);
+    const trend = value.querySelector('[data-testid="metric-trend"]')!;
+    expect(trend).not.toBeNull();
+    expect(trend.getAttribute('data-trend')).toBe('down');
+    expect(trend.querySelector('.metric-row__arrow')?.getAttribute('aria-label')).toBe('down');
+    expect(trend.querySelector('.metric-row__delta')?.textContent).toBe('-12 ms');
+    expect(value.textContent).toBe('182 ms-12 ms');
+  });
+
+  it('draws a delta without an arrow, and an arrow without a delta', () => {
+    const deltaOnly = renderMetrics([{ ...metric1, data: { label: 'GPU', value: '94%', delta: '+3%' } }]);
+    expect(deltaOnly.querySelector('.metric-row__arrow')).toBeNull();
+    expect(deltaOnly.querySelector('.metric-row__delta')?.textContent).toBe('+3%');
+    const arrowOnly = renderMetrics([{ ...metric1, data: { label: 'GPU', value: '94%', trend: 'flat' } }]);
+    expect(arrowOnly.querySelector('.metric-row__arrow')?.getAttribute('aria-label')).toBe('flat');
+    expect(arrowOnly.querySelector('.metric-row__delta')).toBeNull();
+  });
+
+  it('draws nothing beside a value that has neither', () => {
+    const host = renderMetrics([metric1]);
+    expect(host.querySelector('[data-testid="metric-trend"]')).toBeNull();
+  });
+
   it('returns null when variant is rail and metrics list is empty', () => {
     const host = renderMetrics([], 'rail');
     expect(host.querySelector('.metrics')).toBeNull();
