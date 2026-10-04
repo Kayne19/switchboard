@@ -210,9 +210,14 @@ for (const { chart, viewport } of chartNoteCases) {
         }]);
       }, stepsUnderTheChart);
       await expect(page.locator('.progress-step[data-state]')).toHaveCount(stepsUnderTheChart.length);
-      await page.waitForTimeout(400);
-      // The case tests a short chart only while the plan really shortens it.
-      expect((await chartBox()).height).toBeLessThan(tall.height - 60);
+      // The chart shrinks over a few frames: wait until it holds one size,
+      // and test a short chart only while the plan really shortens it.
+      await expect.poll(async () => {
+        const first = await chartBox();
+        await page.waitForTimeout(250);
+        const then = await chartBox();
+        return first.width === then.width && first.height === then.height && then.height < tall.height - 60;
+      }).toBe(true);
     }
     const before = await chartBox();
 
