@@ -319,6 +319,154 @@
       }
     },
     {
+      "name": "show_table_minimal",
+      "action": {
+        "op": "show",
+        "id": "table-1",
+        "type": "table",
+        "data": {
+          "columns": [
+            {
+              "label": "name"
+            }
+          ],
+          "rows": []
+        }
+      },
+      "normalized": {
+        "op": "show",
+        "id": "table-1",
+        "type": "table",
+        "data": {
+          "columns": [
+            {
+              "label": "name"
+            }
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "show_table_full",
+      "action": {
+        "op": "show",
+        "id": "results",
+        "type": "table",
+        "role": "primary",
+        "data": {
+          "title": "TESTS / MATRIX",
+          "subtitle": "SUITE / PASSED / FAILED / DURATION",
+          "context": "CI RUN",
+          "caption": "RESULTS / 3 SUITES",
+          "columns": [
+            {
+              "label": "suite"
+            },
+            {
+              "label": "passed",
+              "semantic": "green"
+            },
+            {
+              "label": "failed",
+              "semantic": "red"
+            },
+            {
+              "label": "duration"
+            }
+          ],
+          "rows": [
+            [
+              "backend",
+              212,
+              0,
+              "41.2s"
+            ],
+            [
+              "frontend",
+              188,
+              {
+                "text": "2",
+                "semantic": "red",
+                "bold": true
+              },
+              "12.8s"
+            ],
+            [
+              {
+                "text": "skill",
+                "semantic": "muted"
+              },
+              31,
+              0,
+              "0.9s"
+            ]
+          ],
+          "highlight": [
+            1
+          ]
+        }
+      },
+      "normalized": {
+        "op": "show",
+        "id": "results",
+        "type": "table",
+        "role": "primary",
+        "data": {
+          "title": "TESTS / MATRIX",
+          "subtitle": "SUITE / PASSED / FAILED / DURATION",
+          "context": "CI RUN",
+          "caption": "RESULTS / 3 SUITES",
+          "columns": [
+            {
+              "label": "suite"
+            },
+            {
+              "label": "passed",
+              "semantic": "green"
+            },
+            {
+              "label": "failed",
+              "semantic": "red"
+            },
+            {
+              "label": "duration"
+            }
+          ],
+          "rows": [
+            [
+              "backend",
+              212,
+              0,
+              "41.2s"
+            ],
+            [
+              "frontend",
+              188,
+              {
+                "text": "2",
+                "semantic": "red",
+                "bold": true
+              },
+              "12.8s"
+            ],
+            [
+              {
+                "text": "skill",
+                "semantic": "muted"
+              },
+              31,
+              0,
+              "0.9s"
+            ]
+          ],
+          "highlight": [
+            1
+          ]
+        }
+      }
+    },
+    {
       "name": "show_note_segments",
       "action": {
         "op": "show",
@@ -896,6 +1044,204 @@
       "reason": "duplicate edge pair"
     },
     {
+      "name": "table_ragged_row",
+      "action": {
+        "op": "show",
+        "id": "t",
+        "type": "table",
+        "data": {
+          "columns": [
+            {
+              "label": "a"
+            },
+            {
+              "label": "b"
+            }
+          ],
+          "rows": [
+            [
+              "x",
+              1
+            ],
+            [
+              "y"
+            ]
+          ]
+        }
+      },
+      "reason": "every row has exactly columns.length cells"
+    },
+    {
+      "name": "table_too_many_columns",
+      "action": {
+        "op": "show",
+        "id": "t",
+        "type": "table",
+        "data": {
+          "columns": [
+            {
+              "label": "c0"
+            },
+            {
+              "label": "c1"
+            },
+            {
+              "label": "c2"
+            },
+            {
+              "label": "c3"
+            },
+            {
+              "label": "c4"
+            },
+            {
+              "label": "c5"
+            },
+            {
+              "label": "c6"
+            },
+            {
+              "label": "c7"
+            },
+            {
+              "label": "c8"
+            },
+            {
+              "label": "c9"
+            },
+            {
+              "label": "c10"
+            },
+            {
+              "label": "c11"
+            },
+            {
+              "label": "c12"
+            }
+          ],
+          "rows": []
+        }
+      },
+      "reason": "columns must be 1 to 12"
+    },
+    {
+      "name": "table_no_columns",
+      "action": {
+        "op": "show",
+        "id": "t",
+        "type": "table",
+        "data": {
+          "columns": [],
+          "rows": []
+        }
+      },
+      "reason": "columns must be 1 to 12"
+    },
+    {
+      "name": "table_bad_cell",
+      "action": {
+        "op": "show",
+        "id": "t",
+        "type": "table",
+        "data": {
+          "columns": [
+            {
+              "label": "a"
+            }
+          ],
+          "rows": [
+            [
+              true
+            ]
+          ]
+        }
+      },
+      "reason": "a cell is a string, a number or {text, semantic?, bold?}"
+    },
+    {
+      "name": "table_cell_unknown_field",
+      "action": {
+        "op": "show",
+        "id": "t",
+        "type": "table",
+        "data": {
+          "columns": [
+            {
+              "label": "a"
+            }
+          ],
+          "rows": [
+            [
+              {
+                "text": "x",
+                "align": "right"
+              }
+            ]
+          ]
+        }
+      },
+      "reason": "unknown field in table cell"
+    },
+    {
+      "name": "table_column_align_forbidden",
+      "action": {
+        "op": "show",
+        "id": "t",
+        "type": "table",
+        "data": {
+          "columns": [
+            {
+              "label": "a",
+              "align": "right"
+            }
+          ],
+          "rows": []
+        }
+      },
+      "reason": "alignment is inferred by the page; no align field"
+    },
+    {
+      "name": "table_highlight_out_of_range",
+      "action": {
+        "op": "show",
+        "id": "t",
+        "type": "table",
+        "data": {
+          "columns": [
+            {
+              "label": "a"
+            }
+          ],
+          "rows": [
+            [
+              "x"
+            ]
+          ],
+          "highlight": [
+            3
+          ]
+        }
+      },
+      "reason": "highlight names row indices"
+    },
+    {
+      "name": "table_column_label_oversized",
+      "action": {
+        "op": "show",
+        "id": "t",
+        "type": "table",
+        "data": {
+          "columns": [
+            {
+              "label": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ],
+          "rows": []
+        }
+      },
+      "reason": "column label exceeds 64 UTF-16 code units"
+    },
+    {
       "name": "html_injection_script",
       "action": {
         "op": "say",
@@ -1142,6 +1488,33 @@
       "path": [
         "at",
         "x"
+      ],
+      "value": "NaN"
+    },
+    {
+      "name": "table_cell_nan",
+      "baseAction": {
+        "op": "show",
+        "id": "t",
+        "type": "table",
+        "data": {
+          "columns": [
+            {
+              "label": "a"
+            }
+          ],
+          "rows": [
+            [
+              1.5
+            ]
+          ]
+        }
+      },
+      "path": [
+        "data",
+        "rows",
+        0,
+        0
       ],
       "value": "NaN"
     }

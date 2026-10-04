@@ -179,8 +179,8 @@ caller-pin precedence above.
 
 ## Visual artifacts
 
-The visual channel supports seven content types: chart, metric, progress,
-diagram, document, code, and note.
+The visual channel supports eight content types: chart, metric, progress,
+diagram, document, code, table, and note.
 
 Artifacts arrive during an agent turn over `POST /display` and the existing
 WebSocket, so they can appear while work is still in progress. Lifecycle

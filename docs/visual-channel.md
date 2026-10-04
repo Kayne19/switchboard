@@ -33,6 +33,7 @@ agent sends semantics. See `docs/display-tool.md` for the full action protocol.
 | `progress` | checklists, steps, states, and optional durations |
 | `document` | headings, paragraphs, bullets, code blocks |
 | `code` | code and diff views (`add`/`del`/`ctx` lines) |
+| `table` | rows of named columns: results, comparisons, inventories; cells carry semantic colour and rows can be highlighted |
 | `note` | a persistent annotation, independent from the live transcript |
 
 Diagram node styling stays restricted to semantic classes and states, enforced server-side.

@@ -14,6 +14,9 @@ import type {
   SceneObjectRole,
   Semantic,
   SpeechState,
+  TableCell,
+  TableColumn,
+  TableData,
 } from './types';
 
 /**
@@ -33,6 +36,7 @@ const ALLOWED_OBJECT_TYPES = new Set([
   'diagram',
   'document',
   'code',
+  'table',
   'note',
 ]);
 const ALLOWED_ROLES = new Set<SceneObjectRole>(['primary', 'compare', 'secondary', 'ambient']);
@@ -540,6 +544,107 @@ function validateCodeData(data: Record<string, unknown>): { ok: true; data: Code
   return { ok: true, data: result };
 }
 
+// The table contract (docs/display-tool.md, "Table v1 rules"): 1 to 12
+// columns, 0 to 200 rows of exactly one cell per column, a cell a string, a
+// finite number or `{ text, semantic?, bold? }`, and `highlight` naming row
+// indices. Alignment is the page's to infer, so there is no `align`.
+const MAX_TABLE_COLUMNS = 12;
+const MAX_TABLE_ROWS = 200;
+const MAX_TABLE_COLUMN_LABEL_UTF16 = 64;
+const MAX_TABLE_CELL_UTF16 = 256;
+
+function validateTableData(data: Record<string, unknown>): { ok: true; data: TableData } | { ok: false; error: string } {
+  const allowed = new Set(['title', 'subtitle', 'context', 'caption', 'columns', 'rows', 'highlight']);
+  const unknownKey = checkUnknownKeys(data, allowed, 'table data');
+  if (unknownKey) return { ok: false, error: unknownKey };
+
+  if (!Array.isArray(data.columns) || data.columns.length < 1 || data.columns.length > MAX_TABLE_COLUMNS) {
+    return { ok: false, error: `table.columns must be an array of 1 to ${MAX_TABLE_COLUMNS} items` };
+  }
+  const columnAllowed = new Set(['label', 'semantic']);
+  const columns: TableColumn[] = [];
+  for (const c of data.columns) {
+    if (!isRecord(c)) return { ok: false, error: 'table column must be an object' };
+    const cUnknown = checkUnknownKeys(c, columnAllowed, 'table column');
+    if (cUnknown) return { ok: false, error: cUnknown };
+    const labelErr = checkString(c.label, MAX_TABLE_COLUMN_LABEL_UTF16, 'table column.label');
+    if (labelErr) return { ok: false, error: labelErr };
+    const column: TableColumn = { label: c.label as string };
+    if (c.semantic !== undefined) {
+      if (!ALLOWED_SEMANTICS.has(c.semantic as Semantic)) return { ok: false, error: 'invalid table column.semantic' };
+      column.semantic = c.semantic as Semantic;
+    }
+    columns.push(column);
+  }
+
+  if (!Array.isArray(data.rows) || data.rows.length > MAX_TABLE_ROWS) {
+    return { ok: false, error: `table.rows must be an array of at most ${MAX_TABLE_ROWS} items` };
+  }
+  const cellAllowed = new Set(['text', 'semantic', 'bold']);
+  const rows: TableCell[][] = [];
+  for (const [rowIndex, r] of data.rows.entries()) {
+    if (!Array.isArray(r)) return { ok: false, error: `table row ${rowIndex} must be an array` };
+    if (r.length !== columns.length) {
+      return { ok: false, error: `table row ${rowIndex} has ${r.length} cells; the table has ${columns.length} columns` };
+    }
+    const row: TableCell[] = [];
+    for (const cell of r) {
+      if (typeof cell === 'number') {
+        if (!Number.isFinite(cell)) return { ok: false, error: 'table cell must be a finite number' };
+        row.push(cell);
+        continue;
+      }
+      if (typeof cell === 'string') {
+        const err = checkString(cell, MAX_TABLE_CELL_UTF16, 'table cell');
+        if (err) return { ok: false, error: err };
+        row.push(cell);
+        continue;
+      }
+      if (!isRecord(cell)) return { ok: false, error: 'table cell must be a string, a number or an object' };
+      const cellUnknown = checkUnknownKeys(cell, cellAllowed, 'table cell');
+      if (cellUnknown) return { ok: false, error: cellUnknown };
+      const textErr = checkString(cell.text, MAX_TABLE_CELL_UTF16, 'table cell.text');
+      if (textErr) return { ok: false, error: textErr };
+      const cellObj: TableCell = { text: cell.text as string };
+      if (cell.semantic !== undefined) {
+        if (!ALLOWED_SEMANTICS.has(cell.semantic as Semantic)) return { ok: false, error: 'invalid table cell.semantic' };
+        cellObj.semantic = cell.semantic as Semantic;
+      }
+      if (cell.bold !== undefined) {
+        if (typeof cell.bold !== 'boolean') return { ok: false, error: 'table cell.bold must be boolean' };
+        cellObj.bold = cell.bold;
+      }
+      row.push(cellObj);
+    }
+    rows.push(row);
+  }
+
+  const result: TableData = { columns, rows };
+  if (data.highlight !== undefined) {
+    if (!Array.isArray(data.highlight)) return { ok: false, error: 'table.highlight must be an array' };
+    for (const h of data.highlight) {
+      if (typeof h !== 'number' || !Number.isInteger(h) || h < 0 || h >= rows.length) {
+        return { ok: false, error: 'table.highlight must contain row indices' };
+      }
+    }
+    result.highlight = data.highlight as number[];
+  }
+  for (const k of ['title', 'subtitle', 'context'] as const) {
+    if (data[k] !== undefined) {
+      const err = checkString(data[k], 256, `table.${k}`);
+      if (err) return { ok: false, error: err };
+      result[k] = data[k] as string;
+    }
+  }
+  if (data.caption !== undefined) {
+    const err = checkString(data.caption, 128, 'table.caption');
+    if (err) return { ok: false, error: err };
+    result.caption = data.caption as string;
+  }
+
+  return { ok: true, data: result };
+}
+
 function validateNoteData(data: Record<string, unknown>): { ok: true; data: NoteData } | { ok: false; error: string } {
   const allowed = new Set(['tag', 'segments', 'caption', 'anchor']);
   const unknownKey = checkUnknownKeys(data, allowed, 'note data');
@@ -680,6 +785,12 @@ export function validateControllerAction(value: unknown): ActionValidationResult
         }
         case 'code': {
           const res = validateCodeData(value.data);
+          if (!res.ok) return res;
+          validatedData = res.data;
+          break;
+        }
+        case 'table': {
+          const res = validateTableData(value.data);
           if (!res.ok) return res;
           validatedData = res.data;
           break;

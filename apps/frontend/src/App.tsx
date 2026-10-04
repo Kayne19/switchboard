@@ -77,7 +77,7 @@ export default function App() {
       if (!demoMode) return;
       if (event.touches.length !== 1) return;
       const target = event.target as HTMLElement | null;
-      if (target?.closest('button,input,textarea,.code-viewport__scroll,.document-viewport__body,.focus-layer,.controller-panel,.ir-drawer,.transcript')) return;
+      if (target?.closest('button,input,textarea,.code-viewport__scroll,.document-viewport__body,.table-viewport__scroll,.focus-layer,.controller-panel,.ir-drawer,.transcript')) return;
       touchStart.current = { x: event.touches[0].clientX, y: event.touches[0].clientY, target: event.target };
     };
     const onTouchEnd = (event: TouchEvent) => {

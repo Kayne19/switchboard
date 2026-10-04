@@ -303,7 +303,8 @@ class ProgrammingErrorTest(ModuleTestCase):
     def test_programming_errors_raise_before_anything_is_sent(self):
         host = self.host()
         cases = [
-            (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "table", "data": {}}),
+            (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "gauge", "data": {}}),
+            (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "table", "data": {"columns": []}}),
             (ValueError, switchboard.display, (), {"op": "explode"}),
             (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "metric", "data": {"label": "L"}}),
             (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "note", "role": "hero", "data": {"segments": []}}),
@@ -323,8 +324,9 @@ class ProgrammingErrorTest(ModuleTestCase):
 
     def test_unknown_display_type_names_the_shapes(self):
         with self.assertRaises(ValueError) as caught:
-            switchboard.display(op="show", id="x", type="table", data={})
+            switchboard.display(op="show", id="x", type="gauge", data={})
         self.assertIn("chart: {series:[{name, values:[n]}]}", str(caught.exception))
+        self.assertIn("table: {columns:[{label}], rows:[[cell]]}", str(caught.exception))
 
 
 if __name__ == "__main__":

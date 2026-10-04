@@ -23,6 +23,9 @@
       "$ref": "#/definitions/ShowCodeAction"
     },
     {
+      "$ref": "#/definitions/ShowTableAction"
+    },
+    {
       "$ref": "#/definitions/ShowNoteAction"
     },
     {
@@ -468,6 +471,104 @@
       ],
       "additionalProperties": false
     },
+    "TableColumn": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "semantic": {
+          "$ref": "#/definitions/Semantic"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "additionalProperties": false
+    },
+    "TableCell": {
+      "oneOf": [
+        {
+          "type": "string",
+          "maxLength": 256
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "semantic": {
+              "$ref": "#/definitions/Semantic"
+            },
+            "bold": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "TableData": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "subtitle": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "context": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TableColumn"
+          },
+          "minItems": 1,
+          "maxItems": 12
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/TableCell"
+            },
+            "maxItems": 12
+          },
+          "maxItems": 200
+        },
+        "highlight": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "required": [
+        "columns",
+        "rows"
+      ],
+      "additionalProperties": false
+    },
     "RichSegment": {
       "type": "object",
       "properties": {
@@ -727,6 +828,39 @@
         },
         "data": {
           "$ref": "#/definitions/CodeData"
+        }
+      },
+      "required": [
+        "op",
+        "id",
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "ShowTableAction": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "show"
+          ]
+        },
+        "id": {
+          "$ref": "#/definitions/Identifier"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "table"
+          ]
+        },
+        "role": {
+          "$ref": "#/definitions/Role"
+        },
+        "data": {
+          "$ref": "#/definitions/TableData"
         }
       },
       "required": [

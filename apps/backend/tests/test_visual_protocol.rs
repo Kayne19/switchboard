@@ -82,6 +82,116 @@ fn rejects_non_finite_progress_values() {
     }
 }
 
+fn table_action(data: Value) -> Value {
+    json!({"op": "show", "id": "results", "type": "table", "data": data})
+}
+
+// The table rules the schema cannot state (docs/display-tool.md, "Table v1
+// rules"): a row has exactly one cell per column, a highlight names a row,
+// and a cell is a string, a number or `{text, semantic?, bold?}`. The
+// browser's validation.test.ts pins the same cases.
+#[test]
+fn table_rows_fit_their_columns() {
+    let two = json!([{"label": "a"}, {"label": "b"}]);
+    assert!(validate_action(&table_action(json!({"columns": two, "rows": [["x", 1]]}))).is_ok());
+    assert_eq!(
+        validate_action(&table_action(
+            json!({"columns": two, "rows": [["x", 1], ["y"]]})
+        )),
+        Err("table row 1 has 1 cells; the table has 2 columns".into())
+    );
+    assert_eq!(
+        validate_action(&table_action(json!({"columns": two, "rows": ["x"]}))),
+        Err("table row 0 must be an array".into())
+    );
+}
+
+#[test]
+fn table_highlight_names_rows() {
+    let one = json!([{"label": "a"}]);
+    let rows = json!([["x"], ["y"]]);
+    for index in [json!(0), json!(1), json!(1.0)] {
+        let data = json!({"columns": one, "rows": rows, "highlight": [index]});
+        assert!(validate_action(&table_action(data)).is_ok());
+    }
+    for index in [json!(2), json!(-1), json!(0.5), json!("0")] {
+        let data = json!({"columns": one, "rows": rows, "highlight": [index]});
+        assert_eq!(
+            validate_action(&table_action(data)),
+            Err("table.highlight must contain row indices".into())
+        );
+    }
+}
+
+#[test]
+fn table_cells_are_text_numbers_or_styled_text() {
+    let one = json!([{"label": "a"}]);
+    let ok = json!({"columns": one, "rows": [["x"], [1.5], [{"text": "y", "semantic": "red", "bold": true}]]});
+    assert_eq!(
+        validate_action(&table_action(ok.clone())),
+        Ok(table_action(ok))
+    );
+    for (cell, error) in [
+        (
+            json!(true),
+            "table cell must be a string, a number or an object",
+        ),
+        (
+            json!(null),
+            "table cell must be a string, a number or an object",
+        ),
+        (
+            json!({"semantic": "red"}),
+            "table cell.text must be a string",
+        ),
+        (
+            json!({"text": "y", "semantic": "pink"}),
+            "invalid table cell.semantic",
+        ),
+        (
+            json!({"text": "y", "bold": "yes"}),
+            "table cell.bold must be boolean",
+        ),
+        (
+            json!({"text": "y", "align": "right"}),
+            "unknown field in table cell: align",
+        ),
+        (
+            json!("x".repeat(257)),
+            "table cell exceeds maximum length of 256 UTF-16 code units",
+        ),
+    ] {
+        let data = json!({"columns": one, "rows": [[cell]]});
+        assert_eq!(validate_action(&table_action(data)), Err(error.into()));
+    }
+}
+
+#[test]
+fn table_columns_are_one_to_twelve_labelled() {
+    let columns = |n: usize| -> Value {
+        Value::Array((0..n).map(|i| json!({"label": format!("c{i}")})).collect())
+    };
+    assert!(validate_action(&table_action(json!({"columns": columns(12), "rows": []}))).is_ok());
+    for n in [0, 13] {
+        assert_eq!(
+            validate_action(&table_action(json!({"columns": columns(n), "rows": []}))),
+            Err("table.columns must be an array of 1 to 12 items".into())
+        );
+    }
+    assert_eq!(
+        validate_action(&table_action(
+            json!({"columns": [{"label": "a", "align": "right"}], "rows": []})
+        )),
+        Err("unknown field in table column: align".into())
+    );
+    assert_eq!(
+        validate_action(&table_action(
+            json!({"columns": [{"label": "x".repeat(65)}], "rows": []})
+        )),
+        Err("table column.label exceeds maximum length of 64 UTF-16 code units".into())
+    );
+}
+
 /// The validator is held to `docs/display-action-v1.schema.json`, the one
 /// source for the display protocol: it accepts every show type the schema
 /// lists with exactly the data the schema requires, refuses each of those
@@ -140,6 +250,7 @@ fn show_types_and_their_required_data_follow_the_schema() {
             }
             "document" => json!({"subject": "S", "paragraphs": ["p"]}),
             "code" => json!({"source": {"text": "x"}}),
+            "table" => json!({"columns": [{"label": "c"}], "rows": []}),
             "note" => json!({"segments": [{"text": "t"}]}),
             other => panic!("no sample for {other}; the schema grew a type"),
         }

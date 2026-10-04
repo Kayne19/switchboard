@@ -1,6 +1,6 @@
 # The `display` channel & Visual Stage
 
-A project agent pushes anything it wants the caller to *see* — a diagram, a chart, a metric, a progress list, a document, code, or a plain note — to the caller's page mid-turn, the same way it pushes speech. The caller sees it render while the agent is still working. **The agent chooses what to show and how it is composed; the page owns the pixels.** `docs/visual-channel.md` is the product/capability companion to this wire contract.
+A project agent pushes anything it wants the caller to *see* — a diagram, a chart, a metric, a progress list, a document, code, a table, or a plain note — to the caller's page mid-turn, the same way it pushes speech. The caller sees it render while the agent is still working. **The agent chooses what to show and how it is composed; the page owns the pixels.** `docs/visual-channel.md` is the product/capability companion to this wire contract.
 
 ## Wire shape and transport
 
@@ -32,7 +32,7 @@ type DisplayAction =
 ```
 
 - **ops** (one per call): `show | focus | hide | clear | say`. There is **no** `listen` on this public channel (`listen` is internal-only).
-- **content types** (for `show`): `chart | metric | progress | diagram | document | code | note`. `message` is a runtime-owned transcript, **not** an agent display type.
+- **content types** (for `show`): `chart | metric | progress | diagram | document | code | table | note`. `message` is a runtime-owned transcript, **not** an agent display type.
 - **roles** (composition slot): `primary | compare | secondary | ambient`.
 - **`id`**: agent-owned and stable across updates (re-sending the same `id` replaces the object in place). Agent IDs must not begin with the reserved `__runtime/` namespace.
 - **`target`**: the object id to anchor a `say` action (must not begin with `__runtime/`).
@@ -78,6 +78,7 @@ type DisplayAction =
 | `diagram` | `{ mode: "graph", nodes: [{ id, label, sub?, detail?, semantic?, state? }], edges: [{ from, to, label?, semantic?, active? }], title?, subtitle?, context?, caption? }` | SVG semantic graph |
 | `document` | `{ subject, paragraphs: string[], kind?: "email"\|"document", context?, caption?, source?, from?, timestamp? }` | document reader; each paragraph is read as Markdown (see below) |
 | `code` | `{ source: { text, language?, highlight? }, title?, file?, context?, caption? }` | syntax/diff view |
+| `table` | `{ columns: [{ label, semantic? }], rows: Cell[][], highlight?: number[], title?, subtitle?, context?, caption? }`; `Cell = string \| number \| { text, semantic?, bold? }` | ruled data table in a scroll viewport (see below) |
 | `note` | `{ segments: [{ text, accent?, bold?, semantic? }], tag?, caption?, anchor?: { target, x?, series?, node? } }` | persistent annotation |
 
 Each document paragraph is read as the same small Markdown subset the conversation surfaces use (`apps/frontend/src/primitives/markdown.ts`): `#` headings (shown as a bold line), `**bold**`, `*italic*`, `` `inline code` ``, `-` and `1.` lists, and fenced code blocks. A newline inside a paragraph is a line break; a blank line starts a new paragraph. It is never HTML: markup stays literal text, and a link shows only its label.
@@ -91,6 +92,13 @@ Notes have their own display lifecycle. A chat or spoken response does not updat
 - `nodes`: 1 to 100 items. Node IDs must be unique strings (1-128 UTF-16 code units).
 - `edges`: 0 to 200 items. Both `from` and `to` endpoints must exist in `nodes`. Self-loops (`from === to`) and duplicate `(from, to)` pairs are rejected.
 
+### Table v1 rules
+- `columns`: 1 to 12 items, each `{ label, semantic? }` with `label` <= 64 UTF-16 code units. A column's `semantic` colours its header; a cell's `semantic` colours that cell.
+- `rows`: 0 to 200 items. Every row is an array of exactly `columns.length` cells; a ragged row is rejected with its index.
+- A cell is a string (<= 256 UTF-16 code units), a finite number, or `{ text, semantic?, bold? }` with `text` <= 256. A number is shown as its text.
+- `highlight`: row indices (integers in `0..rows.length`) the page draws with the accent. An index naming no row is rejected.
+- There is no `align`: the page right-aligns a column whose cells are all numeric (a number, or text that reads as one with a unit, such as `12.4s` or `91%`), and left-aligns the rest.
+
 ## Canonical schema & validation rules
 
 The canonical contract is defined in `docs/display-action-v1.schema.json` and exercised by `apps/frontend/tests/fixtures/display-actions.json`. Both the TypeScript frontend validator (`apps/frontend/src/controller/validation.ts`) and the Rust backend validator (`apps/backend/src/visual_protocol.rs`) enforce identical rules:
@@ -103,6 +111,6 @@ The canonical contract is defined in `docs/display-action-v1.schema.json` and ex
 - **Safety**: Raw HTML/JS markup (`<script`, `<iframe`, `javascript:`, etc.) and external resource URLs (`http://`, `https://`, `//`) are rejected.
 - **Unknown fields**: All schema branches specify `additionalProperties: false`; unexpected fields are rejected.
 
-`docs/display-action-v1.schema.json` encodes as much of this as declarative JSON Schema can express, and `apps/frontend/tests/unit/schema.test.ts` holds it to `display-actions.json` fixture-by-fixture so it cannot drift from the two validators unnoticed. Three things it cannot express, so it does not attempt to: diagram invariants that span sibling array items (duplicate node IDs, an edge endpoint naming no node, a self-loop, a duplicate edge pair — each a relationship between items, not one item's shape); the 48,000-byte action-size cap, which bounds the serialized envelope on the wire rather than the parsed instance; and the UTF-16-code-unit string caps above for content containing astral characters, since JSON Schema's `maxLength` counts Unicode code points. Those stay enforced only by `validation.ts` and `visual_protocol.rs`; the test names each as a documented, asserted exception (`KNOWN_SCHEMA_GAPS`) rather than silently passing.
+`docs/display-action-v1.schema.json` encodes as much of this as declarative JSON Schema can express, and `apps/frontend/tests/unit/schema.test.ts` holds it to `display-actions.json` fixture-by-fixture so it cannot drift from the two validators unnoticed. Three things it cannot express, so it does not attempt to: invariants that span sibling array items (duplicate node IDs, an edge endpoint naming no node, a self-loop, a duplicate edge pair, a table row with other than `columns.length` cells, a table highlight naming no row — each a relationship between items, not one item's shape); the 48,000-byte action-size cap, which bounds the serialized envelope on the wire rather than the parsed instance; and the UTF-16-code-unit string caps above for content containing astral characters, since JSON Schema's `maxLength` counts Unicode code points. Those stay enforced only by `validation.ts` and `visual_protocol.rs`; the test names each as a documented, asserted exception (`KNOWN_SCHEMA_GAPS`) rather than silently passing.
 
 Rejections return `{"delivered":false,"detail":"<reason>"}` and are neither stored in display state nor broadcast.

@@ -7,9 +7,16 @@ pub const MAX_TEXT_UTF16: usize = 50_000;
 pub const RESERVED_ID_PREFIX: &str = "__runtime/";
 /// What an agent may `show`. The browser reports the same kinds back in its
 /// screen state, so this list is the one both directions are checked against.
-pub const CONTENT_TYPES: [&str; 7] = [
-    "chart", "metric", "progress", "diagram", "document", "code", "note",
+pub const CONTENT_TYPES: [&str; 8] = [
+    "chart", "metric", "progress", "diagram", "document", "code", "table", "note",
 ];
+
+// The table contract (docs/display-tool.md, "Table v1 rules"); the browser's
+// validateTableData holds the same numbers.
+const MAX_TABLE_COLUMNS: usize = 12;
+const MAX_TABLE_ROWS: usize = 200;
+const MAX_TABLE_COLUMN_LABEL_UTF16: usize = 64;
+const MAX_TABLE_CELL_UTF16: usize = 256;
 
 fn utf16_len(s: &str) -> usize {
     s.encode_utf16().count()
@@ -702,6 +709,163 @@ fn validate_code_data(data: &Map<String, Value>) -> Result<Value, String> {
     Ok(Value::Object(out))
 }
 
+fn validate_table_cell(cell: &Value) -> Result<Value, String> {
+    match cell {
+        Value::Number(n) => {
+            if !n.as_f64().is_some_and(f64::is_finite) {
+                return Err("table cell must be a finite number".into());
+            }
+            Ok(cell.clone())
+        }
+        Value::String(s) => {
+            if utf16_len(s) > MAX_TABLE_CELL_UTF16 {
+                return Err(format!(
+                    "table cell exceeds maximum length of {MAX_TABLE_CELL_UTF16} UTF-16 code units"
+                ));
+            }
+            Ok(cell.clone())
+        }
+        Value::Object(cm) => {
+            check_unknown_keys(cm, &["text", "semantic", "bold"], "table cell")?;
+            let text = cm
+                .get("text")
+                .and_then(Value::as_str)
+                .ok_or("table cell.text must be a string")?;
+            if utf16_len(text) > MAX_TABLE_CELL_UTF16 {
+                return Err(format!(
+                    "table cell.text exceeds maximum length of {MAX_TABLE_CELL_UTF16} UTF-16 code units"
+                ));
+            }
+            let mut cell_out = Map::new();
+            cell_out.insert("text".into(), text.into());
+            if let Some(sem) = cm.get("semantic") {
+                let s = sem.as_str().ok_or("invalid table cell.semantic")?;
+                if !is_valid_semantic(s) {
+                    return Err("invalid table cell.semantic".into());
+                }
+                cell_out.insert("semantic".into(), s.into());
+            }
+            if let Some(bold) = cm.get("bold") {
+                let b = bold.as_bool().ok_or("table cell.bold must be boolean")?;
+                cell_out.insert("bold".into(), b.into());
+            }
+            Ok(Value::Object(cell_out))
+        }
+        _ => Err("table cell must be a string, a number or an object".into()),
+    }
+}
+
+fn validate_table_data(data: &Map<String, Value>) -> Result<Value, String> {
+    check_unknown_keys(
+        data,
+        &[
+            "title",
+            "subtitle",
+            "context",
+            "caption",
+            "columns",
+            "rows",
+            "highlight",
+        ],
+        "table data",
+    )?;
+
+    let columns_err = format!("table.columns must be an array of 1 to {MAX_TABLE_COLUMNS} items");
+    let columns_arr = data
+        .get("columns")
+        .and_then(Value::as_array)
+        .ok_or_else(|| columns_err.clone())?;
+    if columns_arr.is_empty() || columns_arr.len() > MAX_TABLE_COLUMNS {
+        return Err(columns_err);
+    }
+    let mut clean_columns = Vec::new();
+    for c in columns_arr {
+        let cm = c.as_object().ok_or("table column must be an object")?;
+        check_unknown_keys(cm, &["label", "semantic"], "table column")?;
+        let label = cm
+            .get("label")
+            .and_then(Value::as_str)
+            .ok_or("table column.label must be a string")?;
+        if utf16_len(label) > MAX_TABLE_COLUMN_LABEL_UTF16 {
+            return Err(format!(
+                "table column.label exceeds maximum length of {MAX_TABLE_COLUMN_LABEL_UTF16} UTF-16 code units"
+            ));
+        }
+        let mut column_out = Map::new();
+        column_out.insert("label".into(), label.into());
+        if let Some(sem) = cm.get("semantic") {
+            let s = sem.as_str().ok_or("invalid table column.semantic")?;
+            if !is_valid_semantic(s) {
+                return Err("invalid table column.semantic".into());
+            }
+            column_out.insert("semantic".into(), s.into());
+        }
+        clean_columns.push(Value::Object(column_out));
+    }
+
+    let rows_err = format!("table.rows must be an array of at most {MAX_TABLE_ROWS} items");
+    let rows_arr = data
+        .get("rows")
+        .and_then(Value::as_array)
+        .ok_or_else(|| rows_err.clone())?;
+    if rows_arr.len() > MAX_TABLE_ROWS {
+        return Err(rows_err);
+    }
+    let mut clean_rows = Vec::new();
+    for (row_index, r) in rows_arr.iter().enumerate() {
+        let cells = r
+            .as_array()
+            .ok_or(format!("table row {row_index} must be an array"))?;
+        if cells.len() != clean_columns.len() {
+            return Err(format!(
+                "table row {row_index} has {} cells; the table has {} columns",
+                cells.len(),
+                clean_columns.len()
+            ));
+        }
+        let mut clean_cells = Vec::new();
+        for cell in cells {
+            clean_cells.push(validate_table_cell(cell)?);
+        }
+        clean_rows.push(Value::Array(clean_cells));
+    }
+
+    let mut out = Map::new();
+    out.insert("columns".into(), Value::Array(clean_columns));
+    let row_count = clean_rows.len();
+    out.insert("rows".into(), Value::Array(clean_rows));
+
+    if let Some(hl) = data.get("highlight") {
+        let arr = hl.as_array().ok_or("table.highlight must be an array")?;
+        for n in arr {
+            // An integer, as the browser's Number.isInteger counts it: 2.0 is
+            // one, 1.5 and -1 are not.
+            let is_row_index = n
+                .as_f64()
+                .is_some_and(|f| f.fract() == 0.0 && f >= 0.0 && f < row_count as f64);
+            if !is_row_index {
+                return Err("table.highlight must contain row indices".into());
+            }
+        }
+        out.insert("highlight".into(), Value::Array(arr.clone()));
+    }
+
+    for (k, max_len) in [("title", 256), ("subtitle", 256), ("context", 256)] {
+        if let Some(v) = data.get(k) {
+            let s = v.as_str().ok_or(format!("table.{k} must be a string"))?;
+            if utf16_len(s) > max_len {
+                return Err(format!(
+                    "table.{k} exceeds maximum length of {max_len} UTF-16 code units"
+                ));
+            }
+            out.insert(k.into(), s.into());
+        }
+    }
+    copy_optional_string(data, &mut out, "caption", 128, "table.caption")?;
+
+    Ok(Value::Object(out))
+}
+
 fn validate_note_data(data: &Map<String, Value>) -> Result<Value, String> {
     check_unknown_keys(data, &["tag", "segments", "caption", "anchor"], "note data")?;
     let segs_arr = data
@@ -856,6 +1020,7 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
                 "diagram" => validate_diagram_data(data_obj)?,
                 "document" => validate_document_data(data_obj)?,
                 "code" => validate_code_data(data_obj)?,
+                "table" => validate_table_data(data_obj)?,
                 "note" => validate_note_data(data_obj)?,
                 _ => return Err("show.type is unknown".into()),
             };

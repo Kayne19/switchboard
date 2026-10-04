@@ -48,6 +48,12 @@ const KNOWN_SCHEMA_GAPS: Record<string, string> = {
   diagram_edge_missing_endpoint: 'edge endpoints referencing nodes[] is cross-array referential integrity',
   diagram_edge_self_loop: 'from === to is an equality check between two sibling fields',
   diagram_edge_duplicate_pair: 'duplicate (from, to) pairs is a cross-item uniqueness invariant',
+  // A table row's length must equal `columns.length`, and a highlight index
+  // must name a row: both relate one array to another in the same object.
+  // The schema bounds a row at 12 cells and an index at a non-negative
+  // integer; the exact fit stays with visual_protocol.rs and validation.ts.
+  table_ragged_row: 'a row having exactly columns.length cells relates two sibling arrays',
+  table_highlight_out_of_range: 'a highlight index naming an existing row relates two sibling arrays',
   // The 48,000 UTF-8 byte cap bounds the serialized envelope on the wire
   // (see docs/display-tool.md, "Action size"). JSON Schema validates the
   // shape of the parsed instance, not the byte length of its serialization;
@@ -152,6 +158,7 @@ describe('validateControllerAction follows display-action-v1.schema.json', () =>
     diagram: { mode: 'graph', nodes: [{ id: 'n', label: 'N' }], edges: [] },
     document: { subject: 'S', paragraphs: ['p'] },
     code: { source: { text: 'x' } },
+    table: { columns: [{ label: 'c' }], rows: [] },
     note: { segments: [{ text: 't' }] },
   };
 

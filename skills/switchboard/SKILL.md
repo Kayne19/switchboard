@@ -77,6 +77,10 @@ Types and their `data` shapes (each type takes only its own shape):
 - document: `{subject, paragraphs: [str]}` (each paragraph reads Markdown:
   headings, bold, italic, inline code, lists, fenced code; no HTML)
 - code: `{source: {text}}`
+- table: `{columns: [{label}], rows: [[cell]]}` (1 to 12 columns, up to 200
+  rows, each row one cell per column; a cell is a string, a number or
+  `{text, semantic?, bold?}`; `highlight: [row index]` marks rows; the page
+  aligns columns itself)
 - note: `{segments: [{text}]}`
 
 Every `data` shape also takes an optional `caption`, a short supporting label.

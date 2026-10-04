@@ -11,6 +11,7 @@ import type {
   NoteData,
   ProgressData,
   SceneObject,
+  TableData,
 } from '../controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
 import { buildCompositionModel, cast, objectsOfType, primaryObject, type SceneKind } from '../app/sceneModel';
@@ -26,6 +27,7 @@ import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
 import { ObjectMotion } from '../primitives/ObjectMotion';
 import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
 import { SceneFooter } from '../primitives/SceneFooter';
+import { TablePrimitive } from '../primitives/TablePrimitive';
 import { FocusableSurface } from '../primitives/FocusableSurface';
 import { TechFrame } from '../primitives/TechFrame';
 import { ToolActivity } from '../primitives/ToolActivity';
@@ -209,6 +211,8 @@ function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux') {
       return <DocumentViewport data={(object as SceneObject<DocumentData>).data} />;
     case 'code':
       return <CodeViewport data={(object as SceneObject<CodeData>).data} />;
+    case 'table':
+      return <TablePrimitive data={(object as SceneObject<TableData>).data} />;
     case 'metric':
       return <MetricsPrimitive metrics={[object as SceneObject<MetricData>]} variant={slot === 'primary' ? 'primary' : undefined} />;
     case 'progress':
@@ -315,8 +319,8 @@ function trainingContent({ state, onFocus, onOpenHistory }: SceneProps): SceneCo
   };
 }
 
-// A diagram, document, or code object fills the main slot alone, its note
-// in the rail -- unless the diagram places the note as its own callout.
+// A diagram, document, code, or table object fills the main slot alone, its
+// note in the rail -- unless the diagram places the note as its own callout.
 function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed: boolean) => void): SceneContent | null {
   const primary = primaryObject(state);
   if (!primary) return null;
@@ -379,12 +383,24 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         main: slot('code-object', <CodeViewport data={data} />),
       };
     }
+    case 'table': {
+      const { data } = cast.table(primary);
+      return {
+        ...rail,
+        title: data.title ?? 'DATA / TABLE',
+        subtitle: data.subtitle ?? `${data.rows.length} ROWS / ${data.columns.length} COLUMNS`,
+        context: data.context ?? 'TABLE',
+        footer: 'FRAME / INTERRUPTED RAILS',
+        caption: sceneCaption(primary, 'DISPLAY / TABLE'),
+        main: slot('table-object', <TablePrimitive data={data} />),
+      };
+    }
     default:
       return null;
   }
 }
 
-const AUX_VISUAL_TYPES = new Set(['chart', 'diagram', 'document', 'code']);
+const AUX_VISUAL_TYPES = new Set(['chart', 'diagram', 'document', 'code', 'table']);
 
 // Any mix of objects: the primary, or a cluster of primary metrics, over an
 // aux row of everything the rail does not carry.

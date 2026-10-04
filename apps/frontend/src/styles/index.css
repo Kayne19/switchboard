@@ -1589,7 +1589,9 @@ button {
   min-height: 0;
   background: #000;
 }
-.code-viewport__mask {
+/* The table viewport shares this mask: it sits in the same frame. */
+.code-viewport__mask,
+.table-viewport__mask {
   position: absolute;
   z-index: 1;
   inset: clamp(8px, 1.1cqh, 16px) clamp(8px, 1cqw, 16px);
@@ -1666,6 +1668,113 @@ button {
   color: #686862;
 }
 
+/* Table: rows of named columns in the code frame, scrolling inside its mask
+   only when they overflow. Thin rules, not cards; the header in the tech
+   face; quantities in mono, set to the end so digits line up; a highlighted
+   row carries the hot-line accent. */
+.table-object {
+  background: #000;
+}
+.table-viewport {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  background: #000;
+}
+.table-viewport__scroll {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: clamp(20px, 3cqh, 34px) clamp(28px, 3cqw, 52px)
+    clamp(54px, 7cqh, 76px);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--orange-rgb), 0.46) transparent;
+}
+/* Left-set, clear of the frame's top-right cut. */
+.table-viewport__meta {
+  display: flex;
+  gap: clamp(18px, 2.4cqw, 36px);
+  margin-bottom: clamp(10px, 1.6cqh, 18px);
+  color: rgba(232, 230, 223, 0.37);
+}
+.table-grid {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  color: #d9d7d1;
+  font-family: var(--font-prose);
+  font-size: clamp(13px, 1.05cqw, 18px);
+  line-height: 1.4;
+}
+.table-grid__head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0 clamp(8px, 0.9cqw, 14px) clamp(8px, 1cqh, 12px);
+  border-bottom: 1px solid rgba(var(--orange-rgb), 0.48);
+  background: #000;
+  color: rgba(232, 230, 223, 0.55);
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+.table-grid__cell {
+  padding: clamp(7px, 0.9cqh, 11px) clamp(8px, 0.9cqw, 14px);
+  border-bottom: 1px solid rgba(232, 230, 223, 0.1);
+  vertical-align: top;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.table-grid__head:first-child,
+.table-grid__cell:first-child {
+  padding-left: clamp(6px, 0.6cqw, 10px);
+}
+.table-grid__cell--end {
+  text-align: right;
+}
+.table-grid__cell.table-grid__cell--end {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.table-grid__text--bold {
+  font-weight: 700;
+}
+.table-grid__row--hot {
+  background: linear-gradient(
+    90deg,
+    rgba(var(--orange-rgb), 0.085),
+    rgba(var(--orange-rgb), 0.018) 76%,
+    transparent
+  );
+}
+.table-grid__row--hot .table-grid__cell {
+  border-bottom-color: rgba(var(--orange-rgb), 0.3);
+}
+.table-grid__row--hot .table-grid__cell:first-child {
+  box-shadow: inset 2px 0 0 rgba(var(--orange-rgb), 0.64);
+}
+.table-grid__empty {
+  margin-top: clamp(12px, 2cqh, 20px);
+  color: rgba(232, 230, 223, 0.3);
+}
+/* In the aux row the panel is short: the header and the first rows are
+   the point, so the meta line goes and the padding tightens. */
+.composed-aux-object--table .table-viewport__scroll {
+  padding: clamp(12px, 1.8cqh, 18px) clamp(16px, 1.8cqw, 28px) clamp(28px, 4cqh, 40px);
+}
+.composed-aux-object--table .table-viewport__meta {
+  display: none;
+}
+.composed-aux-object--table .table-grid {
+  font-size: clamp(12px, 0.85cqw, 15px);
+}
+.composed-aux-object--table .table-grid__cell {
+  padding: clamp(4px, 0.6cqh, 7px) clamp(6px, 0.7cqw, 10px);
+}
+
 /* Focus layer */
 .focus-layer {
   position: fixed;
@@ -1717,7 +1826,8 @@ button {
 .focus-layer__content > .chart-primitive,
 .focus-layer__content > .diagram-primitive,
 .focus-layer__content > .document-viewport,
-.focus-layer__content > .code-viewport {
+.focus-layer__content > .code-viewport,
+.focus-layer__content > .table-viewport {
   width: 100%;
   height: 100%;
 }
@@ -2144,6 +2254,22 @@ button {
     font-size: clamp(12px, 2.45cqw, 17px);
   }
 
+  .table-viewport__mask {
+    inset: 7px;
+  }
+  .table-viewport__scroll {
+    padding: 24px 18px 60px;
+  }
+  .table-grid {
+    font-size: clamp(12px, 3cqw, 16px);
+  }
+  .table-grid__head {
+    padding: 0 8px 7px;
+  }
+  .table-grid__cell {
+    padding: 7px 8px;
+  }
+
   .focus-layer {
     padding: 5cqh 3cqw;
   }
@@ -2194,7 +2320,8 @@ button {
     font-size: clamp(13px, 1.05cqw, 19px);
     line-height: 1.45;
   }
-  .code-viewport__scroll {
+  .code-viewport__scroll,
+  .table-viewport__scroll {
     padding-top: 18px;
     padding-bottom: 48px;
   }
