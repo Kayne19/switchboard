@@ -30,11 +30,16 @@ _ROLES = ("primary", "compare", "secondary", "ambient")
 _SHAPES = {
     "chart": (("series",), "{series:[{name, values:[n]}]}"),
     "metric": (("label", "value"), "{label, value}"),
-    "progress": (("label", "value"), "{label, value (percent, 0-100)}"),
+    "progress": (("label",), "{label, value (percent, 0-100) and/or steps:[{label}]}"),
     "diagram": (("mode", "nodes", "edges"), '{mode:"graph", nodes:[{id, label}], edges:[{from, to}]}'),
     "document": (("subject", "paragraphs"), "{subject, paragraphs:[str]}"),
     "code": (("source",), "{source:{text}}"),
     "note": (("segments",), "{segments:[{text}]}"),
+}
+# Keys of which a show type needs at least one, beyond `_SHAPES`: a progress
+# bar is filled from `value`, or from the share of `steps` that are done.
+_ONE_OF = {
+    "progress": ("value", "steps"),
 }
 
 
@@ -243,6 +248,9 @@ def _check_display_action(action):
     missing = [key for key in required if key not in data]
     if missing:
         raise ValueError(f"{kind} data is missing {', '.join(missing)}; its shape is {hint}")
+    one_of = _ONE_OF.get(kind, ())
+    if one_of and not any(key in data for key in one_of):
+        raise ValueError(f"{kind} data needs {' or '.join(one_of)}; its shape is {hint}")
 
 
 def display(action=None, **fields):

@@ -141,10 +141,14 @@ describe('validateControllerAction follows display-action-v1.schema.json', () =>
     if (!kind) continue;
     const dataRef: string | undefined = action.properties.data.$ref;
     const data = dataRef ? definitions[dataRef.split('/').pop()!] : action.properties.data;
-    requiredByType[kind] = [...data.required].sort();
+    // A shape with an `anyOf` of `required` branches (progress: value or
+    // steps) needs one branch met; the first is the one the sample carries.
+    const firstBranch: string[] = data.anyOf?.[0]?.required ?? [];
+    requiredByType[kind] = [...data.required, ...firstBranch].sort();
   }
   // The smallest data the validator accepts for each type; each carries
-  // exactly the schema's required keys, checked below.
+  // exactly the schema's required keys (and the first `anyOf` branch's),
+  // checked below.
   const smallest: Record<string, Record<string, unknown>> = {
     chart: { series: [{ name: 'a', values: [1] }] },
     metric: { label: 'L', value: '1' },
@@ -171,4 +175,12 @@ describe('validateControllerAction follows display-action-v1.schema.json', () =>
       }
     });
   }
+
+  it('accepts a progress with steps in place of value, the schema\'s other anyOf branch', () => {
+    const branches = (definitions.ProgressData.anyOf as Array<{ required: string[] }>).map((branch) => branch.required);
+    expect(branches).toEqual([['value'], ['steps']]);
+    const action = { op: 'show', id: 'x', type: 'progress', data: { label: 'L', steps: [{ label: 'S' }] } };
+    expect(validate(action), errorSummary()).toBe(true);
+    expect(validateControllerAction(action).ok).toBe(true);
+  });
 });

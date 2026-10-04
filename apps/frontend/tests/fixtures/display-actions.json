@@ -149,6 +149,35 @@
       }
     },
     {
+      "name": "show_metric_trend_delta",
+      "action": {
+        "op": "show",
+        "id": "p95",
+        "type": "metric",
+        "role": "secondary",
+        "data": {
+          "label": "P95 LATENCY",
+          "value": "182 ms",
+          "semantic": "cyan",
+          "trend": "down",
+          "delta": "-12 ms"
+        }
+      },
+      "normalized": {
+        "op": "show",
+        "id": "p95",
+        "type": "metric",
+        "role": "secondary",
+        "data": {
+          "label": "P95 LATENCY",
+          "value": "182 ms",
+          "semantic": "cyan",
+          "trend": "down",
+          "delta": "-12 ms"
+        }
+      }
+    },
+    {
       "name": "show_progress_detailed",
       "action": {
         "op": "show",
@@ -172,6 +201,119 @@
           "detail": "Building assets",
           "value": 75,
           "text": "75%"
+        }
+      }
+    },
+    {
+      "name": "show_progress_steps_without_value",
+      "action": {
+        "op": "show",
+        "id": "build",
+        "type": "progress",
+        "role": "secondary",
+        "data": {
+          "label": "Build",
+          "steps": [
+            {
+              "label": "Resolve dependencies",
+              "state": "done",
+              "detail": "412 crates"
+            },
+            {
+              "label": "Compile",
+              "state": "active",
+              "detail": "switchboard-backend"
+            },
+            {
+              "label": "Link"
+            }
+          ]
+        }
+      },
+      "normalized": {
+        "op": "show",
+        "id": "build",
+        "type": "progress",
+        "role": "secondary",
+        "data": {
+          "label": "Build",
+          "value": 33.33,
+          "steps": [
+            {
+              "label": "Resolve dependencies",
+              "state": "done",
+              "detail": "412 crates"
+            },
+            {
+              "label": "Compile",
+              "state": "active",
+              "detail": "switchboard-backend"
+            },
+            {
+              "label": "Link"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "show_progress_steps_with_value",
+      "action": {
+        "op": "show",
+        "id": "deploy",
+        "type": "progress",
+        "data": {
+          "label": "Deploy",
+          "value": 80,
+          "text": "4 OF 5",
+          "steps": [
+            {
+              "label": "Build",
+              "state": "done"
+            },
+            {
+              "label": "Push image",
+              "state": "done"
+            },
+            {
+              "label": "Migrate",
+              "state": "blocked",
+              "detail": "lock held by job 118"
+            },
+            {
+              "label": "Roll out",
+              "state": "todo"
+            }
+          ]
+        }
+      },
+      "normalized": {
+        "op": "show",
+        "id": "deploy",
+        "type": "progress",
+        "data": {
+          "label": "Deploy",
+          "value": 80,
+          "text": "4 OF 5",
+          "steps": [
+            {
+              "label": "Build",
+              "state": "done"
+            },
+            {
+              "label": "Push image",
+              "state": "done"
+            },
+            {
+              "label": "Migrate",
+              "state": "blocked",
+              "detail": "lock held by job 118"
+            },
+            {
+              "label": "Roll out",
+              "state": "todo"
+            }
+          ]
         }
       }
     },
@@ -791,6 +933,222 @@
         }
       },
       "reason": "missing metric value"
+    },
+    {
+      "name": "progress_too_many_steps",
+      "action": {
+        "op": "show",
+        "id": "p",
+        "type": "progress",
+        "data": {
+          "label": "L",
+          "steps": [
+            {
+              "label": "step 0"
+            },
+            {
+              "label": "step 1"
+            },
+            {
+              "label": "step 2"
+            },
+            {
+              "label": "step 3"
+            },
+            {
+              "label": "step 4"
+            },
+            {
+              "label": "step 5"
+            },
+            {
+              "label": "step 6"
+            },
+            {
+              "label": "step 7"
+            },
+            {
+              "label": "step 8"
+            },
+            {
+              "label": "step 9"
+            },
+            {
+              "label": "step 10"
+            },
+            {
+              "label": "step 11"
+            },
+            {
+              "label": "step 12"
+            },
+            {
+              "label": "step 13"
+            },
+            {
+              "label": "step 14"
+            },
+            {
+              "label": "step 15"
+            },
+            {
+              "label": "step 16"
+            },
+            {
+              "label": "step 17"
+            },
+            {
+              "label": "step 18"
+            },
+            {
+              "label": "step 19"
+            },
+            {
+              "label": "step 20"
+            },
+            {
+              "label": "step 21"
+            },
+            {
+              "label": "step 22"
+            },
+            {
+              "label": "step 23"
+            },
+            {
+              "label": "step 24"
+            },
+            {
+              "label": "step 25"
+            },
+            {
+              "label": "step 26"
+            },
+            {
+              "label": "step 27"
+            },
+            {
+              "label": "step 28"
+            },
+            {
+              "label": "step 29"
+            },
+            {
+              "label": "step 30"
+            }
+          ]
+        }
+      },
+      "reason": "progress.steps exceeds 30 items"
+    },
+    {
+      "name": "progress_empty_steps",
+      "action": {
+        "op": "show",
+        "id": "p",
+        "type": "progress",
+        "data": {
+          "label": "L",
+          "value": 10,
+          "steps": []
+        }
+      },
+      "reason": "progress.steps must carry at least one step"
+    },
+    {
+      "name": "progress_bad_step_state",
+      "action": {
+        "op": "show",
+        "id": "p",
+        "type": "progress",
+        "data": {
+          "label": "L",
+          "steps": [
+            {
+              "label": "S",
+              "state": "paused"
+            }
+          ]
+        }
+      },
+      "reason": "unknown progress step state"
+    },
+    {
+      "name": "progress_step_unknown_field",
+      "action": {
+        "op": "show",
+        "id": "p",
+        "type": "progress",
+        "data": {
+          "label": "L",
+          "steps": [
+            {
+              "label": "S",
+              "percent": 50
+            }
+          ]
+        }
+      },
+      "reason": "unknown field in progress step"
+    },
+    {
+      "name": "progress_step_detail_too_long",
+      "action": {
+        "op": "show",
+        "id": "p",
+        "type": "progress",
+        "data": {
+          "label": "L",
+          "steps": [
+            {
+              "label": "S",
+              "detail": "ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+            }
+          ]
+        }
+      },
+      "reason": "progress step detail exceeds 256 UTF-16 code units"
+    },
+    {
+      "name": "progress_neither_value_nor_steps",
+      "action": {
+        "op": "show",
+        "id": "p",
+        "type": "progress",
+        "data": {
+          "label": "L",
+          "text": "working"
+        }
+      },
+      "reason": "progress requires value or steps"
+    },
+    {
+      "name": "metric_bad_trend",
+      "action": {
+        "op": "show",
+        "id": "m",
+        "type": "metric",
+        "data": {
+          "label": "L",
+          "value": "1",
+          "trend": "sideways"
+        }
+      },
+      "reason": "unknown metric trend"
+    },
+    {
+      "name": "metric_delta_too_long",
+      "action": {
+        "op": "show",
+        "id": "m",
+        "type": "metric",
+        "data": {
+          "label": "L",
+          "value": "1",
+          "delta": "+99999999999999999999999999999999"
+        }
+      },
+      "reason": "metric.delta exceeds 32 UTF-16 code units"
     },
     {
       "name": "diagram_duplicate_node_id",
