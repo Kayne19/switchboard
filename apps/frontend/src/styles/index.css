@@ -1168,26 +1168,53 @@ button {
    slot, and alone it fills the column. Row 2, when there is one, is the aux
    row: the objects beside the primary that the slot does not draw (compare
    objects, the other visuals, secondary progress) get an explicit visible
-   slot below it, so an accepted object is never lost to the layout. */
+   slot below it, so an accepted object is never lost to the layout. The row
+   takes what its cells need up to two fifths of the column, so the primary
+   keeps the larger share; past that the row scrolls inside itself. */
 .composed-main {
   display: grid;
   grid-template-rows: minmax(0, 1fr);
-  grid-auto-rows: minmax(0, auto);
+  grid-auto-rows: fit-content(40%);
   gap: clamp(12px, 2cqh, 22px);
 }
 .composed-aux {
+  /* A scroll region clips at its padding edge: the bleed lets the cells'
+     frame strokes and focus rings run past their edges, as they do outside
+     a scroll region, without moving the cells. */
+  --aux-bleed: 6px;
+  /* The readable floor of a visual's cell: the head of a table or a code
+     pane and its first rows, a chart's plot, a figure with its caption. */
+  --aux-visual-floor: clamp(132px, 18cqh, 200px);
   grid-row: 2;
   min-width: 0;
-  min-height: clamp(96px, 15cqh, 210px);
+  min-height: calc(clamp(96px, 15cqh, 210px) + 2 * var(--aux-bleed));
+  margin: calc(-1 * var(--aux-bleed));
+  padding: var(--aux-bleed);
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
   gap: clamp(10px, 1.6cqw, 20px);
+  /* A row with no room for every cell at its floor scrolls, the same
+     bounded scroll as a code pane or the rail, and never squeezes a cell
+     to nothing. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
 }
 .composed-primary-object,
 .composed-aux-object {
   position: relative;
   min-width: 0;
   min-height: 0;
+}
+/* A cell is never shorter than what it holds needs: a metric, a note or a
+   progress keeps its own height, and a visual, whose drawing fits any box,
+   keeps the readable floor. */
+.composed-aux-object {
+  min-height: auto;
+}
+.composed-aux-object--visual {
+  min-height: var(--aux-visual-floor);
 }
 .composed-primary-object > .focusable-content,
 .composed-aux-object > .focusable-content {
@@ -1206,8 +1233,11 @@ button {
   grid-auto-rows: auto;
   align-content: center;
 }
+/* A metric card keeps its height; the aux row under it takes the rest of
+   the slot and scrolls inside it when that is not enough. */
 .composed-primary-object--metric {
   width: min(100%, 720px);
+  min-height: auto;
   justify-self: start;
 }
 .composed-primary-object--cluster {
@@ -1771,6 +1801,27 @@ button {
 }
 .document-viewport__body {
   overflow-wrap: anywhere;
+}
+
+/* In the aux row the panel is short: the subject and the opening lines are
+   the point, so the meta line goes, the subject drops to a reading size,
+   and the body takes the rest of the panel and scrolls inside it. */
+.composed-aux-object--document .document-viewport__inner {
+  inset: clamp(12px, 1.8cqh, 18px) clamp(14px, 1.6cqw, 24px);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.composed-aux-object--document .document-viewport__meta {
+  display: none;
+}
+.composed-aux-object--document .document-viewport h1 {
+  width: 100%;
+  margin: 0 0 clamp(6px, 1cqh, 10px);
+  font-size: clamp(15px, 1.25cqw, 20px);
+}
+.composed-aux-object--document .document-viewport__body {
+  width: 100%;
+  font-size: clamp(13px, 0.95cqw, 16px);
+  line-height: 1.5;
 }
 
 /* Image: a raster figure contained on the black field, never cropped or
