@@ -367,7 +367,7 @@ export interface ChartBar {
   index: number;
   value: number;
   rect: ViewRect;
-  /** The bar's far end, mid-width: the point a marker or a note's leader reaches. */
+  /** The bar's far end, mid-width, held inside the plot: the point a marker or a note's leader reaches. */
   end: ViewPoint;
 }
 
@@ -392,7 +392,10 @@ export function chartBars(data: ChartData, scales: ChartScales = chartScales(dat
         ? { left: Math.min(base, far), right: Math.max(base, far), top: start, bottom: stop }
         : { left: start, right: stop, top: Math.min(base, far), bottom: Math.max(base, far) };
       const mid = (start + stop) / 2;
-      bars.push({ series: seriesIndex, index, value, rect, end: scales.horizontal ? { x: far, y: mid } : { x: mid, y: far } });
+      // A bar past an explicit end of the domain is clipped at the plot's
+      // edge, so its end is held there, as a line's point is.
+      const reach = scales.valueAt(Math.min(scales.yMax, Math.max(scales.yMin, value)));
+      bars.push({ series: seriesIndex, index, value, rect, end: scales.horizontal ? { x: reach, y: mid } : { x: mid, y: reach } });
     });
   });
   return bars;
