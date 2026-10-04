@@ -97,6 +97,13 @@ describe('TablePrimitive', () => {
     expect(view.querySelector('td')?.textContent).toBe('<b onclick=alert(1)>bold</b>');
   });
 
+  it('keeps the meta line out of the scroll, so rows scroll only under the sticky header', () => {
+    const view = render(results.data);
+    expect(view.querySelector('.table-viewport__mask > .table-viewport__meta')).not.toBeNull();
+    expect(view.querySelector('.table-viewport__scroll .table-viewport__meta')).toBeNull();
+    expect(view.querySelector('.table-viewport__scroll')?.firstElementChild?.tagName).toBe('TABLE');
+  });
+
   it('says so when there are no rows, and scrolls inside the frame mask', () => {
     const view = render(table(['a', 'b'], []));
     expect(view.querySelectorAll('tbody tr')).toHaveLength(0);
