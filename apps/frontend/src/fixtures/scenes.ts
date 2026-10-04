@@ -64,19 +64,12 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
   ],
   training: [
     { op: 'show', id: 'loss', type: 'chart', role: 'primary', data: { ...trainingSeries, title: 'RUN / GRAPE-AMODAL-04', subtitle: 'TRAINING / LOSS TRACE / LIVE', context: 'TRAINING RUN', caption: 'PRIMARY / LOSS TRACE' } },
-    { op: 'show', id: 'val-loss', type: 'metric', data: { label: 'VAL LOSS', value: '0.1832', semantic: 'orange', trend: 'up', delta: '+0.0138' } },
-    { op: 'show', id: 'train-loss', type: 'metric', data: { label: 'TRAIN LOSS', value: '0.1041', semantic: 'green', trend: 'down', delta: '-0.0009' } },
+    { op: 'show', id: 'val-loss', type: 'metric', data: { label: 'VAL LOSS', value: '0.1832', semantic: 'orange' } },
+    { op: 'show', id: 'train-loss', type: 'metric', data: { label: 'TRAIN LOSS', value: '0.1041', semantic: 'green' } },
     { op: 'show', id: 'learning-rate', type: 'metric', data: { label: 'LEARNING RATE', value: '1.2e-4' } },
     { op: 'show', id: 'gpu', type: 'metric', data: { label: 'GPU', value: '91%' } },
     { op: 'show', id: 'eta', type: 'metric', data: { label: 'ETA', value: '01:42:18' } },
-    { op: 'show', id: 'progress', type: 'progress', data: { label: 'EPOCH 41 / 80', detail: 'ACTIVE / OPTIMIZER STEP 18442', value: 51.25, text: '51.25% COMPLETE', steps: [
-      { label: 'WARMUP', state: 'done', detail: 'EPOCHS 1-5 / LR RAMP' },
-      { label: 'STAGE 1 / FULL RES', state: 'done', detail: 'EPOCHS 6-30' },
-      { label: 'LR TRANSITION', state: 'done', detail: 'EPOCH 31 / COSINE DECAY' },
-      { label: 'STAGE 2 / FINE', state: 'active', detail: 'EPOCHS 32-70 / VAL DIVERGING' },
-      { label: 'EVAL / HELD-OUT SEEDS', detail: 'EPOCHS 71-80' },
-      { label: 'EXPORT CHECKPOINT' },
-    ] } },
+    { op: 'show', id: 'progress', type: 'progress', data: { label: 'EPOCH 41 / 80', detail: 'ACTIVE / OPTIMIZER STEP 18442', value: 51.25, text: '51.25% COMPLETE' } },
     { op: 'show', id: 'training-note', type: 'note', data: { tag: 'OBSERVATION / EPOCH 32+', anchor: { target: 'loss', x: 32, series: 'VAL LOSS' }, segments: [
       { text: 'Validation loss turns upward here while training loss continues down. I would inspect the ' },
       { text: 'learning-rate transition', accent: true, bold: true },
@@ -223,6 +216,32 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
       { text: 'The page draws the picture from the bytes the agent sent; ' },
       { text: 'no URL is ever fetched.', accent: true, bold: true },
       { text: ' It keeps the whole figure in view and reads its size on decode.' },
+    ] } },
+  ],
+  // An agent's plan as the primary: the bar is the share of steps done (the
+  // value the validators fill in from the steps, 4 of 7), the measures the
+  // work moves sit in the rail with which way each went, and the note says
+  // what holds the plan up.
+  plan: [
+    { op: 'show', id: 'ship-plan', type: 'progress', role: 'primary', data: {
+      label: 'VISUAL-PALETTE', detail: 'SHIP PLAN / 4 OF 7 STEPS DONE', value: 57.14, caption: 'PLAN / 7 STEPS',
+      steps: [
+        { label: 'CHART KINDS + LABELS', state: 'done', detail: 'LINE / BAR / AREA / SCATTER' },
+        { label: 'TABLE TYPE', state: 'done', detail: 'MERGED / AUDITED' },
+        { label: 'SEQUENCE DIAGRAMS', state: 'done', detail: 'DIAGRAM MODE "sequence"' },
+        { label: 'PROGRESS STEPS + METRIC TREND', state: 'done', detail: 'MERGED / AUDITED' },
+        { label: 'GRAPH LAYOUT REWRITE', state: 'active', detail: 'CYCLES / LONG EDGES / IN REVIEW' },
+        { label: 'REBUILD static/', state: 'blocked', detail: 'WAITS ON THE LAYOUT MERGE' },
+        { label: 'BUMP THE HOMELAB PIN', detail: 'switchboard_version' },
+      ],
+    } },
+    { op: 'show', id: 'tests-passing', type: 'metric', data: { label: 'TESTS PASSING', value: '418', semantic: 'green', trend: 'up', delta: '+31' } },
+    { op: 'show', id: 'build-time', type: 'metric', data: { label: 'BUILD TIME', value: '38.4 s', semantic: 'cyan', trend: 'down', delta: '-2.1 s' } },
+    { op: 'show', id: 'bundle', type: 'metric', data: { label: 'BUNDLE', value: '412 kB', trend: 'flat', delta: '+0.1%' } },
+    { op: 'show', id: 'plan-note', type: 'note', data: { tag: 'DAMOCLES / PLAN', anchor: { target: 'ship-plan' }, segments: [
+      { text: 'Four of seven steps are merged. ' },
+      { text: 'The static rebuild waits on the graph layout', accent: true, bold: true },
+      { text: ', which is in review.' },
     ] } },
   ],
 };

@@ -176,9 +176,22 @@ test('explicit anchored note survives later chat messages', async ({ page }) => 
 
 // #49 and #26: every note on a chart is shown over the plot, clear of the
 // others, and the chart keeps its size for them; a note that names a point
-// runs its leader out of its card's border.
-for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }, { width: 2560, height: 1080 }]) {
-  test(`every note on a chart shows over it without covering another at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+// runs its leader out of its card's border. A stepped plan under the chart
+// leaves it short, and the rule holds there too: a card that could sit
+// level with its point, its leader leaving by a side, sits above or below.
+const stepsUnderTheChart = [
+  { label: 'WARMUP', state: 'done', detail: 'EPOCHS 1-5 / LR RAMP' },
+  { label: 'STAGE 1 / FULL RES', state: 'done', detail: 'EPOCHS 6-30' },
+  { label: 'LR TRANSITION', state: 'done', detail: 'EPOCH 31 / COSINE DECAY' },
+  { label: 'STAGE 2 / FINE', state: 'active', detail: 'EPOCHS 32-70 / VAL DIVERGING' },
+  { label: 'EVAL / HELD-OUT SEEDS', detail: 'EPOCHS 71-80' },
+  { label: 'EXPORT CHECKPOINT' },
+];
+const chartNoteCases = ['', ' on a short chart'].flatMap((chart) =>
+  [{ width: 1440, height: 900 }, { width: 390, height: 844 }, { width: 2560, height: 1080 }].map((viewport) => ({ chart, viewport })),
+);
+for (const { chart, viewport } of chartNoteCases) {
+  test(`every note on a chart shows over it without covering another${chart} at ${viewport.width}x${viewport.height}`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.goto('/?scene=training&chrome=0');
     await expect(page.locator('.chart-note')).toHaveCount(1);
@@ -186,6 +199,26 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
       const box = svg.getBoundingClientRect();
       return { width: box.width, height: box.height };
     });
+    if (chart) {
+      const tall = await chartBox();
+      await page.evaluate((steps) => {
+        const run = window.SwitchboardController?.run;
+        if (!run) throw new Error('controller unavailable');
+        run([{
+          op: 'show', id: 'progress', type: 'progress',
+          data: { label: 'EPOCH 41 / 80', detail: 'ACTIVE / OPTIMIZER STEP 18442', value: 51.25, text: '51.25% COMPLETE', steps },
+        }]);
+      }, stepsUnderTheChart);
+      await expect(page.locator('.progress-step[data-state]')).toHaveCount(stepsUnderTheChart.length);
+      // The chart shrinks over a few frames: wait until it holds one size,
+      // and test a short chart only while the plan really shortens it.
+      await expect.poll(async () => {
+        const first = await chartBox();
+        await page.waitForTimeout(250);
+        const then = await chartBox();
+        return first.width === then.width && first.height === then.height && then.height < tall.height - 60;
+      }).toBe(true);
+    }
     const before = await chartBox();
 
     await page.evaluate(() => {
@@ -515,6 +548,48 @@ test('a primary progress keeps its text under the bar on a portrait phone, with 
     }
   }
 });
+
+// The step list stretches to the primary cell so a long plan scrolls inside
+// it. A short plan must not spread over that height: its rows keep their own
+// height at the top of the list, each glyph on its label's line.
+for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+  test(`a primary progress with a short plan lists its steps at their own height at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await openController(page);
+    await page.evaluate(() => {
+      const dispatch = window.SwitchboardController?.dispatch;
+      if (!dispatch) throw new Error('controller unavailable');
+      dispatch({ op: 'clear' });
+      dispatch({
+        op: 'show', id: 'release', type: 'progress', role: 'primary',
+        data: {
+          label: 'RELEASE', value: 40,
+          steps: [
+            { label: 'BUILD', state: 'done' },
+            { label: 'TEST', state: 'done', detail: 'ALL SUITES' },
+            { label: 'REVIEW', state: 'active' },
+            { label: 'MERGE', state: 'blocked', detail: 'WAITS ON REVIEW' },
+            { label: 'DEPLOY' },
+          ],
+        },
+      });
+    });
+    const rows = page.locator('.composed-primary-object--progress .progress-step');
+    await expect(rows).toHaveCount(5);
+    const geometry = await rows.evaluateAll((items) => items.map((item) => {
+      const label = item.querySelector<HTMLElement>('.progress-step__label')!.getBoundingClientRect();
+      const glyph = item.querySelector<SVGElement>('.progress-step__glyph')!.getBoundingClientRect();
+      const row = item.getBoundingClientRect();
+      return { row: { top: row.top, bottom: row.bottom }, label: { top: label.top, bottom: label.bottom }, glyphMiddle: (glyph.top + glyph.bottom) / 2 };
+    }));
+    for (const [index, step] of geometry.entries()) {
+      expect(step.glyphMiddle, `step ${index} glyph on its label's line`).toBeGreaterThanOrEqual(step.label.top);
+      expect(step.glyphMiddle, `step ${index} glyph on its label's line`).toBeLessThanOrEqual(step.label.bottom);
+      expect(step.row.bottom - step.row.top, `step ${index} keeps its own height`).toBeLessThan((step.label.bottom - step.label.top) * 2);
+      if (index > 0) expect(step.row.top - geometry[index - 1].row.bottom, `step ${index} follows the one before`).toBeLessThan(12);
+    }
+  });
+}
 
 test('compare progress renders once in the composed aux row', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });

@@ -1025,6 +1025,9 @@ button {
   border-top: 1px solid rgba(232, 230, 223, 0.13);
   list-style: none;
   display: grid;
+  /* A list shorter than its stretched box keeps its rows at their own
+     height at the top, rather than spreading them over the box. */
+  align-content: start;
   gap: clamp(3px, 0.6cqh, 7px);
   overflow-y: auto;
   overscroll-behavior: contain;
