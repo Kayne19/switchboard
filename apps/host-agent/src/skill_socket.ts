@@ -17,8 +17,14 @@ import type { CallMode, CallState, TurnCause } from "./sessions.ts";
 /** Calls exposed by the installed switchboard skill. */
 export const MODULE_CALLS: readonly string[] = ["speak", "request_to_speak", "display", "view"];
 
-/** Longest request line accepted; a longer one closes the connection. */
-const MAX_LINE_BYTES = 1024 * 1024;
+/**
+ * Longest request line accepted; a longer one closes the connection. An image
+ * display action may be 12 MiB (MAX_IMAGE_ACTION_BYTES in the service), so a
+ * line may be as long as the host link's frame (16 MiB, MAX_HOST_FRAME_BYTES
+ * in hosts.rs) that relays it: a line this accepts is never one the link
+ * cannot carry.
+ */
+export const MAX_LINE_BYTES = 16 * 1024 * 1024;
 
 export interface SkillSocketOptions {
 	socketPath: string;

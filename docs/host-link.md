@@ -381,7 +381,9 @@ otherwise), or the link is down, the module gets `failed`.
 A Unix socket at `~/.cache/switchboard/host-agent.sock` (directory 0700,
 socket 0600). JSON lines: the module writes one request per line and reads
 one reply line; the host agent never pushes. A connection may carry several
-requests; they are answered in order.
+requests; they are answered in order. A request line is at most 16 MiB, the
+host link's frame size, so the largest display action (an image, at most
+12 MiB) fits; a longer line closes the connection.
 
 ### Hello
 

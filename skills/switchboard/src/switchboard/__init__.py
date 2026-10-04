@@ -10,6 +10,7 @@ unknown display type or op) does. The host agent and the service decide
 delivery; the checks here only catch malformed arguments early.
 """
 
+import base64 as _base64
 import json as _json
 import os as _os
 import socket as _socket
@@ -35,7 +36,15 @@ _SHAPES = {
     "document": (("subject", "paragraphs"), "{subject, paragraphs:[str]}"),
     "code": (("source",), "{source:{text}}"),
     "note": (("segments",), "{segments:[{text}]}"),
+    # The wire shape; `_image_data` makes it from a path or raw bytes first.
+    "image": (("format", "bytes", "alt"), '{alt, path:"/tmp/fig.png"} or {alt, bytes:<raw bytes>}'),
 }
+
+# ---- image ------------------------------------------------------------------
+
+# The service and the page take at most this many raw image bytes
+# (MAX_IMAGE_BYTES in visual_protocol.rs and validation.ts).
+_MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
 
 class _Result:
@@ -217,6 +226,50 @@ def request_to_speak(message, reason):
     return _send("request_to_speak", {"message": message, "reason": reason}, describe)
 
 
+def _image_format(raw):
+    """The raster format `raw` starts with, by its file signature, or None."""
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if raw.startswith(b"\xff\xd8\xff"):
+        return "jpeg"
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def _image_data(data):
+    """An image's `data` as the wire carries it: `path` or raw `bytes` become
+    `format` and base64 `bytes`; the path itself is never sent. Data already in
+    the wire shape (base64 text) is returned as it is."""
+    path = data.get("path")
+    raw = data.get("bytes")
+    if path is None and not isinstance(raw, (bytes, bytearray, memoryview)):
+        return data
+    if path is not None and raw is not None:
+        raise ValueError("image data takes a path or bytes, not both")
+    if path is not None:
+        if not isinstance(path, (str, _os.PathLike)):
+            raise TypeError(f"image path must be a string, not {type(path).__name__}")
+        try:
+            with open(path, "rb") as fh:
+                raw = fh.read(_MAX_IMAGE_BYTES + 1)
+        except OSError as err:
+            raise ValueError(f"cannot read image path {_os.fspath(path)!r}: {err.strerror or err}") from err
+    raw = bytes(raw)
+    if len(raw) > _MAX_IMAGE_BYTES:
+        raise ValueError(f"the image is over {_MAX_IMAGE_BYTES} bytes; scale it down or re-encode it")
+    found = _image_format(raw)
+    if found is None:
+        raise ValueError("the image is not a PNG, JPEG or WebP (SVG is not shown); save it as a PNG first")
+    named = data.get("format")
+    if named is not None and named != found:
+        raise ValueError(f"the image's bytes are a {found}, not a {named}")
+    wire = {key: value for key, value in data.items() if key != "path"}
+    wire["format"] = found
+    wire["bytes"] = _base64.b64encode(raw).decode("ascii")
+    return wire
+
+
 def _check_display_action(action):
     if not isinstance(action, dict):
         raise TypeError(f"a display action must be a dict, not {type(action).__name__}")
@@ -250,11 +303,15 @@ def display(action=None, **fields):
 
     Pass one action as a dict, or its fields as keywords:
     display(op="show", id="build", type="progress", data={"label": "Build", "value": 40}).
+    An image is shown from a file or raw bytes, never a URL:
+    display(op="show", id="fig", type="image", data={"path": "/tmp/fig.png", "alt": "Loss curve"}).
     """
     if action is None:
         action = fields
     elif fields:
         raise TypeError("pass the display action as a dict or as keywords, not both")
+    if isinstance(action, dict) and action.get("op") == "show" and action.get("type") == "image" and isinstance(action.get("data"), dict):
+        action = {**action, "data": _image_data(action["data"])}
     _check_display_action(action)
 
     def describe(result):

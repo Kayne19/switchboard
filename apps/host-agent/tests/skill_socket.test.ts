@@ -7,7 +7,7 @@ import { test } from "node:test";
 import type { ModuleReply } from "../src/link.ts";
 import type { CallState } from "../src/sessions.ts";
 import { SessionManager } from "../src/sessions.ts";
-import { SkillSocket } from "../src/skill_socket.ts";
+import { MAX_LINE_BYTES, SkillSocket } from "../src/skill_socket.ts";
 import { FakeDaemon } from "./fake_daemon.ts";
 
 interface Relayed {
@@ -155,5 +155,24 @@ test("background mode refuses speak, but accepts request_to_speak and display", 
 		assert.deepEqual(await call("request_to_speak", { message: "finished", reason: "finished" }), { status: "delivered", reason: null });
 		assert.deepEqual(await call("display", { action: { op: "show", id: "chart", type: "chart", data: { series: [] } } }), { status: "delivered", reason: null });
 		assert.equal(relayed.length, 2, "speak is refused locally while request and display are relayed");
+	});
+});
+
+test("an image display line up to the host link's frame size is relayed whole; a longer line closes the connection", async () => {
+	await withSocket(async ({ ask, manager, handle, sessionId, relayed, socketPath }) => {
+		await manager.handle("join_call", { session: handle, ...CALL, mode: "foreground" });
+		// 12 MiB of base64: the largest image action the service accepts.
+		const bytes = "A".repeat(12 * 1024 * 1024 - 256);
+		const action = { op: "show", id: "fig", type: "image", data: { format: "png", bytes, alt: "a" } };
+		assert.deepEqual(await ask({ op: "call", session_id: sessionId, depth: 0, token: CALL.token, call: "display", args: { action } }), { status: "delivered", reason: null });
+		assert.equal((relayed.at(-1)?.args.action as typeof action).data.bytes.length, bytes.length);
+
+		const before = relayed.length;
+		const long = net.createConnection(socketPath);
+		const closed = new Promise<void>((resolve) => long.once("close", () => resolve()));
+		long.on("error", () => {});
+		long.write(`${JSON.stringify({ op: "call", session_id: sessionId, depth: 0, token: CALL.token, call: "display", args: { pad: "A".repeat(MAX_LINE_BYTES) } })}\n`);
+		await closed;
+		assert.equal(relayed.length, before, "an over-long line is never relayed");
 	});
 });
