@@ -42,3 +42,28 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
     expect(geometry.headTop - geometry.maskTop).toBeGreaterThanOrEqual(geometry.maskHeight * 0.057);
   });
 }
+
+// A long prose column must not squeeze a short column into breaking its
+// words: `overflow-wrap: anywhere` let the table size a column below its
+// longest word, so `MEDIUM` and `$1,200` broke inside themselves.
+const options = {
+  title: 'OPTIONS / COMPARE',
+  columns: [{ label: 'OPTION' }, { label: 'COST' }, { label: 'NOTES' }, { label: 'RISK' }],
+  rows: [
+    ['Postgres on damocles', '$1,200', 'We already run it; backups exist and the team knows the failure modes well, but disk is tight.', { text: 'LOW', semantic: 'green' }],
+    ['Managed RDS', '$3,450', 'No ops work, but egress costs grow with replication and a second region would double it.', { text: 'MEDIUM', semantic: 'amber' }],
+    ['SQLite per host', '$0', 'Cheap and simple; concurrent writers from the PBX legs would contend on one file.', { text: 'HIGH', semantic: 'red', bold: true }],
+  ],
+};
+
+for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+  test(`a table cell breaks between words, never inside one / ${viewport.width}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await showTable(page, options);
+    const broken = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.table-grid td .table-grid__text')]
+      .filter((node) => !/\s/.test(node.textContent ?? ''))
+      .filter((node) => node.getClientRects().length > 1)
+      .map((node) => node.textContent));
+    expect(broken).toEqual([]);
+  });
+}
