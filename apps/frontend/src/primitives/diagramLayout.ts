@@ -667,7 +667,7 @@ function assignPorts(layers: Item[][], segments: Segment[]) {
 
 /**
  * Gives every bend in a gap a track. Two bends whose cross runs overlap
- * take different tracks, ordered so an edge that starts nearer the far
+ * (or touch, other than at a shared port) take different tracks, ordered so an edge that starts nearer the far
  * side of its run bends nearer its target: then its stubs cross no other
  * run. Returns the track count.
  */
@@ -684,12 +684,24 @@ function assignTracks(segments: Segment[]): number {
     track: 0,
   }));
   keyed.sort((a, b) => a.key - b.key || a.far - b.far || a.segment.edge - b.segment.edge);
+  // Runs that only touch end to end still meet on one track, and read as
+  // one line with a junction, unless the point they share is one port of
+  // one box: branches of a trunk may part there.
+  const sharePort = (a: Segment, b: Segment, at: number) =>
+    (a.from === b.from && Math.abs(a.fromCross - at) < 1e-6 && Math.abs(b.fromCross - at) < 1e-6) ||
+    (a.to === b.to && Math.abs(a.toCross - at) < 1e-6 && Math.abs(b.toCross - at) < 1e-6);
+  const meet = (a: (typeof keyed)[number], b: (typeof keyed)[number]) => {
+    if (a.low < b.high - 1e-6 && b.low < a.high - 1e-6) return true;
+    if (Math.abs(a.high - b.low) < 1e-6) return !sharePort(a.segment, b.segment, a.high);
+    if (Math.abs(b.high - a.low) < 1e-6) return !sharePort(a.segment, b.segment, a.low);
+    return false;
+  };
   let count = 0;
   keyed.forEach((entry, index) => {
     let track = 0;
     for (let other = 0; other < index; other += 1) {
       const earlier = keyed[other];
-      if (earlier.low < entry.high && entry.low < earlier.high) track = Math.max(track, earlier.track + 1);
+      if (meet(earlier, entry)) track = Math.max(track, earlier.track + 1);
     }
     entry.track = track;
     entry.segment.track = track;

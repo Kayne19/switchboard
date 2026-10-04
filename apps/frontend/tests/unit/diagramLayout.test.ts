@@ -216,6 +216,25 @@ for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
         }
       });
 
+      it(`${name}: two edges between one pair of nodes, one each way, never meet`, () => {
+        // Touching end to end on one track, they would read as one line
+        // with a junction, and neither direction could be told.
+        const meet = (a: Point, b: Point, c: Point, d: Point) =>
+          Math.min(a.x, b.x) <= Math.max(c.x, d.x) + 1e-6 &&
+          Math.min(c.x, d.x) <= Math.max(a.x, b.x) + 1e-6 &&
+          Math.min(a.y, b.y) <= Math.max(c.y, d.y) + 1e-6 &&
+          Math.min(c.y, d.y) <= Math.max(a.y, b.y) + 1e-6;
+        for (const edge of layout.edges) {
+          const back = layout.edges.find((other) => other.edge.from === edge.edge.to && other.edge.to === edge.edge.from);
+          if (!back) continue;
+          edge.points.slice(1).forEach((end, k) => {
+            back.points.slice(1).forEach((backEnd, j) => {
+              expect(meet(edge.points[k], end, back.points[j], backEnd), `${edge.edge.from}<->${edge.edge.to}`).toBe(false);
+            });
+          });
+        }
+      });
+
       it(`${name}: routes pass through no node but their own ends`, () => {
         for (const edge of layout.edges) {
           expect(edge.points.length).toBeGreaterThanOrEqual(2);
