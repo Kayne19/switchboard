@@ -195,7 +195,12 @@ for (const { chart, viewport } of chartNoteCases) {
     await page.setViewportSize(viewport);
     await page.goto('/?scene=training&chrome=0');
     await expect(page.locator('.chart-note')).toHaveCount(1);
+    const chartBox = async () => page.locator('.chart-object[data-chart-id="loss"] .chart-primitive > svg').evaluate((svg) => {
+      const box = svg.getBoundingClientRect();
+      return { width: box.width, height: box.height };
+    });
     if (chart) {
+      const tall = await chartBox();
       await page.evaluate((steps) => {
         const run = window.SwitchboardController?.run;
         if (!run) throw new Error('controller unavailable');
@@ -206,11 +211,9 @@ for (const { chart, viewport } of chartNoteCases) {
       }, stepsUnderTheChart);
       await expect(page.locator('.progress-step[data-state]')).toHaveCount(stepsUnderTheChart.length);
       await page.waitForTimeout(400);
+      // The case tests a short chart only while the plan really shortens it.
+      expect((await chartBox()).height).toBeLessThan(tall.height - 60);
     }
-    const chartBox = async () => page.locator('.chart-object[data-chart-id="loss"] .chart-primitive > svg').evaluate((svg) => {
-      const box = svg.getBoundingClientRect();
-      return { width: box.width, height: box.height };
-    });
     const before = await chartBox();
 
     await page.evaluate(() => {

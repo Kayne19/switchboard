@@ -13,11 +13,13 @@
 // under another card; then the legend and axis labels, then the grid; and,
 // for a note with a point, as close over it as that allows.
 //
-// A card sits level with its point, just beside it with its leader leaving
-// by a side, only where every place above and below it is taken: the card
-// is too tall to clear the point either way inside the layer, or each such
-// place covers another card or another note's point. Beside the point is
-// still better than over it.
+// Where no row clears a card's point, the card also tries straight above
+// and below the point, a gap away, and last beside it, level with it, so
+// that its leader leaves by a side. It ends up beside its point only where
+// each of those places above or below comes within 6px of the point, covers
+// another note's point or overlaps another card. A card alone does so
+// exactly when it is taller than the room above and below its point, less
+// those 6px. Beside the point is still better than over it.
 
 export interface Point {
   x: number;
@@ -57,6 +59,7 @@ const COST = {
   ownPoint: 1e9,
   otherPoint: 1e8,
   cardOverlap: 1e7,
+  skirtingPoint: 2e6,
   levelWithPoint: 1e6,
   cardOverlapArea: 100,
   traceLength: 40,
@@ -75,6 +78,9 @@ const POINT_CLEARANCE = 6;
 // leave the card, step across and arrive.
 const BESIDE_POINT = 24;
 
+/** How a card that does not cover its point stands to it. */
+type Standing = 'clear' | 'level' | 'skirting';
+
 function overlapArea(a: Rect, b: Rect): number {
   const width = Math.min(a.right, b.right) - Math.max(a.left, b.left);
   const height = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
@@ -90,10 +96,13 @@ function covers(rect: Rect, point: Point, clearance = POINT_CLEARANCE): boolean 
   );
 }
 
-// Whether a card that does not cover a point sits level with it, so that a
-// leader to it would leave by a side, or run along the top or bottom border.
-function level(rect: Rect, point: Point, clearance = POINT_CLEARANCE): boolean {
-  return point.y > rect.top - clearance && point.y < rect.bottom + clearance;
+// Clear of the point above or below it, so the leader leaves by the top or
+// bottom border; level with it, so the leader leaves by a side; or skirting
+// it, within the clearance of the top or bottom border line, where a leader
+// would run along the border. Asked only of a card that does not cover it.
+function standing(rect: Rect, point: Point, clearance = POINT_CLEARANCE): Standing {
+  if (point.y <= rect.top - clearance || point.y >= rect.bottom + clearance) return 'clear';
+  return point.y >= rect.top + clearance && point.y <= rect.bottom - clearance ? 'level' : 'skirting';
 }
 
 // The length of the segment from `a` to `b` that falls inside `rect`
@@ -165,51 +174,65 @@ export function placeNotes(notes: NoteToPlace[], field: NoteField, gap = NOTE_GA
     const minTop = area.top;
     const maxTop = area.bottom - height;
 
+    const clampLeft = (left: number) => clamp(left, minLeft, maxLeft);
+    const clampTop = (top: number) => clamp(top, minTop, maxTop);
     const lefts = unique(
       [
-        ...(point ? [point.x - width / 2, point.x - BESIDE_POINT - width, point.x + BESIDE_POINT] : [minLeft, maxLeft]),
+        ...(point ? [point.x - width / 2] : [minLeft, maxLeft]),
         ...[...others, ...labels].flatMap((other) => [other.left - gap - width, other.right + gap]),
-      ].map((left) => clamp(left, minLeft, maxLeft)),
+      ].map(clampLeft),
     );
     const tops = unique(
-      [minTop, maxTop, ...[...others, ...labels].flatMap((other) => [other.bottom + gap, other.top - gap - height])].map((top) =>
-        clamp(top, minTop, maxTop),
-      ),
+      [minTop, maxTop, ...[...others, ...labels].flatMap((other) => [other.bottom + gap, other.top - gap - height])].map(clampTop),
     );
 
     let best: { rect: Rect; cost: number } | undefined;
-    for (const left of lefts) {
-      for (const top of tops) {
-        const rect = { left, top, right: left + width, bottom: top + height };
-        let cost = 0;
-        if (point && covers(rect, point)) cost += COST.ownPoint;
-        else if (point && level(rect, point)) cost += COST.levelWithPoint;
-        for (const other of points) {
-          if (other.id !== note.id && covers(rect, other.point)) cost += COST.otherPoint;
-        }
-        for (const other of others) {
-          const area = overlapArea(rect, other);
-          if (area > 0) cost += COST.cardOverlap + area * COST.cardOverlapArea;
-        }
-        cost += hiddenTraceLength(rect, traces) * COST.traceLength;
-        cost += hiddenTraceLength(rect, leaders) * COST.leaderLength;
-        if (point) {
-          const leader = routeLeader(rect, point);
-          for (const other of others) cost += hiddenTraceLength(other, [leader]) * COST.leaderLength;
-        }
-        for (const label of labels) cost += overlapArea(rect, label) * COST.labelArea;
-        if (field.plot) cost += overlapArea(rect, field.plot) * COST.plotArea;
-        const nearTop = top - minTop <= maxTop - top;
-        if (point) {
-          cost += Math.abs(left + width / 2 - point.x) * COST.shift;
-          const leaderLength = point.y >= rect.bottom ? point.y - rect.bottom : point.y <= rect.top ? rect.top - point.y : 0;
-          cost += leaderLength * COST.leader;
-        } else if (left - minLeft > maxLeft - left) {
-          cost += COST.rightCorner;
-        }
-        if (!nearTop) cost += COST.bottomRow;
-        if (!best || cost < best.cost - 1e-6) best = { rect, cost };
+    const consider = (left: number, top: number) => {
+      const rect = { left, top, right: left + width, bottom: top + height };
+      let cost = 0;
+      if (point && covers(rect, point)) cost += COST.ownPoint;
+      else if (point) {
+        const stands = standing(rect, point);
+        if (stands === 'skirting') cost += COST.skirtingPoint;
+        else if (stands === 'level') cost += COST.levelWithPoint;
       }
+      for (const other of points) {
+        if (other.id !== note.id && covers(rect, other.point)) cost += COST.otherPoint;
+      }
+      for (const other of others) {
+        const area = overlapArea(rect, other);
+        if (area > 0) cost += COST.cardOverlap + area * COST.cardOverlapArea;
+      }
+      cost += hiddenTraceLength(rect, traces) * COST.traceLength;
+      cost += hiddenTraceLength(rect, leaders) * COST.leaderLength;
+      if (point) {
+        const leader = routeLeader(rect, point);
+        for (const other of others) cost += hiddenTraceLength(other, [leader]) * COST.leaderLength;
+      }
+      for (const label of labels) cost += overlapArea(rect, label) * COST.labelArea;
+      if (field.plot) cost += overlapArea(rect, field.plot) * COST.plotArea;
+      const nearTop = top - minTop <= maxTop - top;
+      if (point) {
+        cost += Math.abs(left + width / 2 - point.x) * COST.shift;
+        const leaderLength = point.y >= rect.bottom ? point.y - rect.bottom : point.y <= rect.top ? rect.top - point.y : 0;
+        cost += leaderLength * COST.leader;
+      } else if (left - minLeft > maxLeft - left) {
+        cost += COST.rightCorner;
+      }
+      if (!nearTop) cost += COST.bottomRow;
+      if (!best || cost < best.cost - 1e-6) best = { rect, cost };
+    };
+    for (const left of lefts) {
+      for (const top of tops) consider(left, top);
+    }
+    if (point && best!.cost >= COST.levelWithPoint) {
+      // No row clears the point: straight above or below it, a gap away,
+      // and last beside it, level with it.
+      for (const top of unique([point.y - gap - height, point.y + gap].map(clampTop))) {
+        for (const left of lefts) consider(left, top);
+      }
+      const besideTop = clampTop(point.y - height / 2);
+      for (const left of unique([point.x - BESIDE_POINT - width, point.x + BESIDE_POINT].map(clampLeft))) consider(left, besideTop);
     }
     placed.set(note.id, best!.rect);
     if (point) leaders.push(routeLeader(best!.rect, point));

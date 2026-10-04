@@ -184,6 +184,39 @@ describe('note placement', () => {
     expect(leader[leader.length - 1]).toEqual(point);
   });
 
+  it('tries straight above or below its point when no row clears it', () => {
+    // Other notes' points hold the top row; the bottom row is level with the point.
+    const notes: NoteToPlace[] = [
+      { id: 'a', width: 300, height: 80, point: { x: 500, y: 260 } },
+      { id: 'b', width: 150, height: 40, point: { x: 400, y: 40 } },
+      { id: 'c', width: 150, height: 40, point: { x: 600, y: 40 } },
+    ];
+    const card = placeNotes(notes, { area: box(0, 0, 1000, 300) }).get('a')!;
+    for (const other of notes.slice(1)) expect(inside(other.point!, card)).toBe(false);
+    const leader = routeLeader(card, notes[0].point!);
+    expect([card.top, card.bottom]).toContain(leader[0].y);
+  });
+
+  it('beside its point sits level with it, so its leader leaves by a side and never runs along a border', () => {
+    // The point is 3px under where the top row's bottom border would be.
+    const point = { x: 500, y: 63 };
+    const card = placeNotes([{ id: 'a', width: 400, height: 60, point }], { area: box(0, 0, 1000, 100) }).get('a')!;
+    expect(point.y).toBeGreaterThan(card.top + 6);
+    expect(point.y).toBeLessThan(card.bottom - 6);
+    const leader = routeLeader(card, point);
+    expect([card.left, card.right]).toContain(leader[0].x);
+  });
+
+  it('centres over its point in a row that clears it, rather than taking a place beside it', () => {
+    // The trace falls across the top-right corner, so a card a little left
+    // of the point would hide less of it; the places beside the point are
+    // only for a card no place above or below can clear.
+    const point = { x: 790, y: 220 };
+    const traces = [[{ x: 0, y: 180 }, { x: 1000, y: 50 }]];
+    const card = placeNotes([{ id: 'a', width: 250, height: 70, point }], { area: box(0, 0, 1000, 260), traces }).get('a')!;
+    expect(card).toEqual(box(665, 0, 250, 70));
+  });
+
   it('steps clear of an axis label rather than cover it, staying near its point', () => {
     const label = box(0, 60, 70, 400);
     const placed = placeNotes([{ id: 'a', width: 300, height: 80, point: { x: 120, y: 300 } }], { area, labels: [label] });
