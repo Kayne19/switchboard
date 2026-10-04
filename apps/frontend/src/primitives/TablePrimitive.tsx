@@ -10,10 +10,11 @@ export function cellText(cell: TableCell): string {
   return cell.text;
 }
 
-// Text that reads as a quantity: a sign, digits with separators, a fraction
-// or exponent, then a short unit such as `s`, `ms`, `%`, `GB`, `req/s`;
-// a compound duration such as `1m 48s`; or a clock time such as `01:42:18`.
-const QUANTITY = /^(?:[-+\u2212]?(?:\d[\d,_ ]*(?:\.\d+)?|\.\d+)(?:e[-+]?\d+)?\s*(?:[%\u2030\u00b0]|[a-z\u00b5]{1,4}(?:\/[a-z]{1,4})?)?(?:\s+\d+(?:\.\d+)?\s*[a-z\u00b5]{1,4})*|\d{1,2}(?::\d{2}){1,2})$/i;
+// Text that reads as a quantity: a sign, a currency symbol, digits with
+// separators, a fraction or exponent, then a short unit such as `s`, `ms`,
+// `%`, `GB`, `req/s`; a compound duration such as `1m 48s`; or a clock time
+// such as `01:42:18`.
+const QUANTITY = /^(?:[-+\u2212]?(?:[$\u20ac\u00a3\u00a5\u20b9]\s?)?(?:\d[\d,_ ]*(?:\.\d+)?|\.\d+)(?:e[-+]?\d+)?\s*(?:[%\u2030\u00b0]|[a-z\u00b5]{1,4}(?:\/[a-z]{1,4})?)?(?:\s+\d+(?:\.\d+)?\s*[a-z\u00b5]{1,4})*|\d{1,2}(?::\d{2}){1,2})$/i;
 // A cell with nothing to align: empty, a dash, or a placeholder.
 const BLANK = /^(?:|[-\u2013\u2014]|n\/a|\u2026)$/i;
 
@@ -56,7 +57,9 @@ function CellText({ cell }: { cell: TableCell }) {
 // Rows of named columns inside the interrupted-rails frame, scrolling only
 // when they overflow it and clipped to its inside (the same mask the code
 // viewport uses). Thin rules separate rows; a highlighted row carries the
-// orange accent the code viewport gives a hot line.
+// orange accent the code viewport gives a hot line. The meta line stays
+// above the scroll, so the sticky header is the scroll's top edge and a row
+// scrolling up passes under it rather than showing above it.
 export function TablePrimitive({ data, focused = false }: { data: TableData; focused?: boolean }) {
   const alignment = inferColumnAlignment(data);
   const highlighted = new Set(data.highlight ?? []);
@@ -64,11 +67,11 @@ export function TablePrimitive({ data, focused = false }: { data: TableData; foc
     <div className={`table-viewport${focused ? ' table-viewport--focused' : ''}`} data-testid="table">
       <TechFrame variant="code" />
       <div className="table-viewport__mask">
+        <div className="table-viewport__meta tech micro">
+          <span>{data.title ?? 'TABLE'}</span>
+          <span>{data.rows.length} ROWS / {data.columns.length} COLS</span>
+        </div>
         <div className="table-viewport__scroll" tabIndex={0}>
-          <div className="table-viewport__meta tech micro">
-            <span>{data.title ?? 'TABLE'}</span>
-            <span>{data.rows.length} ROWS / {data.columns.length} COLS</span>
-          </div>
           <table className="table-grid">
             <thead>
               <tr>

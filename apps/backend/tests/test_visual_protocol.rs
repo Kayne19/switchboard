@@ -304,6 +304,22 @@ fn table_rows_fit_their_columns() {
 }
 
 #[test]
+fn table_rows_are_at_most_two_hundred() {
+    let one = json!([{"label": "a"}]);
+    let rows = |n: usize| Value::Array((0..n).map(|_| json!(["x"])).collect());
+    assert!(validate_action(&table_action(json!({"columns": one, "rows": rows(200)}))).is_ok());
+    for data in [
+        json!({"columns": one, "rows": rows(201)}),
+        json!({"columns": one}),
+    ] {
+        assert_eq!(
+            validate_action(&table_action(data)),
+            Err("table.rows must be an array of at most 200 items".into())
+        );
+    }
+}
+
+#[test]
 fn table_highlight_names_rows() {
     let one = json!([{"label": "a"}]);
     let rows = json!([["x"], ["y"]]);
@@ -356,6 +372,10 @@ fn table_cells_are_text_numbers_or_styled_text() {
         (
             json!("x".repeat(257)),
             "table cell exceeds maximum length of 256 UTF-16 code units",
+        ),
+        (
+            json!({"text": "x".repeat(257)}),
+            "table cell.text exceeds maximum length of 256 UTF-16 code units",
         ),
     ] {
         let data = json!({"columns": one, "rows": [[cell]]});

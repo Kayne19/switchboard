@@ -36,6 +36,14 @@ describe('inferColumnAlignment', () => {
     ]))).toEqual(['start', 'end', 'end', 'end', 'end', 'end', 'start']);
   });
 
+  it('reads a currency amount as a quantity', () => {
+    expect(inferColumnAlignment(table(['cost', 'delta', 'label'], [
+      ['$1,200', '-$40', '$ for dollars'],
+      ['\u20ac3.50', '+\u00a312', 'USD'],
+      ['\u00a50', '\u2212\u20b9 5', 'n/a'],
+    ]))).toEqual(['end', 'end', 'start']);
+  });
+
   it('ignores blank cells and dashes, but one word turns the column to text', () => {
     expect(inferColumnAlignment(table(['a', 'b', 'c'], [
       [12, '', 'n/a'],
@@ -95,6 +103,13 @@ describe('TablePrimitive', () => {
     const view = render(table(['a'], [['<b onclick=alert(1)>bold</b>']]));
     expect(view.querySelector('b')).toBeNull();
     expect(view.querySelector('td')?.textContent).toBe('<b onclick=alert(1)>bold</b>');
+  });
+
+  it('keeps the meta line out of the scroll, so rows scroll only under the sticky header', () => {
+    const view = render(results.data);
+    expect(view.querySelector('.table-viewport__mask > .table-viewport__meta')).not.toBeNull();
+    expect(view.querySelector('.table-viewport__scroll .table-viewport__meta')).toBeNull();
+    expect(view.querySelector('.table-viewport__scroll')?.firstElementChild?.tagName).toBe('TABLE');
   });
 
   it('says so when there are no rows, and scrolls inside the frame mask', () => {
