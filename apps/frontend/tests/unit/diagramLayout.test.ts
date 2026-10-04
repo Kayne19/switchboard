@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DiagramData } from '../../src/controller/types';
-import { breakCycles, layoutDiagram, measureNode, type Box, type DiagramOrientation, type Point } from '../../src/primitives/diagramLayout';
+import { ARROW_LENGTH, breakCycles, layoutDiagram, measureNode, type Box, type DiagramOrientation, type Point } from '../../src/primitives/diagramLayout';
 
 const graph = (nodes: string[], edges: Array<[string, string, string]>): DiagramData => ({
   mode: 'graph',
@@ -132,6 +132,27 @@ const segmentBox = (a: Point, b: Point): Box => ({
   height: Math.max(Math.abs(a.y - b.y), 0.001),
 });
 
+// A label names the route it sits on: its centre lies on one of the
+// route's segments.
+const onRoute = (point: Point, points: Point[]) =>
+  points.slice(1).some((end, index) => {
+    const box = segmentBox(points[index], end);
+    return point.x >= box.x - 1e-6 && point.x <= box.x + box.width + 1e-6 && point.y >= box.y - 1e-6 && point.y <= box.y + box.height + 1e-6;
+  });
+
+// The arrowhead at a route's end: the last ARROW_LENGTH of its final
+// segment, as wide as it is long.
+const arrowhead = (points: Point[]): Box => {
+  const end = points[points.length - 1];
+  const before = points[points.length - 2];
+  if (Math.abs(end.y - before.y) < 1e-6) {
+    const back = end.x - Math.sign(end.x - before.x) * ARROW_LENGTH;
+    return { x: Math.min(end.x, back), y: end.y - ARROW_LENGTH / 2, width: ARROW_LENGTH, height: ARROW_LENGTH };
+  }
+  const back = end.y - Math.sign(end.y - before.y) * ARROW_LENGTH;
+  return { x: end.x - ARROW_LENGTH / 2, y: Math.min(end.y, back), width: ARROW_LENGTH, height: ARROW_LENGTH };
+};
+
 const onOutline = (point: Point, box: Box) => {
   const onVertical = (Math.abs(point.x - box.x) < 1e-6 || Math.abs(point.x - (box.x + box.width)) < 1e-6) && point.y >= box.y && point.y <= box.y + box.height;
   const onHorizontal = (Math.abs(point.y - box.y) < 1e-6 || Math.abs(point.y - (box.y + box.height)) < 1e-6) && point.x >= box.x && point.x <= box.x + box.width;
@@ -180,6 +201,16 @@ for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
             expect(overlaps(label.box, other.box), `${label.text} over ${other.text}`).toBe(false);
           }
         });
+      });
+
+      it(`${name}: every label sits on its own route and clears every arrowhead`, () => {
+        for (const edge of layout.edges) {
+          if (edge.label) expect(onRoute(edge.label, edge.points), `${edge.label.text} on ${edge.edge.from}->${edge.edge.to}`).toBe(true);
+        }
+        for (const edge of layout.edges) {
+          const head = arrowhead(edge.points);
+          for (const label of labels) expect(overlaps(head, label.box), `${label.text} over the arrowhead of ${edge.edge.from}->${edge.edge.to}`).toBe(false);
+        }
       });
 
       it(`${name}: routes pass through no node but their own ends`, () => {
@@ -261,6 +292,29 @@ for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
     });
   });
 }
+
+describe('edge labels in landscape', () => {
+  // A label's backing hides whatever it covers, so a label over another
+  // edge's line would read as naming it. Where the graph leaves room, a
+  // label never does. (A pair of opposite edges between the same two
+  // nodes, carrying a two-line label, can leave none: the pipeline's
+  // "transfer signal" still covers its partner.)
+  for (const name of ['chain', 'skip', 'fan', 'cycle', 'states', 'wide']) {
+    it(`${name}: no label hides another edge's line`, () => {
+      const layout = layoutDiagram(graphs[name], 'landscape');
+      for (const edge of layout.edges) {
+        const label = edge.label;
+        if (!label) continue;
+        for (const other of layout.edges) {
+          if (other === edge) continue;
+          other.points.slice(1).forEach((end, index) => {
+            expect(overlaps(segmentBox(other.points[index], end), label.box), `${label.text} over ${other.edge.from}->${other.edge.to}`).toBe(false);
+          });
+        }
+      }
+    });
+  }
+});
 
 describe('node measurement', () => {
   it('sizes a box to its wrapped text', () => {

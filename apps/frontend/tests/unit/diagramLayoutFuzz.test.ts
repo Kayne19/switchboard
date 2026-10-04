@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DiagramData } from '../../src/controller/types';
-import { layoutDiagram, type Box, type DiagramOrientation, type Point } from '../../src/primitives/diagramLayout';
+import { ARROW_LENGTH, layoutDiagram, type Box, type DiagramOrientation, type Point } from '../../src/primitives/diagramLayout';
 
 // A small deterministic generator, so a failing seed can be replayed.
 function random(seed: number) {
@@ -48,6 +48,21 @@ const segmentBox = (a: Point, b: Point): Box => ({
   width: Math.max(Math.abs(a.x - b.x), 0.001),
   height: Math.max(Math.abs(a.y - b.y), 0.001),
 });
+const onRoute = (point: Point, points: Point[]) =>
+  points.slice(1).some((end, index) => {
+    const box = segmentBox(points[index], end);
+    return point.x >= box.x - 1e-6 && point.x <= box.x + box.width + 1e-6 && point.y >= box.y - 1e-6 && point.y <= box.y + box.height + 1e-6;
+  });
+const arrowhead = (points: Point[]): Box => {
+  const end = points[points.length - 1];
+  const before = points[points.length - 2];
+  if (Math.abs(end.y - before.y) < 1e-6) {
+    const back = end.x - Math.sign(end.x - before.x) * ARROW_LENGTH;
+    return { x: Math.min(end.x, back), y: end.y - ARROW_LENGTH / 2, width: ARROW_LENGTH, height: ARROW_LENGTH };
+  }
+  const back = end.y - Math.sign(end.y - before.y) * ARROW_LENGTH;
+  return { x: end.x - ARROW_LENGTH / 2, y: Math.min(end.y, back), width: ARROW_LENGTH, height: ARROW_LENGTH };
+};
 const within = (box: Box, width: number, height: number) => box.x >= 0 && box.y >= 0 && box.x + box.width <= width && box.y + box.height <= height;
 
 describe('diagram layout stays quick at the largest allowed graph', () => {
@@ -90,6 +105,11 @@ describe('diagram layout holds its invariants on random graphs', () => {
             expect(overlaps(label.box, other.box), `seed ${seed}: ${label.text} over ${other.text}`).toBe(false);
           }
         });
+        for (const edge of layout.edges) {
+          if (edge.label) expect(onRoute(edge.label, edge.points), `seed ${seed}: ${edge.label.text} on its own route`).toBe(true);
+          const head = arrowhead(edge.points);
+          for (const label of labels) expect(overlaps(head, label.box), `seed ${seed}: ${label.text} over an arrowhead`).toBe(false);
+        }
         for (const edge of layout.edges) {
           for (let index = 1; index < edge.points.length; index += 1) {
             const segment = segmentBox(edge.points[index - 1], edge.points[index]);

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import type { DiagramData, NoteData, Semantic } from '../controller/types';
 import { useElementSize } from '../hooks/useElementSize';
-import { layoutDiagram, type Point } from './diagramLayout';
+import { ARROW_LENGTH, layoutDiagram, type Point } from './diagramLayout';
 
 const colors: Record<Semantic, string> = {
   red: 'var(--red)',
@@ -14,9 +14,9 @@ const colors: Record<Semantic, string> = {
 };
 const SEMANTICS = Object.keys(colors) as Semantic[];
 
-// The arrowhead at an edge's target, in user units: it scales with the
-// drawing, as the node frames do, while the stroke itself does not.
-const ARROW = 11;
+// The arrowhead at an edge's target is ARROW_LENGTH user units, which the
+// layout keeps labels clear of: it scales with the drawing, as the node
+// frames do, while the stroke itself does not.
 // Edge label line pitch, in user units (.diagram-edge-label is 11 units).
 const LABEL_LINE = 14;
 // The small tag in a node's top-right corner that carries its state glyph.
@@ -156,8 +156,8 @@ export function DiagramPrimitive({
               viewBox="0 0 10 10"
               refX="10"
               refY="5"
-              markerWidth={ARROW}
-              markerHeight={ARROW}
+              markerWidth={ARROW_LENGTH}
+              markerHeight={ARROW_LENGTH}
               markerUnits="userSpaceOnUse"
               orient="auto"
             >

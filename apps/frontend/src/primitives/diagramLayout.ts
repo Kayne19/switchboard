@@ -20,8 +20,9 @@
 //    neighbours as far as the ones beside it allow.
 // 6. Routes are axis-aligned and bend in the gap between layers; bends that
 //    would otherwise be ambiguous take their own track, and the gap grows to
-//    hold its tracks and its labels. Labels sit mid-route in the gap and
-//    slide along their bend when two meet.
+//    hold its tracks and its labels. A label sits on its own route in the
+//    gap, clear of the other labels, of the other edges' lines, and of the
+//    arrowheads at the gap's ends.
 // The drawing grows when the approved canvas is too small, and the SVG
 // scales it to fit, rather than letting anything overlap.
 
@@ -130,8 +131,15 @@ const LABEL_HEIGHT = 14;
 const LABEL_BACKING = 4;
 const LABEL_WRAP_AT = 14;
 const LABEL_MAX_LINES = 2;
-// Space kept clear between a label's backing and anything else in its gap.
+// Space kept clear between a label's backing and anything else in its gap;
+// a line passing a label keeps a little room from its backing too.
 const CLEARANCE = 6;
+const LINE_CLEARANCE = 2;
+// An edge's arrowhead, in user units: the renderer draws it this long, and a
+// label keeps clear of the gap's ends by this much so its backing never
+// covers an arrowhead.
+export const ARROW_LENGTH = 11;
+const ARROW_ROOM = ARROW_LENGTH + 2;
 // The narrowest gap between layers, labelled or not.
 const MIN_GAP = 48;
 // Distance between two bend tracks sharing a gap.
@@ -749,14 +757,20 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
   const gapIndexOf = (route: Route) => route.segments[0].from.layer + Math.floor((route.segments.length - 1) / 2);
   const gaps = Array.from({ length: Math.max(0, layerCount - 1) }, (_, gap) => {
     const own = segments.filter((segment) => segment.from.layer === gap);
-    return { tracks: assignTracks(own), size: MIN_GAP, centre: 0 };
+    // A gap is measured from its centre, where its tracks are centred, out
+    // to each of its ends: each side holds what reaches that way.
+    return { tracks: assignTracks(own), before: MIN_GAP / 2, after: MIN_GAP / 2, centre: 0 };
   });
   const trackOffset = (segment: Segment) => ((segment.track ?? 0) - (gaps[segment.from.layer].tracks - 1) / 2) * TRACK_PITCH;
 
-  // A label sits mid-route in its gap, on its bend's track. Labels that
-  // share a gap can meet: the later one slides along its own bend until it
-  // clears, and when its bend has no room it takes the next row of the
-  // gap instead, which the gap then grows to hold.
+  // A label sits on its own route, mid-route in its gap: on its bend when it
+  // has one, else on its straight run. Its backing hides whatever it covers,
+  // so it keeps clear of the other labels in its gap and of the other
+  // edges' lines there: a label that hid a line it does not name would read
+  // as naming it. It tries the middle of its bend (or of its straight run)
+  // first, then slides along the bend, then moves out along its run on
+  // either side of the bend, which the gap grows to hold. When no spot is
+  // clear of every line, it takes the first one clear of the other labels.
   interface PlacedLabel {
     text: string;
     gap: number;
@@ -764,6 +778,27 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
     cross: number;
     extent: { main: number; cross: number };
   }
+  // A straight run of one route inside a gap, relative to the gap's centre:
+  // one along the main axis sits at a cross coordinate and spans main
+  // offsets, a bend the other way round.
+  interface GapLine {
+    route: number;
+    alongMain: boolean;
+    at: number;
+    low: number;
+    high: number;
+  }
+  const linesOf = (segment: Segment): GapLine[] => {
+    const route = segment.edge;
+    if (segment.track === null) return [{ route, alongMain: true, at: segment.fromCross, low: -Infinity, high: Infinity }];
+    const track = trackOffset(segment);
+    return [
+      { route, alongMain: true, at: segment.fromCross, low: -Infinity, high: track },
+      { route, alongMain: false, at: track, low: Math.min(segment.fromCross, segment.toCross), high: Math.max(segment.fromCross, segment.toCross) },
+      { route, alongMain: true, at: segment.toCross, low: track, high: Infinity },
+    ];
+  };
+  const gapLines = gaps.map((_, gap) => segments.filter((segment) => segment.from.layer === gap).flatMap(linesOf));
   const placedLabels: PlacedLabel[] = [];
   const clashes = (candidate: PlacedLabel) =>
     placedLabels.some(
@@ -772,52 +807,95 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
         Math.abs(other.mainOffset - candidate.mainOffset) < (other.extent.main + candidate.extent.main) / 2 &&
         Math.abs(other.cross - candidate.cross) < (other.extent.cross + candidate.extent.cross) / 2,
     );
+  const covers = (candidate: PlacedLabel, line: GapLine) =>
+    line.alongMain
+      ? Math.abs(candidate.cross - line.at) < candidate.extent.cross / 2 + LINE_CLEARANCE &&
+        candidate.mainOffset + candidate.extent.main / 2 > line.low &&
+        candidate.mainOffset - candidate.extent.main / 2 < line.high
+      : Math.abs(candidate.mainOffset - line.at) < candidate.extent.main / 2 + LINE_CLEARANCE &&
+        candidate.cross + candidate.extent.cross / 2 > line.low &&
+        candidate.cross - candidate.extent.cross / 2 < line.high;
   const labelOf = new Map<Route, PlacedLabel>();
-  for (const route of routes) {
+  routes.forEach((route, routeIndex) => {
     const text = route.directed.edge.label;
-    if (!text) continue;
+    if (!text) return;
     const gap = gapIndexOf(route);
     const mid = route.segments[gap - route.segments[0].from.layer];
     const extent = labelExtent(text);
-    const anchorMain = mid.track !== null ? trackOffset(mid) : 0;
-    const anchorCross = (mid.fromCross + mid.toCross) / 2;
-    const slide: [number, number] = [Math.min(mid.fromCross, mid.toCross), Math.max(mid.fromCross, mid.toCross)];
+    const place = (mainOffset: number, cross: number): PlacedLabel => ({ text, gap, mainOffset, cross, extent });
+    const own = linesOf(mid);
+    // Another route's line that runs along one of this route's own (both
+    // leave one shared port) is drawn under the label either way.
+    const others = gapLines[gap].filter(
+      (line) =>
+        line.route !== routeIndex &&
+        !own.some((mine) => mine.alongMain === line.alongMain && Math.abs(mine.at - line.at) < 1e-6 && mine.low < line.high && line.low < mine.high),
+    );
     const neighbours = placedLabels.filter((other) => other.gap === gap);
-    const crossCandidates = [
-      anchorCross,
-      ...neighbours.flatMap((other) => {
-        // Just past the other label, with a hair of room so the two never
-        // meet even in floating point.
-        const apart = (other.extent.cross + extent.cross) / 2 + 2;
-        return [other.cross + apart, other.cross - apart];
-      }),
-    ]
-      .map((cross) => Math.min(slide[1], Math.max(slide[0], cross)))
-      .sort((a, b) => Math.abs(a - anchorCross) - Math.abs(b - anchorCross) || a - b);
-    let chosen: PlacedLabel | null = null;
-    for (let row = 0; row <= 8 && !chosen; row += 1) {
-      for (const sign of row === 0 ? [1] : [1, -1]) {
-        const mainOffset = anchorMain + sign * row * (extent.main + CLEARANCE);
-        for (const cross of crossCandidates) {
-          const candidate = { text, gap, mainOffset, cross, extent };
-          if (!clashes(candidate)) {
-            chosen = candidate;
-            break;
-          }
-        }
-        if (chosen) break;
+    // Spots on a run along the main axis, nearest `start` first: the start
+    // itself, and just past each line crossing the run and each label
+    // beside it (with a hair of room, so two never meet in floating point).
+    // `direction` keeps them to one side of the start, or 0 for both.
+    const alongRun = (cross: number, start: number, direction: -1 | 0 | 1): PlacedLabel[] => {
+      const stops = [start];
+      for (const line of others) {
+        if (!line.alongMain) stops.push(line.at + extent.main / 2 + LINE_CLEARANCE + 1, line.at - extent.main / 2 - LINE_CLEARANCE - 1);
       }
+      for (const other of neighbours) {
+        const apart = (other.extent.main + extent.main) / 2 + 2;
+        stops.push(other.mainOffset + apart, other.mainOffset - apart);
+      }
+      return stops
+        .filter((main) => direction === 0 || (main - start) * direction >= -1e-9)
+        .sort((a, b) => Math.abs(a - start) - Math.abs(b - start) || b - a)
+        .map((main) => place(main, cross));
+    };
+    let candidates: PlacedLabel[];
+    if (mid.track === null) {
+      candidates = alongRun(mid.fromCross, 0, 0);
+    } else {
+      const track = trackOffset(mid);
+      const low = Math.min(mid.fromCross, mid.toCross);
+      const high = Math.max(mid.fromCross, mid.toCross);
+      const anchor = (low + high) / 2;
+      const crosses = [anchor];
+      for (const line of others) {
+        if (line.alongMain) crosses.push(line.at + extent.cross / 2 + LINE_CLEARANCE + 1, line.at - extent.cross / 2 - LINE_CLEARANCE - 1);
+      }
+      for (const other of neighbours) {
+        const apart = (other.extent.cross + extent.cross) / 2 + 2;
+        crosses.push(other.cross + apart, other.cross - apart);
+      }
+      const onBend = crosses
+        .map((cross) => Math.min(high, Math.max(low, cross)))
+        .sort((a, b) => Math.abs(a - anchor) - Math.abs(b - anchor) || a - b)
+        .map((cross) => place(track, cross));
+      // Beside the bend: on the run toward the target, or back toward the
+      // source, whichever is nearer the bend (the target's side on a tie).
+      const reach = extent.main / 2 + CLEARANCE;
+      const beside = [...alongRun(mid.toCross, track + reach, 1), ...alongRun(mid.fromCross, track - reach, -1)].sort(
+        (a, b) => Math.abs(a.mainOffset - track) - Math.abs(b.mainOffset - track) || b.mainOffset - a.mainOffset,
+      );
+      candidates = [...onBend, ...beside];
     }
-    const label = chosen ?? { text, gap, mainOffset: anchorMain, cross: anchorCross, extent };
+    // The last spot on a run is past every label in the gap, so some spot
+    // is always clear of them.
+    const label =
+      candidates.find((candidate) => !clashes(candidate) && !others.some((line) => covers(candidate, line))) ??
+      candidates.find((candidate) => !clashes(candidate)) ??
+      candidates[0];
     placedLabels.push(label);
     labelOf.set(route, label);
+  });
+  for (const gap of gaps) {
+    const tracks = ((gap.tracks - 1) * TRACK_PITCH) / 2 + TRACK_PITCH + CLEARANCE;
+    gap.before = Math.max(gap.before, tracks);
+    gap.after = Math.max(gap.after, tracks);
   }
   for (const label of placedLabels) {
     const gap = gaps[label.gap];
-    gap.size = Math.max(gap.size, 2 * (Math.abs(label.mainOffset) + label.extent.main / 2 + CLEARANCE));
-  }
-  for (const gap of gaps) {
-    gap.size = Math.max(gap.size, (gap.tracks - 1) * TRACK_PITCH + 2 * (TRACK_PITCH + CLEARANCE));
+    gap.before = Math.max(gap.before, label.extent.main / 2 - label.mainOffset + ARROW_ROOM);
+    gap.after = Math.max(gap.after, label.mainOffset + label.extent.main / 2 + ARROW_ROOM);
   }
 
   // --- The main axis -------------------------------------------------------
@@ -825,7 +903,7 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
   const bands = layers.map((layer) =>
     layer[0]?.staggered ? rowExtent(layer, 0) + ROW_GAP + rowExtent(layer, 1) : Math.max(0, ...layer.map((item) => item.mainExtent)),
   );
-  const natural = bands.reduce((sum, band) => sum + band, 0) + gaps.reduce((sum, gap) => sum + gap.size, 0) + 2 * PAD_MAIN;
+  const natural = bands.reduce((sum, band) => sum + band, 0) + gaps.reduce((sum, gap) => sum + gap.before + gap.after, 0) + 2 * PAD_MAIN;
   const stretch = gaps.length ? Math.max(0, (canvas.main - natural) / gaps.length) : 0;
   let cursor = PAD_MAIN;
   layers.forEach((layer, index) => {
@@ -835,9 +913,11 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
     }
     cursor += bands[index];
     if (index < gaps.length) {
-      gaps[index].size += stretch;
-      gaps[index].centre = cursor + gaps[index].size / 2;
-      cursor += gaps[index].size;
+      const gap = gaps[index];
+      gap.before += stretch / 2;
+      gap.after += stretch / 2;
+      gap.centre = cursor + gap.before;
+      cursor += gap.before + gap.after;
     }
   });
   const mainSize = Math.max(canvas.main, layerCount ? cursor + PAD_MAIN : canvas.main);
