@@ -218,9 +218,9 @@ rules"); the reasons are these.
   action, through the same validation, projection, confirmation and replay as
   every other type. There is no second upload path; instead an image `show`
   has its own size cap (8 MiB raw, 12 MiB action) where every other action
-  keeps 48,000 bytes. The links it crosses all fit it: the skill socket's
-  request lines and the host link's frames are capped at 16 MiB, and so is
-  the browser socket.
+  keeps 48,000 bytes. The links it crosses all fit it: the skill socket takes
+  request lines up to 13 MiB, and the host link and the browser socket take
+  frames up to 16 MiB.
 - **Replay.** A reconnect snapshot replays every object, images included, and
   sends each replayed action as its own WebSocket frame, so two images on stage
   (up to 24 MiB together) never share one 16 MiB frame

@@ -20,11 +20,12 @@ export const MODULE_CALLS: readonly string[] = ["speak", "request_to_speak", "di
 /**
  * Longest request line accepted; a longer one closes the connection. An image
  * display action may be 12 MiB (MAX_IMAGE_ACTION_BYTES in the service), so a
- * line may be as long as the host link's frame (16 MiB, MAX_HOST_FRAME_BYTES
- * in hosts.rs) that relays it: a line this accepts is never one the link
- * cannot carry.
+ * line may carry that and 1 MiB more for its envelope. The relay re-wraps the
+ * args in a module_call frame of its own, and the host link refuses frames
+ * over 16 MiB (MAX_HOST_FRAME_BYTES in hosts.rs) by dropping the whole link,
+ * so the cap stays well under that: a line this accepts always fits a frame.
  */
-export const MAX_LINE_BYTES = 16 * 1024 * 1024;
+export const MAX_LINE_BYTES = 13 * 1024 * 1024;
 
 export interface SkillSocketOptions {
 	socketPath: string;

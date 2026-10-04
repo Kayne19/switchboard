@@ -158,7 +158,7 @@ test("background mode refuses speak, but accepts request_to_speak and display", 
 	});
 });
 
-test("an image display line up to the host link's frame size is relayed whole; a longer line closes the connection", async () => {
+test("a 12 MiB image display line is relayed whole; a line over the cap closes the connection", async () => {
 	await withSocket(async ({ ask, manager, handle, sessionId, relayed, socketPath }) => {
 		await manager.handle("join_call", { session: handle, ...CALL, mode: "foreground" });
 		// 12 MiB of base64: the largest image action the service accepts.
@@ -167,6 +167,9 @@ test("an image display line up to the host link's frame size is relayed whole; a
 		assert.deepEqual(await ask({ op: "call", session_id: sessionId, depth: 0, token: CALL.token, call: "display", args: { action } }), { status: "delivered", reason: null });
 		assert.equal((relayed.at(-1)?.args.action as typeof action).data.bytes.length, bytes.length);
 
+		// The relay wraps the args in a frame of its own; the cap leaves room
+		// for that under the host link's 16 MiB frame limit.
+		assert.ok(MAX_LINE_BYTES + 1024 * 1024 <= 16 * 1024 * 1024);
 		const before = relayed.length;
 		const long = net.createConnection(socketPath);
 		const closed = new Promise<void>((resolve) => long.once("close", () => resolve()));
