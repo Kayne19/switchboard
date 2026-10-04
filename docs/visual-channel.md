@@ -27,7 +27,7 @@ agent sends semantics. See `docs/display-tool.md` for the full action protocol.
 
 | type | use |
 | --- | --- |
-| `diagram` | relationships and structure — structured graph data (`mode: "graph"`, nodes and edges with semantic states) |
+| `diagram` | relationships and structure — structured graph data (`mode: "graph"`, nodes and edges with semantic states) — or an exchange over time (`mode: "sequence"`, actors across the top and messages between them in order, each a `call`, `return` or `async`, one of them `active`) |
 | `chart` | quantitative trends (`bar`, `line`, `pie`, `spark`) |
 | `metric` | a single tracked value with trend |
 | `progress` | checklists, steps, states, and optional durations |
@@ -36,6 +36,13 @@ agent sends semantics. See `docs/display-tool.md` for the full action protocol.
 | `note` | a persistent annotation, independent from the live transcript |
 
 Diagram node styling stays restricted to semantic classes and states, enforced server-side.
+
+A sequence diagram is the same `diagram` type under `mode: "sequence"`: the
+agent names the actors and the messages in order, and the page sizes the
+columns to the labels, wraps a long message over its span, and scales the
+drawing to the stage as the exchange grows. A self-message draws as a loop;
+a `return` is dashed; an `async` message has an open arrowhead; the `active`
+message glows like the active edge of a graph.
 
 ### Composition & focus
 

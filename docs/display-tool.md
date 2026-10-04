@@ -75,7 +75,7 @@ type DisplayAction =
 | `chart` | `{ series: [{ name, values[], semantic? }], title?, subtitle?, context?, caption?, xLabel?, yLabel?, xMax?, yMin?, yMax?, marker?, compareLabel? }` | SVG chart |
 | `metric` | `{ label, value, semantic?, caption? }` | numeric gauge |
 | `progress` | `{ label, value, detail?, text?, caption? }`; `value` is a percent, 0–100 | progress indicator |
-| `diagram` | `{ mode: "graph", nodes: [{ id, label, sub?, detail?, semantic?, state? }], edges: [{ from, to, label?, semantic?, active? }], title?, subtitle?, context?, caption? }` | SVG semantic graph |
+| `diagram` | `{ mode: "graph", nodes: [{ id, label, sub?, detail?, semantic?, state? }], edges: [{ from, to, label?, semantic?, active? }], title?, subtitle?, context?, caption? }` or `{ mode: "sequence", actors: [{ id, label, sub?, semantic? }], messages: [{ from, to, label, kind?, active? }], title?, subtitle?, context?, caption? }` | SVG semantic graph, or SVG sequence diagram |
 | `document` | `{ subject, paragraphs: string[], kind?: "email"\|"document", context?, caption?, source?, from?, timestamp? }` | document reader; each paragraph is read as Markdown (see below) |
 | `code` | `{ source: { text, language?, highlight? }, title?, file?, context?, caption? }` | syntax/diff view |
 | `note` | `{ segments: [{ text, accent?, bold?, semantic? }], tag?, caption?, anchor?: { target, x?, series?, node? } }` | persistent annotation |
@@ -87,9 +87,16 @@ A composed scene is built from multiple `show` actions with distinct `id`s and r
 Notes have their own display lifecycle. A chat or spoken response does not update an existing note; only another `show` using the note's stable id, `hide`, or `clear` changes it. An anchored note is selected for the visual object it targets and, when the target exposes the requested semantic coordinate, is placed near that location by the page.
 
 ### Diagram v1 rules
-- Diagram data requires `mode: "graph"`. Mermaid source (`source`) is rejected/deferred in v1.
-- `nodes`: 1 to 100 items. Node IDs must be unique strings (1-128 UTF-16 code units).
-- `edges`: 0 to 200 items. Both `from` and `to` endpoints must exist in `nodes`. Self-loops (`from === to`) and duplicate `(from, to)` pairs are rejected.
+- Diagram data requires `mode: "graph"` or `mode: "sequence"`; both validators read `mode` first and judge the rest by that mode's rules. Mermaid source (`source`) is rejected/deferred in v1 in either mode.
+- `mode: "graph"`:
+  - `nodes`: 1 to 100 items. Node IDs must be unique strings (1-128 UTF-16 code units).
+  - `edges`: 0 to 200 items. Both `from` and `to` endpoints must exist in `nodes`. Self-loops (`from === to`) and duplicate `(from, to)` pairs are rejected.
+  - `actors` and `messages` are rejected by name.
+- `mode: "sequence"`:
+  - `actors`: 1 to 12 items, `{ id, label, sub?, semantic? }`. Actor IDs must be unique strings (1-128 UTF-16 code units); `label` and `sub` are <= 256.
+  - `messages`: 0 to 100 items, `{ from, to, label, kind?, active? }`, drawn in the order given. `from` and `to` name actors; `label` is required (<= 256); `kind` is `call` (default), `return` or `async`; `active` is a boolean. A self-message (`from === to`) and a repeated `(from, to)` pair are both allowed.
+  - `nodes` and `edges` are rejected by name.
+- `note.anchor.node` may name a node id or an actor id. The graph places a fitting note as a callout beside its node; a sequence marks the actor and keeps the note in the rail.
 
 ## Canonical schema & validation rules
 
@@ -103,6 +110,6 @@ The canonical contract is defined in `docs/display-action-v1.schema.json` and ex
 - **Safety**: Raw HTML/JS markup (`<script`, `<iframe`, `javascript:`, etc.) and external resource URLs (`http://`, `https://`, `//`) are rejected.
 - **Unknown fields**: All schema branches specify `additionalProperties: false`; unexpected fields are rejected.
 
-`docs/display-action-v1.schema.json` encodes as much of this as declarative JSON Schema can express, and `apps/frontend/tests/unit/schema.test.ts` holds it to `display-actions.json` fixture-by-fixture so it cannot drift from the two validators unnoticed. Three things it cannot express, so it does not attempt to: diagram invariants that span sibling array items (duplicate node IDs, an edge endpoint naming no node, a self-loop, a duplicate edge pair — each a relationship between items, not one item's shape); the 48,000-byte action-size cap, which bounds the serialized envelope on the wire rather than the parsed instance; and the UTF-16-code-unit string caps above for content containing astral characters, since JSON Schema's `maxLength` counts Unicode code points. Those stay enforced only by `validation.ts` and `visual_protocol.rs`; the test names each as a documented, asserted exception (`KNOWN_SCHEMA_GAPS`) rather than silently passing.
+`docs/display-action-v1.schema.json` encodes as much of this as declarative JSON Schema can express, and `apps/frontend/tests/unit/schema.test.ts` holds it to `display-actions.json` fixture-by-fixture so it cannot drift from the two validators unnoticed. Three things it cannot express, so it does not attempt to: diagram invariants that span sibling array items (duplicate node or actor IDs, an edge or message endpoint naming no node or actor, a self-loop, a duplicate edge pair — each a relationship between items, not one item's shape); the 48,000-byte action-size cap, which bounds the serialized envelope on the wire rather than the parsed instance; and the UTF-16-code-unit string caps above for content containing astral characters, since JSON Schema's `maxLength` counts Unicode code points. Those stay enforced only by `validation.ts` and `visual_protocol.rs`; the test names each as a documented, asserted exception (`KNOWN_SCHEMA_GAPS`) rather than silently passing.
 
 Rejections return `{"delivered":false,"detail":"<reason>"}` and are neither stored in display state nor broadcast.

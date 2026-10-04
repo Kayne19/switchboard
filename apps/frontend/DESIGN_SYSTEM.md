@@ -65,6 +65,7 @@ The model controls semantic intent. The frontend controls composition, geometry,
 | `TechFrame` | approved frame paths and frame construction motion |
 | `ChartPrimitive` | chart geometry, axes, traces, semantic series colors |
 | `DiagramPrimitive` | node layout, edge routing, portrait and landscape topology |
+| `SequencePrimitive` + `sequenceLayout` | actor columns, lifelines, message rows, arrowheads by kind, label wrapping over a span |
 | `CodeViewport` | syntax presentation, safe scrolling, irregular clipping |
 | `DocumentViewport` | readable document layout and bounded scrolling |
 | `MetricsPrimitive` | metric alignment and semantic values |
