@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DiagramData } from '../../src/controller/types';
-import { ARROW_LENGTH, breakCycles, layoutDiagram, measureNode, type Box, type DiagramOrientation, type Point } from '../../src/primitives/diagramLayout';
+import { ARROW_LENGTH, breakCycles, layoutDiagram, measureNode, wrapEdgeLabel, type Box, type DiagramOrientation, type Point } from '../../src/primitives/diagramLayout';
 
 const graph = (nodes: string[], edges: Array<[string, string, string]>): DiagramData => ({
   mode: 'graph',
@@ -348,11 +348,23 @@ describe('node measurement', () => {
     const long = measureNode({ id: 'b', label: 'Worker 1 with a fairly long label', sub: 'review round 1', detail: 'apps/backend/src/ws.rs' }, 0);
     expect(short.width).toBe(140);
     expect(short.lines.map((line) => line.kind)).toEqual(['label']);
-    expect(long.lines.filter((line) => line.kind === 'label').map((line) => line.text)).toEqual(['Worker 1 with', 'a fairly long label']);
+    expect(long.lines.filter((line) => line.kind === 'label').map((line) => line.text)).toEqual(['Worker 1 with a', 'fairly long label']);
     expect(long.width).toBeGreaterThan(short.width);
     expect(long.height).toBeGreaterThan(short.height);
     expect(long.lines.map((line) => line.kind)).toEqual(['label', 'label', 'sub', 'detail']);
     expect(long.lines.every((line) => line.y < long.height)).toBe(true);
+  });
+
+  it('wraps text too long for its lines wider and balanced, not piled onto the last line', () => {
+    const label = 'Speech-to-text transcription sidecar for the operator leg';
+    const lines = measureNode({ id: 'a', label }, 0).lines.map((line) => line.text);
+    expect(lines).toHaveLength(2);
+    expect(lines.join(' ')).toBe(label);
+    // Greedy at the usual width would leave 'Speech-to-text' and 42 characters.
+    for (const line of lines) expect(line.length).toBeLessThanOrEqual(Math.ceil(label.length / 2) + 'operator'.length);
+    const edge = wrapEdgeLabel('waits for the caller to finish speaking before it replies');
+    expect(edge).toHaveLength(2);
+    expect(Math.abs(edge[0].length - edge[1].length)).toBeLessThanOrEqual(10);
   });
 
   it('reserves room for its corner tags beside the label', () => {

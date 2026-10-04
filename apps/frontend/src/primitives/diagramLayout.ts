@@ -167,8 +167,7 @@ const EPSILON = 0.5;
 
 // --- Text ------------------------------------------------------------------
 
-function wrapLine(text: string, wrapAt: number, maxLines: number): string[] {
-  const words = text.split(/\s+/).filter(Boolean);
+function wrapGreedy(words: string[], wrapAt: number): string[] {
   const lines: string[] = [];
   let current = '';
   for (const word of words) {
@@ -182,12 +181,31 @@ function wrapLine(text: string, wrapAt: number, maxLines: number): string[] {
     }
   }
   if (current) lines.push(current);
-  if (lines.length > maxLines) {
-    const head = lines.slice(0, maxLines - 1);
-    head.push(lines.slice(maxLines - 1).join(' '));
-    return head;
+  return lines;
+}
+
+/**
+ * Breaks text at spaces into lines of at most `wrapAt` characters. Text
+ * that would take more than `maxLines` lines is wrapped wider instead, at
+ * the narrowest width that fits, so its lines stay balanced rather than
+ * piling the rest onto the last one.
+ */
+function wrapLine(text: string, wrapAt: number, maxLines: number): string[] {
+  const words = text.split(/\s+/).filter(Boolean);
+  if (!words.length) return [''];
+  let lines = wrapGreedy(words, wrapAt);
+  if (lines.length <= maxLines) return lines;
+  // The line count only falls as the width grows; the whole text on one
+  // line always fits.
+  let low = wrapAt + 1;
+  let high = text.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (wrapGreedy(words, middle).length <= maxLines) high = middle;
+    else low = middle + 1;
   }
-  return lines.length ? lines : [''];
+  lines = wrapGreedy(words, low);
+  return lines;
 }
 
 interface NodeText {
