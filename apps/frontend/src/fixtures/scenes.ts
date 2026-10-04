@@ -185,6 +185,8 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
       { text: 'Two frontend unit failures, both in ' },
       { text: 'notePlacement.test.ts', accent: true, bold: true },
       { text: ': the leader now clears the trace by two more pixels than the test expects. Nothing else moved.' },
+    ] } },
+  ],
   comparison: [
     { op: 'show', id: 'durations', type: 'chart', role: 'primary', data: { ...suiteDurations, title: 'CI / TEST SUITE DURATIONS', subtitle: 'WALL TIME BY PACKAGE / THIS RUN vs PREVIOUS', context: 'CI RUN', caption: 'PRIMARY / SUITE DURATIONS' } },
     { op: 'show', id: 'total', type: 'metric', data: { label: 'TOTAL', value: '148.3 s', semantic: 'green' } },
