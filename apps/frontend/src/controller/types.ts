@@ -60,6 +60,9 @@ export interface DiagramEdge {
   active?: boolean;
 }
 
+/** A diagram in `mode: "graph"`: nodes and the edges between them. The graph
+ * layout and its renderer (`primitives/diagramLayout.ts`,
+ * `primitives/DiagramPrimitive.tsx`) take this shape under this name. */
 export interface DiagramData {
   title?: string;
   subtitle?: string;
@@ -71,6 +74,38 @@ export interface DiagramData {
   nodes: DiagramNode[];
   edges: DiagramEdge[];
 }
+
+export interface SequenceActor {
+  id: string;
+  label: string;
+  sub?: string;
+  semantic?: Semantic;
+}
+
+export interface SequenceMessage {
+  /** Actor ids. A self-message (`from === to`) is allowed. */
+  from: string;
+  to: string;
+  label: string;
+  /** `call` (default): solid, filled head. `return`: dashed. `async`: open head. */
+  kind?: 'call' | 'return' | 'async';
+  active?: boolean;
+}
+
+/** A diagram in `mode: "sequence"`: actors across the top, messages between
+ * them in order down the page. */
+export interface SequenceDiagramData {
+  title?: string;
+  subtitle?: string;
+  context?: string;
+  caption?: string;
+  mode: 'sequence';
+  actors: SequenceActor[];
+  messages: SequenceMessage[];
+}
+
+/** What a `diagram` object carries: one of the two modes, told apart by `mode`. */
+export type DiagramObjectData = DiagramData | SequenceDiagramData;
 
 export interface DocumentData {
   kind?: 'email' | 'document';
@@ -281,7 +316,7 @@ export type DisplayAction =
   | { op: 'show'; id: string; type: 'chart'; role?: SceneObjectRole; data: ChartData }
   | { op: 'show'; id: string; type: 'metric'; role?: SceneObjectRole; data: MetricData }
   | { op: 'show'; id: string; type: 'progress'; role?: SceneObjectRole; data: ProgressData }
-  | { op: 'show'; id: string; type: 'diagram'; role?: SceneObjectRole; data: DiagramData }
+  | { op: 'show'; id: string; type: 'diagram'; role?: SceneObjectRole; data: DiagramObjectData }
   | { op: 'show'; id: string; type: 'document'; role?: SceneObjectRole; data: DocumentData }
   | { op: 'show'; id: string; type: 'code'; role?: SceneObjectRole; data: CodeData }
   | { op: 'show'; id: string; type: 'table'; role?: SceneObjectRole; data: TableData }
@@ -318,4 +353,4 @@ export type ControllerAction =
   | { op: 'focus'; id?: string | null }
   | { op: 'listen'; on: boolean };
 
-export type FixtureName = 'idle' | 'conversation' | 'training' | 'architecture' | 'email' | 'code' | 'results';
+export type FixtureName = 'idle' | 'conversation' | 'training' | 'architecture' | 'email' | 'code' | 'results' | 'handoff';

@@ -49,7 +49,7 @@ npm run build:cdn        # dependency-light browser preview using pinned CDN mod
 
 | Input | Action |
 |---|---|
-| `1` through `7` | Load idle, conversation, training, architecture, email, code, or results (table) fixture |
+| `1` through `8` | Load idle, conversation, training, architecture, email, code, results (table), or handoff (sequence diagram) fixture |
 | `L` | Toggle listening |
 | `C` | Open or close the controller sandbox |
 | `J` | Open or close the current Scene IR |
@@ -65,6 +65,7 @@ Direct fixture URLs are also supported:
 /?scene=architecture
 /?scene=code
 /?scene=results
+/?scene=handoff
 ```
 
 ## Runtime API

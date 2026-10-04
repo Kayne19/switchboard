@@ -95,6 +95,32 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
       { text: 'No action is required immediately. The only concrete request is to send the updated draft after the additional seed runs and tighten related work before submission.' },
     ] } },
   ],
+  handoff: [
+    { op: 'show', id: 'handoff', type: 'diagram', role: 'primary', data: {
+      mode: 'sequence', title: 'CALL / HANDOFF', subtitle: 'OPERATOR -> PROJECT AGENT / TRANSFER', context: 'CALL TRACE',
+      actors: [
+        { id: 'caller', label: 'CALLER', sub: 'BROWSER / VOICE', semantic: 'paper' },
+        { id: 'operator', label: 'OPERATOR', sub: 'DAMOCLES / FRONT DESK', semantic: 'orange' },
+        { id: 'pbx', label: 'PBX', sub: 'SWITCHBOARD / ROUTING', semantic: 'cyan' },
+        { id: 'agent', label: 'PROJECT AGENT', sub: 'HEADLESS PI / SSH', semantic: 'green' },
+      ],
+      messages: [
+        { from: 'caller', to: 'operator', label: 'put me through to llm-wiki' },
+        { from: 'operator', to: 'pbx', label: 'route(llm-wiki)' },
+        { from: 'pbx', to: 'agent', label: 'launch session', kind: 'async' },
+        { from: 'agent', to: 'agent', label: 'load context' },
+        { from: 'agent', to: 'pbx', label: 'ready', kind: 'return' },
+        { from: 'pbx', to: 'caller', label: 'line transferred', active: true },
+        { from: 'caller', to: 'agent', label: 'what changed since yesterday?' },
+        { from: 'agent', to: 'caller', label: 'three commits, one open PR', kind: 'return' },
+      ],
+    } },
+    { op: 'show', id: 'handoff-note', type: 'note', data: { tag: 'CURRENT EXPLANATION / 01', anchor: { target: 'handoff', node: 'pbx' }, segments: [
+      { text: 'The operator never leaves the line. ' },
+      { text: 'The PBX moves the caller.', accent: true, bold: true },
+      { text: ' Once the project agent reports ready, the caller speaks to it directly.' },
+    ] } },
+  ],
   code: [
     { op: 'show', id: 'source', type: 'code', role: 'primary', data: {
       title: 'SOURCE / ROUTER', file: 'apps/backend/src/session/router.ts / L41-57', context: 'CODE REVIEW',

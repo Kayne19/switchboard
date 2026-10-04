@@ -54,6 +54,9 @@ const KNOWN_SCHEMA_GAPS: Record<string, string> = {
   // integer; the exact fit stays with visual_protocol.rs and validation.ts.
   table_ragged_row: 'a row having exactly columns.length cells relates two sibling arrays',
   table_highlight_out_of_range: 'a highlight index naming an existing row relates two sibling arrays',
+  // The same two invariants in sequence mode, over actors and messages.
+  diagram_sequence_duplicate_actor_id: 'actor id uniqueness is a cross-item invariant, not a per-actor shape rule',
+  diagram_sequence_message_missing_endpoint: 'message endpoints referencing actors[] is cross-array referential integrity',
   // The 48,000 UTF-8 byte cap bounds the serialized envelope on the wire
   // (see docs/display-tool.md, "Action size"). JSON Schema validates the
   // shape of the parsed instance, not the byte length of its serialization;
@@ -140,41 +143,49 @@ describe('display-action-v1.schema.json', () => {
 // when a required key is missing.
 describe('validateControllerAction follows display-action-v1.schema.json', () => {
   const definitions = schema.definitions as Record<string, any>;
-  const requiredByType: Record<string, string[]> = {};
+  const resolve = (node: any) => (node.$ref ? definitions[node.$ref.split('/').pop()!] : node);
+  // A type's data is one shape, or (a diagram's) one shape per `mode`; a
+  // shape is named by its type and, when it has one, its mode.
+  const requiredByShape: Record<string, string[]> = {};
   for (const variant of schema.oneOf as Array<{ $ref: string }>) {
     const action = definitions[variant.$ref.split('/').pop()!];
     const kind: string | undefined = action.properties.type?.enum?.[0];
     if (!kind) continue;
-    const dataRef: string | undefined = action.properties.data.$ref;
-    const data = dataRef ? definitions[dataRef.split('/').pop()!] : action.properties.data;
-    requiredByType[kind] = [...data.required].sort();
+    const data = resolve(action.properties.data);
+    const shapes: any[] = data.oneOf ? data.oneOf.map(resolve) : [data];
+    for (const shape of shapes) {
+      const mode: string | undefined = shape.properties.mode?.enum?.[0];
+      requiredByShape[mode ? `${kind}/${mode}` : kind] = [...shape.required].sort();
+    }
   }
-  // The smallest data the validator accepts for each type; each carries
+  // The smallest data the validator accepts for each shape; each carries
   // exactly the schema's required keys, checked below.
   const smallest: Record<string, Record<string, unknown>> = {
     chart: { series: [{ name: 'a', values: [1] }] },
     metric: { label: 'L', value: '1' },
     progress: { label: 'L', value: 50 },
-    diagram: { mode: 'graph', nodes: [{ id: 'n', label: 'N' }], edges: [] },
+    'diagram/graph': { mode: 'graph', nodes: [{ id: 'n', label: 'N' }], edges: [] },
+    'diagram/sequence': { mode: 'sequence', actors: [{ id: 'a', label: 'A' }], messages: [] },
     document: { subject: 'S', paragraphs: ['p'] },
     code: { source: { text: 'x' } },
     table: { columns: [{ label: 'c' }], rows: [] },
     note: { segments: [{ text: 't' }] },
   };
 
-  it('knows exactly the schema\'s show types', () => {
-    expect(Object.keys(smallest).sort()).toEqual(Object.keys(requiredByType).sort());
+  it('knows exactly the schema\'s show types and their shapes', () => {
+    expect(Object.keys(smallest).sort()).toEqual(Object.keys(requiredByShape).sort());
   });
 
-  for (const [kind, required] of Object.entries(requiredByType)) {
-    it(`accepts the smallest ${kind} and refuses it without each required key`, () => {
-      const data = smallest[kind];
+  for (const [shape, required] of Object.entries(requiredByShape)) {
+    it(`accepts the smallest ${shape} and refuses it without each required key`, () => {
+      const data = smallest[shape];
+      const kind = shape.split('/')[0];
       expect(Object.keys(data).sort()).toEqual(required);
       const action = { op: 'show', id: 'x', type: kind, data };
-      expect(validateControllerAction(action).ok, `${kind}: ${JSON.stringify(validateControllerAction(action))}`).toBe(true);
+      expect(validateControllerAction(action).ok, `${shape}: ${JSON.stringify(validateControllerAction(action))}`).toBe(true);
       for (const key of required) {
         const { [key]: _dropped, ...rest } = data;
-        expect(validateControllerAction({ ...action, data: rest }).ok, `${kind} without ${key}`).toBe(false);
+        expect(validateControllerAction({ ...action, data: rest }).ok, `${shape} without ${key}`).toBe(false);
       }
     });
   }

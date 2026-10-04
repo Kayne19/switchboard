@@ -1,1 +1,1 @@
-export const sceneOrder = ['idle', 'conversation', 'training', 'architecture', 'email', 'code', 'results'] as const;
+export const sceneOrder = ['idle', 'conversation', 'training', 'architecture', 'email', 'code', 'results', 'handoff'] as const;

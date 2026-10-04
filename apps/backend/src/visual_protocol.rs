@@ -374,9 +374,23 @@ fn validate_progress_data(data: &Map<String, Value>) -> Result<Value, String> {
     Ok(Value::Object(out))
 }
 
+/// The two diagram modes are told apart by `mode` before anything else is
+/// read, so a graph payload is judged by the graph rules and a sequence
+/// payload by the sequence rules; each refuses the other's arrays by name.
 fn validate_diagram_data(data: &Map<String, Value>) -> Result<Value, String> {
     if data.contains_key("source") {
         return Err("diagram data source field is forbidden in v1".into());
+    }
+    match data.get("mode").and_then(Value::as_str) {
+        Some("graph") => validate_graph_diagram_data(data),
+        Some("sequence") => validate_sequence_diagram_data(data),
+        _ => Err("diagram.mode must be \"graph\" or \"sequence\"".into()),
+    }
+}
+
+fn validate_graph_diagram_data(data: &Map<String, Value>) -> Result<Value, String> {
+    if data.contains_key("actors") || data.contains_key("messages") {
+        return Err("diagram.actors and diagram.messages belong to mode \"sequence\"".into());
     }
     check_unknown_keys(
         data,
@@ -385,14 +399,6 @@ fn validate_diagram_data(data: &Map<String, Value>) -> Result<Value, String> {
         ],
         "diagram data",
     )?;
-
-    let mode = data
-        .get("mode")
-        .and_then(Value::as_str)
-        .ok_or("diagram.mode must be \"graph\"")?;
-    if mode != "graph" {
-        return Err("diagram.mode must be \"graph\"".into());
-    }
 
     let nodes_arr = data
         .get("nodes")
@@ -545,6 +551,154 @@ fn validate_diagram_data(data: &Map<String, Value>) -> Result<Value, String> {
     out.insert("mode".into(), "graph".into());
     out.insert("nodes".into(), Value::Array(clean_nodes));
     out.insert("edges".into(), Value::Array(clean_edges));
+
+    for (k, max_len) in [("title", 256), ("subtitle", 256), ("context", 256)] {
+        if let Some(v) = data.get(k) {
+            let s = v.as_str().ok_or(format!("diagram.{k} must be a string"))?;
+            if utf16_len(s) > max_len {
+                return Err(format!(
+                    "diagram.{k} exceeds maximum length of {max_len} UTF-16 code units"
+                ));
+            }
+            out.insert(k.into(), s.into());
+        }
+    }
+    copy_optional_string(data, &mut out, "caption", 128, "diagram.caption")?;
+
+    Ok(Value::Object(out))
+}
+
+fn validate_sequence_diagram_data(data: &Map<String, Value>) -> Result<Value, String> {
+    if data.contains_key("nodes") || data.contains_key("edges") {
+        return Err("diagram.nodes and diagram.edges belong to mode \"graph\"".into());
+    }
+    check_unknown_keys(
+        data,
+        &[
+            "title", "subtitle", "context", "caption", "mode", "actors", "messages",
+        ],
+        "diagram data",
+    )?;
+
+    let actors_arr = data
+        .get("actors")
+        .and_then(Value::as_array)
+        .ok_or("diagram.actors must be an array of 1 to 12 items")?;
+    if actors_arr.is_empty() || actors_arr.len() > 12 {
+        return Err("diagram.actors must be an array of 1 to 12 items".into());
+    }
+
+    let messages_arr = data
+        .get("messages")
+        .and_then(Value::as_array)
+        .ok_or("diagram.messages must be an array of at most 100 items")?;
+    if messages_arr.len() > 100 {
+        return Err("diagram.messages must be an array of at most 100 items".into());
+    }
+
+    let mut actor_ids = HashSet::new();
+    let mut clean_actors = Vec::new();
+
+    for a in actors_arr {
+        let am = a.as_object().ok_or("diagram actor must be an object")?;
+        check_unknown_keys(am, &["id", "label", "sub", "semantic"], "diagram actor")?;
+
+        let id = am
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or("diagram actor id must be non-empty and <= 128 UTF-16 code units")?;
+        if id.trim().is_empty() || utf16_len(id) > 128 {
+            return Err("diagram actor id must be non-empty and <= 128 UTF-16 code units".into());
+        }
+        if !actor_ids.insert(id.to_string()) {
+            return Err(format!("duplicate diagram actor id: {id}"));
+        }
+
+        let label = am
+            .get("label")
+            .and_then(Value::as_str)
+            .ok_or("diagram actor.label must be a string")?;
+        if utf16_len(label) > 256 {
+            return Err(
+                "diagram actor.label exceeds maximum length of 256 UTF-16 code units".into(),
+            );
+        }
+
+        let mut actor_out = Map::new();
+        actor_out.insert("id".into(), id.into());
+        actor_out.insert("label".into(), label.into());
+        copy_optional_string(am, &mut actor_out, "sub", 256, "diagram actor.sub")?;
+        if let Some(sem) = am.get("semantic") {
+            let s = sem.as_str().ok_or("invalid diagram actor.semantic")?;
+            if !is_valid_semantic(s) {
+                return Err("invalid diagram actor.semantic".into());
+            }
+            actor_out.insert("semantic".into(), s.into());
+        }
+        clean_actors.push(Value::Object(actor_out));
+    }
+
+    // A self-message and a repeated pair are both ordinary in a sequence, so
+    // unlike graph edges neither is refused.
+    let mut clean_messages = Vec::new();
+    for m in messages_arr {
+        let mm = m.as_object().ok_or("diagram message must be an object")?;
+        check_unknown_keys(
+            mm,
+            &["from", "to", "label", "kind", "active"],
+            "diagram message",
+        )?;
+
+        let (Some(from), Some(to)) = (
+            mm.get("from").and_then(Value::as_str),
+            mm.get("to").and_then(Value::as_str),
+        ) else {
+            return Err("diagram message from and to must be strings".into());
+        };
+        if !actor_ids.contains(from) {
+            return Err(format!(
+                "diagram message from endpoint \"{from}\" not found in actors"
+            ));
+        }
+        if !actor_ids.contains(to) {
+            return Err(format!(
+                "diagram message to endpoint \"{to}\" not found in actors"
+            ));
+        }
+        let label = mm
+            .get("label")
+            .and_then(Value::as_str)
+            .ok_or("diagram message.label must be a string")?;
+        if utf16_len(label) > 256 {
+            return Err(
+                "diagram message.label exceeds maximum length of 256 UTF-16 code units".into(),
+            );
+        }
+
+        let mut message_out = Map::new();
+        message_out.insert("from".into(), from.into());
+        message_out.insert("to".into(), to.into());
+        message_out.insert("label".into(), label.into());
+        if let Some(kind) = mm.get("kind") {
+            let k = kind.as_str().ok_or("invalid diagram message.kind")?;
+            if !matches!(k, "call" | "return" | "async") {
+                return Err("invalid diagram message.kind".into());
+            }
+            message_out.insert("kind".into(), k.into());
+        }
+        if let Some(active) = mm.get("active") {
+            let b = active
+                .as_bool()
+                .ok_or("diagram message.active must be boolean")?;
+            message_out.insert("active".into(), b.into());
+        }
+        clean_messages.push(Value::Object(message_out));
+    }
+
+    let mut out = Map::new();
+    out.insert("mode".into(), "sequence".into());
+    out.insert("actors".into(), Value::Array(clean_actors));
+    out.insert("messages".into(), Value::Array(clean_messages));
 
     for (k, max_len) in [("title", 256), ("subtitle", 256), ("context", 256)] {
         if let Some(v) = data.get(k) {
