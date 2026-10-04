@@ -151,7 +151,7 @@ describe('diagram node state', () => {
 
     const active = nodeOf('active');
     expect(active.querySelector('.diagram-node__body--active')).not.toBeNull();
-    expect(active.querySelector('.diagram-node__frame')?.getAttribute('filter')).toBe('url(#active-edge-glow)');
+    expect(active.querySelector('.diagram-node__frame')?.getAttribute('filter')).toBe('url(#diagram-node-glow)');
     expect(active.querySelector('.diagram-node__tag')).toBeNull();
 
     const blocked = nodeOf('blocked');
@@ -163,6 +163,37 @@ describe('diagram node state', () => {
     expect(todo.querySelector('.diagram-node__body--todo')).not.toBeNull();
     expect(todo.querySelector('.diagram-node__frame')?.getAttribute('filter')).toBeNull();
     expect(todo.querySelector('.diagram-node__tag')).toBeNull();
+  });
+
+  it('gives a lit node its glow on every side of the frame', () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() =>
+      root.render(
+        <DiagramPrimitive
+          data={stateful}
+          id="test-diagram"
+          note={{ segments: [{ text: 'x' }], anchor: { target: 'test-diagram', node: 'todo' } }}
+        />,
+      ),
+    );
+    // An active node and an anchored one are both lit.
+    const lit = [nodeOf('active'), nodeOf('todo')].map((node) => node.querySelector('.diagram-node__frame'));
+    for (const frame of lit) {
+      const filterId = /^url\(#(.+)\)$/.exec(frame?.getAttribute('filter') ?? '')?.[1];
+      const filter = host.querySelector(`filter[id="${filterId}"]`);
+      expect(filter).not.toBeNull();
+      // The frame is drawn inside its node's translated group. A region in
+      // user space from (0, 0) would begin at the frame's own corner and cut
+      // the glow, and half the stroke, off its top and left edges; the
+      // region has to be the frame's box with room around it.
+      expect(filter?.getAttribute('filterUnits') ?? 'objectBoundingBox').toBe('objectBoundingBox');
+      expect(parseFloat(filter?.getAttribute('x') ?? '0')).toBeLessThan(0);
+      expect(parseFloat(filter?.getAttribute('y') ?? '0')).toBeLessThan(0);
+      expect(parseFloat(filter?.getAttribute('width') ?? '100')).toBeGreaterThan(100);
+      expect(parseFloat(filter?.getAttribute('height') ?? '100')).toBeGreaterThan(100);
+    }
   });
 });
 

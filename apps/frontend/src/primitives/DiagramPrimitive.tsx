@@ -134,6 +134,18 @@ export function DiagramPrimitive({
               <feMergeNode in="SourceGraphic" />
             </feMerge>
           </filter>
+          {/* A lit node's frame is drawn inside its node's translated group,
+              where the drawing-wide region above would begin at the frame's
+              own corner and cut the glow, and half the stroke, off its top
+              and left edges. A frame has a real box, so this region is that
+              box with room on every side. */}
+          <filter id="diagram-node-glow" x="-25%" y="-50%" width="150%" height="200%">
+            <feGaussianBlur stdDeviation="2.2" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
           {/* One arrowhead per colour: a marker cannot take its fill from the
               path it ends, so each edge points at the marker of its own hue. */}
           {SEMANTICS.map((semantic) => (
@@ -197,7 +209,7 @@ export function DiagramPrimitive({
                     strokeOpacity={lit || state === 'blocked' ? '1' : '.64'}
                     strokeWidth={lit ? '2.2' : '1.3'}
                     vectorEffect="non-scaling-stroke"
-                    filter={lit ? 'url(#active-edge-glow)' : undefined}
+                    filter={lit ? 'url(#diagram-node-glow)' : undefined}
                   />
                   <line
                     x1="16"
