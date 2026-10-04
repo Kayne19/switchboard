@@ -475,6 +475,47 @@ test('secondary progress occupies the visible aux row in a composed workspace', 
 });
 
 
+// A progress in the primary slot fills the cell so its step list can scroll
+// inside it. That stretch belongs to the step list alone: on a portrait
+// stage the text sits on its own row under the bar, and a stretched row
+// there floated it to the middle of the cell, away from the bar it reads.
+test('a primary progress keeps its text under the bar on a portrait phone, with or without steps', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openController(page);
+  const steps = Array.from({ length: 30 }, (_, i) => ({ label: `STEP ${i + 1}`, state: i < 11 ? 'done' : 'todo' }));
+  for (const data of [
+    { label: 'DEPLOY', value: 42, text: '42% COMPLETE' },
+    { label: 'DEPLOY', text: '37% COMPLETE', steps },
+  ]) {
+    await page.evaluate((progressData) => {
+      const dispatch = window.SwitchboardController?.dispatch;
+      if (!dispatch) throw new Error('controller unavailable');
+      dispatch({ op: 'clear' });
+      dispatch({ op: 'show', id: 'deploy', type: 'progress', role: 'primary', data: progressData });
+    }, data);
+    await expect(page.locator('.composed-primary-object--progress .progress-primitive__text')).toHaveText(data.text);
+    const geometry = await page.locator('.composed-primary-object--progress').evaluate((cell) => {
+      const box = (selector: string) => cell.querySelector<HTMLElement>(selector)?.getBoundingClientRect() ?? null;
+      const list = cell.querySelector<HTMLElement>('.progress-primitive__steps');
+      return {
+        cell: cell.getBoundingClientRect().toJSON(),
+        track: box('.progress-primitive__track')!.toJSON(),
+        text: box('.progress-primitive__text')!.toJSON(),
+        list: list ? { ...list.getBoundingClientRect().toJSON(), scrolls: list.scrollHeight > list.clientHeight } : null,
+      };
+    });
+    // Directly under the bar, as before steps existed; not mid-cell.
+    expect(geometry.text.top).toBeGreaterThanOrEqual(geometry.track.bottom - 1);
+    expect(geometry.text.top - geometry.track.bottom).toBeLessThan(40);
+    if (geometry.list) {
+      // The list follows the text and scrolls inside the cell.
+      expect(geometry.list.top).toBeGreaterThanOrEqual(geometry.text.bottom - 1);
+      expect(geometry.list.bottom).toBeLessThanOrEqual(geometry.cell.bottom + 1);
+      expect(geometry.list.scrolls).toBe(true);
+    }
+  }
+});
+
 test('compare progress renders once in the composed aux row', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openController(page);

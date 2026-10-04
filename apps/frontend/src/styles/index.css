@@ -2150,9 +2150,10 @@ button {
   max-height: 52vh;
   font-size: clamp(11px, 0.85cqw, 15px);
 }
-/* A progress holding the primary slot fills it: the bar at the top, the
-   list taking the rest and scrolling inside it. */
-.composed-primary-object--progress .progress-primitive {
+/* A progress with steps holding the primary slot fills it: the bar at the
+   top, the list taking the rest and scrolling inside it. Only the list's
+   row stretches; a bar without steps keeps its own height. */
+.composed-primary-object--progress .progress-primitive--stepped {
   height: 100%;
   grid-template-rows: auto minmax(0, 1fr);
   align-content: start;
@@ -2489,6 +2490,11 @@ button {
      less of it so the chart above keeps its height. */
   .training-progress .progress-primitive__steps {
     max-height: clamp(56px, 12cqh, 140px);
+  }
+  /* Portrait puts the text on its own row under the bar, so the list that
+     stretches in the primary slot is the third row, not the second. */
+  .composed-primary-object--progress .progress-primitive--stepped {
+    grid-template-rows: auto auto minmax(0, 1fr);
   }
   .metric-row {
     min-height: 0;
