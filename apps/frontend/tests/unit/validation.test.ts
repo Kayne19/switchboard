@@ -167,6 +167,13 @@ describe('table validation', () => {
     expect(error({ columns: two, rows: ['x'] })).toBe('table row 0 must be an array');
   });
 
+  it('takes at most 200 rows', () => {
+    const rows = (n: number) => Array.from({ length: n }, () => ['x']);
+    expect(table({ columns: one, rows: rows(200) }).ok).toBe(true);
+    expect(error({ columns: one, rows: rows(201) })).toBe('table.rows must be an array of at most 200 items');
+    expect(error({ columns: one })).toBe('table.rows must be an array of at most 200 items');
+  });
+
   it('requires highlight to name rows', () => {
     const rows = [['x'], ['y']];
     for (const index of [0, 1, 1.0]) {
@@ -190,6 +197,7 @@ describe('table validation', () => {
       [{ text: 'y', bold: 'yes' }, 'table cell.bold must be boolean'],
       [{ text: 'y', align: 'right' }, 'unknown field in table cell: align'],
       ['x'.repeat(257), 'table cell exceeds maximum length of 256 UTF-16 code units'],
+      [{ text: 'x'.repeat(257) }, 'table cell.text exceeds maximum length of 256 UTF-16 code units'],
     ];
     for (const [cell, message] of cases) {
       expect(error({ columns: one, rows: [[cell]] }), JSON.stringify(cell)).toBe(message);
