@@ -14,6 +14,7 @@ const expected = {
   results: 'table',
   comparison: 'training',
   figure: 'image',
+  plan: 'composed',
   composed: 'architecture',
 } as const;
 

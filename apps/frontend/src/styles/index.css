@@ -1025,6 +1025,9 @@ button {
   border-top: 1px solid rgba(232, 230, 223, 0.13);
   list-style: none;
   display: grid;
+  /* A list shorter than its stretched box keeps its rows at their own
+     height at the top, rather than spreading them over the box. */
+  align-content: start;
   gap: clamp(3px, 0.6cqh, 7px);
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -1647,6 +1650,9 @@ button {
     transform: scale(0.94);
   }
 }
+/* The layout sizes each node's box from its text in these three faces at
+   these sizes (diagramLayout.ts, NODE_TEXT); change one and the other must
+   follow. */
 .diagram-node-label {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 15px;
@@ -1665,10 +1671,13 @@ button {
   font-size: 7px;
   letter-spacing: 0.08em;
 }
-.diagram-node__body--anchored .diagram-node__frame {
-  stroke: var(--orange);
-  stroke-width: 2.2px;
-  stroke-opacity: 1;
+/* Node state: a done node recedes and carries a check in its corner tag; an
+   active one is lit by the same glow as an active edge; a blocked one is
+   framed in red with a cross in its tag. A todo node is the plain frame.
+   The frame's stroke (colour, width, opacity) is drawn by
+   DiagramPrimitive alone: a rule here would outrank its attributes. */
+.diagram-node__body--done {
+  opacity: 0.52;
 }
 
 /* A diagram in sequence mode shares the diagram slot and its motion; its
@@ -2208,9 +2217,10 @@ button {
   max-height: 52vh;
   font-size: clamp(11px, 0.85cqw, 15px);
 }
-/* A progress holding the primary slot fills it: the bar at the top, the
-   list taking the rest and scrolling inside it. */
-.composed-primary-object--progress .progress-primitive {
+/* A progress with steps holding the primary slot fills it: the bar at the
+   top, the list taking the rest and scrolling inside it. Only the list's
+   row stretches; a bar without steps keeps its own height. */
+.composed-primary-object--progress .progress-primitive--stepped {
   height: 100%;
   grid-template-rows: auto minmax(0, 1fr);
   align-content: start;
@@ -2547,6 +2557,11 @@ button {
      less of it so the chart above keeps its height. */
   .training-progress .progress-primitive__steps {
     max-height: clamp(56px, 12cqh, 140px);
+  }
+  /* Portrait puts the text on its own row under the bar, so the list that
+     stretches in the primary slot is the third row, not the second. */
+  .composed-primary-object--progress .progress-primitive--stepped {
+    grid-template-rows: auto auto minmax(0, 1fr);
   }
   .metric-row {
     min-height: 0;

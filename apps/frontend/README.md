@@ -58,11 +58,13 @@ npm run build:cdn        # dependency-light browser preview using pinned CDN mod
 | Tap Damocles | Toggle listening without replacing the current scene |
 | Tap primary content | Focus that object |
 
-The tenth and eleventh fixtures have no number key: `figure` (an inline PNG
-test card: the image type) and `composed` (a diagram primary with a table and
+The tenth to twelfth fixtures have no number key: `figure` (an inline PNG
+test card: the image type), `plan` (a stepped progress as the primary, with
+metric trends in the rail) and `composed` (a diagram primary with a table and
 a figure in the aux row under it, a note and two metrics in the rail: the
 visuals an agent can compose beside a visual primary). Reach them with
-`/?scene=figure` and `/?scene=composed`, or by swiping past `comparison`.
+`/?scene=figure`, `/?scene=plan` and `/?scene=composed`, or by swiping past
+`comparison`.
 
 Direct fixture URLs are also supported:
 
@@ -74,6 +76,7 @@ Direct fixture URLs are also supported:
 /?scene=handoff
 /?scene=comparison
 /?scene=figure
+/?scene=plan
 /?scene=composed
 ```
 
