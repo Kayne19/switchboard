@@ -99,3 +99,15 @@ describe('the aux row', () => {
     expect(topLevel('.image-primitive__img', 'object-fit')).toBe('contain');
   });
 });
+
+describe('a table', () => {
+  // A narrow cell scrolls the table sideways inside its viewport; it never
+  // splits a word to fit (`overflow-wrap: anywhere` sized columns below
+  // their longest word).
+  it('never breaks a word inside itself to fit a narrow cell', () => {
+    const breaking = all.filter((rule) => rule.selectors.some((s) => s.includes('table-'))
+      && (rule.declarations.get('overflow-wrap') === 'anywhere' || /break-all|break-word/.test(rule.declarations.get('word-break') ?? '')));
+    expect(breaking.map((rule) => rule.selectors.join(', '))).toEqual([]);
+    expect(topLevel('.table-viewport__scroll', 'overflow')).toBe('auto');
+  });
+});

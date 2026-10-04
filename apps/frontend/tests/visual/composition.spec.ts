@@ -92,3 +92,15 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
     expect(image.caption!.bottom).toBeLessThanOrEqual(image.cell.bottom);
   });
 }
+
+// In a narrow aux cell a table scrolls sideways inside its viewport; it
+// never splits a word to fit.
+test('a table in a narrow aux cell breaks between words, never inside one', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await show(page, crowded);
+  const broken = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.composed-aux .table-grid td .table-grid__text')]
+    .filter((node) => !/\s/.test(node.textContent ?? ''))
+    .filter((node) => node.getClientRects().length > 1)
+    .map((node) => node.textContent));
+  expect(broken).toEqual([]);
+});
