@@ -259,6 +259,32 @@ for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
       expect(front.length).toBeGreaterThanOrEqual(4);
     });
 
+    it('sends a fan-out too crowded for its side out as one trunk whose branches never cross', () => {
+      const layout = layoutDiagram(graphs.wide, orientation);
+      const starts = new Set(layout.edges.map((edge) => `${edge.points[0].x},${edge.points[0].y}`));
+      // Nine ports on a landscape box's short side would be a striped band;
+      // a portrait box's long side has room to spread them.
+      expect(starts.size).toBe(orientation === 'landscape' ? 1 : 9);
+      const crossings = layout.edges.flatMap((edge, index) =>
+        layout.edges.slice(index + 1).flatMap((other) =>
+          edge.points.slice(1).flatMap((end, k) =>
+            other.points.slice(1).filter((otherEnd, j) => {
+              const [a, b, c, d] = [edge.points[k], end, other.points[j], otherEnd];
+              const across = (p: Point, q: Point, r: Point, s: Point) =>
+                Math.abs(p.y - q.y) < 1e-6 &&
+                Math.abs(r.x - s.x) < 1e-6 &&
+                r.x > Math.min(p.x, q.x) + 1e-6 &&
+                r.x < Math.max(p.x, q.x) - 1e-6 &&
+                p.y > Math.min(r.y, s.y) + 1e-6 &&
+                p.y < Math.max(r.y, s.y) - 1e-6;
+              return across(a, b, c, d) || across(c, d, a, b);
+            }),
+          ),
+        ),
+      );
+      expect(crossings).toHaveLength(0);
+    });
+
     it('lays a feedback edge out backwards and draws it toward its true target', () => {
       const layout = layoutDiagram(graphs.cycle, orientation);
       const revise = layout.edges.find((edge) => edge.edge.label === 'revise')!;

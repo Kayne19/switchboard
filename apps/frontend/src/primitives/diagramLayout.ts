@@ -157,6 +157,7 @@ const STAGGER_CLEARANCE = 12;
 const ROW_GAP = 24;
 // Where edges leave and enter a box: ports spread along its side.
 const PORT_PITCH = 16;
+const MIN_PORT_PITCH = 4;
 const PORT_INSET = 14;
 const SELF_LOOP = 18;
 
@@ -609,8 +610,11 @@ function assignPorts(layers: Item[][], segments: Segment[]) {
         });
         const count = ends.length;
         // A staggered box's edges run through the other row at its centre
-        // line, so they share one port.
-        const pitch = count > 1 && !item.staggered ? Math.min(PORT_PITCH, (item.crossExtent - 2 * PORT_INSET) / (count - 1)) : 0;
+        // line, so they share one port. So do ends too many for their side:
+        // ports packed closer than a few units read as one striped band, so
+        // they leave as one trunk and part where they bend.
+        const spread = count > 1 && !item.staggered ? Math.min(PORT_PITCH, (item.crossExtent - 2 * PORT_INSET) / (count - 1)) : 0;
+        const pitch = spread >= MIN_PORT_PITCH ? spread : 0;
         ends.forEach((segment, index) => {
           const cross = item.cross + (index - (count - 1) / 2) * pitch;
           if (side === 'out') segment.fromCross = cross;
@@ -629,14 +633,17 @@ function assignPorts(layers: Item[][], segments: Segment[]) {
  */
 function assignTracks(segments: Segment[]): number {
   const bent = segments.filter((segment) => Math.abs(segment.fromCross - segment.toCross) > 1e-6);
+  // Bends that leave one shared port nest: the one going farthest bends
+  // first, so no branch crosses another.
   const keyed = bent.map((segment) => ({
     segment,
     key: segment.toCross > segment.fromCross ? -segment.fromCross : segment.fromCross,
+    far: segment.toCross > segment.fromCross ? -segment.toCross : segment.toCross,
     low: Math.min(segment.fromCross, segment.toCross),
     high: Math.max(segment.fromCross, segment.toCross),
     track: 0,
   }));
-  keyed.sort((a, b) => a.key - b.key || a.segment.edge - b.segment.edge);
+  keyed.sort((a, b) => a.key - b.key || a.far - b.far || a.segment.edge - b.segment.edge);
   let count = 0;
   keyed.forEach((entry, index) => {
     let track = 0;
