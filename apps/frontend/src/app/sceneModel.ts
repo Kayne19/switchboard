@@ -195,6 +195,9 @@ export function deriveScreenState(
       title = data.subject;
     } else if (typeof data.label === 'string') {
       title = data.label;
+    } else if (typeof data.alt === 'string') {
+      // An image's alt text is its title when it has none.
+      title = data.alt;
     }
   }
 

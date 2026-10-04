@@ -195,6 +195,20 @@
       "expected": { "has_visual": true, "kind": "note", "title": "amb1", "visible_ids": ["amb1"] }
     },
     {
+      "name": "image_title_is_its_title",
+      "actions": [
+        { "op": "show", "id": "fig", "type": "image", "role": "primary", "data": { "format": "png", "bytes": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mN48ew+AAVnAq5EDgAUAAAAAElFTkSuQmCC", "alt": "fig-alt", "title": "fig-title" } }
+      ],
+      "expected": { "has_visual": true, "kind": "image", "title": "fig-title", "visible_ids": ["fig"] }
+    },
+    {
+      "name": "image_without_title_is_titled_by_its_alt",
+      "actions": [
+        { "op": "show", "id": "fig", "type": "image", "data": { "format": "png", "bytes": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mN48ew+AAVnAq5EDgAUAAAAAElFTkSuQmCC", "alt": "fig-alt" } }
+      ],
+      "expected": { "has_visual": true, "kind": "image", "title": "fig-alt", "visible_ids": ["fig"] }
+    },
+    {
       "name": "empty_stage_has_no_visual",
       "actions": [],
       "expected": { "has_visual": false, "kind": null, "title": null, "visible_ids": [] }
