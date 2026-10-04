@@ -10,6 +10,7 @@ const expected = {
   architecture: 'architecture',
   email: 'document',
   code: 'code',
+  figure: 'image',
 } as const;
 
 describe('scene classification', () => {

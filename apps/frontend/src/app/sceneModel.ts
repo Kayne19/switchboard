@@ -5,6 +5,7 @@ import type {
   ControllerState,
   DiagramData,
   DocumentData,
+  ImageData,
   MessageData,
   MetricData,
   NoteData,
@@ -152,6 +153,7 @@ export type SceneKind =
   | 'architecture'
   | 'document'
   | 'code'
+  | 'image'
   | 'composed';
 
 export function sceneKind(state: ControllerState): SceneKind {
@@ -174,6 +176,7 @@ export function sceneKind(state: ControllerState): SceneKind {
   if (primary.type === 'diagram') return 'architecture';
   if (primary.type === 'document') return 'document';
   if (primary.type === 'code') return 'code';
+  if (primary.type === 'image') return 'image';
   return 'composed';
 }
 
@@ -220,6 +223,7 @@ export const cast = {
   diagram: (object: SceneObject) => object as SceneObject<DiagramData>,
   document: (object: SceneObject) => object as SceneObject<DocumentData>,
   code: (object: SceneObject) => object as SceneObject<CodeData>,
+  image: (object: SceneObject) => object as SceneObject<ImageData>,
   message: (object: SceneObject) => object as SceneObject<MessageData>,
   note: (object: SceneObject) => object as SceneObject<NoteData>,
 };

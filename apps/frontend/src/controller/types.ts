@@ -309,4 +309,4 @@ export type ControllerAction =
   | { op: 'focus'; id?: string | null }
   | { op: 'listen'; on: boolean };
 
-export type FixtureName = 'idle' | 'conversation' | 'training' | 'architecture' | 'email' | 'code';
+export type FixtureName = 'idle' | 'conversation' | 'training' | 'architecture' | 'email' | 'code' | 'figure';

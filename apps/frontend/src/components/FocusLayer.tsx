@@ -5,6 +5,7 @@ import type {
   CodeData,
   DiagramData,
   DocumentData,
+  ImageData,
   MetricData,
   NoteData,
   ProgressData,
@@ -15,6 +16,7 @@ import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { CodeViewport } from '../primitives/CodeViewport';
 import { DiagramPrimitive } from '../primitives/DiagramPrimitive';
 import { DocumentViewport } from '../primitives/DocumentViewport';
+import { ImagePrimitive } from '../primitives/ImagePrimitive';
 import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
 import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
 import { SurfaceBoundary } from './SurfaceBoundary';
@@ -29,6 +31,8 @@ function FocusedObject({ object }: { object: SceneObject }) {
       return <DocumentViewport data={object.data as DocumentData} focused />;
     case 'code':
       return <CodeViewport data={object.data as CodeData} focused />;
+    case 'image':
+      return <ImagePrimitive data={object.data as ImageData} focused />;
     case 'note':
       return <AnnotationCard data={object.data as NoteData} />;
     case 'metric':

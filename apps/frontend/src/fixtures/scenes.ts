@@ -21,6 +21,12 @@ const trainingSeries = {
   ],
 };
 
+// The `figure` scene's image: a 320x200 PNG test card (palette bars, a
+// crosshair, a grey step ramp), 1251 bytes, generated once with Python's
+// zlib and struct and embedded here so the fixture needs no file or network.
+const FIGURE_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAUAAAADICAIAAAAWZq/8AAAEqklEQVR42u3cwU4TaxiAYWrihrgw0aSszZgY5QJqItuuWLDgArwT8RZYscM7oPcAJk1csTEuIOwILGXlxujEJrWZwrTTduj3zzxPujiak+kP9c33zTkjnZvrq40Yumf7QU5ysL0Z5CTnd8dLXmHQy/aGF0te5ORoN8g35HIY5CAbh/1+hGM82QCSJWAQMCBgQMAgYEDAgIABAUOzdDyJNS2tJ7EGvWyZt5jnOS1PYk3zJBaLy6Mdv+JcChPYBC6bwPc2Vj5CZz4LPc81TeCwE1jACQQ83dj8fz+h0l9meOiNBGyFZvH9djKn0aumt5u+vtU6OAEH9fntaf4qpPVo7154u86XH/nLhyJgqqVb98itNJBlLGBm1zv6h0/fd/JXkFP9+fgmf40z9jEJmLLBGyfdQsZGsYBJZvAaxQIm+cFrFAuYtAevUSxgyupN9EvQsIDVu5P0F6JhAbe03uTW5pnrtIYF3KJ6G/Z1aVjA6tUwAlavhgWMejUsYP7X2zYaFnCj6m3D+J0cwhoWcHO0p95CwwjYra+bYQTs1tfNsICxPFukBWx5tkgjYMuzRVrAWJ4t0gLG8myRFjAgYOPXEBYwIOCWjV/KGcICDs3+XL5FI2BAwDXsz8bvPEPYFi1gQMAgYOzPtmgBAwIGAQMCdgOM22ABAwIGAQMCBgQMAgYEDAgYEDA0X+fm+irIUbpn+0FOcrC9OflLP+lqjQo/hedyGOVgh/2+gNMIeKb6HqU8vzte8gqDXrY3vFjyIidHu6v/k/fvOcqqPyVLwFZocA8MCBgQMAgYEDAgYEDAIGBAwI01egbLE5fzW+wxLAQMAgYEDAjYbbAbYAEDAgYEbIu2PyNgEDBVGcLl4xcBh96iKWd/FjAg4NqGsC36of3Z+BUwIGBD2PgVMCU0PFkvAk5sCDPJ+BWwRdryjIAt0pZnAWORtjwL2CJteUbAFmnLs4CpdZFuT8Pjeo1fAbsZduuLgN0Mu/UVMBpWr4A1fKpeBKxh9QqY9TXcjIzzdNUr4DY23IBR7P8YCVjDp+pFwGk3nFbG47VZvQJue8PJjeLJdNUrYJIZxQavgEl1FBu8AibJUWzwCphFRvGgl41eazlJ4d0NXgGzSMbjlh453fEvpStgFrE3vMhfD43Eukfu9AEI9x8mbq6vghyle7Yf5CQH25tBTnJ+d1wI7N7Iy5uc+S/MvObJ0W6Qb8jlMEo5h/2+gAVcLeDy6lYy8O/9fQGHDdgKnfBqvZL9doWXwgQ2geeawJVua5cv0wQ2gQEBAwIGAQMCBgQMAgYEDDyKTpZlQY7y+vY2yEmevYjy8Xx99SHCMZ4//RbkG/Lu5+8gJ/n18r0JDAgYBAwIGBAwIGAQMCBgQMCAgEHAwFp1Vn7Fbrcb+YLBj7fyC25tbfl8Q11wtZ+ICQxWaEDAgIBBwICAAQEDAgYBAwIGBAwCBgQMCBgQMAgYEDAgYEDAIGBAwICAQcCAgAEBAwIGAQMCBgQMCBgEDAgYEDAIGBAwIGBAwCBgQMCAgEHAgIABAQMCBgEDAgYEDAgYBAwIGBAwCBgQMCBgQMAgYEDAgIABAYOAAQEDAgYBAwn5C/I3UR6npYO2AAAAAElFTkSuQmCC';
+
 export const fixtures: Record<FixtureName, ControllerAction[]> = {
   idle: [],
   conversation: [
@@ -120,6 +126,20 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
       { text: 'This is the actual handoff boundary. ' },
       { text: 'The executor changes; the voice does not.', accent: true, bold: true },
       { text: ' The rest of the function is transport plumbing.' },
+    ] } },
+  ],
+  // An image primary: the page builds the img source from format and bytes,
+  // and the note sits in the rail beside it.
+  figure: [
+    { op: 'show', id: 'test-card', type: 'image', role: 'primary', data: {
+      format: 'png', bytes: FIGURE_PNG_BASE64,
+      alt: 'Test card: seven palette bars under a crosshair, over a grey step ramp',
+      title: 'FIGURE / TEST CARD', subtitle: 'IMAGE / PNG / INLINE', context: 'FIGURE',
+    } },
+    { op: 'show', id: 'figure-note', type: 'note', data: { tag: 'DAMOCLES / FIGURE', segments: [
+      { text: 'The page draws the picture from the bytes the agent sent; ' },
+      { text: 'no URL is ever fetched.', accent: true, bold: true },
+      { text: ' It keeps the whole figure in view and reads its size on decode.' },
     ] } },
   ],
 };
