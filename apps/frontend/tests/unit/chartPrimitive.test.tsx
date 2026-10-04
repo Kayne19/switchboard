@@ -8,6 +8,7 @@ import {
   CHART_LEGEND_ROW_HEIGHT,
   CHART_LEGEND_STEP,
   CHART_TICK_CHAR_ADVANCE,
+  CHART_TICK_GAP,
   CHART_TICK_ROW_HEIGHT,
   chartBars,
   chartLegendLayout,
@@ -467,6 +468,30 @@ describe('chart kinds keep the line chart as it was', () => {
     expect(xs[0]).toBeCloseTo(74);
     expect(xs[2]).toBeCloseTo(1000 - 28);
     expect(host.querySelector('.chart-marker')).toBeNull();
+  });
+
+  // A label held inside the viewBox at the plot's edge moves toward its
+  // neighbour; the layout must count that move when it decides a row fits,
+  // or the two overlap (five 20-character service names did).
+  it('keeps an edge label it holds inside the viewBox clear of its neighbour on the row', () => {
+    const labels = ['checkout-service p95', 'inventory-svc p95 ms', 'payments-gateway p95', 'search-frontend p95x', 'shipping-quotes p95x'];
+    renderWith({ labels, series: [{ name: 'P95', values: [120, 180, 90, 140, 160] }] });
+    const ticks = [...host.querySelectorAll<SVGTextElement>('.chart-grid__category')].map((tick) => {
+      const x = Number(tick.getAttribute('x'));
+      const half = (tick.textContent!.length * CHART_TICK_CHAR_ADVANCE) / 2;
+      return { y: Number(tick.getAttribute('y')), left: x - half, right: x + half };
+    });
+    expect(ticks).toHaveLength(labels.length);
+    for (const row of new Set(ticks.map((tick) => tick.y))) {
+      const onRow = ticks.filter((tick) => tick.y === row).sort((a, b) => a.left - b.left);
+      for (let index = 1; index < onRow.length; index += 1) {
+        expect(onRow[index].left - onRow[index - 1].right).toBeGreaterThanOrEqual(CHART_TICK_GAP);
+      }
+    }
+    for (const tick of ticks) {
+      expect(tick.left).toBeGreaterThanOrEqual(0);
+      expect(tick.right).toBeLessThanOrEqual(1000);
+    }
   });
 
   it('holds the last category label inside the viewBox', () => {
