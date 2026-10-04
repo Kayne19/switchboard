@@ -11,6 +11,7 @@ const expected = {
   email: 'document',
   code: 'code',
   results: 'table',
+  comparison: 'training',
 } as const;
 
 describe('scene classification', () => {

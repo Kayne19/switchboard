@@ -28,7 +28,7 @@ agent sends semantics. See `docs/display-tool.md` for the full action protocol.
 | type | use |
 | --- | --- |
 | `diagram` | relationships and structure — structured graph data (`mode: "graph"`, nodes and edges with semantic states) — or an exchange over time (`mode: "sequence"`, actors across the top and messages between them in order, each a `call`, `return` or `async`, one of them `active`) |
-| `chart` | quantitative trends (`bar`, `line`, `pie`, `spark`) |
+| `chart` | quantitative series — `kind` is `line` (default), `bar`, `area` or `scatter`, over a numeric x or categorical `labels` |
 | `metric` | a single tracked value with trend |
 | `progress` | checklists, steps, states, and optional durations |
 | `document` | headings, paragraphs, bullets, code blocks |
@@ -44,6 +44,16 @@ columns to the labels, wraps a long message over its span, and scales the
 drawing to the stage as the exchange grows. A self-message draws as a loop;
 a `return` is dashed; an `async` message has an open arrowhead; the `active`
 message glows like the active edge of a graph.
+
+A chart's `kind` says how its series are drawn, and the page decides the rest
+from geometry. Categorical `labels` replace the numeric x ticks; when a row of
+them does not fit, the page staggers them onto two rows, and when even that
+does not fit it draws every n-th label. A bar chart whose labels do not fit a
+row is drawn with its bars running across and a labelled row per category,
+as long as the rows fit the plot; otherwise its labels are staggered or thinned
+like any other chart's. There is no pie chart and no sparkline: a single
+series with no axes is a `metric`, and a share of a whole reads better as a
+bar per part.
 
 ### Composition & focus
 

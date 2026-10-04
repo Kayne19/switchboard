@@ -72,7 +72,7 @@ type DisplayAction =
 
 | type | `data` shape (`additionalProperties: false`) | what the page renders |
 | --- | --- | --- |
-| `chart` | `{ series: [{ name, values[], semantic? }], title?, subtitle?, context?, caption?, xLabel?, yLabel?, xMax?, yMin?, yMax?, marker?, compareLabel? }` | SVG chart |
+| `chart` | `{ series: [{ name, values[], semantic? }], kind?: "line"\|"bar"\|"area"\|"scatter", labels?: string[], title?, subtitle?, context?, caption?, xLabel?, yLabel?, xMax?, yMin?, yMax?, marker?, compareLabel? }` | SVG chart; see "Chart v1 rules" |
 | `metric` | `{ label, value, semantic?, caption? }` | numeric gauge |
 | `progress` | `{ label, value, detail?, text?, caption? }`; `value` is a percent, 0–100 | progress indicator |
 | `diagram` | `{ mode: "graph", nodes: [{ id, label, sub?, detail?, semantic?, state? }], edges: [{ from, to, label?, semantic?, active? }], title?, subtitle?, context?, caption? }` or `{ mode: "sequence", actors: [{ id, label, sub?, semantic? }], messages: [{ from, to, label, kind?, active? }], title?, subtitle?, context?, caption? }` | SVG semantic graph, or SVG sequence diagram |
@@ -86,6 +86,12 @@ Each document paragraph is read as the same small Markdown subset the conversati
 A composed scene is built from multiple `show` actions with distinct `id`s and roles (e.g. `diagram` as `primary`, `note` as `secondary`, `metric` as `ambient`). The page owns layout, geometry, and styling.
 
 Notes have their own display lifecycle. A chat or spoken response does not update an existing note; only another `show` using the note's stable id, `hide`, or `clear` changes it. An anchored note is selected for the visual object it targets and, when the target exposes the requested semantic coordinate, is placed near that location by the page.
+
+### Chart v1 rules
+- `kind` is how the series are drawn: `line` (the default), `bar`, `area` or `scatter`. Anything else is rejected.
+- `labels`: 1 to 100 categorical x labels, each a string of at most 64 UTF-16 code units. When present the x domain is the label indices (`0` to `labels.length - 1`), the x ticks are the labels, and `xMax` is ignored. Every `series.values` must be no longer than `labels`; a shorter series ends early.
+- `marker.x`, a note's `anchor.x` and `say at.x` name a label index on a labelled chart, and the numeric x otherwise.
+- Bars are grouped per category across the series. A bar chart without `labels` takes the value indices as its categories, so `xMax` is ignored there too. Whether bars run up or across is the page's decision (`docs/visual-channel.md`).
 
 ### Diagram v1 rules
 - Diagram data requires `mode: "graph"` or `mode: "sequence"`; both validators read `mode` first and judge the rest by that mode's rules. Mermaid source (`source`) is rejected/deferred in v1 in either mode.
@@ -118,6 +124,6 @@ The canonical contract is defined in `docs/display-action-v1.schema.json` and ex
 - **Safety**: Raw HTML/JS markup (`<script`, `<iframe`, `javascript:`, etc.) and external resource URLs (`http://`, `https://`, `//`) are rejected.
 - **Unknown fields**: All schema branches specify `additionalProperties: false`; unexpected fields are rejected.
 
-`docs/display-action-v1.schema.json` encodes as much of this as declarative JSON Schema can express, and `apps/frontend/tests/unit/schema.test.ts` holds it to `display-actions.json` fixture-by-fixture so it cannot drift from the two validators unnoticed. Three things it cannot express, so it does not attempt to: invariants that span sibling array items (duplicate node or actor IDs, an edge or message endpoint naming no node or actor, a self-loop, a duplicate edge pair, a table row with other than `columns.length` cells, a table highlight naming no row — each a relationship between items, not one item's shape); the 48,000-byte action-size cap, which bounds the serialized envelope on the wire rather than the parsed instance; and the UTF-16-code-unit string caps above for content containing astral characters, since JSON Schema's `maxLength` counts Unicode code points. Those stay enforced only by `validation.ts` and `visual_protocol.rs`; the test names each as a documented, asserted exception (`KNOWN_SCHEMA_GAPS`) rather than silently passing.
+`docs/display-action-v1.schema.json` encodes as much of this as declarative JSON Schema can express, and `apps/frontend/tests/unit/schema.test.ts` holds it to `display-actions.json` fixture-by-fixture so it cannot drift from the two validators unnoticed. Four things it cannot express, so it does not attempt to: invariants that span sibling array items (duplicate node or actor IDs, an edge or message endpoint naming no node or actor, a self-loop, a duplicate edge pair, a table row with other than `columns.length` cells, a table highlight naming no row — each a relationship between items, not one item's shape); a chart series' value count against its `labels` count, a relationship between two sibling fields; the 48,000-byte action-size cap, which bounds the serialized envelope on the wire rather than the parsed instance; and the UTF-16-code-unit string caps above for content containing astral characters, since JSON Schema's `maxLength` counts Unicode code points. Those stay enforced only by `validation.ts` and `visual_protocol.rs`; the test names each as a documented, asserted exception (`KNOWN_SCHEMA_GAPS`) rather than silently passing.
 
 Rejections return `{"delivered":false,"detail":"<reason>"}` and are neither stored in display state nor broadcast.

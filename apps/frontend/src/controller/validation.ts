@@ -1,5 +1,6 @@
 import type {
   ChartData,
+  ChartKind,
   ChartSeries,
   CodeData,
   DiagramData,
@@ -53,6 +54,10 @@ const ALLOWED_SEMANTICS = new Set<Semantic>([
   'paper',
   'muted',
 ]);
+
+const CHART_KINDS = new Set<ChartKind>(['line', 'bar', 'area', 'scatter']);
+const MAX_CHART_LABELS = 100;
+const MAX_CHART_LABEL_UTF16 = 64;
 
 const MAX_ID_UTF16 = 128;
 const MAX_TEXT_UTF16 = 50_000;
@@ -188,9 +193,24 @@ function checkString(val: unknown, maxLen: number, name: string): string | null 
 }
 
 function validateChartData(data: Record<string, unknown>): { ok: true; data: ChartData } | { ok: false; error: string } {
-  const allowed = new Set(['title', 'subtitle', 'context', 'caption', 'xLabel', 'yLabel', 'xMax', 'yMin', 'yMax', 'series', 'marker', 'compareLabel']);
+  const allowed = new Set(['title', 'subtitle', 'context', 'caption', 'kind', 'labels', 'xLabel', 'yLabel', 'xMax', 'yMin', 'yMax', 'series', 'marker', 'compareLabel']);
   const unknownKey = checkUnknownKeys(data, allowed, 'chart data');
   if (unknownKey) return { ok: false, error: unknownKey };
+
+  if (data.kind !== undefined && !CHART_KINDS.has(data.kind as ChartKind)) {
+    return { ok: false, error: 'invalid chart.kind' };
+  }
+  let labels: string[] | undefined;
+  if (data.labels !== undefined) {
+    if (!Array.isArray(data.labels) || data.labels.length < 1 || data.labels.length > MAX_CHART_LABELS) {
+      return { ok: false, error: `chart.labels must be an array of 1 to ${MAX_CHART_LABELS} strings` };
+    }
+    for (const label of data.labels) {
+      const err = checkString(label, MAX_CHART_LABEL_UTF16, 'chart label');
+      if (err) return { ok: false, error: err };
+    }
+    labels = data.labels as string[];
+  }
 
   if (!Array.isArray(data.series)) {
     return { ok: false, error: 'chart.series must be an array' };
@@ -207,6 +227,9 @@ function validateChartData(data: Record<string, unknown>): { ok: true; data: Cha
     for (const v of s.values) {
       if (typeof v !== 'number' || !Number.isFinite(v)) return { ok: false, error: 'series.values must contain finite numbers' };
     }
+    if (labels && s.values.length > labels.length) {
+      return { ok: false, error: 'series.values is longer than chart.labels' };
+    }
     if (s.semantic !== undefined && !ALLOWED_SEMANTICS.has(s.semantic as Semantic)) {
       return { ok: false, error: 'invalid series.semantic' };
     }
@@ -218,6 +241,8 @@ function validateChartData(data: Record<string, unknown>): { ok: true; data: Cha
   }
 
   const result: ChartData = { series: seriesList };
+  if (data.kind !== undefined) result.kind = data.kind as ChartKind;
+  if (labels) result.labels = labels;
   for (const k of ['title', 'subtitle', 'context'] as const) {
     if (data[k] !== undefined) {
       const err = checkString(data[k], 256, `chart.${k}`);

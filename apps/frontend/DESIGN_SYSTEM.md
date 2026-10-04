@@ -63,7 +63,7 @@ The model controls semantic intent. The frontend controls composition, geometry,
 |---|---|
 | `DamoclesPresence` | identity, float, listening, voice indicator, caption |
 | `TechFrame` | approved frame paths and frame construction motion |
-| `ChartPrimitive` | chart geometry, axes, traces, semantic series colors |
+| `ChartPrimitive` + `chartGeometry` | chart kinds (line, bar, area, scatter), geometry, axes and category labels, traces, semantic series colors |
 | `DiagramPrimitive` | node layout, edge routing, portrait and landscape topology |
 | `SequencePrimitive` + `sequenceLayout` | actor columns, lifelines, message rows, arrowheads by kind, label wrapping over a span |
 | `CodeViewport` | syntax presentation, safe scrolling, irregular clipping |

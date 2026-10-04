@@ -21,6 +21,20 @@ const trainingSeries = {
   ],
 };
 
+// Test suite wall time by package, this run against the last: the shape a
+// bar chart is for, with a labelled category per package.
+const suiteDurations = {
+  kind: 'bar' as const,
+  labels: ['backend', 'frontend unit', 'frontend visual', 'host agent', 'skill', 'hygiene'],
+  yLabel: 'SECONDS',
+  xLabel: 'PACKAGE',
+  series: [
+    { name: 'THIS RUN', semantic: 'green' as const, values: [41.8, 3.3, 96.4, 6.1, 0.3, 0.4] },
+    { name: 'PREVIOUS RUN', semantic: 'muted' as const, values: [44.0, 3.1, 102.9, 6.4, 0.3, 0.4] },
+  ],
+  marker: { x: 2, series: 'THIS RUN' },
+};
+
 export const fixtures: Record<FixtureName, ControllerAction[]> = {
   idle: [],
   conversation: [
@@ -171,6 +185,15 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
       { text: 'Two frontend unit failures, both in ' },
       { text: 'notePlacement.test.ts', accent: true, bold: true },
       { text: ': the leader now clears the trace by two more pixels than the test expects. Nothing else moved.' },
+  comparison: [
+    { op: 'show', id: 'durations', type: 'chart', role: 'primary', data: { ...suiteDurations, title: 'CI / TEST SUITE DURATIONS', subtitle: 'WALL TIME BY PACKAGE / THIS RUN vs PREVIOUS', context: 'CI RUN', caption: 'PRIMARY / SUITE DURATIONS' } },
+    { op: 'show', id: 'total', type: 'metric', data: { label: 'TOTAL', value: '148.3 s', semantic: 'green' } },
+    { op: 'show', id: 'delta', type: 'metric', data: { label: 'VS PREVIOUS', value: '-8.8 s' } },
+    { op: 'show', id: 'slowest', type: 'metric', data: { label: 'SLOWEST', value: 'frontend visual', semantic: 'orange' } },
+    { op: 'show', id: 'durations-note', type: 'note', data: { tag: 'OBSERVATION / VISUAL SUITE', anchor: { target: 'durations', x: 2, series: 'THIS RUN' }, segments: [
+      { text: 'The visual suite is two thirds of the run. ' },
+      { text: 'Six seconds faster than last time', accent: true, bold: true },
+      { text: ', since the goldens are now compared without a rebuild.' },
     ] } },
   ],
 };

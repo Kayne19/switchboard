@@ -70,7 +70,11 @@ markup, CSS, pixel geometry or styling.
 
 Types and their `data` shapes (each type takes only its own shape):
 
-- chart: `{series: [{name, values: [n]}]}`
+- chart: `{series: [{name, values: [n]}]}`; optional `kind` (`line`, the
+  default, `bar`, `area` or `scatter`) and `labels: [str]`, categorical x
+  labels (at most 100, each at most 64 characters; no series may be longer
+  than them). Bars group per category; the page decides whether they run up
+  or across.
 - metric: `{label, value}`
 - progress: `{label, value}` (value is a percent, 0-100)
 - diagram: `{mode: "graph", nodes: [{id, label}], edges: [{from, to}]}` for
