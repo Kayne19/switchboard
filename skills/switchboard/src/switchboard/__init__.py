@@ -34,6 +34,7 @@ _SHAPES = {
     "diagram": (("mode", "nodes", "edges"), '{mode:"graph", nodes:[{id, label}], edges:[{from, to}]}'),
     "document": (("subject", "paragraphs"), "{subject, paragraphs:[str]}"),
     "code": (("source",), "{source:{text}}"),
+    "table": (("columns", "rows"), "{columns:[{label}], rows:[[cell]]} (cell: str | number | {text})"),
     "note": (("segments",), "{segments:[{text}]}"),
 }
 

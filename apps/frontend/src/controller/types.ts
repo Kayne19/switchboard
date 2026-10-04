@@ -97,6 +97,34 @@ export interface CodeData {
   source: CodeSourceData;
 }
 
+export interface TableColumn {
+  label: string;
+  /** Colours the header; a cell colours itself. */
+  semantic?: Semantic;
+}
+
+export interface TableCellObject {
+  text: string;
+  semantic?: Semantic;
+  bold?: boolean;
+}
+
+/** A number is drawn as its text; the page infers a column's alignment from its cells. */
+export type TableCell = string | number | TableCellObject;
+
+export interface TableData {
+  title?: string;
+  subtitle?: string;
+  context?: string;
+  caption?: string;
+  /** 1 to 12 columns. */
+  columns: TableColumn[];
+  /** 0 to 200 rows, each exactly `columns.length` cells. */
+  rows: TableCell[][];
+  /** Indices into `rows` the page draws with the accent. */
+  highlight?: number[];
+}
+
 /** A line the caller heard, in the live response's log (#113). */
 export interface SpokenLine {
   /** Stable across updates, for rendering. */
@@ -139,6 +167,7 @@ export type AgentObjectType =
   | 'diagram'
   | 'document'
   | 'code'
+  | 'table'
   | 'note';
 
 export type SceneObjectType = AgentObjectType | 'message';
@@ -255,6 +284,7 @@ export type DisplayAction =
   | { op: 'show'; id: string; type: 'diagram'; role?: SceneObjectRole; data: DiagramData }
   | { op: 'show'; id: string; type: 'document'; role?: SceneObjectRole; data: DocumentData }
   | { op: 'show'; id: string; type: 'code'; role?: SceneObjectRole; data: CodeData }
+  | { op: 'show'; id: string; type: 'table'; role?: SceneObjectRole; data: TableData }
   | { op: 'show'; id: string; type: 'note'; role?: SceneObjectRole; data: NoteData }
   | { op: 'hide'; id: string }
   | { op: 'say'; text: string; target?: string | null; at?: SpeechState['at'] }
@@ -288,4 +318,4 @@ export type ControllerAction =
   | { op: 'focus'; id?: string | null }
   | { op: 'listen'; on: boolean };
 
-export type FixtureName = 'idle' | 'conversation' | 'training' | 'architecture' | 'email' | 'code';
+export type FixtureName = 'idle' | 'conversation' | 'training' | 'architecture' | 'email' | 'code' | 'results';

@@ -149,3 +149,60 @@ describe('display protocol validation', () => {
     })).toMatchObject({ ok: false });
   });
 });
+
+// The table rules the schema cannot state (docs/display-tool.md, "Table v1
+// rules"). The backend's test_visual_protocol.rs pins the same cases.
+describe('table validation', () => {
+  const table = (data: Record<string, unknown>) => validateControllerAction({ op: 'show', id: 'results', type: 'table', data });
+  const error = (data: Record<string, unknown>) => {
+    const result = table(data);
+    return result.ok ? null : result.error;
+  };
+  const two = [{ label: 'a' }, { label: 'b' }];
+  const one = [{ label: 'a' }];
+
+  it('requires every row to have one cell per column', () => {
+    expect(table({ columns: two, rows: [['x', 1]] }).ok).toBe(true);
+    expect(error({ columns: two, rows: [['x', 1], ['y']] })).toBe('table row 1 has 1 cells; the table has 2 columns');
+    expect(error({ columns: two, rows: ['x'] })).toBe('table row 0 must be an array');
+  });
+
+  it('requires highlight to name rows', () => {
+    const rows = [['x'], ['y']];
+    for (const index of [0, 1, 1.0]) {
+      expect(table({ columns: one, rows, highlight: [index] }).ok).toBe(true);
+    }
+    for (const index of [2, -1, 0.5, '0']) {
+      expect(error({ columns: one, rows, highlight: [index] })).toBe('table.highlight must contain row indices');
+    }
+  });
+
+  it('accepts text, numbers and styled text as cells, and nothing else', () => {
+    const data = { columns: one, rows: [['x'], [1.5], [{ text: 'y', semantic: 'red', bold: true }]] };
+    const result = table(data);
+    expect(result.ok).toBe(true);
+    if (result.ok && result.action.op === 'show') expect(result.action.data).toEqual(data);
+    const cases: Array<[unknown, string]> = [
+      [true, 'table cell must be a string, a number or an object'],
+      [null, 'table cell must be a string, a number or an object'],
+      [{ semantic: 'red' }, 'table cell.text must be a string'],
+      [{ text: 'y', semantic: 'pink' }, 'invalid table cell.semantic'],
+      [{ text: 'y', bold: 'yes' }, 'table cell.bold must be boolean'],
+      [{ text: 'y', align: 'right' }, 'unknown field in table cell: align'],
+      ['x'.repeat(257), 'table cell exceeds maximum length of 256 UTF-16 code units'],
+    ];
+    for (const [cell, message] of cases) {
+      expect(error({ columns: one, rows: [[cell]] }), JSON.stringify(cell)).toBe(message);
+    }
+  });
+
+  it('takes one to twelve labelled columns with no alignment of their own', () => {
+    const columns = (n: number) => Array.from({ length: n }, (_, i) => ({ label: `c${i}` }));
+    expect(table({ columns: columns(12), rows: [] }).ok).toBe(true);
+    for (const n of [0, 13]) {
+      expect(error({ columns: columns(n), rows: [] })).toBe('table.columns must be an array of 1 to 12 items');
+    }
+    expect(error({ columns: [{ label: 'a', align: 'right' }], rows: [] })).toBe('unknown field in table column: align');
+    expect(error({ columns: [{ label: 'x'.repeat(65) }], rows: [] })).toBe('table column.label exceeds maximum length of 64 UTF-16 code units');
+  });
+});
