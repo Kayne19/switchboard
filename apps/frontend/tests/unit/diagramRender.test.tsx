@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -180,8 +181,7 @@ describe('diagram node state', () => {
     );
     const blocked = nodeOf('blocked');
     expect(blocked.querySelector('.diagram-node__body--anchored')).not.toBeNull();
-    // The stylesheet's blocked rule outranks the anchored one; the drawn
-    // frame, its rule and its tag agree with it.
+    // The frame, its rule and its tag agree.
     expect(blocked.querySelector('.diagram-node__frame')?.getAttribute('stroke')).toBe('var(--red)');
     expect(blocked.querySelector('.diagram-node__body > line')?.getAttribute('stroke')).toBe('var(--red)');
     expect(blocked.querySelector('.diagram-node__tag--blocked rect')?.getAttribute('stroke')).toBe('var(--red)');
@@ -209,6 +209,15 @@ describe('diagram node state', () => {
     // The label starts 18 units in, each character 10.8 units wide
     // (.diagram-node-label: 15px monospace, 0.6em advance plus 0.1em tracking).
     expect(tagX).toBeGreaterThanOrEqual(18 + label.length * 10.8);
+  });
+
+  it('leaves a node frame\'s stroke to the renderer: no stylesheet rule outranks it', () => {
+    // A CSS stroke beats an SVG stroke attribute, so a rule on the frame
+    // would be a second owner of its colour; one such rule once painted an
+    // anchored blocked frame red while the renderer drew it orange.
+    const css = readFileSync(`${import.meta.dirname}/../../src/styles/index.css`, 'utf8');
+    const rules = [...css.matchAll(/([^{}]*\.diagram-node__frame[^{}]*)\{([^}]*)\}/g)];
+    for (const [, selector, body] of rules) expect(/(^|[\s;])stroke(-width|-opacity)?\s*:/.test(body), selector.trim()).toBe(false);
   });
 
   it('gives a lit node its glow on every side of the frame', () => {
