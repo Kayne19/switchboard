@@ -147,6 +147,30 @@ export function primaryObject(state: ControllerState): SceneObject | null {
   return buildCompositionModel(state).primary;
 }
 
+/** The content types that need a slot of their own to be read; the rail
+ * carries the others (metrics, notes, progress). */
+export const VISUAL_TYPES: ReadonlySet<SceneObjectType> = new Set<SceneObjectType>([
+  'chart',
+  'diagram',
+  'document',
+  'code',
+  'table',
+  'image',
+]);
+
+/**
+ * Every visual on stage beside the primary, in the order a composition
+ * places them: compare objects first, then secondary, then ambient, each in
+ * show order. No composition may drop one: a scene draws the ones its main
+ * slot has a place for, and the rest go in the aux row under it
+ * (`components/Scenes.tsx`), so an accepted visual is never lost to the
+ * layout. An ambient visual is here too: the rail has no room for a visual,
+ * so it takes the last place in the row.
+ */
+export function besideVisuals(comp: CompositionModel): SceneObject[] {
+  return [...comp.compare, ...comp.secondary, ...comp.ambient].filter((object) => VISUAL_TYPES.has(object.type));
+}
+
 export type SceneKind =
   | 'idle'
   | 'conversation'

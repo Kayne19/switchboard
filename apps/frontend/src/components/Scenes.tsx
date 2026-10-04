@@ -15,7 +15,7 @@ import type {
   TableData,
 } from '../controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
-import { buildCompositionModel, cast, objectsOfType, primaryObject, type SceneKind } from '../app/sceneModel';
+import { besideVisuals, buildCompositionModel, cast, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { chartKind } from '../primitives/chartGeometry';
@@ -255,7 +255,8 @@ function chartNotesByPanel(
 }
 
 // What a content scene fills the shell with: the text of its frame, its main
-// slot, and the objects the rail carries for it. The shell draws the rest.
+// slot, the visuals that slot leaves out, and the objects the rail carries
+// for it. The shell draws the rest.
 interface SceneContent {
   title: string;
   subtitle: string;
@@ -263,6 +264,13 @@ interface SceneContent {
   footer: string;
   caption: string;
   main: ReactNode;
+  /** Objects on stage that `main` does not draw and the rail does not
+   * carry: the shell lays them in the aux row under it (`MainWithAux`), so
+   * none is lost to the layout. */
+  aux: SceneObject[];
+  /** A variant of the column `main` and the aux row share, if the scene
+   * has one. */
+  mainVariant?: string;
   metrics: Array<SceneObject<MetricData>>;
   note: NoteData | null;
   noteObject?: SceneObject<NoteData>;
@@ -291,6 +299,9 @@ function trainingContent({ state, onFocus, onOpenHistory }: SceneProps): SceneCo
     // The notes sit on the charts here, so the rail carries none.
     note: null,
     progressList: railProgress,
+    // Every chart is drawn here, the primary's neighbours beside it; any
+    // other visual goes in the aux row under them.
+    aux: besideVisuals(buildCompositionModel(state)).filter((object) => object.type !== 'chart'),
     main: (
       <motion.div className="content-main training-main" layout>
         <div className={`training-charts${charts.length > 1 ? ' training-charts--compare' : ''}`}>
@@ -328,15 +339,18 @@ function trainingContent({ state, onFocus, onOpenHistory }: SceneProps): SceneCo
   };
 }
 
-// A diagram, document, code, table, or image object fills the main slot
-// alone, its note in the rail -- unless the diagram places the note as its
-// own callout.
+// A diagram, document, code, table, or image object fills the main slot,
+// its note in the rail -- unless the diagram places the note as its own
+// callout -- and every other visual in the aux row under it.
 function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed: boolean) => void): SceneContent | null {
   const primary = primaryObject(state);
   if (!primary) return null;
   const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), primary.id);
   const note = annotationForScene(state, noteObject, liveChatMessage(state));
+  // What the shell places around the main slot: the aux row under it (every
+  // visual beside the primary) and the rail beside it.
   const rail = {
+    aux: besideVisuals(buildCompositionModel(state)),
     metrics: objectsOfType<MetricData>(state, 'metric'),
     note,
     noteObject,
@@ -425,7 +439,60 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
   }
 }
 
-const AUX_VISUAL_TYPES = new Set(['chart', 'diagram', 'document', 'code', 'table', 'image']);
+// ---- The aux row: every visual a main slot does not draw ----
+
+// The row under a primary: each object the main slot does not draw and the
+// rail does not carry gets a framed cell of its own, so an accepted object is
+// never lost to the layout. A visual keeps a readable floor in its cell; a
+// row with no room for every cell scrolls inside itself rather than squeezing
+// one to nothing (`.composed-aux` in styles/index.css).
+function AuxRow({ objects, onFocus }: { objects: SceneObject[]; onFocus: (id: string | null) => void }) {
+  return (
+    <div className="composed-aux">
+      {objects.map((object) => (
+        <ObjectMotion
+          key={object.id}
+          objectId={object.id}
+          className={`composed-aux-object composed-aux-object--${object.type}${VISUAL_TYPES.has(object.type) ? ' composed-aux-object--visual' : ''}`}
+        >
+          <TechFrame variant="panel" />
+          <ObjectSurface object={object}>
+            <FocusableSurface onActivate={() => onFocus(object.id)} ariaLabel={`Expand ${object.type}`}>
+              {composedPrimitive(object, 'aux')}
+            </FocusableSurface>
+          </ObjectSurface>
+        </ObjectMotion>
+      ))}
+    </div>
+  );
+}
+
+// The main column of every content scene: the scene's own main slot over
+// the aux row. The slot sits here whether or not the row is shown, so an
+// object arriving beside the primary resizes the primary in place rather
+// than redrawing it; alone, the slot fills the column as it always did. The
+// primary keeps the larger share and the row takes what it needs up to its
+// cap (`.composed-main`).
+function MainWithAux({
+  variant,
+  aux,
+  onFocus,
+  children,
+}: {
+  variant?: string;
+  aux: SceneObject[];
+  onFocus: (id: string | null) => void;
+  children: ReactNode;
+}) {
+  return (
+    <motion.div className={`content-main composed-main${variant ? ` ${variant}` : ''}`} layout>
+      {children}
+      {aux.length > 0 ? <AuxRow objects={aux} onFocus={onFocus} /> : null}
+    </motion.div>
+  );
+}
+
+// ---- End of the aux row ----
 
 // Any mix of objects: the primary, or a cluster of primary metrics, over an
 // aux row of everything the rail does not carry.
@@ -444,12 +511,12 @@ function composedContent({ state, onFocus }: SceneProps): SceneContent | null {
   const progressList = comp.allAgentObjects.filter((o) => o.type === 'progress') as Array<SceneObject<ProgressData>>;
   const primaryMetricIds = new Set(primaryMetrics.map((m) => m.id));
   // Everything the rail does not carry shares one visible aux row below the
-  // primary -- compare objects, secondary visuals, and progress -- so an
-  // accepted object is never lost to the layout. Metrics and the note stay
-  // in the rail.
+  // primary -- compare objects, the other visuals beside it, and progress --
+  // so an accepted object is never lost to the layout. Metrics and the note
+  // stay in the rail.
   const auxObjects: SceneObject[] = [
     ...comp.compare,
-    ...comp.secondary.filter((o) => AUX_VISUAL_TYPES.has(o.type)),
+    ...besideVisuals(comp).filter((o) => o.role !== 'compare'),
     ...progressList.filter((p) => p.id !== primary.id && !comp.compare.some((c) => c.id === p.id)),
   ];
 
@@ -464,59 +531,41 @@ function composedContent({ state, onFocus }: SceneProps): SceneContent | null {
     note: noteIsPrimary ? null : annotationForScene(state, noteObject, liveChatMessage(state)),
     noteObject: noteIsPrimary ? undefined : noteObject,
     progressList: [],
+    aux: auxObjects,
+    mainVariant: isMetricPrimary ? 'composed-main--metric-primary' : undefined,
     main: (
-      <motion.div className={`content-main composed-main${isMetricPrimary ? ' composed-main--metric-primary' : ''}`} layout>
-        <ObjectMotion
-          objectId={primaryMetrics.length > 1 ? 'primary-metric-cluster' : primary.id}
-          layoutId={primaryMetrics.length > 1 ? 'switchboard-primary-metric-cluster' : undefined}
-          className={`composed-primary-object composed-primary-object--${primary.type}${primaryMetrics.length > 1 ? ' composed-primary-object--cluster' : ''}`}
-        >
-          <TechFrame variant="panel" />
-          {primaryMetrics.length > 1 ? (
-            <SurfaceBoundary surfaceId="primary-metric-cluster" resetKey={state.agentObjects}>
-              <div className="focusable-content">
+      <ObjectMotion
+        objectId={primaryMetrics.length > 1 ? 'primary-metric-cluster' : primary.id}
+        layoutId={primaryMetrics.length > 1 ? 'switchboard-primary-metric-cluster' : undefined}
+        className={`composed-primary-object composed-primary-object--${primary.type}${primaryMetrics.length > 1 ? ' composed-primary-object--cluster' : ''}`}
+      >
+        <TechFrame variant="panel" />
+        {primaryMetrics.length > 1 ? (
+          <SurfaceBoundary surfaceId="primary-metric-cluster" resetKey={state.agentObjects}>
+            <div className="focusable-content">
+              <MetricsPrimitive
+                metrics={primaryMetrics}
+                variant="primary"
+                onFocus={onFocus}
+              />
+            </div>
+          </SurfaceBoundary>
+        ) : (
+          <ObjectSurface object={primary}>
+            <FocusableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
+              {isMetricPrimary ? (
                 <MetricsPrimitive
-                  metrics={primaryMetrics}
+                  metrics={primaryMetrics.length > 0 ? primaryMetrics : [primary as SceneObject<MetricData>]}
                   variant="primary"
                   onFocus={onFocus}
                 />
-              </div>
-            </SurfaceBoundary>
-          ) : (
-            <ObjectSurface object={primary}>
-              <FocusableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
-                {isMetricPrimary ? (
-                  <MetricsPrimitive
-                    metrics={primaryMetrics.length > 0 ? primaryMetrics : [primary as SceneObject<MetricData>]}
-                    variant="primary"
-                    onFocus={onFocus}
-                  />
-                ) : (
-                  composedPrimitive(primary, 'primary')
-                )}
-              </FocusableSurface>
-            </ObjectSurface>
-          )}
-        </ObjectMotion>
-        {auxObjects.length > 0 ? (
-          <div className="composed-aux">
-            {auxObjects.map((object) => (
-              <ObjectMotion
-                key={object.id}
-                objectId={object.id}
-                className={`composed-aux-object composed-aux-object--${object.type}`}
-              >
-                <TechFrame variant="panel" />
-                <ObjectSurface object={object}>
-                  <FocusableSurface onActivate={() => onFocus(object.id)} ariaLabel={`Expand ${object.type}`}>
-                    {composedPrimitive(object, 'aux')}
-                  </FocusableSurface>
-                </ObjectSurface>
-              </ObjectMotion>
-            ))}
-          </div>
-        ) : null}
-      </motion.div>
+              ) : (
+                composedPrimitive(primary, 'primary')
+              )}
+            </FocusableSurface>
+          </ObjectSurface>
+        )}
+      </ObjectMotion>
     ),
   };
 }
@@ -611,7 +660,9 @@ export function SceneShell(props: SceneProps) {
             <div className="scene-heading__sub tech micro">{content.subtitle}</div>
           </div>
           <div className="content-grid">
-            {content.main}
+            <MainWithAux variant={content.mainVariant} aux={content.aux} onFocus={onFocus}>
+              {content.main}
+            </MainWithAux>
             <motion.aside className="content-rail" layout>
               {presence}
               <RailDetails

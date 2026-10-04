@@ -1164,12 +1164,15 @@ button {
 }
 
 /* Generic composed workspaces */
+/* The main column of every content scene. Row 1 is the scene's own main
+   slot, and alone it fills the column. Row 2, when there is one, is the aux
+   row: the objects beside the primary that the slot does not draw (compare
+   objects, the other visuals, secondary progress) get an explicit visible
+   slot below it, so an accepted object is never lost to the layout. */
 .composed-main {
   display: grid;
-  /* Row 2 is the aux strip: compare objects and secondary progress get an
-     explicit visible slot below the primary, so an accepted object is
-     never lost to the layout. */
-  grid-template-rows: minmax(0, 1fr) minmax(0, auto);
+  grid-template-rows: minmax(0, 1fr);
+  grid-auto-rows: minmax(0, auto);
   gap: clamp(12px, 2cqh, 22px);
 }
 .composed-aux {
@@ -1200,6 +1203,7 @@ button {
 }
 .composed-main--metric-primary {
   grid-template-rows: auto;
+  grid-auto-rows: auto;
   align-content: center;
 }
 .composed-primary-object--metric {
