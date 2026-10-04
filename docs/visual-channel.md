@@ -29,8 +29,8 @@ agent sends semantics. See `docs/display-tool.md` for the full action protocol.
 | --- | --- |
 | `diagram` | relationships and structure — structured graph data (`mode: "graph"`, nodes and edges with semantic states) — or an exchange over time (`mode: "sequence"`, actors across the top and messages between them in order, each a `call`, `return` or `async`, one of them `active`) |
 | `chart` | quantitative series — `kind` is `line` (default), `bar`, `area` or `scatter`, over a numeric x or categorical `labels` |
-| `metric` | a single tracked value with trend |
-| `progress` | checklists, steps, states, and optional durations |
+| `metric` | a single tracked value, with the way it moved (`trend` arrow, `delta` text) when that matters |
+| `progress` | a bar, and under it the plan it measures: `steps` with a state each (`done`, `active`, `todo`, `blocked`) and a detail |
 | `document` | headings, paragraphs, bullets, code blocks |
 | `code` | code and diff views (`add`/`del`/`ctx` lines) |
 | `table` | rows of named columns: results, comparisons, inventories; cells carry semantic colour and rows can be highlighted |
@@ -54,6 +54,12 @@ as long as the rows fit the plot; otherwise its labels are staggered or thinned
 like any other chart's. There is no pie chart and no sparkline: a single
 series with no axes is a `metric`, and a share of a whole reads better as a
 bar per part.
+
+A progress object with `steps` may omit `value`: the service fills in the
+share of steps done, so "I am on step three of five" is spoken while the
+screen shows the five, their states, and a bar that agrees with them. The
+page decides how much of a long plan each slot shows; the whole plan is a
+focus away.
 
 ### Composition & focus
 

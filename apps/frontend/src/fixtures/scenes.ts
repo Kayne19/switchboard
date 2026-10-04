@@ -58,12 +58,19 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
   ],
   training: [
     { op: 'show', id: 'loss', type: 'chart', role: 'primary', data: { ...trainingSeries, title: 'RUN / GRAPE-AMODAL-04', subtitle: 'TRAINING / LOSS TRACE / LIVE', context: 'TRAINING RUN' } },
-    { op: 'show', id: 'val-loss', type: 'metric', data: { label: 'VAL LOSS', value: '0.1832', semantic: 'orange' } },
-    { op: 'show', id: 'train-loss', type: 'metric', data: { label: 'TRAIN LOSS', value: '0.1041', semantic: 'green' } },
+    { op: 'show', id: 'val-loss', type: 'metric', data: { label: 'VAL LOSS', value: '0.1832', semantic: 'orange', trend: 'up', delta: '+0.0138' } },
+    { op: 'show', id: 'train-loss', type: 'metric', data: { label: 'TRAIN LOSS', value: '0.1041', semantic: 'green', trend: 'down', delta: '-0.0009' } },
     { op: 'show', id: 'learning-rate', type: 'metric', data: { label: 'LEARNING RATE', value: '1.2e-4' } },
     { op: 'show', id: 'gpu', type: 'metric', data: { label: 'GPU', value: '91%' } },
     { op: 'show', id: 'eta', type: 'metric', data: { label: 'ETA', value: '01:42:18' } },
-    { op: 'show', id: 'progress', type: 'progress', data: { label: 'EPOCH 41 / 80', detail: 'ACTIVE / OPTIMIZER STEP 18442', value: 51.25, text: '51.25% COMPLETE' } },
+    { op: 'show', id: 'progress', type: 'progress', data: { label: 'EPOCH 41 / 80', detail: 'ACTIVE / OPTIMIZER STEP 18442', value: 51.25, text: '51.25% COMPLETE', steps: [
+      { label: 'WARMUP', state: 'done', detail: 'EPOCHS 1-5 / LR RAMP' },
+      { label: 'STAGE 1 / FULL RES', state: 'done', detail: 'EPOCHS 6-30' },
+      { label: 'LR TRANSITION', state: 'done', detail: 'EPOCH 31 / COSINE DECAY' },
+      { label: 'STAGE 2 / FINE', state: 'active', detail: 'EPOCHS 32-70 / VAL DIVERGING' },
+      { label: 'EVAL / HELD-OUT SEEDS', detail: 'EPOCHS 71-80' },
+      { label: 'EXPORT CHECKPOINT' },
+    ] } },
     { op: 'show', id: 'training-note', type: 'note', data: { tag: 'OBSERVATION / EPOCH 32+', anchor: { target: 'loss', x: 32, series: 'VAL LOSS' }, segments: [
       { text: 'Validation loss turns upward here while training loss continues down. I would inspect the ' },
       { text: 'learning-rate transition', accent: true, bold: true },

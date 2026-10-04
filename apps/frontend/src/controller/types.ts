@@ -39,19 +39,41 @@ export interface ChartData {
   compareLabel?: string;
 }
 
+export type MetricTrend = 'up' | 'down' | 'flat';
+
 export interface MetricData {
   label: string;
   value: string;
   semantic?: Semantic;
   caption?: string;
+  /** Which way the value moved; drawn as an arrow beside it in the value's colour. */
+  trend?: MetricTrend;
+  /** The change, as the agent words it (`+0.4%`, `-12 ms`); shown beside the arrow. */
+  delta?: string;
+}
+
+export type ProgressStepState = 'done' | 'active' | 'todo' | 'blocked';
+
+export interface ProgressStep {
+  label: string;
+  /** Absent reads as `todo`. */
+  state?: ProgressStepState;
+  detail?: string;
 }
 
 export interface ProgressData {
   label: string;
   detail?: string;
+  /**
+   * Percent, 0-100. On the wire it may be left out when `steps` is given;
+   * the validators then fill it in as done/total*100, so a rendered object
+   * always carries one.
+   */
   value: number;
   text?: string;
   caption?: string;
+  /** The plan behind the bar, 1 to 30 steps, listed under it. */
+  steps?: ProgressStep[];
 }
 
 export interface DiagramNode {

@@ -10,8 +10,11 @@ import type {
   DisplayAction,
   DocumentData,
   MetricData,
+  MetricTrend,
   NoteData,
   ProgressData,
+  ProgressStep,
+  ProgressStepState,
   RichSegment,
   SceneObjectRole,
   Semantic,
@@ -63,6 +66,10 @@ const MAX_ID_UTF16 = 128;
 const MAX_TEXT_UTF16 = 50_000;
 const MAX_ACTION_BYTES = 48_000;
 const RESERVED_ID_PREFIX = '__runtime/';
+const MAX_PROGRESS_STEPS = 30;
+const MAX_METRIC_DELTA_UTF16 = 32;
+const METRIC_TRENDS = new Set<MetricTrend>(['up', 'down', 'flat']);
+const PROGRESS_STEP_STATES = new Set<ProgressStepState>(['done', 'active', 'todo', 'blocked']);
 
 const FORBIDDEN_LAYOUT_KEYS = new Set([
   'layout',
@@ -286,7 +293,7 @@ function validateChartData(data: Record<string, unknown>): { ok: true; data: Cha
 }
 
 function validateMetricData(data: Record<string, unknown>): { ok: true; data: MetricData } | { ok: false; error: string } {
-  const allowed = new Set(['label', 'value', 'semantic', 'caption']);
+  const allowed = new Set(['label', 'value', 'semantic', 'caption', 'trend', 'delta']);
   const unknownKey = checkUnknownKeys(data, allowed, 'metric data');
   if (unknownKey) return { ok: false, error: unknownKey };
 
@@ -309,28 +316,94 @@ function validateMetricData(data: Record<string, unknown>): { ok: true; data: Me
     if (err) return { ok: false, error: err };
     result.caption = data.caption as string;
   }
+  if (data.trend !== undefined) {
+    if (!METRIC_TRENDS.has(data.trend as MetricTrend)) {
+      return { ok: false, error: 'invalid metric.trend' };
+    }
+    result.trend = data.trend as MetricTrend;
+  }
+  if (data.delta !== undefined) {
+    const err = checkString(data.delta, MAX_METRIC_DELTA_UTF16, 'metric.delta');
+    if (err) return { ok: false, error: err };
+    result.delta = data.delta as string;
+  }
   return {
     ok: true,
     data: result,
   };
 }
 
+/**
+ * The percent a step list stands for when the agent gives no `value`: the
+ * share of its steps that are done. The backend's `progress_value_of_steps`
+ * computes it the same way, so a filled-in value agrees on both sides.
+ */
+function progressValueOfSteps(steps: ProgressStep[]): number {
+  const done = steps.filter((step) => step.state === 'done').length;
+  return normalizeProgressValue((done * 100) / steps.length);
+}
+
+function validateProgressSteps(value: unknown): { ok: true; steps: ProgressStep[] } | { ok: false; error: string } {
+  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_PROGRESS_STEPS) {
+    return { ok: false, error: `progress.steps must be an array of 1 to ${MAX_PROGRESS_STEPS} items` };
+  }
+  const stepAllowed = new Set(['label', 'state', 'detail']);
+  const steps: ProgressStep[] = [];
+  for (const s of value) {
+    if (!isRecord(s)) return { ok: false, error: 'progress step must be an object' };
+    const sUnknown = checkUnknownKeys(s, stepAllowed, 'progress step');
+    if (sUnknown) return { ok: false, error: sUnknown };
+    const labelErr = checkString(s.label, 128, 'progress step.label');
+    if (labelErr) return { ok: false, error: labelErr };
+    const step: ProgressStep = { label: s.label as string };
+    if (s.state !== undefined) {
+      if (!PROGRESS_STEP_STATES.has(s.state as ProgressStepState)) {
+        return { ok: false, error: 'invalid progress step.state' };
+      }
+      step.state = s.state as ProgressStepState;
+    }
+    if (s.detail !== undefined) {
+      const err = checkString(s.detail, 256, 'progress step.detail');
+      if (err) return { ok: false, error: err };
+      step.detail = s.detail as string;
+    }
+    steps.push(step);
+  }
+  return { ok: true, steps };
+}
+
 function validateProgressData(data: Record<string, unknown>): { ok: true; data: ProgressData } | { ok: false; error: string } {
-  const allowed = new Set(['label', 'detail', 'value', 'text', 'caption']);
+  const allowed = new Set(['label', 'detail', 'value', 'text', 'caption', 'steps']);
   const unknownKey = checkUnknownKeys(data, allowed, 'progress data');
   if (unknownKey) return { ok: false, error: unknownKey };
 
   const labelErr = checkString(data.label, 128, 'progress.label');
   if (labelErr) return { ok: false, error: labelErr };
 
-  if (typeof data.value !== 'number' || !Number.isFinite(data.value)) {
-    return { ok: false, error: 'progress.value must be a finite number' };
+  let steps: ProgressStep[] | undefined;
+  if (data.steps !== undefined) {
+    const res = validateProgressSteps(data.steps);
+    if (!res.ok) return res;
+    steps = res.steps;
   }
-  const value = normalizeProgressValue(data.value);
+
+  // The bar needs a percent: the agent's own, or the share of steps done.
+  let value: number;
+  if (data.value !== undefined) {
+    if (typeof data.value !== 'number' || !Number.isFinite(data.value)) {
+      return { ok: false, error: 'progress.value must be a finite number' };
+    }
+    value = normalizeProgressValue(data.value);
+  } else if (steps) {
+    value = progressValueOfSteps(steps);
+  } else {
+    return { ok: false, error: 'progress requires value or steps' };
+  }
 
   const result: ProgressData = {
     label: data.label as string,
     value,
+    ...(steps ? { steps } : {}),
   };
 
   if (data.detail !== undefined) {

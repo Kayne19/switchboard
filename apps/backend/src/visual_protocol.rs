@@ -8,6 +8,8 @@ pub const RESERVED_ID_PREFIX: &str = "__runtime/";
 const CHART_KINDS: [&str; 4] = ["line", "bar", "area", "scatter"];
 const MAX_CHART_LABELS: usize = 100;
 const MAX_CHART_LABEL_UTF16: usize = 64;
+const MAX_PROGRESS_STEPS: usize = 30;
+const MAX_METRIC_DELTA_UTF16: usize = 32;
 /// What an agent may `show`. The browser reports the same kinds back in its
 /// screen state, so this list is the one both directions are checked against.
 pub const CONTENT_TYPES: [&str; 8] = [
@@ -330,7 +332,7 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
 fn validate_metric_data(data: &Map<String, Value>) -> Result<Value, String> {
     check_unknown_keys(
         data,
-        &["label", "value", "semantic", "caption"],
+        &["label", "value", "semantic", "caption", "trend", "delta"],
         "metric data",
     )?;
     let label = data
@@ -358,6 +360,20 @@ fn validate_metric_data(data: &Map<String, Value>) -> Result<Value, String> {
         out.insert("semantic".into(), sem.into());
     }
     copy_optional_string(data, &mut out, "caption", 128, "metric.caption")?;
+    if let Some(trend) = data.get("trend") {
+        let t = trend
+            .as_str()
+            .filter(|t| matches!(*t, "up" | "down" | "flat"))
+            .ok_or("invalid metric.trend")?;
+        out.insert("trend".into(), t.into());
+    }
+    copy_optional_string(
+        data,
+        &mut out,
+        "delta",
+        MAX_METRIC_DELTA_UTF16,
+        "metric.delta",
+    )?;
     Ok(Value::Object(out))
 }
 
@@ -373,10 +389,56 @@ fn normalize_progress_value(value: f64) -> Value {
     }
 }
 
+/// The percent a step list stands for when the agent gives no `value`: the
+/// share of its steps that are done. The browser's `progressValueOfSteps`
+/// computes it the same way, so a filled-in value agrees on both sides.
+fn progress_value_of_steps(steps: &[Value]) -> Value {
+    let done = steps
+        .iter()
+        .filter(|step| step["state"].as_str() == Some("done"))
+        .count();
+    normalize_progress_value((done as f64 * 100.0) / steps.len() as f64)
+}
+
+fn validate_progress_steps(value: &Value) -> Result<Vec<Value>, String> {
+    let steps = value
+        .as_array()
+        .filter(|steps| !steps.is_empty() && steps.len() <= MAX_PROGRESS_STEPS)
+        .ok_or(format!(
+            "progress.steps must be an array of 1 to {MAX_PROGRESS_STEPS} items"
+        ))?;
+    let mut clean_steps = Vec::new();
+    for step in steps {
+        let sm = step.as_object().ok_or("progress step must be an object")?;
+        check_unknown_keys(sm, &["label", "state", "detail"], "progress step")?;
+        let label = sm
+            .get("label")
+            .and_then(Value::as_str)
+            .ok_or("progress step.label must be a string")?;
+        if utf16_len(label) > 128 {
+            return Err(
+                "progress step.label exceeds maximum length of 128 UTF-16 code units".into(),
+            );
+        }
+        let mut step_out = Map::new();
+        step_out.insert("label".into(), label.into());
+        if let Some(state) = sm.get("state") {
+            let st = state
+                .as_str()
+                .filter(|st| matches!(*st, "done" | "active" | "todo" | "blocked"))
+                .ok_or("invalid progress step.state")?;
+            step_out.insert("state".into(), st.into());
+        }
+        copy_optional_string(sm, &mut step_out, "detail", 256, "progress step.detail")?;
+        clean_steps.push(Value::Object(step_out));
+    }
+    Ok(clean_steps)
+}
+
 fn validate_progress_data(data: &Map<String, Value>) -> Result<Value, String> {
     check_unknown_keys(
         data,
-        &["label", "detail", "value", "text", "caption"],
+        &["label", "detail", "value", "text", "caption", "steps"],
         "progress data",
     )?;
     let label = data
@@ -387,19 +449,30 @@ fn validate_progress_data(data: &Map<String, Value>) -> Result<Value, String> {
         return Err("progress.label exceeds maximum length of 128 UTF-16 code units".into());
     }
 
-    let val = data
-        .get("value")
-        .filter(|v| v.is_number() && v.as_f64().is_some_and(f64::is_finite))
-        .ok_or("progress.value must be a finite number")?
-        .as_f64()
-        .unwrap();
+    let steps = data.get("steps").map(validate_progress_steps).transpose()?;
+
+    // The bar needs a percent: the agent's own, or the share of steps done.
+    let value = match (data.get("value"), &steps) {
+        (Some(v), _) => {
+            let val = v
+                .as_f64()
+                .filter(|val| val.is_finite())
+                .ok_or("progress.value must be a finite number")?;
+            // Values arrive as a 0-100 percentage; the projection applies
+            // the same normalization as the browser to keep both sides of the
+            // socket in agreement.
+            normalize_progress_value(val)
+        }
+        (None, Some(steps)) => progress_value_of_steps(steps),
+        (None, None) => return Err("progress requires value or steps".into()),
+    };
 
     let mut out = Map::new();
     out.insert("label".into(), label.into());
-    // Values arrive as a 0-100 percentage; the projection applies
-    // the same normalization as the browser to keep both sides of the
-    // socket in agreement.
-    out.insert("value".into(), normalize_progress_value(val));
+    out.insert("value".into(), value);
+    if let Some(steps) = steps {
+        out.insert("steps".into(), Value::Array(steps));
+    }
 
     if let Some(detail) = data.get("detail") {
         let d = detail.as_str().ok_or("progress.detail must be a string")?;

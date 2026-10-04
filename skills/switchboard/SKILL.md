@@ -75,8 +75,12 @@ Types and their `data` shapes (each type takes only its own shape):
   labels (at most 100, each at most 64 characters; no series may be longer
   than them). Bars group per category; the page decides whether they run up
   or across.
-- metric: `{label, value}`
-- progress: `{label, value}` (value is a percent, 0-100)
+- metric: `{label, value}`, plus `trend` (`up`, `down` or `flat`) and
+  `delta` (a short string such as `-12 ms`) to show how it moved
+- progress: `{label, value}` (value is a percent, 0-100) and/or
+  `steps: [{label, state?, detail?}]` (1 to 30; state is `done`, `active`,
+  `todo` or `blocked`). With steps, value may be left out: the bar then
+  shows the share of steps done.
 - diagram: `{mode: "graph", nodes: [{id, label}], edges: [{from, to}]}` for
   structure, or `{mode: "sequence", actors: [{id, label}], messages: [{from,
   to, label}]}` for an exchange over time (a message's `kind` is `call`,

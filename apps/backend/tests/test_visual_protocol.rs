@@ -143,6 +143,129 @@ fn rounds_progress_values_to_two_decimal_places() {
     assert_eq!(progress_value(json!(66.666)), json!(66.67));
 }
 
+fn progress_steps(data: Value) -> Result<Value, String> {
+    validate_action(&json!({
+        "op": "show",
+        "id": "build",
+        "type": "progress",
+        "data": data
+    }))
+    .map(|normalized| normalized["data"].clone())
+}
+
+// The browser's progressValueOfSteps fills the bar the same way; the
+// `show_progress_steps_without_value` fixture pins both to one output.
+#[test]
+fn fills_in_the_value_from_the_steps_when_the_agent_gives_none() {
+    let data = progress_steps(json!({
+        "label": "BUILD",
+        "steps": [
+            {"label": "Fetch", "state": "done"},
+            {"label": "Compile", "state": "active"},
+            {"label": "Link"}
+        ]
+    }))
+    .unwrap();
+    assert_eq!(data["value"], json!(33.33));
+    assert_eq!(data["steps"].as_array().unwrap().len(), 3);
+    // A step without a state stays as sent: the browser reads it as todo.
+    assert_eq!(data["steps"][2], json!({"label": "Link"}));
+
+    let all_done = progress_steps(json!({
+        "label": "BUILD",
+        "steps": [{"label": "Fetch", "state": "done"}, {"label": "Link", "state": "done"}]
+    }))
+    .unwrap();
+    assert_eq!(all_done["value"], json!(100));
+}
+
+#[test]
+fn keeps_the_agents_value_over_the_steps_when_both_are_given() {
+    let data = progress_steps(json!({
+        "label": "BUILD",
+        "value": 10,
+        "steps": [{"label": "Fetch", "state": "done"}]
+    }))
+    .unwrap();
+    assert_eq!(data["value"], json!(10));
+}
+
+#[test]
+fn refuses_a_progress_with_neither_value_nor_steps() {
+    assert_eq!(
+        progress_steps(json!({"label": "BUILD", "text": "working"})),
+        Err("progress requires value or steps".into())
+    );
+}
+
+#[test]
+fn bounds_and_shapes_the_steps() {
+    let many: Vec<Value> = (0..31).map(|i| json!({"label": format!("s{i}")})).collect();
+    assert_eq!(
+        progress_steps(json!({"label": "L", "steps": many})),
+        Err("progress.steps must be an array of 1 to 30 items".into())
+    );
+    assert_eq!(
+        progress_steps(json!({"label": "L", "value": 1, "steps": []})),
+        Err("progress.steps must be an array of 1 to 30 items".into())
+    );
+    assert_eq!(
+        progress_steps(json!({"label": "L", "steps": [{"label": "S", "state": "paused"}]})),
+        Err("invalid progress step.state".into())
+    );
+    assert_eq!(
+        progress_steps(json!({"label": "L", "steps": [{"label": "S", "percent": 5}]})),
+        Err("unknown field in progress step: percent".into())
+    );
+    assert_eq!(
+        progress_steps(json!({"label": "L", "steps": [{"label": "x".repeat(129)}]})),
+        Err("progress step.label exceeds maximum length of 128 UTF-16 code units".into())
+    );
+    assert_eq!(
+        progress_steps(json!({"label": "L", "steps": [{"label": "S", "detail": "d".repeat(257)}]})),
+        Err("progress step.detail exceeds maximum length of 256 UTF-16 code units".into())
+    );
+    assert_eq!(
+        progress_steps(json!({"label": "L", "steps": ["Fetch"]})),
+        Err("progress step must be an object".into())
+    );
+}
+
+fn metric(data: Value) -> Result<Value, String> {
+    validate_action(&json!({"op": "show", "id": "m", "type": "metric", "data": data}))
+        .map(|normalized| normalized["data"].clone())
+}
+
+#[test]
+fn carries_a_metric_trend_and_delta_and_bounds_them() {
+    let data = metric(json!({
+        "label": "P95", "value": "182 ms", "trend": "down", "delta": "-12 ms"
+    }))
+    .unwrap();
+    assert_eq!(data["trend"], json!("down"));
+    assert_eq!(data["delta"], json!("-12 ms"));
+    for trend in ["up", "down", "flat"] {
+        assert!(metric(json!({"label": "P95", "value": "1", "trend": trend})).is_ok());
+    }
+    assert_eq!(
+        metric(json!({"label": "P95", "value": "1", "trend": "sideways"})),
+        Err("invalid metric.trend".into())
+    );
+    assert_eq!(
+        metric(json!({"label": "P95", "value": "1", "trend": 1})),
+        Err("invalid metric.trend".into())
+    );
+    assert!(metric(json!({"label": "P95", "value": "1", "delta": "x".repeat(32)})).is_ok());
+    assert_eq!(
+        metric(json!({"label": "P95", "value": "1", "delta": "x".repeat(33)})),
+        Err("metric.delta exceeds maximum length of 32 UTF-16 code units".into())
+    );
+    assert_eq!(
+        metric(json!({"label": "P95", "value": "1", "delta": 3})),
+        Err("metric.delta must be a string".into())
+    );
+}
+
 #[test]
 fn rejects_non_finite_progress_values() {
     for non_finite in [json!("NaN"), json!("Infinity"), json!("-Infinity")] {
@@ -306,14 +429,19 @@ fn show_types_and_their_required_data_follow_the_schema() {
                 .collect(),
             None => vec![data],
         };
+        // A shape with an `anyOf` of `required` branches (progress: value
+        // or steps) needs one branch met; the first is the one the sample
+        // carries.
         for shape in shapes {
             let mode = shape["properties"]["mode"]["enum"][0]
                 .as_str()
                 .map(str::to_owned);
+            let first_branch = shape["anyOf"][0]["required"].as_array();
             let required = shape["required"]
                 .as_array()
                 .unwrap()
                 .iter()
+                .chain(first_branch.into_iter().flatten())
                 .map(|key| key.as_str().unwrap().to_owned())
                 .collect();
             required_by_shape.push((kind.to_owned(), mode, required));
@@ -333,8 +461,9 @@ fn show_types_and_their_required_data_follow_the_schema() {
     );
 
     // The smallest data the validator accepts for each shape. Each carries
-    // exactly the schema's required keys, checked below, so a key the schema
-    // adds or drops fails here until both sides agree.
+    // exactly the schema's required keys (and the first `anyOf` branch's),
+    // checked below, so a key the schema adds or drops fails here until both
+    // sides agree.
     let smallest = |kind: &str, mode: Option<&str>| -> Value {
         match (kind, mode) {
             ("chart", None) => json!({"series": [{"name": "a", "values": [1]}]}),

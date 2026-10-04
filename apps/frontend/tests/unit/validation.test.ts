@@ -61,6 +61,74 @@ describe('progress value normalization', () => {
   });
 });
 
+describe('progress steps', () => {
+  const progress = (data: Record<string, unknown>) =>
+    validateControllerAction({ op: 'show', id: 'build', type: 'progress', data });
+
+  // The backend's progress_value_of_steps fills the bar the same way; the
+  // `show_progress_steps_without_value` fixture pins both to one output.
+  it('fills in the value from the steps when the agent gives none', () => {
+    const result = progress({
+      label: 'BUILD',
+      steps: [{ label: 'Fetch', state: 'done' }, { label: 'Compile', state: 'active' }, { label: 'Link' }],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok && result.action.op === 'show') {
+      const data = result.action.data as { value: number; steps: unknown[] };
+      expect(data.value).toBe(33.33);
+      expect(data.steps).toHaveLength(3);
+      // A step without a state stays as sent: the primitive reads it as todo.
+      expect(data.steps[2]).toEqual({ label: 'Link' });
+    }
+    const allDone = progress({ label: 'BUILD', steps: [{ label: 'A', state: 'done' }, { label: 'B', state: 'done' }] });
+    expect(allDone.ok && allDone.action.op === 'show' && (allDone.action.data as { value: number }).value).toBe(100);
+  });
+
+  it('keeps the agent\'s value over the steps when both are given', () => {
+    const result = progress({ label: 'BUILD', value: 10, steps: [{ label: 'Fetch', state: 'done' }] });
+    expect(result.ok && result.action.op === 'show' && (result.action.data as { value: number }).value).toBe(10);
+  });
+
+  it('refuses a progress with neither value nor steps', () => {
+    expect(progress({ label: 'BUILD', text: 'working' })).toEqual({ ok: false, error: 'progress requires value or steps' });
+  });
+
+  it('bounds and shapes the steps', () => {
+    const many = Array.from({ length: 31 }, (_, i) => ({ label: `s${i}` }));
+    expect(progress({ label: 'L', steps: many })).toEqual({ ok: false, error: 'progress.steps must be an array of 1 to 30 items' });
+    expect(progress({ label: 'L', value: 1, steps: [] })).toEqual({ ok: false, error: 'progress.steps must be an array of 1 to 30 items' });
+    expect(progress({ label: 'L', steps: [{ label: 'S', state: 'paused' }] })).toEqual({ ok: false, error: 'invalid progress step.state' });
+    expect(progress({ label: 'L', steps: [{ label: 'S', percent: 5 }] })).toEqual({ ok: false, error: 'unknown field in progress step: percent' });
+    expect(progress({ label: 'L', steps: [{ label: 'x'.repeat(129) }] })).toEqual({
+      ok: false, error: 'progress step.label exceeds maximum length of 128 UTF-16 code units',
+    });
+    expect(progress({ label: 'L', steps: [{ label: 'S', detail: 'd'.repeat(257) }] })).toEqual({
+      ok: false, error: 'progress step.detail exceeds maximum length of 256 UTF-16 code units',
+    });
+    expect(progress({ label: 'L', steps: ['Fetch'] })).toEqual({ ok: false, error: 'progress step must be an object' });
+  });
+});
+
+describe('metric trend and delta', () => {
+  const metric = (data: Record<string, unknown>) =>
+    validateControllerAction({ op: 'show', id: 'm', type: 'metric', data });
+
+  it('carries a trend and delta and bounds them', () => {
+    const result = metric({ label: 'P95', value: '182 ms', trend: 'down', delta: '-12 ms' });
+    expect(result.ok && result.action.op === 'show' && result.action.data).toMatchObject({ trend: 'down', delta: '-12 ms' });
+    for (const trend of ['up', 'down', 'flat']) {
+      expect(metric({ label: 'P95', value: '1', trend }).ok).toBe(true);
+    }
+    expect(metric({ label: 'P95', value: '1', trend: 'sideways' })).toEqual({ ok: false, error: 'invalid metric.trend' });
+    expect(metric({ label: 'P95', value: '1', trend: 1 })).toEqual({ ok: false, error: 'invalid metric.trend' });
+    expect(metric({ label: 'P95', value: '1', delta: 'x'.repeat(32) }).ok).toBe(true);
+    expect(metric({ label: 'P95', value: '1', delta: 'x'.repeat(33) })).toEqual({
+      ok: false, error: 'metric.delta exceeds maximum length of 32 UTF-16 code units',
+    });
+    expect(metric({ label: 'P95', value: '1', delta: 3 })).toEqual({ ok: false, error: 'metric.delta must be a string' });
+  });
+});
+
 describe('display protocol validation', () => {
   it('accepts and normalizes all canonical valid fixtures', () => {
     for (const testCase of fixtures.valid) {

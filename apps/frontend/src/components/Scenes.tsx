@@ -157,7 +157,7 @@ function RailProgress({ progressList, onFocus }: { progressList: Array<SceneObje
         <ObjectMotion key={progress.id} objectId={progress.id} className="rail-progress">
           <ObjectSurface object={progress}>
             <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
-              <ProgressPrimitive data={progress.data} />
+              <ProgressPrimitive data={progress.data} compact />
             </FocusableSurface>
           </ObjectSurface>
         </ObjectMotion>
@@ -200,7 +200,8 @@ function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, 
 }
 
 // One object drawn inside a composed workspace, as the primary or in the aux
-// row beneath it. Only a metric changes with the slot.
+// row beneath it. A metric and a progress change with the slot: the aux row
+// has no room for a whole step list.
 function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux') {
   switch (object.type) {
     case 'chart':
@@ -216,7 +217,7 @@ function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux') {
     case 'metric':
       return <MetricsPrimitive metrics={[object as SceneObject<MetricData>]} variant={slot === 'primary' ? 'primary' : undefined} />;
     case 'progress':
-      return <ProgressPrimitive data={(object as SceneObject<ProgressData>).data} />;
+      return <ProgressPrimitive data={(object as SceneObject<ProgressData>).data} compact={slot === 'aux'} />;
     case 'note':
       return <AnnotationCard data={(object as SceneObject<NoteData>).data} />;
     default:

@@ -236,11 +236,49 @@
         "caption": {
           "type": "string",
           "maxLength": 128
+        },
+        "trend": {
+          "type": "string",
+          "enum": [
+            "up",
+            "down",
+            "flat"
+          ]
+        },
+        "delta": {
+          "type": "string",
+          "maxLength": 32
         }
       },
       "required": [
         "label",
         "value"
+      ],
+      "additionalProperties": false
+    },
+    "ProgressStep": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "done",
+            "active",
+            "todo",
+            "blocked"
+          ]
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "label"
       ],
       "additionalProperties": false
     },
@@ -265,13 +303,32 @@
         "caption": {
           "type": "string",
           "maxLength": 128
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ProgressStep"
+          },
+          "minItems": 1,
+          "maxItems": 30
         }
       },
       "required": [
-        "label",
-        "value"
+        "label"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "value"
+          ]
+        },
+        {
+          "required": [
+            "steps"
+          ]
+        }
+      ]
     },
     "DiagramNode": {
       "type": "object",

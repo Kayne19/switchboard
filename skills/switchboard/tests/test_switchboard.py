@@ -312,6 +312,8 @@ class ProgrammingErrorTest(ModuleTestCase):
             (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "diagram", "data": {"mode": "sequence", "actors": []}}),
             (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "diagram", "data": {"mode": "timeline", "actors": [], "messages": []}}),
             (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "diagram", "data": {"mode": ["graph"], "nodes": [], "edges": []}}),
+            (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "progress", "data": {"label": "L"}}),
+            (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "progress", "data": {"steps": [{"label": "S"}]}}),
             (ValueError, switchboard.display, (), {"op": "show", "id": "x", "type": "note", "role": "hero", "data": {"segments": []}}),
             (TypeError, switchboard.display, ("show",), {}),
             (TypeError, switchboard.display, (), {"op": "show", "id": "x", "type": "chart", "data": {"series": [object()]}}),
@@ -350,6 +352,25 @@ class ProgrammingErrorTest(ModuleTestCase):
             switchboard.display(op="show", id="d", type="diagram", data={"mode": "timeline"})
         self.assertIn("unknown diagram mode 'timeline'", str(caught.exception))
 
+    def test_a_progress_needs_value_or_steps_and_takes_either(self):
+        with self.assertRaises(ValueError) as caught:
+            switchboard.display(op="show", id="x", type="progress", data={"label": "L", "text": "working"})
+        self.assertIn("progress data needs value or steps", str(caught.exception))
+        host = self.host()
+        for data in (
+            {"label": "L", "value": 40},
+            {"label": "L", "steps": [{"label": "Fetch", "state": "done"}, {"label": "Link"}]},
+            {"label": "L", "value": 50, "steps": [{"label": "Fetch"}]},
+        ):
+            with self.subTest(data=data):
+                result, _line = self.run_call(switchboard.display, op="show", id="x", type="progress", data=data)
+                self.assertTrue(result.ok)
+        self.assertEqual([call["args"]["action"]["data"] for call in host.calls()][-3:], [
+            {"label": "L", "value": 40},
+            {"label": "L", "steps": [{"label": "Fetch", "state": "done"}, {"label": "Link"}]},
+            {"label": "L", "value": 50, "steps": [{"label": "Fetch"}]},
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -386,6 +407,28 @@ class DisplaySchemaTests(unittest.TestCase):
             shapes[kind] = {frozenset(branch["required"]) for branch in branches}
         return shapes
 
+    def _one_of_keys(self):
+        """{type: keys of which one is needed} for every Show*Action whose data
+        carries an `anyOf` of single `required` branches (progress: value or steps)."""
+        one_of = {}
+        for ref in self.schema["oneOf"]:
+            name = ref["$ref"].rsplit("/", 1)[1]
+            props = self.definitions[name]["properties"]
+            if "type" not in props:
+                continue
+            (kind,) = props["type"].get("enum") or [props["type"]["const"]]
+            data = props["data"]
+            if "$ref" in data:
+                data = self.definitions[data["$ref"].rsplit("/", 1)[1]]
+            branches = data.get("anyOf")
+            if branches:
+                keys = []
+                for branch in branches:
+                    (key,) = branch["required"]
+                    keys.append(key)
+                one_of[kind] = tuple(keys)
+        return one_of
+
     def test_show_types_and_required_data_keys_match_the_schema(self):
         module = {}
         for kind, (required, _hint) in switchboard._SHAPES.items():
@@ -403,6 +446,9 @@ class DisplaySchemaTests(unittest.TestCase):
             (mode,) = shape["properties"]["mode"]["enum"]
             modes[mode] = tuple(key for key in shape["required"] if key != "mode")
         self.assertEqual(switchboard._DIAGRAM_MODES, modes)
+
+    def test_one_of_keys_match_the_schema(self):
+        self.assertEqual(switchboard._ONE_OF, self._one_of_keys())
 
     def test_ops_and_roles_match_the_schema(self):
         ops = set()
