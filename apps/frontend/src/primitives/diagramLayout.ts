@@ -163,6 +163,7 @@ const ROW_GAP = 24;
 // Where edges leave and enter a box: ports spread along its side.
 const PORT_PITCH = 16;
 const MIN_PORT_PITCH = 4;
+const DIRECTION_SPLIT = 8;
 const PORT_INSET = 14;
 const SELF_LOOP = 18;
 
@@ -398,6 +399,8 @@ interface Segment {
   toCross: number;
   /** The main coordinate of its bend, when it has one. */
   track: number | null;
+  /** Its edge is drawn against the layout's direction (a broken cycle). */
+  reversed: boolean;
 }
 
 interface Route {
@@ -637,12 +640,26 @@ function assignPorts(layers: Item[][], segments: Segment[]) {
         // ports packed closer than a few units read as one striped band, so
         // they leave as one trunk and part where they bend.
         const spread = count > 1 && !item.staggered ? Math.min(PORT_PITCH, (item.crossExtent - 2 * PORT_INSET) / (count - 1)) : 0;
-        const pitch = spread >= MIN_PORT_PITCH ? spread : 0;
-        ends.forEach((segment, index) => {
-          const cross = item.cross + (index - (count - 1) / 2) * pitch;
+        const portOf = new Map<Segment, number>();
+        if (spread >= MIN_PORT_PITCH) {
+          ends.forEach((segment, index) => portOf.set(segment, item.cross + (index - (count - 1) / 2) * spread));
+        } else {
+          // Only ends drawn the same way share a port: an arrowhead arriving
+          // where other edges leave would read as one more of them. Each
+          // way takes its own port, the two a few units apart.
+          const far = (segment: Segment) => (side === 'out' ? segment.to.cross : segment.from.cross);
+          const ways = [ends.filter((segment) => !segment.reversed), ends.filter((segment) => segment.reversed)]
+            .filter((way) => way.length)
+            .sort((a, b) => meanOf(a.map(far), 0) - meanOf(b.map(far), 0));
+          ways.forEach((way, index) => {
+            for (const segment of way) portOf.set(segment, item.cross + (index - (ways.length - 1) / 2) * DIRECTION_SPLIT);
+          });
+        }
+        for (const segment of ends) {
+          const cross = portOf.get(segment) ?? item.cross;
           if (side === 'out') segment.fromCross = cross;
           else segment.toCross = cross;
-        });
+        }
       }
     }
   }
@@ -765,7 +782,7 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
     let previous = from;
     for (let layer = from.layer + 1; layer <= to.layer; layer += 1) {
       const next = layer === to.layer ? to : makeItem(layer, null);
-      const segment: Segment = { edge: routeIndex, from: previous, to: next, fromCross: 0, toCross: 0, track: null };
+      const segment: Segment = { edge: routeIndex, from: previous, to: next, fromCross: 0, toCross: 0, track: null, reversed: entry.reversed };
       previous.succs.push(next);
       next.preds.push(previous);
       route.segments.push(segment);

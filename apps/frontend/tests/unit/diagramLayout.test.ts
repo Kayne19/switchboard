@@ -288,6 +288,16 @@ for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
       expect(crossings).toHaveLength(0);
     });
 
+    it('brings a back edge into a crowded side at its own port, not where the trunk leaves', () => {
+      const layout = layoutDiagram(graphs.wideBack, orientation);
+      const back = layout.edges.find((edge) => edge.edge.to === 'root')!;
+      const arrival = back.points[back.points.length - 1];
+      for (const edge of layout.edges.filter((other) => other.edge.from === 'root')) {
+        const start = edge.points[0];
+        expect(Math.hypot(start.x - arrival.x, start.y - arrival.y), `root->${edge.edge.to}`).toBeGreaterThanOrEqual(4);
+      }
+    });
+
     it('lays a feedback edge out backwards and draws it toward its true target', () => {
       const layout = layoutDiagram(graphs.cycle, orientation);
       const revise = layout.edges.find((edge) => edge.edge.label === 'revise')!;
