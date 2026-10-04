@@ -37,6 +37,80 @@ fn rejects_note_anchor_without_a_target() {
     );
 }
 
+fn labelled_chart(data: Value) -> Value {
+    let mut data = data;
+    let base = json!({
+        "kind": "bar",
+        "labels": ["backend", "frontend", "skill"],
+        "series": [{"name": "SECONDS", "values": [41.2, 18.7, 3.1]}]
+    });
+    for (key, value) in base.as_object().unwrap() {
+        data.as_object_mut()
+            .unwrap()
+            .entry(key.clone())
+            .or_insert(value.clone());
+    }
+    json!({"op": "show", "id": "durations", "type": "chart", "data": data})
+}
+
+// The browser's validateChartData holds the same rules; the fixtures in
+// apps/frontend/tests/fixtures/display-actions.json pin both to them.
+#[test]
+fn normalizes_chart_kind_and_labels() {
+    let action = labelled_chart(json!({"title": "SUITE DURATIONS"}));
+    assert_eq!(validate_action(&action), Ok(action));
+    for kind in CHART_KINDS {
+        let action = labelled_chart(json!({"kind": kind}));
+        assert_eq!(validate_action(&action), Ok(action), "{kind}");
+    }
+    // A series may carry fewer values than there are labels.
+    let short = labelled_chart(json!({"series": [{"name": "SECONDS", "values": [41.2]}]}));
+    assert_eq!(validate_action(&short), Ok(short));
+}
+
+#[test]
+fn rejects_a_chart_kind_it_does_not_draw() {
+    let action = labelled_chart(json!({"kind": "pie"}));
+    assert_eq!(validate_action(&action), Err("invalid chart.kind".into()));
+}
+
+#[test]
+fn rejects_chart_labels_outside_their_bounds() {
+    let too_many: Vec<String> = (0..=MAX_CHART_LABELS).map(|i| format!("L{i}")).collect();
+    let action = labelled_chart(json!({"labels": too_many}));
+    assert_eq!(
+        validate_action(&action),
+        Err("chart.labels must be an array of 1 to 100 strings".into())
+    );
+    let action = labelled_chart(json!({"labels": [], "series": []}));
+    assert_eq!(
+        validate_action(&action),
+        Err("chart.labels must be an array of 1 to 100 strings".into())
+    );
+    let action = labelled_chart(json!({"labels": ["a", 2, "c"]}));
+    assert_eq!(
+        validate_action(&action),
+        Err("chart label must be a string".into())
+    );
+    let action = labelled_chart(json!({"labels": ["x".repeat(65), "b", "c"]}));
+    assert_eq!(
+        validate_action(&action),
+        Err("chart label exceeds maximum length of 64 UTF-16 code units".into())
+    );
+    // An astral character is two UTF-16 units, as in the browser.
+    let action = labelled_chart(json!({"labels": ["\u{1F600}".repeat(33), "b", "c"]}));
+    assert!(validate_action(&action).is_err());
+}
+
+#[test]
+fn rejects_a_series_longer_than_the_chart_labels() {
+    let action = labelled_chart(json!({"series": [{"name": "SECONDS", "values": [1, 2, 3, 4]}]}));
+    assert_eq!(
+        validate_action(&action),
+        Err("series.values is longer than chart.labels".into())
+    );
+}
+
 fn progress_value(value: Value) -> Value {
     let action = json!({
         "op": "show",

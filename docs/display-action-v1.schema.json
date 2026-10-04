@@ -162,6 +162,24 @@
           "type": "string",
           "maxLength": 128
         },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "line",
+            "bar",
+            "area",
+            "scatter"
+          ]
+        },
+        "labels": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "maxLength": 64
+          }
+        },
         "xLabel": {
           "type": "string",
           "maxLength": 128

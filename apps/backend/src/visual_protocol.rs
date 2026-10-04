@@ -5,6 +5,9 @@ pub const MAX_ACTION_BYTES: usize = 48_000;
 pub const MAX_ID_UTF16: usize = 128;
 pub const MAX_TEXT_UTF16: usize = 50_000;
 pub const RESERVED_ID_PREFIX: &str = "__runtime/";
+const CHART_KINDS: [&str; 4] = ["line", "bar", "area", "scatter"];
+const MAX_CHART_LABELS: usize = 100;
+const MAX_CHART_LABEL_UTF16: usize = 64;
 /// What an agent may `show`. The browser reports the same kinds back in its
 /// screen state, so this list is the one both directions are checked against.
 pub const CONTENT_TYPES: [&str; 7] = [
@@ -158,6 +161,8 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
             "subtitle",
             "context",
             "caption",
+            "kind",
+            "labels",
             "xLabel",
             "yLabel",
             "xMax",
@@ -169,6 +174,37 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
         ],
         "chart data",
     )?;
+
+    let kind = match data.get("kind") {
+        None => None,
+        Some(v) => {
+            let k = v
+                .as_str()
+                .filter(|k| CHART_KINDS.contains(k))
+                .ok_or("invalid chart.kind")?;
+            Some(k)
+        }
+    };
+    let labels = match data.get("labels") {
+        None => None,
+        Some(v) => {
+            let arr = v
+                .as_array()
+                .filter(|a| !a.is_empty() && a.len() <= MAX_CHART_LABELS)
+                .ok_or(format!(
+                    "chart.labels must be an array of 1 to {MAX_CHART_LABELS} strings"
+                ))?;
+            for label in arr {
+                let text = label.as_str().ok_or("chart label must be a string")?;
+                if utf16_len(text) > MAX_CHART_LABEL_UTF16 {
+                    return Err(format!(
+                        "chart label exceeds maximum length of {MAX_CHART_LABEL_UTF16} UTF-16 code units"
+                    ));
+                }
+            }
+            Some(arr)
+        }
+    };
 
     let series_val = data.get("series").ok_or("chart.series must be an array")?;
     let series_arr = series_val
@@ -197,6 +233,9 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
                 return Err("series.values must contain finite numbers".into());
             }
         }
+        if labels.is_some_and(|labels| values.len() > labels.len()) {
+            return Err("series.values is longer than chart.labels".into());
+        }
 
         let mut item = Map::new();
         item.insert("name".into(), name.into());
@@ -212,6 +251,12 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
 
     let mut out = Map::new();
     out.insert("series".into(), Value::Array(clean_series));
+    if let Some(kind) = kind {
+        out.insert("kind".into(), kind.into());
+    }
+    if let Some(labels) = labels {
+        out.insert("labels".into(), Value::Array(labels.clone()));
+    }
 
     for (k, max_len) in [("title", 256), ("subtitle", 256), ("context", 256)] {
         if let Some(v) = data.get(k) {

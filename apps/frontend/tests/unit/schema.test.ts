@@ -48,6 +48,9 @@ const KNOWN_SCHEMA_GAPS: Record<string, string> = {
   diagram_edge_missing_endpoint: 'edge endpoints referencing nodes[] is cross-array referential integrity',
   diagram_edge_self_loop: 'from === to is an equality check between two sibling fields',
   diagram_edge_duplicate_pair: 'duplicate (from, to) pairs is a cross-item uniqueness invariant',
+  // A series' value count against the chart's label count is a relationship
+  // between two sibling fields of the chart data, the same kind of check.
+  chart_values_longer_than_labels: 'series.values.length <= labels.length compares two sibling fields',
   // The 48,000 UTF-8 byte cap bounds the serialized envelope on the wire
   // (see docs/display-tool.md, "Action size"). JSON Schema validates the
   // shape of the parsed instance, not the byte length of its serialization;

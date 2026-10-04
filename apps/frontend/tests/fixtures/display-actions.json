@@ -124,6 +124,165 @@
       }
     },
     {
+      "name": "show_chart_bar_labelled",
+      "action": {
+        "op": "show",
+        "id": "durations",
+        "type": "chart",
+        "role": "primary",
+        "data": {
+          "title": "TEST SUITE / DURATIONS",
+          "kind": "bar",
+          "labels": [
+            "backend",
+            "frontend",
+            "skill"
+          ],
+          "yLabel": "SECONDS",
+          "series": [
+            {
+              "name": "THIS RUN",
+              "semantic": "green",
+              "values": [
+                41.2,
+                18.7,
+                3.1
+              ]
+            },
+            {
+              "name": "PREVIOUS",
+              "semantic": "muted",
+              "values": [
+                44.0,
+                19.9
+              ]
+            }
+          ],
+          "marker": {
+            "x": 0,
+            "series": "THIS RUN"
+          }
+        }
+      },
+      "normalized": {
+        "op": "show",
+        "id": "durations",
+        "type": "chart",
+        "role": "primary",
+        "data": {
+          "title": "TEST SUITE / DURATIONS",
+          "kind": "bar",
+          "labels": [
+            "backend",
+            "frontend",
+            "skill"
+          ],
+          "yLabel": "SECONDS",
+          "series": [
+            {
+              "name": "THIS RUN",
+              "semantic": "green",
+              "values": [
+                41.2,
+                18.7,
+                3.1
+              ]
+            },
+            {
+              "name": "PREVIOUS",
+              "semantic": "muted",
+              "values": [
+                44.0,
+                19.9
+              ]
+            }
+          ],
+          "marker": {
+            "x": 0,
+            "series": "THIS RUN"
+          }
+        }
+      }
+    },
+    {
+      "name": "show_chart_area",
+      "action": {
+        "op": "show",
+        "id": "area-1",
+        "type": "chart",
+        "data": {
+          "kind": "area",
+          "series": [
+            {
+              "name": "CPU",
+              "values": [
+                10,
+                20,
+                30
+              ]
+            }
+          ]
+        }
+      },
+      "normalized": {
+        "op": "show",
+        "id": "area-1",
+        "type": "chart",
+        "data": {
+          "kind": "area",
+          "series": [
+            {
+              "name": "CPU",
+              "values": [
+                10,
+                20,
+                30
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "show_chart_scatter",
+      "action": {
+        "op": "show",
+        "id": "scatter-1",
+        "type": "chart",
+        "data": {
+          "kind": "scatter",
+          "series": [
+            {
+              "name": "CPU",
+              "values": [
+                10,
+                20,
+                30
+              ]
+            }
+          ]
+        }
+      },
+      "normalized": {
+        "op": "show",
+        "id": "scatter-1",
+        "type": "chart",
+        "data": {
+          "kind": "scatter",
+          "series": [
+            {
+              "name": "CPU",
+              "values": [
+                10,
+                20,
+                30
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
       "name": "show_metric_simple",
       "action": {
         "op": "show",
@@ -779,6 +938,247 @@
         }
       },
       "reason": "unknown field in chart data"
+    },
+    {
+      "name": "chart_kind_unknown",
+      "action": {
+        "op": "show",
+        "id": "c",
+        "type": "chart",
+        "data": {
+          "labels": [
+            "a",
+            "b",
+            "c"
+          ],
+          "series": [
+            {
+              "name": "s",
+              "values": [
+                1,
+                2,
+                3
+              ]
+            }
+          ],
+          "kind": "pie"
+        }
+      },
+      "reason": "invalid chart.kind"
+    },
+    {
+      "name": "chart_labels_too_many",
+      "action": {
+        "op": "show",
+        "id": "c",
+        "type": "chart",
+        "data": {
+          "labels": [
+            "L0",
+            "L1",
+            "L2",
+            "L3",
+            "L4",
+            "L5",
+            "L6",
+            "L7",
+            "L8",
+            "L9",
+            "L10",
+            "L11",
+            "L12",
+            "L13",
+            "L14",
+            "L15",
+            "L16",
+            "L17",
+            "L18",
+            "L19",
+            "L20",
+            "L21",
+            "L22",
+            "L23",
+            "L24",
+            "L25",
+            "L26",
+            "L27",
+            "L28",
+            "L29",
+            "L30",
+            "L31",
+            "L32",
+            "L33",
+            "L34",
+            "L35",
+            "L36",
+            "L37",
+            "L38",
+            "L39",
+            "L40",
+            "L41",
+            "L42",
+            "L43",
+            "L44",
+            "L45",
+            "L46",
+            "L47",
+            "L48",
+            "L49",
+            "L50",
+            "L51",
+            "L52",
+            "L53",
+            "L54",
+            "L55",
+            "L56",
+            "L57",
+            "L58",
+            "L59",
+            "L60",
+            "L61",
+            "L62",
+            "L63",
+            "L64",
+            "L65",
+            "L66",
+            "L67",
+            "L68",
+            "L69",
+            "L70",
+            "L71",
+            "L72",
+            "L73",
+            "L74",
+            "L75",
+            "L76",
+            "L77",
+            "L78",
+            "L79",
+            "L80",
+            "L81",
+            "L82",
+            "L83",
+            "L84",
+            "L85",
+            "L86",
+            "L87",
+            "L88",
+            "L89",
+            "L90",
+            "L91",
+            "L92",
+            "L93",
+            "L94",
+            "L95",
+            "L96",
+            "L97",
+            "L98",
+            "L99",
+            "L100"
+          ],
+          "series": [
+            {
+              "name": "s",
+              "values": [
+                1
+              ]
+            }
+          ]
+        }
+      },
+      "reason": "chart.labels has more than 100 items"
+    },
+    {
+      "name": "chart_labels_empty",
+      "action": {
+        "op": "show",
+        "id": "c",
+        "type": "chart",
+        "data": {
+          "labels": [],
+          "series": []
+        }
+      },
+      "reason": "chart.labels has fewer than 1 item"
+    },
+    {
+      "name": "chart_values_longer_than_labels",
+      "action": {
+        "op": "show",
+        "id": "c",
+        "type": "chart",
+        "data": {
+          "labels": [
+            "a",
+            "b",
+            "c"
+          ],
+          "series": [
+            {
+              "name": "s",
+              "values": [
+                1,
+                2,
+                3,
+                4
+              ]
+            }
+          ]
+        }
+      },
+      "reason": "series.values is longer than chart.labels"
+    },
+    {
+      "name": "chart_label_too_long",
+      "action": {
+        "op": "show",
+        "id": "c",
+        "type": "chart",
+        "data": {
+          "labels": [
+            "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "b",
+            "c"
+          ],
+          "series": [
+            {
+              "name": "s",
+              "values": [
+                1,
+                2,
+                3
+              ]
+            }
+          ]
+        }
+      },
+      "reason": "chart label exceeds 64 UTF-16 code units"
+    },
+    {
+      "name": "chart_label_not_string",
+      "action": {
+        "op": "show",
+        "id": "c",
+        "type": "chart",
+        "data": {
+          "labels": [
+            "a",
+            2,
+            "c"
+          ],
+          "series": [
+            {
+              "name": "s",
+              "values": [
+                1,
+                2,
+                3
+              ]
+            }
+          ]
+        }
+      },
+      "reason": "chart label must be a string"
     },
     {
       "name": "metric_missing_value",

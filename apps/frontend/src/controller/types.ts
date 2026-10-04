@@ -13,11 +13,22 @@ export interface ChartSeries {
   values: number[];
 }
 
+/** How a chart draws its series; `line` when unset. */
+export type ChartKind = 'line' | 'bar' | 'area' | 'scatter';
+
 export interface ChartData {
   title?: string;
   subtitle?: string;
   context?: string;
   caption?: string;
+  kind?: ChartKind;
+  /**
+   * Categorical x labels. When present the x domain is their indices, the
+   * ticks are the labels, `xMax` is ignored, and no series carries more
+   * values than there are labels. A `marker`, a note's `x` and `say at.x`
+   * name a label index.
+   */
+  labels?: string[];
   xLabel?: string;
   yLabel?: string;
   xMax?: number;
