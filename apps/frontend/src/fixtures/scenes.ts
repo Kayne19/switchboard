@@ -218,6 +218,32 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
       { text: ' It keeps the whole figure in view and reads its size on decode.' },
     ] } },
   ],
+  // An agent's plan as the primary: the bar is the share of steps done (the
+  // value the validators fill in from the steps, 4 of 7), the measures the
+  // work moves sit in the rail with which way each went, and the note says
+  // what holds the plan up.
+  plan: [
+    { op: 'show', id: 'ship-plan', type: 'progress', role: 'primary', data: {
+      label: 'VISUAL-PALETTE', detail: 'SHIP PLAN / 4 OF 7 STEPS DONE', value: 57.14, caption: 'PLAN / 7 STEPS',
+      steps: [
+        { label: 'CHART KINDS + LABELS', state: 'done', detail: 'LINE / BAR / AREA / SCATTER' },
+        { label: 'TABLE TYPE', state: 'done', detail: 'MERGED / AUDITED' },
+        { label: 'SEQUENCE DIAGRAMS', state: 'done', detail: 'DIAGRAM MODE "sequence"' },
+        { label: 'PROGRESS STEPS + METRIC TREND', state: 'done', detail: 'MERGED / AUDITED' },
+        { label: 'GRAPH LAYOUT REWRITE', state: 'active', detail: 'CYCLES / LONG EDGES / IN REVIEW' },
+        { label: 'REBUILD static/', state: 'blocked', detail: 'WAITS ON THE LAYOUT MERGE' },
+        { label: 'BUMP THE HOMELAB PIN', detail: 'switchboard_version' },
+      ],
+    } },
+    { op: 'show', id: 'tests-passing', type: 'metric', data: { label: 'TESTS PASSING', value: '418', semantic: 'green', trend: 'up', delta: '+31' } },
+    { op: 'show', id: 'build-time', type: 'metric', data: { label: 'BUILD TIME', value: '38.4 s', semantic: 'cyan', trend: 'down', delta: '-2.1 s' } },
+    { op: 'show', id: 'bundle', type: 'metric', data: { label: 'BUNDLE', value: '412 kB', trend: 'flat', delta: '+0.1%' } },
+    { op: 'show', id: 'plan-note', type: 'note', data: { tag: 'DAMOCLES / PLAN', anchor: { target: 'ship-plan' }, segments: [
+      { text: 'Four of seven steps are merged. ' },
+      { text: 'The static rebuild waits on the graph layout', accent: true, bold: true },
+      { text: ', which is in review.' },
+    ] } },
+  ],
 };
 
 export const previousRunAction: ControllerAction = {
