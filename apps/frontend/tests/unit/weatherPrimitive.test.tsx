@@ -156,12 +156,13 @@ describe('a short slot', () => {
     // The today scene's forecast cell on a phone: 334x128, with an alert.
     const page = render(forecast, undefined, { width: 334, height: 128 });
     expect(page.querySelector('.weather__field')!.getAttribute('data-parts')).toBe('now');
+    // Today's high and low are the figure's (H 68° L 54°): the row is the days to come.
     const days = [...page.querySelectorAll('.weather-outlook__day')];
-    expect(days.map((day) => day.getAttribute('data-item'))).toEqual(['2026-10-07', '2026-10-08', '2026-10-09']);
-    expect(days[1].querySelector('.weather-outlook__name')!.textContent).toBe('THU 8');
-    expect(days[1].querySelector('.weather-glyph')!.getAttribute('aria-label')).toBe('rain');
-    expect(days[1].querySelector('.weather-outlook__high')!.textContent).toBe('61°');
-    expect(days[1].querySelector('.weather-outlook__low')!.textContent).toBe('55°');
+    expect(days.map((day) => day.getAttribute('data-item'))).toEqual(['2026-10-08', '2026-10-09']);
+    expect(days[0].querySelector('.weather-outlook__name')!.textContent).toBe('THU 8');
+    expect(days[0].querySelector('.weather-glyph')!.getAttribute('aria-label')).toBe('rain');
+    expect(days[0].querySelector('.weather-outlook__high')!.textContent).toBe('61°');
+    expect(days[0].querySelector('.weather-outlook__low')!.textContent).toBe('55°');
   });
 });
 

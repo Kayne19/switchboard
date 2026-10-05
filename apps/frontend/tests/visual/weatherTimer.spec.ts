@@ -218,7 +218,8 @@ test('on a phone the today scene\'s forecast cell stands the days beside the con
   await expect(weather).toHaveAttribute('data-layout', 'compact');
   const days = weather.locator('.weather-outlook__day');
   await expect.poll(() => days.count()).toBeGreaterThanOrEqual(3);
-  await expect(days.first().locator('.weather-outlook__name')).toHaveText('WED 7');
+  // Today's high and low are the figure's: the row opens on the day after.
+  await expect(days.first().locator('.weather-outlook__name')).toHaveText('THU 8');
   const cell = (await weather.boundingBox())!;
   for (const box of await days.evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().toJSON() as DOMRect))) {
     expect(box.left).toBeGreaterThanOrEqual(cell.x - 1);

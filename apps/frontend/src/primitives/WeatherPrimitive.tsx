@@ -19,6 +19,7 @@ import {
   LEAST_TEMP_SPAN,
   outlookCount,
   outlookDays,
+  outlookOffer,
   rangeOnScale,
   STRIP_PAD,
   tempScale,
@@ -116,7 +117,7 @@ function Now({ data, compact, temp, framed, spot, outlook, inline }: { data: Wea
             </div>
           </div>
         </div>
-        {outlook ? <Outlook days={data.daily ?? []} marked={spot} onShown={setOutlookShown} /> : null}
+        {outlook ? <Outlook days={outlookOffer(data.daily ?? [], current, spot)} marked={spot} onShown={setOutlookShown} /> : null}
         {!compact && (current.summary || readings.length > 0) ? (
           <div className="weather-now__detail">
             {current.summary ? <p className="weather-now__summary">{current.summary}</p> : null}

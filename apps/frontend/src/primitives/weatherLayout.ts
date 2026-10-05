@@ -162,6 +162,17 @@ export function outlookCount(width: number, days: number): number {
 }
 
 /**
+ * The days an outlook offers: the days to come. A first day whose high and
+ * low the conditions now show already (`H 68° L 54°`: today, as a forecast
+ * usually opens) is left out, unless a note names it: the figure has said it.
+ */
+export function outlookOffer<T extends { date: string; high: number; low: number }>(days: T[], current: { high?: number; low?: number }, marked?: string): T[] {
+  const [first] = days;
+  const said = first !== undefined && first.date !== marked && current.high === first.high && current.low === first.low;
+  return said ? days.slice(1) : days;
+}
+
+/**
  * The days an outlook of `count` columns shows: the first, in order; where
  * a note names a day past them, that day takes the last column, so the day
  * the card names is on screen with its badge.

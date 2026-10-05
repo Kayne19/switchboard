@@ -25,6 +25,7 @@ import {
   OUTLOOK_HEIGHT,
   outlookCount,
   outlookDays,
+  outlookOffer,
   rangeOnScale,
   tempScale,
   titleNamesPlace,
@@ -170,6 +171,18 @@ describe('the outlook', () => {
     expect(outlookCount(columns(12), 10)).toBe(10);
     expect(outlookCount(OUTLOOK_COLUMN - 1, 10)).toBe(0);
     expect(outlookCount(0, 10)).toBe(0);
+  });
+
+  it('offers the days to come: a first day whose high and low the figure shows already is left out', () => {
+    const days = [{ date: '2026-10-07', high: 68, low: 54 }, { date: '2026-10-08', high: 61, low: 55 }];
+    const dates = (offered: Array<{ date: string }>) => offered.map((day) => day.date);
+    expect(dates(outlookOffer(days, { high: 68, low: 54 }))).toEqual(['2026-10-08']);
+    // Not said by the figure: a different high, or none.
+    expect(dates(outlookOffer(days, { high: 70, low: 54 }))).toEqual(['2026-10-07', '2026-10-08']);
+    expect(dates(outlookOffer(days, {}))).toEqual(['2026-10-07', '2026-10-08']);
+    // A day a note names stays, in its place.
+    expect(dates(outlookOffer(days, { high: 68, low: 54 }, '2026-10-07'))).toEqual(['2026-10-07', '2026-10-08']);
+    expect(outlookOffer([], { high: 68, low: 54 })).toEqual([]);
   });
 
   it('shows the first days, and a day a note names past them in the last column', () => {
