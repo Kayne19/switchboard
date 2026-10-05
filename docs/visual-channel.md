@@ -461,8 +461,9 @@ reads as cold beside a warm one. An alert stands on an amber rule.
 
 A title shows once. In the main slot the scene's frame carries it; in an
 aux cell and in focus, where no frame does, the forecast's head leads with
-it (the place it is for beside it) and the timers carry it over their
-field. The forecast's head names its place in every role.
+it (the place it is for beside it, unless the title names the place
+already) and the timers carry it over their field. The forecast's head
+names its place in every role.
 
 ### Lists that outgrow the frame
 

@@ -22,6 +22,7 @@ import {
   rangeOnScale,
   STRIP_PAD,
   tempScale,
+  titleNamesPlace,
   weatherLayout,
   type WeatherArrangement,
 } from './weatherLayout';
@@ -93,7 +94,8 @@ function Now({ data, compact, temp, framed, spot, outlook, inline }: { data: Wea
           place of NOW. */}
       <div className="weather-now__head tech micro">
         <MetaTitle title={data.title ?? 'WEATHER'} framed={framed} className="weather-now__title" />
-        <span className="weather-now__location">{data.location}</span>
+        {/* The place, unless the title leading the head names it already. */}
+        {framed || !titleNamesPlace(data.title, data.location) ? <span className="weather-now__location">{data.location}</span> : null}
         {framed ? <span>NOW</span> : null}
       </div>
       {data.alert ? <AlertLine text={data.alert} /> : null}

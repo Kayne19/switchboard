@@ -44,6 +44,18 @@ export function hourLong(time: string): string {
   return value ? `${weekday(value.dayNumber)} ${String(value.hour).padStart(2, '0')}:${String(value.minute).padStart(2, '0')}` : time;
 }
 
+/**
+ * Whether a forecast's title already names its place: the place's first
+ * part (`San Francisco` of `San Francisco, CA`) stands in the title as
+ * words, whatever their case. A head that leads with such a title does not
+ * name the place again beside it.
+ */
+export function titleNamesPlace(title: string | undefined, location: string): boolean {
+  const words = (text: string) => ` ${text.toUpperCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()} `;
+  const place = words(location.split(',')[0]);
+  return title !== undefined && place.trim() !== '' && words(title).includes(place);
+}
+
 /** A forecast hour or day a note names, in the forecast's own words; undefined when it holds none of that name. */
 export function weatherItemName(data: WeatherData, item: string): string | undefined {
   const hour = (data.hourly ?? []).find((candidate) => candidate.time === item);

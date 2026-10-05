@@ -126,6 +126,31 @@ describe('flat days', () => {
   });
 });
 
+describe('the head', () => {
+  const placed = (data: WeatherData, framed: boolean) => {
+    const element = document.createElement('div');
+    document.body.append(element);
+    host = element;
+    root = createRoot(element);
+    act(() => root!.render(<WeatherPrimitive data={data} framed={framed} />));
+    return element.querySelector('.weather-now__head')!;
+  };
+
+  it('names the place once: beside a title that does not name it, not beside one that does', () => {
+    // The today scene's aux cell read `WEATHER / SAN FRANCISCO ... SAN FRANCISCO, CA`.
+    const named = placed({ ...forecast, title: 'WEATHER / SAN FRANCISCO' }, false);
+    expect(named.querySelector('[data-object-title]')!.textContent).toBe('WEATHER / SAN FRANCISCO');
+    expect(named.querySelector('.weather-now__location')).toBeNull();
+  });
+
+  it('names the place beside a title that does not, and under a frame that shows the title', () => {
+    expect(placed({ ...forecast, title: 'FORECAST / WEEKEND' }, false).querySelector('.weather-now__location')!.textContent).toBe('San Francisco, CA');
+    act(() => root!.unmount());
+    host!.remove();
+    expect(placed({ ...forecast, title: 'WEATHER / SAN FRANCISCO' }, true).querySelector('.weather-now__location')!.textContent).toBe('San Francisco, CA');
+  });
+});
+
 describe('a short slot', () => {
   it('stands the days beside the conditions: each its name, glyph, high and low', () => {
     // The today scene's forecast cell on a phone: 334x128, with an alert.

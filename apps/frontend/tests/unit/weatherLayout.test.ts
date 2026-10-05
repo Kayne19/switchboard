@@ -27,6 +27,7 @@ import {
   outlookDays,
   rangeOnScale,
   tempScale,
+  titleNamesPlace,
   weatherItemName,
   weatherLayout,
 } from '../../src/primitives/weatherLayout';
@@ -68,6 +69,17 @@ describe('words', () => {
     expect(weatherItemName(data, '2026-10-08')).toBe('THU OCT 8');
     expect(weatherItemName(data, '2026-10-09')).toBeUndefined();
     expect(weatherItemName({ ...data, hourly: undefined, daily: undefined }, '2026-10-08')).toBeUndefined();
+  });
+});
+
+describe('the place in the head', () => {
+  it('is named by a title holding its first part as words, whatever their case', () => {
+    expect(titleNamesPlace('WEATHER / SAN FRANCISCO', 'San Francisco, CA')).toBe(true);
+    expect(titleNamesPlace('Tromsø / this week', 'Tromsø')).toBe(true);
+    expect(titleNamesPlace('WEATHER', 'San Francisco, CA')).toBe(false);
+    expect(titleNamesPlace('FRANCISCAN COAST', 'San Francisco')).toBe(false);
+    expect(titleNamesPlace(undefined, 'San Francisco, CA')).toBe(false);
+    expect(titleNamesPlace('WEATHER', ', CA')).toBe(false);
   });
 });
 
