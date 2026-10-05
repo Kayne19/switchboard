@@ -143,11 +143,21 @@ describe('note placement', () => {
     expect(length(place.leader)).toBeLessThan(40);
   });
 
-  it('keeps a card inside the area when its point is near an edge', () => {
+  it('keeps a card inside the area when its point is near an edge, still just past it', () => {
     const point = { x: 980, y: 400 };
     const place = layoutNotes([{ id: 'a', width: 300, height: 80, point, from: 'above' }], { area }).get('a')!;
     expect(place.rect.right).toBeLessThanOrEqual(1000);
-    expect(place.leader.at(-1)).toEqual(point);
+    // Over its point, a short leader down onto it, for all the edge.
+    expect(place.rect.right).toBeGreaterThanOrEqual(point.x);
+    expect(place.rect.bottom).toBeLessThanOrEqual(point.y - 14);
+    expect(comesFrom(place.leader, 'above')).toBe(true);
+    expect(length(place.leader)).toBeLessThan(40);
+  });
+
+  it('takes no point without the side its leader comes from', () => {
+    // @ts-expect-error a note that names a point says the side its value is printed on (NoteOnPoint)
+    const loose: NoteToPlace = { id: 'a', width: 300, height: 80, point: { x: 500, y: 400 } };
+    expect(loose.point).toBeDefined();
   });
 
   it('puts a note that names no point in the top-left corner of an empty field', () => {
