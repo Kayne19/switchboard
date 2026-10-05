@@ -1,4 +1,6 @@
+import { useRef } from 'react';
 import type { TableCell, TableData } from '../controller/types';
+import { useScrollDemand } from '../hooks/useStageDemand';
 import { MetaTitle } from './MetaTitle';
 import { TechFrame } from './TechFrame';
 
@@ -65,6 +67,8 @@ function CellText({ cell }: { cell: TableCell }) {
 export function TablePrimitive({ data, focused = false, framed = false }: { data: TableData; focused?: boolean; framed?: boolean }) {
   const alignment = inferColumnAlignment(data);
   const highlighted = new Set(data.highlight ?? []);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useScrollDemand(scrollRef);
   return (
     <div className={`table-viewport${focused ? ' table-viewport--focused' : ''}`} data-testid="table">
       <TechFrame variant="code" />
@@ -73,7 +77,7 @@ export function TablePrimitive({ data, focused = false, framed = false }: { data
           <MetaTitle title={data.title ?? 'TABLE'} framed={framed} />
           <span>{data.rows.length} ROWS / {data.columns.length} COLS</span>
         </div>
-        <div className="table-viewport__scroll" tabIndex={0}>
+        <div ref={scrollRef} className="table-viewport__scroll" tabIndex={0}>
           <table className="table-grid">
             <thead>
               <tr>

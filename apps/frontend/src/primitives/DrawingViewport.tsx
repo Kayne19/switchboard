@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, type RefObject } from 'react';
 import { useElementSize } from '../hooks/useElementSize';
-import type { DrawingFit, Size } from './drawingFit';
+import { useLeastHeight } from '../hooks/useStageDemand';
+import { SLIVER, type DrawingFit, type Size } from './drawingFit';
 import {
   EXIT_CHARS,
   clearOf,
@@ -188,6 +189,25 @@ export function DrawingViewport({
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef<HTMLDivElement>(null);
   const [reading, setReading] = useState<Reading | null>(null);
+  // What the drawing asks of the stage: the height it is read whole in at
+  // its least readable scale, less the sliver it would be contained over.
+  // Only a fit made for this viewport speaks for it: before its host is
+  // measured a drawing is laid out for the screen, and a contained drawing
+  // larger than its box, or a scrolling one wider or taller than it across
+  // the axis it does not scroll, was fitted to another (or the box has
+  // just changed and the fit not yet followed). Until it is, what it said
+  // last stands.
+  const least = drawing.height * fit.minScale * (1 - SLIVER);
+  useLeastHeight(
+    viewportRef,
+    useCallback(
+      (box: { width: number; height: number }) =>
+        (fit.scrollX || fit.width <= box.width + 1) && (fit.scrollY || fit.height <= box.height + 1) ? least : undefined,
+      [fit.scrollX, fit.scrollY, fit.width, fit.height, least],
+    ),
+    // A graph is laid out again for its viewport's height.
+    true,
+  );
   const scrolling = fit.scrollX || fit.scrollY;
   const axis = fit.scrollX && fit.scrollY ? 'both' : fit.scrollX ? 'x' : fit.scrollY ? 'y' : 'none';
   const pinnedDepth = pinned && fit.scrollY ? pinned.height * fit.scale : 0;

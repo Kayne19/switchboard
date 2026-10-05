@@ -1,5 +1,5 @@
 import { motion, useReducedMotion } from 'motion/react';
-import { useId, useMemo, useRef } from 'react';
+import { useCallback, useId, useMemo, useRef } from 'react';
 import type { ChartData, ChartKind, ChartSeries, Semantic } from '../controller/types';
 import {
   CHART_LEGEND_KEY_WIDTH,
@@ -16,6 +16,7 @@ import {
   chartCategoryLabelX,
   chartClip,
   chartFrame,
+  chartLeastHeight,
   chartLegendLayout,
   chartPointCallouts,
   chartScales,
@@ -23,6 +24,7 @@ import {
   type ChartScales,
 } from './chartGeometry';
 import { useElementSize } from '../hooks/useElementSize';
+import { useLeastHeight } from '../hooks/useStageDemand';
 
 const semanticColor: Record<Semantic,string> = {
   red:'var(--red)',orange:'var(--orange)',green:'var(--green)',cyan:'var(--cyan)',amber:'var(--amber)',paper:'var(--paper)',muted:'var(--muted)'
@@ -162,6 +164,8 @@ export function ChartPrimitive({
   // else one of the slot's own shape (`chartFrame`).
   const hostRef = useRef<HTMLDivElement>(null);
   const slot = useElementSize(hostRef);
+  // A bar chart whose categories want a row each asks for the height.
+  useLeastHeight(hostRef, useCallback((box: { width: number }) => chartLeastHeight(data, box.width), [data]));
   const fit = chartFrame(slot);
   const width = fit.width, height = fit.height;
   const scales=useMemo(()=>chartScales(data,{width,height}),[data,width,height]);

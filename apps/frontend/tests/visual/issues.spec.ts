@@ -237,9 +237,22 @@ for (const { chart, viewport } of chartNoteCases) {
         },
       });
     });
-    await expect(page.locator('.chart-note')).toHaveCount(3);
+    // A card the chart keeps over it, or the one it leaves out: in the rail,
+    // or where the rail stands under the chart (a portrait stage), in a band
+    // under the chart that takes its height from it (chartNotePlace.spec.ts).
+    await expect.poll(async () => (await page.locator('.chart-note').count()) + (await page.locator('.chart-note-band').count())).toBe(3);
     await page.waitForTimeout(400);
-    expect(await chartBox()).toEqual(before);
+    const band = await page.locator('.chart-note-band').evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().height));
+    if (band.length === 0) {
+      expect(await chartBox()).toEqual(before);
+    } else {
+      // The chart keeps its width and gives the band no more than its own
+      // height and the gap over it.
+      const after = await chartBox();
+      expect(viewport.height).toBeGreaterThan(viewport.width);
+      expect(after.width).toBe(before.width);
+      expect(before.height - after.height).toBeLessThanOrEqual(band[0] + 24);
+    }
 
     const geometry = await page.evaluate(() => {
       const panel = document.querySelector<HTMLElement>('.chart-object[data-chart-id="loss"]')!.getBoundingClientRect();
@@ -256,6 +269,7 @@ for (const { chart, viewport } of chartNoteCases) {
         text: element.querySelector('.annotation-card__text')?.textContent ?? '',
       }));
       const rail = document.querySelector<HTMLElement>('.content-rail .rail-note')?.textContent ?? '';
+      const band = document.querySelector<HTMLElement>('.chart-note-band')?.textContent ?? null;
       const values = [...document.querySelectorAll('.chart-object[data-chart-id="loss"] .chart-marker')].map((marked) => {
         const box = marked.querySelector('.chart-marker__value')!.getBoundingClientRect();
         return { x: marked.getAttribute('data-x'), series: marked.getAttribute('data-series'), left: box.left, top: box.top, right: box.right, bottom: box.bottom };
@@ -267,13 +281,17 @@ for (const { chart, viewport } of chartNoteCases) {
           return { x: layer.left + x, y: layer.top + y };
         }),
       }));
-      return { panel: { left: panel.left, top: panel.top, right: panel.right, bottom: panel.bottom }, cards, leaders, away, rail, values };
+      return { panel: { left: panel.left, top: panel.top, right: panel.right, bottom: panel.bottom }, cards, leaders, away, rail, band, values };
     });
 
     // Every note is on screen: on the chart, or -- one at most, where the
-    // chart has no place for it clear of its data -- in the rail.
-    expect(geometry.cards.length + geometry.away.length).toBe(3);
+    // chart has no place for it clear of its data -- in the rail, and on a
+    // portrait stage one in the band under the chart.
+    expect(geometry.cards.length + geometry.away.length + (geometry.band === null ? 0 : 1)).toBe(3);
     expect(geometry.away.length).toBeLessThanOrEqual(1);
+    if (geometry.band !== null) {
+      expect(['Both losses fall together through the warmup.', 'A second note that names no point. It must still be on screen.', 'Validation loss'].some((text) => geometry.band!.includes(text))).toBe(true);
+    }
     for (const note of geometry.away) {
       expect(note.hidden, `${note.id} is out of view on the chart`).toBe(true);
       expect(geometry.rail, `${note.id} is in the rail`).toContain(note.text);
@@ -289,7 +307,8 @@ for (const { chart, viewport } of chartNoteCases) {
         expect(apart, `${card.id} and ${other.id} must not overlap`).toBe(true);
       }
     }
-    // Every note on the chart that names a point runs a leader to it.
+    // Every note on the chart that names a point runs a leader to it; one in
+    // the band under the chart names its point in its target line instead.
     expect(geometry.leaders.map((leader) => leader.id).sort()).toEqual(
       ['early-note', 'training-note'].filter((id) => geometry.cards.some((card) => card.id === id)),
     );
@@ -390,11 +409,11 @@ for (const { viewport, two } of barNoteCases) {
       }));
       const bars = [...document.querySelectorAll('.chart-series-group')].flatMap((group) =>
         [...group.querySelectorAll('.chart-bar')].map((bar, index) => ({ series: group.getAttribute('data-series'), index: String(index), ...box(bar) })));
-      const notes = [...document.querySelectorAll<HTMLElement>('.chart-note')].map((card) => {
+      const notes = [...document.querySelectorAll<HTMLElement>('.chart-note, .chart-note-band')].map((card) => {
         const polyline = document.querySelector(`.chart-note-leader[data-note="${card.dataset.note}"] polyline`);
         return {
           id: card.dataset.note!,
-          away: card.classList.contains('chart-note--away'),
+          away: card.classList.contains('chart-note--away') || card.classList.contains('chart-note-band'),
           card: box(card),
           anchor: card.querySelector('.annotation-card__anchor')?.textContent ?? '',
           leader: polyline ? polyline.getAttribute('points')!.split(' ').map((pair) => {
@@ -505,7 +524,9 @@ for (const { chart, viewport } of pointNoteCases) {
     await page.setViewportSize(viewport);
     await page.goto(`/?scene=${chart === 'training' ? 'training' : 'comparison'}&chrome=0`);
     if (spec.actions.length > 0) await page.evaluate((actions) => window.SwitchboardController!.run(actions as never), spec.actions);
-    await expect(page.locator('.chart-note')).toHaveCount(Object.keys(spec.notes).length);
+    // A note the chart hands over is in the rail, or where the rail stands
+    // under the chart in the band under it (chartNotePlace.spec.ts).
+    await expect.poll(async () => (await page.locator('.chart-note').count()) + (await page.locator('.chart-note-band').count())).toBe(Object.keys(spec.notes).length);
     await page.waitForTimeout(600);
     const geometry = await page.evaluate(() => {
       const box = (element: Element) => {
@@ -529,7 +550,8 @@ for (const { chart, viewport } of pointNoteCases) {
         ring: box(group.querySelector('.chart-marker__point')!), value: box(group.querySelector('.chart-marker__value')!),
         text: group.querySelector('.chart-marker__value')!.textContent,
       }));
-      const layer = document.querySelector('.chart-notes')!.getBoundingClientRect();
+      // No layer where the chart's one note is in the band.
+      const layer = document.querySelector('.chart-notes')?.getBoundingClientRect() ?? { left: 0, top: 0 };
       const notes = [...document.querySelectorAll<HTMLElement>('.chart-note')].map((card) => {
         const polyline = document.querySelector(`.chart-note-leader[data-note="${card.dataset.note}"] polyline`);
         return {
@@ -543,7 +565,7 @@ for (const { chart, viewport } of pointNoteCases) {
           }) : null,
         };
       });
-      return { plot, lines, points, marked, notes, rail: document.querySelector('.content-rail .rail-note')?.textContent ?? '' };
+      return { plot, lines, points, marked, notes, rail: [...document.querySelectorAll('.content-rail .rail-note, .chart-note-band')].map((element) => element.textContent).join(' ') };
     });
     const near = (p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) => {
       const dx = b.x - a.x;
@@ -974,10 +996,11 @@ test('a primary progress keeps its text under the bar on a portrait phone, with 
     expect(geometry.text.top).toBeGreaterThanOrEqual(geometry.track.bottom - 1);
     expect(geometry.text.top - geometry.track.bottom).toBeLessThan(40);
     if (geometry.list) {
-      // The list follows the text and scrolls inside the cell.
+      // The list follows the text and stays inside the cell, scrolling
+      // there unless the plan, taking the stage's height, reads whole.
       expect(geometry.list.top).toBeGreaterThanOrEqual(geometry.text.bottom - 1);
       expect(geometry.list.bottom).toBeLessThanOrEqual(geometry.cell.bottom + 1);
-      expect(geometry.list.scrolls).toBe(true);
+      if (!geometry.list.scrolls) await expect(page.locator('.content-grid--staged')).toHaveCount(1);
     }
   }
 });

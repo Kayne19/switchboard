@@ -1,0 +1,135 @@
+import { createContext, useContext, useEffect, useId, useRef, type RefObject } from 'react';
+import type { StageNeed } from '../app/stageFold';
+
+// What a primary's content asks of the stage (docs/visual-channel.md, "A
+// primary that outgrows its slot"). A primitive whose content may outgrow
+// its viewport -- a drawing, a table, a code pane, a document, a figure, a
+// bar chart, a plan -- says how much taller than its viewport it would have
+// to be to be read whole at its readable size, in CSS pixels: more than zero
+// when it overflows, zero or less (the room it leaves) when it fits. The
+// shell gives the primary's surface a listener, and on a stage whose rail
+// stands under the slot folds the rail away while the primary needs the
+// height (SceneShell). Anywhere else (an aux cell, the focus layer) there is
+// no listener: nothing is measured or said. Saying renders nothing: a
+// primitive is drawn as it would be anyway.
+
+/** Hears, for each reporting primitive in the primary's surface, how much height it lacks past its viewport's; `null` once it has nothing to ask (it is gone, or its content asks for nothing). */
+export type StageDemandListener = (key: string, need: StageNeed | null) => void;
+
+export const StageDemandContext = createContext<StageDemandListener | null>(null);
+
+// Whole pixels: sub-pixel churn is not a change of mind.
+const need = (excess: number, viewport: number, relaid = false): StageNeed => ({ excess: Math.round(excess), viewport: Math.round(viewport), relaid });
+
+/**
+ * Measures an element whenever it is resized, and, as asked, whenever one
+ * of its children is or what it holds changes. Returns the disconnect.
+ */
+export function watchElement(element: Element, measure: () => void, { children = false, changes = false }: { children?: boolean; changes?: boolean } = {}): () => void {
+  const resized = new ResizeObserver(() => measure());
+  const watch = () => {
+    resized.disconnect();
+    resized.observe(element);
+    if (children) for (const child of Array.from(element.children)) resized.observe(child);
+    measure();
+  };
+  const changed = changes || children ? new MutationObserver(watch) : null;
+  changed?.observe(element, { childList: true, subtree: changes, characterData: changes });
+  watch();
+  return () => {
+    resized.disconnect();
+    changed?.disconnect();
+  };
+}
+
+/**
+ * Says how much taller than a box (`ref`) a content needs it to be, given
+ * the least height the content is read whole in (`least`, CSS pixels, or
+ * worked out from the box): measured whenever the box is resized or the
+ * content's need changes. `null` is a content that asks for nothing; a
+ * function may answer `undefined` while it cannot tell, and what it said
+ * last stands. `relaid` is a content laid out again for the box's height.
+ */
+export function useLeastHeight(
+  ref: RefObject<HTMLElement | null>,
+  least: number | ((box: { width: number; height: number }) => number | null | undefined) | null,
+  relaid = false,
+): void {
+  const listener = useContext(StageDemandContext);
+  const key = useId();
+  const wanted = useRef(least);
+  const tell = useRef<() => void>(() => {});
+  useEffect(() => {
+    wanted.current = least;
+    tell.current();
+  }, [least]);
+  const relayout = useRef(relaid);
+  useEffect(() => {
+    relayout.current = relaid;
+  }, [relaid]);
+  useEffect(() => {
+    const element = ref.current;
+    if (!listener || !element) return undefined;
+    tell.current = () => {
+      const height = element.offsetHeight;
+      if (!(height > 0)) return;
+      const current = wanted.current;
+      const content = typeof current === 'function' ? current({ width: element.offsetWidth, height }) : current;
+      if (content === undefined) return;
+      listener(key, content === null ? null : need(content - height, height, relayout.current));
+    };
+    const stop = watchElement(element, () => tell.current());
+    return () => {
+      stop();
+      tell.current = () => {};
+      listener(key, null);
+    };
+  }, [listener, ref, key]);
+}
+
+/**
+ * How tall a scroll region's content is, in its own layout pixels: what it
+ * scrolls through when it overflows, and otherwise down to the end of its
+ * last child and its padding, so a region with room to spare says how much.
+ * A box in a shared-layout animation is scaled on screen; its offset height
+ * is not, and the measures are brought back to it.
+ */
+export function scrollContentHeight(element: HTMLElement): number {
+  if (element.scrollHeight > element.clientHeight + 1) return element.scrollHeight;
+  const box = element.getBoundingClientRect();
+  const k = element.offsetHeight > 0 && box.height > 0 ? box.height / element.offsetHeight : 1;
+  const style = getComputedStyle(element);
+  const top = box.top + (parseFloat(style.borderTopWidth) || 0) * k;
+  let bottom = (parseFloat(style.paddingTop) || 0) * k;
+  for (const child of Array.from(element.children)) {
+    const rect = child.getBoundingClientRect();
+    if (rect.height === 0 && rect.width === 0) continue;
+    const margin = parseFloat(getComputedStyle(child).marginBottom) || 0;
+    bottom = Math.max(bottom, rect.bottom - top + margin * k);
+  }
+  return bottom / k + element.scrollTop + (parseFloat(style.paddingBottom) || 0);
+}
+
+/**
+ * Says how much taller than its box a scroll region's content is, measured
+ * whenever the region or what it holds is resized or changed.
+ */
+export function useScrollDemand(ref: RefObject<HTMLElement | null>): void {
+  const listener = useContext(StageDemandContext);
+  const key = useId();
+  useEffect(() => {
+    const element = ref.current;
+    if (!listener || !element) return undefined;
+    const stop = watchElement(
+      element,
+      () => {
+        if (element.clientHeight > 0) listener(key, need(scrollContentHeight(element) - element.clientHeight, element.clientHeight));
+      },
+      { children: true, changes: true },
+    );
+    return () => {
+      stop();
+      listener(key, null);
+    };
+  }, [listener, ref, key]);
+}

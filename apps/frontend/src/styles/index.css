@@ -654,6 +654,69 @@ button {
   align-self: center;
   justify-self: center;
 }
+/* The column the main slot has in the layout it shares with the rail: the
+   shell measures it to know when a primary has outgrown it (stageFold.ts).
+   It follows the same rule as that row, so the two cannot drift. */
+.content-grid__probe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: var(--main-share, 100%);
+  visibility: hidden;
+  pointer-events: none;
+}
+/* The handle of a rail that folds under a primary taking the stage's
+   height: a rule the width of the rail, what is folded named at its end. */
+.rail-handle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  /* A finger's reach round a thin rule: the button is 24 px tall or more,
+     its rule and label drawn as before, its row no taller. */
+  min-height: 24px;
+  margin-block: -6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(var(--orange-rgb), 0.78);
+  cursor: pointer;
+  appearance: none;
+}
+.rail-handle__rule {
+  flex: 1 1 auto;
+  min-width: 12px;
+  height: 1px;
+  background: rgba(var(--orange-rgb), 0.48);
+}
+.rail-handle__label {
+  flex: none;
+  white-space: nowrap;
+}
+.rail-handle__chevron {
+  flex: none;
+  width: 8px;
+  height: 6px;
+  fill: currentColor;
+}
+.rail-handle--bare {
+  min-height: 0;
+  margin-block: 0;
+  cursor: default;
+}
+.rail-handle--open .rail-handle__chevron {
+  transform: rotate(180deg);
+}
+.rail-handle:hover,
+.rail-handle:focus-visible {
+  color: var(--orange);
+}
+.rail-handle:focus-visible {
+  outline: 1px solid rgba(var(--orange-rgb), 0.6);
+  outline-offset: 3px;
+}
 .rail-note {
   min-width: 0;
   min-height: 0;
@@ -816,7 +879,21 @@ button {
 .training-main {
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
+  grid-auto-rows: auto;
   gap: clamp(12px, 2cqh, 22px);
+}
+/* The note the primary chart leaves out, where the rail stands under the
+   charts: a band under them, its card's text scrolling past a third of the
+   column. */
+.chart-note-band {
+  min-width: 0;
+  min-height: 0;
+  max-height: 34cqh;
+  display: flex;
+}
+.chart-note-band .annotation-card {
+  height: auto;
+  max-height: 100%;
 }
 .training-charts {
   position: relative;
@@ -975,7 +1052,11 @@ button {
   display: flex;
   flex-direction: column;
   width: var(--note-width);
-  max-height: 36%;
+  /* A third of the layer, but on a short one (a phone on its side) room
+     for its header and a few lines, up to three fifths of it: at a third
+     of a layer 150 px tall the card had room for its header alone, and
+     its text scrolled out of sight. */
+  max-height: max(36%, min(104px, 62%));
   background: #000;
   pointer-events: auto;
 }
@@ -1442,6 +1523,15 @@ button {
 .content-rail__details > .rail-note {
   flex: 1 1 auto;
   min-height: clamp(64px, 10cqh, 110px);
+}
+/* A note the charts could not hold, leading a column too short for all of
+   it: whole, the metrics after it in the column's scroll. */
+.content-rail__details > .rail-note--leads {
+  flex: none;
+  order: -1;
+}
+.rail-note--leads .annotation-card {
+  height: auto;
 }
 .content-rail__details > .rail-progress {
   flex: none;
@@ -5297,11 +5387,18 @@ button {
     left: var(--edge);
   }
   .content-grid {
+    --main-share: 59cqh;
     top: 9.2cqh;
     bottom: 9.2cqh;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 59cqh) minmax(0, 1fr);
+    grid-template-rows: minmax(0, var(--main-share)) minmax(0, 1fr);
     gap: var(--scene-gap);
+  }
+  /* A primary that outgrows its share takes the stage's height; the rail
+     under it folds to a strip of its own height (stageFold.ts). */
+  .content-grid--staged {
+    grid-template-rows: minmax(0, 1fr) auto;
+    gap: clamp(10px, 1.4cqh, 16px);
   }
   .content-rail {
     display: grid;
@@ -5322,6 +5419,75 @@ button {
     grid-column: 1;
     grid-row: 1;
     min-height: 0;
+  }
+  /* A rail that folds keeps its handle on a row of its own over it. */
+  .content-rail--foldable {
+    grid-template-rows: auto minmax(0, 1fr);
+    row-gap: clamp(6px, 1cqh, 10px);
+  }
+  .content-rail--foldable > .rail-handle {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+  .content-rail--foldable > .damocles-presence,
+  .content-rail--foldable > .content-rail__details {
+    grid-row: 2;
+  }
+  /* Folded: the note (or the live response) beside a smaller Damocles, the
+     note held to three lines; a tap on it expands it, the handle opens the
+     rest. The strip stands down to the footer's band, and its handle is
+     its top rule. */
+  .content-grid--staged {
+    bottom: 6.4cqh;
+  }
+  .content-rail--folded {
+    grid-template-rows: auto auto;
+    row-gap: clamp(6px, 0.9cqh, 10px);
+  }
+  .content-rail--folded > .damocles-presence {
+    --presence-width: min(11cqw, 5.4cqh, 56px);
+    --signal-height: clamp(24px, 3cqh, 30px);
+  }
+  .content-rail--folded > .content-rail__details {
+    align-self: start;
+    overflow: hidden;
+  }
+  .content-rail--folded .rail-note,
+  .content-rail--folded .live-chat-card {
+    flex: none;
+    min-height: 0;
+  }
+  /* The strip keeps the note, or the live response where there is no note;
+     the rest stays in the page, set aside until the rail opens. */
+  .content-rail--folded .content-rail__details > :is(.metrics, .rail-progress, .tool-activity-slot),
+  .content-rail--folded .content-rail__details--noted > .live-chat-card {
+    display: none;
+  }
+  .content-rail--folded .rail-note--leads {
+    order: 0;
+  }
+  /* A live response streams at its newest lines, held to three. */
+  .content-rail--folded .live-chat-card__text {
+    height: auto;
+    max-height: calc(3 * 1.38em);
+    overflow: hidden;
+    line-height: 1.38;
+  }
+  .content-rail--folded .annotation-card {
+    height: auto;
+    padding-top: 0;
+    border-top: 0;
+  }
+  .content-rail--folded .annotation-card__header {
+    margin-bottom: 6px;
+  }
+  .content-rail--folded .annotation-card__text {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    overflow: hidden;
+    line-height: 1.38;
   }
   .scene-footer {
     left: var(--edge);

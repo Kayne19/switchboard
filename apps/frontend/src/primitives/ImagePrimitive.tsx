@@ -1,6 +1,7 @@
-import { useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { ImageData, ImageFormat } from '../controller/types';
 import { base64DecodedLength } from '../controller/validation';
+import { useLeastHeight } from '../hooks/useStageDemand';
 
 // The only image types the page draws, by the format the validators
 // accepted. SVG is not one: it is markup, and markup is never an img source.
@@ -35,6 +36,12 @@ export function ImagePrimitive({ data, focused = false }: { data: ImageData; foc
   const result: Decode = decode.src === src ? decode.result : { state: 'loading' };
   const failed = src === null || result.state === 'failed';
   const size = result.state === 'ready' ? `${result.width} × ${result.height}` : failed ? 'UNREADABLE' : 'DECODING';
+  // What the figure asks of the stage: its height drawn across the field's
+  // width, never past its own size. A picture taller than its field is
+  // drawn smaller there, never cropped.
+  const fieldRef = useRef<HTMLDivElement>(null);
+  const ready = result.state === 'ready' ? result : null;
+  useLeastHeight(fieldRef, useCallback((box: { width: number }) => (ready ? ready.height * Math.min(1, box.width / ready.width) : null), [ready]));
   return (
     <figure
       className={`image-primitive${focused ? ' image-primitive--focused' : ''}`}
@@ -44,7 +51,7 @@ export function ImagePrimitive({ data, focused = false }: { data: ImageData; foc
       // content (the aux row); a slot that fills its space ignores them.
       style={result.state === 'ready' ? ({ '--image-aspect': `${result.width} / ${result.height}` } as CSSProperties) : undefined}
     >
-      <div className="image-primitive__field">
+      <div ref={fieldRef} className="image-primitive__field">
         {src !== null && result.state !== 'failed' ? (
           <img
             className="image-primitive__img"

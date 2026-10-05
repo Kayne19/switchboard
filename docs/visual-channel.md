@@ -264,6 +264,62 @@ it are (its label and share done on one row, the steps still to do under
 the bar). Shown as the primary, its frame fits the plan and sits in the
 middle of the column, and only a plan longer than the column fills it.
 
+### A primary that outgrows its slot
+
+On a portrait stage the rail -- metrics, progress, the live response, the
+note, tool activity and Damocles -- stands under the main column, and the
+column keeps 59% of the stage. A primary that reads whole there keeps that
+layout. One whose content asks for more gets the stage's height:
+
+- **What counts as more is the content's own word, never its type or the
+  screen's size.** Each primitive that can outgrow its viewport says how
+  much taller than the viewport it would have to be to be read whole
+  (`hooks/useStageDemand.ts`): a drawing the height it reads in at its
+  least readable scale (a fit made for another viewport, as before its
+  host is measured, says nothing); a table, code pane, document or plan
+  the height of what it scrolls through; a figure its height drawn across
+  its field's width, never past its own size; a bar chart whose labels do
+  not fit under its bars the height in which it lies on its side with a
+  labelled row per category. Only the primary speaks: a plan under a chart
+  or a table in the aux row never folds the rail.
+- **The shell decides** (`app/stageFold.ts`): where the rail stands under
+  the column (measured, not a media query), a primary whose content is
+  more than a line of text past its viewport in the layout it shares with
+  the rail takes the stage. On the stage a content is weighed against the
+  viewport it had in that shared layout, never against a model of the
+  frame round it (a table's head, a document's heading, an aux row are
+  fixed; a diagram's rails grow with it). Folded, it gives the stage back
+  only once it would be within a few pixels of reading whole there, so a
+  need on the line does not fold and unfold as it redraws. A graph laid
+  out again for the stage's taller viewport says nothing of the shared
+  layout unless it overflows even the stage, and a primitive that cannot
+  tell yet (a drawing whose fit has not followed its box) leaves the
+  layout as it is. A new primary is measured first in the shared layout.
+  Opening the rail changes nothing of this. A landscape stage, the rail
+  beside the primary, never folds.
+- **The rail folds to a strip under the primary, down to the footer's
+  band.** The strip shows the note (held to three lines, its target line
+  naming what it is about, and on a diagram the NOTE marker on the node or
+  actor it names), or the live response where there is no note, beside a
+  smaller Damocles whose caption still names the tool at work. A tap on
+  the note expands it in focus. A live response streams at its newest
+  three lines. Its top rule is a handle, a finger's reach tall round the
+  thin rule: it names what the rail keeps folded (the rest of a cut note,
+  the metrics, progress, the live response, activity) and opens the rail
+  as it was, the primary back in its share; from there it folds again.
+  Its accessible name holds the words it shows. What it folds is set
+  aside by the stylesheet, not taken out of the page, so folding draws
+  nothing afresh. The caller's choice holds for that primary.
+
+At 390x844 a diagram's viewport grows from 374 px to 460 px, a 40-row
+table's from 436 to 544, and a bar chart of 45 categories names every one
+instead of every eighth. Why fold the rail rather than scroll the page or
+shrink the primary: the page never scrolls as a whole (its frame and
+Damocles stay put), and a primary drawn smaller is the squeeze this
+answers. The note is what the caller most needs from the rail while they
+read a large primary, so it stays, and stays linked to its item; the
+metrics are a tap away.
+
 ### Personal-assistant views: time is data
 
 The `calendar`, `tasks`, `timer`, `weather` and `inbox` types let an agent on
@@ -507,8 +563,23 @@ is not a chart (one in the aux row) is shown in the rail too. The rail holds
 one note, so: only the primary chart hands one over; only the first note about
 a visual off the charts goes there (later ones lie on the primary chart, as
 before); while it does, the primary hands none over; and a compare chart's
-notes stay on it, over its data where it has no clear place. In portrait a rail already full of metrics shows the note
-below them, in its scroll. Every visual payload may also provide a short `caption` for the
+notes stay on it, over its data where it has no clear place.
+
+The note a chart hands over stays readable beside it. Where the rail stands
+under a chart (a portrait stage), the note is drawn in a band under it, full
+width, carved from its slot, rather than in the rail under its metrics (a
+compare pair, which already scrolls in its row, keeps its note in the rail,
+leading it): the chart is recomposed to the shorter slot, and the card's target
+line names what the marked bar or point is. The band holds the note while it
+is on that chart; the chart is not asked to place it again, so a chart laid
+out in less room cannot take it back and hand it out again, the band coming
+and going. This is the one exception to "the chart keeps its size for its
+notes". Where the rail stands beside the charts and is too short for all it
+carries (a phone on its side), a note the charts could not hold leads it, at
+its whole height, the metrics after it in the column's scroll. A card on a
+short chart keeps room for its header and a few lines (up to three fifths of
+the layer), so a note too long for that is one the chart hands over rather
+than a card whose text scrolls out of sight. Every visual payload may also provide a short `caption` for the
 scene's supporting corner label, so that label describes real content instead
 of fixed decorative text.
 
