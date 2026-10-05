@@ -171,6 +171,26 @@ fn is_valid_semantic(s: &str) -> bool {
     )
 }
 
+/// Copies an optional `semantic`. Anything but one of the seven names, a
+/// non-string or `null` included, is `invalid {field_name}`, as the
+/// browser's `ALLOWED_SEMANTICS.has` check refuses it: a field the browser
+/// refuses is refused here, never dropped.
+fn copy_optional_semantic(
+    data: &Map<String, Value>,
+    out: &mut Map<String, Value>,
+    field_name: &str,
+) -> Result<(), String> {
+    let Some(value) = data.get("semantic") else {
+        return Ok(());
+    };
+    let semantic = value
+        .as_str()
+        .filter(|s| is_valid_semantic(s))
+        .ok_or_else(|| format!("invalid {field_name}"))?;
+    out.insert("semantic".into(), semantic.into());
+    Ok(())
+}
+
 fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
     check_unknown_keys(
         data,
@@ -258,12 +278,7 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
         let mut item = Map::new();
         item.insert("name".into(), name.into());
         item.insert("values".into(), Value::Array(values.clone()));
-        if let Some(sem) = sm.get("semantic").and_then(Value::as_str) {
-            if !is_valid_semantic(sem) {
-                return Err("invalid series.semantic".into());
-            }
-            item.insert("semantic".into(), sem.into());
-        }
+        copy_optional_semantic(sm, &mut item, "series.semantic")?;
         clean_series.push(Value::Object(item));
     }
 
@@ -362,12 +377,7 @@ fn validate_metric_data(data: &Map<String, Value>) -> Result<Value, String> {
     let mut out = Map::new();
     out.insert("label".into(), label.into());
     out.insert("value".into(), value.into());
-    if let Some(sem) = data.get("semantic").and_then(Value::as_str) {
-        if !is_valid_semantic(sem) {
-            return Err("invalid metric.semantic".into());
-        }
-        out.insert("semantic".into(), sem.into());
-    }
+    copy_optional_semantic(data, &mut out, "metric.semantic")?;
     copy_optional_string(data, &mut out, "caption", 128, "metric.caption")?;
     if let Some(trend) = data.get("trend") {
         let t = trend
@@ -579,32 +589,14 @@ fn validate_graph_diagram_data(data: &Map<String, Value>) -> Result<Value, Strin
         node_out.insert("id".into(), id.into());
         node_out.insert("label".into(), label.into());
 
-        if let Some(sub) = nm.get("sub").and_then(Value::as_str) {
-            if utf16_len(sub) > 256 {
-                return Err(
-                    "diagram node.sub exceeds maximum length of 256 UTF-16 code units".into(),
-                );
-            }
-            node_out.insert("sub".into(), sub.into());
-        }
-        if let Some(detail) = nm.get("detail").and_then(Value::as_str) {
-            if utf16_len(detail) > 256 {
-                return Err(
-                    "diagram node.detail exceeds maximum length of 256 UTF-16 code units".into(),
-                );
-            }
-            node_out.insert("detail".into(), detail.into());
-        }
-        if let Some(sem) = nm.get("semantic").and_then(Value::as_str) {
-            if !is_valid_semantic(sem) {
-                return Err("invalid diagram node.semantic".into());
-            }
-            node_out.insert("semantic".into(), sem.into());
-        }
-        if let Some(st) = nm.get("state").and_then(Value::as_str) {
-            if !matches!(st, "done" | "active" | "todo" | "blocked") {
-                return Err("invalid diagram node.state".into());
-            }
+        copy_optional_string(nm, &mut node_out, "sub", 256, "diagram node.sub")?;
+        copy_optional_string(nm, &mut node_out, "detail", 256, "diagram node.detail")?;
+        copy_optional_semantic(nm, &mut node_out, "diagram node.semantic")?;
+        if let Some(state) = nm.get("state") {
+            let st = state
+                .as_str()
+                .filter(|st| matches!(*st, "done" | "active" | "todo" | "blocked"))
+                .ok_or("invalid diagram node.state")?;
             node_out.insert("state".into(), st.into());
         }
         clean_nodes.push(Value::Object(node_out));
@@ -651,20 +643,8 @@ fn validate_graph_diagram_data(data: &Map<String, Value>) -> Result<Value, Strin
         edge_out.insert("from".into(), from.into());
         edge_out.insert("to".into(), to.into());
 
-        if let Some(label) = em.get("label").and_then(Value::as_str) {
-            if utf16_len(label) > 256 {
-                return Err(
-                    "diagram edge.label exceeds maximum length of 256 UTF-16 code units".into(),
-                );
-            }
-            edge_out.insert("label".into(), label.into());
-        }
-        if let Some(sem) = em.get("semantic").and_then(Value::as_str) {
-            if !is_valid_semantic(sem) {
-                return Err("invalid diagram edge.semantic".into());
-            }
-            edge_out.insert("semantic".into(), sem.into());
-        }
+        copy_optional_string(em, &mut edge_out, "label", 256, "diagram edge.label")?;
+        copy_optional_semantic(em, &mut edge_out, "diagram edge.semantic")?;
         if let Some(active) = em.get("active") {
             let b = active
                 .as_bool()
@@ -755,13 +735,7 @@ fn validate_sequence_diagram_data(data: &Map<String, Value>) -> Result<Value, St
         actor_out.insert("id".into(), id.into());
         actor_out.insert("label".into(), label.into());
         copy_optional_string(am, &mut actor_out, "sub", 256, "diagram actor.sub")?;
-        if let Some(sem) = am.get("semantic") {
-            let s = sem.as_str().ok_or("invalid diagram actor.semantic")?;
-            if !is_valid_semantic(s) {
-                return Err("invalid diagram actor.semantic".into());
-            }
-            actor_out.insert("semantic".into(), s.into());
-        }
+        copy_optional_semantic(am, &mut actor_out, "diagram actor.semantic")?;
         clean_actors.push(Value::Object(actor_out));
     }
 
@@ -1019,13 +993,7 @@ fn validate_table_cell(cell: &Value) -> Result<Value, String> {
             }
             let mut cell_out = Map::new();
             cell_out.insert("text".into(), text.into());
-            if let Some(sem) = cm.get("semantic") {
-                let s = sem.as_str().ok_or("invalid table cell.semantic")?;
-                if !is_valid_semantic(s) {
-                    return Err("invalid table cell.semantic".into());
-                }
-                cell_out.insert("semantic".into(), s.into());
-            }
+            copy_optional_semantic(cm, &mut cell_out, "table cell.semantic")?;
             if let Some(bold) = cm.get("bold") {
                 let b = bold.as_bool().ok_or("table cell.bold must be boolean")?;
                 cell_out.insert("bold".into(), b.into());
@@ -1074,13 +1042,7 @@ fn validate_table_data(data: &Map<String, Value>) -> Result<Value, String> {
         }
         let mut column_out = Map::new();
         column_out.insert("label".into(), label.into());
-        if let Some(sem) = cm.get("semantic") {
-            let s = sem.as_str().ok_or("invalid table column.semantic")?;
-            if !is_valid_semantic(s) {
-                return Err("invalid table column.semantic".into());
-            }
-            column_out.insert("semantic".into(), s.into());
-        }
+        copy_optional_semantic(cm, &mut column_out, "table column.semantic")?;
         clean_columns.push(Value::Object(column_out));
     }
 
@@ -1342,12 +1304,7 @@ fn validate_note_data(data: &Map<String, Value>) -> Result<Value, String> {
             let b = bold.as_bool().ok_or("note segment.bold must be boolean")?;
             seg_out.insert("bold".into(), b.into());
         }
-        if let Some(sem) = sm.get("semantic").and_then(Value::as_str) {
-            if !is_valid_semantic(sem) {
-                return Err("invalid note segment.semantic".into());
-            }
-            seg_out.insert("semantic".into(), sem.into());
-        }
+        copy_optional_semantic(sm, &mut seg_out, "note segment.semantic")?;
         clean_segs.push(Value::Object(seg_out));
     }
 
