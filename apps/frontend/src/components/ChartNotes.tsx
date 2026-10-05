@@ -1,6 +1,7 @@
 import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'motion/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ChartData, NoteData, SceneObject } from '../controller/types';
+import { noteTarget } from '../app/noteItems';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import {
   chartFrame,
@@ -9,7 +10,6 @@ import {
   chartScales,
   chartSeriesPoint,
   chartNoteTarget,
-  chartTargetText,
   type ChartAnchor,
   type ChartPointCallout,
   type ChartScales,
@@ -479,7 +479,7 @@ export function ChartNotes({
                   data={note.data}
                   onFocus={note.object ? () => onFocus(note.object!.id) : undefined}
                   onOpenHistory={note.object ? undefined : onOpenHistory}
-                  target={note.data.anchor?.target === chart.id ? chartTargetText(note.data.anchor, chart.data) : undefined}
+                  target={noteTarget(chart, note.data).target}
                 />
               </SurfaceBoundary>
             </motion.div>

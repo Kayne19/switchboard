@@ -1,4 +1,4 @@
-import type { CalendarData, InboxData, NoteData, SceneObject, SceneObjectType, TasksData, TimerData, WeatherData } from '../controller/types';
+import type { CalendarData, InboxData, NoteData, SceneObject, TasksData, TimerData, WeatherData } from '../controller/types';
 import { weatherItemName } from '../primitives/weatherLayout';
 import { eventTargetText } from '../primitives/calendarLayout';
 import { chartTargetText } from '../primitives/chartGeometry';
@@ -15,9 +15,6 @@ import { cast } from './sceneModel';
 // page does not draw marks nothing, so a badge always has its card on
 // screen. Neither validator looks the item up, so a name the object does
 // not hold marks nothing either.
-
-/** The types whose objects hold items a note can name. */
-export const ITEM_TYPES: ReadonlySet<SceneObjectType> = new Set<SceneObjectType>(['calendar', 'tasks', 'timer', 'weather', 'inbox']);
 
 /** The item the drawn note `note` names inside the object `objectId`, which
  * that object marks; nothing when the note is about another object or names
@@ -76,7 +73,7 @@ export function itemTargetText(object: SceneObject, item: string): string | unde
 /** The item a note's card names on its TARGET line, in its object's words:
  * set only when the note is about `object` and the object holds the item it
  * names, which is when the item is marked and the card carries the badge. */
-export function noteItemTarget(object: SceneObject | null | undefined, note: NoteData | null | undefined): string | undefined {
+function noteItemTarget(object: SceneObject | null | undefined, note: NoteData | null | undefined): string | undefined {
   const item = markedItem(note, object?.id ?? '');
   return object && item !== undefined ? itemTargetText(object, item) : undefined;
 }

@@ -22,7 +22,7 @@ import { StageDemandContext, watchElement, type StageDemandListener } from '../h
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { CalendarPrimitive, calendarFrame } from '../primitives/CalendarPrimitive';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
-import { chartKind, chartTargetText } from '../primitives/chartGeometry';
+import { chartKind } from '../primitives/chartGeometry';
 import { CodeViewport } from '../primitives/CodeViewport';
 import { DamoclesPresence } from '../primitives/DamoclesPresence';
 import { DocumentViewport } from '../primitives/DocumentViewport';
@@ -454,7 +454,7 @@ function trainingContent(
                   data={banded.data}
                   onFocus={banded.object ? () => onFocus(banded.object!.id) : undefined}
                   onOpenHistory={banded.object ? undefined : onOpenHistory}
-                  target={banded.data.anchor?.target === primary.id ? chartTargetText(banded.data.anchor, primary.data) : undefined}
+                  target={noteTarget(primary, banded.data).target}
                 />
               </SurfaceBoundary>
             </ObjectMotion>
