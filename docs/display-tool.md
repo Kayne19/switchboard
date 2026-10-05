@@ -227,7 +227,7 @@ How the page draws a calendar (`CalendarPrimitive`, laid out by `calendarLayout.
 
 #### weather
 
-- `location` (required, <= 128) and `units` (required, `C` or `F`). Every temperature is in `units`; the page converts none.
+- `location` (required, <= 128) and `units` (required, `C` or `F`). Every temperature is in `units`; the page converts none. A forecast with no `title` is named by its `location` in `view`'s report.
 - `current` (required): `{ temp, condition, summary? (<= 256), high?, low?, feelsLike?, humidity?, precip?, wind? (<= 128) }`. Temperatures are finite numbers; `humidity` and `precip` (the chance of precipitation) are percents, 0 to 100.
 - `hourly`: 0 to 48 `{ time, temp, condition, precip? }`, `time` a wall time, no two hours with one `time`. `daily`: 0 to 14 `{ date, high, low, condition, precip? }`, no two days with one `date`. `alert`: <= 256.
 - `condition` is one of `clear`, `partly-cloudy`, `cloudy`, `fog`, `drizzle`, `rain`, `heavy-rain`, `thunder`, `snow`, `sleet`, `hail`, `wind`, `haze`. The page draws each as a glyph in the design system's sharp vector geometry, never as an emoji or an image.
