@@ -27,6 +27,16 @@ export interface ListPast {
   below: number;
 }
 
+/**
+ * The edges a list continues past: more of it than a sliver lies that way.
+ * An edge is marked even where no item lies past it (a forecast's
+ * conditions above its days): the count names what it can, and the edge
+ * still says the list goes on.
+ */
+export function continuesPast(scrollTop: number, viewHeight: number, contentHeight: number): { top: boolean; bottom: boolean } {
+  return { top: scrollTop > SLIVER, bottom: contentHeight - viewHeight - scrollTop > SLIVER };
+}
+
 /** A box along the scroll axis, in one coordinate space. */
 export interface Extent {
   top: number;
@@ -148,7 +158,7 @@ interface ListViewportProps {
 export function ListViewport({ children, noun, lead, countSelector = '[data-item]', head, className, scrollClassName, scrollRef: givenRef, label }: ListViewportProps) {
   const ownRef = useRef<HTMLDivElement>(null);
   const scrollRef = givenRef ?? ownRef;
-  const [past, setPast] = useState<ListPast>({ above: 0, below: 0 });
+  const [past, setPast] = useState<ListPast & { top: boolean; bottom: boolean }>({ above: 0, below: 0, top: false, bottom: false });
   const [scrolls, setScrolls] = useState(false);
   const [viewHeight, setViewHeight] = useState(0);
 
@@ -167,8 +177,13 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
       const rect = item.getBoundingClientRect();
       return { top: rect.top, bottom: rect.bottom };
     });
-    const next = element.scrollHeight > element.clientHeight + 1 ? countPast(items, { top: box.top, bottom: box.top + element.clientHeight * k }) : { above: 0, below: 0 };
-    setPast((current) => (current.above === next.above && current.below === next.below ? current : next));
+    const overflows = element.scrollHeight > element.clientHeight + 1;
+    const counts = overflows ? countPast(items, { top: box.top, bottom: box.top + element.clientHeight * k }) : { above: 0, below: 0 };
+    const goes = overflows ? continuesPast(element.scrollTop, element.clientHeight, element.scrollHeight) : { top: false, bottom: false };
+    const next = { ...counts, top: goes.top || counts.above > 0, bottom: goes.bottom || counts.below > 0 };
+    setPast((current) =>
+      current.above === next.above && current.below === next.below && current.top === next.top && current.bottom === next.bottom ? current : next,
+    );
     setScrolls(element.scrollHeight > element.clientHeight + 1);
     setViewHeight(element.clientHeight);
   }, [scrollRef, countSelector]);
@@ -242,13 +257,15 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
   };
 
   const fade = fadeDepth(viewHeight);
-  const edge = (side: 'top' | 'bottom', count: number) =>
-    count > 0 ? (
+  // An edge the list continues past: the fade, the cut line, and the count
+  // of the items that lie that way, or MORE where none of them does.
+  const edge = (side: 'top' | 'bottom', continues: boolean, count: number) =>
+    continues ? (
       <>
         <div className={`drawing-viewport__more drawing-viewport__more--${side}`} style={{ height: `${fade}px` }} aria-hidden="true" />
         <div className={`drawing-viewport__rail drawing-viewport__rail--${side}`} aria-hidden="true" />
         <div className={`drawing-viewport__rim drawing-viewport__rim--${side} list-viewport__rim`} onClick={page(side === 'top' ? -1 : 1)} aria-hidden="true" data-count={count}>
-          <span className="drawing-viewport__rim-text">{`${count} ${nounFor(noun, count)}`}</span>
+          <span className="drawing-viewport__rim-text">{count > 0 ? `${count} ${nounFor(noun, count)}` : 'MORE'}</span>
           <svg className="drawing-viewport__chevron" viewBox="0 0 8 6" aria-hidden="true">
             <path d="M 4 0 L 8 6 L 0 6 Z" />
           </svg>
@@ -271,8 +288,8 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
         >
           {children}
         </div>
-        {edge('top', past.above)}
-        {edge('bottom', past.below)}
+        {edge('top', past.top, past.above)}
+        {edge('bottom', past.bottom, past.below)}
       </div>
     </div>
   );
