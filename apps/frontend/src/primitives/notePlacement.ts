@@ -56,7 +56,7 @@
 // Without `spill`, or where no note's absence helps, each card takes the
 // place that hides the least.
 
-import { LEADER_CLEARANCE, clipSegment, hiddenTraceLength, segmentDistance, segmentsMeet, type Point, type Rect } from './segments';
+import { LEADER_CLEARANCE, clipSegment, hiddenTraceLength, segmentDistance, segmentsMeet, withoutRepeats, type Point, type Rect } from './segments';
 
 interface NoteCard {
   id: string;
@@ -1144,11 +1144,13 @@ export function routeLeader(card: Rect, point: Point, options: LeaderOptions = {
   if (step < 0.5 || reach < 1) return [start, point];
   const turn = edgeAt + main * first;
   if (step <= room) {
-    return distinct([start, make(exit, turn), make(across(point), turn + main * step), point]);
+    // A step as long as the room for it can come out a rounding error
+    // longer, a run along of 1e-14 that listed the same vertex twice.
+    return withoutRepeats([start, make(exit, turn), make(across(point), turn + main * step), point]);
   }
   // Too far across to reach on the step alone: run along first.
   const run = step - room;
-  return distinct([
+  return withoutRepeats([
     start,
     make(exit, turn),
     make(exit + direction * run, turn),
@@ -1157,9 +1159,3 @@ export function routeLeader(card: Rect, point: Point, options: LeaderOptions = {
   ]);
 }
 
-// The polyline without a vertex that repeats the one before it. A step as
-// long as the room for it can come out a rounding error longer, a run along
-// of 1e-14 that left the same vertex twice (line-notes review L9).
-function distinct(line: Point[]): Point[] {
-  return line.filter((point, index) => index === 0 || Math.hypot(point.x - line[index - 1].x, point.y - line[index - 1].y) > 1e-6);
-}

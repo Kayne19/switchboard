@@ -1,6 +1,6 @@
 // The segment maths the chart and its notes share (segments.ts).
 import { describe, expect, it } from 'vitest';
-import { clipSegment, hiddenTraceLength, segmentDistance, segmentsMeet, type Rect } from '../../src/primitives/segments';
+import { clipSegment, crispLine, hiddenTraceLength, segmentDistance, segmentsMeet, type Rect } from '../../src/primitives/segments';
 
 const box = (left: number, top: number, width: number, height: number): Rect => ({ left, top, right: left + width, bottom: top + height });
 
@@ -25,5 +25,16 @@ describe('two segments', () => {
     expect(segmentsMeet({ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 5 })).toBe(true);
     expect(segmentDistance({ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 0, y: 4 }, { x: 10, y: 4 })).toBe(4);
     expect(segmentDistance({ x: 0, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }, { x: 10, y: 0 })).toBe(0);
+  });
+});
+
+// A leader is drawn on the half pixel. A run or a step shorter than a pixel
+// (a 0.13 px step after a 13 px run, from a placement) put both its ends on
+// the same half pixel, so the drawn leader listed one vertex twice
+// (notes-tidy review L2).
+describe('a crisp line', () => {
+  it('sits on the half pixel and repeats no vertex, however short a run it snaps away', () => {
+    const line = crispLine([{ x: 10, y: 20 }, { x: 23, y: 20 }, { x: 23.13, y: 20.13 }, { x: 23.13, y: 40 }]);
+    expect(line).toEqual([{ x: 10.5, y: 20.5 }, { x: 23.5, y: 20.5 }, { x: 23.5, y: 40.5 }]);
   });
 });

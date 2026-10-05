@@ -18,7 +18,7 @@ import {
   type ViewRect,
 } from '../primitives/chartGeometry';
 import { layoutNotes, type NoteField, type NoteToPlace } from '../primitives/notePlacement';
-import type { Point, Rect } from '../primitives/segments';
+import { crispLine, type Point, type Rect } from '../primitives/segments';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
 /** One note on a chart: a note object, or the spoken explanation standing in for one. */
@@ -154,9 +154,6 @@ function sameLayout(a: NotesLayout | null, b: NotesLayout): boolean {
   }
   return true;
 }
-
-// A crisp one-pixel line sits on the half pixel.
-const snap = (value: number) => Math.round(value - 0.5) + 0.5;
 
 /**
  * The notes on one chart, laid over its panel rather than in a band that
@@ -366,7 +363,7 @@ export function ChartNotes({
         if (Math.abs(width - (cssWidths.get(note.id) ?? width)) > 0.5) next.widths[note.id] = width;
         // The leader begins on the card's one-pixel border, so the two read
         // as one line: the route the placement scored on the card's whole pixels.
-        if (place!.leader.length > 1) next.leaders[note.id] = place!.leader.map((point) => ({ x: snap(point.x), y: snap(point.y) }));
+        if (place!.leader.length > 1) next.leaders[note.id] = crispLine(place!.leader);
       }
       placedRef.current = { key, exact, notes: current.map((note) => note.data), layout: next, area: field.area, frame: { width: frame.width, height: frame.height }, points };
       setLayout((previous) => (sameLayout(previous, next) ? previous : next));

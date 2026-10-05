@@ -91,3 +91,18 @@ export function segmentDistance(a: Point, b: Point, c: Point, d: Point): number 
   };
   return Math.min(toSegment(a, c, d), toSegment(b, c, d), toSegment(c, a, b), toSegment(d, a, b));
 }
+
+/** The polyline without a vertex that repeats the one before it (within a millionth of a pixel). */
+export function withoutRepeats(line: Point[]): Point[] {
+  return line.filter((point, index) => index === 0 || Math.hypot(point.x - line[index - 1].x, point.y - line[index - 1].y) > 1e-6);
+}
+
+/**
+ * The polyline as a crisp one-pixel line draws it: each vertex on the half
+ * pixel, and none repeating the one before, which a run or a step shorter
+ * than a pixel would leave there once both its ends are snapped.
+ */
+export function crispLine(line: Point[]): Point[] {
+  const snap = (value: number) => Math.round(value - 0.5) + 0.5;
+  return withoutRepeats(line.map((point) => ({ x: snap(point.x), y: snap(point.y) })));
+}
