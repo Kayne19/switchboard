@@ -70,7 +70,7 @@ The model controls semantic intent. The frontend controls composition, geometry,
 | `DocumentViewport` | readable document layout and bounded scrolling |
 | `MetricsPrimitive` | metric alignment and semantic values |
 | `AnnotationCard` | targeted explanation and rich text semantics |
-| `ChartNotes` + `notePlacement` | every note on a chart, laid over it clear of the others, their points and the traces; the angular leader from card to point |
+| `ChartNotes` + `notePlacement` | every note on a chart, laid over it clear of the others, their points and what the chart draws (`chartObstacles`: bars and scatter points as areas, lines, the marker ring, legend and axis labels; an area's fill only where nothing else is free); the angular leader from card to point; the one note with no clear place handed to the rail, its point ringed |
 | `FocusableSurface` | accessible activation without invalid button-wrapped scroll regions |
 | `FocusLayer` | shared-object expansion and return behavior |
 | Controller reducer | six-operation state semantics |

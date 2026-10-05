@@ -112,7 +112,17 @@ Notes are durable objects rather than a mirror of the latest chat response.
 They change only through an explicit `show` update to their stable id, `hide`,
 or `clear`. A note may carry a semantic `anchor` naming another object's id and
 an optional chart `x`/`series` or diagram `node`; the browser owns the resulting
-placement. Every visual payload may also provide a short `caption` for the
+placement. On a chart page a note lies over the chart it names, clear of what
+the chart draws: a bar or a scatter point is an area, not the line round it,
+and a card keeps a few pixels from it; lines, the marker ring, the legend and
+the axis labels are kept clear too, and an area chart's fill is given up only
+where nothing else is free. The page looks for such a place anywhere within
+reach of the named point, including the band above the plot. Where the chart
+has none (every bar standing to the top and the band shorter than the card,
+say), that one note is shown in the rail instead, still naming its target,
+and the point it names keeps a ring on the chart. A note anchored to a visual
+on a chart page that is not a chart (one in the aux row) is shown in the rail
+too. Every visual payload may also provide a short `caption` for the
 scene's supporting corner label, so that label describes real content instead
 of fixed decorative text.
 
