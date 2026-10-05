@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
-// Focus gives a diagram the stage and the rail goes: the note about it comes
-// with it. The node (or actor) the note names keeps its NOTE marker, the
-// drawing opens on it, and the note itself stands in a panel of its own.
+// Focus gives an object the stage and the rail goes: the notes about it come
+// with it. On a diagram the node (or actor) the note names keeps its NOTE
+// marker, the drawing opens on it, and the note itself stands in a panel of
+// its own; a chart keeps every note about it, its points marked; a table,
+// code, a document or a figure keeps the rail's note about it.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { focusNote } from '../../src/components/FocusLayer';
+import { focusNotes } from '../../src/components/FocusLayer';
 import { SceneRenderer } from '../../src/components/SceneRenderer';
 import { ControllerProvider, useController } from '../../src/controller/context';
 import { createInitialState, reduceActions } from '../../src/controller/reducer';
@@ -144,10 +146,64 @@ describe('a diagram in focus keeps its note', () => {
       ...fixtures.topology,
       { op: 'show', id: 'other-note', type: 'note', data: { segments: [{ text: 'about the table' }], anchor: { target: 'elsewhere' } } },
     ]);
-    expect(focusNote(state, state.objects['topology'])?.segments[0].text).toMatch(/^A display counts/);
+    expect(focusNotes(state, state.objects['topology']).map((note) => note.data.segments[0].text)).toEqual([expect.stringMatching(/^A display counts/)]);
     const plain = reduceActions(createInitialState(), [fixtures.topology[0]]);
-    expect(focusNote(plain, plain.objects['topology'])).toBeNull();
-    // A note is about a diagram here; a focused note or chart keeps its own way.
-    expect(focusNote(state, state.objects['topology-note'])).toBeNull();
+    expect(focusNotes(plain, plain.objects['topology'])).toEqual([]);
+    // A focused note is the note: nothing beside it.
+    expect(focusNotes(state, state.objects['topology-note'])).toEqual([]);
+  });
+});
+
+// Focus kept only a diagram's note (and a list's): a chart's notes, and the
+// note about a table, code, a document or a figure, went with the rail the
+// moment their object took the stage (polish row 11).
+describe('any object in focus keeps the notes about it', () => {
+  const early: ControllerAction = {
+    op: 'show', id: 'early-note', type: 'note',
+    data: { tag: 'EARLY / EPOCH 6', anchor: { target: 'loss', x: 6, series: 'TRAIN LOSS' }, segments: [{ text: 'Both losses fall together through the warmup.' }] },
+  };
+
+  it('keeps every note about a chart beside it, each naming its point, and the chart marks each point', () => {
+    const layer = focusOn([...fixtures.training, early], 'loss');
+    const cards = [...layer.querySelectorAll('.focus-layer__note .annotation-card')];
+    expect(cards.map((card) => card.querySelector('.annotation-card__anchor')?.textContent)).toEqual([
+      'TARGET / EPOCH 32 / VAL LOSS',
+      'TARGET / EPOCH 6 / TRAIN LOSS',
+    ]);
+    expect(cards[0].textContent).toContain('Validation loss turns upward here');
+    expect(layer.querySelector('.focus-layer__content--noted')).not.toBeNull();
+    const marked = [...layer.querySelectorAll('.chart-marker')].map((group) => `${group.getAttribute('data-x')} ${group.getAttribute('data-series')}`);
+    expect(marked.sort()).toEqual(['32 VAL LOSS', '6 TRAIN LOSS']);
+  });
+
+  it("keeps the note about a bar chart beside it, its bar outlined and its value printed", () => {
+    const layer = focusOn(fixtures.comparison, 'durations');
+    expect(layer.querySelector('.focus-layer__note .annotation-card__anchor')?.textContent).toBe('TARGET / frontend visual / THIS RUN');
+    expect(layer.querySelector('.chart-callout[data-index="2"][data-series="THIS RUN"]')).not.toBeNull();
+  });
+
+  for (const [fixture, id, note] of [
+    ['results', 'test-matrix', 'results-note'],
+    ['code', 'source', 'code-note'],
+    ['email', 'mail', 'email-note'],
+    ['figure', 'test-card', 'figure-note'],
+  ] as const) {
+    it(`keeps the note about the ${fixture} fixture's ${id} beside it`, () => {
+      // The fixture's note, anchored to its object, as the rail shows it.
+      const actions = fixtures[fixture].map((action) =>
+        action.op === 'show' && action.id === note ? { ...action, data: { ...(action.data as object), anchor: { target: id } } } : action,
+      ) as ControllerAction[];
+      const layer = focusOn(actions, id);
+      const card = layer.querySelector('.focus-layer__note .annotation-card');
+      expect(card?.getAttribute('data-anchor-target')).toBe(id);
+      expect(layer.querySelector('.focus-layer__content--noted')).not.toBeNull();
+    });
+  }
+
+  it('shows no panel for an object no note names', () => {
+    const layer = focusOn(fixtures.code, 'source');
+    // The code fixture's note names no object: it is about the scene.
+    expect(layer.querySelector('.focus-layer__note')).toBeNull();
+    expect(layer.querySelector('.focus-layer__content--noted')).toBeNull();
   });
 });

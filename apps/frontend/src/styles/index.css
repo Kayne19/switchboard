@@ -1062,9 +1062,11 @@ button {
 }
 /* A narrow card puts what it names on a line of its own rather than cut
    it to an ellipsis beside the tag; so does a card naming a list's item,
-   whose words are the point of its TARGET line. */
+   whose words are the point of its TARGET line, and a card focus keeps
+   beside its object, in a column as narrow as the rail. */
 .chart-note .annotation-card__header,
-.annotation-card--item .annotation-card__header {
+.annotation-card--item .annotation-card__header,
+.focus-layer__note .annotation-card__header {
   flex-wrap: wrap;
   row-gap: 4px;
 }
@@ -5191,8 +5193,16 @@ button {
   flex-direction: column;
   padding-top: clamp(12px, 2cqh, 28px);
 }
+/* A chart's notes stand one under another, each as tall as its words while
+   they fit; past that they share the panel's height and a long one scrolls
+   inside its card. */
+.focus-layer__note {
+  gap: clamp(10px, 1.6cqh, 18px);
+}
 .focus-layer__note .annotation-card {
+  flex: 0 1 auto;
   height: auto;
+  min-height: 0;
   max-height: 100%;
 }
 .focus-layer__content--note .annotation-card {
@@ -5205,6 +5215,12 @@ button {
 .focus-layer__content--note .annotation-card__text {
   font-size: clamp(20px, 2cqw, 34px);
   line-height: 1.45;
+}
+/* A metric or a progress with a note beside it is wider by the note's
+   column, so it keeps the width it has alone. */
+.focus-layer__content--metric.focus-layer__content--noted,
+.focus-layer__content--progress.focus-layer__content--noted {
+  width: min(92vw, 1240px);
 }
 .focus-layer__content--metric .metrics {
   display: grid;
@@ -5797,6 +5813,13 @@ button {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) auto;
     row-gap: clamp(10px, 1.6cqh, 18px);
+  }
+  /* A chart with its notes under it takes the focus box's height, not a
+     square: the notes come out of the box, not out of the chart's room. */
+  .focus-layer__content--chart.focus-layer__content--noted {
+    height: 86vh;
+    max-height: none;
+    aspect-ratio: auto;
   }
   .focus-layer__note {
     max-height: 30cqh;

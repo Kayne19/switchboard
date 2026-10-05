@@ -603,6 +603,18 @@ than a card whose text scrolls out of sight. Every visual payload may also provi
 scene's supporting corner label, so that label describes real content instead
 of fixed decorative text.
 
+**Focus keeps the notes about its object.** Focus gives an object the stage
+and the rail goes, so the notes the scene drew about it come with it, in a
+panel of their own beside the object when the focus box is wide (where the
+rail stood) and under it when the box is tall: on a chart, every note that
+names it, one under another, each card's `TARGET` line naming its point, the
+chart ringing or outlining each point and printing its value; on any other
+object (a diagram, a table, code, a document, a figure, a list with items, a
+metric, a progress), the note the rail shows about it, and what that note
+names stays marked: a diagram's node or actor, a list's item with its NOTE
+badge. A note that names no object is about the scene, not the object, and
+stays out of focus; a focused note is itself the note.
+
 ### Replay & state
 
 A reconnecting browser is replayed the full current projection — every

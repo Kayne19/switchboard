@@ -1,6 +1,7 @@
 import type { CalendarData, InboxData, NoteData, SceneObject, SceneObjectType, TasksData, TimerData, WeatherData } from '../controller/types';
 import { weatherItemName } from '../primitives/weatherLayout';
 import { eventTargetText } from '../primitives/calendarLayout';
+import { chartTargetText } from '../primitives/chartGeometry';
 import { cast } from './sceneModel';
 
 // A note on one item (docs/display-tool.md, "A note on one item"): a note's
@@ -78,4 +79,21 @@ export function itemTargetText(object: SceneObject, item: string): string | unde
 export function noteItemTarget(object: SceneObject | null | undefined, note: NoteData | null | undefined): string | undefined {
   const item = markedItem(note, object?.id ?? '');
   return object && item !== undefined ? itemTargetText(object, item) : undefined;
+}
+
+/**
+ * What a drawn note's card says it is about on its TARGET line, in its
+ * object's words, and whether the object marks that with the NOTE badge:
+ * the point it names on a chart (`chartTargetText`; the chart rings or
+ * outlines the point and prints its value, no badge), or the item it names
+ * in a list (marked with the badge, as `noteItemTarget` says). Nothing for
+ * a note about another object, or about one with neither, whose card shows
+ * the anchor as sent. The rail card and the cards focus keeps read this.
+ */
+export function noteTarget(object: SceneObject | null | undefined, note: NoteData | null | undefined): { target?: string; itemMarked: boolean } {
+  const anchor = note?.anchor;
+  if (!object || !anchor || anchor.target !== object.id) return { itemMarked: false };
+  if (object.type === 'chart') return { target: chartTargetText(anchor, cast.chart(object).data), itemMarked: false };
+  const item = noteItemTarget(object, note);
+  return { target: item, itemMarked: item !== undefined };
 }
