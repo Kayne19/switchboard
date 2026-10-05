@@ -1,10 +1,74 @@
 import type { ChartData, ChartKind, ChartSeries } from '../controller/types';
+import { readableScale, type DrawingText } from './drawingFit';
 
-// The chart's viewBox is a fixed geometry. The chart draws in it, and the
-// notes laid over a chart map their points and the drawn traces through it,
-// so both read the same scales from here instead of re-declaring them.
+// The chart draws in a viewBox -- its frame -- and the notes laid over a
+// chart map their points and the drawn marks through the same frame, so both
+// read the same scales from here instead of re-declaring them. The approved
+// canvas is 1000 by 500 units; a slot it does not read well in gets a frame
+// of its own shape (`chartFrame`).
 export const CHART_VIEW_WIDTH = 1000;
 export const CHART_VIEW_HEIGHT = 500;
+
+/** The chart's viewBox, in its own units. */
+export interface ChartFrame {
+  width: number;
+  height: number;
+}
+
+/** The approved canvas: the frame every chart is drawn in where it reads. */
+export const CHART_FRAME: ChartFrame = { width: CHART_VIEW_WIDTH, height: CHART_VIEW_HEIGHT };
+
+// The chart's text, in viewBox units, and the page face whose floor each
+// line keeps: the tick text is 13 units, the legend and the axis names 11
+// (styles/index.css; a test holds the two in step).
+export const CHART_TEXT: DrawingText[] = [
+  { size: 13, floor: 'tech' },
+  { size: 11, floor: 'micro' },
+];
+/** The least scale at which every line of a chart's text meets the page's type floors. */
+export const CHART_READABLE_SCALE = readableScale(CHART_TEXT);
+// How much taller than the approved canvas drawn across it a slot may be
+// before the chart is recomposed for it: the landscape slots the canvas was
+// approved in leave up to a fifth of their height to the band above and
+// below it, where the notes sit.
+const CHART_TALL_SLACK = 1.25;
+// The least frame a chart is recomposed into: room for its legend, its
+// axes' text and a plot a few rows of tick text tall. A slot too small to
+// give it at the readable scale draws it smaller instead; the aux row keeps
+// a chart's cell at least this tall (styles/index.css), so only a slot with
+// nowhere to grow (a phone's focus box on its side, say) ever does.
+export const CHART_MIN_FRAME: ChartFrame = { width: 320, height: 240 };
+
+/** A frame for a slot, and the CSS pixels per unit it is drawn at there. */
+export interface ChartFit extends ChartFrame {
+  scale: number;
+}
+
+/**
+ * The frame a chart is drawn in, for a slot of this size in CSS pixels:
+ * decided by the slot's geometry alone, never by the viewport. The
+ * approved canvas holds wherever it reads -- its text at or above the
+ * page's floors, and the slot no taller than a little more than the canvas
+ * drawn across it; a slot wider than the canvas keeps it whole, with the
+ * room beside it for the notes. Anywhere else the chart is recomposed: its
+ * frame takes the slot's own shape, so the plot follows the slot instead of
+ * shrinking inside bands of black, at the scale that fits the slot's width
+ * or height but never below the readable one -- unless the slot cannot
+ * hold even the least frame (`CHART_MIN_FRAME`) at that scale. A slot not
+ * yet measured gets the approved canvas.
+ */
+export function chartFrame(slot: { width: number; height: number }): ChartFit {
+  if (!(slot.width > 0) || !(slot.height > 0)) return { ...CHART_FRAME, scale: 1 };
+  const fit = Math.min(slot.width / CHART_VIEW_WIDTH, slot.height / CHART_VIEW_HEIGHT);
+  if (fit >= CHART_READABLE_SCALE && slot.height <= CHART_VIEW_HEIGHT * fit * CHART_TALL_SLACK) return { ...CHART_FRAME, scale: fit };
+  const scale = Math.min(
+    Math.max(CHART_READABLE_SCALE, fit),
+    slot.width / CHART_MIN_FRAME.width,
+    slot.height / CHART_MIN_FRAME.height,
+  );
+  return { width: Math.round(slot.width / scale), height: Math.round(slot.height / scale), scale };
+}
+
 // The padding for a chart whose legend fits on one row. A legend that wraps
 // grows `top` past this floor (see `chartPad`) so the plot never sits under
 // a wrapped row; the base value is what every existing chart still gets.
@@ -46,7 +110,12 @@ export const CHART_TICK_BASELINE = CHART_PAD.bottom - 20;
 // ticks do, and leave the rotated axis label its strip on the far left.
 const CHART_CATEGORY_PAD_GAP = 40;
 // The most of the width those labels may take; a longer one is truncated.
+// A frame narrower than the approved canvas gives them the same share of
+// its width.
 export const CHART_CATEGORY_PAD_MAX = 340;
+function categoryPadMax(frame: ChartFrame): number {
+  return Math.min(CHART_CATEGORY_PAD_MAX, (CHART_CATEGORY_PAD_MAX * frame.width) / CHART_VIEW_WIDTH);
+}
 // The share of a bar chart's band its group of bars fills.
 const CHART_BAR_GROUP_SHARE = 0.72;
 
@@ -174,9 +243,9 @@ function upright(categories: string[] | undefined, ticks: ChartTick[], rows: num
  * last categories sit on the plot's edges, and a long label centred there
  * would run past them.
  */
-export function chartCategoryLabelX(x: number, text: string): number {
+export function chartCategoryLabelX(x: number, text: string, frameWidth: number = CHART_VIEW_WIDTH): number {
   const half = (text.length * CHART_TICK_CHAR_ADVANCE) / 2;
-  return Math.min(CHART_VIEW_WIDTH - half, Math.max(half, x));
+  return Math.min(frameWidth - half, Math.max(half, x));
 }
 
 // How many legend rows the plot's top padding grows by. A line passes
@@ -203,14 +272,14 @@ function legendRowsAbovePlot(kind: ChartKind, legendRows: number): number {
  * are drawn (`chartCategoryLabelX`), still clear each other on every row:
  * an edge label held in moves toward its neighbour.
  */
-export function chartCategoryLayout(data: ChartData): ChartCategoryLayout {
+export function chartCategoryLayout(data: ChartData, frame: ChartFrame = CHART_FRAME): ChartCategoryLayout {
   const categories = chartCategories(data);
   if (!categories) return upright(undefined, [], 1, 1);
   const count = categories.length;
   const kind = chartKind(data);
-  const plotWidth = CHART_VIEW_WIDTH - CHART_PAD.left - CHART_PAD.right;
-  const legendRows = chartLegendLayout(data).rows;
-  const plotHeight = CHART_VIEW_HEIGHT - CHART_PAD.top - legendRowsAbovePlot(kind, legendRows) * CHART_LEGEND_ROW_HEIGHT - CHART_PAD.bottom;
+  const plotWidth = frame.width - CHART_PAD.left - CHART_PAD.right;
+  const legendRows = chartLegendLayout(data, plotWidth).rows;
+  const plotHeight = frame.height - CHART_PAD.top - legendRowsAbovePlot(kind, legendRows) * CHART_LEGEND_ROW_HEIGHT - CHART_PAD.bottom;
   const widest = Math.max(...categories.map((label) => label.length)) * CHART_TICK_CHAR_ADVANCE + CHART_TICK_GAP;
   // Bars take a band each; the other kinds spread their categories edge to edge.
   const slot = kind === 'bar' ? plotWidth / count : count > 1 ? plotWidth / (count - 1) : plotWidth;
@@ -226,7 +295,7 @@ export function chartCategoryLayout(data: ChartData): ChartCategoryLayout {
     const ends = new Map<number, number>();
     for (const tick of ticks) {
       const half = (tick.text.length * CHART_TICK_CHAR_ADVANCE) / 2;
-      const x = chartCategoryLabelX(centre(tick.index), tick.text);
+      const x = chartCategoryLabelX(centre(tick.index), tick.text, frame.width);
       const end = ends.get(tick.row);
       if (end !== undefined && x - half - end < CHART_TICK_GAP) return false;
       ends.set(tick.row, x + half);
@@ -237,7 +306,7 @@ export function chartCategoryLayout(data: ChartData): ChartCategoryLayout {
   if (kind === 'bar' && count * CHART_TICK_ROW_HEIGHT <= plotHeight) {
     const ticks = categories.map((label, index) => ({
       index,
-      ...truncateLabel(label, CHART_CATEGORY_PAD_MAX - CHART_CATEGORY_PAD_GAP, CHART_TICK_CHAR_ADVANCE),
+      ...truncateLabel(label, categoryPadMax(frame) - CHART_CATEGORY_PAD_GAP, CHART_TICK_CHAR_ADVANCE),
       row: 0,
     }));
     return { categories, horizontal: true, ticks, rows: 1, step: 1 };
@@ -260,14 +329,14 @@ export function chartCategoryLayout(data: ChartData): ChartCategoryLayout {
  * a horizontal bar chart's category labels, so none of them runs into the
  * plot.
  */
-export function chartPad(data: ChartData): ChartPad {
-  const categories = chartCategoryLayout(data);
+export function chartPad(data: ChartData, frame: ChartFrame = CHART_FRAME): ChartPad {
+  const categories = chartCategoryLayout(data, frame);
   let left: number = CHART_PAD.left;
   if (categories.horizontal) {
     const widest = Math.max(0, ...categories.ticks.map((tick) => tick.text.length)) * CHART_TICK_CHAR_ADVANCE;
-    left = Math.min(CHART_CATEGORY_PAD_MAX, Math.max(CHART_PAD.left, Math.ceil(widest + CHART_CATEGORY_PAD_GAP)));
+    left = Math.min(categoryPadMax(frame), Math.max(CHART_PAD.left, Math.ceil(widest + CHART_CATEGORY_PAD_GAP)));
   }
-  const legendRows = chartLegendLayout(data, CHART_VIEW_WIDTH - left - CHART_PAD.right).rows;
+  const legendRows = chartLegendLayout(data, frame.width - left - CHART_PAD.right).rows;
   return {
     left,
     right: CHART_PAD.right,
@@ -353,6 +422,8 @@ export function chartValueAxis(data: ChartData): ChartValueAxis {
 }
 
 export interface ChartScales {
+  /** The frame the chart is drawn in. */
+  frame: ChartFrame;
   kind: ChartKind;
   categories: ChartCategoryLayout;
   /** Bars run across the chart: the value axis is x and the category axis y. */
@@ -380,13 +451,13 @@ export interface ChartScales {
   plot: ViewRect;
 }
 
-export function chartScales(data: ChartData): ChartScales {
-  const pad = chartPad(data);
-  const plot = { left: pad.left, top: pad.top, right: CHART_VIEW_WIDTH - pad.right, bottom: CHART_VIEW_HEIGHT - pad.bottom };
+export function chartScales(data: ChartData, frame: ChartFrame = CHART_FRAME): ChartScales {
+  const pad = chartPad(data, frame);
+  const plot = { left: pad.left, top: pad.top, right: frame.width - pad.right, bottom: frame.height - pad.bottom };
   const plotWidth = plot.right - plot.left;
   const plotHeight = plot.bottom - plot.top;
   const kind = chartKind(data);
-  const categories = chartCategoryLayout(data);
+  const categories = chartCategoryLayout(data, frame);
   const horizontal = categories.horizontal;
   const { min: yMin, max: yMax, ticks: valueTicks, decimals: valueDecimals } = chartValueAxis(data);
   const baseline = Math.min(yMax, Math.max(yMin, 0));
@@ -408,6 +479,7 @@ export function chartScales(data: ChartData): ChartScales {
   const valueAt = (value: number): number =>
     horizontal ? plot.left + share(value) * plotWidth : plot.top + (1 - share(value)) * plotHeight;
   return {
+    frame,
     kind,
     categories,
     horizontal,
@@ -571,7 +643,7 @@ export function chartObstacles(data: ChartData, scales: ChartScales = chartScale
     const ring = cut({ left: marker.x - r, top: marker.y - r, right: marker.x + r, bottom: marker.y + r }, clip);
     if (ring) marks.push(ring);
   }
-  return { marks, lines, fills, labels: [chartLegendBox(data), ...chartAxisBoxes(plot)] };
+  return { marks, lines, fills, labels: [chartLegendBox(data, scales.frame), ...chartAxisBoxes(plot, scales.frame)] };
 }
 
 /**
@@ -613,9 +685,9 @@ export function chartSeriesPoint(
 
 /** The legend's own box, across the top of the plot, in viewBox units: every
  * row its items wrap onto, each as wide as its longest item's real content. */
-export function chartLegendBox(data: ChartData): ViewRect {
-  const pad = chartPad(data);
-  const layout = chartLegendLayout(data, CHART_VIEW_WIDTH - pad.left - pad.right);
+export function chartLegendBox(data: ChartData, frame: ChartFrame = CHART_FRAME): ViewRect {
+  const pad = chartPad(data, frame);
+  const layout = chartLegendLayout(data, frame.width - pad.left - pad.right);
   // Its keys sit on this line, its 11-unit labels across it.
   const left = pad.left + 8;
   const line = CHART_PAD.top + 12;
@@ -628,9 +700,9 @@ export function chartLegendBox(data: ChartData): ViewRect {
 }
 
 /** The axis labels' strips beside and beneath a chart's plot, in viewBox units. */
-export function chartAxisBoxes(plot: ViewRect): ViewRect[] {
+export function chartAxisBoxes(plot: ViewRect, frame: ChartFrame = CHART_FRAME): ViewRect[] {
   return [
     { left: 0, top: plot.top - 8, right: plot.left, bottom: plot.bottom + 8 },
-    { left: plot.left - 20, top: plot.bottom, right: CHART_VIEW_WIDTH, bottom: CHART_VIEW_HEIGHT },
+    { left: plot.left - 20, top: plot.bottom, right: frame.width, bottom: frame.height },
   ];
 }

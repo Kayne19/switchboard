@@ -1227,6 +1227,14 @@ button {
 .composed-aux-object--visual {
   min-height: var(--aux-visual-floor);
 }
+
+/* A chart's floor is its least frame at the readable scale
+   (chartGeometry.ts: CHART_MIN_FRAME 240 units tall, CHART_READABLE_SCALE
+   7/11 px a unit, so 153px) inside the cell's padding: shorter, its text
+   would fall below the page's floors, so the row scrolls instead. */
+.composed-aux-object--chart {
+  min-height: max(var(--aux-visual-floor), calc(153px + 2 * clamp(12px, 1.4cqw, 22px)));
+}
 .composed-primary-object > .focusable-content,
 .composed-aux-object > .focusable-content {
   position: relative;

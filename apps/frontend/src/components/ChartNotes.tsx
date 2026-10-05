@@ -5,11 +5,11 @@ import { AnnotationCard } from '../primitives/AnnotationCard';
 import {
   CHART_MARKER_RADIUS,
   CHART_MARKER_STROKE,
-  CHART_VIEW_HEIGHT,
-  CHART_VIEW_WIDTH,
+  chartFrame,
   chartObstacles,
   chartScales,
   chartSeriesPoint,
+  type ChartScales,
   type ViewPoint,
   type ViewRect,
 } from '../primitives/chartGeometry';
@@ -37,9 +37,9 @@ interface NotesLayout {
 const CARD_CUT = 0.08;
 
 /** Where on the chart a note names a point, if it names one there. */
-export function chartNotePoint(note: NoteData, chart: SceneObject<ChartData>): ViewPoint | undefined {
+export function chartNotePoint(note: NoteData, chart: SceneObject<ChartData>, scales?: ChartScales): ViewPoint | undefined {
   if (note.anchor?.target !== chart.id || note.anchor.x === undefined) return undefined;
-  return chartSeriesPoint(chart.data, note.anchor.x, note.anchor.series);
+  return chartSeriesPoint(chart.data, note.anchor.x, note.anchor.series, scales);
 }
 
 // How much a transform in flight (a panel moving into place) scales an
@@ -138,14 +138,19 @@ export function ChartNotes({
       let viewScale = 1;
       const svg = svgOf();
       const svgRect = svg?.getBoundingClientRect();
+      // The frame the chart draws in, decided from its slot as the chart
+      // decides it (`chartFrame`), so the layer never maps through a frame
+      // the chart has yet to redraw in.
+      const host = svg?.parentElement;
+      const frame = chartFrame({ width: host?.offsetWidth ?? 0, height: host?.offsetHeight ?? 0 });
       if (svgRect && svgRect.width > 0 && svgRect.height > 0) {
         // The chart letterboxes its viewBox into its svg; map through the
         // same fit.
         const width = svgRect.width / kx;
         const height = svgRect.height / ky;
-        const scale = Math.min(width / CHART_VIEW_WIDTH, height / CHART_VIEW_HEIGHT);
-        const left = (svgRect.left - layerRect.left) / kx + (width - CHART_VIEW_WIDTH * scale) / 2;
-        const top = (svgRect.top - layerRect.top) / ky + (height - CHART_VIEW_HEIGHT * scale) / 2;
+        const scale = Math.min(width / frame.width, height / frame.height);
+        const left = (svgRect.left - layerRect.left) / kx + (width - frame.width * scale) / 2;
+        const top = (svgRect.top - layerRect.top) / ky + (height - frame.height * scale) / 2;
         toLayer = (point) => ({ x: left + point.x * scale, y: top + point.y * scale });
         viewScale = scale;
       }
@@ -154,8 +159,8 @@ export function ChartNotes({
         const b = toLayer!({ x: rect.right, y: rect.bottom });
         return { left: a.x, top: a.y, right: b.x, bottom: b.y };
       };
+      const scales = chartScales(data, frame);
       if (toLayer) {
-        const scales = chartScales(data);
         const obstacles = chartObstacles(data, scales);
         field.plot = rectToLayer(scales.plot);
         field.traces = obstacles.lines.map((line) => line.map(toLayer!));
@@ -170,7 +175,7 @@ export function ChartNotes({
         if (!element) continue;
         const rect = element.getBoundingClientRect();
         const size = { width: rect.width / kx, height: rect.height / ky };
-        const viewPoint = toLayer ? chartNotePoint(note.data, chartRef.current) : undefined;
+        const viewPoint = toLayer ? chartNotePoint(note.data, chartRef.current, scales) : undefined;
         toPlace.push({ id: note.key, width: size.width, height: size.height, point: viewPoint && toLayer!(viewPoint) });
       }
       const placed = placeNotes(toPlace, field, { spill });
@@ -208,6 +213,7 @@ export function ChartNotes({
     observer.observe(layer);
     const svg = svgOf();
     if (svg) observer.observe(svg);
+    if (svg?.parentElement) observer.observe(svg.parentElement);
     for (const element of cardRefs.current.values()) observer.observe(element);
     return () => observer.disconnect();
   }, [signature, chart.data, spill]);

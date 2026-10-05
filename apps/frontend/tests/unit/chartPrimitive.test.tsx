@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ChartData } from '../../src/controller/types';
 import { ChartPrimitive, chartSeriesColor, chartXTicks } from '../../src/primitives/ChartPrimitive';
 import {
@@ -10,6 +10,7 @@ import {
   CHART_TICK_CHAR_ADVANCE,
   CHART_TICK_GAP,
   CHART_TICK_ROW_HEIGHT,
+  CHART_READABLE_SCALE,
   chartBars,
   chartLegendLayout,
   chartPad,
@@ -32,6 +33,13 @@ let root: Root;
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  // The chart measures its slot; jsdom lays nothing out, so the slot reads
+  // 0 x 0 and the chart keeps the approved canvas unless a test sizes it.
+  globalThis.ResizeObserver ??= class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
 });
 
 afterEach(() => {
@@ -509,5 +517,55 @@ describe('chart kinds keep the line chart as it was', () => {
     const half = (labels[2].length * CHART_TICK_CHAR_ADVANCE) / 2;
     expect(Number(last.getAttribute('x')) + half).toBeLessThanOrEqual(1000);
     expect(Number(last.getAttribute('x'))).toBeLessThan(1000 - 28);
+  });
+});
+
+// The chart's frame is its slot's to decide (chartGeometry's chartFrame):
+// a phone's slot gets a frame of its own shape, not the desktop canvas drawn
+// at a third of its size.
+describe('chart frame', () => {
+  function renderInSlot(chart: ChartData, slot: { width: number; height: number }) {
+    const width = vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('chart-primitive') ? slot.width : 0;
+    });
+    const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('chart-primitive') ? slot.height : 0;
+    });
+    try {
+      renderWith(chart);
+    } finally {
+      width.mockRestore();
+      height.mockRestore();
+    }
+    return host.querySelector('.chart-primitive svg')!;
+  }
+  const suite: ChartData = {
+    kind: 'bar',
+    labels: ['backend', 'frontend unit', 'frontend visual', 'host agent', 'skill', 'hygiene'],
+    xLabel: 'PACKAGE',
+    yLabel: 'SECONDS',
+    series: [{ name: 'THIS RUN', values: [41.8, 3.3, 96.4, 6.1, 0.3, 0.4] }],
+  };
+
+  it('keeps the approved canvas in a landscape slot', () => {
+    const svg = renderInSlot(suite, { width: 937, height: 561 });
+    expect(svg.getAttribute('viewBox')).toBe('0 0 1000 500');
+  });
+
+  it("recomposes for a phone's slot, its plot filling the slot and its bars turned on their side", () => {
+    const svg = renderInSlot(suite, { width: 342, height: 393 });
+    const width = Math.round(342 / CHART_READABLE_SCALE);
+    const height = Math.round(393 / CHART_READABLE_SCALE);
+    expect(svg.getAttribute('viewBox')).toBe(`0 0 ${width} ${height}`);
+    // The labels no longer fit a row under bars this narrow, so the bars run across.
+    expect(host.querySelector('.chart-primitive')!.getAttribute('data-orientation')).toBe('horizontal');
+    const scales = chartScales(suite, { width, height });
+    // The axis names sit at the frame's own edges.
+    const names = [...host.querySelectorAll<SVGTextElement>('.chart-axis-label')];
+    expect(Number(names[0].getAttribute('y'))).toBe(height - 2);
+    expect(Number(names[0].getAttribute('x'))).toBe(width / 2);
+    const bar = host.querySelector<SVGRectElement>('.chart-bar')!;
+    expect(Number(bar.getAttribute('x'))).toBeCloseTo(scales.plot.left, 1);
+    expect(scales.plot.right).toBe(width - 28);
   });
 });

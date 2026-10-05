@@ -1,5 +1,5 @@
 import { motion, useReducedMotion } from 'motion/react';
-import { useId, useMemo } from 'react';
+import { useId, useMemo, useRef } from 'react';
 import type { ChartData, ChartKind, ChartSeries, Semantic } from '../controller/types';
 import {
   CHART_LEGEND_KEY_WIDTH,
@@ -11,16 +11,16 @@ import {
   CHART_POINT_RADIUS,
   CHART_TICK_BASELINE,
   CHART_TICK_ROW_HEIGHT,
-  CHART_VIEW_HEIGHT,
-  CHART_VIEW_WIDTH,
   chartBars,
   chartCategoryLabelX,
   chartClip,
+  chartFrame,
   chartLegendLayout,
   chartScales,
   chartSeriesPoint,
   type ChartScales,
 } from './chartGeometry';
+import { useElementSize } from '../hooks/useElementSize';
 
 const semanticColor: Record<Semantic,string> = {
   red:'var(--red)',orange:'var(--orange)',green:'var(--green)',cyan:'var(--cyan)',amber:'var(--amber)',paper:'var(--paper)',muted:'var(--muted)'
@@ -92,7 +92,7 @@ function LegendKey({ kind, color }: { kind: ChartKind; color: string }) {
 // The gridlines and tick labels along the category (or numeric x) axis and
 // the value axis, whichever way the chart runs.
 function Grid({ scales }: { scales: ChartScales }) {
-  const { plot, categories, horizontal, xMax, xAt, valueAt, kind, valueDecimals } = scales;
+  const { plot, categories, horizontal, xMax, xAt, valueAt, kind, valueDecimals, frame } = scales;
   const valueLines = valueGridLines(scales);
   const categorical = categories.categories !== undefined;
   // Category gridlines belong to a line through the categories; bars stand
@@ -131,7 +131,7 @@ function Grid({ scales }: { scales: ChartScales }) {
       const x = xAt(tick.index);
       return <g key={tick.index}>
         {categoryLines ? <line x1={x} y1={plot.top} x2={x} y2={plot.bottom}/> : null}
-        <text className="chart-grid__category" x={chartCategoryLabelX(x, tick.text)} y={plot.bottom + CHART_TICK_BASELINE + tick.row * CHART_TICK_ROW_HEIGHT} textAnchor="middle">{tick.text}</text>
+        <text className="chart-grid__category" x={chartCategoryLabelX(x, tick.text, frame.width)} y={plot.bottom + CHART_TICK_BASELINE + tick.row * CHART_TICK_ROW_HEIGHT} textAnchor="middle">{tick.text}</text>
       </g>;
     })}
   </g>;
@@ -146,8 +146,13 @@ export function ChartPrimitive({
 }) {
   const reduced = useReducedMotion();
   const clipId = useId().replace(/:/g,'');
-  const width=CHART_VIEW_WIDTH,height=CHART_VIEW_HEIGHT;
-  const scales=useMemo(()=>chartScales(data),[data]);
+  // The frame is the slot's to decide: the approved canvas where it reads,
+  // else one of the slot's own shape (`chartFrame`).
+  const hostRef = useRef<HTMLDivElement>(null);
+  const slot = useElementSize(hostRef);
+  const fit = chartFrame(slot);
+  const width = fit.width, height = fit.height;
+  const scales=useMemo(()=>chartScales(data,{width,height}),[data,width,height]);
   const {plot,kind,horizontal,baseline,valueAt}=scales;
   // The plot's own padding grows to clear a legend that wraps, a second
   // row of category labels, and a horizontal bar chart's labels down the
@@ -173,7 +178,7 @@ export function ChartPrimitive({
   const base=valueAt(baseline);
   const clip=chartClip(scales);
 
-  return <div className={`chart-primitive${focused?' chart-primitive--focused':''}`} data-testid="chart" data-kind={kind} data-orientation={horizontal?'horizontal':'upright'}>
+  return <div ref={hostRef} className={`chart-primitive${focused?' chart-primitive--focused':''}`} data-testid="chart" data-kind={kind} data-orientation={horizontal?'horizontal':'upright'}>
     <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label={data.title ?? 'Chart'}>
       <defs>
         {/* A scatter chart's points at the ends of its domain sit on the

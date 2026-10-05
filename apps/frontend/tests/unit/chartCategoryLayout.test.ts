@@ -1,7 +1,13 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { ChartData } from '../../src/controller/types';
+import { TYPE_FLOOR_PX } from '../../src/design/tokens';
 import {
   CHART_CATEGORY_PAD_MAX,
+  CHART_FRAME,
+  CHART_MIN_FRAME,
+  CHART_READABLE_SCALE,
+  CHART_TEXT,
   CHART_LEGEND_ROW_HEIGHT,
   CHART_MARKER_RADIUS,
   CHART_MARKER_STROKE,
@@ -16,6 +22,7 @@ import {
   chartBars,
   chartCategoryLayout,
   chartClip,
+  chartFrame,
   chartLegendBox,
   chartObstacles,
   chartPad,
@@ -398,5 +405,68 @@ describe('chart value axis', () => {
   it('gives a flat series a domain to stand in', () => {
     expect(chartValueAxis({ series: [{ name: 'S', values: [5, 5, 5] }] })).toMatchObject({ min: 4, max: 6 });
     expect(chartValueAxis({ kind: 'bar', labels: ['a'], series: [{ name: 'S', values: [0] }] }).max).toBeGreaterThan(0);
+  });
+});
+
+// The frame a chart is drawn in is the slot's to decide. On a phone the
+// chart was the 1000x500 canvas drawn at a third of its size: tick text at
+// 4px, tiny bars, and bands of black above and below it inside the frame.
+describe('chart frame for a slot', () => {
+  const css = readFileSync(`${import.meta.dirname}/../../src/styles/index.css`, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  // The size the last rule naming a selector sets: the rule that wins.
+  const sizeOf = (selector: string) => {
+    const rules = [...css.matchAll(new RegExp(`(^|\\n)${selector.replace(/[.]/g, '\\.')}[^{]*\\{([^}]*)\\}`, 'g'))];
+    const sizes = rules.map((rule) => /font-size:\s*(\d+(?:\.\d+)?)px/.exec(rule[2])?.[1]).filter(Boolean);
+    return Number(sizes.at(-1));
+  };
+
+  it("names the chart's own text sizes and the faces whose floors they keep", () => {
+    expect(sizeOf('.chart-grid text')).toBe(13);
+    expect(sizeOf('.chart-axis-label')).toBe(11);
+    expect(sizeOf('.chart-legend text')).toBe(11);
+    expect(CHART_TEXT.map((text) => text.size).sort()).toEqual([11, 13]);
+    for (const text of CHART_TEXT) expect(text.size * CHART_READABLE_SCALE).toBeGreaterThanOrEqual(TYPE_FLOOR_PX[text.floor] - 1e-9);
+  });
+
+  it('keeps the approved canvas in the landscape slots it was approved in', () => {
+    // The training chart's slot at 1440x900, 1280x720 and 2560x1080.
+    expect(chartFrame({ width: 937, height: 561 })).toEqual({ ...CHART_FRAME, scale: 0.937 });
+    expect(chartFrame({ width: 833, height: 432 })).toEqual({ ...CHART_FRAME, scale: 0.833 });
+    // Wider than the canvas: drawn across its height, the room beside it the notes'.
+    expect(chartFrame({ width: 2008, height: 647 })).toEqual({ ...CHART_FRAME, scale: 647 / 500 });
+    // Not measured yet.
+    expect(chartFrame({ width: 0, height: 0 })).toEqual({ ...CHART_FRAME, scale: 1 });
+  });
+
+  it("takes a portrait slot's own shape, its text never under the page's floors", () => {
+    // The training chart's slot at 390x844: the canvas would draw at 0.34.
+    const phone = chartFrame({ width: 342, height: 393 });
+    expect(phone.scale).toBeCloseTo(CHART_READABLE_SCALE);
+    expect(phone.width).toBe(Math.round(342 / CHART_READABLE_SCALE));
+    expect(phone.height).toBe(Math.round(393 / CHART_READABLE_SCALE));
+    // At 820x1180 the canvas reads, but leaves a third of the slot black.
+    expect(chartFrame({ width: 738, height: 581 })).toEqual({ width: 1000, height: 787, scale: 0.738 });
+  });
+
+  it('draws a short wide slot at the readable scale, wider than the canvas', () => {
+    const frame = chartFrame({ width: 541, height: 182 });
+    expect(frame.scale).toBeCloseTo(CHART_READABLE_SCALE);
+    expect(frame.width / frame.height).toBeCloseTo(541 / 182, 1);
+  });
+
+  it('draws a slot too small for its least frame at the readable scale smaller, never cropped', () => {
+    const frame = chartFrame({ width: 300, height: 100 });
+    expect(frame.height).toBe(CHART_MIN_FRAME.height);
+    expect(frame.scale).toBeCloseTo(100 / CHART_MIN_FRAME.height);
+    expect(frame.width).toBe(Math.round(300 / frame.scale));
+  });
+
+  it('lays a recomposed plot out in the frame it is given', () => {
+    const chart: ChartData = { kind: 'bar', labels: ['a', 'b', 'c'], series: [{ name: 'S', values: [1, 2, 3] }] };
+    const frame = { width: 538, height: 618 };
+    const scales = chartScales(chart, frame);
+    expect(scales.frame).toEqual(frame);
+    expect(scales.plot).toEqual({ left: CHART_PAD.left, top: CHART_PAD.top + CHART_LEGEND_ROW_HEIGHT, right: 538 - CHART_PAD.right, bottom: 618 - CHART_PAD.bottom });
+    expect(chartAxisBoxes(scales.plot, frame)[1]).toMatchObject({ right: 538, bottom: 618 });
   });
 });
