@@ -318,17 +318,23 @@ export const assistantTasks: TasksData = {
 
 const FIXTURE_LOADED_AT = Math.floor(Date.now() / 1000) * 1000;
 
-/** An instant `minutes` from when this module loaded, in the form a timer takes. */
+/** An instant `minutes` from when this module loaded, in the form a timer
+ * takes, written on the caller's Pacific clock (-07:00) as the agent would. */
 function minutesFromLoad(minutes: number): string {
-  return new Date(FIXTURE_LOADED_AT + minutes * 60_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  return new Date(FIXTURE_LOADED_AT + minutes * 60_000 - 7 * 3_600_000).toISOString().replace(/\.\d{3}Z$/, '-07:00');
 }
 
+// The hard cases of a kitchen: one counting with its bar, one paused, one
+// done a minute ago, a reminder with no start, and one long label over an
+// hour to go.
 export const assistantTimers: TimerData = {
-  title: 'KITCHEN / TIMERS', subtitle: '2 RUNNING / 1 PAUSED', context: 'TIMERS', caption: 'SET BY VOICE',
+  title: 'KITCHEN / TIMERS', subtitle: '5 TIMERS / 1 PAUSED', context: 'TIMERS', caption: 'SET BY VOICE',
   timers: [
     { id: 'pasta', label: 'Pasta', startedAt: minutesFromLoad(-1.5), endsAt: minutesFromLoad(7.5) },
     { id: 'bread', label: 'Bread in the oven', startedAt: minutesFromLoad(-24), endsAt: minutesFromLoad(21), state: 'paused', remaining: 1260 },
+    { id: 'tea', label: 'Tea', startedAt: minutesFromLoad(-5.25), endsAt: minutesFromLoad(-1.25) },
     { id: 'leave', label: 'Leave for the dentist', endsAt: minutesFromLoad(50) },
+    { id: 'laundry', label: 'Move the laundry from the washer to the dryer downstairs', startedAt: minutesFromLoad(-10), endsAt: minutesFromLoad(75) },
   ],
 };
 
