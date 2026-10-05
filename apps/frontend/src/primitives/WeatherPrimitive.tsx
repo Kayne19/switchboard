@@ -11,6 +11,7 @@ import {
   hourLabel,
   hourLabelStep,
   labelledHours,
+  LEAST_TEMP_SPAN,
   rangeOnScale,
   tempScale,
   weatherLayout,
@@ -111,13 +112,13 @@ function SectionHead({ name, count }: { name: string; count: string }) {
 
 // The hours: a column each, labelled as often as the width allows; the
 // temperature's trace runs across them over each hour's chance of rain.
-function Hours({ hours, marked }: { hours: WeatherHour[]; marked?: string }) {
+function Hours({ hours, units, marked }: { hours: WeatherHour[]; units: WeatherData['units']; marked?: string }) {
   const stripRef = useRef<HTMLDivElement>(null);
   const { width } = useElementSize(stripRef);
   // The columns share the strip's width inside its padding (--strip-pad, 10px a side).
   const step = hourLabelStep(width - 20, hours.length);
   const labelled = labelledHours(hours, step, marked);
-  const scale = tempScale(hours.map((hour) => hour.temp));
+  const scale = tempScale(hours.map((hour) => hour.temp), LEAST_TEMP_SPAN[units]);
   const x = (index: number) => ((index + 0.5) / hours.length) * 100;
   const y = (temp: number) => 100 - ((temp - scale.min) / (scale.max - scale.min)) * 100;
   const points = hours.map((hour, index) => `${x(index).toFixed(3)},${y(hour.temp).toFixed(3)}`);
@@ -236,7 +237,7 @@ export function WeatherPrimitive({ data, marked, focused = false }: { data: Weat
   const field = (
     <div className="weather__field" data-parts={parts} style={{ '--weather-temp': `${layout.temp}px` } as CSSProperties}>
       <Now data={data} compact={arrangement === 'compact'} />
-      {layout.hourly ? <Hours hours={hours} marked={marked} /> : null}
+      {layout.hourly ? <Hours hours={hours} units={data.units} marked={marked} /> : null}
       {layout.daily ? <Days days={days} marked={marked} scroll={!tall} /> : null}
     </div>
   );

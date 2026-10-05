@@ -2335,8 +2335,10 @@ button {
     "now daily"
     "hourly hourly";
 }
+/* With no days, the hours take the height the days would have had. */
 .weather--wide .weather__field[data-parts="now hourly"] {
   grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(150px, 1fr);
   grid-template-areas:
     "now"
     "hourly";
@@ -2365,7 +2367,7 @@ button {
     "daily";
 }
 .weather--tall .weather__field[data-parts="now hourly"] {
-  grid-template-rows: auto 172px;
+  grid-template-rows: auto minmax(172px, 1fr);
   grid-template-areas:
     "now"
     "hourly";

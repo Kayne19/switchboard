@@ -144,14 +144,21 @@ export function labelledHours(hours: WeatherHour[], step: number, marked?: strin
   return labelled;
 }
 
-/** The span a strip's temperatures are drawn over: their range, padded, never empty. */
-export function tempScale(temps: number[]): { min: number; max: number } {
+/**
+ * The span a strip's temperatures are drawn over: their range, padded, and
+ * never narrower than `least` degrees (10 for F, 6 for C), so a degree's
+ * wobble over a quiet day is not drawn as a mountain.
+ */
+export function tempScale(temps: number[], least = 0): { min: number; max: number } {
   if (temps.length === 0) return { min: 0, max: 1 };
   const low = Math.min(...temps);
   const high = Math.max(...temps);
-  const pad = Math.max(1, (high - low) * 0.12);
+  const pad = Math.max(1, (high - low) * 0.12, (least - (high - low)) / 2);
   return { min: low - pad, max: high + pad };
 }
+
+/** The least span of a strip's temperature scale in a forecast's units. */
+export const LEAST_TEMP_SPAN = { F: 10, C: 6 } as const;
 
 // ---- the daily list ---------------------------------------------------------------
 

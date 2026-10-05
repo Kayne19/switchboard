@@ -140,9 +140,12 @@ describe('the hourly strip', () => {
     }
   });
 
-  it('draws the temperatures over their padded range', () => {
+  it('draws the temperatures over their padded range, never narrower than the least span', () => {
     expect(tempScale([50, 60])).toEqual({ min: 48.8, max: 61.2 });
     expect(tempScale([55, 55])).toEqual({ min: 54, max: 56 });
+    // A quiet day: a 2-degree wobble on a 10-degree scale, not a mountain.
+    expect(tempScale([55, 57], 10)).toEqual({ min: 51, max: 61 });
+    expect(tempScale([40, 70], 10)).toEqual({ min: 36.4, max: 73.6 });
   });
 });
 
