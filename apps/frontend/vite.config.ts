@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
@@ -12,6 +13,14 @@ export default defineConfig({
   preview: {
     host: '0.0.0.0',
     port: 4173,
+  },
+  test: {
+    // The wall-clock limit on one unit test is a hang detector, not a
+    // budget: the heaviest tests (a dense chart's notes placed three times,
+    // sixty random graphs, a stage fold rendered at every share) take 4-7 s
+    // with two or three copies of the suite running at once, against the
+    // default 5 s. Budgets are CPU time, in tests/unit/cpuTime.ts.
+    testTimeout: 30_000,
   },
   build: {
     outDir: '../../static',
