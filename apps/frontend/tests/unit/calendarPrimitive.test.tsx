@@ -167,6 +167,13 @@ describe('the month', () => {
   });
 });
 
+describe('an empty calendar', () => {
+  it.each(['day', 'week', 'month'] as const)('says so on the %s grid it still draws', (view) => {
+    const calendar = render({ view, start: '2026-10-05', today: '2026-10-07', events: [] });
+    expect(calendar.querySelector('.calendar-grid__nothing')?.textContent).toBe('NOTHING SCHEDULED');
+  });
+});
+
 describe('the agenda', () => {
   it('lists today with the now line after the standup under way, and the overlaps tagged', () => {
     const calendar = render(assistantAgenda, 'dentist');

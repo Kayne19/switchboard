@@ -3137,9 +3137,14 @@ button {
   white-space: nowrap;
 }
 .calendar-month__weeks {
+  position: relative;
   display: grid;
   flex: 1 1 auto;
   min-height: 0;
+}
+.calendar-month__weeks > .calendar-grid__nothing {
+  z-index: 2;
+  left: 0;
 }
 .calendar-month__week {
   display: grid;

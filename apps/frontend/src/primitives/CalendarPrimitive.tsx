@@ -605,6 +605,7 @@ function MonthView({ data, model, marked, size, marks }: { data: CalendarData; m
           {grid.weeks[0].map((day) => <span key={day} className="tech micro">{weekdayName(day)}</span>)}
         </div>
         <div className="calendar-month__weeks" style={{ gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))` }}>
+          {plans.every((plan) => plan.cells.every((cell) => cell.touching.length === 0)) ? <div className="calendar-grid__nothing tech micro">NOTHING SCHEDULED</div> : null}
           {plans.map((plan, row) => (
             <MonthWeek key={plan.week[0]} plan={plan} row={row} month={grid.month} model={model} marked={gridMarked} capacity={capacity} marks={marks} isFirst={isFirst} />
           ))}
