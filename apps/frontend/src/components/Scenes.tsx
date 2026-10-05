@@ -524,7 +524,7 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
       return {
         ...rail,
         title: data.title ?? 'INBOX / MESSAGES',
-        subtitle: data.subtitle ?? `${counts.messages} MESSAGES / ${counts.unread} UNREAD`,
+        subtitle: data.subtitle ?? `${counts.messages} ${counts.messages === 1 ? 'MESSAGE' : 'MESSAGES'} / ${counts.unread} UNREAD`,
         context: data.context ?? 'INBOX',
         footer: 'DISPLAY / INBOX',
         caption: sceneCaption(primary, `INBOX / ${counts.messages} ${counts.messages === 1 ? 'MESSAGE' : 'MESSAGES'}`),

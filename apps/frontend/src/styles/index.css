@@ -3188,10 +3188,10 @@ button {
   box-shadow: inset 2px 0 0 rgba(var(--orange-rgb), 0.7), inset 4px 0 0 var(--tint);
 }
 
-/* TEMPORARY (pa-contract): the stand-in for calendar, tasks, timer, weather
-   and inbox (primitives/TemporaryAssistantList.tsx), a plain list of the
-   fields as sent until the render slice draws each type with a primitive of
-   its own. Replaced by the render slice; delete this block with the file. */
+/* TEMPORARY (pa-contract): the stand-in for calendar, timer and weather
+   (primitives/TemporaryAssistantList.tsx), a plain list of the fields as
+   sent until their render slices draw each type with a primitive of its
+   own. Replaced by the render slices; delete this block with the file. */
 .temporary-assistant-object {
   background: #000;
 }
@@ -3824,6 +3824,12 @@ button {
   .tasks-primitive__scroll,
   .inbox-primitive__scroll {
     font-size: clamp(13px, 1.9cqw, 17px);
+  }
+
+  /* Tags take the micro face's portrait size, the page's floor on a phone. */
+  .task-tag,
+  .inbox-row__tag {
+    font-size: clamp(7px, 1.08cqw, 9px);
   }
 
   .table-viewport__mask {

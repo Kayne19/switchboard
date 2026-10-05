@@ -2,11 +2,12 @@ import type { ReactNode } from 'react';
 import { NoteBadge } from './NoteMarker';
 
 /*
- * TEMPORARY (pa-contract): the one stand-in renderer for the five
- * personal-assistant types -- calendar, tasks, timer, weather, inbox -- until
- * the render slice draws each with a primitive of its own. It is a plain
- * framed list of the fields the agent sent, so the page neither crashes on
- * nor drops an accepted object and the fixtures load. It draws no clock: a
+ * TEMPORARY (pa-contract): the one stand-in renderer for the
+ * personal-assistant types still without a primitive -- calendar, timer,
+ * weather (tasks and inbox have theirs) -- until their render slices draw
+ * each with a primitive of its own. It is a plain framed list of the
+ * fields the agent sent, so the page neither crashes on nor drops an
+ * accepted object and the fixtures load. It draws no clock: a
  * timer's `endsAt` is shown as sent.
  *
  * Replaced by the render slice. To retire it for a type, point that type's
@@ -15,7 +16,9 @@ import { NoteBadge } from './NoteMarker';
  * `objectContent`, FocusLayer.tsx `FocusedObject`); when no type uses it,
  * delete this file and the `.temporary-assistant` block in
  * styles/index.css. Keep the `data-testid` (the type's name) on the new
- * primitive: the scene tests count objects by it.
+ * primitive: the scene tests count objects by it; and `data-item` on each
+ * item and `data-object-title` on the title (noteItems.test.tsx,
+ * sceneComposition.test.tsx).
  */
 
 export type TemporaryAssistantType = 'calendar' | 'timer' | 'weather';
@@ -30,7 +33,7 @@ const MAIN_LIST: Record<TemporaryAssistantType, [string, string]> = {
 };
 
 /** The field an item is named by, first found. */
-const NAME_KEYS = ['title', 'text', 'label', 'from', 'time', 'date'];
+const NAME_KEYS = ['title', 'label', 'time', 'date'];
 /** Drawn by the scene frame, not in the list. */
 const FRAME_KEYS = new Set(['title', 'subtitle', 'context', 'caption']);
 

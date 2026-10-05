@@ -12,7 +12,7 @@ const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', '
 const two = (value: number) => String(value).padStart(2, '0');
 
 /** The day of the week, from the day count (1970-01-01, day 0, was a Thursday). */
-export function weekdayText(time: TimeValue): string {
+function weekdayText(time: TimeValue): string {
   return WEEKDAYS[(((time.dayNumber + 4) % 7) + 7) % 7];
 }
 
@@ -24,7 +24,10 @@ export function clockText(time: TimeValue): string {
 /**
  * A day: `TUE OCT 6`, its weekday and date. A day in another year than
  * `today`'s gives its year instead of its weekday (`DEC 30 2025`), so a
- * label stays short and never names the wrong year by leaving it out.
+ * label stays short and a day from last December does not read as this
+ * one's. With no `today` there is no year to set it against, and the label
+ * is the weekday and date alone: the agent that leaves `today` out has not
+ * said which year the reader is in.
  */
 export function dayText(time: TimeValue, today?: TimeValue | null): string {
   const month = MONTHS[time.month - 1];

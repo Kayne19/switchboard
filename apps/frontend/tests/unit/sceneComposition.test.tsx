@@ -226,9 +226,10 @@ describe('the composed fixture', () => {
 });
 
 describe('the personal-assistant fixtures', () => {
-  // The five types draw through one stand-in until the render slice gives
-  // each a primitive of its own (primitives/TemporaryAssistantList.tsx);
-  // these hold what the scenes are, whatever draws them.
+  // Tasks and inbox draw with primitives of their own; calendar, timer and
+  // weather through one stand-in until their render slices give each one
+  // (primitives/TemporaryAssistantList.tsx). These hold what the scenes
+  // are, whatever draws them.
   const names = ['calendar', 'tasks', 'timer', 'weather', 'inbox', 'today'] as const;
 
   it.each(names)('the %s fixture holds only actions the validators accept', (name) => {
