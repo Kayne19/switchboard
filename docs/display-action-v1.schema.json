@@ -84,7 +84,7 @@
       "then": {
         "type": "string",
         "not": {
-          "pattern": "<[sS][cC][rR][iI][pP][tT]|<[iI][fF][rR][aA][mM][eE]|<[hH][tT][mM][lL]|<[sS][tT][yY][lL][eE]|<[sS][vV][gG]|<[oO][bB][jJ][eE][cC][tT]|<[eE][mM][bB][eE][dD]|[jJ][aA][vV][aA][sS][cC][rR][iI][pP][tT]:|[dD][aA][tT][aA]:[tT][eE][xX][tT]/[hH][tT][mM][lL]|[hH][tT][tT][pP][sS]?://|[fF][tT][pP]://|^//|//[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+          "pattern": "<[sS][cC][rR][iI][pP][tT]|<[iI][fF][rR][aA][mM][eE]|<[hH][tT][mM][lL]|<[sS][tT][yY][lL][eE]|<[sS][vV][gG]|<[oO][bB][jJ][eE][cC][tT]|<[eE][mM][bB][eE][dD]|[jJ][aA][vV][aA][sS][cC][rR][iI][pP][tT]:|[dD][aA][tT][aA]:[tT][eE][xX][tT]/[hH][tT][mM][lL]|://|^//|//[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
         }
       },
       "else": {

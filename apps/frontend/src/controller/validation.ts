@@ -108,7 +108,13 @@ const HTML_JS_PATTERNS = [
   /data:text\/html/i,
 ];
 
-const EXTERNAL_URL_REGEX = /(?:https?:\/\/|ftp:\/\/|^\/\/|\/\/[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i;
+/**
+ * An external resource, in any string: a `scheme://` of any scheme, a
+ * leading `//`, or a `//` followed by a host name with a dot and a top-level
+ * part of two letters or more (`see //cdn.example.com`). The backend's
+ * `names_external_resource` is the same rule, written out by hand.
+ */
+const EXTERNAL_URL_REGEX = /:\/\/|^\/\/|\/\/[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
 
 export type ActionValidationResult =
   | { ok: true; action: DisplayAction }

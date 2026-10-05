@@ -933,6 +933,13 @@ fn agrees_with_the_shared_validator_corpus() {
             _ => panic!("{name}: a case is either accepted or names its error"),
         }
     }
+    assert!(
+        failures.is_empty(),
+        "{} of {} corpus cases disagree:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
     // Every op and every show type is both accepted and refused somewhere.
     for outcome in ["accepted", "error"] {
         let mut wanted: Vec<String> = ["hide", "focus", "say", "clear"]
@@ -953,11 +960,4 @@ fn agrees_with_the_shared_validator_corpus() {
         });
         assert!(wanted.is_empty(), "no {outcome} case for {wanted:?}");
     }
-    assert!(
-        failures.is_empty(),
-        "{} of {} corpus cases disagree:\n{}",
-        failures.len(),
-        cases.len(),
-        failures.join("\n")
-    )
 }

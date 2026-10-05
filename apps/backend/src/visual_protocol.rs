@@ -107,6 +107,34 @@ fn forbidden_layout(v: &Value) -> Option<&'static str> {
     }
 }
 
+/// Whether `s` names an external resource: a `scheme://` of any scheme, a
+/// leading `//`, or a `//` followed by a host name with a dot and a
+/// top-level part of two letters or more (`see //cdn.example.com`). The
+/// browser's `EXTERNAL_URL_REGEX` is the same rule; the last part is its
+/// `//[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`, matched here without a regex crate.
+fn names_external_resource(s: &str) -> bool {
+    if s.contains("://") || s.starts_with("//") {
+        return true;
+    }
+    let bytes = s.as_bytes();
+    bytes.windows(2).enumerate().any(|(at, pair)| {
+        if pair != b"//" {
+            return false;
+        }
+        let rest = &bytes[at + 2..];
+        let host_len = rest
+            .iter()
+            .take_while(|b| b.is_ascii_alphanumeric() || **b == b'.' || **b == b'-')
+            .count();
+        let host = &rest[..host_len];
+        (1..host_len).any(|dot| {
+            host[dot] == b'.'
+                && host.get(dot + 1).is_some_and(u8::is_ascii_alphabetic)
+                && host.get(dot + 2).is_some_and(u8::is_ascii_alphabetic)
+        })
+    })
+}
+
 fn check_unsafe_string(v: &Value) -> Result<(), String> {
     match v {
         Value::String(s) => {
@@ -123,12 +151,7 @@ fn check_unsafe_string(v: &Value) -> Result<(), String> {
             {
                 return Err("raw markup or script injection is forbidden".to_string());
             }
-            if lower.contains("http://")
-                || lower.contains("https://")
-                || lower.contains("ftp://")
-                || lower.starts_with("//")
-                || lower.contains("//") && s.contains("://")
-            {
+            if names_external_resource(s) {
                 return Err("external resource URL is forbidden".to_string());
             }
             Ok(())
