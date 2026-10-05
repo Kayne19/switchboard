@@ -65,8 +65,8 @@ The model controls semantic intent. The frontend controls composition, geometry,
 | `TechFrame` | approved frame paths and frame construction motion |
 | `ChartPrimitive` + `chartGeometry` | chart kinds (line, bar, area, scatter), geometry, axes and category labels, traces, semantic series colors |
 | `DiagramPrimitive` + `diagramLayout` | node layout, edge routing, portrait and landscape topology, a graph recomposed for its viewport, node corner tags inside the frame |
-| `SequencePrimitive` + `sequenceLayout` | actor columns, lifelines, message rows, arrowheads by kind, label wrapping over a span, a sequence recomposed to its viewport's width |
-| `DrawingViewport` + `drawingFit` | a drawing's scale (never text below the page's type floors), scrolling one way inside its clipped viewport, the edge fades, pinned headers |
+| `SequencePrimitive` + `sequenceLayout` | actor columns, lifelines, message rows, arrowheads by kind, label wrapping over a span, a sequence recomposed to its viewport's width, the NOTE marker in the header of the actor a note names |
+| `DrawingViewport` + `drawingFit` + `drawingScroll` | a drawing's scale (never text below the page's type floors), scrolling one way inside its clipped viewport, pinned headers; where a scrolled drawing rests (never a part cut at the edge it is read from), the rails on the edges it continues past (counts, fades, the names of lines leaving the view), its map |
 | `CodeViewport` | syntax presentation, safe scrolling, irregular clipping |
 | `DocumentViewport` | readable document layout and bounded scrolling |
 | `MetricsPrimitive` | metric alignment and semantic values |

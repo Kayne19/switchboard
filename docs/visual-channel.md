@@ -74,12 +74,12 @@ primary's shorter cell, an aux cell, focus):
    so a drawing neither crosses the frame nor meets the rails. It scrolls
    only when it overflows. It opens on the node its note names (or on
    where it begins) and keeps the reader's place through an update that
-   does not change its shape; each edge it continues past fades into the
-   black; a sequence keeps its actor headers pinned at the top as its
-   messages scroll under them; the keys that scroll it scroll it rather
-   than expanding it. A drawing that scrolls places no callout,
-   which could sit out of view: its note stays in the rail and the node
-   carries the NOTE marker.
+   does not change its shape; a sequence keeps its actor headers pinned at
+   the top as its messages scroll under them; the keys that scroll it
+   scroll it rather than expanding it. How it tells the reader where they
+   are is the next list. A drawing that scrolls places no callout, which
+   could sit out of view: its note stays in the rail and the node, or the
+   sequence's actor, carries the NOTE marker, the rail badge's twin.
 3. **It is recomposed for the viewport, not scaled down.** A graph that
    does not read whole is laid out again for a frame of the viewport's
    size at the readable minimum, once in each direction: a layer too wide
@@ -98,6 +98,43 @@ primary's shorter cell, an aux cell, focus):
    viewport at the minimum (a dozen actors in a phone's aux cell).
 4. **Focus gives it the stage.** The same rule runs in the focus layer's
    larger viewport, so focus shows more of it at once.
+
+A drawing that scrolls says where its reader is, in the frame's own marks
+rather than with a scroll bar (`primitives/drawingScroll.ts` decides,
+`DrawingViewport` draws):
+
+- **It rests between its parts.** A view at rest never has a node (or a
+  sequence's message) cut at the edge it is read from: the places it may
+  rest put that edge in a gap between layers, the next part clear of the
+  edge's rail, an edge label in the gap kept whole when there is room.
+  Touch and the keys settle there through the browser's scroll snapping;
+  a wheel or a trackpad moves freely and settles when it pauses, a single
+  notch on to the next place; a mouse wheel over a drawing that scrolls
+  only across scrolls it across. It opens on its lead at such a place.
+  The far edge can still cut the part beyond the view: there a fade as
+  deep as that part reaches in makes it read as the next one coming.
+- **Each edge it continues past carries a rail.** A dashed orange line on
+  the cut, the count of what lies that way ("13 NODES", "23 MESSAGES")
+  and a chevron pointing there; a tap on the count turns a page. Text on
+  the left and right rails runs along them, so a rail costs the drawing a
+  line of small type.
+- **A line that leaves the view says where it goes.** On the rail where
+  it crosses, the name of the node at its far end, in the line's colour,
+  pointing out; several lines to one node are one name.
+- **A map shows the whole.** A drawing scrolled a view and a half or more
+  carries a small map in the corner it covers least of: every node and
+  line, the view boxed in orange. A tap or a drag on it moves the view.
+  A drawing in a viewport too small for a map (a phone's aux cell) has
+  its rails only.
+
+Why a map, rather than opening on the whole drawing and then moving in to
+its anchor: an opening overview is gone a second later, a reader who
+prefers reduced motion never sees it, and it says nothing once the reader
+has scrolled. The map is there whenever the reader looks, says where the
+view is as well as what the whole is, and is a way to move; it costs a
+corner of about a fiftieth of the view, chosen where the drawing has
+least. Hidden scroll bars lose nothing: the rails and the map say more,
+in sharp geometry, and a bar on a phone is not shown at all.
 
 Why this rule and not another. A diagram exists to be read; a drawing too
 small to read is not a smaller answer but no answer, and the caller cannot
