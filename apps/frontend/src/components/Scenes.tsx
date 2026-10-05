@@ -33,6 +33,7 @@ import { SceneFooter } from '../primitives/SceneFooter';
 import { TablePrimitive } from '../primitives/TablePrimitive';
 import { TemporaryAssistantList, temporaryAssistantFrame, type TemporaryAssistantType } from '../primitives/TemporaryAssistantList';
 import { TimerPrimitive } from '../primitives/TimerPrimitive';
+import { WeatherPrimitive } from '../primitives/WeatherPrimitive';
 import { FocusableSurface } from '../primitives/FocusableSurface';
 import { TechFrame } from '../primitives/TechFrame';
 import { ToolActivity } from '../primitives/ToolActivity';
@@ -244,13 +245,13 @@ function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux', marked?
       return <AnnotationCard data={(object as SceneObject<NoteData>).data} />;
     case 'timer':
       return <TimerPrimitive data={cast.timer(object).data} marked={marked} />;
+    case 'weather':
+      return <WeatherPrimitive data={cast.weather(object).data} marked={marked} />;
     // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
     case 'calendar':
       return <TemporaryAssistantList type="calendar" data={object.data} marked={marked} />;
     case 'tasks':
       return <TemporaryAssistantList type="tasks" data={object.data} marked={marked} />;
-    case 'weather':
-      return <TemporaryAssistantList type="weather" data={object.data} marked={marked} />;
     case 'inbox':
       return <TemporaryAssistantList type="inbox" data={object.data} marked={marked} />;
     default:
@@ -513,10 +514,21 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         main: slot('timer-object', <TimerPrimitive data={data} marked={anchoredItem(state, primary.id)} />, <TechFrame variant="panel" />),
       };
     }
+    case 'weather': {
+      const { data } = cast.weather(primary);
+      return {
+        ...rail,
+        title: data.title ?? `WEATHER / ${data.location}`,
+        subtitle: data.subtitle ?? ['NOW', data.hourly?.length ? `${data.hourly.length} H` : null, data.daily?.length ? `${data.daily.length} DAYS` : null].filter(Boolean).join(' + '),
+        context: data.context ?? 'FORECAST',
+        footer: 'DISPLAY / FORECAST',
+        caption: sceneCaption(primary, `FORECAST / DEGREES ${data.units}`),
+        main: slot('weather-object', <WeatherPrimitive data={data} marked={anchoredItem(state, primary.id)} />, <TechFrame variant="panel" />),
+      };
+    }
     // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
     case 'calendar':
     case 'tasks':
-    case 'weather':
     case 'inbox': {
       const type = primary.type as TemporaryAssistantType;
       const kind = type.toUpperCase();

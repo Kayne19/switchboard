@@ -3,11 +3,11 @@ import { NoteBadge } from './NoteMarker';
 
 /*
  * TEMPORARY (pa-contract): the one stand-in renderer for the five
- * personal-assistant types -- calendar, tasks, timer, weather, inbox -- until
+ * personal-assistant types -- calendar, tasks, inbox -- until
  * the render slice draws each with a primitive of its own. It is a plain
  * framed list of the fields the agent sent, so the page neither crashes on
- * nor drops an accepted object and the fixtures load. The timer has its
- * own primitive (TimerPrimitive).
+ * nor drops an accepted object and the fixtures load. The timer and the
+ * forecast have their own primitives (TimerPrimitive, WeatherPrimitive).
  *
  * Replaced by the render slice. To retire it for a type, point that type's
  * cases at its own primitive (grep `TemporaryAssistantList` and
@@ -18,7 +18,7 @@ import { NoteBadge } from './NoteMarker';
  * primitive: the scene tests count objects by it.
  */
 
-export type TemporaryAssistantType = 'calendar' | 'tasks' | 'weather' | 'inbox';
+export type TemporaryAssistantType = 'calendar' | 'tasks' | 'inbox';
 
 type Fields = Record<string, unknown>;
 
@@ -26,7 +26,6 @@ type Fields = Record<string, unknown>;
 const MAIN_LIST: Record<TemporaryAssistantType, [string, string]> = {
   calendar: ['events', 'EVENTS'],
   tasks: ['items', 'TASKS'],
-  weather: ['daily', 'DAYS'],
   inbox: ['messages', 'MESSAGES'],
 };
 
@@ -47,11 +46,9 @@ function plain(value: unknown): string {
   return String(value);
 }
 
-/** What a note's `anchor.item` names an item by: a forecast hour or day by
- * its time or date, anything else by its id. */
-function itemKey(type: TemporaryAssistantType, fields: Fields): string | undefined {
-  const key = type === 'weather' ? (fields.time ?? fields.date) : fields.id;
-  return typeof key === 'string' ? key : undefined;
+/** What a note's `anchor.item` names an item by: its id. */
+function itemKey(fields: Fields): string | undefined {
+  return typeof fields.id === 'string' ? fields.id : undefined;
 }
 
 function Item({ fields, itemKey: key, marked }: { fields: Fields; itemKey?: string; marked: boolean }) {
@@ -78,7 +75,7 @@ export function temporaryAssistantFrame(type: TemporaryAssistantType, data: unkn
   const kind = type.toUpperCase();
   const said = (key: string) => (typeof fields[key] === 'string' ? (fields[key] as string) : undefined);
   return {
-    title: said('title') ?? (type === 'weather' && said('location') ? `${kind} / ${said('location')}` : kind),
+    title: said('title') ?? kind,
     subtitle: said('subtitle') ?? (Array.isArray(list) ? `${list.length} ${noun}` : kind),
     context: said('context') ?? kind,
   };
@@ -97,7 +94,7 @@ export function TemporaryAssistantList({ type, data, marked }: { type: Temporary
           <ol>
             {value.map((item, index) => {
               const fields = fieldsOf(item);
-              const key = itemKey(type, fields);
+              const key = itemKey(fields);
               return <Item key={index} fields={fields} itemKey={key} marked={key !== undefined && key === marked} />;
             })}
           </ol>

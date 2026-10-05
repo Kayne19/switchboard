@@ -255,7 +255,12 @@ describe('the personal-assistant fixtures', () => {
   it('the stand-in names each object by its title, where no frame does', () => {
     const page = render(fixtures.today);
     expect([...page.querySelectorAll('.composed-aux .temporary-assistant__head')].map((node) => node.textContent))
-      .toEqual(['WEATHER / SAN FRANCISCO', 'TO DO / THIS WEEK', 'INBOX / UNREAD FIRST']);
+      .toEqual(['TO DO / THIS WEEK', 'INBOX / UNREAD FIRST']);
+  });
+
+  it('the forecast in the aux row names the place it is for', () => {
+    const page = render(fixtures.today);
+    expect(page.querySelector('.composed-aux [data-testid="weather"] .weather-now__location')?.textContent).toBe('San Francisco, CA');
   });
 
   it('the calendar note names the dentist appointment by its id', () => {

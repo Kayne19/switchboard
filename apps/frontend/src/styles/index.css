@@ -2287,6 +2287,556 @@ button {
 .focus-layer__content > .timer-primitive {
   padding: 5cqh 4cqw 4cqh;
 }
+
+/* Weather (primitives/WeatherPrimitive.tsx): a forecast as an instrument.
+   The conditions now are the hero: the condition's glyph and the
+   temperature large in the mono face (weatherLayout sets --weather-temp
+   from the box), the readings on rules under it as a metric's are, an
+   alert on an amber rule (the warning colour). The hours are a strip, a
+   column each: the temperature traced in orange over the chance of rain in
+   cyan, labelled as often as the width allows. The days are rows, each
+   range a bar on one cold-to-warm scale they all share. How the three
+   stand is the box's (weather--wide, --tall, --compact). */
+.weather-object {
+  background: #000;
+}
+.weather-object .focusable-content {
+  position: relative;
+  z-index: 1;
+  padding: clamp(26px, 4.2cqh, 48px) clamp(22px, 2.6cqw, 42px) clamp(18px, 3cqh, 34px);
+}
+.weather {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  color: #d9d7d1;
+}
+.weather__box {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+.weather__field {
+  position: relative;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  gap: clamp(14px, 2.4cqh, 28px) clamp(22px, 2.6cqw, 44px);
+}
+.weather--wide .weather__field {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(150px, 36%);
+  grid-template-areas:
+    "now daily"
+    "hourly hourly";
+}
+.weather--wide .weather__field[data-parts="now hourly"] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "now"
+    "hourly";
+}
+.weather--wide .weather__field[data-parts="now daily"] {
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "now daily";
+}
+/* Down the box the column keeps each part's own height and scrolls as one
+   (a ListViewport) when it is longer than the box. */
+.weather--tall .weather__field {
+  height: auto;
+  min-height: 100%;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto 172px auto;
+  grid-template-areas:
+    "now"
+    "hourly"
+    "daily";
+  align-content: start;
+}
+.weather--tall .weather__field[data-parts="now daily"] {
+  grid-template-rows: auto auto;
+  grid-template-areas:
+    "now"
+    "daily";
+}
+.weather--tall .weather__field[data-parts="now hourly"] {
+  grid-template-rows: auto 172px;
+  grid-template-areas:
+    "now"
+    "hourly";
+}
+.weather__scroll {
+  padding-right: 4px;
+}
+.weather--compact .weather__field {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    "now"
+    "daily";
+  gap: 10px;
+}
+.weather--compact .weather__field[data-parts="now hourly"] {
+  grid-template-areas:
+    "now"
+    "hourly";
+}
+/* Conditions alone stand in the middle of the box. */
+.weather__field[data-parts="now"] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto;
+  grid-template-areas: "now";
+  align-content: center;
+}
+.weather__field[data-parts="now"] .weather-now {
+  width: min(100%, 720px);
+}
+
+/* The thirteen glyphs: strokes that keep their width at any size, each
+   part in its kind's colour. */
+.weather-glyph {
+  display: block;
+  width: 1em;
+  height: 1em;
+  overflow: visible;
+  fill: none;
+  stroke-width: var(--glyph-stroke, 1.4px);
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+}
+.weather-glyph path {
+  vector-effect: non-scaling-stroke;
+}
+.weather-glyph__sun {
+  stroke: var(--orange);
+}
+.weather-glyph__cloud {
+  stroke: rgba(232, 230, 223, 0.88);
+}
+.weather-glyph__water {
+  stroke: var(--cyan);
+}
+.weather-glyph__ice {
+  stroke: var(--paper);
+}
+.weather-glyph__bolt {
+  stroke: var(--amber);
+}
+.weather-glyph__air {
+  stroke: rgba(232, 230, 223, 0.7);
+}
+.weather-glyph path.weather-glyph--solid {
+  fill: var(--paper);
+  stroke: none;
+}
+
+/* Conditions now. */
+.weather-now {
+  grid-area: now;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(8px, 1.5cqh, 16px);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.weather-now__head,
+.weather-section__head {
+  display: flex;
+  flex: none;
+  justify-content: space-between;
+  gap: 14px;
+  padding-bottom: 6px;
+  color: rgba(232, 230, 223, 0.42);
+  white-space: nowrap;
+}
+.weather-now__head {
+  border-bottom: 1px solid rgba(var(--orange-rgb), 0.48);
+}
+.weather-now__location {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(var(--orange-rgb), 0.9);
+  text-overflow: ellipsis;
+}
+.weather-now__body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  align-items: center;
+  gap: clamp(10px, 1.6cqh, 18px) clamp(20px, 2.6cqw, 44px);
+  min-width: 0;
+}
+.weather-now__detail {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(8px, 1.4cqh, 14px);
+  min-width: 0;
+}
+.weather-now__main {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--weather-temp, 64px) * 0.24);
+  min-width: 0;
+}
+.weather-now__glyph {
+  --glyph-stroke: 1.8px;
+  flex: none;
+  width: calc(var(--weather-temp, 64px) * 1.1);
+  height: calc(var(--weather-temp, 64px) * 1.1);
+}
+.weather-now__figure {
+  min-width: 0;
+}
+.weather-now__temp {
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: var(--weather-temp, 64px);
+  font-variant-numeric: tabular-nums;
+  font-weight: 300;
+  letter-spacing: -0.04em;
+  line-height: 0.95;
+  white-space: nowrap;
+}
+.weather-now__unit {
+  margin-left: 0.1em;
+  color: rgba(232, 230, 223, 0.55);
+  font-size: 0.34em;
+  letter-spacing: 0.04em;
+  vertical-align: top;
+}
+.weather-now__condition {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 16px;
+  margin-top: 8px;
+  color: var(--paper);
+}
+.weather-now__high-low {
+  color: rgba(232, 230, 223, 0.55);
+}
+.weather-now__summary {
+  max-width: 46ch;
+  margin: 0;
+  color: #d9d7d1;
+  font-family: var(--font-prose);
+  font-size: clamp(14px, 1.15cqw, 19px);
+  line-height: 1.4;
+}
+.weather-now__readings {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+  gap: 0 18px;
+  margin: 0;
+}
+.weather-now__reading {
+  min-width: 0;
+  padding: 7px 0 4px;
+  border-top: 1px solid rgba(232, 230, 223, 0.13);
+}
+.weather-now__reading dt {
+  color: rgba(232, 230, 223, 0.4);
+}
+.weather-now__reading dd {
+  margin: 3px 0 0;
+  overflow: hidden;
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: clamp(14px, 1.15cqw, 20px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The alert: an amber rule, its sign and its words, the warning colour. */
+.weather-alert {
+  display: flex;
+  flex: none;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  padding: 6px 10px;
+  border-left: 2px solid var(--amber);
+  background: linear-gradient(90deg, rgba(255, 176, 0, 0.13), rgba(255, 176, 0, 0.02) 80%, transparent);
+  color: var(--amber);
+}
+.weather-alert__glyph {
+  flex: none;
+  align-self: center;
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linejoin: miter;
+}
+.weather-alert__tag {
+  flex: none;
+  font-weight: 700;
+}
+.weather-alert__text {
+  min-width: 0;
+  font-family: var(--font-prose);
+  font-size: clamp(13px, 1.02cqw, 17px);
+  line-height: 1.35;
+}
+
+/* The hours. Each column holds its rows; the trace lies over the band
+   between the labels and the rain, across every column. */
+.weather-hourly {
+  grid-area: hourly;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.weather-section__head {
+  margin-bottom: 4px;
+  border-bottom: 1px solid rgba(232, 230, 223, 0.13);
+}
+.weather-hourly__strip {
+  --badge-row: 0px;
+  --glyph-row: 22px;
+  --temp-row: 16px;
+  --rain-row: 24px;
+  --precip-row: 14px;
+  --time-row: 15px;
+  --strip-pad: 10px;
+  position: relative;
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 120px;
+  padding: 0 var(--strip-pad);
+}
+.weather-hourly__strip--marked {
+  --badge-row: 18px;
+}
+.weather-hourly__trace {
+  position: absolute;
+  left: var(--strip-pad);
+  top: calc(var(--badge-row) + var(--glyph-row) + var(--temp-row) + 6px);
+  width: calc(100% - 2 * var(--strip-pad));
+  height: calc(100% - var(--badge-row) - var(--glyph-row) - var(--temp-row) - var(--rain-row) - var(--precip-row) - var(--time-row) - 14px);
+  overflow: visible;
+  pointer-events: none;
+}
+.weather-hourly__area {
+  fill: rgba(var(--orange-rgb), 0.08);
+  stroke: none;
+}
+.weather-hourly__line {
+  fill: none;
+  stroke: var(--orange);
+  stroke-width: 1.6px;
+  stroke-linejoin: miter;
+  vector-effect: non-scaling-stroke;
+}
+.weather-hourly__dots {
+  fill: none;
+  stroke: var(--paper);
+  stroke-width: 5px;
+  stroke-linecap: square;
+  vector-effect: non-scaling-stroke;
+}
+.weather-hourly__dots--marked {
+  stroke: var(--orange);
+  stroke-width: 9px;
+}
+.weather-hour {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+  padding-top: var(--badge-row);
+}
+.weather-hour > span {
+  flex: none;
+  align-self: stretch;
+  display: flex;
+  justify-content: center;
+  white-space: nowrap;
+}
+.weather-hour__glyph {
+  height: var(--glyph-row);
+  align-items: center;
+}
+.weather-hour__glyph .weather-glyph {
+  width: 18px;
+  height: 18px;
+}
+.weather-hour__temp {
+  height: var(--temp-row);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: var(--temp-row);
+}
+.weather-hour > .weather-hour__plot {
+  flex: 1 1 auto;
+}
+.weather-hour__rain {
+  height: var(--rain-row);
+  align-items: flex-end;
+  border-bottom: 1px solid rgba(232, 230, 223, 0.16);
+}
+.weather-hour__rain-bar {
+  width: calc(100% - 2px);
+  max-width: 16px;
+  background: rgba(94, 214, 216, 0.5);
+}
+.weather-hour__precip {
+  height: var(--precip-row);
+  color: var(--cyan);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: var(--precip-row);
+}
+.weather-hour__time {
+  height: var(--time-row);
+  align-items: flex-end;
+  color: rgba(232, 230, 223, 0.5);
+}
+/* Midnight: a dashed rule down the strip and the new day's name. */
+.weather-hour--day {
+  box-shadow: inset 1px 0 0 rgba(var(--orange-rgb), 0.35);
+}
+.weather-hour--day > .weather-hour__time {
+  color: rgba(var(--orange-rgb), 0.9);
+}
+/* The hour a note names: its badge over it, a rule down through its
+   point, and its words in orange. */
+.weather-hour--marked::before {
+  content: "";
+  position: absolute;
+  top: var(--badge-row);
+  bottom: calc(var(--time-row) + var(--precip-row));
+  left: calc(50% - 0.5px);
+  width: 1px;
+  background: rgba(var(--orange-rgb), 0.55);
+}
+.weather-hour--marked > .weather-hour__temp,
+.weather-hour--marked > .weather-hour__time {
+  color: var(--orange);
+}
+.weather-hour__badge {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: 50%;
+  translate: -50% 0;
+}
+
+/* The days. */
+.weather-daily {
+  grid-area: daily;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.weather-daily > .list-viewport {
+  flex: 1 1 auto;
+  height: auto;
+}
+.weather-daily__days {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.weather-day {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(4.6em, auto) 1.3em 3.2em 2.6em minmax(36px, 1fr) 2.6em;
+  align-items: center;
+  column-gap: clamp(8px, 0.9cqw, 14px);
+  padding: clamp(5px, 0.75cqh, 9px) 4px clamp(5px, 0.75cqh, 9px) 0;
+  border-bottom: 1px solid rgba(232, 230, 223, 0.1);
+  color: #d9d7d1;
+  font-family: var(--font-mono);
+  font-size: clamp(13px, 1.02cqw, 17px);
+  font-variant-numeric: tabular-nums;
+}
+.weather-day__name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(232, 230, 223, 0.78);
+  white-space: nowrap;
+}
+.weather-day__glyph {
+  width: 1.3em;
+  height: 1.3em;
+}
+.weather-day__precip {
+  color: var(--cyan);
+  text-align: right;
+}
+.weather-day__precip--none {
+  color: rgba(232, 230, 223, 0.3);
+}
+.weather-day__low {
+  color: rgba(232, 230, 223, 0.55);
+  text-align: right;
+}
+.weather-day__high {
+  color: var(--paper);
+}
+/* A day's range on the shared scale: the track is the whole scale, and
+   the bar is that scale's gradient, cold to warm, shown only from the
+   day's low to its high, so the same colour is the same temperature on
+   every row. */
+.weather-day__range {
+  position: relative;
+  height: 4px;
+  background: rgba(232, 230, 223, 0.08);
+}
+.weather-day__bar {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, var(--cyan), var(--paper) 55%, var(--orange));
+  clip-path: inset(0 calc(100% - var(--to)) 0 var(--from));
+}
+.weather-day--marked {
+  background: linear-gradient(90deg, rgba(var(--orange-rgb), 0.085), rgba(var(--orange-rgb), 0.018) 76%, transparent);
+  box-shadow: inset 2px 0 0 rgba(var(--orange-rgb), 0.64);
+}
+.weather-day--marked .weather-day__name {
+  padding-left: 8px;
+  color: var(--orange);
+}
+
+/* A small slot: conditions on one line, one list under them. */
+.weather--compact .weather-now {
+  gap: 6px;
+}
+.weather--compact .weather-now__main {
+  gap: 10px;
+}
+.weather--compact .weather-now__condition {
+  margin-top: 3px;
+}
+.weather--compact .weather-alert {
+  padding: 3px 8px;
+}
+.weather--compact .weather-alert__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.weather--compact .weather-day {
+  grid-template-columns: minmax(4.2em, auto) 1.2em 2.9em 2.3em minmax(18px, 1fr) 2.3em;
+  column-gap: 7px;
+  padding: 4px 2px 4px 0;
+  font-size: 12px;
+}
+.focus-layer__content > .weather {
+  padding: 5cqh 4cqw 4cqh;
+}
 /* Entry motion stays in CSS on elements that carry no SVG positioning
    transform: a CSS transform on a translated node group replaces its
    transform attribute and stacks every node in one corner. */
