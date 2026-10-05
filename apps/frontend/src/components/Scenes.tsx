@@ -15,6 +15,7 @@ import type {
   TableData,
 } from '../controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
+import { markedItem, noteItemTarget } from '../app/noteItems';
 import { anchoredNote, besideVisuals, buildCompositionModel, cast, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
 import { stageReport, wantsStage, type StageReport } from '../app/stageFold';
 import { StageDemandContext, watchElement, type StageDemandListener } from '../hooks/useStageDemand';
@@ -32,6 +33,8 @@ import { ObjectMotion } from '../primitives/ObjectMotion';
 import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
 import { SceneFooter } from '../primitives/SceneFooter';
 import { TablePrimitive } from '../primitives/TablePrimitive';
+import { TasksPrimitive, taskCounts } from '../primitives/TasksPrimitive';
+import { InboxPrimitive, inboxCounts } from '../primitives/InboxPrimitive';
 import { TemporaryAssistantList, temporaryAssistantFrame, type TemporaryAssistantType } from '../primitives/TemporaryAssistantList';
 import { FocusableSurface } from '../primitives/FocusableSurface';
 import { TechFrame } from '../primitives/TechFrame';
@@ -136,7 +139,7 @@ interface ExplanationProps {
 // it resolves in and out only when an explanation appears or goes away. Its
 // layout animates position only: animating its size on a text change scales
 // the text while it reflows, which reads as a twitch.
-function RailNote({ note, noteObject, onFocus, onOpenHistory, target, leads = false }: ExplanationProps & { target?: string; leads?: boolean }) {
+function RailNote({ note, noteObject, onFocus, onOpenHistory, target, itemMarked, leads = false }: ExplanationProps & { target?: string; itemMarked?: boolean; leads?: boolean }) {
   return (
     <AnimatePresence initial={false}>
       {note ? (
@@ -147,6 +150,7 @@ function RailNote({ note, noteObject, onFocus, onOpenHistory, target, leads = fa
               onFocus={noteObject ? () => onFocus(noteObject.id) : undefined}
               onOpenHistory={noteObject ? undefined : onOpenHistory}
               target={target}
+              itemMarked={itemMarked}
             />
           </SurfaceBoundary>
         </ObjectMotion>
@@ -205,10 +209,16 @@ function useCrowded(ref: RefObject<HTMLDivElement | null>, watching: boolean): b
 }
 
 // A rail note about a chart on stage names the category it points at, as
-// the same note on the chart does.
-function railNoteTarget(state: ControllerState, note: NoteData | null): string | undefined {
-  const named = note?.anchor ? state.agentObjects[note.anchor.target] : undefined;
-  return named?.type === 'chart' && note?.anchor ? chartTargetText(note.anchor, (named as SceneObject<ChartData>).data) : undefined;
+// the same note on the chart does; one about an item of a list (a task, a
+// message, an event, a timer, a forecast hour or day) names the item, which
+// is then marked where its object is drawn.
+function railNoteTarget(state: ControllerState, note: NoteData | null): { target?: string; itemMarked: boolean } {
+  const anchor = note?.anchor;
+  const named = anchor ? state.agentObjects[anchor.target] : undefined;
+  if (!anchor || !named) return { itemMarked: false };
+  if (named.type === 'chart') return { target: chartTargetText(anchor, (named as SceneObject<ChartData>).data), itemMarked: false };
+  const item = noteItemTarget(named, note);
+  return { target: item, itemMarked: item !== undefined };
 }
 
 // The details column beside every content visual: the metrics and any
@@ -235,7 +245,7 @@ function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, 
       {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} variant="rail" /> : null}
       <RailProgress progressList={progressList} onFocus={onFocus} />
       {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
-      <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} target={railNoteTarget(state, note)} leads={leads} />
+      <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} {...railNoteTarget(state, note)} leads={leads} />
       <ToolActivity activity={state.activity} reserveSpace={reserveActivity} />
     </div>
   );
@@ -244,8 +254,9 @@ function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, 
 
 // One object drawn inside a composed workspace, as the primary or in the aux
 // row beneath it. A metric and a progress change with the slot: the aux row
-// has no room for a whole step list.
-function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux') {
+// has no room for a whole step list. `marked` is the item the drawn note
+// names in the object (`markedItem`), which the object marks.
+function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux', marked?: string) {
   switch (object.type) {
     case 'chart':
       return <ChartPrimitive data={(object as SceneObject<ChartData>).data} />;
@@ -267,15 +278,15 @@ function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux') {
       return <AnnotationCard data={(object as SceneObject<NoteData>).data} />;
     // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
     case 'calendar':
-      return <TemporaryAssistantList type="calendar" data={object.data} />;
+      return <TemporaryAssistantList type="calendar" data={object.data} marked={marked} />;
     case 'tasks':
-      return <TemporaryAssistantList type="tasks" data={object.data} />;
+      return <TasksPrimitive data={cast.tasks(object).data} variant={slot === 'aux' ? 'compact' : 'full'} marked={marked} />;
     case 'timer':
-      return <TemporaryAssistantList type="timer" data={object.data} />;
+      return <TemporaryAssistantList type="timer" data={object.data} marked={marked} />;
     case 'weather':
-      return <TemporaryAssistantList type="weather" data={object.data} />;
+      return <TemporaryAssistantList type="weather" data={object.data} marked={marked} />;
     case 'inbox':
-      return <TemporaryAssistantList type="inbox" data={object.data} />;
+      return <InboxPrimitive data={cast.inbox(object).data} variant={slot === 'aux' ? 'compact' : 'full'} marked={marked} />;
     default:
       return null;
   }
@@ -558,12 +569,37 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         main: slot('image-object', <ImagePrimitive data={data} />, <TechFrame variant="panel" />),
       };
     }
+    case 'tasks': {
+      // A to-do list heads the scene with its own words, else what it holds.
+      const { data } = cast.tasks(primary);
+      const counts = taskCounts(data);
+      return {
+        ...rail,
+        title: data.title ?? 'TASKS / TO DO',
+        subtitle: data.subtitle ?? `${counts.open} OPEN / ${counts.done} DONE`,
+        context: data.context ?? 'TASKS',
+        footer: 'DISPLAY / TASKS',
+        caption: sceneCaption(primary, `TASKS / ${data.items.length} ${data.items.length === 1 ? 'ITEM' : 'ITEMS'}`),
+        main: slot('tasks-object', <TasksPrimitive data={data} marked={markedItem(note, primary.id)} />, <TechFrame variant="panel" />),
+      };
+    }
+    case 'inbox': {
+      const { data } = cast.inbox(primary);
+      const counts = inboxCounts(data);
+      return {
+        ...rail,
+        title: data.title ?? 'INBOX / MESSAGES',
+        subtitle: data.subtitle ?? `${counts.messages} ${counts.messages === 1 ? 'MESSAGE' : 'MESSAGES'} / ${counts.unread} UNREAD`,
+        context: data.context ?? 'INBOX',
+        footer: 'DISPLAY / INBOX',
+        caption: sceneCaption(primary, `INBOX / ${counts.messages} ${counts.messages === 1 ? 'MESSAGE' : 'MESSAGES'}`),
+        main: slot('inbox-object', <InboxPrimitive data={data} marked={markedItem(note, primary.id)} />, <TechFrame variant="panel" />),
+      };
+    }
     // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
     case 'calendar':
-    case 'tasks':
     case 'timer':
-    case 'weather':
-    case 'inbox': {
+    case 'weather': {
       const type = primary.type as TemporaryAssistantType;
       const kind = type.toUpperCase();
       return {
@@ -571,7 +607,11 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         ...temporaryAssistantFrame(type, primary.data),
         footer: `DISPLAY / ${kind}`,
         caption: sceneCaption(primary, `${kind} / FIELDS AS SENT`),
-        main: slot('temporary-assistant-object', <TemporaryAssistantList type={type} data={primary.data} />, <TechFrame variant="panel" />),
+        main: slot(
+          'temporary-assistant-object',
+          <TemporaryAssistantList type={type} data={primary.data} marked={markedItem(note, primary.id)} />,
+          <TechFrame variant="panel" />,
+        ),
       };
     }
     default:
@@ -585,8 +625,17 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
 // rail does not carry gets a framed cell of its own, so an accepted object is
 // never lost to the layout. A visual keeps a readable floor in its cell; a
 // row with no room for every cell scrolls inside itself rather than squeezing
-// one to nothing (`.composed-aux` in styles/index.css).
-function AuxRow({ objects, onFocus }: { objects: SceneObject[]; onFocus: (id: string | null) => void }) {
+// one to nothing (`.composed-aux` in styles/index.css). Each object marks
+// the item the rail's note names in it (`marked`).
+function AuxRow({
+  objects,
+  onFocus,
+  marked,
+}: {
+  objects: SceneObject[];
+  onFocus: (id: string | null) => void;
+  marked: (objectId: string) => string | undefined;
+}) {
   return (
     <div className="composed-aux">
       {objects.map((object) => (
@@ -598,7 +647,7 @@ function AuxRow({ objects, onFocus }: { objects: SceneObject[]; onFocus: (id: st
           <TechFrame variant="panel" />
           <ObjectSurface object={object}>
             <FocusableSurface onActivate={() => onFocus(object.id)} ariaLabel={`Expand ${object.type}`}>
-              {composedPrimitive(object, 'aux')}
+              {composedPrimitive(object, 'aux', marked(object.id))}
             </FocusableSurface>
           </ObjectSurface>
         </ObjectMotion>
@@ -617,19 +666,21 @@ function MainWithAux({
   variant,
   aux,
   onFocus,
+  marked,
   ref,
   children,
 }: {
   variant?: string;
   aux: SceneObject[];
   onFocus: (id: string | null) => void;
+  marked: (objectId: string) => string | undefined;
   ref?: RefObject<HTMLDivElement | null>;
   children: ReactNode;
 }) {
   return (
     <motion.div ref={ref} className={`content-main composed-main${variant ? ` ${variant}` : ''}`} layout>
       {children}
-      {aux.length > 0 ? <AuxRow objects={aux} onFocus={onFocus} /> : null}
+      {aux.length > 0 ? <AuxRow objects={aux} onFocus={onFocus} marked={marked} /> : null}
     </motion.div>
   );
 }
@@ -810,6 +861,7 @@ function composedContent({ state, onFocus }: SceneProps, onDemand: StageDemandLi
   const metrics = comp.allAgentObjects.filter((o) => o.type === 'metric') as Array<SceneObject<MetricData>>;
   const progressList = comp.allAgentObjects.filter((o) => o.type === 'progress') as Array<SceneObject<ProgressData>>;
   const primaryMetricIds = new Set(primaryMetrics.map((m) => m.id));
+  const note = noteIsPrimary ? null : annotationForScene(state, noteObject, liveChatMessage(state));
   // Everything the rail does not carry shares one visible aux row below the
   // primary -- compare objects, the other visuals beside it, and progress --
   // so an accepted object is never lost to the layout. Metrics and the note
@@ -828,7 +880,7 @@ function composedContent({ state, onFocus }: SceneProps, onDemand: StageDemandLi
     footer: 'DISPLAY / COMPOSED',
     caption: sceneCaption(primary, 'SYSTEM / ACTIVE'),
     metrics: isMetricPrimary ? metrics.filter((metric) => !primaryMetricIds.has(metric.id)) : metrics,
-    note: noteIsPrimary ? null : annotationForScene(state, noteObject, liveChatMessage(state)),
+    note,
     noteObject: noteIsPrimary ? undefined : noteObject,
     progressList: [],
     aux: auxObjects,
@@ -860,7 +912,7 @@ function composedContent({ state, onFocus }: SceneProps, onDemand: StageDemandLi
                   onFocus={onFocus}
                 />
               ) : (
-                <StageDemandContext.Provider value={onDemand}>{composedPrimitive(primary, 'primary')}</StageDemandContext.Provider>
+                <StageDemandContext.Provider value={onDemand}>{composedPrimitive(primary, 'primary', markedItem(note, primary.id))}</StageDemandContext.Provider>
               )}
             </FocusableSurface>
           </ObjectSurface>
@@ -1018,7 +1070,7 @@ export function SceneShell(props: SceneProps) {
           </div>
           <div className={`content-grid${staged ? ' content-grid--staged' : ''}`} data-stage={foldable ? (staged ? 'primary' : 'shared') : undefined}>
             <div ref={probeRef} className="content-grid__probe" aria-hidden="true" />
-            <MainWithAux ref={mainRef} variant={content.mainVariant} aux={content.aux} onFocus={onFocus}>
+            <MainWithAux ref={mainRef} variant={content.mainVariant} aux={content.aux} onFocus={onFocus} marked={(id) => markedItem(calloutPlaced ? null : content.note, id)}>
               {content.main}
             </MainWithAux>
             <motion.aside

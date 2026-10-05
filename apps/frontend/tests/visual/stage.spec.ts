@@ -162,7 +162,7 @@ test('a note on a folded rail stays matched to the node it names', async ({ page
   await page.setViewportSize({ width: 390, height: 844 });
   await open(page, 'pipeline');
   await expect(page.locator('.content-rail--folded')).toBeVisible();
-  await expect(page.locator('.content-rail .annotation-card__node-badge')).toHaveText('NOTE');
+  await expect(page.locator('.content-rail .note-badge')).toHaveText('NOTE');
   const laid = await boxes(page);
   // The drawing opens on the node the note names, its marker in view.
   expect(laid.marker).not.toBeNull();

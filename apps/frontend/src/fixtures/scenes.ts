@@ -298,7 +298,7 @@ export const assistantAgenda: CalendarData = {
 };
 
 export const assistantTasks: TasksData = {
-  title: 'TO DO / THIS WEEK', subtitle: '9 OPEN / 3 DONE', context: 'TASKS', caption: 'TODOIST / PERSONAL + WORK',
+  title: 'TO DO / THIS WEEK', subtitle: '10 OPEN / 3 DONE', context: 'TASKS', caption: 'TODOIST / PERSONAL + WORK',
   today: ASSISTANT_TODAY,
   items: [
     { id: 'pr', text: 'Review the switchboard PR', state: 'active', due: '2026-10-07T17:00', priority: 'high', group: 'Work', tags: ['switchboard', 'review'] },
@@ -309,6 +309,7 @@ export const assistantTasks: TasksData = {
     { id: 'gift', text: 'Buy a gift for Mom', state: 'done', due: '2026-10-06', group: 'Errands' },
     { id: 'pge', text: 'Pay the PG&E bill', due: '2026-10-05', priority: 'high', group: 'Home', tags: ['bills'] },
     { id: 'smoke', text: 'Replace the smoke detector battery', priority: 'low', group: 'Home' },
+    { id: 'claim', text: 'Send the dental insurance claim for the cleaning and the x-ray, with the receipt from the front desk and the referral letter', due: '2026-10-12', group: 'Home', detail: 'Form 2B on the Delta portal, not the one on its first page', tags: ['health', 'bills'] },
     { id: 'plumber', text: 'Book the plumber', state: 'blocked', group: 'Home', detail: "Waiting on the landlord's OK" },
     { id: 'pack', text: 'Pack for New York', due: '2026-10-09', group: 'Trip', tags: ['travel'] },
     { id: 'check-in', text: 'Check in for UA 1532', due: '2026-10-08T18:05', group: 'Trip', tags: ['travel'] },
@@ -358,7 +359,7 @@ export const assistantWeather: WeatherData = {
 };
 
 export const assistantInbox: InboxData = {
-  title: 'INBOX / UNREAD FIRST', subtitle: '5 UNREAD / 3 FLAGGED', context: 'MAIL + CHAT', caption: 'GMAIL / SLACK / SMS',
+  title: 'INBOX / UNREAD FIRST', subtitle: '5 UNREAD / 4 FLAGGED', context: 'MAIL + CHAT', caption: 'GMAIL / SLACK / SMS',
   today: ASSISTANT_TODAY,
   messages: [
     { id: 'dentist', from: "Dr. Okafor's office", subject: 'Appointment today', snippet: 'Reminder: today at 10:30. Reply C to confirm or call to reschedule.', time: '2026-10-07T08:12', channel: 'sms', unread: true, flagged: true, semantic: 'amber' },
@@ -368,7 +369,10 @@ export const assistantInbox: InboxData = {
     { id: 'mom', from: 'Mom', snippet: 'Are you still coming for dinner Thursday?', time: '2026-10-06T19:02', channel: 'sms', flagged: true },
     { id: 'pge', from: 'PG&E', subject: 'Your bill is past due', snippet: 'Pay $84.12 by Oct 12 to avoid a late fee.', time: '2026-10-05T06:00', channel: 'email', unread: true, flagged: true },
     { id: 'ana', from: 'Ana', snippet: 'lunch was great, same time next week?', time: '2026-10-06T14:20', channel: 'slack' },
-    { id: 'wedding', from: 'Sam and Lee', subject: 'Wedding weekend: shuttle times', snippet: 'Shuttles leave the hotel at 15:15 and 15:45.', time: '2026-10-04', channel: 'email' },
+    { id: 'homelab', from: 'damocles (homelab cron)', subject: 'Nightly backup report: 2 warnings, disk at 81% on the media pool', snippet: 'restic: 2 files changed during the snapshot; the media pool crossed its 80% threshold at 02:14.', time: '2026-10-07T02:30', channel: 'email' },
+    { id: 'wedding', from: 'Sam and Lee', subject: 'Wedding weekend: shuttle times, the rehearsal dinner and parking at the garden', snippet: 'Shuttles leave the hotel at 15:15 and 15:45; there is no parking at the garden on weekends.', time: '2026-10-04', channel: 'email' },
+    { id: 'linear', from: 'Linear', subject: 'Weekly digest: 14 issues moved to Done', time: '2026-10-02T08:00', channel: 'email' },
+    { id: 'lease', from: 'Mission Bay Properties', subject: 'Lease renewal', snippet: 'Your lease ends Nov 30. Please let us know by Oct 15 whether you plan to renew.', time: '2026-09-28', channel: 'email', flagged: true },
   ],
 };
 

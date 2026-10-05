@@ -1,0 +1,296 @@
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from 'react';
+
+// The viewport an HTML list is read in when it outgrows its slot (a to-do
+// list, an inbox, an agenda, a forecast's days): the list scrolls inside
+// it, up and down only, and on each edge it continues past the viewport
+// draws what DrawingViewport draws for a drawing, in the same classes so
+// the two read as one instrument: a fade as the edge's rows run under it,
+// the dashed cut line, and a count of the items wholly past that edge with
+// a chevron pointing there (a tap turns a page that way). A list that fits
+// has none of them and does not scroll.
+//
+// Items are the elements under the scroll that carry `data-item` (the name
+// a note uses for them, `app/noteItems.ts`), or those `countSelector`
+// picks where only some of them are what the list is a list of; anything
+// else in the list (a group heading, a day rule) is not counted. They are counted by their
+// boxes against the scroll's edges, whatever their layout: rows, a time
+// grid with several to a row, cards.
+//
+// It opens on its lead, once per shape (the lead, the item count, the
+// viewport's height): the item `lead` names, else an element marked
+// `data-lead` (a calendar's now line), brought into view a little below
+// the top. An update that keeps the shape keeps the reader's place.
+
+/** What lies past each edge of a list's view, counted in whole items. */
+export interface ListPast {
+  above: number;
+  below: number;
+}
+
+/**
+ * The edges a list continues past: more of it than a sliver lies that way.
+ * An edge is marked even where no item lies past it (a forecast's
+ * conditions above its days): the count names what it can, and the edge
+ * still says the list goes on.
+ */
+export function continuesPast(scrollTop: number, viewHeight: number, contentHeight: number): { top: boolean; bottom: boolean } {
+  return { top: scrollTop > SLIVER, bottom: contentHeight - viewHeight - scrollTop > SLIVER };
+}
+
+/** A box along the scroll axis, in one coordinate space. */
+export interface Extent {
+  top: number;
+  bottom: number;
+}
+
+// Half a pixel either way is the edge itself, not past it.
+const EDGE = 0.5;
+// An item with no more of it in view than this is past the edge: what
+// shows of it is its padding, not its words. The least of a few pixels and
+// a share of its height.
+const SLIVER = 16;
+const SLIVER_SHARE = 0.4;
+
+/** How much of an item may show in the view while it still counts as past the edge. */
+const sliver = (item: Extent) => Math.max(EDGE, Math.min(SLIVER, (item.bottom - item.top) * SLIVER_SHARE));
+
+/** How many items lie past each edge of `view`: wholly, or with only a sliver of them in view. */
+export function countPast(items: Extent[], view: Extent): ListPast {
+  let above = 0;
+  let below = 0;
+  for (const item of items) {
+    if (item.bottom <= view.top + sliver(item)) above += 1;
+    else if (item.top >= view.bottom - sliver(item)) below += 1;
+  }
+  return { above, below };
+}
+
+/**
+ * Where the scroll rests to show `lead` (in content coordinates): where it
+ * stands already when the lead is wholly in the clear part of the view,
+ * else with the lead a quarter of the way down, or at the top when it is
+ * taller than that room. The clear part leaves out the band (`band`, the
+ * fade's depth) at each edge the list continues past, where the fade and
+ * the count lie over the rows: a lead under them is not in view.
+ */
+export function leadScrollTop(lead: Extent, scrollTop: number, viewHeight: number, contentHeight: number, band = 0): number {
+  const max = Math.max(0, contentHeight - viewHeight);
+  const top = scrollTop + (scrollTop > EDGE ? band : 0);
+  const bottom = scrollTop + viewHeight - (scrollTop < max - EDGE ? band : 0);
+  if (lead.top >= top - EDGE && lead.bottom <= bottom + EDGE) return scrollTop;
+  const above = lead.bottom - lead.top > viewHeight * 0.75 ? 0 : Math.round(viewHeight * 0.25);
+  return Math.max(0, Math.min(max, Math.round(lead.top - above)));
+}
+
+/** The depth of the fade at an edge a list continues past, for a view `viewHeight` tall. */
+export function fadeDepth(viewHeight: number): number {
+  return Math.round(Math.max(FADE_MIN, Math.min(FADE_MAX, viewHeight * FADE_SHARE)));
+}
+
+/**
+ * How much a box is drawn scaled on screen: a shared-layout animation (focus
+ * opening) scales the box it moves, and its rects with it, while its layout
+ * sizes (clientHeight, offsetHeight) stay as laid out. Measures from the two
+ * are brought to one scale by it.
+ */
+export function drawnScale(rectHeight: number, offsetHeight: number): number {
+  return offsetHeight > 0 && rectHeight > 0 ? rectHeight / offsetHeight : 1;
+}
+
+/** How a count names its items: a singular and a plural, or a function of the count. */
+export type ListNoun = readonly [string, string] | ((count: number) => string);
+
+function nounFor(noun: ListNoun, count: number): string {
+  if (typeof noun === 'function') return noun(count);
+  return count === 1 ? noun[0] : noun[1];
+}
+
+// The deepest a fade reaches, as a share of the view, and its least depth.
+const FADE_SHARE = 0.18;
+const FADE_MAX = 36;
+const FADE_MIN = 18;
+// A page is the view less a row's worth, so the row at the edge stays in
+// sight; an arrow moves a line.
+const PAGE_SHARE = 0.85;
+const LINE = 40;
+
+const pageLength = (viewHeight: number) => Math.max(1, Math.round(viewHeight * PAGE_SHARE));
+
+/** Where a scroll key moves a list's scroll to, or null for a key the list does not take. */
+export function keyScrollTop(key: string, shift: boolean, scrollTop: number, viewHeight: number, contentHeight: number): number | null {
+  const max = Math.max(0, contentHeight - viewHeight);
+  const page = pageLength(viewHeight);
+  const moves: Record<string, number> = { ArrowDown: LINE, ArrowUp: -LINE, PageDown: page, PageUp: -page, ' ': shift ? -page : page };
+  if (key === 'Home') return 0;
+  if (key === 'End') return max;
+  if (!(key in moves)) return null;
+  return Math.max(0, Math.min(max, scrollTop + moves[key]));
+}
+
+function reducedMotion(): boolean {
+  return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function cssEscape(value: string): string {
+  return typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(value) : value.replace(/["\\]/g, '\\$&');
+}
+
+interface ListViewportProps {
+  children: ReactNode;
+  /** How the counts name the items: `['TASK', 'TASKS']`, or `(n) => ...`. */
+  noun: ListNoun;
+  /** The `data-item` of the item to open on; absent, an element marked `data-lead`, if any. */
+  lead?: string;
+  /** Which items the counts count, when not every `data-item` is one (a forecast counts its days, not its hours). */
+  countSelector?: string;
+  /** Pinned above the scroll inside the same frame: a list's header, a calendar's day row. */
+  head?: ReactNode;
+  /** The viewport's own class, beside `list-viewport`. */
+  className?: string;
+  /** The scroll element's class, beside `list-viewport__scroll`: the primitive's padding and type. */
+  scrollClassName?: string;
+  /** The scroll element, for a primitive that measures it. */
+  scrollRef?: RefObject<HTMLDivElement | null>;
+  /** The accessible name of the scroll region. */
+  label?: string;
+}
+
+export function ListViewport({ children, noun, lead, countSelector = '[data-item]', head, className, scrollClassName, scrollRef: givenRef, label }: ListViewportProps) {
+  const ownRef = useRef<HTMLDivElement>(null);
+  const scrollRef = givenRef ?? ownRef;
+  const [past, setPast] = useState<ListPast & { top: boolean; bottom: boolean }>({ above: 0, below: 0, top: false, bottom: false });
+  const [scrolls, setScrolls] = useState(false);
+  const [viewHeight, setViewHeight] = useState(0);
+
+  // What the edges say, from where the reader stands. Read on scroll at
+  // most once a frame, and whenever the list or its box changes.
+  const frame = useRef(0);
+  const measure = useCallback(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    // The rows' rects and the box's are on screen, scaled with it while a
+    // focus opens; the view's height is brought to that scale, so the
+    // counts are right mid-animation as at rest.
+    const box = element.getBoundingClientRect();
+    const k = drawnScale(box.height, element.offsetHeight);
+    const items = Array.from(element.querySelectorAll<HTMLElement>(countSelector)).map((item) => {
+      const rect = item.getBoundingClientRect();
+      return { top: rect.top, bottom: rect.bottom };
+    });
+    const overflows = element.scrollHeight > element.clientHeight + 1;
+    const counts = overflows ? countPast(items, { top: box.top, bottom: box.top + element.clientHeight * k }) : { above: 0, below: 0 };
+    const goes = overflows ? continuesPast(element.scrollTop, element.clientHeight, element.scrollHeight) : { top: false, bottom: false };
+    const next = { ...counts, top: goes.top || counts.above > 0, bottom: goes.bottom || counts.below > 0 };
+    setPast((current) =>
+      current.above === next.above && current.below === next.below && current.top === next.top && current.bottom === next.bottom ? current : next,
+    );
+    setScrolls(element.scrollHeight > element.clientHeight + 1);
+    setViewHeight(element.clientHeight);
+  }, [scrollRef, countSelector]);
+  const onScroll = () => {
+    if (frame.current) return;
+    frame.current = requestAnimationFrame(() => {
+      frame.current = 0;
+      measure();
+    });
+  };
+  useEffect(() => () => cancelAnimationFrame(frame.current), []);
+
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element) return undefined;
+    const resized = new ResizeObserver(() => measure());
+    const watch = () => {
+      resized.disconnect();
+      resized.observe(element);
+      for (const child of Array.from(element.children)) resized.observe(child);
+      measure();
+    };
+    const changed = new MutationObserver(watch);
+    changed.observe(element, { childList: true, subtree: true, characterData: true });
+    watch();
+    return () => {
+      resized.disconnect();
+      changed.disconnect();
+    };
+  }, [scrollRef, measure]);
+
+  // Opens on the lead, once per shape.
+  const led = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    const shape = `${lead ?? ''}|${element.querySelectorAll('[data-item]').length}|${Math.round(element.clientHeight)}`;
+    if (led.current === shape) return;
+    led.current = shape;
+    const target = lead !== undefined
+      ? element.querySelector<HTMLElement>(`[data-item="${cssEscape(lead)}"]`)
+      : element.querySelector<HTMLElement>('[data-lead]');
+    if (!target) return;
+    const box = element.getBoundingClientRect();
+    const rect = target.getBoundingClientRect();
+    const k = drawnScale(box.height, element.offsetHeight);
+    const top = (rect.top - box.top) / k + element.scrollTop;
+    element.scrollTop = leadScrollTop({ top, bottom: top + rect.height / k }, element.scrollTop, element.clientHeight, element.scrollHeight, fadeDepth(element.clientHeight));
+  });
+
+  // The keys that scroll a focused list scroll it here, and each one it
+  // takes is marked handled (FocusableSurface's rule: a child marks an
+  // event with preventDefault and never stops it), so the surface around it
+  // leaves Space alone rather than expanding the object, and Enter, which
+  // the list does not take, still expands it.
+  const scrollKeys = (event: KeyboardEvent<HTMLDivElement>) => {
+    const element = scrollRef.current;
+    if (!element || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+    const top = keyScrollTop(event.key, event.shiftKey, element.scrollTop, element.clientHeight, element.scrollHeight);
+    if (top === null) return;
+    event.preventDefault();
+    element.scrollTo({ top, behavior: reducedMotion() ? 'auto' : 'smooth' });
+  };
+  // A tap on an edge's count turns a page that way. The tap is marked
+  // handled, so the surface around the list does not expand the object.
+  const page = (direction: -1 | 1) => (event: MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const element = scrollRef.current;
+    if (!element) return;
+    element.scrollBy({ top: direction * pageLength(element.clientHeight), behavior: reducedMotion() ? 'auto' : 'smooth' });
+  };
+
+  const fade = fadeDepth(viewHeight);
+  // An edge the list continues past: the fade, the cut line, and the count
+  // of the items that lie that way, or MORE where none of them does.
+  const edge = (side: 'top' | 'bottom', continues: boolean, count: number) =>
+    continues ? (
+      <>
+        <div className={`drawing-viewport__more drawing-viewport__more--${side}`} style={{ height: `${fade}px` }} aria-hidden="true" />
+        <div className={`drawing-viewport__rail drawing-viewport__rail--${side}`} aria-hidden="true" />
+        <div className={`drawing-viewport__rim drawing-viewport__rim--${side} list-viewport__rim`} onClick={page(side === 'top' ? -1 : 1)} aria-hidden="true" data-count={count}>
+          <span className="drawing-viewport__rim-text">{count > 0 ? `${count} ${nounFor(noun, count)}` : 'MORE'}</span>
+          <svg className="drawing-viewport__chevron" viewBox="0 0 8 6" aria-hidden="true">
+            <path d="M 4 0 L 8 6 L 0 6 Z" />
+          </svg>
+        </div>
+      </>
+    ) : null;
+
+  return (
+    <div className={`list-viewport${scrolls ? ' list-viewport--scrolling' : ''}${className ? ` ${className}` : ''}`}>
+      {head ? <div className="list-viewport__head">{head}</div> : null}
+      <div className="list-viewport__port">
+        <div
+          ref={scrollRef}
+          className={`list-viewport__scroll${scrollClassName ? ` ${scrollClassName}` : ''}`}
+          tabIndex={scrolls ? 0 : undefined}
+          aria-label={label}
+          role={label ? 'region' : undefined}
+          onScroll={onScroll}
+          onKeyDown={scrolls ? scrollKeys : undefined}
+        >
+          {children}
+        </div>
+        {edge('top', past.top, past.above)}
+        {edge('bottom', past.bottom, past.below)}
+      </div>
+    </div>
+  );
+}

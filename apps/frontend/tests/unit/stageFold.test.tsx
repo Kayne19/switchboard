@@ -196,7 +196,7 @@ describe('a primary that outgrows a rail standing under it', () => {
     const rail = page.querySelector('.content-rail')!;
     expect(rail.classList.contains('content-rail--folded')).toBe(true);
     // The note stays, its NOTE badge the twin of the marker on its node.
-    expect(rail.querySelector('.rail-note .annotation-card__node-badge')?.textContent).toBe('NOTE');
+    expect(rail.querySelector('.rail-note .note-badge')?.textContent).toBe('NOTE');
     expect(rail.querySelector('[data-testid="damocles-presence"]')).not.toBeNull();
   });
 

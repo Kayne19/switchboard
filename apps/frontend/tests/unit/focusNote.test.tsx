@@ -101,7 +101,7 @@ describe('a diagram in focus keeps its note', () => {
     expect(marked.map((group) => group.querySelector('.diagram-node-label')?.textContent)).toEqual(['Display gate']);
     const card = layer.querySelector('.focus-layer__note .annotation-card');
     expect(card?.textContent).toContain('The gate stamps each action with a seq');
-    expect(card?.querySelector('.annotation-card__node-badge')?.textContent).toBe('NOTE');
+    expect(card?.querySelector('.note-badge')?.textContent).toBe('NOTE');
     expect(layer.querySelector('.focus-layer__content--noted')).not.toBeNull();
     // Opened on the node it names, whole in view.
     const scroller = layer.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
