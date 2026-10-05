@@ -383,13 +383,15 @@ go out because the link's socket is already closing gets `failed` at once.
 
 ### Frames the service cannot read
 
-The service reads frames with serde_json, which refuses three things a host
-agent's `JSON.stringify` can write: a string with half of a UTF-16 surrogate
-pair (`"\ud83d"`, an emoji cut in two), a number beyond a double (`1e400`),
-and arrays or objects nested deeper than 128 levels. When the whole frame
-cannot be read, the service still reads its `type`, `id`, `epoch`, `session`
-and `call` (serde skips the other fields without building them) and answers
-what it can, at once:
+The service reads frames with serde_json, which refuses three things that
+are valid JSON: a string with half of a UTF-16 surrogate pair (`"\ud83d"`,
+an emoji cut in two), a number beyond a double (`1e400`), and arrays or
+objects nested deeper than 128 levels. This host agent writes only the last
+of them: its `JSON.stringify` writes no number beyond a double, and it writes
+every lone surrogate as U+FFFD (below). When the whole frame cannot be read,
+the service still reads its `type`, `id`, `epoch`, `session` and `call`
+(serde skips the other fields without building them) and answers what it
+can, at once:
 
 - a `module_call` is refused, its reason naming the fault:
 
@@ -406,9 +408,12 @@ an `id`, an event without a `session` or `cursor`) is logged and dropped the
 same way. A module call for a session whose listener has gone is refused
 `not_on_call`, as one for a session nobody listens to.
 
-The host agent keeps its own frames readable where it builds them: a clipped
-tool `args` or `result` preview is cut between whole characters. Text it
-passes on from the daemon is sent as it came.
+The host agent writes every frame well-formed: a lone surrogate in any
+string it sends (daemon text, a saved session's first message, a relayed
+call's arguments) goes out as U+FFFD, so the frame is not lost to it. A
+clipped tool `args` or `result` preview is cut between whole characters, so
+it makes none. The skill module refuses a lone surrogate before sending, so a
+relayed call is not changed in practice.
 
 Going the other way, the host agent logs and drops a service frame that is
 not a JSON object, a `module_reply` whose call is no longer waiting (it

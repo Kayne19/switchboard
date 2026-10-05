@@ -76,6 +76,22 @@ interface SessionBuffer {
 
 const OPEN = 1;
 
+/**
+ * A JSON.stringify replacer that writes a lone surrogate in a string as
+ * U+FFFD. JSON.stringify would write it as a `\uXXXX` escape, which the
+ * service's serde_json refuses, and the whole frame would be lost: an
+ * event, a snapshot, or a command's reply (a saved session's first message
+ * cut inside an emoji failed `list_saved_sessions` on every try). The skill
+ * module refuses a lone surrogate before it sends one, so a relayed call is
+ * not changed in practice. (`isWellFormed` and `toWellFormed` are ES2024,
+ * in Node since 20; the type library here is ES2023.)
+ */
+function wellFormed(_key: string, value: unknown): unknown {
+	if (typeof value !== "string") return value;
+	const text = value as unknown as { isWellFormed(): boolean; toWellFormed(): string };
+	return text.isWellFormed() ? value : text.toWellFormed();
+}
+
 export function formatCursor(bootId: string, seq: number): string {
 	return `${bootId}:${seq}`;
 }
@@ -234,7 +250,7 @@ export class HostLink {
 	#send(message: Record<string, unknown>): boolean {
 		const ws = this.#ws;
 		if (!ws || ws.readyState !== OPEN) return false;
-		ws.send(JSON.stringify(message));
+		ws.send(JSON.stringify(message, wellFormed));
 		return true;
 	}
 

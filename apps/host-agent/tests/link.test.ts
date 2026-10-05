@@ -415,6 +415,33 @@ test("a frame the host agent cannot use is logged with the reason", async () => 
 	}
 });
 
+// serde_json refuses a lone surrogate, and the service lost the whole frame
+// that carried one: an event, or a command's reply (list_saved_sessions
+// failed on every try for a first message cut inside an emoji).
+test("every frame goes out with a lone surrogate written as U+FFFD", async () => {
+	const service = await FakeService.start();
+	const { link } = makeLink(service, {
+		heartbeatMs: 60_000,
+		command: async () => ({ sessions: [{ first_message: "fix the parser \ud83d" }] }),
+	});
+	try {
+		link.start();
+		const l = await service.link(0);
+		await l.next((m) => m.type === "synced");
+		const raw: string[] = [];
+		l.socket.on("message", (data) => raw.push(String(data)));
+		link.publish("a1", { kind: "text", text: "half \ude00 and whole \ud83d\ude00" });
+		const event = await l.next((m) => m.type === "event");
+		assert.equal((event.event as Message).text, "half \ufffd and whole \ud83d\ude00");
+		const reply = await command(l, 1, "c1", "list_saved_sessions", { cwd: "/srv/homelab" });
+		assert.deepEqual(reply.result, { sessions: [{ first_message: "fix the parser \ufffd" }] });
+		assert.ok(raw.every((frame) => !/\\ud[89a-f]/i.test(frame)), "no surrogate escape on the wire");
+	} finally {
+		link.stop();
+		await service.close();
+	}
+});
+
 test("reconnect: a session closed while the link was down reaches the service", async () => {
 	const service = await FakeService.start();
 	let tracked = ["a1", "a2"];
