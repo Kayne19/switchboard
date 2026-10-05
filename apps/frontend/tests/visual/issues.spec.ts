@@ -460,6 +460,28 @@ for (const { scene, viewport } of portraitCharts) {
   });
 }
 
+// Focus on a phone drew the chart in a 2:1 strip across the screen; its
+// frame follows its box now, so the box is a square to read in.
+test('a focused chart on a portrait phone gets a square to read in, its text readable', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/?scene=comparison&chrome=0');
+  await page.evaluate(() => window.SwitchboardController!.dispatch({ op: 'focus', id: 'durations' }));
+  const chart = page.locator('.focus-layer [data-testid="chart"]');
+  await expect(chart).toBeVisible();
+  await page.waitForTimeout(500);
+  const geometry = await chart.evaluate((element) => {
+    const svg = element.querySelector('svg')!;
+    const box = svg.getBoundingClientRect();
+    const sizes = [...svg.querySelectorAll('text')].map((text) => {
+      const matrix = text.getScreenCTM()!;
+      return Number.parseFloat(getComputedStyle(text).fontSize) * Math.hypot(matrix.a, matrix.b);
+    });
+    return { aspect: box.width / box.height, smallest: Math.min(...sizes) };
+  });
+  expect(geometry.aspect).toBeLessThan(1.2);
+  expect(geometry.smallest).toBeGreaterThanOrEqual(7 - 0.01);
+});
+
 // Where every bar stands to the top of the domain the chart gives and the
 // band above the plot is shorter than the card, no place on the chart is
 // clear of the data: the note goes to the rail, still naming its target,

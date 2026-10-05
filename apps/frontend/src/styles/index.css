@@ -2866,11 +2866,13 @@ button {
     width: 94vw;
     height: 86vh;
   }
+  /* The chart's frame follows its box (chartFrame), so a portrait focus
+     gives it a square to read in rather than a 2:1 strip. */
   .focus-layer__content--chart {
     width: 94vw;
     height: auto;
-    max-height: none;
-    aspect-ratio: 2 / 1;
+    max-height: 70vh;
+    aspect-ratio: 1 / 1;
   }
   .focus-layer__content--note,
   .focus-layer__content--metric,
