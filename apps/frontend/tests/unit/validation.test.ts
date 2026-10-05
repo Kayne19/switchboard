@@ -109,7 +109,7 @@ describe('display protocol validation', () => {
     const action = assertControllerAction(valid);
     expect(action.op).toBe('show');
 
-    expect(() => assertControllerAction({ op: 'listen', on: true })).toThrow(/unknown operation/);
+    expect(() => assertControllerAction({ op: 'listen', on: true })).toThrow('invalid op: expected one of show, hide, focus, say, clear');
     expect(() => assertControllerAction({ op: 'show', id: '__runtime/x', type: 'metric', data: { label: 'L', value: '1' } })).toThrow(/reserved identifier namespace/);
   });
 

@@ -50,8 +50,10 @@ export function normalizeProgressValue(value: number): number {
   return Math.round(bounded * 100) / 100;
 }
 
-const ALLOWED_OPERATIONS = new Set(['show', 'hide', 'say', 'focus', 'clear']);
-const ALLOWED_OBJECT_TYPES = new Set([
+// The names a field takes from a fixed set, each in the schema's order. A
+// refused name is `invalidName`'s text, which lists them.
+const OPERATIONS = ['show', 'hide', 'focus', 'say', 'clear'] as const;
+const OBJECT_TYPES = [
   'chart',
   'metric',
   'progress',
@@ -66,19 +68,10 @@ const ALLOWED_OBJECT_TYPES = new Set([
   'timer',
   'weather',
   'inbox',
-]);
-const ALLOWED_ROLES = new Set<SceneObjectRole>(['primary', 'compare', 'secondary', 'ambient']);
-const ALLOWED_SEMANTICS = new Set<Semantic>([
-  'red',
-  'orange',
-  'green',
-  'cyan',
-  'amber',
-  'paper',
-  'muted',
-]);
-
-const CHART_KINDS = new Set<ChartKind>(['line', 'bar', 'area', 'scatter']);
+] as const;
+const ROLES: readonly SceneObjectRole[] = ['primary', 'compare', 'secondary', 'ambient'];
+const SEMANTICS: readonly Semantic[] = ['red', 'orange', 'green', 'cyan', 'amber', 'paper', 'muted'];
+const CHART_KINDS: readonly ChartKind[] = ['line', 'bar', 'area', 'scatter'];
 const MAX_CHART_LABELS = 100;
 const MAX_CHART_LABEL_UTF16 = 64;
 
@@ -97,8 +90,27 @@ export const MAX_IMAGE_ACTION_BYTES = 12 * 1024 * 1024;
 const RESERVED_ID_PREFIX = '__runtime/';
 const MAX_PROGRESS_STEPS = 30;
 const MAX_METRIC_DELTA_UTF16 = 32;
-const METRIC_TRENDS = new Set<MetricTrend>(['up', 'down', 'flat']);
-const PROGRESS_STEP_STATES = new Set<ProgressStepState>(['done', 'active', 'todo', 'blocked']);
+const METRIC_TRENDS: readonly MetricTrend[] = ['up', 'down', 'flat'];
+/** A progress step's state and a diagram node's state. */
+const STEP_STATES: readonly ProgressStepState[] = ['done', 'active', 'todo', 'blocked'];
+const DIAGRAM_MODES = ['graph', 'sequence'] as const;
+const MESSAGE_KINDS: readonly NonNullable<SequenceMessage['kind']>[] = ['call', 'return', 'async'];
+const DOCUMENT_KINDS: readonly NonNullable<DocumentData['kind']>[] = ['email', 'document'];
+
+/**
+ * The one refusal of a name outside its set, required or optional alike
+ * (docs/display-tool.md, "How the two validators agree"): the field and
+ * every name it takes, so an agent can mend the action from the error
+ * alone. The backend's `invalid_name` writes the same text.
+ */
+function invalidName(field: string, allowed: readonly string[]): string {
+  return `invalid ${field}: expected one of ${allowed.join(', ')}`;
+}
+
+/** Whether `value` is one of `allowed`: a string, and in the set. */
+function isName<T extends string>(value: unknown, allowed: readonly T[]): value is T {
+  return typeof value === 'string' && (allowed as readonly string[]).includes(value);
+}
 
 const FORBIDDEN_LAYOUT_KEYS = new Set([
   'layout',
@@ -280,8 +292,8 @@ function validateChartData(data: Record<string, unknown>): { ok: true; data: Cha
   const unknownKey = checkUnknownKeys(data, allowed, 'chart data');
   if (unknownKey) return { ok: false, error: unknownKey };
 
-  if (data.kind !== undefined && !CHART_KINDS.has(data.kind as ChartKind)) {
-    return { ok: false, error: 'invalid chart.kind' };
+  if (data.kind !== undefined && !isName(data.kind, CHART_KINDS)) {
+    return { ok: false, error: invalidName('chart.kind', CHART_KINDS) };
   }
   let labels: string[] | undefined;
   if (data.labels !== undefined) {
@@ -313,8 +325,8 @@ function validateChartData(data: Record<string, unknown>): { ok: true; data: Cha
     if (labels && s.values.length > labels.length) {
       return { ok: false, error: 'series.values is longer than chart.labels' };
     }
-    if (s.semantic !== undefined && !ALLOWED_SEMANTICS.has(s.semantic as Semantic)) {
-      return { ok: false, error: 'invalid series.semantic' };
+    if (s.semantic !== undefined && !isName(s.semantic, SEMANTICS)) {
+      return { ok: false, error: invalidName('series.semantic', SEMANTICS) };
     }
     seriesList.push({
       name: s.name as string,
@@ -378,8 +390,8 @@ function validateMetricData(data: Record<string, unknown>): { ok: true; data: Me
   const valErr = checkString(data.value, 128, 'metric.value');
   if (valErr) return { ok: false, error: valErr };
 
-  if (data.semantic !== undefined && !ALLOWED_SEMANTICS.has(data.semantic as Semantic)) {
-    return { ok: false, error: 'invalid metric.semantic' };
+  if (data.semantic !== undefined && !isName(data.semantic, SEMANTICS)) {
+    return { ok: false, error: invalidName('metric.semantic', SEMANTICS) };
   }
 
   const result: MetricData = {
@@ -393,8 +405,8 @@ function validateMetricData(data: Record<string, unknown>): { ok: true; data: Me
     result.caption = data.caption as string;
   }
   if (data.trend !== undefined) {
-    if (!METRIC_TRENDS.has(data.trend as MetricTrend)) {
-      return { ok: false, error: 'invalid metric.trend' };
+    if (!isName(data.trend, METRIC_TRENDS)) {
+      return { ok: false, error: invalidName('metric.trend', METRIC_TRENDS) };
     }
     result.trend = data.trend as MetricTrend;
   }
@@ -433,8 +445,8 @@ function validateProgressSteps(value: unknown): { ok: true; steps: ProgressStep[
     if (labelErr) return { ok: false, error: labelErr };
     const step: ProgressStep = { label: s.label as string };
     if (s.state !== undefined) {
-      if (!PROGRESS_STEP_STATES.has(s.state as ProgressStepState)) {
-        return { ok: false, error: 'invalid progress step.state' };
+      if (!isName(s.state, STEP_STATES)) {
+        return { ok: false, error: invalidName('progress step.state', STEP_STATES) };
       }
       step.state = s.state as ProgressStepState;
     }
@@ -514,7 +526,7 @@ function validateDiagramData(data: Record<string, unknown>): { ok: true; data: D
     case 'sequence':
       return validateSequenceDiagramData(data);
     default:
-      return { ok: false, error: 'diagram.mode must be "graph" or "sequence"' };
+      return { ok: false, error: invalidName('diagram.mode', DIAGRAM_MODES) };
   }
 }
 
@@ -534,7 +546,6 @@ function validateGraphDiagramData(data: Record<string, unknown>): { ok: true; da
   }
 
   const nodeAllowed = new Set(['id', 'label', 'sub', 'detail', 'semantic', 'state']);
-  const nodeStates = new Set(['done', 'active', 'todo', 'blocked']);
   const nodeIds = new Set<string>();
   const nodes: DiagramNode[] = [];
 
@@ -566,11 +577,11 @@ function validateGraphDiagramData(data: Record<string, unknown>): { ok: true; da
       nodeItem.detail = n.detail as string;
     }
     if (n.semantic !== undefined) {
-      if (!ALLOWED_SEMANTICS.has(n.semantic as Semantic)) return { ok: false, error: 'invalid diagram node.semantic' };
+      if (!isName(n.semantic, SEMANTICS)) return { ok: false, error: invalidName('diagram node.semantic', SEMANTICS) };
       nodeItem.semantic = n.semantic as Semantic;
     }
     if (n.state !== undefined) {
-      if (!nodeStates.has(n.state as string)) return { ok: false, error: 'invalid diagram node.state' };
+      if (!isName(n.state, STEP_STATES)) return { ok: false, error: invalidName('diagram node.state', STEP_STATES) };
       nodeItem.state = n.state as DiagramNode['state'];
     }
     nodes.push(nodeItem);
@@ -612,7 +623,7 @@ function validateGraphDiagramData(data: Record<string, unknown>): { ok: true; da
       edgeItem.label = e.label as string;
     }
     if (e.semantic !== undefined) {
-      if (!ALLOWED_SEMANTICS.has(e.semantic as Semantic)) return { ok: false, error: 'invalid diagram edge.semantic' };
+      if (!isName(e.semantic, SEMANTICS)) return { ok: false, error: invalidName('diagram edge.semantic', SEMANTICS) };
       edgeItem.semantic = e.semantic as Semantic;
     }
     if (e.active !== undefined) {
@@ -685,14 +696,13 @@ function validateSequenceDiagramData(data: Record<string, unknown>): { ok: true;
       actorItem.sub = a.sub as string;
     }
     if (a.semantic !== undefined) {
-      if (!ALLOWED_SEMANTICS.has(a.semantic as Semantic)) return { ok: false, error: 'invalid diagram actor.semantic' };
+      if (!isName(a.semantic, SEMANTICS)) return { ok: false, error: invalidName('diagram actor.semantic', SEMANTICS) };
       actorItem.semantic = a.semantic as Semantic;
     }
     actors.push(actorItem);
   }
 
   const messageAllowed = new Set(['from', 'to', 'label', 'kind', 'active']);
-  const messageKinds = new Set(['call', 'return', 'async']);
   const messages: SequenceMessage[] = [];
 
   // A self-message and a repeated pair are both ordinary in a sequence, so
@@ -716,7 +726,7 @@ function validateSequenceDiagramData(data: Record<string, unknown>): { ok: true;
 
     const messageItem: SequenceMessage = { from: m.from, to: m.to, label: m.label as string };
     if (m.kind !== undefined) {
-      if (!messageKinds.has(m.kind as string)) return { ok: false, error: 'invalid diagram message.kind' };
+      if (!isName(m.kind, MESSAGE_KINDS)) return { ok: false, error: invalidName('diagram message.kind', MESSAGE_KINDS) };
       messageItem.kind = m.kind as SequenceMessage['kind'];
     }
     if (m.active !== undefined) {
@@ -767,8 +777,8 @@ function validateDocumentData(data: Record<string, unknown>): { ok: true; data: 
   };
 
   if (data.kind !== undefined) {
-    if (data.kind !== 'email' && data.kind !== 'document') {
-      return { ok: false, error: 'invalid document.kind' };
+    if (!isName(data.kind, DOCUMENT_KINDS)) {
+      return { ok: false, error: invalidName('document.kind', DOCUMENT_KINDS) };
     }
     result.kind = data.kind;
   }
@@ -868,7 +878,7 @@ function validateTableData(data: Record<string, unknown>): { ok: true; data: Tab
     if (labelErr) return { ok: false, error: labelErr };
     const column: TableColumn = { label: c.label as string };
     if (c.semantic !== undefined) {
-      if (!ALLOWED_SEMANTICS.has(c.semantic as Semantic)) return { ok: false, error: 'invalid table column.semantic' };
+      if (!isName(c.semantic, SEMANTICS)) return { ok: false, error: invalidName('table column.semantic', SEMANTICS) };
       column.semantic = c.semantic as Semantic;
     }
     columns.push(column);
@@ -904,7 +914,7 @@ function validateTableData(data: Record<string, unknown>): { ok: true; data: Tab
       if (textErr) return { ok: false, error: textErr };
       const cellObj: TableCell = { text: cell.text as string };
       if (cell.semantic !== undefined) {
-        if (!ALLOWED_SEMANTICS.has(cell.semantic as Semantic)) return { ok: false, error: 'invalid table cell.semantic' };
+        if (!isName(cell.semantic, SEMANTICS)) return { ok: false, error: invalidName('table cell.semantic', SEMANTICS) };
         cellObj.semantic = cell.semantic as Semantic;
       }
       if (cell.bold !== undefined) {
@@ -944,7 +954,7 @@ function validateTableData(data: Record<string, unknown>): { ok: true; data: Tab
 
 // ---- image -----------------------------------------------------------------
 
-const IMAGE_FORMATS = new Set<ImageFormat>(['png', 'jpeg', 'webp']);
+const IMAGE_FORMATS: readonly ImageFormat[] = ['png', 'jpeg', 'webp'];
 /** The fewest bytes a signature check needs: WebP's `WEBP` ends at byte 12. */
 const IMAGE_SIGNATURE_BYTES = 12;
 
@@ -1022,12 +1032,12 @@ function validateImageData(data: Record<string, unknown>): { ok: true; data: Ima
   if (unknownKey) return { ok: false, error: unknownKey };
 
   if (data.format === 'svg' || data.format === 'svg+xml') {
-    return { ok: false, error: 'image.format svg is refused: an image is raster bytes, not markup' };
+    return { ok: false, error: `${invalidName('image.format', IMAGE_FORMATS)} (svg is refused: an image is raster bytes, not markup)` };
   }
-  if (typeof data.format !== 'string' || !IMAGE_FORMATS.has(data.format as ImageFormat)) {
-    return { ok: false, error: 'image.format must be one of png, jpeg, webp' };
+  if (!isName(data.format, IMAGE_FORMATS)) {
+    return { ok: false, error: invalidName('image.format', IMAGE_FORMATS) };
   }
-  const format = data.format as ImageFormat;
+  const format = data.format;
 
   if (typeof data.bytes !== 'string') return { ok: false, error: 'image.bytes must be a base64 string' };
   const decodedLength = base64DecodedLength(data.bytes);
@@ -1218,11 +1228,11 @@ function copyOptionalBoolean(data: Fields, out: Fields, key: string, field: stri
   return null;
 }
 
-/** An optional name from `allowed`; anything else, `null` included, is `invalid {field}`. */
-function copyOptionalName(data: Fields, out: Fields, key: string, allowed: ReadonlySet<string>, field: string): string | null {
+/** An optional name from `allowed`; anything else, `null` included, is `invalidName`'s refusal. */
+function copyOptionalName(data: Fields, out: Fields, key: string, allowed: readonly string[], field: string): string | null {
   const value = data[key];
   if (value === undefined) return null;
-  if (typeof value !== 'string' || !allowed.has(value)) return `invalid ${field}`;
+  if (!isName(value, allowed)) return invalidName(field, allowed);
   out[key] = value;
   return null;
 }
@@ -1255,11 +1265,11 @@ function checkItemId(value: unknown, seen: Set<string>, context: string): { ok: 
   return { ok: true, id: value };
 }
 
-const CALENDAR_VIEWS = new Set(['day', 'week', 'month', 'agenda']);
+const CALENDAR_VIEWS = ['day', 'week', 'month', 'agenda'];
 /** The most days a view may show; the day and month views take no `days`. */
 const CALENDAR_MAX_DAYS: Record<string, number> = { week: 7, agenda: 31 };
 const MAX_CALENDAR_EVENTS = 200;
-const CALENDAR_EVENT_STATUSES = new Set(['confirmed', 'tentative', 'cancelled']);
+const CALENDAR_EVENT_STATUSES = ['confirmed', 'tentative', 'cancelled'];
 
 function validateCalendarEvent(e: unknown, seen: Set<string>): { ok: true; event: CalendarEvent } | { ok: false; error: string } {
   if (!isRecord(e)) return { ok: false, error: 'calendar event must be an object' };
@@ -1288,7 +1298,7 @@ function validateCalendarEvent(e: unknown, seen: Set<string>): { ok: true; event
   const err =
     copyOptionalString(e, out, 'location', 128, 'calendar event.location') ??
     copyOptionalString(e, out, 'detail', 256, 'calendar event.detail') ??
-    copyOptionalName(e, out, 'semantic', ALLOWED_SEMANTICS, 'calendar event.semantic') ??
+    copyOptionalName(e, out, 'semantic', SEMANTICS, 'calendar event.semantic') ??
     copyOptionalName(e, out, 'status', CALENDAR_EVENT_STATUSES, 'calendar event.status') ??
     copyOptionalBoolean(e, out, 'active', 'calendar event.active');
   if (err) return { ok: false, error: err };
@@ -1303,8 +1313,8 @@ function validateCalendarData(data: Fields): { ok: true; data: CalendarData } | 
   );
   if (unknownKey) return { ok: false, error: unknownKey };
 
-  if (typeof data.view !== 'string' || !CALENDAR_VIEWS.has(data.view)) {
-    return { ok: false, error: 'calendar.view must be one of day, week, month, agenda' };
+  if (!isName(data.view, CALENDAR_VIEWS)) {
+    return { ok: false, error: invalidName('calendar.view', CALENDAR_VIEWS) };
   }
   const view = data.view;
   const start = readTime(data.start, ['date'], 'calendar.start');
@@ -1350,8 +1360,8 @@ function validateCalendarData(data: Fields): { ok: true; data: CalendarData } | 
 }
 
 const MAX_TASKS = 100;
-const TASK_STATES = new Set(['todo', 'active', 'done', 'blocked']);
-const TASK_PRIORITIES = new Set(['high', 'low']);
+const TASK_STATES = ['todo', 'active', 'done', 'blocked'];
+const TASK_PRIORITIES = ['high', 'low'];
 const MAX_TASK_TAGS = 4;
 const MAX_TASK_TAG_UTF16 = 32;
 
@@ -1415,7 +1425,7 @@ function validateTasksData(data: Fields): { ok: true; data: TasksData } | { ok: 
 }
 
 const MAX_TIMERS = 8;
-const TIMER_STATES = new Set(['running', 'paused']);
+const TIMER_STATES = ['running', 'paused'];
 
 function validateTimer(t: unknown, seen: Set<string>): { ok: true; timer: Timer } | { ok: false; error: string } {
   if (!isRecord(t)) return { ok: false, error: 'timer must be an object' };
@@ -1475,14 +1485,12 @@ function validateTimerData(data: Fields): { ok: true; data: TimerData } | { ok: 
 const WEATHER_CONDITIONS = [
   'clear', 'partly-cloudy', 'cloudy', 'fog', 'drizzle', 'rain', 'heavy-rain', 'thunder', 'snow', 'sleet', 'hail', 'wind', 'haze',
 ];
-const WEATHER_CONDITION_SET = new Set(WEATHER_CONDITIONS);
+const WEATHER_UNITS = ['C', 'F'];
 const MAX_WEATHER_HOURS = 48;
 const MAX_WEATHER_DAYS = 14;
 
 function copyCondition(data: Fields, out: Fields, field: string): string | null {
-  if (typeof data.condition !== 'string' || !WEATHER_CONDITION_SET.has(data.condition)) {
-    return `${field} must be one of ${WEATHER_CONDITIONS.join(', ')}`;
-  }
+  if (!isName(data.condition, WEATHER_CONDITIONS)) return invalidName(field, WEATHER_CONDITIONS);
   out.condition = data.condition;
   return null;
 }
@@ -1556,7 +1564,7 @@ function validateWeatherData(data: Fields): { ok: true; data: WeatherData } | { 
   if (unknownKey) return { ok: false, error: unknownKey };
   const locationErr = checkString(data.location, 128, 'weather.location');
   if (locationErr) return { ok: false, error: locationErr };
-  if (data.units !== 'C' && data.units !== 'F') return { ok: false, error: 'weather.units must be "C" or "F"' };
+  if (!isName(data.units, WEATHER_UNITS)) return { ok: false, error: invalidName('weather.units', WEATHER_UNITS) };
   const current = validateWeatherCurrent(data.current);
   if (!current.ok) return current;
   const out: Fields = { location: data.location, units: data.units, current: current.current };
@@ -1618,7 +1626,7 @@ function validateInboxMessage(m: unknown, seen: Set<string>): { ok: true; messag
     copyOptionalString(m, out, 'channel', MAX_INBOX_CHANNEL_UTF16, 'inbox message.channel') ??
     copyOptionalBoolean(m, out, 'unread', 'inbox message.unread') ??
     copyOptionalBoolean(m, out, 'flagged', 'inbox message.flagged') ??
-    copyOptionalName(m, out, 'semantic', ALLOWED_SEMANTICS, 'inbox message.semantic');
+    copyOptionalName(m, out, 'semantic', SEMANTICS, 'inbox message.semantic');
   if (err) return { ok: false, error: err };
   return { ok: true, message: out as unknown as InboxMessage };
 }
@@ -1677,7 +1685,7 @@ function validateNoteData(data: Record<string, unknown>): { ok: true; data: Note
       segObj.bold = seg.bold;
     }
     if (seg.semantic !== undefined) {
-      if (!ALLOWED_SEMANTICS.has(seg.semantic as Semantic)) return { ok: false, error: 'invalid note segment.semantic' };
+      if (!isName(seg.semantic, SEMANTICS)) return { ok: false, error: invalidName('note segment.semantic', SEMANTICS) };
       segObj.semantic = seg.semantic as Semantic;
     }
     segments.push(segObj);
@@ -1759,8 +1767,8 @@ export function validateControllerAction(value: unknown): ActionValidationResult
 function validateActionFields(value: unknown): ActionValidationResult {
   if (!isRecord(value)) return { ok: false, error: 'action must be an object' };
   if (serializedSize(value) > actionSizeCap(value)) return { ok: false, error: 'action exceeds size limit' };
-  if (typeof value.op !== 'string' || !ALLOWED_OPERATIONS.has(value.op)) {
-    return { ok: false, error: 'unknown operation' };
+  if (!isName(value.op, OPERATIONS)) {
+    return { ok: false, error: invalidName('op', OPERATIONS) };
   }
 
   const layoutError = findForbiddenLayoutKey(value);
@@ -1782,12 +1790,12 @@ function validateActionFields(value: unknown): ActionValidationResult {
       const idCheck = checkIdentifier(value.id, 'show.id');
       if (!idCheck.ok) return idCheck;
 
-      if (typeof value.type !== 'string' || !ALLOWED_OBJECT_TYPES.has(value.type)) {
-        return { ok: false, error: 'show.type is unknown' };
+      if (!isName(value.type, OBJECT_TYPES)) {
+        return { ok: false, error: invalidName('show.type', OBJECT_TYPES) };
       }
 
-      if (value.role !== undefined && (typeof value.role !== 'string' || !ALLOWED_ROLES.has(value.role as SceneObjectRole))) {
-        return { ok: false, error: 'show.role is unknown' };
+      if (value.role !== undefined && !isName(value.role, ROLES)) {
+        return { ok: false, error: invalidName('show.role', ROLES) };
       }
 
       if (!isRecord(value.data)) return { ok: false, error: 'show.data must be an object' };
@@ -1879,7 +1887,7 @@ function validateActionFields(value: unknown): ActionValidationResult {
           break;
         }
         default:
-          return { ok: false, error: 'show.type is unknown' };
+          return { ok: false, error: invalidName('show.type', OBJECT_TYPES) };
       }
 
       // The switch above validated `type` and `data` together; TypeScript
@@ -1971,7 +1979,7 @@ function validateActionFields(value: unknown): ActionValidationResult {
       return { ok: true, action: { op: 'clear' } };
     }
     default:
-      return { ok: false, error: 'unknown operation' };
+      return { ok: false, error: invalidName('op', OPERATIONS) };
   }
 }
 

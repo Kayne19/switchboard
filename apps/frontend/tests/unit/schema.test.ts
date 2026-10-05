@@ -126,6 +126,36 @@ describe('display-action-v1.schema.json and the validator corpus', () => {
     expect(accepted).toEqual([]);
   });
 
+  // A refused name lists every name its field takes (docs/display-tool.md,
+  // "How the two validators agree"). Each list is one the schema states, in
+  // its order, so the error and the contract name the same set.
+  it('lists, in every refusal of a name, a set the schema states, in its order', () => {
+    const definitions = schema.definitions as Record<string, any>;
+    const stated: string[][] = [];
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) node.forEach(walk);
+      else if (typeof node === 'object' && node !== null) {
+        const record = node as Record<string, unknown>;
+        if (Array.isArray(record.enum) && record.enum.length > 1) stated.push(record.enum as string[]);
+        Object.values(record).forEach(walk);
+      }
+    };
+    walk(schema);
+    // The op, the show type and the diagram mode are stated one per action
+    // or shape, across the schema's `oneOf`s.
+    const actions = (schema.oneOf as Array<{ $ref: string }>).map((variant) => definitions[variant.$ref.split('/').pop()!].properties);
+    stated.push([...new Set(actions.map((properties) => properties.op.enum[0] as string))]);
+    stated.push(actions.filter((properties) => properties.type).map((properties) => properties.type.enum[0] as string));
+    stated.push(
+      (definitions.DiagramData.oneOf as Array<{ $ref: string }>).map((shape) => definitions[shape.$ref.split('/').pop()!].properties.mode.enum[0] as string),
+    );
+    const listed = corpusCases
+      .map((testCase) => /^invalid [^:]+: expected one of (.+?)(?: \(.*\))?$/.exec(testCase.error ?? '')?.[1])
+      .filter((list): list is string => list !== undefined);
+    expect(listed.length).toBeGreaterThan(100);
+    for (const list of new Set(listed)) expect(stated, list).toContainEqual(list.split(', '));
+  });
+
   // JSON cannot hold a NaN or an infinity, so these are not corpus cases.
   it('refuses every non-finite mutation (NaN, Infinity, -Infinity)', () => {
     for (const mutation of fixtures.nonFiniteMutations) {
