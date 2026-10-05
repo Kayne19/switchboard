@@ -159,7 +159,7 @@ Every time in a display action is a string in one of three forms. Each validator
 
 Five types show a person's day: `calendar`, `tasks`, `timer`, `weather` and `inbox`. They keep the conventions of the other types: an optional `title`, `subtitle`, `context` (each <= 256) and `caption` (<= 128); camelCase keys; an unknown key is refused. An item id (an event, a task, a timer, a message) is non-blank and <= 128 UTF-16 code units, like a diagram node id, and is unique in its list.
 
-Status: both validators, the schema and the skill module hold the whole contract below. The page draws the five with one stand-in for now, a framed list of the fields as sent (`apps/frontend/src/primitives/TemporaryAssistantList.tsx`), so none is dropped. The drawing rules below (a timer's countdown, a marked item, an overdue task, the condition glyphs, the half-hour block) are what the render slice implements; until it lands the page does not do them.
+Status: both validators, the schema and the skill module hold the whole contract below. The page draws `tasks` and `inbox` with primitives of their own (`TasksPrimitive`, `InboxPrimitive`; how, in `docs/visual-channel.md`), and marks the item a note names in any of the five. It draws `calendar`, `timer` and `weather` with one stand-in for now, a framed list of the fields as sent (`apps/frontend/src/primitives/TemporaryAssistantList.tsx`), so none is dropped. The drawing rules below for those three (a timer's countdown, the condition glyphs, the half-hour block) are what their render slices implement; until they land the page does not do them.
 
 #### calendar
 
@@ -246,7 +246,7 @@ Status: both validators, the schema and the skill module hold the whole contract
 
 #### A note on one item: `note.anchor.item`
 
-A note's `anchor.item` names an item inside its target: a calendar event, a task, a timer or an inbox message by its `id`, or a forecast hour or day by its `time` or `date`. It is checked as an item id is (non-blank, <= 128 UTF-16 code units). As for `node` and `series`, the validators check only its shape: the note and its target are separate objects, and the target may change after the note. The page is to mark the named item the way a diagram marks the node a note names (the render slice; the stand-in marks nothing), and marks nothing when the target has no item of that name.
+A note's `anchor.item` names an item inside its target: a calendar event, a task, a timer or an inbox message by its `id`, or a forecast hour or day by its `time` or `date`. It is checked as an item id is (non-blank, <= 128 UTF-16 code units). As for `node` and `series`, the validators check only its shape: the note and its target are separate objects, and the target may change after the note. The page marks the named item the way a diagram marks the node a note names: wherever the target is drawn (the main slot, a cell beside the primary, focus) the item carries the NOTE badge, the twin of the one on the rail card, and a list that scrolls opens on it; the card's `TARGET` line names the item in the target's own words (a task's text, a message's sender and subject). It marks nothing, and the card shows the anchor as sent, when the target has no item of that name.
 
 ```json
 { "op": "show", "id": "dentist-note", "type": "note", "data": {

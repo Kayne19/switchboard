@@ -71,10 +71,12 @@ The model controls semantic intent. The frontend controls composition, geometry,
 | `CodeViewport` | syntax presentation, safe scrolling, irregular clipping |
 | `DocumentViewport` | readable document layout and bounded scrolling |
 | `MetricsPrimitive` | metric alignment and semantic values |
-| `AnnotationCard` | targeted explanation and rich text semantics |
+| `TasksPrimitive` | a to-do list: sections by group, the step glyph for a task's state, the priority arrow, the due day judged against the list's `today`, done tasks quieter and counted where a slot is short of room, the compact rows beside a primary |
+| `InboxPrimitive` | an inbox: messages in the order sent, the columns of senders, channels and times, a snippet cut on its one line, the time of day on `today`, the unread, flagged and tinted marks, one line or stacked by the list's width |
+| `AnnotationCard` | targeted explanation and rich text semantics; its TARGET line names the chart point or list item it is about, and carries the NOTE badge (`NoteBadge`, the HTML twin of the drawings' `NoteMarker`) where that part is marked |
 | `ChartNotes` + `notePlacement` | every note on a chart, laid over it clear of the others, their points and what the chart draws (`chartObstacles`: bars and scatter points as areas, lines, the marker ring, a bar's printed value, legend and axis labels; an area's fill only where nothing else is free); on a bar chart a card wholly in or out of the plot, its leader onto the bar from past its end; a card's width where its own has no clear place; the angular leader from card to point; where a card has no clear place, one note handed to the rail (a note naming no point first), its point ringed or its bar marked |
 | `FocusableSurface` | accessible activation without invalid button-wrapped scroll regions; a click or key a control inside it has handled (`preventDefault`) is left alone, and no control stops one, so the page hears every tap |
-| `FocusLayer` | shared-object expansion and return behavior; a focused diagram's note, beside or under it by the box's shape |
+| `FocusLayer` | shared-object expansion and return behavior; the note of a focused diagram or list with items, beside or under it by the box's shape |
 | Controller reducer | six-operation state semantics |
 
 A page-level patch that duplicates one of these responsibilities is usually incorrect.
