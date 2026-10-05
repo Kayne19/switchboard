@@ -6,7 +6,9 @@
 // pixel it takes is one the primary does not get. A primary that reads
 // whole in the column it shares with the rail keeps that layout. One whose
 // content asks for more -- a drawing past its least readable scale, a table,
-// a code pane or a document that scrolls -- gets the stage's height: the rail folds to a strip under it (its note,
+// a code pane or a document that scrolls, a figure drawn smaller than its
+// width allows, a bar chart too short for a row per category, a long plan --
+// gets the stage's height: the rail folds to a strip under it (its note,
 // and Damocles), and the caller can open it again. Decided by geometry
 // alone: where the rail stands, and what the primary's content says it
 // lacks (useStageDemand), never the viewport's size or the object's type.

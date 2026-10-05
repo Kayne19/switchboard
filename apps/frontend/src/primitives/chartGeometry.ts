@@ -980,3 +980,24 @@ export function chartAxisBoxes(plot: ViewRect, frame: ChartFrame = CHART_FRAME):
     { left: plot.left - 20, top: plot.bottom, right: frame.width, bottom: frame.height },
   ];
 }
+
+/**
+ * The least height, in CSS pixels, of a slot `width` wide in which a bar
+ * chart gives every category a labelled row of its own -- on its side, as
+ * it is drawn when its labels do not fit under its bars -- at the readable
+ * scale; `null` for a chart that never asks for more (not bars, no labels,
+ * or labels that fit under the bars). A slot shorter than that thins the
+ * labels; on a portrait stage the chart then asks for the stage's height
+ * (useStageDemand).
+ */
+export function chartLeastHeight(data: ChartData, width: number): number | null {
+  const categories = chartCategories(data);
+  if (chartKind(data) !== 'bar' || !categories || !(width > 0)) return null;
+  // The scale a tall slot of this width is drawn at (chartFrame).
+  const scale = Math.min(Math.max(CHART_READABLE_SCALE, width / CHART_VIEW_WIDTH), width / CHART_MIN_FRAME.width);
+  const frame = { width: width / scale, height: Number.MAX_SAFE_INTEGER };
+  if (!chartCategoryLayout(data, frame).horizontal) return null;
+  const legendRows = chartLegendLayout(data, frame.width - categoryPadMax(frame) - CHART_PAD.right).rows;
+  const units = CHART_PAD.top + legendRowsAbovePlot('bar', legendRows) * CHART_LEGEND_ROW_HEIGHT + categories.length * CHART_TICK_ROW_HEIGHT + CHART_PAD.bottom;
+  return units * scale;
+}

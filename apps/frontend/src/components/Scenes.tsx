@@ -366,6 +366,7 @@ function trainingContent(
   railNote: ChartRailNote | null,
   onRailNote: (chartId: string, key: string, away: boolean) => void,
   band: ChartRailNote | null,
+  onDemand: StageDemandListener,
 ): SceneContent | null {
   const charts = objectsOfType<ChartData>(state, 'chart');
   const [firstProgress, ...railProgress] = objectsOfType<ProgressData>(state, 'progress');
@@ -423,7 +424,9 @@ function trainingContent(
                   <TechFrame variant="panel" />
                   <ObjectSurface object={chart}>
                     <FocusableSurface onActivate={() => onFocus(chart.id)} ariaLabel={`Expand ${chart.data.title ?? 'chart'}`}>
-                      <ChartPrimitive data={chart.data} named={chartNoteAnchors(chart, notes)} />
+                      <StageDemandContext.Provider value={chart.id === primary.id ? onDemand : null}>
+                        <ChartPrimitive data={chart.data} named={chartNoteAnchors(chart, notes)} />
+                      </StageDemandContext.Provider>
                     </FocusableSurface>
                   </ObjectSurface>
                   {onChart.length > 0 ? (
@@ -472,7 +475,7 @@ function trainingContent(
 // A diagram, document, code, table, or image object fills the main slot,
 // its note in the rail -- unless the diagram places the note as its own
 // callout -- and every other visual in the aux row under it.
-function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed: boolean) => void): SceneContent | null {
+function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed: boolean) => void, onDemand: StageDemandListener): SceneContent | null {
   const primary = primaryObject(state);
   if (!primary) return null;
   const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), primary.id);
@@ -491,7 +494,7 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
       {frame}
       <ObjectSurface object={primary}>
         <FocusableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
-          {body}
+          <StageDemandContext.Provider value={onDemand}>{body}</StageDemandContext.Provider>
         </FocusableSurface>
       </ObjectSurface>
     </ObjectMotion>
@@ -603,26 +606,22 @@ function AuxRow({ objects, onFocus }: { objects: SceneObject[]; onFocus: (id: st
 // than redrawing it; alone, the slot fills the column as it always did. The
 // primary keeps the larger share and the row takes what it needs up to its
 // cap (`.composed-main`).
-// The primary's own slot hears what its content asks of the stage
-// (useStageDemand); the aux row's cells do not speak for it.
 function MainWithAux({
   variant,
   aux,
   onFocus,
-  onDemand,
   ref,
   children,
 }: {
   variant?: string;
   aux: SceneObject[];
   onFocus: (id: string | null) => void;
-  onDemand: StageDemandListener;
   ref?: RefObject<HTMLDivElement | null>;
   children: ReactNode;
 }) {
   return (
     <motion.div ref={ref} className={`content-main composed-main${variant ? ` ${variant}` : ''}`} layout>
-      <StageDemandContext.Provider value={onDemand}>{children}</StageDemandContext.Provider>
+      {children}
       {aux.length > 0 ? <AuxRow objects={aux} onFocus={onFocus} /> : null}
     </motion.div>
   );
@@ -763,7 +762,7 @@ function useStageFold(
 
 // Any mix of objects: the primary, or a cluster of primary metrics, over an
 // aux row of everything the rail does not carry.
-function composedContent({ state, onFocus }: SceneProps): SceneContent | null {
+function composedContent({ state, onFocus }: SceneProps, onDemand: StageDemandListener): SceneContent | null {
   const comp = buildCompositionModel(state);
   const primary = comp.primary;
   if (!primary) return null;
@@ -827,7 +826,7 @@ function composedContent({ state, onFocus }: SceneProps): SceneContent | null {
                   onFocus={onFocus}
                 />
               ) : (
-                composedPrimitive(primary, 'primary')
+                <StageDemandContext.Provider value={onDemand}>{composedPrimitive(primary, 'primary')}</StageDemandContext.Provider>
               )}
             </FocusableSurface>
           </ObjectSurface>
@@ -878,17 +877,18 @@ function sceneContent(
   chartRailNote: ChartRailNote | null,
   onChartRailNote: (chartId: string, key: string, away: boolean) => void,
   chartBand: ChartRailNote | null,
+  onDemand: StageDemandListener,
 ): SceneContent | null {
   switch (props.kind) {
     case 'idle':
     case 'conversation':
       return null;
     case 'training':
-      return trainingContent(props, chartRailNote, onChartRailNote, chartBand);
+      return trainingContent(props, chartRailNote, onChartRailNote, chartBand, onDemand);
     case 'composed':
-      return composedContent(props);
+      return composedContent(props, onDemand);
     default:
-      return objectContent(props, onCalloutChange);
+      return objectContent(props, onCalloutChange, onDemand);
   }
 }
 
@@ -926,7 +926,11 @@ export function SceneShell(props: SceneProps) {
   // in less room, or for another note, must not take the note back and
   // hand it out again, the band coming and going under it.
   const [chartBand, setChartBand] = useState<ChartRailNote | null>(null);
-  const content = sceneContent(props, setCalloutPlaced, chartRailNote, onChartRailNote, chartBand);
+  // What the primary says it lacks reaches the fold (useStageFold) through
+  // a listener made before the scene is, since the scene draws the primary.
+  const foldListener = useRef<StageDemandListener | null>(null);
+  const onDemand = useCallback<StageDemandListener>((key, said) => foldListener.current?.(key, said), []);
+  const content = sceneContent(props, setCalloutPlaced, chartRailNote, onChartRailNote, chartBand, onDemand);
   const layout = content ? 'content' : kind === 'conversation' ? 'conversation' : 'idle';
   // A primary that outgrows the column it shares with a rail standing under
   // it takes the stage's height, the rail folded to a strip (stageFold.ts).
@@ -937,7 +941,10 @@ export function SceneShell(props: SceneProps) {
   const primaryId = content ? (primaryObject(state)?.id ?? null) : null;
   const [openFor, setOpenFor] = useState<string | null>(null);
   const railOpen = primaryId !== null && openFor === primaryId;
-  const { foldable, stacked, onDemand } = useStageFold(content !== null, railOpen, content?.chartNotes !== undefined, mainRef, railRef, probeRef);
+  const { foldable, stacked, onDemand: foldOnDemand } = useStageFold(content !== null, railOpen, content?.chartNotes !== undefined, mainRef, railRef, probeRef);
+  useLayoutEffect(() => {
+    foldListener.current = foldOnDemand;
+  }, [foldOnDemand]);
   const staged = foldable && !railOpen;
   const banding = stacked ? content?.chartNotes : undefined;
   const bandHeld = chartBand !== null && banding?.chart === chartBand.chart && banding.keys.includes(chartBand.note);
@@ -977,7 +984,7 @@ export function SceneShell(props: SceneProps) {
           </div>
           <div className={`content-grid${staged ? ' content-grid--staged' : ''}`} data-stage={foldable ? (staged ? 'primary' : 'shared') : undefined}>
             <div ref={probeRef} className="content-grid__probe" aria-hidden="true" />
-            <MainWithAux ref={mainRef} variant={content.mainVariant} aux={content.aux} onFocus={onFocus} onDemand={onDemand}>
+            <MainWithAux ref={mainRef} variant={content.mainVariant} aux={content.aux} onFocus={onFocus}>
               {content.main}
             </MainWithAux>
             <motion.aside

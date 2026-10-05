@@ -31,6 +31,54 @@ const shortTable = [
   { op: 'show', id: 'suites-note', type: 'note', data: { segments: [{ text: 'All green.' }] } },
 ];
 
+const longPlan = [
+  { op: 'clear' },
+  {
+    op: 'show', id: 'migration', type: 'progress', role: 'primary',
+    data: { label: 'MIGRATION / 30 SHARDS', steps: Array.from({ length: 30 }, (_, index) => ({ label: `MIGRATE SHARD ${index}`, state: index < 12 ? 'done' : index === 12 ? 'active' : 'todo', detail: `node ${index % 5}` })) },
+  },
+  { op: 'show', id: 'migration-note', type: 'note', data: { segments: [{ text: 'Shard 12 is moving now.' }], anchor: { target: 'migration' } } },
+];
+const manyBars = [
+  { op: 'clear' },
+  {
+    op: 'show', id: 'minutes', type: 'chart', role: 'primary',
+    data: { kind: 'bar', title: 'CI / 45 SERVICES', labels: Array.from({ length: 45 }, (_, index) => `service-${String(index).padStart(2, '0')}`), series: [{ name: 'THIS WEEK', values: Array.from({ length: 45 }, (_, index) => 10 + ((index * 37) % 80)) }] },
+  },
+];
+// A stepped plan under a chart is not the primary: its list scrolls in
+// its own row and the rail stays.
+const chartOverPlan = [
+  { op: 'show', id: 'progress', type: 'progress', data: { label: 'EPOCH 41 / 80', value: 51, steps: Array.from({ length: 12 }, (_, index) => ({ label: `STAGE ${index}`, state: index < 5 ? 'done' : 'todo' })) } },
+];
+// A long table in the aux row under a diagram that fits: the row scrolls,
+// and the primary, which reads whole, keeps the rail.
+const tableBeside = [
+  { op: 'clear' },
+  { op: 'show', id: 'flow', type: 'diagram', role: 'primary', data: { mode: 'graph', nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }], edges: [{ from: 'a', to: 'b' }] } },
+  { op: 'show', id: 'suites', type: 'table', data: { columns: [{ label: 'SUITE' }, { label: 'TESTS' }], rows: rows.map((row) => [row[0], row[1]]) } },
+];
+
+// A picture three times as tall as it is wide, drawn by the page itself.
+async function tallFigure(page: Page) {
+  const bytes = await page.evaluate(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 400;
+    canvas.height = 1200;
+    const context = canvas.getContext('2d')!;
+    context.fillStyle = '#222';
+    context.fillRect(0, 0, 400, 1200);
+    context.strokeStyle = '#f60';
+    for (let y = 0; y < 1200; y += 60) context.strokeRect(20, y + 5, 360, 45);
+    return canvas.toDataURL('image/png').slice('data:image/png;base64,'.length);
+  });
+  return [
+    { op: 'clear' },
+    { op: 'show', id: 'settings', type: 'image', role: 'primary', data: { format: 'png', bytes, alt: 'The settings list, all of it' } },
+    { op: 'show', id: 'settings-note', type: 'note', data: { segments: [{ text: 'The toggle is in row seven.' }], anchor: { target: 'settings' } } },
+  ];
+}
+
 async function open(page: Page, scene: string, actions: unknown[] = []) {
   await page.goto(`/?scene=${scene}&chrome=0`);
   await expect(page.locator('.stage')).toBeVisible();
@@ -62,7 +110,7 @@ async function boxes(page: Page) {
       note: box('.content-rail .rail-note'),
       presence: box('.content-rail [data-testid="damocles-presence"]'),
       footer: box('.scene-footer'),
-      viewport: box(`${main} :is(.drawing-viewport, .table-viewport__scroll, .code-viewport__scroll, .document-viewport__body)`),
+      viewport: box(`${main} :is(.drawing-viewport, .table-viewport__scroll, .code-viewport__scroll, .document-viewport__body, .image-primitive__field, .progress-primitive__steps, .chart-primitive)`),
       marker: box(`${main} :is(.diagram-node__marker, .sequence-actor__marker)`),
       folded: document.querySelector('.content-rail--folded') !== null,
       foldable: document.querySelector('.content-rail--foldable') !== null,
@@ -80,6 +128,7 @@ const outgrowing: Array<{ name: string; scene: string; actions?: unknown[]; size
   { name: 'a long table', scene: 'idle', actions: longTable, sizes: [{ width: 390, height: 844 }, { width: 820, height: 1180 }] },
   { name: 'long code', scene: 'idle', actions: longCode, sizes: [{ width: 390, height: 844 }] },
   { name: 'a long document', scene: 'idle', actions: longDocument, sizes: [{ width: 390, height: 844 }] },
+  { name: 'a long plan', scene: 'idle', actions: longPlan, sizes: [{ width: 390, height: 844 }, { width: 820, height: 1180 }] },
 ];
 
 for (const { name, scene, actions, sizes } of outgrowing) {
@@ -167,3 +216,36 @@ test('the caller opens the folded rail and folds it again', async ({ page }) => 
   await expect(page.locator('.content-rail--folded')).toBeVisible();
   await expect(page.locator('.content-rail [data-testid="metrics"]')).toHaveCount(0);
 });
+
+test('a figure taller than its field takes the stage, drawn larger', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/?scene=idle&chrome=0');
+  await open(page, 'idle', await tallFigure(page));
+  await expect(page.locator('.content-rail--folded')).toBeVisible();
+  const laid = await boxes(page);
+  expect(laid.main.height).toBeGreaterThan(laid.stage.height * 0.69);
+  const picture = await page.locator('.image-primitive__img').boundingBox();
+  // Held to its field's height, it is drawn taller than the shared column's field could hold.
+  expect(picture!.height).toBeGreaterThan(laid.stage.height * 0.59 * 0.8);
+});
+
+test('a bar chart of forty-five categories takes the stage and gives each a labelled row', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, 'idle', manyBars);
+  await expect(page.locator('.content-rail--folded')).toBeVisible();
+  // On its side, every category named.
+  const labels = await page.locator('.chart-primitive svg text').allTextContents();
+  for (const index of [0, 22, 44]) expect(labels).toContain(`service-${String(index).padStart(2, '0')}`);
+});
+
+for (const { name, scene, actions } of [
+  { name: 'a stepped plan under a chart', scene: 'training', actions: chartOverPlan },
+  { name: 'a long table beside a diagram that fits', scene: 'idle', actions: tableBeside },
+]) {
+  test(`${name} keeps the rail: only the primary asks for the stage`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await open(page, scene, actions);
+    const laid = await boxes(page);
+    expect(laid.foldable).toBe(false);
+  });
+}
