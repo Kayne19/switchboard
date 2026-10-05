@@ -7,10 +7,11 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { ChartNotes, type ChartNote } from '../../src/components/ChartNotes';
 import { SceneShell } from '../../src/components/Scenes';
 import { ControllerProvider } from '../../src/controller/context';
 import { createInitialState, reduceActions } from '../../src/controller/reducer';
-import type { ControllerAction, ControllerState } from '../../src/controller/types';
+import type { ChartData, ControllerAction, ControllerState, SceneObject } from '../../src/controller/types';
 import { chartBarCallout, chartPointCallouts, chartSeriesPoint } from '../../src/primitives/chartGeometry';
 
 const chart: ControllerAction = {
@@ -293,6 +294,34 @@ describe('chart notes', () => {
     render(reduceActions(createInitialState(), [show('april', [100, 100, 100, 100]), note('uptime-note', { target: 'april', x: 2 }, 'Held a full month.')]));
     expect(host.querySelector('.content-rail .rail-note')?.textContent).toContain('Held a full month.');
     expect(host.querySelector('.chart-object[data-chart-id="april"] .chart-note--away[data-note="uptime-note"]')).not.toBeNull();
+  });
+
+  // A scene that shows one note elsewhere (a band, the rail) still has the
+  // chart mark its point; a point's printed value keeps clear of the ones
+  // before it, so the layer must read the chart's own list or its leaders
+  // land where no value is drawn.
+  it('lands a leader on the value as the chart prints it, from every point the chart marks', () => {
+    const flat = { xMax: 40, yMin: 0, yMax: 10, series: [{ name: 'A', values: [5.25, 5.25, 5.25, 5.25, 5.25] }] };
+    const object = { id: 'flat', type: 'chart', role: 'primary', data: flat } as unknown as SceneObject<ChartData>;
+    const named = [{ x: 20 }, { x: 21 }];
+    const callouts = chartPointCallouts(flat, named);
+    // The second value is printed below its ring, clear of the first's above.
+    expect(callouts.map((callout) => callout.from)).toEqual(['above', 'below']);
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    const shown: ChartNote = { key: 'second', data: { tag: 'SECOND', anchor: { target: 'flat', x: 21 }, segments: [{ text: 'The second point.' }] } };
+    act(() =>
+      root.render(
+        <div className="chart-object">
+          <div className="chart-primitive"><svg /></div>
+          <ChartNotes chart={object} notes={[shown]} named={named} onFocus={() => {}} />
+        </div>,
+      ),
+    );
+    const end = leader('second')!.at(-1)!;
+    expect(Math.abs(end.x - callouts[1].point.x)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(end.y - (SVG_TOP + callouts[1].point.y))).toBeLessThanOrEqual(0.5);
   });
 
   // The tag read "TARGET / DURATIONS / X 2 / THIS RUN": an object id and an

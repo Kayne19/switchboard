@@ -122,12 +122,22 @@ export function ChartNotes({
   onFocus,
   onOpenHistory,
   onRailNote,
+  named: namedPoints,
 }: {
   chart: SceneObject<ChartData>;
   notes: ChartNote[];
   onFocus: (id: string | null) => void;
   onOpenHistory?: () => void;
   onRailNote?: (chartId: string, key: string, away: boolean) => void;
+  /**
+   * Every point the chart marks for its notes, as given to the chart
+   * (`ChartPrimitive named`): the notes laid here and any the scene shows
+   * elsewhere. A point's printed value keeps clear of the ones before it,
+   * so the layer reads the chart's own list to land each leader where the
+   * value is drawn and to keep every card off every ring. The notes laid
+   * here, when not given.
+   */
+  named?: ChartAnchor[];
 }) {
   const reduced = useReducedMotion();
   const layerRef = useRef<HTMLDivElement>(null);
@@ -137,13 +147,17 @@ export function ChartNotes({
   notesRef.current = notes;
   const chartRef = useRef(chart);
   chartRef.current = chart;
+  const marked = useMemo(() => namedPoints ?? chartNoteAnchors(chart, notes), [namedPoints, chart, notes]);
+  const markedRef = useRef(marked);
+  markedRef.current = marked;
   const spill = onRailNote !== undefined;
 
   // What moves a card without resizing anything: which notes there are and
   // what each one names. A size change reaches the observer instead.
-  const signature = notes
-    .map((note) => `${note.key}\u0000${note.data.anchor?.target ?? ''}\u0000${note.data.anchor?.x ?? ''}\u0000${note.data.anchor?.series ?? ''}`)
-    .join('\u0001');
+  const signature = [
+    ...notes.map((note) => `${note.key}\u0000${note.data.anchor?.target ?? ''}\u0000${note.data.anchor?.x ?? ''}\u0000${note.data.anchor?.series ?? ''}`),
+    ...marked.map((anchor) => `${anchor.x}\u0000${anchor.series ?? ''}`),
+  ].join('\u0001');
 
   useLayoutEffect(() => {
     const layer = layerRef.current;
@@ -183,7 +197,7 @@ export function ChartNotes({
         return { left: a.x, top: a.y, right: b.x, bottom: b.y };
       };
       const scales = chartScales(data, frame);
-      const named = chartNoteAnchors(chartRef.current, current);
+      const named = markedRef.current;
       if (toLayer) {
         const obstacles = chartObstacles(data, scales, named);
         field.plot = rectToLayer(scales.plot);
@@ -286,9 +300,8 @@ export function ChartNotes({
   // Which notes name a point on the chart, worked out once a render.
   const anchored = useMemo(() => {
     const scales = chartScales(chart.data);
-    const named = chartNoteAnchors(chart, notes);
-    return new Set(notes.filter((note) => chartNotePoint(note.data, chart, scales, named) !== undefined).map((note) => note.key));
-  }, [chart, notes]);
+    return new Set(notes.filter((note) => chartNotePoint(note.data, chart, scales, marked) !== undefined).map((note) => note.key));
+  }, [chart, notes, marked]);
 
   // The rail shows the note this chart leaves out, for as long as it does:
   // the layer says, for its own chart, when the note leaves and when it is
