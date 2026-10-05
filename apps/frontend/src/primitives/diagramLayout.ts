@@ -12,8 +12,8 @@
 // 3. An edge that spans more than one layer is routed through a dummy in
 //    each layer it crosses, so it threads the gaps between that layer's
 //    nodes and never passes through one.
-// 4. Barycenter sweeps and adjacent swaps order each layer to reduce
-//    crossings.
+// 4. Barycenter sweeps, adjacent swaps and sifting order each layer to
+//    reduce crossings, from several starting orders (`orderLayers`).
 // 5. Each node's box is sized from its text (a monospace estimate, the same
 //    way edge labels are measured); a layer stacks its boxes along the cross
 //    axis, grows with them, and each node then settles toward its
@@ -234,6 +234,12 @@ const MIN_PORT_PITCH = 4;
 const DIRECTION_SPLIT = 8;
 const PORT_INSET = 14;
 const SELF_LOOP = 18;
+// Layers are ordered from this many shuffled starts as well as the given
+// order and a depth-first one, and sifted (`orderLayers`), when no more than
+// THOROUGH_SEGMENTS lines join them (a forty-step pipeline laid out for a
+// phone has some 140): past that it costs more than a frame's budget.
+const ORDER_SHUFFLES = 4;
+const THOROUGH_SEGMENTS = 160;
 
 const EPSILON = 0.5;
 
@@ -637,10 +643,52 @@ function transpose(layer: Item[]) {
   }
 }
 
-function orderLayers(layers: Item[][]) {
-  for (const layer of layers) reindex(layer);
+/**
+ * Moves each item of a layer to the place in it where its edges cross the
+ * fewest others (sifting): the crossings it makes with each other item
+ * depend only on which of the two comes first, so every place is weighed
+ * in one pass. It moves only for a strict gain.
+ */
+function sift(layer: Item[]) {
+  for (const item of [...layer]) {
+    const others = layer.filter((other) => other !== item);
+    const after = others.map((other) => pairCrossings(other, item));
+    const before = others.map((other) => pairCrossings(item, other));
+    let cost = before.reduce((sum, count) => sum + count, 0);
+    let best = cost;
+    let bestAt = 0;
+    let current = Infinity;
+    for (let at = 0; at <= others.length; at += 1) {
+      if (at > 0) cost += after[at - 1] - before[at - 1];
+      if (at === item.index) current = cost;
+      if (cost < best) {
+        best = cost;
+        bestAt = at;
+      }
+    }
+    if (best < current) {
+      layer.splice(0, layer.length, ...others.slice(0, bestAt), item, ...others.slice(bestAt));
+      reindex(layer);
+    }
+  }
+}
+
+/** Barycenter sweeps with adjacent swaps, then (when `sifting`) sifting, from the layers' present order; returns the crossings left. */
+function reduceCrossings(layers: Item[][], sifting: boolean): number {
   let best = layers.map((layer) => [...layer]);
   let bestCrossings = totalCrossings(layers);
+  const keep = () => {
+    const crossings = totalCrossings(layers);
+    if (crossings >= bestCrossings) return false;
+    bestCrossings = crossings;
+    best = layers.map((layer) => [...layer]);
+    return true;
+  };
+  const restore = () =>
+    best.forEach((layer, index) => {
+      layers[index].splice(0, layers[index].length, ...layer);
+      reindex(layers[index]);
+    });
   for (let round = 0; round < 8 && bestCrossings > 0; round += 1) {
     const down = round % 2 === 0;
     if (down) {
@@ -649,16 +697,65 @@ function orderLayers(layers: Item[][]) {
       for (let index = layers.length - 2; index >= 0; index -= 1) barycenterSort(layers[index], (item) => item.succs);
     }
     for (const layer of layers) transpose(layer);
-    const crossings = totalCrossings(layers);
-    if (crossings < bestCrossings) {
-      bestCrossings = crossings;
-      best = layers.map((layer) => [...layer]);
-    }
+    keep();
   }
-  best.forEach((layer, index) => {
-    layers[index].splice(0, layers[index].length, ...layer);
-    reindex(layers[index]);
-  });
+  // From the best order the sweeps found, sift each layer in turn, down
+  // and up, while that still removes crossings.
+  restore();
+  for (let round = 0; round < 8 && bestCrossings > 0 && sifting; round += 1) {
+    for (const layer of round % 2 === 0 ? layers : [...layers].reverse()) sift(layer);
+    if (!keep()) break;
+  }
+  restore();
+  return bestCrossings;
+}
+
+/**
+ * Orders each layer to reduce crossings. Sweeps settle on the first
+ * minimum they reach, so they start from several orders: the order the
+ * items were given in, a depth-first walk (which keeps each chain's
+ * members together), and a few shuffles drawn from a fixed seed, so the
+ * result is the same every time. The order with fewest crossings is kept,
+ * the earliest on a tie.
+ */
+function orderLayers(layers: Item[][]) {
+  for (const layer of layers) reindex(layer);
+  const given = layers.map((layer) => [...layer]);
+  // A graph of the size agents draw is ordered thoroughly; a larger one
+  // gets the sweeps alone, from the given order, within a frame's budget.
+  const thorough = given.reduce((sum, layer) => sum + layer.reduce((count, item) => count + item.succs.length, 0), 0) <= THOROUGH_SEGMENTS;
+  let best = reduceCrossings(layers, thorough);
+  if (!thorough) return;
+  let bestOrder = layers.map((layer) => [...layer]);
+  const start = (order: Item[][]) => {
+    order.forEach((layer, index) => {
+      layers[index].splice(0, layers[index].length, ...layer);
+      reindex(layers[index]);
+    });
+    const crossings = reduceCrossings(layers, true);
+    if (crossings < best) {
+      best = crossings;
+      bestOrder = layers.map((layer) => [...layer]);
+    }
+  };
+  const seen = new Map<Item, number>();
+  const walk = (item: Item) => {
+    if (seen.has(item)) return;
+    seen.set(item, seen.size);
+    for (const next of item.succs) walk(next);
+  };
+  for (const layer of given) for (const item of layer) if (!item.preds.length) walk(item);
+  for (const layer of given) for (const item of layer) walk(item);
+  if (best > 0) start(given.map((layer) => [...layer].sort((a, b) => (seen.get(a) ?? 0) - (seen.get(b) ?? 0))));
+  let seed = 1;
+  const next = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 2 ** 32;
+  };
+  for (let round = 0; round < ORDER_SHUFFLES && best > 0; round += 1) {
+    start(given.map((layer) => layer.map((item) => ({ item, key: next() })).sort((a, b) => a.key - b.key).map((entry) => entry.item)));
+  }
+  start(bestOrder);
 }
 
 // --- Cross coordinates -----------------------------------------------------
@@ -762,7 +859,17 @@ function assignCross(layers: Item[][], usableCross: number, packing: Packing, ba
       for (const item of layer) item.staggered = true;
       return 0;
     }
-    return Math.max(0, Math.min(MAX_STRETCH, (room - natural) / (real.length - 1)));
+    // The spread is shared by the gaps between neighbouring boxes, and
+    // never takes the layer past the room it has when the layer fits it.
+    let stack = layer.length ? (layer[0].crossExtent + layer[layer.length - 1].crossExtent) / 2 : 0;
+    let pairs = 0;
+    layer.forEach((item, k) => {
+      if (k === 0) return;
+      stack += separation(layer[k - 1], item, 0, packing);
+      if (item.node && layer[k - 1].node) pairs += 1;
+    });
+    const spread = Math.min((room - natural) / (real.length - 1), pairs ? (usableCross - stack) / pairs : 0);
+    return Math.max(0, Math.min(MAX_STRETCH, spread));
   });
   layers.forEach((layer, index) => {
     const stretch = stretches[index];
@@ -1399,6 +1506,10 @@ export const GRAPH_MIN_SCALE = readableScale([
 // The stage's own direction (left to right on a wide viewport, top down on
 // a tall one) is kept unless the other asks for this much less scrolling.
 const FLOW_SWITCH = 1.25;
+// A drawing read by scrolling both ways is hunted for in two dimensions; it
+// is kept only if it asks for this much less scrolling than one that
+// scrolls one way.
+const BOTH_WAYS = 2;
 
 export interface DiagramView {
   orientation: DiagramOrientation;
@@ -1469,14 +1580,15 @@ export function viewDiagram(data: DiagramData, viewport: Viewport, anchorNodeId?
     height: Math.max(FRAME_STEP, Math.floor(viewport.height / FRAME_STEP) * FRAME_STEP),
     scrollbar: viewport.scrollbar,
   };
+  const cost = (fitted: DrawingFit) => scrollCost(fitted, viewport) * (fitted.scrollX && fitted.scrollY ? BOTH_WAYS : 1);
   const views = [
-    { orientation: preferred, layout: approved, fit, cost: scrollCost(fit, viewport) },
+    { orientation: preferred, layout: approved, fit, cost: cost(fit) },
     ...(['landscape', 'portrait'] as const).map((orientation) => {
       const layout = remembered(`frame/${orientation}/${stepped.width}x${stepped.height}/${stepped.scrollbar}`, () =>
         layoutForFrame(data, orientation, anchorNodeId, frameFor(orientation, stepped)),
       );
       const fitted = fitDrawing(layout, viewport, GRAPH_MIN_SCALE);
-      return { orientation, layout, fit: fitted, cost: scrollCost(fitted, viewport) * (orientation === preferred ? 1 : FLOW_SWITCH) };
+      return { orientation, layout, fit: fitted, cost: cost(fitted) * (orientation === preferred ? 1 : FLOW_SWITCH) };
     }),
   ];
   const [best] = views.sort((a, b) => a.cost - b.cost);

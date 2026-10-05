@@ -404,6 +404,39 @@ for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
   });
 }
 
+describe('layer order', () => {
+  // Where two drawn routes cross: a run along one axis through the inside
+  // of another edge's run along the other.
+  const crossings = (layout: DiagramLayout) => {
+    const runs = layout.edges.flatMap((edge, index) =>
+      edge.points.slice(1).map((end, k) => ({ index, a: edge.points[k], b: end, horizontal: Math.abs(edge.points[k].y - end.y) < 1e-6 })),
+    );
+    let count = 0;
+    for (const h of runs) {
+      if (!h.horizontal) continue;
+      for (const v of runs) {
+        if (v.horizontal || v.index === h.index) continue;
+        const inside = (value: number, p: number, q: number) => value > Math.min(p, q) + 1e-6 && value < Math.max(p, q) - 1e-6;
+        if (inside(v.a.x, h.a.x, h.b.x) && inside(h.a.y, v.a.y, v.b.y)) count += 1;
+      }
+    }
+    return count;
+  };
+  // The sweeps alone settled on the first minimum they reached: 48 and 49
+  // crossings on the pipeline, 7 on the topology.
+  for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
+    it(`${orientation}: orders the hard diagrams' layers to few crossings`, () => {
+      expect(crossings(layoutDiagram(graphs.ciPipeline, orientation))).toBeLessThanOrEqual(32);
+      expect(crossings(layoutDiagram(graphs.topology, orientation))).toBeLessThanOrEqual(6);
+    });
+  }
+
+  it('orders a graph the same way every time', () => {
+    const first = layoutDiagram(graphs.ciPipeline, 'landscape');
+    expect(JSON.stringify(layoutDiagram(graphs.ciPipeline, 'landscape'))).toBe(JSON.stringify(first));
+  });
+});
+
 describe('edge labels in landscape', () => {
   // A label's backing hides whatever it covers, so a label over another
   // edge's line would read as naming it. Where the graph leaves room, a
