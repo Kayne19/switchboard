@@ -348,8 +348,12 @@ class ProgrammingErrorTest(ModuleTestCase):
                 self.assertTrue(str(caught.exception).startswith("cannot be sent to the switchboard: "), caught.exception)
                 self.assertIn(message, str(caught.exception))
         self.assertEqual(host.connections, 0)
-        # Whole characters go out as they are.
+        # Whole characters go out as they are, and so does a pair held as two
+        # code points, which is one character.
         result, _ = self.run_call(switchboard.speak, "Ship it \U0001F680")
+        self.assertTrue(result.delivered)
+        self.assertEqual(host.calls()[-1]["args"], {"text": "Ship it \U0001F680"})
+        result, _ = self.run_call(switchboard.speak, "Ship it \ud83d\ude80")
         self.assertTrue(result.delivered)
         self.assertEqual(host.calls()[-1]["args"], {"text": "Ship it \U0001F680"})
 

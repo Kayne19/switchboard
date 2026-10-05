@@ -122,6 +122,9 @@ def _encode(request):
         text = _json.dumps(request, default=plain, allow_nan=False, ensure_ascii=False)
     except ValueError as err:
         raise ValueError(f"cannot be sent to the switchboard: {err}") from err
+    # A pair held as two code points ("\ud83d\ude00") is one character; it
+    # is joined first, so only a true lone half is refused.
+    text = text.encode("utf-16", "surrogatepass").decode("utf-16", "surrogatepass")
     try:
         return text.encode() + b"\n"
     except UnicodeEncodeError as err:
