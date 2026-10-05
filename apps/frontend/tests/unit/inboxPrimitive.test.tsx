@@ -76,6 +76,21 @@ describe('inboxLayout and inboxCounts', () => {
   it('counts the fixture: messages, unread and flagged', () => {
     expect(inboxCounts(inbox)).toEqual({ messages: 11, unread: 5, flagged: 4 });
   });
+
+  it('keeps the order the fixture title names: unread first, each run newest first', () => {
+    // The page draws messages in the order sent, so the fixture's own order
+    // is what a reader of "INBOX / UNREAD FIRST" sees.
+    expect(inbox.title).toBe('INBOX / UNREAD FIRST');
+    const unread = inbox.messages.map((m) => m.unread === true);
+    expect(unread).toEqual([...unread].sort((a, b) => Number(b) - Number(a)));
+    const minute = (m: InboxMessage) => {
+      const time = parseTimeValue(m.time)!;
+      return time.dayNumber * 1440 + time.hour * 60 + time.minute;
+    };
+    for (const run of [inbox.messages.filter((m) => m.unread), inbox.messages.filter((m) => !m.unread)]) {
+      expect(run.map((m) => m.id)).toEqual([...run].sort((a, b) => minute(b) - minute(a)).map((m) => m.id));
+    }
+  });
 });
 
 describe('InboxPrimitive', () => {
