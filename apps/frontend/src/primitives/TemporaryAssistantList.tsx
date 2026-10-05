@@ -18,7 +18,7 @@ import { NoteBadge } from './NoteMarker';
  * primitive: the scene tests count objects by it.
  */
 
-export type TemporaryAssistantType = 'calendar' | 'timer' | 'weather' | 'inbox';
+export type TemporaryAssistantType = 'calendar' | 'timer' | 'weather';
 
 type Fields = Record<string, unknown>;
 
@@ -27,7 +27,6 @@ const MAIN_LIST: Record<TemporaryAssistantType, [string, string]> = {
   calendar: ['events', 'EVENTS'],
   timer: ['timers', 'TIMERS'],
   weather: ['daily', 'DAYS'],
-  inbox: ['messages', 'MESSAGES'],
 };
 
 /** The field an item is named by, first found. */

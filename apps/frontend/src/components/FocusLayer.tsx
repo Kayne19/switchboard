@@ -12,6 +12,7 @@ import type {
   ProgressData,
   SceneObject,
   TableData,
+  InboxData,
   TasksData,
 } from '../controller/types';
 import { ITEM_TYPES, itemTargetText } from '../app/noteItems';
@@ -26,6 +27,7 @@ import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
 import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
 import { TablePrimitive } from '../primitives/TablePrimitive';
 import { TasksPrimitive } from '../primitives/TasksPrimitive';
+import { InboxPrimitive } from '../primitives/InboxPrimitive';
 import { TemporaryAssistantList } from '../primitives/TemporaryAssistantList';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
@@ -67,11 +69,12 @@ function FocusedObject({ object, note, marked }: { object: SceneObject; note: No
       return <ProgressPrimitive data={object.data as ProgressData} />;
     case 'tasks':
       return <TasksPrimitive data={object.data as TasksData} variant="focus" marked={marked} />;
+    case 'inbox':
+      return <InboxPrimitive data={object.data as InboxData} marked={marked} />;
     // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
     case 'calendar':
     case 'timer':
     case 'weather':
-    case 'inbox':
       return <TemporaryAssistantList type={object.type} data={object.data} marked={marked} />;
     default:
       return null;

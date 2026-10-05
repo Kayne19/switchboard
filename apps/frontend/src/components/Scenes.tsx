@@ -32,6 +32,7 @@ import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
 import { SceneFooter } from '../primitives/SceneFooter';
 import { TablePrimitive } from '../primitives/TablePrimitive';
 import { TasksPrimitive, taskCounts } from '../primitives/TasksPrimitive';
+import { InboxPrimitive, inboxCounts } from '../primitives/InboxPrimitive';
 import { TemporaryAssistantList, temporaryAssistantFrame, type TemporaryAssistantType } from '../primitives/TemporaryAssistantList';
 import { FocusableSurface } from '../primitives/FocusableSurface';
 import { TechFrame } from '../primitives/TechFrame';
@@ -252,7 +253,7 @@ function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux', marked?
     case 'weather':
       return <TemporaryAssistantList type="weather" data={object.data} marked={marked} />;
     case 'inbox':
-      return <TemporaryAssistantList type="inbox" data={object.data} marked={marked} />;
+      return <InboxPrimitive data={cast.inbox(object).data} variant={slot === 'aux' ? 'compact' : 'full'} marked={marked} />;
     default:
       return null;
   }
@@ -514,11 +515,23 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         main: slot('tasks-object', <TasksPrimitive data={data} marked={anchoredItem(state, primary.id)} />, <TechFrame variant="panel" />),
       };
     }
+    case 'inbox': {
+      const { data } = cast.inbox(primary);
+      const counts = inboxCounts(data);
+      return {
+        ...rail,
+        title: data.title ?? 'INBOX / MESSAGES',
+        subtitle: data.subtitle ?? `${counts.messages} MESSAGES / ${counts.unread} UNREAD`,
+        context: data.context ?? 'INBOX',
+        footer: 'DISPLAY / INBOX',
+        caption: sceneCaption(primary, `INBOX / ${counts.messages} ${counts.messages === 1 ? 'MESSAGE' : 'MESSAGES'}`),
+        main: slot('inbox-object', <InboxPrimitive data={data} marked={anchoredItem(state, primary.id)} />, <TechFrame variant="panel" />),
+      };
+    }
     // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
     case 'calendar':
     case 'timer':
-    case 'weather':
-    case 'inbox': {
+    case 'weather': {
       const type = primary.type as TemporaryAssistantType;
       const kind = type.toUpperCase();
       return {
