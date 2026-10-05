@@ -52,18 +52,6 @@ const SCHEMA_GAPS: Record<string, { why: string; cases: string[] }> = {
       'weather_day_duplicate_date', 'inbox_message_duplicate_id',
     ],
   },
-  blank: {
-    why: 'an id, a target or a node or actor id made only of whitespace (Unicode White_Space); the schema states the blank rule for an item id and an alt only',
-    cases: [
-      'show_id_blank_U+0009', 'show_id_blank_U+000A', 'show_id_blank_U+000B', 'show_id_blank_U+000C',
-      'show_id_blank_U+000D', 'show_id_blank_U+0020', 'show_id_blank_U+0085', 'show_id_blank_U+00A0',
-      'show_id_blank_U+1680', 'show_id_blank_U+2000', 'show_id_blank_U+2005', 'show_id_blank_U+200A',
-      'show_id_blank_U+2028', 'show_id_blank_U+2029', 'show_id_blank_U+202F', 'show_id_blank_U+205F',
-      'show_id_blank_U+3000', 'hide_id_blank', 'focus_id_blank', 'say_target_blank', 'graph_node_id_blank',
-      'graph_node_id_blank_U+0085', 'sequence_actor_id_blank', 'sequence_actor_id_blank_U+0085',
-      'note_anchor_target_blank', 'note_anchor_target_blank_U+0085',
-    ],
-  },
   fields: {
     why: "a series' value count against the chart's label count compares two sibling fields",
     cases: ['chart_series_longer_than_labels'],

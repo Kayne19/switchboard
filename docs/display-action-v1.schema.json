@@ -70,7 +70,7 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 128,
-      "pattern": "^(?!__runtime/)"
+      "pattern": "^(?!__runtime/)[\\s\\S]*[^\\t\\n\\u000b\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
     },
     "Role": {
       "type": "string",
@@ -353,9 +353,7 @@
       "type": "object",
       "properties": {
         "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
+          "$ref": "#/definitions/ItemId"
         },
         "label": {
           "type": "string",
@@ -470,9 +468,7 @@
       "type": "object",
       "properties": {
         "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
+          "$ref": "#/definitions/ItemId"
         },
         "label": {
           "type": "string",
