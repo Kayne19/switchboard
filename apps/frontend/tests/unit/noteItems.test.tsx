@@ -9,7 +9,7 @@
 //
 // The convention every type keeps, whatever primitive draws it: each item
 // element carries `data-item` (the name a note uses for it), and the marked
-// one holds a `.note-badge`.
+// one holds a `.note-badge`. Focus keeps the note beside the object.
 import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -166,10 +166,15 @@ describe('the item a note names is marked wherever its object is drawn', () => {
     expect(markedItems(scene().querySelector('.composed-aux'), type)).toEqual([lists[type].item]);
   });
 
-  it.each(types)('a %s in focus marks the item', (type) => {
+  it.each(types)('a %s in focus marks the item and keeps the note, naming the item', (type) => {
     render([object(type, 'primary'), noteOn(lists[type].item)]);
     act(() => runActions([{ op: 'focus', id: 'list' }]));
-    expect(markedItems(host!.querySelector('.focus-layer'), type)).toEqual([lists[type].item]);
+    const layer = host!.querySelector('.focus-layer');
+    expect(markedItems(layer, type)).toEqual([lists[type].item]);
+    const named = itemTargetText({ id: 'list', type, data: lists[type].data, createdAt: 0, updatedAt: 0 }, lists[type].item);
+    const card = layer?.querySelector('.focus-layer__note .annotation-card');
+    expect(card?.querySelector('.annotation-card__anchor')?.textContent).toBe(`TARGET / ${named}`);
+    expect(card?.querySelectorAll('.note-badge')).toHaveLength(1);
   });
 
   it.each(types)('a %s holding no item of the name marks nothing, and the card shows the anchor as sent with no badge', (type) => {

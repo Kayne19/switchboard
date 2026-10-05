@@ -56,8 +56,8 @@ function SceneContent({
         />
         <FocusLayer
           object={focusedObject}
-          marked={focusedObject ? anchoredItem(state, focusedObject.id) : undefined}
           note={focusNote(state, focusedObject)}
+          marked={focusedObject ? anchoredItem(state, focusedObject.id) : undefined}
           onClose={() => dispatch({ op: "focus", id: null })}
         />
       </main>

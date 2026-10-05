@@ -1,5 +1,5 @@
-import type { CalendarData, ControllerState, InboxData, SceneObject, TasksData, TimerData, WeatherData } from '../controller/types';
-import { cast } from './sceneModel';
+import type { CalendarData, ControllerState, InboxData, NoteData, SceneObject, SceneObjectType, TasksData, TimerData, WeatherData } from '../controller/types';
+import { cast, objectsOfType } from './sceneModel';
 
 // A note on one item (docs/display-tool.md, "A note on one item"): a note's
 // `anchor.item` names an event, a task, a timer, a message, or a forecast
@@ -9,16 +9,13 @@ import { cast } from './sceneModel';
 // item in the object's own words. Neither validator looks the item up, so
 // a name the object does not hold marks nothing.
 
+/** The types whose objects hold items a note can name. */
+export const ITEM_TYPES: ReadonlySet<SceneObjectType> = new Set<SceneObjectType>(['calendar', 'tasks', 'timer', 'weather', 'inbox']);
+
 /** The item a note on stage names inside the object `objectId`: the first
- * note in show order whose anchor targets it and names an item. */
+ * note shown whose anchor targets it and names an item. */
 export function anchoredItem(state: ControllerState, objectId: string): string | undefined {
-  for (const id of state.agentOrder) {
-    const object = state.agentObjects[id];
-    if (object?.type !== 'note') continue;
-    const anchor = cast.note(object).data.anchor;
-    if (anchor?.target === objectId && anchor.item !== undefined) return anchor.item;
-  }
-  return undefined;
+  return objectsOfType<NoteData>(state, 'note').find((note) => note.data.anchor?.target === objectId && note.data.anchor.item !== undefined)?.data.anchor?.item;
 }
 
 type ItemName<T> = (data: T, item: string) => string | undefined;
