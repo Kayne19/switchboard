@@ -341,10 +341,13 @@ the tech face for states, days and counts, no cards.
   names. Focus gives it the stage, and keeps that note beside it.
 
 **A note on one item** (`anchor.item`) marks that item wherever its object
-is drawn, as a diagram marks the node a note names: the item carries the
-NOTE badge, the rail card's twin, and the card's `TARGET` line names it in
-its object's words. Every item element carries `data-item`, the name a
-note uses for it, which is also what the list viewport counts.
+is drawn, as a diagram marks the node a note names, while that note is the
+one the page draws (the rail's, or the one focus keeps): the item carries
+the NOTE badge, the card's twin, and the card's `TARGET` line names it in
+its object's words, on a line of its own. A note the rail does not show
+marks nothing, so a badge always has its card on screen. Every item
+element carries `data-item`, the name a note uses for it, which is also
+what the list viewport counts.
 
 ### Composition & focus
 

@@ -980,8 +980,10 @@ button {
   pointer-events: auto;
 }
 /* A narrow card puts what it names on a line of its own rather than cut
-   it to an ellipsis beside the tag. */
-.chart-note .annotation-card__header {
+   it to an ellipsis beside the tag; so does a card naming a list's item,
+   whose words are the point of its TARGET line. */
+.chart-note .annotation-card__header,
+.annotation-card--item .annotation-card__header {
   flex-wrap: wrap;
   row-gap: 4px;
 }

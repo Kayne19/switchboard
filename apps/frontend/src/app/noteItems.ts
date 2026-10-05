@@ -1,21 +1,27 @@
-import type { CalendarData, ControllerState, InboxData, NoteData, SceneObject, SceneObjectType, TasksData, TimerData, WeatherData } from '../controller/types';
-import { cast, objectsOfType } from './sceneModel';
+import type { CalendarData, InboxData, NoteData, SceneObject, SceneObjectType, TasksData, TimerData, WeatherData } from '../controller/types';
+import { cast } from './sceneModel';
 
 // A note on one item (docs/display-tool.md, "A note on one item"): a note's
 // `anchor.item` names an event, a task, a timer, a message, or a forecast
-// hour or day inside the object it targets. Wherever that object is drawn
-// (the main slot, an aux cell, focus) the item carries the NOTE badge, the
-// twin of the one on the rail card, and the card's TARGET line names the
-// item in the object's own words. Neither validator looks the item up, so
-// a name the object does not hold marks nothing.
+// hour or day inside the object it targets. While that note is the one the
+// page draws for the object (the rail's note, or the note focus keeps
+// beside it), the item carries the NOTE badge wherever the object is drawn
+// (the main slot, an aux cell, focus), the twin of the badge on the card,
+// and the card's TARGET line names the item in the object's own words: a
+// diagram marks the node its shown note names the same way. A note the
+// page does not draw marks nothing, so a badge always has its card on
+// screen. Neither validator looks the item up, so a name the object does
+// not hold marks nothing either.
 
 /** The types whose objects hold items a note can name. */
 export const ITEM_TYPES: ReadonlySet<SceneObjectType> = new Set<SceneObjectType>(['calendar', 'tasks', 'timer', 'weather', 'inbox']);
 
-/** The item a note on stage names inside the object `objectId`: the first
- * note shown whose anchor targets it and names an item. */
-export function anchoredItem(state: ControllerState, objectId: string): string | undefined {
-  return objectsOfType<NoteData>(state, 'note').find((note) => note.data.anchor?.target === objectId && note.data.anchor.item !== undefined)?.data.anchor?.item;
+/** The item the drawn note `note` names inside the object `objectId`, which
+ * that object marks; nothing when the note is about another object or names
+ * no item. */
+export function markedItem(note: NoteData | null | undefined, objectId: string): string | undefined {
+  const anchor = note?.anchor;
+  return anchor?.target === objectId ? anchor.item : undefined;
 }
 
 type ItemName<T> = (data: T, item: string) => string | undefined;
@@ -62,4 +68,12 @@ export function itemTargetText(object: SceneObject, item: string): string | unde
     default:
       return undefined;
   }
+}
+
+/** The item a note's card names on its TARGET line, in its object's words:
+ * set only when the note is about `object` and the object holds the item it
+ * names, which is when the item is marked and the card carries the badge. */
+export function noteItemTarget(object: SceneObject | null | undefined, note: NoteData | null | undefined): string | undefined {
+  const item = markedItem(note, object?.id ?? '');
+  return object && item !== undefined ? itemTargetText(object, item) : undefined;
 }
