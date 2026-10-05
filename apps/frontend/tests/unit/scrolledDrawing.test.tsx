@@ -5,6 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import type { NoteData } from '../../src/controller/types';
 import { pipelineDiagram, topologyDiagram, traceDiagram } from '../../src/fixtures/scenes';
 import { DiagramPrimitive } from '../../src/primitives/DiagramPrimitive';
+import { FocusableSurface } from '../../src/primitives/FocusableSurface';
 import { RAIL } from '../../src/primitives/drawingScroll';
 import { SequencePrimitive } from '../../src/primitives/SequencePrimitive';
 
@@ -142,27 +143,37 @@ describe('a scrolled graph at rest', () => {
   it('turns a page to the next place to rest when its count is tapped, without expanding the object', () => {
     size = { width: 914, height: 526 };
     const activated: string[] = [];
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-    const element = (
-      <div onClick={() => activated.push('expand')}>
-        <DiagramPrimitive data={topologyDiagram} id="topology" note={gateNote} />
-      </div>
-    );
-    act(() => root.render(element));
-    act(() => root.render(element));
-    const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
-    const before = scroller.scrollLeft;
-    act(() => host.querySelector<HTMLElement>('.drawing-viewport__rim--left')!.click());
-    expect(scroller.scrollLeft).toBeLessThan(before);
-    const stops = [...host.querySelectorAll<HTMLElement>('.drawing-viewport__stop')].map((stop) => parseFloat(stop.style.left));
-    expect(stops).toContain(scroller.scrollLeft);
-    act(() => host.querySelector<HTMLElement>('.drawing-viewport__map')!.click());
-    expect(activated).toEqual([]);
-    // The drawing itself still expands.
-    act(() => scroller.click());
-    expect(activated).toEqual(['expand']);
+    // The page hears every click at the document: the gesture that unlocks
+    // audio (callRuntime). A tap on a count or the map is one too.
+    const heard: EventTarget[] = [];
+    const listen = (event: Event) => heard.push(event.target!);
+    document.addEventListener('click', listen);
+    try {
+      render(
+        <FocusableSurface onActivate={() => activated.push('expand')} ariaLabel="Expand diagram">
+          <DiagramPrimitive data={topologyDiagram} id="topology" note={gateNote} />
+        </FocusableSurface>,
+      );
+      const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
+      const before = scroller.scrollLeft;
+      const count = host.querySelector<HTMLElement>('.drawing-viewport__rim--left')!;
+      act(() => count.click());
+      expect(scroller.scrollLeft).toBeLessThan(before);
+      const stops = [...host.querySelectorAll<HTMLElement>('.drawing-viewport__stop')].map((stop) => parseFloat(stop.style.left));
+      expect(stops).toContain(scroller.scrollLeft);
+      const map = host.querySelector<HTMLElement>('.drawing-viewport__map')!;
+      act(() => map.click());
+      expect(activated).toEqual([]);
+      // Before: the count and the map stopped their clicks, so the page never
+      // heard them.
+      expect(heard).toEqual([count, map]);
+      // The drawing itself still expands.
+      act(() => scroller.click());
+      expect(activated).toEqual(['expand']);
+      expect(heard).toEqual([count, map, scroller]);
+    } finally {
+      document.removeEventListener('click', listen);
+    }
   });
 
   it('puts a dense graph\'s stubs on its map, each line once', () => {

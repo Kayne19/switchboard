@@ -7,6 +7,7 @@ import {
   RAIL,
   SIDES,
   findExits,
+  keyStop,
   leadStop,
   mapCorner,
   mapSize,
@@ -78,7 +79,6 @@ interface Reading {
 }
 const sameReading = (a: Reading | null, b: Reading) => a !== null && a.left === b.left && a.top === b.top && a.width === b.width && a.height === b.height;
 
-const SCROLL_KEYS = new Set([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown', 'Home', 'End']);
 // A fade reaches past its rail at least this far, and covers what its edge
 // cuts, up to this share of the view: a part mostly in view keeps the rest
 // of itself clear, only its cut end faded.
@@ -354,16 +354,36 @@ export function DrawingViewport({
     return () => viewport.removeEventListener('wheel', onWheel);
   }, [axis, letGo, settle]);
 
-  // Keys that scroll a focused viewport scroll it; they do not reach the
-  // surface around it, which would take Space as "expand".
-  const keepScrollKeys = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (SCROLL_KEYS.has(event.key)) event.stopPropagation();
+  // The keys that scroll a focused viewport move it from stop to stop, so
+  // it rests between its parts as it does after any other input. Each key
+  // it takes is marked handled (FocusableSurface's rule): the surface
+  // around it leaves Space alone rather than expanding the object, and
+  // Enter, which it does not take, still expands it. The arrows move along
+  // their own axis; the page keys, Home and End along the one it is read
+  // down (or across, when it scrolls only across).
+  const scrollKeys = (event: KeyboardEvent<HTMLDivElement>) => {
+    const element = scrollRef.current;
+    if (!element || !stops || event.altKey || event.ctrlKey || event.metaKey) return;
+    const main = fit.scrollY ? 'y' : 'x';
+    for (const along of ['x', 'y'] as const) {
+      if (!(along === 'x' ? fit.scrollX : fit.scrollY)) continue;
+      const across = along === 'x';
+      const arrow = event.key.startsWith('Arrow');
+      if (!arrow && along !== main) continue;
+      const target = across
+        ? keyStop(event.key, event.shiftKey, true, stops.x, element.scrollLeft, element.clientWidth)
+        : keyStop(event.key, event.shiftKey, false, stops.y, element.scrollTop, element.clientHeight - pinnedDepth);
+      if (target === null) continue;
+      event.preventDefault();
+      element.scrollTo({ [across ? 'left' : 'top']: target, behavior: reducedMotion() ? 'auto' : 'smooth' });
+      return;
+    }
   };
 
-  // A tap on a rim's count turns a page that way; it does not expand the
-  // object around the drawing.
+  // A tap on a rim's count turns a page that way. The tap is marked handled,
+  // so the surface around the drawing does not expand the object.
   const page = (side: Side) => (event: MouseEvent<HTMLDivElement>) => {
-    event.stopPropagation();
+    event.preventDefault();
     const element = scrollRef.current;
     if (!element || !stops) return;
     const across = side === 'left' || side === 'right';
@@ -531,7 +551,7 @@ export function DrawingViewport({
         className="drawing-viewport__scroll"
         tabIndex={scrolling ? 0 : undefined}
         onScroll={scrolling ? onScroll : undefined}
-        onKeyDown={scrolling ? keepScrollKeys : undefined}
+        onKeyDown={scrolling ? scrollKeys : undefined}
       >
         <svg
           viewBox={`0 0 ${drawing.width} ${drawing.height}`}
@@ -610,7 +630,6 @@ export function DrawingViewport({
           style={{ width: `${mapBox.width}px`, height: `${mapBox.height}px` }}
           aria-hidden="true"
           onPointerDown={(event) => {
-            event.stopPropagation();
             if (event.button !== 0) return;
             dragging.current = true;
             event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -626,7 +645,7 @@ export function DrawingViewport({
           }}
           onPointerCancel={endDrag}
           onLostPointerCapture={endDrag}
-          onClick={(event) => event.stopPropagation()}
+          onClick={(event) => event.preventDefault()}
         >
           <svg className="drawing-viewport__map-frame" viewBox={`0 0 ${mapBox.width + 2 * MAP_PAD} ${mapBox.height + 2 * MAP_PAD}`} preserveAspectRatio="none">
             <path d={mapFrame(mapBox.width + 2 * MAP_PAD, mapBox.height + 2 * MAP_PAD, corner)} />

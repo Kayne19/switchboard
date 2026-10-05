@@ -119,10 +119,13 @@ rather than with a scroll bar (`primitives/drawingScroll.ts` decides,
   sequence's message) cut at the edge it is read from: the places it may
   rest put that edge in a gap between layers, the next part clear of the
   edge's rail, an edge label in the gap kept whole when there is room.
-  Touch and the keys settle there through the browser's scroll snapping;
-  a wheel or a trackpad moves freely and settles when it pauses, a single
-  notch on to the next place; a mouse wheel over a drawing that scrolls
-  only across scrolls it across. It opens on its lead at such a place.
+  Touch settles there through the browser's scroll snapping; the keys
+  that scroll a focused drawing move it from one such place to the next
+  (an arrow to the next, Space or Page Down a page on, Home and End to
+  the ends); a wheel or a trackpad moves freely and settles when it
+  pauses, a single notch on to the next place; a mouse wheel over a
+  drawing that scrolls only across scrolls it across. It opens on its
+  lead at such a place.
   At its far end it rests the same way, showing a little black past the
   drawing's end rather than a cut part. Across a drawing that scrolls
   both ways there may be no gap every row leaves: it rests where the
@@ -133,7 +136,11 @@ rather than with a scroll bar (`primitives/drawingScroll.ts` decides,
   the cut, the count of what lies that way ("13 NODES", "23 MESSAGES")
   and a chevron pointing there; a tap on the count turns a page. Text on
   the left and right rails runs along them, so a rail costs the drawing a
-  line of small type.
+  line of small type. A tap on a count or on the map does not expand the
+  object, as a tap on the drawing does; the control marks the tap handled
+  and lets it go on, so the page still hears it as the gesture that lets
+  it play audio (`FocusableSurface`: no control inside it stops an
+  event).
 - **A line that leaves the view says where it goes.** On the rail where
   it crosses, the name of the node at its far end, in the line's colour,
   pointing out; several lines to one node are one name.

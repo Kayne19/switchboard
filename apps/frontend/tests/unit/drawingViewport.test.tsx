@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { DrawingViewport } from '../../src/primitives/DrawingViewport';
+import { FocusableSurface } from '../../src/primitives/FocusableSurface';
 import type { DrawingFit } from '../../src/primitives/drawingFit';
 import { RAIL, type DrawingMap } from '../../src/primitives/drawingScroll';
 
@@ -89,25 +90,58 @@ describe('a drawing viewport', () => {
     expect(scroller.scrollTop).toBe(864);
   });
 
-  it('keeps the keys that scroll it from the surface around it', () => {
+  it('takes the keys that scroll it, from stop to stop, and leaves the surface around it the rest', () => {
     host = undefined as unknown as HTMLDivElement;
+    const expanded: string[] = [];
+    // Keys still reach the page: the scroller marks the ones it takes
+    // rather than stopping them.
     const reached: string[] = [];
-    render(
-      <div onKeyDown={(event) => reached.push(event.key)}>
-        <DrawingViewport drawing={drawing} fit={scrollsDown} map={rows} ariaLabel="d">
-          <rect width="10" height="10" />
-        </DrawingViewport>
-      </div>,
-    );
-    const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
-    expect(scroller.getAttribute('tabindex')).toBe('0');
-    for (const key of [' ', 'PageDown', 'ArrowDown', 'Enter']) {
-      act(() => {
-        scroller.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
-      });
+    const listen = (event: KeyboardEvent) => reached.push(event.key);
+    window.addEventListener('keydown', listen);
+    const scrollTo = HTMLElement.prototype.scrollTo;
+    HTMLElement.prototype.scrollTo = function go(this: HTMLElement, options?: ScrollToOptions | number) {
+      if (typeof options === 'object' && options.top !== undefined) this.scrollTop = options.top;
+    } as typeof HTMLElement.prototype.scrollTo;
+    try {
+      render(
+        <FocusableSurface onActivate={() => expanded.push('expand')} ariaLabel="Expand">
+          <DrawingViewport drawing={drawing} fit={scrollsDown} map={rows} ariaLabel="d">
+            <rect width="10" height="10" />
+          </DrawingViewport>
+        </FocusableSurface>,
+      );
+      const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
+      expect(scroller.getAttribute('tabindex')).toBe('0');
+      const stops = [...host.querySelectorAll<HTMLElement>('.drawing-viewport__stop')].map((stop) => parseFloat(stop.style.top));
+      const press = (key: string, shiftKey = false) =>
+        act(() => {
+          scroller.dispatchEvent(new KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true }));
+        });
+      press('ArrowDown');
+      expect(scroller.scrollTop).toBe(stops[1]);
+      press(' ');
+      const paged = scroller.scrollTop;
+      expect(stops).toContain(paged);
+      expect(paged).toBeGreaterThan(stops[1]);
+      expect(paged - stops[1]).toBeLessThanOrEqual(300);
+      press(' ', true);
+      expect(scroller.scrollTop).toBeLessThan(paged);
+      press('End');
+      expect(scroller.scrollTop).toBe(stops[stops.length - 1]);
+      press('Home');
+      expect(scroller.scrollTop).toBe(0);
+      press('ArrowLeft');
+      expect(scroller.scrollTop).toBe(0);
+      // Space scrolled; it did not expand. Enter is not a scrolling key: it
+      // still expands the object.
+      expect(expanded).toEqual([]);
+      press('Enter');
+      expect(expanded).toEqual(['expand']);
+      expect(reached).toEqual(['ArrowDown', ' ', ' ', 'End', 'Home', 'ArrowLeft', 'Enter']);
+    } finally {
+      window.removeEventListener('keydown', listen);
+      HTMLElement.prototype.scrollTo = scrollTo;
     }
-    // Enter is not a scrolling key: it still expands the object.
-    expect(reached).toEqual(['Enter']);
   });
 
   it('pins its header band only when it scrolls down, and is contained otherwise', () => {

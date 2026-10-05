@@ -5,6 +5,7 @@ import {
   RAIL,
   REST_PAD,
   findExits,
+  keyStop,
   leadStop,
   mapCorner,
   mapSize,
@@ -139,6 +140,24 @@ describe('where a scrolled drawing rests', () => {
     expect(pageStop(stops, 0, 450, -1)).toBe(0);
     // A next stop beyond a page is still the next stop.
     expect(pageStop([0, 900], 0, 450, 1)).toBe(900);
+  });
+
+  it('moves a key\'s way from stop to stop, along the axis its arrows point', () => {
+    const stops = [0, 292, 592, 690];
+    expect(keyStop(' ', false, false, stops, 0, 450)).toBe(292);
+    expect(keyStop(' ', true, false, stops, 592, 450)).toBe(292);
+    expect(keyStop('PageDown', false, true, stops, 292, 450)).toBe(592);
+    expect(keyStop('PageUp', false, true, stops, 292, 450)).toBe(0);
+    expect(keyStop('ArrowDown', false, false, stops, 292, 450)).toBe(592);
+    expect(keyStop('ArrowUp', false, false, stops, 300, 450)).toBe(292);
+    expect(keyStop('ArrowRight', false, true, stops, 690, 450)).toBe(690);
+    expect(keyStop('ArrowLeft', false, true, stops, 292, 450)).toBe(0);
+    expect(keyStop('Home', false, false, stops, 592, 450)).toBe(0);
+    expect(keyStop('End', false, true, stops, 0, 450)).toBe(690);
+    // An arrow across a drawing read down, or a key that does not scroll, is not the drawing's.
+    expect(keyStop('ArrowRight', false, false, stops, 0, 450)).toBeNull();
+    expect(keyStop('ArrowDown', false, true, stops, 0, 450)).toBeNull();
+    expect(keyStop('Enter', false, false, stops, 0, 450)).toBeNull();
   });
 });
 

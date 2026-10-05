@@ -253,6 +253,37 @@ export function pageStop(stops: readonly number[], position: number, view: numbe
 // A page keeps the last eighth of the view it leaves in sight.
 const PAGE = 0.875;
 
+/**
+ * Where a key moves a drawing along one axis it scrolls (`stops` along it,
+ * `position` where it stands, `view` the view's length there, less a pinned
+ * band): Space and Page Down a page on, Shift+Space and Page Up a page back
+ * (`pageStop`), the arrow that points along the axis (`across`: left and
+ * right, else up and down) to the next stop that way, Home and End to the
+ * first and the last. Null for a key that does not move it along the axis.
+ */
+export function keyStop(key: string, shift: boolean, across: boolean, stops: readonly number[], position: number, view: number): number | null {
+  const next = (direction: -1 | 1) =>
+    (direction > 0 ? stops.find((stop) => stop > position + EPSILON) : [...stops].reverse().find((stop) => stop < position - EPSILON)) ?? position;
+  switch (key) {
+    case ' ':
+      return pageStop(stops, position, view, shift ? -1 : 1);
+    case 'PageDown':
+      return pageStop(stops, position, view, 1);
+    case 'PageUp':
+      return pageStop(stops, position, view, -1);
+    case 'Home':
+      return stops[0] ?? 0;
+    case 'End':
+      return stops[stops.length - 1] ?? position;
+    case across ? 'ArrowRight' : 'ArrowDown':
+      return next(1);
+    case across ? 'ArrowLeft' : 'ArrowUp':
+      return next(-1);
+    default:
+      return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // The rims
 
