@@ -1,6 +1,7 @@
-import type { CalendarData, InboxData, NoteData, SceneObject, SceneObjectType, TasksData, TimerData, WeatherData } from '../controller/types';
+import type { CalendarData, InboxData, NoteData, SceneObject, TasksData, TimerData, WeatherData } from '../controller/types';
 import { weatherItemName } from '../primitives/weatherLayout';
 import { eventTargetText } from '../primitives/calendarLayout';
+import { chartTargetText } from '../primitives/chartGeometry';
 import { cast } from './sceneModel';
 
 // A note on one item (docs/display-tool.md, "A note on one item"): a note's
@@ -14,9 +15,6 @@ import { cast } from './sceneModel';
 // page does not draw marks nothing, so a badge always has its card on
 // screen. Neither validator looks the item up, so a name the object does
 // not hold marks nothing either.
-
-/** The types whose objects hold items a note can name. */
-export const ITEM_TYPES: ReadonlySet<SceneObjectType> = new Set<SceneObjectType>(['calendar', 'tasks', 'timer', 'weather', 'inbox']);
 
 /** The item the drawn note `note` names inside the object `objectId`, which
  * that object marks; nothing when the note is about another object or names
@@ -75,7 +73,24 @@ export function itemTargetText(object: SceneObject, item: string): string | unde
 /** The item a note's card names on its TARGET line, in its object's words:
  * set only when the note is about `object` and the object holds the item it
  * names, which is when the item is marked and the card carries the badge. */
-export function noteItemTarget(object: SceneObject | null | undefined, note: NoteData | null | undefined): string | undefined {
+function noteItemTarget(object: SceneObject | null | undefined, note: NoteData | null | undefined): string | undefined {
   const item = markedItem(note, object?.id ?? '');
   return object && item !== undefined ? itemTargetText(object, item) : undefined;
+}
+
+/**
+ * What a drawn note's card says it is about on its TARGET line, in its
+ * object's words, and whether the object marks that with the NOTE badge:
+ * the point it names on a chart (`chartTargetText`; the chart rings or
+ * outlines the point and prints its value, no badge), or the item it names
+ * in a list (marked with the badge, as `noteItemTarget` says). Nothing for
+ * a note about another object, or about one with neither, whose card shows
+ * the anchor as sent. The rail card and the cards focus keeps read this.
+ */
+export function noteTarget(object: SceneObject | null | undefined, note: NoteData | null | undefined): { target?: string; itemMarked: boolean } {
+  const anchor = note?.anchor;
+  if (!object || !anchor || anchor.target !== object.id) return { itemMarked: false };
+  if (object.type === 'chart') return { target: chartTargetText(anchor, cast.chart(object).data), itemMarked: false };
+  const item = noteItemTarget(object, note);
+  return { target: item, itemMarked: item !== undefined };
 }

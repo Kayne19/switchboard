@@ -15,14 +15,14 @@ import type {
   TableData,
 } from '../controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
-import { markedItem, noteItemTarget } from '../app/noteItems';
+import { markedItem, noteTarget } from '../app/noteItems';
 import { anchoredNote, besideVisuals, buildCompositionModel, cast, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
 import { stageReport, wantsStage, type StageReport } from '../app/stageFold';
 import { StageDemandContext, watchElement, type StageDemandListener } from '../hooks/useStageDemand';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { CalendarPrimitive, calendarFrame } from '../primitives/CalendarPrimitive';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
-import { chartKind, chartTargetText } from '../primitives/chartGeometry';
+import { chartKind } from '../primitives/chartGeometry';
 import { CodeViewport } from '../primitives/CodeViewport';
 import { DamoclesPresence } from '../primitives/DamoclesPresence';
 import { DocumentViewport } from '../primitives/DocumentViewport';
@@ -216,11 +216,7 @@ function useCrowded(ref: RefObject<HTMLDivElement | null>, watching: boolean): b
 // is then marked where its object is drawn.
 function railNoteTarget(state: ControllerState, note: NoteData | null): { target?: string; itemMarked: boolean } {
   const anchor = note?.anchor;
-  const named = anchor ? state.agentObjects[anchor.target] : undefined;
-  if (!anchor || !named) return { itemMarked: false };
-  if (named.type === 'chart') return { target: chartTargetText(anchor, (named as SceneObject<ChartData>).data), itemMarked: false };
-  const item = noteItemTarget(named, note);
-  return { target: item, itemMarked: item !== undefined };
+  return noteTarget(anchor ? state.agentObjects[anchor.target] : undefined, note);
 }
 
 // The details column beside every content visual: the metrics and any
@@ -458,7 +454,7 @@ function trainingContent(
                   data={banded.data}
                   onFocus={banded.object ? () => onFocus(banded.object!.id) : undefined}
                   onOpenHistory={banded.object ? undefined : onOpenHistory}
-                  target={banded.data.anchor?.target === primary.id ? chartTargetText(banded.data.anchor, primary.data) : undefined}
+                  target={noteTarget(primary, banded.data).target}
                 />
               </SurfaceBoundary>
             </ObjectMotion>

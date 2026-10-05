@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { ChartData } from '../../src/controller/types';
 import { TYPE_FLOOR_PX } from '../../src/design/tokens';
-import { hiddenTraceLength } from '../../src/primitives/notePlacement';
+import { hiddenTraceLength } from '../../src/primitives/segments';
 import {
   CHART_CATEGORY_PAD_MAX,
   CHART_FRAME,
@@ -619,11 +619,18 @@ describe('what a note names on a chart', () => {
     expect(chartTargetText({ x: 1696512345678 }, { xMax: 1696512399999, series: [{ name: 'S', values: [1, 2] }] })).toBe('X 1696512345678');
   });
 
-  it('names the series alone for an anchor with no x, and nothing where the chart draws no point', () => {
-    expect(chartTargetText({ series: 'S' }, { labels: ['a'], series: [{ name: 'S', values: [1] }] })).toBe('S');
-    expect(chartTargetText({ series: 'NOPE' }, { labels: ['a'], series: [{ name: 'S', values: [1] }] })).toBeUndefined();
-    expect(chartTargetText({}, { labels: ['a'], series: [{ name: 'S', values: [1] }] })).toBeUndefined();
-    expect(chartTargetText({ x: 2 }, { xMax: 0, series: [{ name: 'S', values: [1, 2] }] })).toBeUndefined();
+  // An anchor with no x and a series the chart does not carry named
+  // nothing, so the card printed the anchor as sent: the chart's object id
+  // (line-notes review L5).
+  it('names the series alone for an anchor with no x, and the chart itself where it names no point the chart draws', () => {
+    const titled = { title: 'RUN / GRAPE-AMODAL-04', labels: ['a'], series: [{ name: 'S', values: [1] }] };
+    expect(chartTargetText({ series: 'S' }, titled)).toBe('S');
+    expect(chartTargetText({ series: 'NOPE' }, titled)).toBe('RUN / GRAPE-AMODAL-04');
+    expect(chartTargetText({}, titled)).toBe('RUN / GRAPE-AMODAL-04');
+    expect(chartTargetText({ x: 2 }, { ...titled, labels: undefined, xMax: 0, series: [{ name: 'S', values: [1, 2] }] })).toBe('RUN / GRAPE-AMODAL-04');
+    // A chart with no title, or a blank one, is the chart.
+    expect(chartTargetText({ series: 'NOPE' }, { labels: ['a'], series: [{ name: 'S', values: [1] }] })).toBe('CHART');
+    expect(chartTargetText({ series: 'NOPE' }, { ...titled, title: ' ' })).toBe('CHART');
   });
 
   it('names the series a labelled chart marks wherever it draws more than one', () => {
@@ -706,6 +713,34 @@ describe('a marked point', () => {
     expect(overlaps(callouts[0].label, callouts[1].label)).toBe(false);
     expect(overlaps(callouts[0].ring, callouts[1].label)).toBe(false);
     expect(overlaps(callouts[1].ring, callouts[0].label)).toBe(false);
+  });
+
+  // The room past a value was measured with a run 4 units across, the
+  // leader's clearance, which is 4 CSS pixels: at a phone's scale (0.65 px
+  // a unit) a point of another series 5 units beside the run -- 3.3 px --
+  // left the spot above clear, and the leader the note then ran there
+  // could not keep its clearance (line-notes review L3).
+  it("measures the room past its value with the leader's clearance in pixels, at the scale the chart is drawn", () => {
+    // One unit per x: the named point at x 449, and another series' point
+    // 9 units right of it and 30 units above its value's landing point
+    // (its edge 5 units off the run); the rest of that series lies on the
+    // plot's floor.
+    const values = Array.from({ length: 899 }, (_, x) => (x === 458 ? 64 : 0));
+    const scatter: ChartData = { kind: 'scatter', xMax: 898, yMin: 0, yMax: 100, series: [{ name: 'A', values: [50, 50, 50] }, { name: 'B', values }] };
+    const at = (scale: number) => chartPointCallouts(scatter, [{ x: 449, series: 'A' }], chartScales(scatter, { width: 1000, height: 500, scale }))[0];
+    expect(at(1).from).toBe('above');
+    expect(at(0.65).from).not.toBe('above');
+  });
+
+  // The slot's scale changes every pixel of a resize; the chart's geometry
+  // reads it in steps, so the chart is not worked out again every frame
+  // (notes-tidy review L3), and the chart and its notes read the same step.
+  it('reads the scale in steps of a twentieth', () => {
+    const line: ChartData = { xMax: 4, series: [{ name: 'A', values: [1, 2, 3, 2, 1] }] };
+    expect(chartScales(line, { width: 1000, height: 500, scale: 0.651 }).scale).toBe(0.65);
+    expect(chartScales(line, { width: 1000, height: 500, scale: 0.674 }).scale).toBe(0.65);
+    expect(chartScales(line, { width: 1000, height: 500, scale: 0.676 }).scale).toBe(0.7);
+    expect(chartScales(line).scale).toBe(1);
   });
 
   it("is what a note's leader lands by, as a bar's printed end is", () => {
