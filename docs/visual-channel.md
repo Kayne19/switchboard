@@ -257,6 +257,53 @@ it are (its label and share done on one row, the steps still to do under
 the bar). Shown as the primary, its frame fits the plan and sits in the
 middle of the column, and only a plan longer than the column fills it.
 
+### A primary that outgrows its slot
+
+On a portrait stage the rail -- metrics, progress, the live response, the
+note, tool activity and Damocles -- stands under the main column, and the
+column keeps 59% of the stage. A primary that reads whole there keeps that
+layout. One whose content asks for more gets the stage's height:
+
+- **What counts as more is the content's own word, never its type or the
+  screen's size.** Each primitive that can outgrow its viewport says how
+  much taller than the viewport it would have to be to be read whole
+  (`hooks/useStageDemand.ts`): a drawing the height it reads in at its
+  least readable scale (a fit made for another viewport, as before its
+  host is measured, says nothing); a table, code pane, document or plan
+  the height of what it scrolls through; a figure its height drawn across
+  its field's width, never past its own size; a bar chart whose labels do
+  not fit under its bars the height in which it lies on its side with a
+  labelled row per category. Only the primary speaks: a plan under a chart
+  or a table in the aux row never folds the rail.
+- **The shell decides from the column** (`app/stageFold.ts`): where the
+  rail stands under the column (measured, not a media query), a primary
+  whose need is more than a line of text past the column it shares with
+  the rail takes the stage. The need is the share of its viewport it lacks
+  applied to the column, since the frame round a viewport grows with it.
+  Folded, it gives the stage back only once it would read whole in the
+  shared column with room to spare, so a need on the line does not fold
+  and unfold as it redraws. A landscape stage, the rail beside the
+  primary, never folds.
+- **The rail folds to a strip under the primary, down to the footer's
+  band.** The strip shows the note (held to three lines, its target line
+  naming what it is about, and on a diagram the NOTE marker on the node or
+  actor it names), or the live response where there is no note, beside a
+  smaller Damocles whose caption still names the tool at work. A tap on
+  the note expands it in focus. Its top rule is a handle: it names what
+  the rail keeps folded (the rest of a cut note, the metrics, progress,
+  the live response, activity) and opens the rail as it was, the primary
+  back in its share; from there it folds again. The caller's choice holds
+  for that primary.
+
+At 390x844 a diagram's viewport grows from 374 px to 460 px, a 40-row
+table's from 436 to 544, and a bar chart of 45 categories names every one
+instead of every eighth. Why fold the rail rather than scroll the page or
+shrink the primary: the page never scrolls as a whole (its frame and
+Damocles stay put), and a primary drawn smaller is the squeeze this
+answers. The note is what the caller most needs from the rail while they
+read a large primary, so it stays, and stays linked to its item; the
+metrics are a tap away.
+
 ### Personal-assistant views: time is data
 
 The `calendar`, `tasks`, `timer`, `weather` and `inbox` types let an agent on
@@ -382,8 +429,22 @@ the rail too. The rail holds one note, so: only the primary chart hands one
 over; only the first note about a visual off the charts goes there (later
 ones lie on the primary chart, as before); while it does, the primary hands
 none over; and a compare chart's notes stay on it, over its data where it has
-no clear place. In portrait a rail already full of metrics shows the note
-below them, in its scroll. Every visual payload may also provide a short `caption` for the
+no clear place.
+
+The note a chart hands over stays readable beside it. Where the rail stands
+under the charts (a portrait stage), the note is drawn in a band under them,
+full width, carved from their slot, rather than in the rail under its
+metrics: the chart is recomposed to the shorter slot, and the card's target
+line names what the marked bar or point is. The band holds the note while it
+is on that chart; the chart is not asked to place it again, so a chart laid
+out in less room cannot take it back and hand it out again, the band coming
+and going. This is the one exception to "the chart keeps its size for its
+notes". Where the rail stands beside the charts and is too short for all it
+carries (a phone on its side), a note the charts could not hold leads it, at
+its whole height, the metrics after it in the column's scroll. A card on a
+short chart keeps room for its header and a few lines (up to three fifths of
+the layer), so a note too long for that is one the chart hands over rather
+than a card whose text scrolls out of sight. Every visual payload may also provide a short `caption` for the
 scene's supporting corner label, so that label describes real content instead
 of fixed decorative text.
 

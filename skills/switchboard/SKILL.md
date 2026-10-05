@@ -178,7 +178,11 @@ mostly the side rail. A note can carry `anchor: {target, x?, series?, node?, ite
 another object; `item` names one thing inside it, such as a calendar event or
 a task by its `id`, or a forecast hour by its `time`. The
 live transcript belongs to the system; use a note for lasting on-screen
-annotations and `speak` for words.
+annotations and `speak` for words. On a phone held upright, a primary too
+large for its share (a big diagram, a long table or plan, a tall figure)
+takes the screen and the rail folds to a strip that keeps your note and
+marks what it names, so send what the explanation needs rather than
+trimming it to fit.
 
 The full contract is `docs/display-tool.md` in the switchboard repository;
 the switchboard validates every action and returns its reason when it
