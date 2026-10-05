@@ -28,7 +28,9 @@
 // The drawing grows when the approved canvas is too small rather than
 // letting anything overlap. Shown in a viewport (`viewDiagram`), a drawing
 // too large to read whole there is laid out again for a frame of the
-// viewport's size and scrolls (drawingFit.ts).
+// viewport's size and scrolls (drawingFit.ts). Laid out for a frame, an
+// edge longer than the frame, or one of too many running side by side, is
+// drawn as a stub pair naming its far ends (`chooseStubs`, `bundledEdges`).
 
 import type { DiagramData, DiagramEdge, DiagramNode } from '../controller/types';
 import { fitDrawing, readableScale, scrollCost, type DrawingFit, type Viewport } from './drawingFit';
@@ -75,13 +77,36 @@ export interface EdgeLabel {
   box: Box;
 }
 
+/**
+ * One end of an edge too long to follow, drawn as a short stub: from its
+ * true source out to a label naming the target (`-> target`), or from a
+ * label naming the source (`source ->`) in to its true target.
+ */
+export interface EdgeStub {
+  /** Axis-aligned, in the edge's own direction: from the source's outline to the label, or from the label to the target's. */
+  points: Point[];
+  /**
+   * The label at the stub's open end; the line meets its backing. The
+   * stubs leaving one side of a node the same way share one, which lists
+   * every far end, each edge's own label under its name.
+   */
+  label: EdgeLabel;
+  /** Which side of the label its lines line up on: the side the stub meets. */
+  align: 'start' | 'middle' | 'end';
+  /** For each of the label's lines, whether it is an edge's own label (under the name it belongs to), set quieter than the names. */
+  quiet: boolean[];
+}
+
 export interface LaidOutEdge {
   edge: DiagramEdge;
-  /** Axis-aligned route from the source's outline to the target's. */
+  /** Axis-aligned route from the source's outline to the target's; empty for an edge drawn as stubs. */
   points: Point[];
+  /** The edge's own label on its route; an edge drawn as stubs carries it in their names. */
   label: EdgeLabel | null;
   /** Laid out against its direction to break a cycle; still drawn from `edge.from` to `edge.to`. */
   reversed: boolean;
+  /** An edge longer than the frame it is read in is drawn as a stub at each end instead of a route (`chooseStubs`). */
+  stubs: { from: EdgeStub; to: EdgeStub } | null;
 }
 
 export interface DiagramCallout {
@@ -185,6 +210,8 @@ function tagRoom(tags: CornerTags): number {
 const LABEL_ADVANCE = 7.3;
 const LABEL_HEIGHT = 14;
 const LABEL_BACKING = 4;
+/** Where a label's text starts inside its backing, for text lined up on one side. */
+export const LABEL_INSET = LABEL_BACKING;
 const LABEL_WRAP_AT = 14;
 const LABEL_MAX_LINES = 2;
 // Space kept clear between a label's backing and anything else in its gap;
@@ -239,12 +266,31 @@ const LINE_PORT_PITCH = 10;
 export const ARROW_PORT_PITCH = ARROW_LENGTH + 3;
 const PORT_INSET = 14;
 const SELF_LOOP = 18;
+// No more than this many long edges run side by side through a layer, each
+// within BUNDLE_REACH of the next; past it, the longest are drawn as stubs
+// (`bundledEdges`).
+const BUNDLE_CAP = 4;
+const BUNDLE_REACH = 16;
+const BUNDLE_ROUNDS = 4;
 // Layers are ordered from this many shuffled starts as well as the given
 // order and a depth-first one, and sifted (`orderLayers`), when no more than
 // THOROUGH_SEGMENTS lines join them (a forty-step pipeline laid out for a
 // phone has some 140): past that it costs more than a frame's budget.
 const ORDER_SHUFFLES = 4;
 const THOROUGH_SEGMENTS = 160;
+// An edge too long to follow is drawn as two stubs only when it skips at
+// least this many layers: a shorter one's stubs would take the room its
+// line does (chooseStubs).
+const STUB_MIN_SPAN = 2;
+// Only a drawing longer than this many frames draws stubs.
+const STUB_FROM = 2;
+// Space between a stub's terminal and the boxes beside it in its layer.
+const TERMINAL_SPACING = 16;
+// How many times the edges are judged again once terminals have taken room.
+const STUB_ROUNDS = 3;
+// Where a terminal's names wrap, in characters: in a narrow frame read top
+// down, its names take room across, so they wrap sooner.
+const TERMINAL_WRAP = { approved: 22, narrow: 16 } as const;
 
 const EPSILON = 0.5;
 
@@ -469,59 +515,81 @@ export function createLayers(nodes: DiagramNode[], edges: DiagramEdge[]): Diagra
 
 // --- Wrapping a layer too wide for its frame --------------------------------
 
+/** One edge of the layered graph, by the ids of what it joins: a node, or a stub's terminal. */
+interface Link {
+  from: string;
+  to: string;
+  /** Drawn against the layout's direction: its arrowhead is at `from`. */
+  reversed: boolean;
+}
+
+// The room a part of a layer takes across: its boxes and the spacing
+// between them, and a dummy's spacing for each edge passing through it.
+function partRoom(part: string[], through: number, extentOf: (id: string) => number, packing: Packing) {
+  const lanes = through > 0 ? (through + 1) * packing.dummy : 0;
+  return part.reduce((sum, id) => sum + extentOf(id), 0) + NODE_SPACING * Math.max(0, part.length - 1) + lanes;
+}
+
+// Each layer's members, and how many links pass through it.
+function layerMembers(ids: string[], links: Link[], layerOf: Map<string, number>) {
+  const count = ids.length ? Math.max(...ids.map((id) => layerOf.get(id) ?? 0)) + 1 : 0;
+  const members: string[][] = Array.from({ length: count }, () => []);
+  for (const id of ids) members[layerOf.get(id) ?? 0].push(id);
+  const passing = new Array<number>(count).fill(0);
+  for (const link of links) {
+    for (let layer = (layerOf.get(link.from) ?? 0) + 1; layer < (layerOf.get(link.to) ?? 0); layer += 1) passing[layer] += 1;
+  }
+  return { members, passing };
+}
+
 /**
  * Splits each layer too wide for the frame's cross axis into consecutive
- * layers that fit it, and renumbers the layers after it. A node's edges
+ * layers that fit it, and renumbers the layers after it. A member's edges
  * then pass the other parts of its old layer as long edges do, through the
  * gaps between their boxes, so they are counted against each part's room.
- * Nodes with more edges in than out go first, so the fewest edges have far
- * to run. A layer that fits, and a lone node too wide for any part, stay
- * as they are.
+ * Members with more edges in than out go first, so the fewest edges have
+ * far to run. A layer that fits, and a lone member too wide for any part,
+ * stay as they are; so does a layer of nodes alone that fits staggered
+ * into two rows (`assignCross`).
  */
 function wrapLayers(
-  nodes: DiagramNode[],
-  edges: DirectedEdge[],
+  ids: string[],
+  links: Link[],
   layerOf: Map<string, number>,
   extentOf: (id: string) => number,
   usable: number,
   packing: Packing,
+  canStagger: (id: string) => boolean,
 ) {
-  const count = nodes.length ? Math.max(...layerOf.values()) + 1 : 0;
-  const members: string[][] = Array.from({ length: count }, () => []);
-  for (const node of nodes) members[layerOf.get(node.id) ?? 0].push(node.id);
+  const { members, passing } = layerMembers(ids, links, layerOf);
   const inward = new Map<string, number>();
   const outward = new Map<string, number>();
-  const passing = new Array<number>(count).fill(0);
-  for (const edge of edges) {
-    outward.set(edge.from, (outward.get(edge.from) ?? 0) + 1);
-    inward.set(edge.to, (inward.get(edge.to) ?? 0) + 1);
-    for (let layer = (layerOf.get(edge.from) ?? 0) + 1; layer < (layerOf.get(edge.to) ?? 0); layer += 1) passing[layer] += 1;
+  for (const link of links) {
+    outward.set(link.from, (outward.get(link.from) ?? 0) + 1);
+    inward.set(link.to, (inward.get(link.to) ?? 0) + 1);
   }
-  // The room a part of a layer takes: its boxes and the spacing between
-  // them, and a dummy's spacing for each edge passing through it. A layer
-  // crowded enough to stagger into two rows takes about half.
-  const lanes = (through: number) => (through > 0 ? (through + 1) * packing.dummy : 0);
-  const room = (ids: string[], through: number) =>
-    ids.reduce((sum, id) => sum + extentOf(id), 0) + NODE_SPACING * Math.max(0, ids.length - 1) + lanes(through);
-  const staggered = (ids: string[], through: number) => {
-    const widest = Math.max(...ids.map(extentOf));
-    return ids.length >= STAGGER_FROM ? (ids.length - 1) * (widest / 2 + STAGGER_CLEARANCE) + widest + lanes(through) : Infinity;
+  const room = (part: string[], through: number) => partRoom(part, through, extentOf, packing);
+  // A layer crowded enough to stagger into two rows takes about half.
+  const staggered = (part: string[], through: number) => {
+    if (part.length < STAGGER_FROM || !part.every(canStagger)) return Infinity;
+    const widest = Math.max(...part.map(extentOf));
+    return (part.length - 1) * (widest / 2 + STAGGER_CLEARANCE) + widest + (through > 0 ? (through + 1) * packing.dummy : 0);
   };
   let shift = 0;
-  members.forEach((ids, layer) => {
-    if (room(ids, passing[layer]) <= usable || staggered(ids, passing[layer]) <= usable || ids.length < 2) {
-      for (const id of ids) layerOf.set(id, layer + shift);
+  members.forEach((part, layer) => {
+    if (room(part, passing[layer]) <= usable || staggered(part, passing[layer]) <= usable || part.length < 2) {
+      for (const id of part) layerOf.set(id, layer + shift);
       return;
     }
-    const order = ids
+    const order = part
       .map((id, index) => ({ id, index, lean: (outward.get(id) ?? 0) - (inward.get(id) ?? 0) }))
       .sort((a, b) => a.lean - b.lean || a.index - b.index)
       .map((entry) => entry.id);
-    // Edges into the nodes still to place pass this part; so do the edges
-    // out of the nodes placed in parts before it.
+    // Edges into the members still to place pass this part; so do the
+    // edges out of the members placed in parts before it.
     let waitingIn = order.reduce((sum, id) => sum + (inward.get(id) ?? 0), 0);
     let doneOut = 0;
-    let part = 0;
+    let index = 0;
     let cursor = 0;
     while (cursor < order.length) {
       const taken = [order[cursor]];
@@ -536,16 +604,97 @@ function wrapLayers(
         cursor += 1;
       }
       for (const id of taken) {
-        layerOf.set(id, layer + shift + part);
+        layerOf.set(id, layer + shift + index);
         doneOut += outward.get(id) ?? 0;
       }
-      part += 1;
+      index += 1;
     }
-    shift += part - 1;
+    shift += index - 1;
   });
 }
 
+// --- Edges too long to follow ------------------------------------------------
+
+/**
+ * The edges a frame draws as stub pairs: those whose run along the main
+ * axis would be longer than the frame itself. A reader follows an edge by
+ * keeping both its ends in view; past one frame's length they cannot, and
+ * the line has to be tracked through the scroll among its neighbours. Such
+ * an edge leaves its source as a short stub naming its target and arrives
+ * at its target from a stub naming its source. The run is estimated from
+ * the layers before anything is placed: each layer as deep as its deepest
+ * box, each gap as deep as the tracks and the widest label it is likely to
+ * hold. An edge that skips fewer than STUB_MIN_SPAN layers is never a stub:
+ * its stubs would take as much room as its line.
+ */
+function chooseStubs(
+  edges: DirectedEdge[],
+  links: Link[],
+  layerOf: Map<string, number>,
+  mainExtentOf: (id: string) => number,
+  labelMainOf: (text: string) => number,
+  window: number,
+  packing: Packing,
+): Set<DirectedEdge> {
+  const stubs = new Set<DirectedEdge>();
+  if (!edges.length) return stubs;
+  const count = Math.max(...layerOf.values()) + 1;
+  const band = new Array<number>(count).fill(0);
+  for (const [id, layer] of layerOf) band[layer] = Math.max(band[layer], mainExtentOf(id));
+  const through = new Array<number>(Math.max(0, count - 1)).fill(0);
+  const widest = new Array<number>(Math.max(0, count - 1)).fill(0);
+  for (const link of links) {
+    for (let gap = layerOf.get(link.from) ?? 0; gap < (layerOf.get(link.to) ?? 0); gap += 1) through[gap] += 1;
+  }
+  for (const edge of edges) {
+    const from = layerOf.get(edge.from) ?? 0;
+    const to = layerOf.get(edge.to) ?? 0;
+    const label = edge.edge.label;
+    if (label && to > from) {
+      const gap = from + Math.floor((to - from - 1) / 2);
+      widest[gap] = Math.max(widest[gap], labelMainOf(label));
+    }
+  }
+  const start: number[] = [];
+  const end: number[] = [];
+  let cursor = 0;
+  for (let layer = 0; layer < count; layer += 1) {
+    start.push(cursor);
+    cursor += band[layer];
+    end.push(cursor);
+    if (layer < count - 1) {
+      // About half the edges crossing a gap bend in it, each on its own track.
+      const tracks = (through[layer] * TRACK_PITCH) / 2 + 2 * (TRACK_PITCH + CLEARANCE);
+      cursor += Math.max(packing.minGap, tracks, widest[layer] ? widest[layer] + 2 * ARROW_ROOM : 0);
+    }
+  }
+  // A drawing at most STUB_FROM frames long keeps every edge whole: one
+  // scroll brings any far end into view.
+  if (cursor <= STUB_FROM * window) return stubs;
+  for (const edge of edges) {
+    const from = layerOf.get(edge.from) ?? 0;
+    const to = layerOf.get(edge.to) ?? 0;
+    if (to - from >= STUB_MIN_SPAN && start[to] - end[from] > window) stubs.add(edge);
+  }
+  return stubs;
+}
+
 // --- The layered graph -----------------------------------------------------
+
+/**
+ * The open end of a stub: a label naming the far ends of the edges it
+ * stands for, one layer along from its node (`out`: after it, `in`:
+ * before it).
+ */
+interface Terminal {
+  text: string;
+  lines: string[];
+  /** Which lines are an edge's own label under the name it is on, set quieter. */
+  quiet: boolean[];
+  width: number;
+  height: number;
+  side: 'out' | 'in';
+}
 
 interface Item {
   layer: number;
@@ -553,8 +702,10 @@ interface Item {
   /** Which row of a staggered layer the item sits in; a dummy spans both. */
   row: 0 | 1;
   staggered: boolean;
-  /** The node, or null for a dummy an edge passes through. */
+  /** The node, or null for a dummy an edge passes through or a stub's terminal. */
   node: DiagramNode | null;
+  /** The label at a stub's open end, or null for a node or a dummy. */
+  terminal: Terminal | null;
   text: NodeText | null;
   mainExtent: number;
   crossExtent: number;
@@ -569,7 +720,10 @@ interface Item {
   ins: Segment[];
 }
 
+const isDummy = (item: Item) => item.node === null && item.terminal === null;
+
 interface Segment {
+  /** Its route's index. */
   edge: number;
   from: Item;
   to: Item;
@@ -582,8 +736,12 @@ interface Segment {
   reversed: boolean;
 }
 
+/** A drawn line: an edge drawn whole, or a stub between a node and its terminal. */
 interface Route {
-  directed: DirectedEdge;
+  /** Laid out against the edge's direction: drawn from its last point to its first. */
+  reversed: boolean;
+  /** An edge's own label; a stub's names are on its terminal. */
+  label: string | null;
   segments: Segment[];
 }
 
@@ -777,7 +935,7 @@ function separation(a: Item, b: Item, stretch: number, packing: Packing) {
     // where its edges run through the other row.
     return Math.max(a.crossExtent / 2 + b.facingHalf, b.crossExtent / 2 + a.facingHalf) + STAGGER_CLEARANCE;
   }
-  const spacing = a.node && b.node ? NODE_SPACING + stretch : packing.dummy;
+  const spacing = a.node && b.node ? NODE_SPACING + stretch : isDummy(a) || isDummy(b) ? packing.dummy : TERMINAL_SPACING;
   return a.crossExtent / 2 + spacing + b.crossExtent / 2;
 }
 
@@ -817,7 +975,7 @@ function settleLayer(layer: Item[], wantedOf: (item: Item) => number | null, str
   }
   const wanted = (item: Item) => targets[item.index];
   const order = [...layer].sort((a, b) => {
-    const dummy = Number(Boolean(b.node === null)) - Number(Boolean(a.node === null));
+    const dummy = Number(isDummy(b)) - Number(isDummy(a));
     if (dummy) return dummy;
     const degree = b.preds.length + b.succs.length - (a.preds.length + a.succs.length);
     return degree || a.index - b.index;
@@ -860,9 +1018,12 @@ function assignCross(layers: Item[][], usableCross: number, packing: Packing, ba
     const natural = real.reduce((sum, item) => sum + item.crossExtent, 0) + NODE_SPACING * (real.length - 1);
     // A sparse layer spreads to use the room across, less what the edges
     // passing through it take.
-    const passing = layer.length - real.length;
+    const passing = layer.filter(isDummy).length;
     const room = usableCross - (passing > 0 ? (passing + 1) * packing.dummy : 0);
-    if (real.length >= STAGGER_FROM && natural > usableCross) {
+    // A stub's terminal has no row of its own, so a layer holding one is
+    // never staggered (only a frame draws stubs, and it wraps a crowded
+    // layer instead).
+    if (real.length >= STAGGER_FROM && natural > usableCross && !layer.some((item) => item.terminal)) {
       real.forEach((item, index) => {
         item.row = index % 2 === 0 ? 0 : 1;
         // Row 0's out side and row 1's in side face the other row: their
@@ -940,7 +1101,7 @@ const endsSpan = (ends: Segment[], side: 'out' | 'in') => portSpan(ends.length, 
  * Gives every end on each node's side a port of its own, in the order of
  * the ends' far ends so no two cross at the box. Ports sit PORT_PITCH apart
  * where the side has room, and never closer than portGap; a side short of
- * room for that grew to hold it (`portRoom` in `layoutDiagram`). A staggered
+ * room for that grew to hold it (`portRoom` in `arrange`). A staggered
  * box's lines through the other row pack as close as portGap allows.
  */
 function assignPorts(layers: Item[][]) {
@@ -1024,6 +1185,43 @@ function assignTracks(segments: Segment[]): number {
   return count;
 }
 
+// --- Bundles ---------------------------------------------------------------
+
+/**
+ * The edges to draw as stubs so that no more than BUNDLE_CAP long edges
+ * run side by side through a layer: a bundle is a run of the dummies of
+ * edges passing a layer with nothing between them and no more than
+ * BUNDLE_REACH apart. Past the cap, lines that close together cannot be
+ * told apart along their run. Of a bundle's edges the longest go first,
+ * as many as it is over the cap; an edge's stubs may only stand for an
+ * edge drawn whole, so a stub's own dummies never count against it.
+ */
+function bundledEdges(layers: Item[][], routes: Route[], routeOf: Map<DiagramEdge, Route>, packing: Packing): Set<DiagramEdge> {
+  const edgeOf = new Map<Route, DiagramEdge>();
+  for (const [edge, route] of routeOf) edgeOf.set(route, edge);
+  const chosen = new Set<DiagramEdge>();
+  const reach = Math.max(BUNDLE_REACH, packing.dummy);
+  for (const layer of layers) {
+    // A run's lines, each the edge it draws, or null for a stub's line.
+    let run: Array<DiagramEdge | null> = [];
+    const close = () => {
+      if (run.length > BUNDLE_CAP) {
+        const span = (edge: DiagramEdge) => routeOf.get(edge)?.segments.length ?? 0;
+        const open = run.filter((edge): edge is DiagramEdge => edge !== null && !chosen.has(edge)).sort((a, b) => span(b) - span(a));
+        for (const edge of open.slice(0, run.length - BUNDLE_CAP)) chosen.add(edge);
+      }
+      run = [];
+    };
+    layer.forEach((item, index) => {
+      const previous = layer[index - 1];
+      if (!isDummy(item) || (previous && (!isDummy(previous) || item.cross - previous.cross > reach + EPSILON))) close();
+      if (isDummy(item)) run.push(edgeOf.get(routes[item.ins[0]?.edge ?? -1]) ?? null);
+    });
+    close();
+  }
+  return chosen;
+}
+
 // --- Layout ----------------------------------------------------------------
 
 type MainCross = [number, number];
@@ -1059,6 +1257,31 @@ export interface DiagramFrame {
 }
 
 export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation, anchorNodeId?: string, frame?: DiagramFrame): DiagramLayout {
+  // Stubbing a bundle's excess moves other edges, which may bundle in turn:
+  // a few rounds at most, the last one finishing whatever it finds.
+  const extra = new Set<DiagramEdge>();
+  for (let round = 0; ; round += 1) {
+    const { layout, bundled } = arrange(data, orientation, anchorNodeId, frame, extra, round === BUNDLE_ROUNDS - 1);
+    if (layout) return layout;
+    for (const edge of bundled) extra.add(edge);
+  }
+}
+
+/**
+ * Lays a graph out. Laid out for a frame, it first settles every layer
+ * across; if the long edges passing some layer then run as a bundle wider
+ * than BUNDLE_CAP, it stops and returns the edges to draw as stubs as well
+ * (the longest of each bundle's excess), to be laid out again with them
+ * and those it was given (`extra`). Told to `finish`, it always does.
+ */
+function arrange(
+  data: DiagramData,
+  orientation: DiagramOrientation,
+  anchorNodeId: string | undefined,
+  frame: DiagramFrame | undefined,
+  extra: Set<DiagramEdge>,
+  finish: boolean,
+): { layout: DiagramLayout | null; bundled: Set<DiagramEdge> } {
   const canvas = frame ?? CANVAS[orientation];
   const landscape = orientation === 'landscape';
   const point = (main: number, cross: number): Point => (landscape ? { x: main, y: cross } : { x: cross, y: main });
@@ -1069,7 +1292,7 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
     return landscape ? { main: backing.width, cross: backing.height } : { main: backing.height, cross: backing.width };
   };
 
-  // --- Nodes, layers, dummies ---------------------------------------------
+  // --- Nodes, layers, stubs -------------------------------------------------
   // A done or blocked node carries its state glyph in its corner, and the
   // anchored node may carry the NOTE marker there too.
   const packing = frame ? FRAME_PACKING : APPROVED_PACKING;
@@ -1077,45 +1300,128 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
   const textOf = new Map(
     data.nodes.map((node) => [node.id, measureNode(node, { glyph: node.state === 'done' || node.state === 'blocked', marker: node.id === anchorNodeId }, wrap)]),
   );
+  const nodeById = new Map(data.nodes.map((node) => [node.id, node]));
   const directed = breakCycles(data.nodes, data.edges);
   const layerOf = assignLayers(data.nodes, directed);
+  const usable = canvas.cross - 2 * packing.padCross;
+  // A stub's terminal is the label at its open end, beside the node one
+  // layer along: `-> target` past its true source, `source ->` before its
+  // true target.
+  const terminals = new Map<string, Terminal>();
   // A box whose side is too short for a port of its own per end grows
-  // along that side; every edge has one end at each of its nodes, and an
-  // arrowhead at its true target.
+  // along that side; every edge has one end at each of its nodes, stub or
+  // not, and an arrowhead at its true target.
   const portRoom = new Map<string, number>();
-  {
+  const measurePorts = (links: Link[]) => {
     const ends = new Map<string, { out: number; outArrows: number; in: number; inArrows: number }>();
     const of = (id: string) => ends.get(id) ?? ends.set(id, { out: 0, outArrows: 0, in: 0, inArrows: 0 }).get(id)!;
-    for (const entry of directed) {
-      const from = of(entry.from);
-      const to = of(entry.to);
+    for (const link of links) {
+      const from = of(link.from);
+      const to = of(link.to);
       from.out += 1;
       to.in += 1;
-      if (entry.reversed) from.outArrows += 1;
+      if (link.reversed) from.outArrows += 1;
       else to.inArrows += 1;
     }
+    portRoom.clear();
     for (const [id, count] of ends) portRoom.set(id, Math.max(portSpan(count.out, count.outArrows), portSpan(count.in, count.inArrows)) + 2 * PORT_INSET);
-  }
-  const crossOf = (id: string) => {
-    const text = textOf.get(id);
-    return text ? Math.max(landscape ? text.height : text.width, portRoom.get(id) ?? 0) : 0;
   };
-  // Laid out for a frame, a layer too wide for it wraps into several.
-  if (frame) wrapLayers(data.nodes, directed, layerOf, crossOf, canvas.cross - 2 * packing.padCross, packing);
+  measurePorts(directed);
+  const extentOf = (id: string) => {
+    const text = textOf.get(id);
+    if (text) {
+      const cross = Math.max(landscape ? text.height : text.width, portRoom.get(id) ?? 0);
+      return { main: landscape ? text.width : text.height, cross };
+    }
+    const terminal = terminals.get(id);
+    if (!terminal) return { main: 0, cross: 0 };
+    return landscape ? { main: terminal.width, cross: terminal.height } : { main: terminal.height, cross: terminal.width };
+  };
+  const stubbed = new Set<DirectedEdge>();
+  // Each stubbed edge's two terminals, by id: the one by its layout source
+  // and the one by its layout target.
+  const terminalsOf = new Map<DirectedEdge, { out: string; in: string }>();
+  const links: Link[] = [...directed];
+  if (frame) {
+    // Laid out for a frame, a layer too wide for it wraps into several, and
+    // an edge longer than the frame is drawn as stubs. Their terminals take
+    // room in the layers beside their nodes, so those layers are wrapped
+    // again with them in; that can stretch other edges past the frame, so
+    // the edges are judged again, a few rounds at most.
+    const nodeIds = data.nodes.map((node) => node.id);
+    wrapLayers(nodeIds, links, layerOf, (id) => extentOf(id).cross, usable, packing, () => true);
+    const wrapped = new Map(layerOf);
+    const window = canvas.main - 2 * packing.padMain;
+    for (const entry of directed) if (extra.has(entry.edge)) stubbed.add(entry);
+    for (let round = 0; round < STUB_ROUNDS; round += 1) {
+      const whole = directed.filter((entry) => !stubbed.has(entry));
+      const longer = chooseStubs(whole, links, layerOf, (id) => extentOf(id).main, (text) => labelExtent(text).main, window, packing);
+      if (!longer.size && (round > 0 || !stubbed.size)) break;
+      for (const entry of longer) stubbed.add(entry);
+      layerOf.clear();
+      for (const [id, layer] of wrapped) layerOf.set(id, layer);
+      terminals.clear();
+      terminalsOf.clear();
+      // The stubs that leave one side of a node the same way, in the same
+      // colour, share one terminal listing every far end, so a node sends
+      // one stub to `-> a / -> b` rather than a row of them. It stands in
+      // the layer next to its node.
+      const entries = new Map<string, { node: string; side: 'out' | 'in'; reversed: boolean; texts: string[]; quiet: boolean[] }>();
+      const wrapAt = wrap === NARROW_WRAP ? TERMINAL_WRAP.narrow : TERMINAL_WRAP.approved;
+      for (const entry of directed) {
+        if (!stubbed.has(entry)) continue;
+        const { edge } = entry;
+        const source = nodeById.get(edge.from)?.label ?? edge.from;
+        const target = nodeById.get(edge.to)?.label ?? edge.to;
+        const note = edge.label ? wrapLine(edge.label, wrapAt, 2) : [];
+        // By its true source a stub names the target; by its true target,
+        // the source. Laid out backwards, the layout source is the target.
+        const style = `${edge.semantic ?? 'paper'}/${edge.active ? 'active' : ''}`;
+        const ids = { out: `\u0000${entry.from}/out/${entry.reversed}/${style}`, in: `\u0000${entry.to}/in/${entry.reversed}/${style}` };
+        // The arrow stays on the line with the name's first word (toward the
+        // target) or its last (from the source).
+        const toward = (name: string) => wrapLine(name, wrapAt - 3, 3).map((line, index) => (index === 0 ? `-> ${line}` : line));
+        const from = (name: string) => wrapLine(name, wrapAt - 3, 3).map((line, index, all) => (index === all.length - 1 ? `${line} ->` : line));
+        for (const [id, node, side, lines] of [
+          [ids.out, entry.from, 'out', entry.reversed ? from(source) : toward(target)],
+          [ids.in, entry.to, 'in', entry.reversed ? toward(target) : from(source)],
+        ] as const) {
+          const known = entries.get(id) ?? { node, side, reversed: entry.reversed, texts: [], quiet: [] };
+          known.texts.push(...lines, ...note);
+          known.quiet.push(...lines.map(() => false), ...note.map(() => true));
+          entries.set(id, known);
+        }
+        terminalsOf.set(entry, ids);
+      }
+      links.splice(0, links.length, ...directed.filter((entry) => !stubbed.has(entry)));
+      for (const [id, entry] of entries) {
+        const width = Math.max(...entry.texts.map((line) => line.length)) * LABEL_ADVANCE + 2 * LABEL_BACKING;
+        const height = entry.texts.length * LABEL_HEIGHT + 2 * LABEL_BACKING;
+        terminals.set(id, { text: entry.texts.join(' '), lines: entry.texts, quiet: entry.quiet, width, height, side: entry.side });
+        layerOf.set(id, (layerOf.get(entry.node) ?? 0) + (entry.side === 'out' ? 1 : -1));
+        links.push(entry.side === 'out' ? { from: entry.node, to: id, reversed: entry.reversed } : { from: id, to: entry.node, reversed: entry.reversed });
+      }
+      measurePorts(links);
+      wrapLayers([...nodeIds, ...terminals.keys()], links, layerOf, (id) => extentOf(id).cross, usable, packing, (id) => !terminals.has(id));
+    }
+  }
+
   const layerCount = data.nodes.length ? Math.max(...layerOf.values()) + 1 : 0;
   const layers: Item[][] = Array.from({ length: layerCount }, () => []);
   const itemOf = new Map<string, Item>();
-  const makeItem = (layer: number, node: DiagramNode | null): Item => {
-    const text = node ? (textOf.get(node.id) ?? null) : null;
+  const makeItem = (layer: number, id: string | null): Item => {
+    const node = id === null ? null : (nodeById.get(id) ?? null);
+    const extent = id === null ? { main: 0, cross: 0 } : extentOf(id);
     const item: Item = {
       layer,
       index: layers[layer].length,
       row: 0,
       staggered: false,
       node,
-      text,
-      mainExtent: text ? (landscape ? text.width : text.height) : 0,
-      crossExtent: node ? crossOf(node.id) : 0,
+      terminal: id === null ? null : (terminals.get(id) ?? null),
+      text: id === null ? null : (textOf.get(id) ?? null),
+      mainExtent: extent.main,
+      crossExtent: extent.cross,
       facingHalf: 0,
       main: 0,
       cross: 0,
@@ -1125,26 +1431,25 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
       ins: [],
     };
     layers[layer].push(item);
+    if (id !== null) itemOf.set(id, item);
     return item;
   };
-  for (const node of data.nodes) itemOf.set(node.id, makeItem(layerOf.get(node.id) ?? 0, node));
+  for (const node of data.nodes) makeItem(layerOf.get(node.id) ?? 0, node.id);
+  for (const id of terminals.keys()) makeItem(layerOf.get(id) ?? 0, id);
 
   const routes: Route[] = [];
   const segments: Segment[] = [];
-  const directedByEdge = new Map(directed.map((entry) => [entry.edge, entry]));
-  data.edges.forEach((edge) => {
-    const entry = directedByEdge.get(edge);
-    if (!entry) return;
-    const from = itemOf.get(entry.from);
-    const to = itemOf.get(entry.to);
-    if (!from || !to) return;
-    const route: Route = { directed: entry, segments: [] };
+  const addRoute = (fromId: string, toId: string, reversed: boolean, label: string | null): Route | null => {
+    const from = itemOf.get(fromId);
+    const to = itemOf.get(toId);
+    if (!from || !to) return null;
+    const route: Route = { reversed, label, segments: [] };
     const routeIndex = routes.length;
     routes.push(route);
     let previous = from;
     for (let layer = from.layer + 1; layer <= to.layer; layer += 1) {
       const next = layer === to.layer ? to : makeItem(layer, null);
-      const segment: Segment = { edge: routeIndex, from: previous, to: next, fromCross: 0, toCross: 0, track: null, reversed: entry.reversed };
+      const segment: Segment = { edge: routeIndex, from: previous, to: next, fromCross: 0, toCross: 0, track: null, reversed };
       previous.succs.push(next);
       next.preds.push(previous);
       previous.outs.push(segment);
@@ -1153,18 +1458,39 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
       segments.push(segment);
       previous = next;
     }
-  });
+    return route;
+  };
+  // Every edge drawn whole has a route; so does every terminal, from the
+  // node it stands by (or to it).
+  const directedByEdge = new Map(directed.map((entry) => [entry.edge, entry]));
+  const routeOf = new Map<DiagramEdge, Route>();
+  for (const edge of data.edges) {
+    const entry = directedByEdge.get(edge);
+    if (!entry || stubbed.has(entry)) continue;
+    const route = addRoute(entry.from, entry.to, entry.reversed, edge.label ?? null);
+    if (route) routeOf.set(edge, route);
+  }
+  const stubRouteOf = new Map<string, Route>();
+  for (const id of terminals.keys()) {
+    const link = links.find((candidate) => candidate.from === id || candidate.to === id);
+    const route = link ? addRoute(link.from, link.to, link.reversed, null) : null;
+    if (route) stubRouteOf.set(id, route);
+  }
 
   // --- Order and settle each layer -----------------------------------------
   orderLayers(layers);
-  const band = frame ? canvas.cross - 2 * packing.padCross : null;
-  assignCross(layers, canvas.cross - 2 * packing.padCross, packing, band ?? undefined);
+  const band = frame ? usable : null;
+  assignCross(layers, usable, packing, band ?? undefined);
+  if (frame && !finish) {
+    const bundled = bundledEdges(layers, routes, routeOf, packing);
+    if (bundled.size) return { layout: null, bundled };
+  }
   // A dummy that settled a hair off the line of its segment snaps onto it:
   // a route is straight or it bends, never a sliver of diagonal.
   for (const segment of segments) {
     if (Math.abs(segment.from.cross - segment.to.cross) > EPSILON) continue;
-    if (!segment.to.node) segment.to.cross = segment.from.cross;
-    else if (!segment.from.node) segment.from.cross = segment.to.cross;
+    if (isDummy(segment.to)) segment.to.cross = segment.from.cross;
+    else if (isDummy(segment.from)) segment.from.cross = segment.to.cross;
   }
   for (const segment of segments) {
     segment.fromCross = segment.from.cross;
@@ -1241,7 +1567,7 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
   const placedLabels: PlacedLabel[] = [];
   const labelOf = new Map<Route, PlacedLabel>();
   routes.forEach((route, routeIndex) => {
-    const text = route.directed.edge.label;
+    const text = route.label;
     if (!text) return;
     const gap = gapIndexOf(route);
     const mid = route.segments[gap - route.segments[0].from.layer];
@@ -1438,11 +1764,13 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
   const trackMain = (segment: Segment) => gaps[segment.from.layer].centre + trackOffset(segment);
 
   // --- Routes ----------------------------------------------------------------
+  // A line meets a box (a node, or a stub's terminal) at its outline and
+  // passes a dummy's place straight through.
   const laidOut = routes.map((route) => {
     const points: MainCross[] = [];
     route.segments.forEach((segment, index) => {
-      const exit = segment.from.node ? segment.from.main + segment.from.mainExtent / 2 : segment.from.main;
-      const entrance = segment.to.node ? segment.to.main - segment.to.mainExtent / 2 : segment.to.main;
+      const exit = isDummy(segment.from) ? segment.from.main : segment.from.main + segment.from.mainExtent / 2;
+      const entrance = isDummy(segment.to) ? segment.to.main : segment.to.main - segment.to.mainExtent / 2;
       if (index === 0) points.push([exit, segment.fromCross]);
       if (segment.track !== null) {
         const track = trackMain(segment);
@@ -1454,6 +1782,18 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
     const label = placed ? { text: placed.text, main: gaps[placed.gap].centre + placed.mainOffset, cross: placed.cross } : null;
     return { route, points: simplify(points), label };
   });
+  // The estimate a stub was chosen by can fall short of the drawn run (the
+  // gaps grow with their labels): an edge drawn whole that still runs
+  // longer than the frame is drawn as stubs on the next round.
+  if (frame && !finish && (cursor + packing.padMain) > STUB_FROM * (canvas.main - 2 * packing.padMain)) {
+    const longer = new Set<DiagramEdge>();
+    const pointsOf = new Map(laidOut.map((entry) => [entry.route, entry.points]));
+    for (const [edge, route] of routeOf) {
+      const drawn = (pointsOf.get(route) ?? []).map(([main]) => main);
+      if (Math.max(...drawn) - Math.min(...drawn) > canvas.main - 2 * packing.padMain && route.segments.length >= STUB_MIN_SPAN) longer.add(edge);
+    }
+    if (longer.size) return { layout: null, bundled: longer };
+  }
 
   // Self-loops span no layers (and are refused upstream); one is drawn as a
   // small loop on its node's far side so it is not lost.
@@ -1477,7 +1817,7 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
     crossMin = Math.min(crossMin, cross - extent / 2);
     crossMax = Math.max(crossMax, cross + extent / 2);
   };
-  for (const layer of layers) for (const item of layer) if (item.node) include(item.cross, item.crossExtent);
+  for (const layer of layers) for (const item of layer) if (!isDummy(item)) include(item.cross, item.crossExtent);
   for (const { points, label } of laidOut) {
     for (const [, cross] of points) include(cross);
     if (label) include(label.cross, labelExtent(label.text).cross);
@@ -1494,20 +1834,21 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
   const width = landscape ? mainSize : crossSize;
   const height = landscape ? crossSize : mainSize;
 
+  // An item's box, from its centre and extents.
+  const boxOf = (item: Item): Box => {
+    const centre = place(item.main, item.cross);
+    const boxWidth = landscape ? item.mainExtent : item.crossExtent;
+    const boxHeight = landscape ? item.crossExtent : item.mainExtent;
+    return { x: centre.x - boxWidth / 2, y: centre.y - boxHeight / 2, width: boxWidth, height: boxHeight };
+  };
   const nodes: LaidOutNode[] = data.nodes.flatMap((node) => {
     const item = itemOf.get(node.id);
     if (!item?.text) return [];
-    // The box is as long as its text and, across, as wide as its text or
-    // its ports need.
-    const centre = place(item.main, item.cross);
-    const width = landscape ? item.mainExtent : item.crossExtent;
-    const height = landscape ? item.crossExtent : item.mainExtent;
-    return [{ node, layer: item.layer, box: { x: centre.x - width / 2, y: centre.y - height / 2, width, height }, lines: item.text.lines, ruleY: item.text.ruleY }];
+    return [{ node, layer: item.layer, box: boxOf(item), lines: item.text.lines, ruleY: item.text.ruleY }];
   });
 
-  const laidOutByEdge = new Map<DiagramEdge, LaidOutEdge>();
+  const laidOutByRoute = new Map<Route, { points: Point[]; label: EdgeLabel | null }>();
   for (const { route, points, label } of laidOut) {
-    const placed = points.map(([main, cross]) => place(main, cross));
     let edgeLabel: EdgeLabel | null = null;
     if (label) {
       const centre = place(label.main, label.cross);
@@ -1520,21 +1861,41 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
         box: { x: centre.x - backing.width / 2, y: centre.y - backing.height / 2, ...backing },
       };
     }
-    laidOutByEdge.set(route.directed.edge, {
-      edge: route.directed.edge,
-      points: route.directed.reversed ? placed.reverse() : placed,
-      label: edgeLabel,
-      reversed: route.directed.reversed,
-    });
+    // A route laid out backwards is drawn from its last point to its first.
+    const placed = points.map(([main, cross]) => place(main, cross));
+    laidOutByRoute.set(route, { points: route.reversed ? placed.reverse() : placed, label: edgeLabel });
+  }
+  // A stub runs in its edges' own direction: out from a node to the
+  // terminal naming targets, in from the terminal naming sources to a node.
+  // Its names line up on the side its line meets.
+  const stubs = new Map<string, EdgeStub>();
+  for (const [id, route] of stubRouteOf) {
+    const item = itemOf.get(id);
+    if (!item?.terminal) continue;
+    const box = boxOf(item);
+    const align = !landscape ? 'middle' : item.terminal.side === 'out' ? 'start' : 'end';
+    const label = { text: item.terminal.text, lines: item.terminal.lines, x: box.x + box.width / 2, y: box.y + box.height / 2, box };
+    stubs.set(id, { points: laidOutByRoute.get(route)?.points ?? [], label, align, quiet: item.terminal.quiet });
+  }
+  const laidOutByEdge = new Map<DiagramEdge, LaidOutEdge>();
+  for (const [edge, route] of routeOf) {
+    const drawn = laidOutByRoute.get(route);
+    laidOutByEdge.set(edge, { edge, points: drawn?.points ?? [], label: drawn?.label ?? null, reversed: route.reversed, stubs: null });
+  }
+  for (const [entry, ids] of terminalsOf) {
+    const out = stubs.get(ids.out);
+    const into = stubs.get(ids.in);
+    if (!out || !into) continue;
+    laidOutByEdge.set(entry.edge, { edge: entry.edge, points: [], label: null, reversed: entry.reversed, stubs: entry.reversed ? { from: into, to: out } : { from: out, to: into } });
   }
   for (const loop of loops) {
-    laidOutByEdge.set(loop.edge, { edge: loop.edge, points: loop.points.map(([main, cross]) => place(main, cross)), label: null, reversed: false });
+    laidOutByEdge.set(loop.edge, { edge: loop.edge, points: loop.points.map(([main, cross]) => place(main, cross)), label: null, reversed: false, stubs: null });
   }
   const edges = data.edges.flatMap((edge) => laidOutByEdge.get(edge) ?? []);
 
   const callout = anchorNodeId ? placeCallout(nodes, edges, anchorNodeId, width, height, orientation) : null;
 
-  return { width, height, nodes, edges, callout };
+  return { layout: { width, height, nodes, edges, callout }, bundled: new Set() };
 }
 
 // --- Reading the drawing in its viewport ------------------------------------
@@ -1713,7 +2074,9 @@ export function placeCallout(
     if (overlapsOtherNode) continue;
 
     const overlapsLabel = edges.some(
-      (e) => e.label && boxesOverlap(cand.box, e.label.box, 8),
+      (e) =>
+        (e.label && boxesOverlap(cand.box, e.label.box, 8)) ||
+        (e.stubs && (boxesOverlap(cand.box, e.stubs.from.label.box, 8) || boxesOverlap(cand.box, e.stubs.to.label.box, 8))),
     );
     if (overlapsLabel) continue;
 

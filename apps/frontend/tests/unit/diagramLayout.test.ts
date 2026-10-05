@@ -14,6 +14,8 @@ import {
   type Box,
   type DiagramLayout,
   type DiagramOrientation,
+  type EdgeLabel,
+  type LaidOutEdge,
   type Point,
 } from '../../src/primitives/diagramLayout';
 
@@ -182,6 +184,34 @@ const arrowhead = (points: Point[]): Box => {
   return { x: end.x - ARROW_LENGTH / 2, y: Math.min(end.y, back), width: ARROW_LENGTH, height: ARROW_LENGTH };
 };
 
+// What an edge draws: its route, or the two stubs of an edge too long to
+// follow. Each line names the boxes it may touch: its ends' outlines, or a
+// stub's own node and its label's backing.
+interface DrawnLine {
+  points: Point[];
+  start: Box;
+  end: Box;
+  /** The nodes the line may touch. */
+  own: string[];
+  head: boolean;
+}
+const drawnLines = (layout: DiagramLayout, edge: LaidOutEdge): DrawnLine[] => {
+  const box = (id: string) => layout.nodes.find((node) => node.node.id === id)!.box;
+  if (!edge.stubs) return [{ points: edge.points, start: box(edge.edge.from), end: box(edge.edge.to), own: [edge.edge.from, edge.edge.to], head: true }];
+  return [
+    { points: edge.stubs.from.points, start: box(edge.edge.from), end: edge.stubs.from.label.box, own: [edge.edge.from], head: false },
+    { points: edge.stubs.to.points, start: edge.stubs.to.label.box, end: box(edge.edge.to), own: [edge.edge.to], head: true },
+  ];
+};
+// Every label drawn: the edges' own, and each stub label once.
+const drawnLabels = (layout: DiagramLayout): EdgeLabel[] => [
+  ...new Set(layout.edges.flatMap((edge) => [...(edge.label ? [edge.label] : []), ...(edge.stubs ? [edge.stubs.from.label, edge.stubs.to.label] : [])])),
+];
+// Every arrowhead drawn, each once: a stub shared by several edges ends in one.
+const arrowheads = (layout: DiagramLayout): Point[][] => [
+  ...new Set(layout.edges.flatMap((edge) => drawnLines(layout, edge).filter((line) => line.head).map((line) => line.points))),
+];
+
 const onOutline = (point: Point, box: Box) => {
   const onVertical = (Math.abs(point.x - box.x) < 1e-6 || Math.abs(point.x - (box.x + box.width)) < 1e-6) && point.y >= box.y && point.y <= box.y + box.height;
   const onHorizontal = (Math.abs(point.y - box.y) < 1e-6 || Math.abs(point.y - (box.y + box.height)) < 1e-6) && point.x >= box.x && point.x <= box.x + box.width;
@@ -215,15 +245,16 @@ for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
   ];
   describe(`diagram layout / ${orientation}`, () => {
     for (const [name, data, layout, framed] of cases) {
-      const labels = layout.edges.flatMap((edge) => (edge.label ? [edge.label] : []));
-      const nodeBox = (id: string) => layout.nodes.find((node) => node.node.id === id)?.box;
+      const labels = drawnLabels(layout);
+      const lines = layout.edges.flatMap((edge) => drawnLines(layout, edge).map((line) => ({ edge, line })));
+      const named = (edge: LaidOutEdge) => `${edge.edge.from}->${edge.edge.to}${edge.stubs ? ' (stubs)' : ''}`;
 
       it(`${name}: lays out every node and edge inside the drawing`, () => {
         expect(layout.nodes).toHaveLength(data.nodes.length);
         expect(layout.edges).toHaveLength(data.edges.length);
         for (const node of layout.nodes) expect(within(node.box, layout.width, layout.height), node.node.id).toBe(true);
-        for (const edge of layout.edges) {
-          for (const point of edge.points) {
+        for (const { line } of lines) {
+          for (const point of line.points) {
             expect(point.x).toBeGreaterThanOrEqual(0);
             expect(point.y).toBeGreaterThanOrEqual(0);
             expect(point.x).toBeLessThanOrEqual(layout.width);
@@ -242,7 +273,17 @@ for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
       });
 
       it(`${name}: every label clears every node and every other label`, () => {
-        expect(labels).toHaveLength(data.edges.filter((edge) => edge.label).length);
+        // Every edge's own label is drawn: on its route, or under its name
+        // in both its stubs' labels.
+        for (const edge of layout.edges) {
+          const text = edge.edge.label;
+          if (!text) continue;
+          if (edge.stubs) {
+            for (const stub of [edge.stubs.from, edge.stubs.to]) expect(stub.label.lines.filter((_, index) => stub.quiet[index]).join(' '), named(edge)).toContain(text.split(/\s+/)[0]);
+          } else {
+            expect(edge.label?.text, named(edge)).toBe(text);
+          }
+        }
         for (const label of labels) {
           for (const node of layout.nodes) {
             expect(overlaps(label.box, node.box), `${label.text} over ${node.node.id}`).toBe(false);
@@ -257,16 +298,22 @@ for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
 
       it(`${name}: every label sits on its own route and clears every arrowhead`, () => {
         for (const edge of layout.edges) {
-          if (!edge.label) continue;
-          // Laid out for a frame, a label at the band's edge may slide off
-          // the middle of its line, as long as the line still passes under
-          // it, well inside its backing.
-          const sits = framed ? underLabel(edge.label.box, edge.points) : onRoute(edge.label, edge.points);
-          expect(sits, `${edge.label.text} on ${edge.edge.from}->${edge.edge.to}`).toBe(true);
+          if (edge.label) {
+            // Laid out for a frame, a label at the band's edge may slide off
+            // the middle of its line, as long as the line still passes under
+            // it, well inside its backing.
+            const sits = framed ? underLabel(edge.label.box, edge.points) : onRoute(edge.label, edge.points);
+            expect(sits, `${edge.label.text} on ${named(edge)}`).toBe(true);
+          }
+          // A stub's line meets its label's backing.
+          if (edge.stubs) {
+            expect(onOutline(edge.stubs.from.points[edge.stubs.from.points.length - 1], edge.stubs.from.label.box), `${named(edge)} reaches its target's name`).toBe(true);
+            expect(onOutline(edge.stubs.to.points[0], edge.stubs.to.label.box), `${named(edge)} leaves its source's name`).toBe(true);
+          }
         }
-        for (const edge of layout.edges) {
-          const head = arrowhead(edge.points);
-          for (const label of labels) expect(overlaps(head, label.box), `${label.text} over the arrowhead of ${edge.edge.from}->${edge.edge.to}`).toBe(false);
+        for (const points of arrowheads(layout)) {
+          const head = arrowhead(points);
+          for (const label of labels) expect(overlaps(head, label.box), `${label.text} over an arrowhead`).toBe(false);
         }
       });
 
@@ -281,46 +328,53 @@ for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
         for (const edge of layout.edges) {
           const back = layout.edges.find((other) => other.edge.from === edge.edge.to && other.edge.to === edge.edge.from);
           if (!back) continue;
-          edge.points.slice(1).forEach((end, k) => {
-            back.points.slice(1).forEach((backEnd, j) => {
-              expect(meet(edge.points[k], end, back.points[j], backEnd), `${edge.edge.from}<->${edge.edge.to}`).toBe(false);
-            });
-          });
+          for (const line of drawnLines(layout, edge)) {
+            for (const backLine of drawnLines(layout, back)) {
+              if (line.points === backLine.points) continue;
+              line.points.slice(1).forEach((end, k) => {
+                backLine.points.slice(1).forEach((backEnd, j) => {
+                  expect(meet(line.points[k], end, backLine.points[j], backEnd), `${named(edge)} meets ${named(back)}`).toBe(false);
+                });
+              });
+            }
+          }
         }
       });
 
       it(`${name}: routes pass through no node but their own ends`, () => {
-        for (const edge of layout.edges) {
-          expect(edge.points.length).toBeGreaterThanOrEqual(2);
-          for (let index = 1; index < edge.points.length; index += 1) {
-            const segment = segmentBox(edge.points[index - 1], edge.points[index]);
+        for (const { edge, line } of lines) {
+          expect(line.points.length).toBeGreaterThanOrEqual(2);
+          for (let index = 1; index < line.points.length; index += 1) {
+            const segment = segmentBox(line.points[index - 1], line.points[index]);
             // Consecutive points share an axis: the route is axis-aligned.
             expect(Math.min(segment.width, segment.height)).toBeLessThanOrEqual(0.001);
             for (const node of layout.nodes) {
-              const own = node.node.id === edge.edge.from || node.node.id === edge.edge.to;
-              // A route may touch its own ends' outlines, never cross their bodies.
-              const body = own ? inset(node.box, 1) : node.box;
-              expect(overlaps(segment, body), `${edge.edge.from}->${edge.edge.to} through ${node.node.id}`).toBe(false);
+              // A route may touch its own ends' outlines, never cross their
+              // bodies; a stub touches only its own node.
+              const body = line.own.includes(node.node.id) ? inset(node.box, 1) : node.box;
+              expect(overlaps(segment, body), `${named(edge)} through ${node.node.id}`).toBe(false);
             }
           }
         }
       });
 
       it(`${name}: every route runs from its source's outline to its target's, back edges included`, () => {
-        for (const edge of layout.edges) {
-          const from = nodeBox(edge.edge.from)!;
-          const to = nodeBox(edge.edge.to)!;
-          expect(onOutline(edge.points[0], from), `${edge.edge.from}->${edge.edge.to} starts at ${edge.edge.from}`).toBe(true);
-          expect(onOutline(edge.points[edge.points.length - 1], to), `${edge.edge.from}->${edge.edge.to} ends at ${edge.edge.to}`).toBe(true);
+        // A stub runs from its node's outline to its label's, or from its
+        // label's to its node's.
+        for (const { edge, line } of lines) {
+          expect(onOutline(line.points[0], line.start), `${named(edge)} starts at its start`).toBe(true);
+          expect(onOutline(line.points[line.points.length - 1], line.end), `${named(edge)} ends at its end`).toBe(true);
         }
       });
 
       it(`${name}: every end has a port of its own, and no two arrowheads stack`, () => {
         // Ends at one point would read as one line; arrowheads closer than
-        // their own width and a gap read as one blot.
-        const ends = layout.edges.flatMap((edge) => [
-          { point: edge.points[0], head: false },
-          { point: edge.points[edge.points.length - 1], head: true },
+        // their own width and a gap read as one blot. A stub shared by
+        // several edges is one line.
+        const unique = [...new Map(lines.map(({ line }) => [line.points, line])).values()];
+        const ends = unique.flatMap((line) => [
+          { point: line.points[0], head: false },
+          { point: line.points[line.points.length - 1], head: line.head },
         ]);
         ends.forEach((end, index) => {
           for (const other of ends.slice(index + 1)) {
