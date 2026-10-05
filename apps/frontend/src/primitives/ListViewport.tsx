@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from 'react';
+import { useScrollDemand } from '../hooks/useStageDemand';
 
 // The viewport an HTML list is read in when it outgrows its slot (a to-do
 // list, an inbox, an agenda, a forecast's days): the list scrolls inside
@@ -158,6 +159,8 @@ interface ListViewportProps {
 export function ListViewport({ children, noun, lead, countSelector = '[data-item]', head, className, scrollClassName, scrollRef: givenRef, label }: ListViewportProps) {
   const ownRef = useRef<HTMLDivElement>(null);
   const scrollRef = givenRef ?? ownRef;
+  // A list that outgrows the primary slot says so (useStageDemand).
+  useScrollDemand(scrollRef);
   const [past, setPast] = useState<ListPast & { top: boolean; bottom: boolean }>({ above: 0, below: 0, top: false, bottom: false });
   const [scrolls, setScrolls] = useState(false);
   const [viewHeight, setViewHeight] = useState(0);

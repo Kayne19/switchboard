@@ -278,3 +278,13 @@ test('a long live response on a folded strip is held to its newest lines, the st
     await fixtureServer.stop();
   }
 });
+
+for (const scene of ['tasks', 'inbox']) {
+  test(`a ${scene} list longer than its share takes the stage at 390x844`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await open(page, scene);
+    await expect(page.locator('.content-rail--folded')).toBeVisible();
+    const laid = await boxes(page);
+    expect(laid.main.height).toBeGreaterThan(laid.stage.height * 0.69);
+  });
+}
