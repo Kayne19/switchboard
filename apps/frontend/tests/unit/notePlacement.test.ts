@@ -4,6 +4,7 @@ import type { ChartData } from '../../src/controller/types';
 import { chartBarCallout, chartNoteTarget, chartObstacles, chartPointCallouts, chartScales } from '../../src/primitives/chartGeometry';
 import {
   DATA_CLEARANCE,
+  LINE_CLEARANCE,
   calloutLeader,
   hiddenFillArea,
   layoutNotes,
@@ -245,16 +246,15 @@ describe('note placement', () => {
     }
   });
 
-  it('sits above its point clear of the trace, rather than in a row that hides some of it', () => {
+  it('sits clear of the trace, rather than in a row that hides some of it', () => {
     // The trace falls across the top-right corner, so the top row would
-    // hide some of it; above the point, under the trace, is clear of it.
+    // hide some of it.
     const point = { x: 790, y: 220 };
     const traces = [[{ x: 0, y: 180 }, { x: 1000, y: 50 }]];
     const { rect, leader } = layoutNotes([{ id: 'a', width: 250, height: 70, point, from: 'above' }], { area: box(0, 0, 1000, 260), traces }).get('a')!;
-    expect(hiddenTraceLength(inflate(rect, DATA_CLEARANCE), traces)).toBe(0);
-    expect(rect.bottom).toBeLessThan(point.y);
-    expect(leader[0].y).toBe(rect.bottom);
-    expect(comesFrom(leader, 'above')).toBe(true);
+    expect(hiddenTraceLength(inflate(rect, LINE_CLEARANCE), traces)).toBe(0);
+    expect(rect.top).toBeGreaterThan(0);
+    expect(leader.at(-1)).toEqual(point);
   });
 
   it('sits beside its point, clear of the traces, rather than over one in a row above it', () => {
@@ -701,26 +701,54 @@ describe('a note on a line, area or scatter chart', () => {
     });
   }
 
+  // At 2560x1080 the training card stood 6 px over the VAL line, the
+  // clearance a card keeps from a bar, and read as resting on the line
+  // (line-notes, open item 5). A line is kept a wider clearance.
+  for (const view of [
+    { name: 'at 1440x900', scale: 0.937, top: 47, layer: { width: 937, height: 562 }, card: { width: 394, height: 118 } },
+    { name: 'at 2560x1080', scale: 1.294, top: 9, layer: { width: 2008, height: 665 }, card: { width: 680, height: 86 } },
+  ]) {
+    it(`keeps the training card a line's clearance off the lines, wider than a bar's, ${view.name}`, () => {
+      const { field, targets } = drawn(training, [{ x: 32, series: 'VAL LOSS' }], view.scale, view.top, view.layer);
+      const place = layoutNotes([{ id: 'note', ...view.card, ...targets[0] }], field, { spill: true, leaderOverlap: 1 }).get('note');
+      expect(place, 'the note keeps its place on the chart').toBeDefined();
+      expect(LINE_CLEARANCE).toBeGreaterThanOrEqual(2 * DATA_CLEARANCE);
+      expect(hiddenTraceLength(inflate(place!.rect, LINE_CLEARANCE), field.traces!)).toBe(0);
+      expect(wholly(place!.rect, field.plot!)).toBe(true);
+      expect(place!.leader.at(-1)).toEqual(targets[0].point);
+    });
+  }
+
   // A line chart's axis gets no headroom, so a peak on a round axis end sits
   // on the plot's top border: its value went below the apex, into the wedge
   // between the line's two sides, where no leader reached it clear of the
   // line, and the note went to the rail (review finding). The value stands
   // beside an apex the line falls away from, and the card comes from there.
+  // A trough's card at 1440x900 fits under the line's rising arm only
+  // within 6 px of it, a bar's clearance: kept a line's (`LINE_CLEARANCE`),
+  // it has no place near enough its point, and the rail takes it, its
+  // point still marked on the chart.
   for (const view of [
-    { name: 'at 1440x900', scale: 0.937, top: 47, layer: { width: 937, height: 562 } },
-    { name: 'at 2560x1080', scale: 1.294, top: 9, layer: { width: 2008, height: 665 } },
+    { name: 'at 1440x900', scale: 0.937, top: 47, layer: { width: 937, height: 562 }, rail: ['a trough by the axis end'] },
+    { name: 'at 2560x1080', scale: 1.294, top: 9, layer: { width: 2008, height: 665 }, rail: [] as string[] },
   ]) {
     for (const [name, data, anchor] of [
       ['a peak on the axis end', { xLabel: 'DAY', xMax: 10, series: [{ name: 'REQ', values: [10, 12, 15, 20, 28, 40, 30, 22, 18, 15, 13] }] }, { x: 5 }],
       ['a trough by the axis end', { xLabel: 'DAY', xMax: 10, series: [{ name: 'REQ', values: [40, 35, 30, 25, 20, 12, 20, 25, 30, 35, 40] }] }, { x: 5 }],
       ['the first point of a falling line', { ...training, marker: undefined, series: [training.series[0]] }, { x: 0, series: 'TRAIN LOSS' }],
     ] as Array<[string, ChartData, { x: number; series?: string }]>) {
-      it(`keeps a note on ${name} on the chart, its leader clear of the line, ${view.name}`, () => {
+      const rail = view.rail.includes(name);
+      it(`${rail ? 'hands the rail' : 'keeps'} a note on ${name}${rail ? '' : ' on the chart, its leader clear of the line'}, ${view.name}`, () => {
         const { field, targets } = drawn(data, [anchor], view.scale, view.top, view.layer);
         const sizes = [{ width: 315, height: 136 }, { width: 252, height: 160 }, { width: 180, height: 210 }];
         const place = layoutNotes([{ id: 'note', width: 394, height: 118, sizes, ...targets[0] }], field, { spill: true, leaderOverlap: 1 }).get('note');
+        if (rail) {
+          expect(place, 'no place keeps a line clearance near the point').toBeUndefined();
+          return;
+        }
         expect(place, 'the note keeps its place on the chart').toBeDefined();
         expect(wholly(place!.rect, field.plot!)).toBe(true);
+        expect(hiddenTraceLength(inflate(place!.rect, LINE_CLEARANCE), field.traces!)).toBe(0);
         expect(place!.leader.at(-1)).toEqual(targets[0].point);
         expect(nearest(place!.leader, field.traces!)).toBeGreaterThan(3);
       });

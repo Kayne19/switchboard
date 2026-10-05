@@ -14,14 +14,14 @@
 // an earlier one, rather than covering it. Among the places it tries each
 // card takes the one that hides the least, in this order: never its own
 // point or another note's, never another card; then never the data the
-// chart draws -- a bar, a scatter point, a line, the marker ring, each a
-// clearance away (`DATA_CLEARANCE`); then a leader clear of every other
-// mark and line; then not so far from its point that its leader runs a
-// long way; then never the legend or the axis labels; then an area chart's
-// fill only where nothing else is free; then as little as it can of the
-// other notes' leaders, never running its own under another card, and as
-// little of its own across the data; and, for a note with a point, as
-// short a leader as that allows.
+// chart draws -- a bar, a scatter point, the marker ring, each a clearance
+// away (`DATA_CLEARANCE`), and a line a wider one (`LINE_CLEARANCE`); then
+// a leader clear of every other mark and line; then not so far from its
+// point that its leader runs a long way; then never the legend or the axis
+// labels; then an area chart's fill only where nothing else is free; then
+// as little as it can of the other notes' leaders, never running its own
+// under another card, and as little of its own across the data; and, for
+// a note with a point, as short a leader as that allows.
 //
 // Where no row clears a card's point, the card also tries straight above
 // and below the point, a gap away, and beside it, level with it, a step
@@ -124,6 +124,15 @@ export const NOTE_GAP = 10;
 
 /** Space kept between a card and the data the chart draws, so a card never reads as resting on a bar. */
 export const DATA_CLEARANCE = 6;
+
+/**
+ * Space kept between a card and a line the chart draws (a line's, an area's
+ * edge): wider than a mark's. A line that runs along a card's border, the
+ * card's own colour or near it, reads as the card's edge or as the card
+ * resting on it: at 2560x1080 the training card stood 6 px over the VAL
+ * line and read as sitting on it (line-notes, open item 5).
+ */
+export const LINE_CLEARANCE = 12;
 
 const COST = {
   ownPoint: 1e9,
@@ -629,7 +638,7 @@ function placeInOrder(
       if (beaten()) return;
       // The data, a clearance away: the lines and the marks the chart draws.
       const near = inflate(rect, DATA_CLEARANCE);
-      const line = lineUnder(near);
+      const line = lineUnder(inflate(rect, LINE_CLEARANCE));
       let mark = 0;
       marksNear(near, (each) => {
         mark += overlapArea(near, each);
@@ -765,12 +774,13 @@ function placeInOrder(
         marksNear(slab, (mark) => {
           if (blocks(mark, slab.left, slab.right)) blocked.push([mark.top - DATA_CLEARANCE, mark.bottom + DATA_CLEARANCE]);
         });
-        segmentsNear(slab, ([a, b]) => {
-          const share = clipSegment(a, b, { ...slab, top: -Infinity, bottom: Infinity });
+        const lineSlab = { left: left - LINE_CLEARANCE, right: right + LINE_CLEARANCE, top: area.top - LINE_CLEARANCE, bottom: area.bottom + LINE_CLEARANCE };
+        segmentsNear(lineSlab, ([a, b]) => {
+          const share = clipSegment(a, b, { ...lineSlab, top: -Infinity, bottom: Infinity });
           if (!share) return;
           const y0 = a.y + (b.y - a.y) * share[0];
           const y1 = a.y + (b.y - a.y) * share[1];
-          blocked.push([Math.min(y0, y1) - DATA_CLEARANCE, Math.max(y0, y1) + DATA_CLEARANCE]);
+          blocked.push([Math.min(y0, y1) - LINE_CLEARANCE, Math.max(y0, y1) + LINE_CLEARANCE]);
         });
         if (through < SHORT.label) {
           for (const label of labels) if (blocks(label, left, right)) blocked.push([label.top, label.bottom]);

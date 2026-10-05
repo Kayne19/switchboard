@@ -529,9 +529,11 @@ an optional chart `x`/`series`, diagram `node`, or `item` inside a calendar, a
 to-do list, a timer, a forecast or an inbox; the browser owns the resulting
 placement. On a chart page a note lies over the chart it names, clear of what
 the chart draws: a bar or a scatter point is an area, not the line round it,
-and a card keeps a few pixels from it; lines, a marked point's ring and value,
-a bar's printed value, the legend and the axis labels are kept clear too, and
-an area chart's fill is given up only where nothing else is free. The page
+and a card keeps a few pixels from it (6); a line it keeps twice that (12), as
+a line along a card's border reads as the card resting on it; a marked
+point's ring and value, a bar's printed value, the legend and the axis labels
+are kept clear too, and an area chart's fill is given up only where nothing
+else is free. The page
 looks for such a place anywhere within reach of the named point, including
 the band above the plot. The card's tag names what it points at as the caller
 reads it, never the object's id or an index the agent sent: the category on a
