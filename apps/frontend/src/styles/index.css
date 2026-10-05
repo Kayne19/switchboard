@@ -1182,19 +1182,13 @@ button {
   gap: clamp(12px, 2cqh, 22px);
 }
 .composed-aux {
-  /* A scroll region clips at its padding edge: the bleed lets the cells'
-     frame strokes and focus rings run past their edges, as they do outside
-     a scroll region, without moving the cells. */
-  --aux-bleed: 6px;
   /* The readable floor of a visual's cell: the head of a table or a code
      pane and its first rows, a chart's plot, a figure with its caption. On
      a short stage it fits the row's cap, so one cell shows whole. */
   --aux-visual-floor: clamp(112px, 18cqh, 200px);
   grid-row: 2;
   min-width: 0;
-  min-height: calc(clamp(96px, 15cqh, 210px) + 2 * var(--aux-bleed));
-  margin: calc(-1 * var(--aux-bleed));
-  padding: var(--aux-bleed);
+  min-height: clamp(96px, 15cqh, 210px);
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
   gap: clamp(10px, 1.6cqw, 20px);

@@ -80,9 +80,9 @@ for (const viewport of viewports) {
     for (const cell of geometry.cells) {
       expect(cell.cell.height, cell.kind).toBeGreaterThanOrEqual(cell.visual ? floorFor(viewport) : 40);
     }
-    // The row stays inside the main column (its bleed aside) and scrolls
-    // whatever it cannot show.
-    expect(geometry.row.bottom).toBeLessThanOrEqual(geometry.main!.bottom + 8);
+    // The row stays inside the main column and scrolls whatever it cannot
+    // show.
+    expect(geometry.row.bottom).toBeLessThanOrEqual(geometry.main!.bottom + 1);
     if (viewport.width < viewport.height) expect(geometry.row.scrollHeight).toBeGreaterThan(geometry.row.clientHeight);
   });
 
@@ -96,7 +96,7 @@ for (const viewport of viewports) {
     expect(geometry.cells).toHaveLength(4);
     for (const cell of geometry.cells) expect(cell.cell.height, cell.kind).toBeGreaterThanOrEqual(floorFor(viewport));
     // Two fifths of the column at most; the rest is the diagram's.
-    expect(geometry.row.bottom - geometry.row.top).toBeLessThanOrEqual(geometry.main!.height * 0.4 + 13);
+    expect(geometry.row.bottom - geometry.row.top).toBeLessThanOrEqual(geometry.main!.height * 0.4 + 1);
     expect(geometry.row.scrollHeight).toBeGreaterThan(geometry.row.clientHeight);
   });
 
@@ -142,7 +142,7 @@ for (const viewport of viewports) {
       return { main: height('.content-grid > .content-main'), diagram: height('.diagram-object'), aux: height('.composed-aux') };
     });
     expect(shares.diagram).toBeGreaterThan(shares.aux);
-    expect(shares.aux).toBeLessThanOrEqual(shares.main * 0.4 + 13);
+    expect(shares.aux).toBeLessThanOrEqual(shares.main * 0.4 + 1);
   });
 }
 
