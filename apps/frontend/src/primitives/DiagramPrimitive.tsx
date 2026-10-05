@@ -2,6 +2,7 @@ import { useEffect, useMemo } from 'react';
 import type { DiagramData, NoteData, Semantic } from '../controller/types';
 import { ARROW_LENGTH, cornerTagBoxes, nodeFramePath, viewDiagram, type DiagramLayout, type Point } from './diagramLayout';
 import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
+import type { DrawingMap } from './drawingScroll';
 import { NoteMarker } from './NoteMarker';
 
 const colors: Record<Semantic, string> = {
@@ -89,6 +90,29 @@ export function DiagramPrimitive({
     const y = Math.min(...first.map((box) => box.y));
     return { x, y, width: Math.max(...first.map((box) => box.x + box.width)) - x, height: Math.max(...first.map((box) => box.y + box.height)) - y };
   }, [layout, anchor]);
+  // What the viewport tells a reader of a graph that scrolls: its nodes,
+  // counted past each edge and kept whole at rest; its edges, named for
+  // the node at the far end where they leave the view; and the sketch its
+  // map draws.
+  const map = useMemo<DrawingMap>(() => {
+    const indexOf = new Map(layout.nodes.map(({ node }, index) => [node.id, index]));
+    const toneOf = (semantic?: Semantic) => colors[semantic ?? 'paper'];
+    const links = layout.edges.flatMap(({ edge, points }) => {
+      const from = indexOf.get(edge.from);
+      const to = indexOf.get(edge.to);
+      return from === undefined || to === undefined ? [] : [{ points, from, to, tone: toneOf(edge.semantic) }];
+    });
+    return {
+      parts: layout.nodes.map(({ node, box }) => ({ box, label: node.label })),
+      noun: { one: 'NODE', many: 'NODES' },
+      marks: layout.edges.flatMap(({ label }) => (label ? [label.box] : [])),
+      links,
+      sketch: {
+        boxes: layout.nodes.map(({ node, box }) => ({ box, tone: node.id === anchor ? 'var(--orange)' : toneOf(node.semantic) })),
+        lines: links.map(({ points, tone }) => ({ points, tone })),
+      },
+    };
+  }, [layout, anchor]);
   // The callout box fits three wrapped lines and a one-line tag. A longer
   // note — or a word or tag too wide for the box — is not truncated or
   // spilled over the diagram: it is treated as not fitting, so the note
@@ -126,7 +150,7 @@ export function DiagramPrimitive({
 
   return (
     <div ref={hostRef} className={`diagram-primitive${focused ? ' diagram-primitive--focused' : ''}`} data-testid="diagram">
-      <DrawingViewport drawing={layout} fit={fit} lead={lead} ariaLabel={data.title ?? 'System diagram'}>
+      <DrawingViewport drawing={layout} fit={fit} lead={lead} map={map} ariaLabel={data.title ?? 'System diagram'}>
         <defs>
           {/* The region is the whole drawing, not each edge's bounding box: a
               straight edge has a zero-height box, and a filter region derived

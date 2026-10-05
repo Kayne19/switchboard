@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import type { NoteData, Semantic, SequenceDiagramData } from '../controller/types';
 import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
+import type { DrawingMap } from './drawingScroll';
 import { NoteMarker } from './NoteMarker';
 import { LABEL_HEIGHT, SUB_LINE_HEIGHT, viewSequence, type LaidOutMessage, type Point } from './sequenceLayout';
 
@@ -73,6 +74,31 @@ export function SequencePrimitive({
     () => viewSequence(data, { width, height, scrollbar }, anchoredActorId),
     [data, width, height, scrollbar, anchoredActorId],
   );
+  // What the viewport tells a reader of an exchange that scrolls: its
+  // messages, counted past each edge and kept whole at rest, and the
+  // sketch its map draws (headers, lifelines, the arrows).
+  const map = useMemo<DrawingMap>(() => {
+    const parts = layout.messages.map((item) => {
+      const xs = [...item.points.map((point) => point.x), item.label.box.x, item.label.box.x + item.label.box.width];
+      const ys = [...item.points.map((point) => point.y), item.label.box.y, item.label.box.y + item.label.box.height];
+      const x = Math.min(...xs);
+      const y = Math.min(...ys);
+      return { box: { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y }, label: item.message.label };
+    });
+    return {
+      parts,
+      noun: { one: 'MESSAGE', many: 'MESSAGES' },
+      marks: [],
+      links: [],
+      sketch: {
+        boxes: layout.actors.map(({ actor, box }) => ({ box, tone: actor.id === anchoredActorId ? 'var(--orange)' : colors[actor.semantic ?? 'paper'] })),
+        lines: [
+          ...layout.actors.map(({ actor, x, box, lifelineEnd }) => ({ points: [{ x, y: box.y + box.height }, { x, y: lifelineEnd }], tone: colors[actor.semantic ?? 'paper'] })),
+          ...layout.messages.map((item) => ({ points: item.points, tone: item.message.active ? 'var(--orange)' : 'var(--paper)' })),
+        ],
+      },
+    };
+  }, [layout, anchoredActorId]);
   // Messages resolve in order, but a long exchange is not made to wait on
   // them: the stagger shrinks so the last one is in within about a second.
   const stagger = Math.min(60, Math.floor(900 / Math.max(1, layout.messages.length)));
@@ -142,7 +168,7 @@ export function SequencePrimitive({
 
   return (
     <div ref={hostRef} className={`sequence-primitive${focused ? ' sequence-primitive--focused' : ''}`} data-testid="sequence">
-      <DrawingViewport drawing={layout} fit={fit} pinned={{ height: headerBottom + PINNED_MARGIN, content: actors }} ariaLabel={data.title ?? 'Sequence diagram'}>
+      <DrawingViewport drawing={layout} fit={fit} pinned={{ height: headerBottom + PINNED_MARGIN, content: actors }} map={map} ariaLabel={data.title ?? 'Sequence diagram'}>
         <defs>
           {/* The region is the whole drawing, not each message's bounding box:
               a straight message has a zero-height box, and a filter region
