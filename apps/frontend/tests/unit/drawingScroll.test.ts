@@ -70,6 +70,16 @@ describe('where a scrolled drawing rests', () => {
     for (let index = 1; index < stops.length; index += 1) expect(stops[index] - stops[index - 1]).toBeLessThanOrEqual(0.6 * 300 + 1);
   });
 
+  it('across rows that leave no common gap, where the rail cuts the fewest parts', () => {
+    // Two rows, offset: no line crosses both rows clear, but one crossing a
+    // single part is always near.
+    const rows: Span[] = [[0, 300], [320, 620], [640, 940], [150, 450], [470, 770], [790, 1090]];
+    const stops = restStops(rows, 1100, 400);
+    const cuts = (stop: number) => rows.filter(([start, end]) => start < stop + RAIL && end > stop + RAIL).length;
+    expect(stops.length).toBeGreaterThan(2);
+    for (const stop of stops.slice(1, -1)) expect(cuts(stop), `${stop}`).toBeLessThanOrEqual(1);
+  });
+
   it('a drawing that fits rests at its start only', () => {
     expect(restStops(layers, 400, 450)).toEqual([0]);
   });

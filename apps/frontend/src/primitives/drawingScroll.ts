@@ -130,9 +130,11 @@ export function restStops(spans: readonly Span[], length: number, view: number, 
   }
   // Two stops further apart than a view leave a stretch the reader could
   // not stop along: it gets stops of its own, at most STRETCH of a view
-  // apart, each where its edge falls in a gap if one is near enough, and
-  // only where none is, on a part.
-  const free = between.map(([gapStart, gapEnd]): Span => [gapStart - RAIL - inset, gapEnd - RAIL - REST_ROOM - inset]);
+  // apart, each where its rail's inner edge cuts the fewest parts (none,
+  // where a gap is near enough; across a drawing that scrolls both ways,
+  // as few as its rows allow), the furthest of those.
+  const cuts = (stop: number) => spans.filter(([start, end]) => start < stop + inset + RAIL - EPSILON && end > stop + inset + RAIL + EPSILON).length;
+  const edges = spans.flatMap(([start, end]) => [start - RAIL - REST_ROOM - inset, end - RAIL + REST_ROOM - inset]);
   const stops: number[] = [];
   clean.forEach((stop, index) => {
     stops.push(stop);
@@ -141,11 +143,11 @@ export function restStops(spans: readonly Span[], length: number, view: number, 
     let at = stop;
     while (next - at > view * STRETCH + STOP_MERGE) {
       const reach = at + view * STRETCH;
-      const inGap = free
-        .map(([low, high]): Span => [Math.max(low, at + STOP_MERGE), Math.min(high, reach)])
-        .filter(([low, high]) => high >= low)
-        .map(([, high]) => high);
-      at = Math.round(inGap.length > 0 ? Math.max(...inGap) : reach);
+      const choices = [reach, ...edges.filter((edge) => edge >= at + STOP_MERGE && edge <= reach)].map(Math.round);
+      at = choices.reduce((best, choice) => {
+        const fewer = cuts(choice) - cuts(best);
+        return fewer < 0 || (fewer === 0 && choice > best) ? choice : best;
+      });
       stops.push(at);
     }
   });
@@ -174,9 +176,9 @@ function nearestStop(stops: readonly number[], position: number): number {
 /**
  * Where a drawing opens along one axis to show its lead (`lead`, a span of
  * the content): at a stop that shows the lead whole and clear of the rails,
- * one whose edge cuts no part (of `spans`) before one that does, and of
- * those the nearest to centring the lead; when no stop shows it whole, at
- * the stop nearest centring it.
+ * of those one whose edge cuts the fewest parts (of `spans`; none, along a
+ * layered drawing), and of those the nearest to centring the lead; when no
+ * stop shows it whole, at the stop nearest centring it.
  */
 export function leadStop(stops: readonly number[], lead: Span, view: number, inset = 0, spans: readonly Span[] = []): number {
   const target = (lead[0] + lead[1]) / 2 - (inset + view) / 2;
@@ -184,8 +186,10 @@ export function leadStop(stops: readonly number[], lead: Span, view: number, ins
   const whole = stops.filter(
     (stop) => lead[0] >= stop + inset + (stop > 0 ? RAIL : 0) - EPSILON && lead[1] <= stop + view - (stop < last ? RAIL : 0) + EPSILON,
   );
-  const clean = whole.filter((stop) => stop === 0 || !spans.some(([start, end]) => start < stop + inset + RAIL - EPSILON && end > stop + inset + EPSILON));
-  return nearestStop(clean.length > 0 ? clean : whole.length > 0 ? whole : stops, target);
+  const cuts = (stop: number) => (stop === 0 ? 0 : spans.filter(([start, end]) => start < stop + inset + RAIL - EPSILON && end > stop + inset + EPSILON).length);
+  const fewest = Math.min(...whole.map(cuts));
+  const clean = whole.filter((stop) => cuts(stop) === fewest);
+  return nearestStop(clean.length > 0 ? clean : stops, target);
 }
 
 // Moved less than this from where it rested, a drawing returns there.
