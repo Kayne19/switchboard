@@ -203,6 +203,35 @@ async fn view_reports_the_object_with_role_primary_even_when_shown_first() {
     assert_eq!(response["screen"]["title"], "document-title");
 }
 
+// A refused reason or view target is worded as the display validators word
+// a refused name, and as the skill module raises it before sending: the
+// field and every name it takes, in the skill's order.
+#[tokio::test]
+async fn a_refused_reason_or_target_lists_the_names_it_takes() {
+    let state = state();
+    for args in [
+        json!({"message": "Done"}),
+        json!({"message": "Done", "reason": "later"}),
+        json!({"message": "Done", "reason": null}),
+    ] {
+        let response = request_to_speak(state.clone(), "background-token", args).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(
+            body,
+            json!({"detail": "invalid reason: expected one of finished, needs_decision, problem"})
+        );
+    }
+    let (code, body) = agent_call_json(&state, "/view", json!({"target": "screen"})).await;
+    assert_eq!(code, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        json!({"delivered": false, "detail": "invalid target: expected one of visual, comms, system, theater, auto"})
+    );
+}
+
 #[tokio::test]
 async fn a_view_call_with_an_unknown_field_is_refused_with_the_reason() {
     let (code, body) =

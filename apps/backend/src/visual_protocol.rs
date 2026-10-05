@@ -43,8 +43,9 @@ const WEATHER_UNITS: [&str; 2] = ["C", "F"];
 /// The one refusal of a name outside its set, required or optional alike
 /// (docs/display-tool.md, "How the two validators agree"): the field and
 /// every name it takes, so an agent can mend the action from the error
-/// alone. The browser's `invalidName` writes the same text.
-fn invalid_name(field: &str, allowed: &[&str]) -> String {
+/// alone. The browser's `invalidName` writes the same text, and the module
+/// calls word their own refused names with it.
+pub(crate) fn invalid_name(field: &str, allowed: &[&str]) -> String {
     format!("invalid {field}: expected one of {}", allowed.join(", "))
 }
 
@@ -254,8 +255,8 @@ fn copy_optional_string(
 
 /// Copies an optional `semantic`. Anything but one of the seven names, a
 /// non-string or `null` included, is refused, as the browser's
-/// `ALLOWED_SEMANTICS.has` check refuses it: a field the browser refuses is
-/// refused here, never dropped.
+/// `isName(value, SEMANTICS)` check refuses it: a field the browser refuses
+/// is refused here, never dropped.
 fn copy_optional_semantic(
     data: &Map<String, Value>,
     out: &mut Map<String, Value>,
