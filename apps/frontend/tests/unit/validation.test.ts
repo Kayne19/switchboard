@@ -7,6 +7,7 @@ import {
   base64DecodedLength,
   decodeBase64Head,
   imageSignatureMatches,
+  isBlank,
   normalizeProgressValue,
   validateControllerAction,
 } from '../../src/controller/validation';
@@ -131,6 +132,23 @@ describe('metric trend and delta', () => {
       ok: false, error: 'metric.delta exceeds maximum length of 32 UTF-16 code units',
     });
     expect(metric({ label: 'P95', value: '1', delta: 3 })).toEqual({ ok: false, error: 'metric.delta must be a string' });
+  });
+});
+
+// The one whitespace set (docs/display-tool.md, "How the two validators
+// agree"): the backend's WHITE_SPACE is held to char::is_whitespace the same
+// way, so both lists are Unicode White_Space and nothing else.
+describe('blank text', () => {
+  it('counts Unicode White_Space, and nothing else, as blank', () => {
+    const differ: string[] = [];
+    for (let cp = 0; cp <= 0x10ffff; cp += 1) {
+      if (cp >= 0xd800 && cp <= 0xdfff) continue;
+      const ch = String.fromCodePoint(cp);
+      if (isBlank(ch) !== /^\p{White_Space}$/u.test(ch)) differ.push(`U+${cp.toString(16).toUpperCase()}`);
+    }
+    expect(differ).toEqual([]);
+    expect(isBlank('') && isBlank(' \u0085\u3000')).toBe(true);
+    expect(isBlank('\ufeff') || isBlank('\u200b') || isBlank('\u001c')).toBe(false);
   });
 });
 

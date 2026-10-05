@@ -74,12 +74,12 @@ primary's shorter cell, an aux cell, focus):
    so a drawing neither crosses the frame nor meets the rails. It scrolls
    only when it overflows. It opens on the node its note names (or on
    where it begins) and keeps the reader's place through an update that
-   does not change its shape; each edge it continues past fades into the
-   black; a sequence keeps its actor headers pinned at the top as its
-   messages scroll under them; the keys that scroll it scroll it rather
-   than expanding it. A drawing that scrolls places no callout,
-   which could sit out of view: its note stays in the rail and the node
-   carries the NOTE marker.
+   does not change its shape; a sequence keeps its actor headers pinned at
+   the top as its messages scroll under them; the keys that scroll it
+   scroll it rather than expanding it. How it tells the reader where they
+   are is the next list. A drawing that scrolls places no callout, which
+   could sit out of view: its note stays in the rail and the node, or the
+   sequence's actor, carries the NOTE marker, the rail badge's twin.
 3. **It is recomposed for the viewport, not scaled down.** A graph that
    does not read whole is laid out again for a frame of the viewport's
    size at the readable minimum, once in each direction: a layer too wide
@@ -110,6 +110,47 @@ primary's shorter cell, an aux cell, focus):
    viewport at the minimum (a dozen actors in a phone's aux cell).
 4. **Focus gives it the stage.** The same rule runs in the focus layer's
    larger viewport, so focus shows more of it at once.
+
+A drawing that scrolls says where its reader is, in the frame's own marks
+rather than with a scroll bar (`primitives/drawingScroll.ts` decides,
+`DrawingViewport` draws):
+
+- **It rests between its parts.** A view at rest never has a node (or a
+  sequence's message) cut at the edge it is read from: the places it may
+  rest put that edge in a gap between layers, the next part clear of the
+  edge's rail, an edge label in the gap kept whole when there is room.
+  Touch and the keys settle there through the browser's scroll snapping;
+  a wheel or a trackpad moves freely and settles when it pauses, a single
+  notch on to the next place; a mouse wheel over a drawing that scrolls
+  only across scrolls it across. It opens on its lead at such a place.
+  At its far end it rests the same way, showing a little black past the
+  drawing's end rather than a cut part. Across a drawing that scrolls
+  both ways there may be no gap every row leaves: it rests where the
+  rail cuts the fewest parts. The far edge of the view can still cut the
+  part beyond it: there a fade as deep as that part reaches in makes it
+  read as the next one coming.
+- **Each edge it continues past carries a rail.** A dashed orange line on
+  the cut, the count of what lies that way ("13 NODES", "23 MESSAGES")
+  and a chevron pointing there; a tap on the count turns a page. Text on
+  the left and right rails runs along them, so a rail costs the drawing a
+  line of small type.
+- **A line that leaves the view says where it goes.** On the rail where
+  it crosses, the name of the node at its far end, in the line's colour,
+  pointing out; several lines to one node are one name.
+- **A map shows the whole.** A drawing scrolled a view and a half or more
+  carries a small map in the corner it covers least of: every node and
+  line, the view boxed in orange. A tap or a drag on it moves the view.
+  A drawing in a viewport too small for a map (a phone's aux cell) has
+  its rails only.
+
+Why a map, rather than opening on the whole drawing and then moving in to
+its anchor: an opening overview is gone a second later, a reader who
+prefers reduced motion never sees it, and it says nothing once the reader
+has scrolled. The map is there whenever the reader looks, says where the
+view is as well as what the whole is, and is a way to move; it costs a
+corner of about a fiftieth of the view, chosen where the drawing has
+least. Hidden scroll bars lose nothing: the rails and the map say more,
+in sharp geometry, and a bar on a phone is not shown at all.
 
 Why this rule and not another. A diagram exists to be read; a drawing too
 small to read is not a smaller answer but no answer, and the caller cannot
@@ -276,9 +317,13 @@ resets the scene and sends the `epoch`. The second restates the status and
 leaves the new agent's first drawing, and its confirmation, alone. See
 `LegAnnouncer` in `apps/backend/src/leg_announcer.rs`.
 
-**`POST /display`'s result.** After publishing the action and stamping its
-`seq`, the handler waits up to ~2.5s (`DISPLAY_CONFIRM_DEADLINE_MS`) for that
-`seq` to clear the watermark, then returns one of:
+**The display call's result.** A display reaches the service as a module
+call (the path is under "Explicitly Refused Patterns" below). After
+publishing the action and stamping its `seq`, the service's `display`
+handler (`apps/backend/src/module_calls.rs`) waits up to ~2.5s
+(`DISPLAY_CONFIRM_DEADLINE_MS`) for that `seq` to clear the watermark, then
+answers with one of these, which the agent's skill module receives as the
+call's `result` and turns into the line it prints:
 - `{"delivered": true, "rendered": true}` — the browser confirmed this `seq`.
 - `{"delivered": true, "rendered": false, "rejected": true, "reason": "..."}`
   — the browser nacked this exact `seq`.
@@ -292,8 +337,8 @@ leaves the new agent's first drawing, and its confirmation, alone. See
   on; the action is still recorded in the projection and greets the next
   connection.
 
-**`POST /view` with no `target`.** Rather than ask the browser what is on
-screen right now, `/view` reports the backend's *own* record of what it
+**`view` with no `target`.** Rather than ask the browser what is on
+screen right now, the `view` call reports the backend's *own* record of what it
 believes it told the browser to show — the same projection that seeds a
 reconnect — plus whether that intent is confirmed:
 
@@ -340,7 +385,7 @@ Focus always overrides the composition primary, for both `visual_kind` and
 `title` — an agent that calls `focus` on an ambient or secondary object
 still gets that object reported back. Absent a focus, `role: "primary"`
 wins regardless of show order, and a later `show` without that role never
-displaces an earlier non-ambient object just by being more recent. The backend's `/view`
+displaces an earlier non-ambient object just by being more recent. The backend's `view`
 intent and the browser's own `screen_state` report are computed by the same
 rule, so they agree on every composed scene, not just the common single-object
 or single-`role:"primary"` case.
@@ -399,10 +444,16 @@ rules"); the reasons are these.
   controlled by client code, written via `textContent`.
 - **Layout / style fields from the agent**: refused. Any `layout`, `style`, `css`,
   `className`, or geometry field in an action is rejected — the page owns pixels.
-- **Ad-hoc or unversioned transport sprawl**: refused. The display channel is
-  exposed cleanly via dedicated `POST /display` and `SWITCHBOARD_DISPLAY_URL`,
-  validating every action at the boundary and reusing the existing browser
-  WebSocket for live delivery.
+- **Ad-hoc or unversioned transport sprawl**: refused. A display travels one
+  path. The agent calls `switchboard.display` in the skill module, which sends
+  a `display` call to the host agent on the host's skill socket; the host
+  agent relays it, with the call token, as a module call over the host link
+  (`docs/host-link.md`, "Module calls"); the service's `display` handler
+  (`apps/backend/src/module_calls.rs`) validates it (`visual_protocol.rs`) and
+  applies it under the display gate (`apps/backend/src/display.rs`); and the
+  existing browser WebSocket delivers it, where the page validates it again.
+  There is no HTTP route for it and no URL setting: the agent callback routes
+  and `DISPLAY_URL` are retired (`docs/environment.md`).
 
 ## Resolved: the display extension hardships log
 
@@ -418,10 +469,10 @@ documented above:
    diagram field is wrong — not a chart's. See `docs/display-tool.md`'s per-type
    `data` table and the per-type `data` shapes in the `switchboard` skill
    module's `skills/switchboard/SKILL.md`.
-2. **Silent failure: "On screen" when nothing rendered.** `/display` used to
-   report success the moment the action was handed to the delivery layer,
-   with no signal that the browser ever actually painted it. That is exactly
-   the gap the confirm/reject round trip above closes: `/display` now waits
+2. **Silent failure: "On screen" when nothing rendered.** The display call
+   used to report success the moment the action was handed to the delivery
+   layer, with no signal that the browser ever actually painted it. That is
+   exactly the gap the confirm/reject round trip above closes: it now waits
    for the browser's own `applied_seq` to reach the action's `seq` before
    calling it rendered, and the `display` tool's result text distinguishes
    "On screen." from "Sent, but the caller's screen has not confirmed it" and
@@ -430,8 +481,8 @@ documented above:
    used to report whatever the agent had last requested, independent of
    whether the browser ever confirmed it — so "Screen is in auto view with
    chart" could be true of the agent's intent and false of the caller's
-   screen at the same moment. `/view` with no target now reports that intent
-   *and* a `confirmed` flag computed from the same watermark `/display`
+   screen at the same moment. `view` with no target now reports that intent
+   *and* a `confirmed` flag computed from the same watermark the display call
    waits on, and the tool text says "has not confirmed it yet" instead of
    asserting success.
 

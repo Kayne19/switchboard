@@ -36,8 +36,23 @@ fn utf16_len(s: &str) -> usize {
     s.encode_utf16().count()
 }
 
+/// Unicode White_Space, the one whitespace set both validators use
+/// (docs/display-tool.md, "How the two validators agree"). It is listed
+/// rather than left to `str::trim`, so the set is written down where it is
+/// used; the browser's `NOT_WHITE_SPACE` lists the same 25 code points.
+const WHITE_SPACE: [char; 25] = [
+    '\t', '\n', '\u{b}', '\u{c}', '\r', ' ', '\u{85}', '\u{a0}', '\u{1680}', '\u{2000}',
+    '\u{2001}', '\u{2002}', '\u{2003}', '\u{2004}', '\u{2005}', '\u{2006}', '\u{2007}', '\u{2008}',
+    '\u{2009}', '\u{200a}', '\u{2028}', '\u{2029}', '\u{202f}', '\u{205f}', '\u{3000}',
+];
+
+/// Whether `s` is empty or White_Space only: a blank identifier or alt.
+fn is_blank(s: &str) -> bool {
+    s.chars().all(|c| WHITE_SPACE.contains(&c))
+}
+
 fn check_identifier(s: &str, field_name: &str) -> Result<String, String> {
-    if s.trim().is_empty() {
+    if is_blank(s) {
         return Err(format!("{field_name} must be a non-empty identifier"));
     }
     if utf16_len(s) > MAX_ID_UTF16 {
@@ -51,6 +66,22 @@ fn check_identifier(s: &str, field_name: &str) -> Result<String, String> {
     Ok(s.to_string())
 }
 
+/// An object's entries with their keys in code point order, the one order
+/// both validators walk an object in (docs/display-tool.md, "How the two
+/// validators agree"): with two unknown or forbidden keys, or two unsafe
+/// strings, the error is about the first in this order, wherever the agent
+/// put it. serde_json's map iterates in this order today, but a dependency
+/// that turned on its `preserve_order` feature would change that for the
+/// whole build, so the order is made here. The browser's `keysInOrder`
+/// sorts the same way.
+fn entries_in_order(m: &Map<String, Value>) -> Vec<(&String, &Value)> {
+    let mut entries: Vec<(&String, &Value)> = m.iter().collect();
+    // `str`'s order is byte order of UTF-8, which is code point order.
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+    entries
+}
+
+/// The first forbidden key met walking depth first, keys in code point order.
 fn forbidden_layout(v: &Value) -> Option<&'static str> {
     const KEYS: &[&str] = &[
         "layout",
@@ -65,17 +96,43 @@ fn forbidden_layout(v: &Value) -> Option<&'static str> {
         "bottom",
     ];
     match v {
-        Value::Object(m) => {
-            for k in KEYS {
-                if m.contains_key(*k) {
-                    return Some(k);
-                }
-            }
-            m.values().find_map(forbidden_layout)
-        }
+        Value::Object(m) => entries_in_order(m).into_iter().find_map(|(key, value)| {
+            KEYS.iter()
+                .find(|forbidden| **forbidden == key.as_str())
+                .copied()
+                .or_else(|| forbidden_layout(value))
+        }),
         Value::Array(a) => a.iter().find_map(forbidden_layout),
         _ => None,
     }
+}
+
+/// Whether `s` names an external resource: a `scheme://` of any scheme, a
+/// leading `//`, or a `//` followed by a host name with a dot and a
+/// top-level part of two letters or more (`see //cdn.example.com`). The
+/// browser's `EXTERNAL_URL_REGEX` is the same rule; the last part is its
+/// `//[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`, matched here without a regex crate.
+fn names_external_resource(s: &str) -> bool {
+    if s.contains("://") || s.starts_with("//") {
+        return true;
+    }
+    let bytes = s.as_bytes();
+    bytes.windows(2).enumerate().any(|(at, pair)| {
+        if pair != b"//" {
+            return false;
+        }
+        let rest = &bytes[at + 2..];
+        let host_len = rest
+            .iter()
+            .take_while(|b| b.is_ascii_alphanumeric() || **b == b'.' || **b == b'-')
+            .count();
+        let host = &rest[..host_len];
+        (1..host_len).any(|dot| {
+            host[dot] == b'.'
+                && host.get(dot + 1).is_some_and(u8::is_ascii_alphabetic)
+                && host.get(dot + 2).is_some_and(u8::is_ascii_alphabetic)
+        })
+    })
 }
 
 fn check_unsafe_string(v: &Value) -> Result<(), String> {
@@ -94,18 +151,13 @@ fn check_unsafe_string(v: &Value) -> Result<(), String> {
             {
                 return Err("raw markup or script injection is forbidden".to_string());
             }
-            if lower.contains("http://")
-                || lower.contains("https://")
-                || lower.contains("ftp://")
-                || lower.starts_with("//")
-                || lower.contains("//") && s.contains("://")
-            {
+            if names_external_resource(s) {
                 return Err("external resource URL is forbidden".to_string());
             }
             Ok(())
         }
         Value::Object(m) => {
-            for val in m.values() {
+            for (_, val) in entries_in_order(m) {
                 check_unsafe_string(val)?;
             }
             Ok(())
@@ -134,7 +186,7 @@ fn check_unknown_keys(
     allowed: &[&str],
     context: &str,
 ) -> Result<(), String> {
-    for k in m.keys() {
+    for (k, _) in entries_in_order(m) {
         if !allowed.contains(&k.as_str()) {
             return Err(format!("unknown field in {context}: {k}"));
         }
@@ -169,6 +221,26 @@ fn is_valid_semantic(s: &str) -> bool {
         s,
         "red" | "orange" | "green" | "cyan" | "amber" | "paper" | "muted"
     )
+}
+
+/// Copies an optional `semantic`. Anything but one of the seven names, a
+/// non-string or `null` included, is `invalid {field_name}`, as the
+/// browser's `ALLOWED_SEMANTICS.has` check refuses it: a field the browser
+/// refuses is refused here, never dropped.
+fn copy_optional_semantic(
+    data: &Map<String, Value>,
+    out: &mut Map<String, Value>,
+    field_name: &str,
+) -> Result<(), String> {
+    let Some(value) = data.get("semantic") else {
+        return Ok(());
+    };
+    let semantic = value
+        .as_str()
+        .filter(|s| is_valid_semantic(s))
+        .ok_or_else(|| format!("invalid {field_name}"))?;
+    out.insert("semantic".into(), semantic.into());
+    Ok(())
 }
 
 fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
@@ -258,12 +330,7 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
         let mut item = Map::new();
         item.insert("name".into(), name.into());
         item.insert("values".into(), Value::Array(values.clone()));
-        if let Some(sem) = sm.get("semantic").and_then(Value::as_str) {
-            if !is_valid_semantic(sem) {
-                return Err("invalid series.semantic".into());
-            }
-            item.insert("semantic".into(), sem.into());
-        }
+        copy_optional_semantic(sm, &mut item, "series.semantic")?;
         clean_series.push(Value::Object(item));
     }
 
@@ -362,12 +429,7 @@ fn validate_metric_data(data: &Map<String, Value>) -> Result<Value, String> {
     let mut out = Map::new();
     out.insert("label".into(), label.into());
     out.insert("value".into(), value.into());
-    if let Some(sem) = data.get("semantic").and_then(Value::as_str) {
-        if !is_valid_semantic(sem) {
-            return Err("invalid metric.semantic".into());
-        }
-        out.insert("semantic".into(), sem.into());
-    }
+    copy_optional_semantic(data, &mut out, "metric.semantic")?;
     copy_optional_string(data, &mut out, "caption", 128, "metric.caption")?;
     if let Some(trend) = data.get("trend") {
         let t = trend
@@ -530,18 +592,13 @@ fn validate_graph_diagram_data(data: &Map<String, Value>) -> Result<Value, Strin
     let nodes_arr = data
         .get("nodes")
         .and_then(Value::as_array)
-        .ok_or("diagram.nodes must be an array")?;
-    if nodes_arr.is_empty() || nodes_arr.len() > 100 {
-        return Err("diagram.nodes must be an array of 1 to 100 items".into());
-    }
-
+        .filter(|nodes| !nodes.is_empty() && nodes.len() <= 100)
+        .ok_or("diagram.nodes must be an array of 1 to 100 items")?;
     let edges_arr = data
         .get("edges")
         .and_then(Value::as_array)
-        .ok_or("diagram.edges must be an array")?;
-    if edges_arr.len() > 200 {
-        return Err("diagram.edges must be an array of at most 200 items".into());
-    }
+        .filter(|edges| edges.len() <= 200)
+        .ok_or("diagram.edges must be an array of at most 200 items")?;
 
     let mut node_ids = HashSet::new();
     let mut clean_nodes = Vec::new();
@@ -557,10 +614,8 @@ fn validate_graph_diagram_data(data: &Map<String, Value>) -> Result<Value, Strin
         let id = nm
             .get("id")
             .and_then(Value::as_str)
-            .ok_or("diagram node.id must be a string")?;
-        if id.trim().is_empty() || utf16_len(id) > 128 {
-            return Err("diagram node id must be non-empty and <= 128 UTF-16 code units".into());
-        }
+            .filter(|id| !is_blank(id) && utf16_len(id) <= 128)
+            .ok_or("diagram node id must be non-empty and <= 128 UTF-16 code units")?;
         if !node_ids.insert(id.to_string()) {
             return Err(format!("duplicate diagram node id: {id}"));
         }
@@ -579,32 +634,14 @@ fn validate_graph_diagram_data(data: &Map<String, Value>) -> Result<Value, Strin
         node_out.insert("id".into(), id.into());
         node_out.insert("label".into(), label.into());
 
-        if let Some(sub) = nm.get("sub").and_then(Value::as_str) {
-            if utf16_len(sub) > 256 {
-                return Err(
-                    "diagram node.sub exceeds maximum length of 256 UTF-16 code units".into(),
-                );
-            }
-            node_out.insert("sub".into(), sub.into());
-        }
-        if let Some(detail) = nm.get("detail").and_then(Value::as_str) {
-            if utf16_len(detail) > 256 {
-                return Err(
-                    "diagram node.detail exceeds maximum length of 256 UTF-16 code units".into(),
-                );
-            }
-            node_out.insert("detail".into(), detail.into());
-        }
-        if let Some(sem) = nm.get("semantic").and_then(Value::as_str) {
-            if !is_valid_semantic(sem) {
-                return Err("invalid diagram node.semantic".into());
-            }
-            node_out.insert("semantic".into(), sem.into());
-        }
-        if let Some(st) = nm.get("state").and_then(Value::as_str) {
-            if !matches!(st, "done" | "active" | "todo" | "blocked") {
-                return Err("invalid diagram node.state".into());
-            }
+        copy_optional_string(nm, &mut node_out, "sub", 256, "diagram node.sub")?;
+        copy_optional_string(nm, &mut node_out, "detail", 256, "diagram node.detail")?;
+        copy_optional_semantic(nm, &mut node_out, "diagram node.semantic")?;
+        if let Some(state) = nm.get("state") {
+            let st = state
+                .as_str()
+                .filter(|st| matches!(*st, "done" | "active" | "todo" | "blocked"))
+                .ok_or("invalid diagram node.state")?;
             node_out.insert("state".into(), st.into());
         }
         clean_nodes.push(Value::Object(node_out));
@@ -621,14 +658,12 @@ fn validate_graph_diagram_data(data: &Map<String, Value>) -> Result<Value, Strin
             "diagram edge",
         )?;
 
-        let from = em
-            .get("from")
-            .and_then(Value::as_str)
-            .ok_or("diagram edge.from must be a string")?;
-        let to = em
-            .get("to")
-            .and_then(Value::as_str)
-            .ok_or("diagram edge.to must be a string")?;
+        let (Some(from), Some(to)) = (
+            em.get("from").and_then(Value::as_str),
+            em.get("to").and_then(Value::as_str),
+        ) else {
+            return Err("diagram edge from and to must be strings".into());
+        };
 
         if !node_ids.contains(from) {
             return Err(format!(
@@ -651,20 +686,8 @@ fn validate_graph_diagram_data(data: &Map<String, Value>) -> Result<Value, Strin
         edge_out.insert("from".into(), from.into());
         edge_out.insert("to".into(), to.into());
 
-        if let Some(label) = em.get("label").and_then(Value::as_str) {
-            if utf16_len(label) > 256 {
-                return Err(
-                    "diagram edge.label exceeds maximum length of 256 UTF-16 code units".into(),
-                );
-            }
-            edge_out.insert("label".into(), label.into());
-        }
-        if let Some(sem) = em.get("semantic").and_then(Value::as_str) {
-            if !is_valid_semantic(sem) {
-                return Err("invalid diagram edge.semantic".into());
-            }
-            edge_out.insert("semantic".into(), sem.into());
-        }
+        copy_optional_string(em, &mut edge_out, "label", 256, "diagram edge.label")?;
+        copy_optional_semantic(em, &mut edge_out, "diagram edge.semantic")?;
         if let Some(active) = em.get("active") {
             let b = active
                 .as_bool()
@@ -734,7 +757,7 @@ fn validate_sequence_diagram_data(data: &Map<String, Value>) -> Result<Value, St
             .get("id")
             .and_then(Value::as_str)
             .ok_or("diagram actor id must be non-empty and <= 128 UTF-16 code units")?;
-        if id.trim().is_empty() || utf16_len(id) > 128 {
+        if is_blank(id) || utf16_len(id) > 128 {
             return Err("diagram actor id must be non-empty and <= 128 UTF-16 code units".into());
         }
         if !actor_ids.insert(id.to_string()) {
@@ -755,13 +778,7 @@ fn validate_sequence_diagram_data(data: &Map<String, Value>) -> Result<Value, St
         actor_out.insert("id".into(), id.into());
         actor_out.insert("label".into(), label.into());
         copy_optional_string(am, &mut actor_out, "sub", 256, "diagram actor.sub")?;
-        if let Some(sem) = am.get("semantic") {
-            let s = sem.as_str().ok_or("invalid diagram actor.semantic")?;
-            if !is_valid_semantic(s) {
-                return Err("invalid diagram actor.semantic".into());
-            }
-            actor_out.insert("semantic".into(), s.into());
-        }
+        copy_optional_semantic(am, &mut actor_out, "diagram actor.semantic")?;
         clean_actors.push(Value::Object(actor_out));
     }
 
@@ -887,10 +904,10 @@ fn validate_document_data(data: &Map<String, Value>) -> Result<Value, String> {
     out.insert("paragraphs".into(), Value::Array(clean_paras));
 
     if let Some(kind) = data.get("kind") {
-        let k = kind.as_str().ok_or("document.kind must be a string")?;
-        if !matches!(k, "email" | "document") {
-            return Err("invalid document.kind".into());
-        }
+        let k = kind
+            .as_str()
+            .filter(|k| matches!(*k, "email" | "document"))
+            .ok_or("invalid document.kind")?;
         out.insert("kind".into(), k.into());
     }
 
@@ -1019,13 +1036,7 @@ fn validate_table_cell(cell: &Value) -> Result<Value, String> {
             }
             let mut cell_out = Map::new();
             cell_out.insert("text".into(), text.into());
-            if let Some(sem) = cm.get("semantic") {
-                let s = sem.as_str().ok_or("invalid table cell.semantic")?;
-                if !is_valid_semantic(s) {
-                    return Err("invalid table cell.semantic".into());
-                }
-                cell_out.insert("semantic".into(), s.into());
-            }
+            copy_optional_semantic(cm, &mut cell_out, "table cell.semantic")?;
             if let Some(bold) = cm.get("bold") {
                 let b = bold.as_bool().ok_or("table cell.bold must be boolean")?;
                 cell_out.insert("bold".into(), b.into());
@@ -1074,13 +1085,7 @@ fn validate_table_data(data: &Map<String, Value>) -> Result<Value, String> {
         }
         let mut column_out = Map::new();
         column_out.insert("label".into(), label.into());
-        if let Some(sem) = cm.get("semantic") {
-            let s = sem.as_str().ok_or("invalid table column.semantic")?;
-            if !is_valid_semantic(s) {
-                return Err("invalid table column.semantic".into());
-            }
-            column_out.insert("semantic".into(), s.into());
-        }
+        copy_optional_semantic(cm, &mut column_out, "table column.semantic")?;
         clean_columns.push(Value::Object(column_out));
     }
 
@@ -1289,8 +1294,7 @@ fn validate_image_data(data: &Map<String, Value>) -> Result<Value, String> {
     if utf16_len(alt) > 256 {
         return Err("image.alt exceeds maximum length of 256 UTF-16 code units".into());
     }
-    // Unicode White_Space only; the browser's `isBlank` uses the same set.
-    if alt.chars().all(char::is_whitespace) {
+    if is_blank(alt) {
         return Err("image.alt must not be empty".into());
     }
 
@@ -1342,12 +1346,7 @@ fn validate_note_data(data: &Map<String, Value>) -> Result<Value, String> {
             let b = bold.as_bool().ok_or("note segment.bold must be boolean")?;
             seg_out.insert("bold".into(), b.into());
         }
-        if let Some(sem) = sm.get("semantic").and_then(Value::as_str) {
-            if !is_valid_semantic(sem) {
-                return Err("invalid note segment.semantic".into());
-            }
-            seg_out.insert("semantic".into(), sem.into());
-        }
+        copy_optional_semantic(sm, &mut seg_out, "note segment.semantic")?;
         clean_segs.push(Value::Object(seg_out));
     }
 
@@ -1409,13 +1408,98 @@ fn action_size_cap(action: &Value) -> usize {
     }
 }
 
+/// The bytes of `value` as the browser's `JSON.stringify` writes it, in
+/// UTF-8: what both validators hold to the size cap (docs/display-tool.md,
+/// "How the two validators agree"). serde_json's own output is not measured,
+/// because it spells some numbers differently (`1.0` and `1e+16` where
+/// JSON.stringify writes `1` and `10000000000000000`).
+fn json_len(value: &Value) -> usize {
+    match value {
+        Value::Null | Value::Bool(true) => 4,
+        Value::Bool(false) => 5,
+        Value::Number(n) => js_number_len(n),
+        Value::String(s) => json_string_len(s),
+        Value::Array(items) => {
+            2 + items.len().saturating_sub(1) + items.iter().map(json_len).sum::<usize>()
+        }
+        Value::Object(m) => {
+            2 + m.len().saturating_sub(1)
+                + m.iter()
+                    .map(|(key, value)| json_string_len(key) + 1 + json_len(value))
+                    .sum::<usize>()
+        }
+    }
+}
+
+/// A string's bytes in JSON: two quotes, its UTF-8, and the escapes
+/// JSON.stringify writes (`\"`, `\\`, `\b \f \n \r \t`, and `\u00XX` for
+/// the other control characters).
+fn json_string_len(s: &str) -> usize {
+    2 + s
+        .chars()
+        .map(|c| match c {
+            '"' | '\\' | '\u{8}' | '\u{c}' | '\n' | '\r' | '\t' => 2,
+            c if u32::from(c) < 0x20 => 6,
+            c => c.len_utf8(),
+        })
+        .sum::<usize>()
+}
+
+/// The length of `n` as JavaScript writes a number (Number::toString): the
+/// shortest digits that read back as the same double, written plainly from
+/// 1e-6 up to 1e21 and with an exponent outside that (`1e+21`, `1.5e-7`);
+/// zero, `-0` too, is `0`. serde_json already finds the shortest digits;
+/// only where it puts the point differs, so its text is re-spelled here.
+fn js_number_len(n: &serde_json::Number) -> usize {
+    let value = n.as_f64().unwrap_or(0.0);
+    if value == 0.0 {
+        return 1;
+    }
+    let text = serde_json::Number::from_f64(value.abs())
+        .map(|shortest| shortest.to_string())
+        .unwrap_or_default();
+    let (mantissa, exponent) = match text.split_once(['e', 'E']) {
+        Some((mantissa, exponent)) => (mantissa, exponent.parse::<i64>().unwrap_or(0)),
+        None => (text.as_str(), 0),
+    };
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let all_digits = format!("{whole}{fraction}");
+    let significant = all_digits.trim_start_matches('0');
+    let leading_zeros = (all_digits.len() - significant.len()) as i64;
+    // The value is 0.<digits> times ten to the `point`.
+    let digits = significant.trim_end_matches('0').len() as i64;
+    let point = whole.len() as i64 + exponent - leading_zeros;
+    let spelled = if digits <= point && point <= 21 {
+        point
+    } else if 0 < point && point <= 21 {
+        digits + 1
+    } else if -6 < point && point <= 0 {
+        2 - point + digits
+    } else {
+        // d[.ddd]e+N or e-N
+        let exponent_len = 2 + (point - 1).unsigned_abs().to_string().len() as i64;
+        digits + i64::from(digits > 1) + exponent_len
+    };
+    spelled as usize + usize::from(value < 0.0)
+}
+
+/// Checks one display action and returns it normalized. The checks run in
+/// the browser's order (docs/display-tool.md, "How the two validators
+/// agree"): an object, within its size cap, with a known `op`; then no
+/// layout key, no unsafe string and no non-finite number anywhere in it;
+/// then the op's own rules; and last the normalized action, which may have
+/// gained a field (a say's `at: null`), is held to the same cap.
 pub fn validate_action(action: &Value) -> Result<Value, String> {
-    let bytes = serde_json::to_vec(action).map_err(|_| "action must be valid JSON".to_string())?;
-    if bytes.len() > action_size_cap(action) {
+    let map = action.as_object().ok_or("action must be an object")?;
+    let size_cap = action_size_cap(action);
+    if json_len(action) > size_cap {
         return Err("action exceeds size limit".into());
     }
-
-    let map = action.as_object().ok_or("action must be an object")?;
+    let op = map
+        .get("op")
+        .and_then(Value::as_str)
+        .filter(|op| matches!(*op, "show" | "hide" | "focus" | "say" | "clear"))
+        .ok_or("unknown operation")?;
 
     if let Some(k) = forbidden_layout(action) {
         return Err(format!("model-controlled layout field is forbidden: {k}"));
@@ -1426,11 +1510,6 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
     if !finite(action) {
         return Err("action contains a non-finite number".into());
     }
-
-    let op = map
-        .get("op")
-        .and_then(Value::as_str)
-        .ok_or("unknown operation")?;
 
     let mut out = Map::new();
 
@@ -1524,7 +1603,9 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
 
             if let Some(t_val) = map.get("target") {
                 if !t_val.is_null() {
-                    let t_str = t_val.as_str().ok_or("say.target is invalid")?;
+                    let t_str = t_val
+                        .as_str()
+                        .ok_or("say.target must be a non-empty identifier")?;
                     let clean_target = check_identifier(t_str, "say.target")?;
                     out.insert("target".into(), clean_target.into());
                 }
@@ -1569,7 +1650,11 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
         _ => return Err("unknown operation".into()),
     }
 
-    Ok(Value::Object(out))
+    let normalized = Value::Object(out);
+    if json_len(&normalized) > size_cap {
+        return Err("action exceeds size limit".into());
+    }
+    Ok(normalized)
 }
 
 #[cfg(test)]
