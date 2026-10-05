@@ -41,18 +41,18 @@ const suiteDurations = {
 const FIGURE_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAUAAAADICAIAAAAWZq/8AAAEqklEQVR42u3cwU4TaxiAYWrihrgw0aSszZgY5QJqItuuWLDgArwT8RZYscM7oPcAJk1csTEuIOwILGXlxujEJrWZwrTTduj3zzxPujiak+kP9c33zTkjnZvrq40Yumf7QU5ysL0Z5CTnd8dLXmHQy/aGF0te5ORoN8g35HIY5CAbh/1+hGM82QCSJWAQMCBgQMAgYEDAgIABAUOzdDyJNS2tJ7EGvWyZt5jnOS1PYk3zJBaLy6Mdv+JcChPYBC6bwPc2Vj5CZz4LPc81TeCwE1jACQQ83dj8fz+h0l9meOiNBGyFZvH9djKn0aumt5u+vtU6OAEH9fntaf4qpPVo7154u86XH/nLhyJgqqVb98itNJBlLGBm1zv6h0/fd/JXkFP9+fgmf40z9jEJmLLBGyfdQsZGsYBJZvAaxQIm+cFrFAuYtAevUSxgyupN9EvQsIDVu5P0F6JhAbe03uTW5pnrtIYF3KJ6G/Z1aVjA6tUwAlavhgWMejUsYP7X2zYaFnCj6m3D+J0cwhoWcHO0p95CwwjYra+bYQTs1tfNsICxPFukBWx5tkgjYMuzRVrAWJ4t0gLG8myRFjAgYOPXEBYwIOCWjV/KGcICDs3+XL5FI2BAwDXsz8bvPEPYFi1gQMAgYOzPtmgBAwIGAQMCdgOM22ABAwIGAQMCBgQMAgYEDAgYEDA0X+fm+irIUbpn+0FOcrC9OflLP+lqjQo/hedyGOVgh/2+gNMIeKb6HqU8vzte8gqDXrY3vFjyIidHu6v/k/fvOcqqPyVLwFZocA8MCBgQMAgYEDAgYEDAIGBAwI01egbLE5fzW+wxLAQMAgYEDAjYbbAbYAEDAgYEbIu2PyNgEDBVGcLl4xcBh96iKWd/FjAg4NqGsC36of3Z+BUwIGBD2PgVMCU0PFkvAk5sCDPJ+BWwRdryjIAt0pZnAWORtjwL2CJteUbAFmnLs4CpdZFuT8Pjeo1fAbsZduuLgN0Mu/UVMBpWr4A1fKpeBKxh9QqY9TXcjIzzdNUr4DY23IBR7P8YCVjDp+pFwGk3nFbG47VZvQJue8PJjeLJdNUrYJIZxQavgEl1FBu8AibJUWzwCphFRvGgl41eazlJ4d0NXgGzSMbjlh453fEvpStgFrE3vMhfD43Eukfu9AEI9x8mbq6vghyle7Yf5CQH25tBTnJ+d1wI7N7Iy5uc+S/MvObJ0W6Qb8jlMEo5h/2+gAVcLeDy6lYy8O/9fQGHDdgKnfBqvZL9doWXwgQ2geeawJVua5cv0wQ2gQEBAwIGAQMCBgQMAgYEDDyKTpZlQY7y+vY2yEmevYjy8Xx99SHCMZ4//RbkG/Lu5+8gJ/n18r0JDAgYBAwIGBAwIGAQMCBgQMCAgEHAwFp1Vn7Fbrcb+YLBj7fyC25tbfl8Q11wtZ+ICQxWaEDAgIBBwICAAQEDAgYBAwIGBAwCBgQMCBgQMAgYEDAgYEDAIGBAwICAQcCAgAEBAwIGAQMCBgQMCBgEDAgYEDAIGBAwIGBAwCBgQMCAgEHAgIABAQMCBgEDAgYEDAgYBAwIGBAwCBgQMCBgQMAgYEDAgIABAYOAAQEDAgYBAwn5C/I3UR6npYO2AAAAAElFTkSuQmCC';
 
-// The switchboard itself, drawn the way an agent on a call would draw it:
-// twenty-two parts with their real names and long subs, labelled edges, the
-// transfer and hand-back loop, the display frame and its confirmation
-// coming back, skip edges from the deployment side, a fan-out to three
-// project sessions and the fan-in from them to the skill module. The note
-// is too long for a callout, so the node carries the NOTE marker.
+// The switchboard itself, drawn the way an agent on a call would draw it,
+// from the caller's page inward: twenty-two parts with their real names
+// and long subs, labelled edges, the transfer and hand-back loop, the
+// display frame and its confirmation coming back, skip edges from the
+// deployment side, a fan-out to three project sessions and the fan-in from
+// them to the skill module. The note is too long for a callout, so the
+// node carries the NOTE marker. An agent lists the parts in the order it
+// explains them; the layout breaks cycles from the first, so the call
+// flows from the page.
 export const topologyDiagram: DiagramData = {
   mode: 'graph', title: 'SYSTEM / SWITCHBOARD TOPOLOGY', subtitle: 'CALL PATH / DISPLAY PATH / DEPLOYMENT', context: 'SYSTEM MAP', caption: 'TOPOLOGY / 22 PARTS',
   nodes: [
-    { id: 'role', label: 'homelab damocles role', sub: 'ansible / systemd units / secrets', state: 'done', semantic: 'muted' },
-    { id: 'env', label: 'Environment file', sub: 'SWITCHBOARD_* / docs/environment.md', state: 'done', semantic: 'muted' },
-    { id: 'registry', label: 'Project registry', sub: 'switchboard_projects / host + cwd', state: 'done', semantic: 'muted' },
     { id: 'browser', label: 'Browser page', sub: 'React stage / mic + playback', detail: 'apps/frontend/src' },
     { id: 'runtime', label: 'Call runtime', sub: 'clip outbox / epochs / transfers', detail: 'src/runtime/callRuntime.ts' },
     { id: 'ws', label: 'Browser WebSocket', sub: '/ws / clips in, frames out', detail: 'apps/backend/src/browser.rs' },
@@ -72,12 +72,11 @@ export const topologyDiagram: DiagramData = {
     { id: 'gate', label: 'Display gate', sub: 'validate / stamp seq / confirm watermark', detail: 'apps/backend/src/display.rs' },
     { id: 'projection', label: 'Display projection', sub: 'objects, focus, replay snapshot', detail: 'DisplayProjection::apply' },
     { id: 'debug', label: 'Debug page', sub: 'debug listener / event feed', semantic: 'muted' },
+    { id: 'role', label: 'homelab damocles role', sub: 'ansible / systemd units / secrets', state: 'done', semantic: 'muted' },
+    { id: 'env', label: 'Environment file', sub: 'SWITCHBOARD_* / docs/environment.md', state: 'done', semantic: 'muted' },
+    { id: 'registry', label: 'Project registry', sub: 'switchboard_projects / host + cwd', state: 'done', semantic: 'muted' },
   ],
   edges: [
-    { from: 'role', to: 'env', label: 'writes', semantic: 'muted' },
-    { from: 'role', to: 'registry', label: 'templates', semantic: 'muted' },
-    { from: 'env', to: 'pbx', label: 'Config::from_env', semantic: 'muted' },
-    { from: 'registry', to: 'prewarm', label: 'projects + hosts', semantic: 'muted' },
     { from: 'browser', to: 'runtime', label: 'mic clips' },
     { from: 'runtime', to: 'ws', label: 'webm / opus' },
     { from: 'ws', to: 'stt', label: 'clip' },
@@ -108,6 +107,10 @@ export const topologyDiagram: DiagramData = {
     { from: 'ws', to: 'gate', label: 'applied_seq confirm' },
     { from: 'gate', to: 'debug', label: 'debug feed', semantic: 'muted' },
     { from: 'pbx', to: 'debug', semantic: 'muted' },
+    { from: 'role', to: 'env', label: 'writes', semantic: 'muted' },
+    { from: 'role', to: 'registry', label: 'templates', semantic: 'muted' },
+    { from: 'env', to: 'pbx', label: 'Config::from_env', semantic: 'muted' },
+    { from: 'registry', to: 'prewarm', label: 'projects + hosts', semantic: 'muted' },
   ],
 };
 
