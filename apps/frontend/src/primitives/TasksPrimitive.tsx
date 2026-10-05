@@ -140,17 +140,25 @@ function TaskRow({ task, today, marked, compact }: { task: TaskItem; today: Time
   );
 }
 
-// A section's name and what it holds open; its done tasks are counted here
-// only while they are listed under it, as their own row counts them when
-// they are not.
-function SectionHead({ section, today, doneCounted }: { section: TaskSection; today: TimeValue | null; doneCounted: boolean }) {
+/**
+ * What a section's head says it holds: its open tasks, and its done ones
+ * while they are listed under it (a row counts them when they are not). A
+ * section all done says only that, and needs no row under it.
+ */
+function sectionCount(section: TaskSection, doneCounted: boolean): string {
   const done = section.tasks.filter((task) => stateOf(task) === 'done').length;
+  const open = section.tasks.length - done;
+  if (open === 0) return `${done} DONE`;
+  return `${open} OPEN${done > 0 && !doneCounted ? ` / ${done} DONE` : ''}`;
+}
+
+function SectionHead({ section, today, doneCounted }: { section: TaskSection; today: TimeValue | null; doneCounted: boolean }) {
   const overdue = section.tasks.filter((task) => taskDue(task, today)?.standing === 'overdue').length;
   return (
     <div className="task-section__head">
       <span className="task-section__name tech">{section.group ?? 'OTHER'}</span>
       <span className="task-section__count tech micro">
-        {section.tasks.length - done} OPEN{done > 0 && !doneCounted ? ` / ${done} DONE` : ''}
+        {sectionCount(section, doneCounted)}
         {overdue > 0 ? <span className="task-section__overdue"> / {overdue} OVERDUE</span> : null}
       </span>
     </div>
@@ -190,6 +198,8 @@ export function TasksPrimitive({ data, variant = 'full', marked }: { data: Tasks
             // A task a note names stays listed when its section counts the rest.
             const listed = countDone ? section.tasks.filter((task) => stateOf(task) !== 'done' || task.id === marked) : section.tasks;
             const hidden = section.tasks.length - listed.length;
+            // A section whose head already says it is all done needs no row to count it.
+            const countRow = hidden > 0 && !(grouped && listed.length === 0);
             return (
               <section className="task-section" key={section.group ?? `ungrouped-${index}`}>
                 {grouped ? <SectionHead section={section} today={today} doneCounted={hidden > 0} /> : null}
@@ -197,7 +207,7 @@ export function TasksPrimitive({ data, variant = 'full', marked }: { data: Tasks
                   {listed.map((task) => (
                     <TaskRow key={task.id} task={task} today={today} marked={task.id === marked} compact={compact} />
                   ))}
-                  {hidden > 0 ? (
+                  {countRow ? (
                     <li className="task-row task-row--done task-row--counted">
                       <StepGlyph state="done" className="task-row__glyph" />
                       <span className="task-row__count tech">{hidden} DONE</span>

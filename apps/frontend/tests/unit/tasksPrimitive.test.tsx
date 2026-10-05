@@ -166,6 +166,18 @@ describe('TasksPrimitive', () => {
     expect([...list.querySelectorAll('.task-row--counted')].map((row) => row.textContent)).toEqual(['1 DONE', '1 DONE', '1 DONE']);
   });
 
+  it('says a section is all done in its head, with no row to count it', () => {
+    const items = [task({ id: 'a', group: 'Home', state: 'done' }), task({ id: 'b', group: 'Home', state: 'done' }), task({ id: 'c', group: 'Work' })];
+    const list = render({ items }, 'compact');
+    expect([...list.querySelectorAll('.task-section__count')].map((count) => count.textContent)).toEqual(['2 DONE', '1 OPEN']);
+    expect(list.querySelector('.task-row--counted')).toBeNull();
+  });
+
+  it('keeps the row that counts done tasks in a list with no heads', () => {
+    const list = render({ items: [task({ id: 'x', state: 'done' })] }, 'compact');
+    expect(list.querySelector('.task-row--counted')?.textContent).toBe('1 DONE');
+  });
+
   it('draws a list without groups as one section with no head', () => {
     const list = render({ items: [task({ id: 'bins', text: 'Take the bins out' })] });
     expect(list.querySelector('.task-section__head')).toBeNull();
