@@ -159,7 +159,7 @@ Every time in a display action is a string in one of three forms. Each validator
 
 Five types show a person's day: `calendar`, `tasks`, `timer`, `weather` and `inbox`. They keep the conventions of the other types: an optional `title`, `subtitle`, `context` (each <= 256) and `caption` (<= 128); camelCase keys; an unknown key is refused. An item id (an event, a task, a timer, a message) is non-blank and <= 128 UTF-16 code units, like a diagram node id, and is unique in its list.
 
-Status: both validators, the schema and the skill module hold the whole contract below. The page draws a calendar with its own primitive (`CalendarPrimitive`, "How the page draws a calendar" below). It draws the other four with one stand-in for now, a framed list of the fields as sent (`apps/frontend/src/primitives/TemporaryAssistantList.tsx`), so none is dropped. The drawing rules below for those four (a timer's countdown, an overdue task, the condition glyphs) are what their render slices implement; until they land the page does not do them.
+Status: both validators, the schema and the skill module hold the whole contract below. The page draws `calendar`, `tasks` and `inbox` with primitives of their own (`CalendarPrimitive`, "How the page draws a calendar" below; `TasksPrimitive`, `InboxPrimitive`, how in `docs/visual-channel.md`), and marks the item a note names in any of the five. It draws `timer` and `weather` with one stand-in for now, a framed list of the fields as sent (`apps/frontend/src/primitives/TemporaryAssistantList.tsx`), so none is dropped. The drawing rules below for those two (a timer's countdown, the condition glyphs) are what their render slice implements; until it lands the page does not do them.
 
 #### calendar
 

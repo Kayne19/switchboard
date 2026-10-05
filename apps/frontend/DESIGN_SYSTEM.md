@@ -72,10 +72,12 @@ The model controls semantic intent. The frontend controls composition, geometry,
 | `DocumentViewport` | readable document layout and bounded scrolling |
 | `CalendarPrimitive` + `calendarLayout` | a calendar's four views from the box it is given (a day or week time grid, a Monday-first month, an agenda), the hours a grid shows and the empty ones it folds, overlapping events side by side or stepped, an event cut at midnight, all-day bars in lanes, a busy day's count, a week paged where its columns do not fit, today and the now line from the data, the NOTE badge on the item a note names |
 | `MetricsPrimitive` | metric alignment and semantic values |
-| `AnnotationCard` | targeted explanation and rich text semantics |
+| `TasksPrimitive` | a to-do list: sections by group, the step glyph for a task's state, the priority arrow, the due day judged against the list's `today`, done tasks quieter and counted where a slot is short of room, the compact rows beside a primary |
+| `InboxPrimitive` | an inbox: messages in the order sent, the columns of senders, channels and times, a snippet cut on its one line, the time of day on `today`, the unread, flagged and tinted marks, one line or stacked by the list's width |
+| `AnnotationCard` | targeted explanation and rich text semantics; its TARGET line names the chart point or list item it is about, and carries the NOTE badge (`NoteBadge`, the HTML twin of the drawings' `NoteMarker`) where that part is marked |
 | `ChartNotes` + `notePlacement` | every note on a chart, laid over it clear of the others, their points and what the chart draws (`chartObstacles`: bars and scatter points as areas, lines, a marked point's ring, a callout's printed value, legend and axis labels; an area's fill only where nothing else is free); a card wholly in or out of the plot on every kind of chart, its angular leader onto the value printed at its point from past it, through no other mark or line; a card's width where its own has no clear place; where a card has no place that keeps those rules, one note handed to the rail (the one whose absence leaves the fewest cards astray, a note naming no point first among those) |
 | `FocusableSurface` | accessible activation without invalid button-wrapped scroll regions; a click or key a control inside it has handled (`preventDefault`) is left alone, and no control stops one, so the page hears every tap |
-| `FocusLayer` | shared-object expansion and return behavior; a focused diagram's note, beside or under it by the box's shape |
+| `FocusLayer` | shared-object expansion and return behavior; the note of a focused diagram or list with items, beside or under it by the box's shape |
 | Controller reducer | six-operation state semantics |
 
 A page-level patch that duplicates one of these responsibilities is usually incorrect.

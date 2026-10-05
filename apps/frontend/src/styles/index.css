@@ -988,6 +988,12 @@ button {
   row-gap: 4px;
 }
 
+/* The item's name and its badge share their line: the name gives the
+   badge its room before it is cut. */
+.annotation-card--item .annotation-card__anchor {
+  max-width: calc(100% - 56px);
+}
+
 .chart-note .annotation-card {
   height: auto;
   min-height: 0;
@@ -2597,6 +2603,597 @@ button {
   padding: clamp(4px, 0.6cqh, 7px) clamp(6px, 0.7cqw, 10px);
 }
 
+/* Tasks and inbox (primitives/TasksPrimitive.tsx, InboxPrimitive.tsx): two
+   lists read as the table and the rail's plan module are read. Rows between
+   thin rules, a meta line under an orange rule naming the list and what it
+   holds, the prose face for what a person wrote and the tech face for
+   states, days and counts. A task's state is the plan's step glyph; a
+   message's unread mark is the orange square, its flag the amber pennant.
+   No cards: a section is a heading over its rows. A list that outgrows its
+   slot scrolls inside the frame in the list viewport. */
+.tasks-object,
+.inbox-object {
+  background: #000;
+}
+
+/* The panel frame is drawn behind the list, so the rows sit inside its
+   outline, clear of its cut corners. */
+.tasks-object .focusable-content,
+.inbox-object .focusable-content {
+  position: relative;
+  z-index: 1;
+  padding: clamp(22px, 3.6cqh, 42px) clamp(22px, 2.6cqw, 42px) clamp(16px, 2.6cqh, 30px);
+}
+
+.tasks-primitive,
+.inbox-primitive {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  color: #d9d7d1;
+  font-family: var(--font-prose);
+}
+
+.focus-layer__content > .tasks-primitive,
+.focus-layer__content > .inbox-primitive {
+  padding: clamp(20px, 3.2cqh, 40px) clamp(18px, 2.6cqw, 44px) clamp(12px, 2cqh, 24px);
+}
+
+/* What the list is, and what it holds on the right, or under it where the
+   slot has no room for both. */
+.tasks-primitive__meta,
+.inbox-primitive__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px clamp(12px, 1.8cqw, 28px);
+  padding: 0 0 clamp(6px, 1cqh, 10px) 10px;
+  border-bottom: 1px solid rgba(var(--orange-rgb), 0.48);
+  color: rgba(232, 230, 223, 0.42);
+}
+
+.tasks-primitive__title,
+.inbox-primitive__title {
+  flex: 0 1 auto;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(var(--orange-rgb), 0.85);
+}
+
+.tasks-primitive__counts,
+.inbox-primitive__counts {
+  flex: none;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.tasks-primitive__overdue {
+  color: var(--red);
+}
+
+.inbox-primitive__unread {
+  color: var(--paper);
+}
+
+.tasks-primitive__scroll,
+.inbox-primitive__scroll {
+  font-size: clamp(13px, 1.05cqw, 17px);
+  line-height: 1.4;
+}
+
+/* ---- Tasks ---- */
+
+/* Sections stand side by side where the list is wide enough for two
+   readable columns, and stack where it is not: the column's own width
+   decides, not the device. One section takes the whole width. */
+.tasks-primitive__sections {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 24em), 1fr));
+  align-items: start;
+  gap: clamp(10px, 1.6cqh, 22px) clamp(22px, 2.8cqw, 52px);
+  padding-bottom: clamp(10px, 1.6cqh, 20px);
+}
+
+.task-section {
+  min-width: 0;
+}
+
+/* A section's name, and what it holds on the right, or under it where
+   the column has no room for both. */
+.task-section__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 12px;
+  padding: clamp(8px, 1.4cqh, 14px) 0 clamp(4px, 0.6cqh, 7px) 10px;
+  border-bottom: 1px solid rgba(232, 230, 223, 0.22);
+  color: rgba(232, 230, 223, 0.4);
+}
+
+.task-section__name {
+  flex: 0 1 auto;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(232, 230, 223, 0.78);
+}
+
+.task-section__count {
+  flex: none;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.task-section__overdue {
+  color: var(--red);
+}
+
+.task-section__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: clamp(9px, 0.9cqw, 15px);
+  padding: clamp(7px, 1cqh, 11px) 0 clamp(7px, 1cqh, 11px) 10px;
+  border-bottom: 1px solid rgba(232, 230, 223, 0.1);
+}
+
+.task-row__glyph {
+  width: 0.8em;
+  height: 0.8em;
+  /* Centred on the first line, however many lines the text wraps to. */
+  margin-top: 0.3em;
+  color: rgba(232, 230, 223, 0.4);
+}
+
+.task-row--active .task-row__glyph {
+  color: var(--orange);
+}
+
+.task-row--done .task-row__glyph {
+  color: var(--green);
+}
+
+.task-row--blocked .task-row__glyph {
+  color: var(--red);
+}
+
+.task-row__body {
+  min-width: 0;
+}
+
+.task-row__line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45em;
+  min-width: 0;
+}
+
+.task-row__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+.task-row--active .task-row__text,
+.task-row--blocked .task-row__text {
+  color: var(--paper);
+}
+
+.task-row--high .task-row__text {
+  color: var(--paper);
+  font-weight: 600;
+}
+
+.task-row--low .task-row__text {
+  color: rgba(232, 230, 223, 0.6);
+}
+
+/* Done is quieter: the check says it, the words step back. */
+.task-row--done .task-row__text {
+  color: rgba(232, 230, 223, 0.4);
+  font-weight: 400;
+}
+
+.task-row__priority {
+  flex: none;
+  width: 0.78em;
+  height: 0.78em;
+  align-self: center;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+}
+
+.task-row__priority--high {
+  color: var(--orange);
+}
+
+.task-row__priority--low {
+  color: rgba(232, 230, 223, 0.42);
+}
+
+.task-row--done .task-row__priority {
+  color: rgba(232, 230, 223, 0.3);
+}
+
+.task-row__detail {
+  margin-top: 2px;
+  color: rgba(232, 230, 223, 0.5);
+  font-size: 0.86em;
+  line-height: 1.35;
+  overflow-wrap: break-word;
+}
+
+.task-row__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin-top: 6px;
+}
+
+.task-tag {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 5px;
+  border: 1px solid rgba(232, 230, 223, 0.2);
+  color: rgba(232, 230, 223, 0.55);
+  line-height: 1.6;
+}
+
+.task-row--done .task-tag {
+  color: rgba(232, 230, 223, 0.32);
+  border-color: rgba(232, 230, 223, 0.1);
+}
+
+/* The due day at the end of the row: the word that judges it (OVERDUE,
+   TODAY, TOMORROW) over the day or time, both in the tech face. */
+.task-row__due {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  margin-top: 0.2em;
+  color: rgba(232, 230, 223, 0.5);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.task-row__due-word {
+  font-weight: 700;
+}
+
+.task-row__due--overdue {
+  color: var(--red);
+}
+
+.task-row__due--today {
+  color: var(--orange);
+}
+
+.task-row__due--tomorrow {
+  color: rgba(232, 230, 223, 0.78);
+}
+
+.task-row--done .task-row__due {
+  color: rgba(232, 230, 223, 0.3);
+}
+
+/* A section's done tasks, counted on one row in their place. */
+.task-row--counted {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  color: rgba(232, 230, 223, 0.4);
+}
+
+.task-row--counted .task-row__glyph {
+  margin-top: 0;
+  opacity: 0.6;
+}
+
+/* The task a note names: the hot-row accent of a table and the NOTE badge
+   the rail card carries. */
+.task-row--marked,
+.inbox-row--marked {
+  background: linear-gradient(90deg, rgba(var(--orange-rgb), 0.1), rgba(var(--orange-rgb), 0.02) 76%, transparent);
+  box-shadow: inset 2px 0 0 rgba(var(--orange-rgb), 0.7);
+}
+
+.task-row__note,
+.inbox-row__note {
+  align-self: center;
+}
+
+/* Beside the primary the list reads as the rail's plan module does: one
+   line a task between thin rules, its day at the end, the detail and tags
+   a focus away. */
+.tasks-primitive--compact .tasks-primitive__scroll,
+.inbox-primitive--compact .inbox-primitive__scroll {
+  font-size: clamp(12px, 0.85cqw, 15px);
+  line-height: 1.3;
+}
+
+.tasks-primitive--compact .tasks-primitive__sections {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  padding-bottom: 4px;
+}
+
+.tasks-primitive--compact .task-section__head {
+  padding: clamp(6px, 1cqh, 10px) 0 clamp(2px, 0.4cqh, 4px) 10px;
+  border-bottom: 0;
+}
+
+.tasks-primitive--compact .task-row {
+  align-items: center;
+  padding: clamp(3px, 0.55cqh, 7px) 0 clamp(3px, 0.55cqh, 7px) 10px;
+  border-top: 1px solid rgba(232, 230, 223, 0.13);
+  border-bottom: 0;
+}
+
+.tasks-primitive--compact .task-row__glyph {
+  margin-top: 0;
+}
+
+.tasks-primitive--compact .task-row__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tasks-primitive--compact .task-row__due {
+  flex-direction: row;
+  gap: 0.6em;
+  margin-top: 0;
+}
+
+/* ---- Inbox ---- */
+
+/* The list is a grid and each message a row of its columns (a subgrid),
+   so the senders, the channels and the times stand in columns down the
+   list whatever each message holds. */
+.inbox-primitive__rows {
+  display: grid;
+  align-items: baseline;
+  column-gap: clamp(8px, 0.9cqw, 14px);
+  margin: 0;
+  padding: 0 0 clamp(8px, 1.4cqh, 16px);
+  list-style: none;
+}
+
+/* Wide: one line a message, the sender in a column of its own. */
+.inbox-primitive__rows--line {
+  grid-template-columns: calc(0.5em + 10px) fit-content(14em) minmax(0, 1fr) auto auto auto;
+}
+
+/* Narrow: the sender, the channel and the time over the subject, and the
+   snippet under it. */
+.inbox-primitive__rows--stack {
+  grid-template-columns: calc(0.5em + 10px) minmax(0, 1fr) auto auto auto;
+}
+
+/* Beside the primary, wide: the sender and the subject on one line. */
+.inbox-primitive__rows--compact-line {
+  grid-template-columns: calc(0.5em + 10px) fit-content(38%) minmax(0, 1fr) auto auto;
+}
+
+/* Beside the primary, narrow: the sender and the time over the subject. */
+.inbox-primitive__rows--compact-stack {
+  grid-template-columns: calc(0.5em + 10px) minmax(0, 1fr) auto auto;
+}
+
+.inbox-row {
+  position: relative;
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: baseline;
+  row-gap: 2px;
+  padding: clamp(7px, 1cqh, 11px) 0;
+  border-bottom: 1px solid rgba(232, 230, 223, 0.1);
+}
+
+.inbox-primitive__rows--compact-line > .inbox-row,
+.inbox-primitive__rows--compact-stack > .inbox-row {
+  padding-top: clamp(3px, 0.55cqh, 7px);
+  padding-bottom: clamp(3px, 0.55cqh, 7px);
+  border-top: 1px solid rgba(232, 230, 223, 0.13);
+  border-bottom: 0;
+}
+
+.inbox-primitive__rows--stack .inbox-row__text,
+.inbox-primitive__rows--compact-stack .inbox-row__text {
+  grid-row: 2;
+  grid-column: 2 / -1;
+}
+
+.inbox-primitive__rows--stack .inbox-row__text {
+  display: grid;
+}
+
+/* The mark stands at the end of its column, which keeps the row's edge
+   free for a tint or the marked accent. */
+.inbox-row__unread {
+  justify-self: end;
+  width: 0.5em;
+  height: 0.5em;
+  align-self: center;
+}
+
+.inbox-primitive__rows--stack .inbox-row__unread,
+.inbox-primitive__rows--compact-stack .inbox-row__unread {
+  grid-row: 1;
+}
+
+.inbox-row--unread .inbox-row__unread {
+  background: var(--orange);
+}
+
+.inbox-row__from {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45em;
+  min-width: 0;
+}
+
+.inbox-row__sender {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(232, 230, 223, 0.62);
+}
+
+.inbox-row--unread .inbox-row__sender {
+  color: var(--paper);
+  font-weight: 700;
+}
+
+/* A subject and a snippet hold one line each and are cut at its end. */
+.inbox-row__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inbox-primitive__rows--stack .inbox-row__subject,
+.inbox-primitive__rows--stack .inbox-row__snippet {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inbox-row__subject {
+  color: rgba(232, 230, 223, 0.66);
+}
+
+.inbox-row--unread .inbox-row__subject {
+  color: var(--paper);
+  font-weight: 600;
+}
+
+.inbox-row__snippet {
+  color: rgba(232, 230, 223, 0.42);
+}
+
+/* A message with no subject is read by its snippet: an unread one keeps
+   it strong. */
+.inbox-row--unread .inbox-row__snippet:first-child {
+  color: rgba(232, 230, 223, 0.78);
+}
+
+.inbox-primitive__rows--line .inbox-row__subject + .inbox-row__snippet::before {
+  content: "\2003";
+}
+
+.inbox-primitive--compact .inbox-row__subject,
+.inbox-primitive--compact .inbox-row--unread .inbox-row__subject {
+  color: rgba(232, 230, 223, 0.55);
+  font-weight: 400;
+}
+
+.inbox-row__channel {
+  justify-self: end;
+  align-self: center;
+  display: flex;
+}
+
+/* A tag is set a step over the micro floor: it is read, not just seen. */
+.task-tag,
+.inbox-row__tag {
+  font-size: clamp(7.5px, 0.58cqw, 11px);
+}
+
+.inbox-row__tag {
+  display: inline-block;
+  padding: 0 5px;
+  border: 1px solid rgba(232, 230, 223, 0.2);
+  color: rgba(232, 230, 223, 0.55);
+  line-height: 1.6;
+}
+
+.inbox-row__flagged {
+  align-self: center;
+  display: flex;
+}
+
+.inbox-row__flag {
+  flex: none;
+  width: 0.78em;
+  height: 0.78em;
+  color: var(--amber);
+}
+
+.inbox-row__time {
+  justify-self: end;
+  color: rgba(232, 230, 223, 0.48);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.inbox-row--unread .inbox-row__time,
+.inbox-row__time--today {
+  color: rgba(232, 230, 223, 0.82);
+}
+
+/* A message the agent tinted: its semantic colour down its edge. */
+.inbox-row--tint {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--tint) 12%, transparent), transparent 60%);
+  box-shadow: inset 2px 0 0 var(--tint);
+}
+
+.inbox-row--red {
+  --tint: var(--red);
+}
+
+.inbox-row--orange {
+  --tint: var(--orange);
+}
+
+.inbox-row--green {
+  --tint: var(--green);
+}
+
+.inbox-row--cyan {
+  --tint: var(--cyan);
+}
+
+.inbox-row--amber {
+  --tint: var(--amber);
+}
+
+.inbox-row--paper {
+  --tint: var(--paper);
+}
+
+.inbox-row--muted {
+  --tint: var(--muted);
+}
+
+/* A tinted message a note names keeps both: the marked row's orange on
+   its edge and accent, its own tint just inside the edge. */
+.inbox-row--marked.inbox-row--tint {
+  background: linear-gradient(90deg, rgba(var(--orange-rgb), 0.1), rgba(var(--orange-rgb), 0.02) 76%, transparent);
+  box-shadow: inset 2px 0 0 rgba(var(--orange-rgb), 0.7), inset 4px 0 0 var(--tint);
+}
+
 /* Calendar (CalendarPrimitive): the same instrument as the table and the
    progress module -- thin rules, no cards, times in the mono face, titles
    in the prose face. An event takes its colour from its `semantic` (the
@@ -3469,10 +4066,10 @@ button {
   padding: 3cqh 2cqw 2cqh;
 }
 
-/* TEMPORARY (pa-contract): the stand-in for calendar, tasks, timer, weather
-   and inbox (primitives/TemporaryAssistantList.tsx), a plain list of the
-   fields as sent until the render slice draws each type with a primitive of
-   its own. Replaced by the render slice; delete this block with the file. */
+/* TEMPORARY (pa-contract): the stand-in for timer and weather
+   (primitives/TemporaryAssistantList.tsx), a plain list of the fields as
+   sent until their render slices draw each type with a primitive of its
+   own. Replaced by the render slices; delete this block with the file. */
 .temporary-assistant-object {
   background: #000;
 }
@@ -4097,6 +4694,20 @@ button {
   }
   .code-viewport pre {
     font-size: clamp(12px, 2.45cqw, 17px);
+  }
+
+  /* A list on a portrait stage sets its prose by the stage's width, which
+     is all it has across: the landscape list's size on a wide portrait
+     stage, the page's least on a narrow one. */
+  .tasks-primitive__scroll,
+  .inbox-primitive__scroll {
+    font-size: clamp(13px, 1.9cqw, 17px);
+  }
+
+  /* Tags take the micro face's portrait size, the page's floor on a phone. */
+  .task-tag,
+  .inbox-row__tag {
+    font-size: clamp(7px, 1.08cqw, 9px);
   }
 
   .table-viewport__mask {

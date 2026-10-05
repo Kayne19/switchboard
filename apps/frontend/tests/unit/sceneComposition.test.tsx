@@ -226,9 +226,10 @@ describe('the composed fixture', () => {
 });
 
 describe('the personal-assistant fixtures', () => {
-  // The five types draw through one stand-in until the render slice gives
-  // each a primitive of its own (primitives/TemporaryAssistantList.tsx);
-  // these hold what the scenes are, whatever draws them.
+  // Tasks and inbox draw with primitives of their own; calendar, timer and
+  // weather through one stand-in until their render slices give each one
+  // (primitives/TemporaryAssistantList.tsx). These hold what the scenes
+  // are, whatever draws them.
   const names = ['calendar', 'tasks', 'timer', 'weather', 'inbox', 'today'] as const;
 
   it.each(names)('the %s fixture holds only actions the validators accept', (name) => {
@@ -252,9 +253,11 @@ describe('the personal-assistant fixtures', () => {
     expect(page.querySelectorAll('.content-rail .annotation-card')).toHaveLength(1);
   });
 
-  it('the stand-in names each object by its title, where no frame does', () => {
+  // An object in the aux row has no scene frame to carry its title, so it
+  // names itself: each primitive marks the text with data-object-title.
+  it('each object in the aux row names itself by its title, where no frame does', () => {
     const page = render(fixtures.today);
-    expect([...page.querySelectorAll('.composed-aux .temporary-assistant__head')].map((node) => node.textContent))
+    expect([...page.querySelectorAll('.composed-aux [data-object-title]')].map((node) => node.textContent))
       .toEqual(['WEATHER / SAN FRANCISCO', 'TO DO / THIS WEEK', 'INBOX / UNREAD FIRST']);
   });
 
