@@ -329,9 +329,16 @@ layout. One whose content asks for more gets the stage's height:
   Its accessible name holds the words it shows. What it folds is set
   aside by the stylesheet, not taken out of the page, so folding draws
   nothing afresh. The caller's choice holds for that primary.
+- **What earns nothing while the primary has the stage gives its room
+  back.** The frame's subtitle runs after its title on one line (each cut
+  at the stage's edge, the title last), and the primary starts a line
+  higher. A diagram's rails keep the depth they have in a slot of some
+  400px (their steps at most 40px in from the slot's edges) rather than a
+  tenth of the stage's height, the drawing taking the rest. Opened, the
+  rail and the frame are as they were.
 
-At 390x844 a diagram's viewport grows from 374 px to 460 px, a 40-row
-table's from 436 to 544, and a bar chart of 45 categories names every one
+At 390x844 a diagram's viewport grows from 374 px to some 518 px, a 40-row
+table's from 436 to 556, and a bar chart of 45 categories names every one
 instead of every eighth. Why fold the rail rather than scroll the page or
 shrink the primary: the page never scrolls as a whole (its frame and
 Damocles stay put), and a primary drawn smaller is the squeeze this
