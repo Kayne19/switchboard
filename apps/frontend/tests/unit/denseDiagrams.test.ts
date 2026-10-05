@@ -124,7 +124,7 @@ const CROSSINGS: Record<keyof typeof graphs, Record<Geometry, { before: number; 
     'portrait-tablet 820x1180': { before: 49, after: 11 },
     'ultrawide 2560x1080': { before: 49, after: 10 },
     'focus 1440x900': { before: 49, after: 32 },
-    'focus 390x844': { before: 49, after: 1 },
+    'focus 390x844': { before: 49, after: 0 },
   },
 };
 const BUNDLE_CAP = 4;
@@ -153,6 +153,26 @@ describe('a dense graph read in its viewport', () => {
         points.forEach((tip, index) => {
           for (const other of points.slice(index + 1)) expect(Math.hypot(tip.x - other.x, tip.y - other.y)).toBeGreaterThanOrEqual(ARROW_ROOM - 1e-6);
         });
+      });
+
+      it(`${name} / ${geometry}: a stub is short: it passes no other node, or ends within half a frame`, () => {
+        // Its names stand in the layer next to its node (or, when that
+        // layer is full, the one after), so a stub is never the long line
+        // it replaces.
+        const frame = frameFor(view.orientation, { ...size, scrollbar: 0 });
+        const along = (point: Point) => (view.orientation === 'landscape' ? point.x : point.y);
+        const span = (box: { x: number; y: number; width: number; height: number }) =>
+          view.orientation === 'landscape' ? [box.x, box.x + box.width] : [box.y, box.y + box.height];
+        for (const edge of layout.edges) {
+          if (!edge.stubs) continue;
+          for (const stub of [edge.stubs.from, edge.stubs.to]) {
+            const low = Math.min(...stub.points.map(along));
+            const high = Math.max(...stub.points.map(along));
+            const passed = layout.nodes.filter((node) => span(node.box)[0] > low + 1 && span(node.box)[1] < high - 1);
+            if (passed.length) expect(high - low, `${edge.edge.from}->${edge.edge.to} passes ${passed.map((node) => node.node.id)}`).toBeLessThanOrEqual(frame.main / 2);
+            expect(high - low, `${edge.edge.from}->${edge.edge.to}`).toBeLessThan(frame.main);
+          }
+        }
       });
 
       it(`${name} / ${geometry}: a stub shared by several edges is lit only when all of them are`, () => {

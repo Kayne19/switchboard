@@ -266,9 +266,9 @@ const LINE_PORT_PITCH = 10;
 export const ARROW_PORT_PITCH = ARROW_LENGTH + 3;
 const PORT_INSET = 14;
 const SELF_LOOP = 18;
-// No more than this many long edges run side by side through a layer, each
-// within BUNDLE_REACH of the next; past it, the longest are drawn as stubs
-// (`bundledEdges`).
+// A run of more than this many long edges side by side through a layer,
+// each within BUNDLE_REACH of the next, has its longest drawn as stubs
+// (`bundledEdges`), for a few rounds; whatever the last round finds stays.
 const BUNDLE_CAP = 4;
 const BUNDLE_REACH = 16;
 const BUNDLE_ROUNDS = 4;
@@ -278,11 +278,11 @@ const BUNDLE_ROUNDS = 4;
 // phone has some 140): past that it costs more than a frame's budget.
 const ORDER_SHUFFLES = 4;
 const THOROUGH_SEGMENTS = 160;
-// An edge too long to follow is drawn as two stubs only when it skips at
-// least this many layers: a shorter one's stubs would take the room its
-// line does (chooseStubs).
+// An edge longer than the frame is drawn as two stubs only when it skips at
+// least this many layers (a shorter one's stubs would take the room its line
+// does), and only in a drawing longer than STUB_FROM frames (`chooseStubs`).
+// A bundle's excess is stubbed whatever its length (`bundledEdges`).
 const STUB_MIN_SPAN = 2;
-// Only a drawing longer than this many frames draws stubs.
 const STUB_FROM = 2;
 // Space between a stub's terminal and the boxes beside it in its layer.
 const TERMINAL_SPACING = 16;
@@ -561,10 +561,11 @@ function layerMembers(ids: string[], links: Link[], layerOf: Map<string, number>
  * layers that fit it, and renumbers the layers after it. A member's edges
  * then pass the other parts of its old layer as long edges do, through the
  * gaps between their boxes, so they are counted against each part's room.
- * Members with more edges in than out go first, so the fewest edges have
- * far to run. A layer that fits, and a lone member too wide for any part,
- * stay as they are; so does a layer of nodes alone that fits staggered
- * into two rows (`assignCross`).
+ * Members go in the order of their pins (`pinOf`: below 0 toward the first
+ * part, above 0 toward the last); among equals, members with more edges in
+ * than out go first, so the fewest edges have far to run. A layer that fits,
+ * and a lone member too wide for any part, stay as they are; so does a
+ * layer of nodes alone that fits staggered into two rows (`assignCross`).
  */
 function wrapLayers(
   ids: string[],
@@ -574,6 +575,8 @@ function wrapLayers(
   usable: number,
   packing: Packing,
   canStagger: (id: string) => boolean,
+  facingOf: (id: string) => number,
+  pinOf: (id: string) => number,
 ) {
   const { members, passing } = layerMembers(ids, links, layerOf);
   const inward = new Map<string, number>();
@@ -587,7 +590,8 @@ function wrapLayers(
   const staggered = (part: string[], through: number) => {
     if (part.length < STAGGER_FROM || !part.every(canStagger)) return Infinity;
     const widest = Math.max(...part.map(extentOf));
-    return (part.length - 1) * (widest / 2 + STAGGER_CLEARANCE) + widest + (through > 0 ? (through + 1) * packing.dummy : 0);
+    const facing = Math.max(...part.map(facingOf));
+    return (part.length - 1) * (widest / 2 + facing + STAGGER_CLEARANCE) + widest + (through > 0 ? (through + 1) * packing.dummy : 0);
   };
   let shift = 0;
   members.forEach((part, layer) => {
@@ -596,8 +600,8 @@ function wrapLayers(
       return;
     }
     const order = part
-      .map((id, index) => ({ id, index, lean: (outward.get(id) ?? 0) - (inward.get(id) ?? 0) }))
-      .sort((a, b) => a.lean - b.lean || a.index - b.index)
+      .map((id, index) => ({ id, index, pin: pinOf(id), lean: (outward.get(id) ?? 0) - (inward.get(id) ?? 0) }))
+      .sort((a, b) => a.pin - b.pin || a.lean - b.lean || a.index - b.index)
       .map((entry) => entry.id);
     // Edges into the members still to place pass this part; so do the
     // edges out of the members placed in parts before it.
@@ -697,8 +701,8 @@ function chooseStubs(
 
 /**
  * The open end of a stub: a label naming the far ends of the edges it
- * stands for, one layer along from its node (`out`: after it, `in`:
- * before it).
+ * stands for, in the layer next to its node (`out`: after it, `in`: before
+ * it), or one further when a wrapped layer leaves no room there.
  */
 interface Terminal {
   text: string;
@@ -966,7 +970,8 @@ function settleLayer(layer: Item[], wantedOf: (item: Item) => number | null, str
   const offsets = [0];
   for (let k = 0; k + 1 < layer.length; k += 1) offsets.push(offsets[k] + sep(k));
   const stack = layer.length ? layer[0].crossExtent / 2 + offsets[offsets.length - 1] + layer[layer.length - 1].crossExtent / 2 : 0;
-  const walled = band !== undefined && layer.length > 0 && stack <= band;
+  // (A stack the stretch filled to the band exactly is in it, rounding aside.)
+  const walled = band !== undefined && layer.length > 0 && stack <= band + EPSILON;
   const wallLow = (index: number) => (walled ? -band / 2 + layer[0].crossExtent / 2 + offsets[index] : -Infinity);
   const wallHigh = (index: number) =>
     walled ? band / 2 - layer[layer.length - 1].crossExtent / 2 - (offsets[offsets.length - 1] - offsets[index]) : Infinity;
@@ -1318,9 +1323,9 @@ function arrange(
   const directed = breakCycles(data.nodes, data.edges);
   const layerOf = assignLayers(data.nodes, directed);
   const usable = canvas.cross - 2 * packing.padCross;
-  // A stub's terminal is the label at its open end, beside the node one
-  // layer along: `-> target` past its true source, `source ->` before its
-  // true target.
+  // A stub's terminal is the label at its open end, in the layer next to its
+  // node: `-> target` past its true source, `source ->` before its true
+  // target.
   const terminals = new Map<string, Terminal>();
   // A box whose side is too short for a port of its own per end grows
   // along that side; every edge has one end at each of its nodes, stub or
@@ -1341,6 +1346,8 @@ function arrange(
     for (const [id, count] of ends) portRoom.set(id, Math.max(portSpan(count.out, count.outArrows), portSpan(count.in, count.inArrows)) + 2 * PORT_INSET);
   };
   measurePorts(directed);
+  // Half the most a staggered box's ports can spread on a side (`separation`).
+  const facingOf = (id: string) => Math.max(0, (portRoom.get(id) ?? 0) - 2 * PORT_INSET) / 2;
   const lit = litEdges(data);
   const extentOf = (id: string) => {
     const text = textOf.get(id);
@@ -1364,7 +1371,7 @@ function arrange(
     // again with them in; that can stretch other edges past the frame, so
     // the edges are judged again, a few rounds at most.
     const nodeIds = data.nodes.map((node) => node.id);
-    wrapLayers(nodeIds, links, layerOf, (id) => extentOf(id).cross, usable, packing, () => true);
+    wrapLayers(nodeIds, links, layerOf, (id) => extentOf(id).cross, usable, packing, () => true, facingOf, () => 0);
     const wrapped = new Map(layerOf);
     const window = canvas.main - 2 * packing.padMain;
     for (const entry of directed) if (extra.has(entry.edge)) stubbed.add(entry);
@@ -1430,7 +1437,34 @@ function arrange(
         links.push(entry.side === 'out' ? { from: entry.node, to: id, reversed: entry.reversed } : { from: id, to: entry.node, reversed: entry.reversed });
       }
       measurePorts(links);
-      wrapLayers([...nodeIds, ...terminals.keys()], links, layerOf, (id) => extentOf(id).cross, usable, packing, (id) => !terminals.has(id));
+      // A terminal keeps beside its node when either of their layers wraps:
+      // it goes in the part of its layer nearest the node, and the node in
+      // the part of its own nearest the terminal.
+      const pins = new Map<string, number>();
+      const sides = new Map<string, Set<'out' | 'in'>>();
+      for (const [id, entry] of entries) {
+        // Terminals at the very ends of a layer, so that nodes held to an
+        // end do not crowd them out of the part next to their own nodes.
+        pins.set(id, entry.side === 'out' ? -2 : 2);
+        sides.set(entry.node, (sides.get(entry.node) ?? new Set()).add(entry.side));
+      }
+      for (const [node, has] of sides) pins.set(node, has.size === 2 ? 0 : has.has('out') ? 1 : -1);
+      const members = [...nodeIds, ...terminals.keys()];
+      wrapLayers(members, links, layerOf, (id) => extentOf(id).cross, usable, packing, (id) => !terminals.has(id), facingOf, (id) => pins.get(id) ?? 0);
+      // A node held to the far end of its layer may still have been wrapped
+      // into an earlier part than its terminal's neighbour; its terminal
+      // then moves next to it where that layer has room across.
+      for (const [id, entry] of entries) {
+        const near = (layerOf.get(entry.node) ?? 0) + (entry.side === 'out' ? 1 : -1);
+        if (layerOf.get(id) === near || near < 0) continue;
+        const { members: parts, passing } = layerMembers(members, links, layerOf);
+        if (near >= parts.length) continue;
+        if (partRoom([...parts[near], id], passing[near], (member) => extentOf(member).cross, packing) <= usable) layerOf.set(id, near);
+      }
+      // A layer the moves left empty closes up.
+      const used = [...new Set(layerOf.values())].sort((a, b) => a - b);
+      const compact = new Map(used.map((layer, index) => [layer, index]));
+      for (const [id, layer] of layerOf) layerOf.set(id, compact.get(layer) ?? 0);
     }
   }
 
