@@ -233,7 +233,7 @@ function Days({ days, marked, scroll }: { days: WeatherDay[]; marked?: string; s
   );
 }
 
-export function WeatherPrimitive({ data, marked, focused = false }: { data: WeatherData; marked?: string; focused?: boolean }) {
+export function WeatherPrimitive({ data, marked }: { data: WeatherData; marked?: string }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const size = useElementSize(boxRef);
   const hours = data.hourly ?? [];
@@ -252,14 +252,14 @@ export function WeatherPrimitive({ data, marked, focused = false }: { data: Weat
   const parts = ['now', layout.hourly ? 'hourly' : null, layout.daily ? 'daily' : null].filter(Boolean).join(' ');
   const field = (
     <div className="weather__field" data-parts={parts} style={{ '--weather-temp': `${layout.temp}px` } as CSSProperties}>
-      <Now data={data} compact={arrangement === 'compact'} />
+      <Now data={data} compact={arrangement === 'compact'} temp={layout.temp} />
       {layout.hourly ? <Hours hours={hours} units={data.units} marked={marked} /> : null}
       {layout.daily ? <Days days={days} marked={marked} scroll={!tall} /> : null}
     </div>
   );
   const named = [...hours.map((hour) => hour.time), ...days.map((day) => day.date)].includes(marked ?? '') ? marked : undefined;
   return (
-    <div className={`weather weather--${arrangement}${focused ? ' weather--focused' : ''}`} data-testid="weather" data-layout={arrangement}>
+    <div className={`weather weather--${arrangement}`} data-testid="weather" data-layout={arrangement}>
       {/* The box the forecast is laid out for, inside any padding its slot gives it. */}
       <div ref={boxRef} className="weather__box">
         {tall ? (

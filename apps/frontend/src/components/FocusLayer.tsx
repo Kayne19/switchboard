@@ -68,9 +68,9 @@ function FocusedObject({ object, note, marked }: { object: SceneObject; note: No
     case 'progress':
       return <ProgressPrimitive data={object.data as ProgressData} />;
     case 'timer':
-      return <TimerPrimitive data={object.data as TimerData} marked={marked} focused />;
+      return <TimerPrimitive data={object.data as TimerData} marked={marked} />;
     case 'weather':
-      return <WeatherPrimitive data={object.data as WeatherData} marked={marked} focused />;
+      return <WeatherPrimitive data={object.data as WeatherData} marked={marked} />;
     // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
     case 'calendar':
     case 'tasks':

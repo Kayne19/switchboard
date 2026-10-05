@@ -4,7 +4,7 @@ import { useElementSize } from '../hooks/useElementSize';
 import { usePageClock } from '../hooks/usePageClock';
 import { ListViewport } from './ListViewport';
 import { NoteBadge } from './NoteMarker';
-import { formatCountdown, instantClock, readTimer, timerLayout, type TimerReading } from './timerReading';
+import { CELL_GAP, formatCountdown, instantClock, readTimer, timerLayout, type TimerReading } from './timerReading';
 
 // Countdowns and reminders (docs/display-tool.md, "timer"). Every timer is
 // read against the page's one clock (usePageClock), which runs only while a
@@ -71,7 +71,7 @@ function TimerItem({ timer, reading, marked, as }: { timer: Timer; reading: Time
   );
 }
 
-export function TimerPrimitive({ data, marked, focused = false }: { data: TimerData; marked?: string; focused?: boolean }) {
+export function TimerPrimitive({ data, marked }: { data: TimerData; marked?: string }) {
   const running = data.timers.some((timer) => timer.state !== 'paused');
   const now = usePageClock(running);
   const readings = data.timers.map((timer) => readTimer(timer, now));
@@ -84,10 +84,10 @@ export function TimerPrimitive({ data, marked, focused = false }: { data: TimerD
   ));
   return (
     <div
-      className={`timer-primitive timer-primitive--${layout.kind}${focused ? ' timer-primitive--focused' : ''}`}
+      className="timer-primitive"
       data-testid="timer"
       data-layout={layout.kind === 'grid' ? `grid-${layout.columns}x${layout.rows}` : 'list'}
-      style={layout.kind === 'grid' ? { ['--timer-digits' as string]: `${layout.digits}px`, ['--timer-columns' as string]: layout.columns, ['--timer-rows' as string]: layout.rows } : undefined}
+      style={layout.kind === 'grid' ? { ['--timer-digits' as string]: `${layout.digits}px`, ['--timer-columns' as string]: layout.columns, ['--timer-rows' as string]: layout.rows, ['--timer-gap' as string]: `${CELL_GAP}px` } : undefined}
     >
       {/* The box the timers are laid out for: the primitive's own, inside any padding its slot gives it. */}
       <div ref={hostRef} className="timer-primitive__field">
