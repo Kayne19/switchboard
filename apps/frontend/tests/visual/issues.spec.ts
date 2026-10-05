@@ -435,6 +435,31 @@ for (const { viewport, two } of barNoteCases) {
   });
 }
 
+// On a phone the chart was the desktop canvas drawn at a third of its size:
+// 4px axis text, tiny bars and bands of black above and below it. The frame
+// follows the slot, and no chart text falls under the page's floors.
+const portraitCharts = ['training', 'comparison'].flatMap((scene) => [{ width: 390, height: 844 }, { width: 820, height: 1180 }].map((viewport) => ({ scene, viewport })));
+for (const { scene, viewport } of portraitCharts) {
+  test(`a ${scene} chart in a portrait slot fills it, its text readable, at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.goto(`/?scene=${scene}&chrome=0`);
+    await expect(page.locator('[data-testid="chart"]')).toBeVisible();
+    await page.waitForTimeout(500);
+    const chart = await page.locator('[data-testid="chart"]').first().evaluate((element) => {
+      const svg = element.querySelector('svg')!;
+      const [, , width, height] = svg.getAttribute('viewBox')!.split(' ').map(Number);
+      const box = svg.getBoundingClientRect();
+      const sizes = [...svg.querySelectorAll('text')].map((text) => {
+        const matrix = text.getScreenCTM()!;
+        return Number.parseFloat(getComputedStyle(text).fontSize) * Math.hypot(matrix.a, matrix.b);
+      });
+      return { aspect: width / height, boxAspect: box.width / box.height, smallest: Math.min(...sizes) };
+    });
+    expect(chart.smallest).toBeGreaterThanOrEqual(7 - 0.01);
+    expect(Math.abs(chart.aspect - chart.boxAspect) / chart.boxAspect).toBeLessThan(0.02);
+  });
+}
+
 // Where every bar stands to the top of the domain the chart gives and the
 // band above the plot is shorter than the card, no place on the chart is
 // clear of the data: the note goes to the rail, still naming its target,
