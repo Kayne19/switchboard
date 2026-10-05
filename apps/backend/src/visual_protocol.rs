@@ -1385,13 +1385,22 @@ fn action_size_cap(action: &Value) -> usize {
     }
 }
 
+/// Checks one display action and returns it normalized. The checks run in
+/// the browser's order (docs/display-tool.md, "How the two validators
+/// agree"): an object, within its size cap, with a known `op`; then no
+/// layout key, no unsafe string and no non-finite number anywhere in it;
+/// then the op's own rules.
 pub fn validate_action(action: &Value) -> Result<Value, String> {
+    let map = action.as_object().ok_or("action must be an object")?;
     let bytes = serde_json::to_vec(action).map_err(|_| "action must be valid JSON".to_string())?;
     if bytes.len() > action_size_cap(action) {
         return Err("action exceeds size limit".into());
     }
-
-    let map = action.as_object().ok_or("action must be an object")?;
+    let op = map
+        .get("op")
+        .and_then(Value::as_str)
+        .filter(|op| matches!(*op, "show" | "hide" | "focus" | "say" | "clear"))
+        .ok_or("unknown operation")?;
 
     if let Some(k) = forbidden_layout(action) {
         return Err(format!("model-controlled layout field is forbidden: {k}"));
@@ -1402,11 +1411,6 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
     if !finite(action) {
         return Err("action contains a non-finite number".into());
     }
-
-    let op = map
-        .get("op")
-        .and_then(Value::as_str)
-        .ok_or("unknown operation")?;
 
     let mut out = Map::new();
 
