@@ -10,8 +10,9 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Keyboar
 // has none of them and does not scroll.
 //
 // Items are the elements under the scroll that carry `data-item` (the name
-// a note uses for them, `app/noteItems.ts`); anything else in the list (a
-// group heading, a day rule) is not counted. They are counted by their
+// a note uses for them, `app/noteItems.ts`), or those `countSelector`
+// picks where only some of them are what the list is a list of; anything
+// else in the list (a group heading, a day rule) is not counted. They are counted by their
 // boxes against the scroll's edges, whatever their layout: rows, a time
 // grid with several to a row, cards.
 //
@@ -48,14 +49,34 @@ export function countPast(items: Extent[], view: Extent): ListPast {
 
 /**
  * Where the scroll rests to show `lead` (in content coordinates): where it
- * stands already when the lead is wholly in view, else with the lead a
- * quarter of the way down, or at the top when it is taller than that room.
+ * stands already when the lead is wholly in the clear part of the view,
+ * else with the lead a quarter of the way down, or at the top when it is
+ * taller than that room. The clear part leaves out the band (`band`, the
+ * fade's depth) at each edge the list continues past, where the fade and
+ * the count lie over the rows: a lead under them is not in view.
  */
-export function leadScrollTop(lead: Extent, scrollTop: number, viewHeight: number, contentHeight: number): number {
+export function leadScrollTop(lead: Extent, scrollTop: number, viewHeight: number, contentHeight: number, band = 0): number {
   const max = Math.max(0, contentHeight - viewHeight);
-  if (lead.top >= scrollTop - EDGE && lead.bottom <= scrollTop + viewHeight + EDGE) return scrollTop;
+  const top = scrollTop + (scrollTop > EDGE ? band : 0);
+  const bottom = scrollTop + viewHeight - (scrollTop < max - EDGE ? band : 0);
+  if (lead.top >= top - EDGE && lead.bottom <= bottom + EDGE) return scrollTop;
   const above = lead.bottom - lead.top > viewHeight * 0.75 ? 0 : Math.round(viewHeight * 0.25);
   return Math.max(0, Math.min(max, Math.round(lead.top - above)));
+}
+
+/** The depth of the fade at an edge a list continues past, for a view `viewHeight` tall. */
+export function fadeDepth(viewHeight: number): number {
+  return Math.round(Math.max(FADE_MIN, Math.min(FADE_MAX, viewHeight * FADE_SHARE)));
+}
+
+/**
+ * How much a box is drawn scaled on screen: a shared-layout animation (focus
+ * opening) scales the box it moves, and its rects with it, while its layout
+ * sizes (clientHeight, offsetHeight) stay as laid out. Measures from the two
+ * are brought to one scale by it.
+ */
+export function drawnScale(rectHeight: number, offsetHeight: number): number {
+  return offsetHeight > 0 && rectHeight > 0 ? rectHeight / offsetHeight : 1;
 }
 
 /** How a count names its items: a singular and a plural, or a function of the count. */
@@ -102,6 +123,8 @@ interface ListViewportProps {
   noun: ListNoun;
   /** The `data-item` of the item to open on; absent, an element marked `data-lead`, if any. */
   lead?: string;
+  /** Which items the counts count, when not every `data-item` is one (a forecast counts its days, not its hours). */
+  countSelector?: string;
   /** Pinned above the scroll inside the same frame: a list's header, a calendar's day row. */
   head?: ReactNode;
   /** The viewport's own class, beside `list-viewport`. */
@@ -114,7 +137,7 @@ interface ListViewportProps {
   label?: string;
 }
 
-export function ListViewport({ children, noun, lead, head, className, scrollClassName, scrollRef: givenRef, label }: ListViewportProps) {
+export function ListViewport({ children, noun, lead, countSelector = '[data-item]', head, className, scrollClassName, scrollRef: givenRef, label }: ListViewportProps) {
   const ownRef = useRef<HTMLDivElement>(null);
   const scrollRef = givenRef ?? ownRef;
   const [past, setPast] = useState<ListPast>({ above: 0, below: 0 });
@@ -127,16 +150,20 @@ export function ListViewport({ children, noun, lead, head, className, scrollClas
   const measure = useCallback(() => {
     const element = scrollRef.current;
     if (!element) return;
+    // The rows' rects and the box's are on screen, scaled with it while a
+    // focus opens; the view's height is brought to that scale, so the
+    // counts are right mid-animation as at rest.
     const box = element.getBoundingClientRect();
-    const items = Array.from(element.querySelectorAll<HTMLElement>('[data-item]')).map((item) => {
+    const k = drawnScale(box.height, element.offsetHeight);
+    const items = Array.from(element.querySelectorAll<HTMLElement>(countSelector)).map((item) => {
       const rect = item.getBoundingClientRect();
       return { top: rect.top, bottom: rect.bottom };
     });
-    const next = element.scrollHeight > element.clientHeight + 1 ? countPast(items, { top: box.top, bottom: box.top + element.clientHeight }) : { above: 0, below: 0 };
+    const next = element.scrollHeight > element.clientHeight + 1 ? countPast(items, { top: box.top, bottom: box.top + element.clientHeight * k }) : { above: 0, below: 0 };
     setPast((current) => (current.above === next.above && current.below === next.below ? current : next));
     setScrolls(element.scrollHeight > element.clientHeight + 1);
     setViewHeight(element.clientHeight);
-  }, [scrollRef]);
+  }, [scrollRef, countSelector]);
   const onScroll = () => {
     if (frame.current) return;
     frame.current = requestAnimationFrame(() => {
@@ -179,8 +206,9 @@ export function ListViewport({ children, noun, lead, head, className, scrollClas
     if (!target) return;
     const box = element.getBoundingClientRect();
     const rect = target.getBoundingClientRect();
-    const top = rect.top - box.top + element.scrollTop;
-    element.scrollTop = leadScrollTop({ top, bottom: top + rect.height }, element.scrollTop, element.clientHeight, element.scrollHeight);
+    const k = drawnScale(box.height, element.offsetHeight);
+    const top = (rect.top - box.top) / k + element.scrollTop;
+    element.scrollTop = leadScrollTop({ top, bottom: top + rect.height / k }, element.scrollTop, element.clientHeight, element.scrollHeight, fadeDepth(element.clientHeight));
   });
 
   // The keys that scroll a focused list scroll it here, and each one it
@@ -205,7 +233,7 @@ export function ListViewport({ children, noun, lead, head, className, scrollClas
     element.scrollBy({ top: direction * pageLength(element.clientHeight), behavior: reducedMotion() ? 'auto' : 'smooth' });
   };
 
-  const fade = Math.round(Math.max(FADE_MIN, Math.min(FADE_MAX, viewHeight * FADE_SHARE)));
+  const fade = fadeDepth(viewHeight);
   const edge = (side: 'top' | 'bottom', count: number) =>
     count > 0 ? (
       <>
