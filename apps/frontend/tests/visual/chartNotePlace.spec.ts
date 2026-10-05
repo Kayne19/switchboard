@@ -112,3 +112,30 @@ for (const scene of ['training', 'comparison']) {
     expect(geometry.cards.length + (geometry.rail ? 1 : 0)).toBe(1);
   });
 }
+
+test('a card on the chart keeps clear of the value printed for the note in the band', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await show(page, 'comparison', [{
+    op: 'show', id: 'backend-note', type: 'note',
+    data: { tag: 'OBSERVATION / BACKEND', segments: [{ text: 'The backend suite is the other long pole, and it grew by two seconds.' }], anchor: { target: 'durations', x: 0, series: 'PREVIOUS RUN' } },
+  }]);
+  await expect(page.locator('.chart-note-band')).toHaveCount(1);
+  const geometry = await page.evaluate(() => {
+    const box = (element: Element) => {
+      const { left, top, right, bottom } = element.getBoundingClientRect();
+      return { left, top, right, bottom };
+    };
+    return {
+      cards: [...document.querySelectorAll('.chart-note:not(.chart-note--away)')].map(box),
+      values: [...document.querySelectorAll('.chart-object :is(.chart-marker__value, .chart-callout__value)')].map(box),
+    };
+  });
+  // Both notes' points print their values: the one on the chart and the one in the band.
+  expect(geometry.values.length).toBeGreaterThanOrEqual(2);
+  for (const card of geometry.cards) {
+    for (const value of geometry.values) {
+      const apart = card.right <= value.left || value.right <= card.left || card.bottom <= value.top || value.bottom <= card.top;
+      expect(apart).toBe(true);
+    }
+  }
+});

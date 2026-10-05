@@ -445,6 +445,7 @@ function trainingContent(
                     <ChartNotes
                       chart={chart}
                       notes={onChart}
+                      named={chartNoteAnchors(chart, notes)}
                       onFocus={onFocus}
                       onOpenHistory={onOpenHistory}
                       onRailNote={chart.id === primary.id && !offCharts ? onRailNote : undefined}
