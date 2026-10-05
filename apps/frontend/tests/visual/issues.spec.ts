@@ -256,9 +256,9 @@ for (const { chart, viewport } of chartNoteCases) {
         text: element.querySelector('.annotation-card__text')?.textContent ?? '',
       }));
       const rail = document.querySelector<HTMLElement>('.content-rail .rail-note')?.textContent ?? '';
-      const values = [...document.querySelectorAll('.chart-object[data-chart-id="loss"] .chart-marker__value')].map((value) => {
-        const box = value.getBoundingClientRect();
-        return { left: box.left, top: box.top, right: box.right, bottom: box.bottom };
+      const values = [...document.querySelectorAll('.chart-object[data-chart-id="loss"] .chart-marker')].map((marked) => {
+        const box = marked.querySelector('.chart-marker__value')!.getBoundingClientRect();
+        return { x: marked.getAttribute('data-x'), series: marked.getAttribute('data-series'), left: box.left, top: box.top, right: box.right, bottom: box.bottom };
       });
       const leaders = [...document.querySelectorAll<SVGGElement>('.chart-note-leader')].map((group) => ({
         id: group.dataset.note!,
@@ -302,9 +302,12 @@ for (const { chart, viewport } of chartNoteCases) {
       const onBorder = (Math.abs(start.y - (card.bottom - 0.5)) <= 1 || Math.abs(start.y - (card.top + 0.5)) <= 1) && start.x >= card.left && start.x <= card.right
         || (Math.abs(start.x - (card.right - 0.5)) <= 1 || Math.abs(start.x - (card.left + 0.5)) <= 1) && start.y >= card.top && start.y <= card.bottom;
       expect(onBorder, `${leader.id} leader starts on its card's border`).toBe(true);
-      // It ends by the value the chart prints at its point.
+      // It ends by the value the chart prints at its own point.
+      const named = { 'training-note': { x: '32', series: 'VAL LOSS' }, 'early-note': { x: '6', series: 'TRAIN LOSS' } }[leader.id as 'training-note' | 'early-note'];
+      const value = geometry.values.find((each) => each.x === named.x && each.series === named.series);
+      expect(value, `${leader.id}'s point is marked`).toBeDefined();
       const end = leader.points.at(-1)!;
-      const gap = Math.min(...geometry.values.map((value) => Math.max(value.left - end.x, end.x - value.right, value.top - end.y, end.y - value.bottom, 0)));
+      const gap = Math.max(value!.left - end.x, end.x - value!.right, value!.top - end.y, end.y - value!.bottom, 0);
       expect(gap, `${leader.id} leader ends by its point's value`).toBeLessThanOrEqual(6);
     }
   });
@@ -457,7 +460,7 @@ for (const { viewport, two } of barNoteCases) {
 // prints by the ringed point; and its tag names the x and the series as the
 // caller reads them.
 const pointNoteCharts = {
-  training: { actions: [], notes: { 'training-note': { x: '32', series: 'VAL LOSS', tag: 'TARGET / EPOCH 32 / VAL LOSS', value: '0.164', text: 'Validation loss turns upward here' } }, onChart: true },
+  training: { actions: [], notes: { 'training-note': { x: '32', series: 'VAL LOSS', tag: 'TARGET / EPOCH 32 / VAL LOSS', value: '0.164', text: 'Validation loss turns upward here' } }, railAt: [] },
   area: {
     actions: [
       { op: 'clear' },
@@ -474,7 +477,8 @@ const pointNoteCharts = {
       { op: 'show', id: 'traffic-note', type: 'note', data: { tag: 'OBSERVATION / JULY', anchor: { target: 'traffic', x: 6, series: 'ORGANIC' }, segments: [{ text: 'Organic traffic peaked in July, the month the docs moved to the new site.' }] } },
     ],
     notes: { 'traffic-note': { x: '6', series: 'ORGANIC', tag: 'TARGET / JUL / ORGANIC', value: '38', text: 'Organic traffic peaked in July' } },
-    onChart: false,
+    // A phone's tall plot leaves no clear place above July's peak: the rail takes it there.
+    railAt: ['390x844'],
   },
   scatter: {
     actions: [
@@ -489,7 +493,7 @@ const pointNoteCharts = {
       { op: 'show', id: 'slow-note', type: 'note', data: { tag: 'OBSERVATION / 17:00', anchor: { target: 'slow', x: 17, series: 'P99' }, segments: [{ text: 'The 17:00 spike lines up with the nightly export job starting early.' }] } },
     ],
     notes: { 'slow-note': { x: '17', series: 'P99', tag: 'TARGET / HOUR 17 / P99', value: '92.5', text: 'The 17:00 spike lines up' } },
-    onChart: false,
+    railAt: [],
   },
 } as const;
 const pointNoteCases = (['training', 'area', 'scatter'] as const).flatMap((chart) =>
@@ -556,7 +560,7 @@ for (const { chart, viewport } of pointNoteCases) {
       expect(marked, `${note.id}'s point is marked`).toBeDefined();
       expect(marked!.text).toBe(target.value);
       if (note.away) {
-        expect(spec.onChart, `${note.id} keeps its place on the chart`).toBe(false);
+        expect((spec.railAt as readonly string[]).includes(`${viewport.width}x${viewport.height}`), `${note.id} keeps its place on the chart`).toBe(true);
         expect(geometry.rail, `${note.id} is in the rail`).toContain(target.text);
         continue;
       }
@@ -695,7 +699,7 @@ test('a note with no clear place on its bar chart is shown in the rail, its bar 
   await expect(page.locator('.chart-note[data-note="uptime-note"]')).toBeHidden();
   await expect(page.locator('.chart-note-leader')).toHaveCount(0);
   // The bar it names stays marked, as a bar: outlined, its value printed.
-  await expect(page.locator('.chart-note-ring')).toHaveCount(0);
+  await expect(page.locator('.chart-marker')).toHaveCount(0);
   const callout = page.locator('.chart-callout[data-index="2"][data-series="THIS MONTH"]');
   await expect(callout).toHaveCount(1);
   await expect(callout.locator('.chart-callout__value')).toHaveText('100');

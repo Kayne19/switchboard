@@ -265,7 +265,7 @@ describe('chart notes', () => {
     // names still marked as a bar.
     expect(card('uptime-note')!.element.classList.contains('chart-note--away')).toBe(true);
     expect(leader('uptime-note')).toBeNull();
-    expect(host.querySelector('.chart-note-ring')).toBeNull();
+    expect(host.querySelector('.chart-marker')).toBeNull();
     const callout = host.querySelector('.chart-object[data-chart-id="uptime"] .chart-callout');
     expect(callout?.getAttribute('data-index')).toBe('2');
     expect(callout?.getAttribute('data-series')).toBe('UPTIME');
@@ -359,7 +359,7 @@ describe('chart notes', () => {
     mount([chart, note('loss-note', { target: 'loss', x: 30 })]);
     expect(card('loss-note')!.element.classList.contains('chart-note--away')).toBe(false);
     expect(host.querySelector('.content-rail .rail-note')).toBeNull();
-    expect(host.querySelector('.chart-note-ring')).toBeNull();
+    expect(leader('loss-note')).not.toBeNull();
   });
 
   it('puts a note about a visual that is not a chart in the rail, not on a chart', () => {
