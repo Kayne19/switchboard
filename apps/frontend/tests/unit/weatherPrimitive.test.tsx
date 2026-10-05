@@ -10,7 +10,9 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { WeatherData } from '../../src/controller/types';
 import { WeatherPrimitive } from '../../src/primitives/WeatherPrimitive';
-import { heroEms } from '../../src/primitives/weatherLayout';
+import { heroEms, STRIP_LEAST } from '../../src/primitives/weatherLayout';
+import type { StageNeed } from '../../src/app/stageFold';
+import { StageDemandContext } from '../../src/hooks/useStageDemand';
 
 const forecast: WeatherData = {
   location: 'San Francisco, CA', units: 'F',
@@ -32,10 +34,15 @@ let root: Root | undefined;
 // `condition`: the widths the condition line's parts are drawn at (the
 // condition, the high and low), which jsdom does not lay out; the rest of
 // the box measures as the box.
-const box: { width: number; height: number; condition?: number[] } = { width: 0, height: 0 };
+// `spot`: the spot line's room across and its parts' widths; `parts`: the
+// heights of a forecast's parts down the box, by class.
+interface Box { width: number; height: number; condition?: number[]; spot?: { room: number; parts: number[] }; parts?: Record<string, number> }
+const box: Box = { width: 0, height: 0 };
 
-function render(data: WeatherData, marked?: string, size: { width: number; height: number; condition?: number[] } = { width: 0, height: 0 }): HTMLElement {
+function render(data: WeatherData, marked?: string, size: Box = { width: 0, height: 0 }): HTMLElement {
   box.condition = undefined;
+  box.spot = undefined;
+  box.parts = undefined;
   Object.assign(box, size);
   const element = document.createElement('div');
   document.body.append(element);
@@ -60,10 +67,24 @@ beforeAll(() => {
     configurable: true,
     get(this: HTMLElement) {
       const line = this.parentElement;
-      return line?.classList.contains('weather-now__condition') ? (box.condition?.[Array.from(line.children).indexOf(this)] ?? 0) : 0;
+      if (line?.classList.contains('weather-now__condition')) return box.condition?.[Array.from(line.children).indexOf(this)] ?? 0;
+      if (line?.classList.contains('weather-spot')) return box.spot?.parts[Array.from(line.children).indexOf(this)] ?? 0;
+      return 0;
     },
   });
-  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => box.height });
+  Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.classList.contains('weather-spot') ? (box.spot?.room ?? 0) : 0;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+    configurable: true,
+    get(this: HTMLElement) {
+      const part = Object.entries(box.parts ?? {}).find(([name]) => this.classList.contains(name));
+      return part ? part[1] : box.height;
+    },
+  });
 });
 
 afterEach(() => {
@@ -295,6 +316,18 @@ describe('a note on one hour or day', () => {
     expect(quiet.querySelector('.weather-now__alert-tag')).toBeNull();
   });
 
+  it('a spot line too narrow for its readings sets the chance of rain aside whole, and keeps it where it fits', () => {
+    // Badge, name, glyph, temperature, chance of rain: 221px of parts.
+    const parts = [40, 70, 16, 70, 25];
+    const hour = render(forecast, '2026-10-08T03:00', { width: 252, height: 88, condition: [24, 66], spot: { room: 200, parts } });
+    expect(hour.querySelector('.weather-spot__precip')!.className).toContain('weather-spot__precip--dropped');
+    expect(hour.querySelector('.weather-spot__temp')!.className).not.toContain('dropped');
+    act(() => root!.unmount());
+    host!.remove();
+    const wide = render(forecast, '2026-10-08T03:00', { width: 252, height: 88, condition: [24, 66], spot: { room: 240, parts } });
+    expect(wide.querySelector('.weather-spot__precip')!.className).not.toContain('weather-spot__precip--dropped');
+  });
+
   it('marks nothing for a time the forecast does not hold', () => {
     expect(marks(render(forecast, '2026-10-20', { width: 1000, height: 620 }))).toEqual([]);
   });
@@ -319,5 +352,29 @@ describe('the hours', () => {
     expect(readings).toHaveLength(24);
     expect(readings[1]).toBe('WED 11:00, 61°, clear, 4% precipitation');
     expect(page.querySelector('.weather-hour__time')!.getAttribute('aria-hidden')).toBe('true');
+  });
+});
+
+describe('down the box', () => {
+  it('asks the stage for the height its parts read whole in, the hourly strip at its least', () => {
+    // The field fills its view (the strip grows into a tall box's room), so
+    // its scroll content measured the view: on the stage it read as needing
+    // all of it, and a forecast sent again shorter kept the stage.
+    const heard: Array<number | null> = [];
+    const element = document.createElement('div');
+    document.body.append(element);
+    host = element;
+    box.width = 340;
+    box.height = 600;
+    box.parts = { 'weather-now': 150, 'weather-daily': 300 };
+    root = createRoot(element);
+    act(() => root!.render(
+      <StageDemandContext.Provider value={(_key: string, need: StageNeed | null) => heard.push(need?.excess ?? null)}>
+        <WeatherPrimitive data={forecast} framed />
+      </StageDemandContext.Provider>,
+    ));
+    expect(element.querySelector('[data-testid="weather"]')!.getAttribute('data-layout')).toBe('tall');
+    // The conditions, the strip at its least and the days, against a 600px view.
+    expect(heard.filter((excess) => excess !== null).at(-1)).toBe(150 + STRIP_LEAST + 300 - 600);
   });
 });
