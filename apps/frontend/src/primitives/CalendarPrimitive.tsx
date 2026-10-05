@@ -344,9 +344,13 @@ function TimeGrid({ data, model, marked, size, columns }: GridProps) {
     </ListViewport>
   );
 
-  if (!pages) return <div className="calendar-grid">{grid}</div>;
+  // The hours stand in the same place whether or not the days are paged,
+  // so a grid that turns to pages (on its first measure, or sent again with
+  // fewer days) keeps its viewport, and with it what the viewport has told
+  // the stage (useStageDemand).
   return (
     <PagedDays
+      paged={pages}
       before={first > 0 ? runText(model.days.slice(0, first), model.placed) : null}
       after={first + columns < model.days.length ? runText(model.days.slice(first + columns), model.placed) : null}
       shown={runText(days, model.placed)}
@@ -488,8 +492,10 @@ function DayBarBox({ bar, model, marked, first, column }: { bar: DayBar; model: 
  * each side it hides days a rail names them and counts their events, as a
  * scrolled drawing's rail counts its parts (the same cut line and tag). A
  * tap on the tag, or a swipe across the days, turns to the next of them.
+ * A grid that holds all its days (`paged` false) stands in the same box,
+ * with no rails and nothing to turn.
  */
-function PagedDays({ before, after, shown, onTurn, children }: { before: string | null; after: string | null; shown: string; onTurn: (direction: -1 | 1) => void; children: ReactNode }) {
+function PagedDays({ paged, before, after, shown, onTurn, children }: { paged: boolean; before: string | null; after: string | null; shown: string; onTurn: (direction: -1 | 1) => void; children: ReactNode }) {
   const start = useRef<{ x: number; y: number } | null>(null);
   const swiped = useRef(false);
   const tag = (side: 'left' | 'right', text: string) => (
@@ -511,6 +517,7 @@ function PagedDays({ before, after, shown, onTurn, children }: { before: string 
       </div>
     </>
   );
+  if (!paged) return <div className="calendar-grid">{children}</div>;
   return (
     <div
       className="calendar-grid calendar-pages"

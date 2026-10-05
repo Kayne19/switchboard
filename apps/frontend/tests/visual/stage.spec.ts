@@ -329,6 +329,33 @@ test('a long calendar day takes the stage at 390x844, and gives it back once the
   expect(Math.abs(shared.main.height - shared.stage.height * 0.59)).toBeLessThan(1.5);
 });
 
+// The same week sent again with one appointment in it is the same object:
+// it gives the stage back once it reads whole in its share. Before, the
+// week's first measure turned its grid to pages, and the hours viewport was
+// mounted afresh on the stage, with no measure from the shared layout to be
+// weighed against, so the week kept the stage until another primary came.
+const quietWeek = [
+  {
+    op: 'show', id: 'week', type: 'calendar', role: 'primary', data: {
+      view: 'week', start: '2026-10-05', today: '2026-10-07', now: '2026-10-07T09:40',
+      events: [{ id: 'dentist', title: 'Dentist', start: '2026-10-07T10:30', end: '2026-10-07T11:30' }],
+    },
+  },
+];
+
+test('a calendar week that takes the stage at 390x844 gives it back once it quiets', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, 'calendar');
+  await expect(page.locator('.content-rail--folded')).toBeVisible();
+  await expect(page.locator('[data-testid="calendar"]')).toHaveAttribute('data-layout', 'grid');
+  await page.evaluate((list) => window.SwitchboardController!.run(list), quietWeek);
+  await expect(page.locator('.content-rail--folded')).toHaveCount(0);
+  await page.waitForTimeout(700);
+  const shared = await boxes(page);
+  expect(shared.foldable).toBe(false);
+  expect(Math.abs(shared.main.height - shared.stage.height * 0.59)).toBeLessThan(1.5);
+});
+
 for (const scene of ['tasks', 'inbox']) {
   test(`a ${scene} list longer than its share takes the stage at 390x844`, async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
