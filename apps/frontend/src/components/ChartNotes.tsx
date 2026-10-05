@@ -46,6 +46,64 @@ const MIN_CARD_WIDTH = 180;
 const WIDER = [1.25, 1.5, 1.75];
 const MAX_CARD_SHARE = 0.8;
 
+// The notes are placed again at most once a step of this many pixels of
+// the layer's size or the chart's, as a graph is laid out once a step
+// (diagramLayout's FRAME_STEP): a placement costs up to tens of
+// milliseconds (60-80 ms for a line chart of four series with three notes
+// and the rail), and a resize measures every frame. Within a step the cards
+// follow their points, and once the size has held still for `REST_MS` the
+// notes are placed for it, so where they come to rest is where they would
+// stand had the page opened at that size.
+const PLACE_STEP = 16;
+const REST_MS = 150;
+
+const step = (pixels: number) => Math.floor(pixels / PLACE_STEP);
+
+/** What a placement was worked out for, so a measure within the same step can follow it rather than place again. */
+interface Placed {
+  /** The layer's size and the chart's, by step. */
+  key: string;
+  /** The same, to the pixel: a measure that finds them unchanged has nothing to do. */
+  exact: string;
+  /** The notes placed, by reference: a note shown again (new words, a new size) is placed again. */
+  notes: NoteData[];
+  layout: NotesLayout;
+  /** The layer's room for cards when placed. */
+  area: Rect;
+  /** The chart's frame when placed, and where each named point's leader landed in it and on the layer. */
+  frame: { width: number; height: number };
+  points: Record<string, { view: ViewPoint; layer: Point }>;
+}
+
+// The layout placed for one size, moved to another within its step: a card
+// that names a point moves as its point does, its leader with it; one that
+// names none keeps its distance from the corner it is nearest. Only for the
+// frames a resize passes through: the size it rests at is placed afresh.
+function follow(placed: Placed, area: Rect, toLayer: ((point: ViewPoint) => Point) | undefined, frame: { width: number; height: number }): NotesLayout {
+  const next: NotesLayout = { cards: {}, widths: placed.layout.widths, leaders: {}, away: placed.layout.away };
+  for (const [key, card] of Object.entries(placed.layout.cards)) {
+    const point = placed.points[key];
+    let dx = 0;
+    let dy = 0;
+    if (point && toLayer) {
+      // A frame recomposed for the new slot is near enough the old one,
+      // stretched, for the few pixels of a step.
+      const now = toLayer({ x: (point.view.x * frame.width) / placed.frame.width, y: (point.view.y * frame.height) / placed.frame.height });
+      // Whole pixels, so a leader stays on the half pixel it was snapped to.
+      dx = Math.round(now.x - point.layer.x);
+      dy = Math.round(now.y - point.layer.y);
+    } else {
+      const middle = { x: (placed.area.left + placed.area.right) / 2, y: (placed.area.top + placed.area.bottom) / 2 };
+      dx = Math.round((card.left + card.right) / 2 > middle.x ? area.right - placed.area.right : area.left - placed.area.left);
+      dy = Math.round((card.top + card.bottom) / 2 > middle.y ? area.bottom - placed.area.bottom : area.top - placed.area.top);
+    }
+    next.cards[key] = { left: card.left + dx, top: card.top + dy, right: card.right + dx, bottom: card.bottom + dy };
+    const leader = placed.layout.leaders[key];
+    if (leader) next.leaders[key] = leader.map((p) => ({ x: p.x + dx, y: p.y + dy }));
+  }
+  return next;
+}
+
 // Where on the chart a note names a point, if it names one there: the
 // point's callout -- where its leader lands, past the value the chart
 // prints, the side it comes from, and the mark and value it names. The
@@ -146,6 +204,8 @@ export function ChartNotes({
   const layerRef = useRef<HTMLDivElement>(null);
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
   const [layout, setLayout] = useState<NotesLayout | null>(null);
+  // The last placement, which a resize within its step follows.
+  const placedRef = useRef<Placed | null>(null);
   const notesRef = useRef(notes);
   notesRef.current = notes;
   const chartRef = useRef(chart);
@@ -167,7 +227,12 @@ export function ChartNotes({
     if (!layer) return;
     const svgOf = () => layer.parentElement?.querySelector<SVGSVGElement>('.chart-primitive > svg') ?? null;
 
-    const measure = () => {
+    // Set while a resize is in flight: the placement for the size it rests at.
+    let rest: ReturnType<typeof setTimeout> | undefined;
+
+    // `resized`: a size changed (the observer's call), where the notes may
+    // follow the last placement within its step; otherwise they are placed.
+    const measure = (resized: boolean) => {
       const current = notesRef.current;
       const data = chartRef.current.data;
       // Everything is measured on screen and brought back to the layer's
@@ -193,6 +258,23 @@ export function ChartNotes({
         const left = (svgRect.left - layerRect.left) / kx + (width - frame.width * scale) / 2;
         const top = (svgRect.top - layerRect.top) / ky + (height - frame.height * scale) / 2;
         toLayer = (point) => ({ x: left + point.x * scale, y: top + point.y * scale });
+      }
+      // What the notes were placed for, by step and to the pixel.
+      const sizes = [field.area.right, field.area.bottom, (svgRect?.width ?? 0) / kx, (svgRect?.height ?? 0) / ky];
+      const offset = svgRect ? [(svgRect.left - layerRect.left) / kx, (svgRect.top - layerRect.top) / ky] : [0, 0];
+      const key = sizes.map(step).join('x');
+      const exact = [...sizes, ...offset].map((value) => value.toFixed(1)).join('x');
+      // A resize within the step the notes were placed in: the size they
+      // were placed for is theirs again, any other the cards follow to, and
+      // where it rests they are placed for it.
+      const last = placedRef.current;
+      const sameNotes = last !== null && last.notes.length === current.length && current.every((note, index) => note.data === last.notes[index]);
+      clearTimeout(rest);
+      if (resized && last && sameNotes && last.key === key) {
+        const next = last.exact === exact ? last.layout : follow(last, field.area, toLayer, frame);
+        setLayout((previous) => (sameLayout(previous, next) ? previous : next));
+        if (next !== last.layout) rest = setTimeout(() => measure(false), REST_MS);
+        return;
       }
       const rectToLayer = (rect: ViewRect): Rect => {
         const a = toLayer!({ x: rect.left, y: rect.top });
@@ -229,6 +311,7 @@ export function ChartNotes({
       };
       const toPlace: NoteToPlace[] = [];
       const cssWidths = new Map<string, number>();
+      const points: Placed['points'] = {};
       for (const note of current) {
         const element = cardRefs.current.get(note.key);
         if (!element) continue;
@@ -243,7 +326,8 @@ export function ChartNotes({
         }
         const target = toLayer ? chartNotePoint(note.data, chartRef.current, scales, callouts) : undefined;
         const card = { id: note.key, width: size.width, height: size.height };
-        toPlace.push(target ? { ...card, point: toLayer!(target.point), from: target.from, mark: rectToLayer(target.mark), value: rectToLayer(target.value) } : card);
+        if (target) points[note.key] = { view: target.point, layer: toLayer!(target.point) };
+        toPlace.push(target ? { ...card, point: points[note.key].layer, from: target.from, mark: rectToLayer(target.mark), value: rectToLayer(target.value) } : card);
       }
       const options = { spill, leaderOverlap: 1 };
       let placed = layoutNotes(toPlace, field, options);
@@ -284,17 +368,21 @@ export function ChartNotes({
         // as one line: the route the placement scored on the card's whole pixels.
         if (place!.leader.length > 1) next.leaders[note.id] = place!.leader.map((point) => ({ x: snap(point.x), y: snap(point.y) }));
       }
+      placedRef.current = { key, exact, notes: current.map((note) => note.data), layout: next, area: field.area, frame: { width: frame.width, height: frame.height }, points };
       setLayout((previous) => (sameLayout(previous, next) ? previous : next));
     };
 
-    measure();
-    const observer = new ResizeObserver(measure);
+    measure(false);
+    const observer = new ResizeObserver(() => measure(true));
     observer.observe(layer);
     const svg = svgOf();
     if (svg) observer.observe(svg);
     if (svg?.parentElement) observer.observe(svg.parentElement);
     for (const element of cardRefs.current.values()) observer.observe(element);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      clearTimeout(rest);
+    };
   }, [signature, chart.data, spill]);
 
   // Which notes name a point the chart can draw.

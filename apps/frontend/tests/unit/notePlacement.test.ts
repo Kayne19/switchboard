@@ -940,9 +940,10 @@ describe('placing notes on a dense bar chart', () => {
 
 // Every place a card tried was routed against every line segment: a line
 // chart of two 40-sample series with two notes took 70-120 ms a measure,
-// against about 1 ms before its notes had callouts (review finding). It
-// runs on every resize frame. This chart of four series with three notes
-// and the rail takes some 40-70 ms of CPU time, up to 70 ms at load 50.
+// against about 1 ms before its notes had callouts (review finding). A
+// resize runs it once a size step (chartNotesResize.test.tsx). This chart
+// of four series with three notes and the rail takes some 40-70 ms of CPU
+// time, up to 70 ms at load 50.
 // The budget is CPU time, the least of three runs (cpuTime.ts says why).
 describe('placing notes on a line chart', () => {
   it('stays within a frame budget', () => {

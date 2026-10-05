@@ -579,6 +579,12 @@ a visual off the charts goes there (later ones lie on the primary chart, as
 before); while it does, the primary hands none over; and a compare chart's
 notes stay on it, over its data where it has no clear place.
 
+A resize places the notes again at most once a step of 16 pixels of the
+chart's size, as a graph is laid out again once a step: between steps each
+card moves with the point it names (one naming none keeps its corner), and
+once the size holds still for a moment the notes are placed for it, where
+they would stand had the page opened at that size.
+
 The note a chart hands over stays readable beside it. Where the rail stands
 under a chart (a portrait stage), the note is drawn in a band under it, full
 width, carved from its slot, rather than in the rail under its metrics (a
