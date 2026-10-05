@@ -102,7 +102,10 @@ export function TemporaryAssistantList({ type, data }: { type: TemporaryAssistan
   }
   return (
     <div className="temporary-assistant" data-testid={type}>
-      <div className="temporary-assistant__head tech micro">{type.toUpperCase()} / FIELDS AS SENT</div>
+      {/* The title here too: in an aux cell or in focus no frame shows it. */}
+      <div className="temporary-assistant__head tech micro">
+        {typeof fields.title === 'string' ? fields.title : `${type.toUpperCase()} / FIELDS AS SENT`}
+      </div>
       {scalars.length > 0 ? <dl className="temporary-assistant__fields">{scalars}</dl> : null}
       {lists}
     </div>

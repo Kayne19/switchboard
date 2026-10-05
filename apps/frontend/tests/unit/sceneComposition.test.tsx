@@ -252,6 +252,12 @@ describe('the personal-assistant fixtures', () => {
     expect(page.querySelectorAll('.content-rail .annotation-card')).toHaveLength(1);
   });
 
+  it('the stand-in names each object by its title, where no frame does', () => {
+    const page = render(fixtures.today);
+    expect([...page.querySelectorAll('.composed-aux .temporary-assistant__head')].map((node) => node.textContent))
+      .toEqual(['WEATHER / SAN FRANCISCO', 'TO DO / THIS WEEK', 'INBOX / UNREAD FIRST']);
+  });
+
   it('the calendar note names the dentist appointment by its id', () => {
     const note = fixtures.calendar.find((action) => action.op === 'show' && action.type === 'note');
     const week = fixtures.calendar.find((action) => action.op === 'show' && action.type === 'calendar');
