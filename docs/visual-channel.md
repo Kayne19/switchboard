@@ -500,9 +500,10 @@ before); while it does, the primary hands none over; and a compare chart's
 notes stay on it, over its data where it has no clear place.
 
 The note a chart hands over stays readable beside it. Where the rail stands
-under the charts (a portrait stage), the note is drawn in a band under them,
-full width, carved from their slot, rather than in the rail under its
-metrics: the chart is recomposed to the shorter slot, and the card's target
+under a chart (a portrait stage), the note is drawn in a band under it, full
+width, carved from its slot, rather than in the rail under its metrics (a
+compare pair, which already scrolls in its row, keeps its note in the rail,
+leading it): the chart is recomposed to the shorter slot, and the card's target
 line names what the marked bar or point is. The band holds the note while it
 is on that chart; the chart is not asked to place it again, so a chart laid
 out in less room cannot take it back and hand it out again, the band coming
