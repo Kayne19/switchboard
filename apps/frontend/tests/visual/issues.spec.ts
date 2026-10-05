@@ -409,11 +409,11 @@ for (const { viewport, two } of barNoteCases) {
       }));
       const bars = [...document.querySelectorAll('.chart-series-group')].flatMap((group) =>
         [...group.querySelectorAll('.chart-bar')].map((bar, index) => ({ series: group.getAttribute('data-series'), index: String(index), ...box(bar) })));
-      const notes = [...document.querySelectorAll<HTMLElement>('.chart-note')].map((card) => {
+      const notes = [...document.querySelectorAll<HTMLElement>('.chart-note, .chart-note-band')].map((card) => {
         const polyline = document.querySelector(`.chart-note-leader[data-note="${card.dataset.note}"] polyline`);
         return {
           id: card.dataset.note!,
-          away: card.classList.contains('chart-note--away'),
+          away: card.classList.contains('chart-note--away') || card.classList.contains('chart-note-band'),
           card: box(card),
           anchor: card.querySelector('.annotation-card__anchor')?.textContent ?? '',
           leader: polyline ? polyline.getAttribute('points')!.split(' ').map((pair) => {
@@ -524,7 +524,9 @@ for (const { chart, viewport } of pointNoteCases) {
     await page.setViewportSize(viewport);
     await page.goto(`/?scene=${chart === 'training' ? 'training' : 'comparison'}&chrome=0`);
     if (spec.actions.length > 0) await page.evaluate((actions) => window.SwitchboardController!.run(actions as never), spec.actions);
-    await expect(page.locator('.chart-note')).toHaveCount(Object.keys(spec.notes).length);
+    // A note the chart hands over is in the rail, or where the rail stands
+    // under the chart in the band under it (chartNotePlace.spec.ts).
+    await expect.poll(async () => (await page.locator('.chart-note').count()) + (await page.locator('.chart-note-band').count())).toBe(Object.keys(spec.notes).length);
     await page.waitForTimeout(600);
     const geometry = await page.evaluate(() => {
       const box = (element: Element) => {
@@ -548,7 +550,8 @@ for (const { chart, viewport } of pointNoteCases) {
         ring: box(group.querySelector('.chart-marker__point')!), value: box(group.querySelector('.chart-marker__value')!),
         text: group.querySelector('.chart-marker__value')!.textContent,
       }));
-      const layer = document.querySelector('.chart-notes')!.getBoundingClientRect();
+      // No layer where the chart's one note is in the band.
+      const layer = document.querySelector('.chart-notes')?.getBoundingClientRect() ?? { left: 0, top: 0 };
       const notes = [...document.querySelectorAll<HTMLElement>('.chart-note')].map((card) => {
         const polyline = document.querySelector(`.chart-note-leader[data-note="${card.dataset.note}"] polyline`);
         return {
@@ -562,7 +565,7 @@ for (const { chart, viewport } of pointNoteCases) {
           }) : null,
         };
       });
-      return { plot, lines, points, marked, notes, rail: document.querySelector('.content-rail .rail-note')?.textContent ?? '' };
+      return { plot, lines, points, marked, notes, rail: [...document.querySelectorAll('.content-rail .rail-note, .chart-note-band')].map((element) => element.textContent).join(' ') };
     });
     const near = (p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) => {
       const dx = b.x - a.x;

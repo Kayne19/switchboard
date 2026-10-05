@@ -459,7 +459,7 @@ function trainingContent(
         </div>
         <AnimatePresence initial={false}>
           {banded ? (
-            <ObjectMotion key="chart-note-band" objectId={banded.object?.id ?? banded.key} className="chart-note-band" layout="position">
+            <ObjectMotion key="chart-note-band" objectId={banded.object?.id ?? banded.key} className="chart-note-band" data-note={banded.key} layout="position">
               <SurfaceBoundary surfaceId={banded.object?.id ?? banded.key} resetKey={banded.object ?? banded.data}>
                 <AnnotationCard
                   data={banded.data}
