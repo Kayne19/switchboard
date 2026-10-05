@@ -1,6 +1,7 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import type { NoteData, Semantic, SequenceDiagramData } from '../controller/types';
 import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
+import type { Viewport } from './drawingFit';
 import { viewWithMap, type DrawingMap } from './drawingScroll';
 import { NoteMarker } from './NoteMarker';
 import { LABEL_HEIGHT, SUB_LINE_HEIGHT, actorFramePath, headerReading, pinnedDepth, viewSequence, type LaidOutMessage, type Point } from './sequenceLayout';
@@ -68,9 +69,18 @@ export function SequencePrimitive({
   const anchoredActorId = note?.anchor && note.anchor.target === id ? note.anchor.node : undefined;
   // The geometry follows the viewport's shape, and the drawing is fitted to
   // it, or scrolled in it once fitting would make it too small to read.
-  const { layout, fit, strip } = useMemo(
-    () => viewWithMap({ width, height, scrollbar }, (viewport) => viewSequence(data, viewport, anchoredActorId, focused), headerReading),
-    [data, width, height, scrollbar, anchoredActorId, focused],
+  const view = useCallback(
+    (viewport: Viewport) => viewWithMap(viewport, (each) => viewSequence(data, each, anchoredActorId, focused), headerReading),
+    [data, anchoredActorId, focused],
+  );
+  const { layout, fit, strip } = useMemo(() => view({ width, height, scrollbar }), [view, width, height, scrollbar]);
+  // The exchange it would lay out for a viewport of another height, at this width.
+  const laidOutFor = useCallback(
+    (at: number) => {
+      const other = view({ width, height: at, scrollbar });
+      return { drawing: other.layout, fit: other.fit };
+    },
+    [view, width, scrollbar],
   );
   // What the viewport tells a reader of an exchange that scrolls: its
   // messages, counted past each edge and kept whole at rest, and the
@@ -165,7 +175,7 @@ export function SequencePrimitive({
 
   return (
     <div ref={hostRef} className={`sequence-primitive${focused ? ' sequence-primitive--focused' : ''}`} data-testid="sequence">
-      <DrawingViewport drawing={layout} fit={fit} pinned={{ height: pinnedDepth(layout), content: actors }} map={map} strip={strip} ariaLabel={data.title ?? 'Sequence diagram'}>
+      <DrawingViewport drawing={layout} fit={fit} laidOutFor={laidOutFor} pinned={{ height: pinnedDepth(layout), content: actors }} map={map} strip={strip} ariaLabel={data.title ?? 'Sequence diagram'}>
         <defs>
           {/* The region is the whole drawing, not each message's bounding box:
               a straight message has a zero-height box, and a filter region

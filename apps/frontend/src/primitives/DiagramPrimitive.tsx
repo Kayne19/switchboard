@@ -1,7 +1,8 @@
-import { useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import type { DiagramData, NoteData, Semantic } from '../controller/types';
 import { ARROW_LENGTH, LABEL_INSET, cornerTagBoxes, litEdges, nodeFramePath, viewDiagram, type DiagramLayout, type EdgeLabel, type EdgeStub, type Point } from './diagramLayout';
 import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
+import type { Viewport } from './drawingFit';
 import { viewWithMap, type DrawingMap } from './drawingScroll';
 import { NoteMarker } from './NoteMarker';
 
@@ -103,9 +104,18 @@ export function DiagramPrimitive({
   // strip. Layouts of this graph and anchor are kept across resizes: the
   // approved one does not depend on the size, and a frame's only on its step.
   const layouts = useMemo(() => new Map<string, DiagramLayout>(), [data, anchor]);
-  const { layout, fit, orientation, strip } = useMemo(
-    () => viewWithMap({ width, height, scrollbar }, (viewport) => viewDiagram(data, viewport, anchor, layouts), (view) => view.orientation),
-    [data, width, height, scrollbar, anchor, layouts],
+  const view = useCallback(
+    (viewport: Viewport) => viewWithMap(viewport, (each) => viewDiagram(data, each, anchor, layouts), (each) => each.orientation),
+    [data, anchor, layouts],
+  );
+  const { layout, fit, orientation, strip } = useMemo(() => view({ width, height, scrollbar }), [view, width, height, scrollbar]);
+  // The drawing it would lay out for a viewport of another height, at this width.
+  const laidOutFor = useCallback(
+    (at: number) => {
+      const other = view({ width, height: at, scrollbar });
+      return { drawing: other.layout, fit: other.fit };
+    },
+    [view, width, scrollbar],
   );
   const portrait = orientation === 'portrait';
   // A drawing that scrolls opens on the node its note names, or else on
@@ -198,7 +208,7 @@ export function DiagramPrimitive({
 
   return (
     <div ref={hostRef} className={`diagram-primitive${focused ? ' diagram-primitive--focused' : ''}`} data-testid="diagram">
-      <DrawingViewport drawing={layout} fit={fit} lead={lead} map={map} strip={strip} ariaLabel={data.title ?? 'System diagram'}>
+      <DrawingViewport drawing={layout} fit={fit} laidOutFor={laidOutFor} lead={lead} map={map} strip={strip} ariaLabel={data.title ?? 'System diagram'}>
         <defs>
           {/* The region is the whole drawing, not each edge's bounding box: a
               straight edge has a zero-height box, and a filter region derived

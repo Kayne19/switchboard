@@ -34,7 +34,11 @@ export function MeasuredStageDemand({ measured, children }: { measured: boolean;
 }
 
 // Whole pixels: sub-pixel churn is not a change of mind.
-const need = (excess: number, viewport: number, relaid = false): StageNeed => ({ excess: Math.round(excess), viewport: Math.round(viewport), relaid });
+const need = (excess: number, viewport: number, relaid?: (height: number) => number): StageNeed => ({
+  excess: Math.round(excess),
+  viewport: Math.round(viewport),
+  ...(relaid ? { relaid } : {}),
+});
 
 /**
  * Measures an element whenever it is resized, and, as asked, whenever one
@@ -63,25 +67,27 @@ export function watchElement(element: Element, measure: () => void, { children =
  * worked out from the box): measured whenever the box is resized or the
  * content's need changes. `null` is a content that asks for nothing; a
  * function may answer `undefined` while it cannot tell, and what it said
- * last stands. `relaid` is a content laid out again for the box's height.
+ * last stands. `relaid`, for a content laid out again for the box's
+ * height: the least height it asks for when laid out for a box that tall
+ * (StageNeed `relaid`).
  */
 export function useLeastHeight(
   ref: RefObject<HTMLElement | null>,
   least: number | ((box: { width: number; height: number }) => number | null | undefined) | null,
-  relaid = false,
+  relaid?: (height: number) => number,
 ): void {
   const listener = useContext(StageDemandContext);
   const key = useId();
   const wanted = useRef(least);
+  const relayout = useRef(relaid);
   const tell = useRef<() => void>(() => {});
+  // Said again when either changes: what a content laid out afresh would
+  // ask in another box may change while what it asks in this one does not.
   useEffect(() => {
     wanted.current = least;
-    tell.current();
-  }, [least]);
-  const relayout = useRef(relaid);
-  useEffect(() => {
     relayout.current = relaid;
-  }, [relaid]);
+    tell.current();
+  }, [least, relaid]);
   useEffect(() => {
     const element = ref.current;
     if (!listener || !element) return undefined;

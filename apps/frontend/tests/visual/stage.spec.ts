@@ -516,6 +516,60 @@ test('a week whose drawn days fit its share at 390x844 never takes the stage, no
   expect(await page.evaluate(() => (window as unknown as { stageSeen: string[] }).stageSeen)).not.toContain('primary');
 });
 
+// A graph is laid out again for its viewport's height, so what it asks on
+// the stage is the stage's drawing and said nothing of its share: the same
+// topology sent again with two nodes read whole in its share and kept the
+// stage until another primary came (phone-tidy open 3). It is weighed by
+// what it would ask laid out for the viewport it had in its share, which
+// is what the share then says: the stage goes back once, and stays back.
+const smallTopology = [
+  { op: 'show', id: 'topology', type: 'diagram', role: 'primary', data: {
+    mode: 'graph', title: 'DISPLAY / TOPOLOGY', nodes: [{ id: 'gate', label: 'GATE' }, { id: 'page', label: 'PAGE' }], edges: [{ from: 'gate', to: 'page' }],
+  } },
+];
+const smallTrace = [
+  { op: 'show', id: 'trace', type: 'diagram', role: 'primary', data: {
+    mode: 'sequence', title: 'CALL / TRACE', actors: [{ id: 'caller', label: 'CALLER' }, { id: 'pbx', label: 'PBX' }],
+    messages: [{ from: 'caller', to: 'pbx', label: 'dial' }, { from: 'pbx', to: 'caller', label: 'ok', kind: 'return' }],
+  } },
+];
+
+for (const [scene, small] of [['topology', smallTopology], ['trace', smallTrace]] as const) {
+  test(`a ${scene} that takes the stage at 390x844 gives it back, once, when sent again small`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await open(page, scene);
+    await expect(page.locator('.content-rail--folded')).toBeVisible();
+    await page.evaluate(() => {
+      const seen: string[] = [];
+      (window as unknown as { stageSeen: string[] }).stageSeen = seen;
+      new MutationObserver((records) => {
+        for (const record of records) seen.push(String((record.target as Element).getAttribute('data-stage')));
+      }).observe(document, { subtree: true, attributes: true, attributeFilter: ['data-stage'] });
+    });
+    await page.evaluate((list) => window.SwitchboardController!.run(list), small);
+    await expect(page.locator('.content-rail--folded')).toHaveCount(0);
+    await page.waitForTimeout(700);
+    const shared = await boxes(page);
+    expect(shared.foldable).toBe(false);
+    expect(Math.abs(shared.main.height - shared.stage.height * 0.59)).toBeLessThan(1.5);
+    // Given back once: the share, measuring the same drawing, never takes it again.
+    expect(await page.evaluate(() => (window as unknown as { stageSeen: string[] }).stageSeen)).toEqual(['null']);
+  });
+}
+
+test('a topology sent again still too large for its share at 390x844 keeps the stage', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, 'topology');
+  await expect(page.locator('.content-rail--folded')).toBeVisible();
+  // Nine of its parts, chained: still taller than its share at a readable scale.
+  const chain = Array.from({ length: 9 }, (_, index) => ({ id: `n${index}`, label: `PART ${index}`, sub: 'one of nine' }));
+  await page.evaluate((list) => window.SwitchboardController!.run(list), [
+    { op: 'show', id: 'topology', type: 'diagram', role: 'primary', data: { mode: 'graph', nodes: chain, edges: chain.slice(1).map((node, index) => ({ from: chain[index].id, to: node.id })) } },
+  ]);
+  await page.waitForTimeout(700);
+  await expect(page.locator('.content-rail--folded')).toBeVisible();
+});
+
 // A forecast laid down the box fills its view, so its scroll content
 // always measured the view: on the stage it read as needing all of it, and
 // a forecast sent again with only the next three days kept the stage. It

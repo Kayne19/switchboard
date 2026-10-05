@@ -17,8 +17,14 @@
 export interface StageNeed {
   excess: number;
   viewport: number;
-  /** Its content is laid out again for its viewport's height (a graph recomposed to scroll the least), so what it asks on the stage says nothing of the shared layout unless it overflows even the stage. */
-  relaid?: boolean;
+  /**
+   * For a content laid out again for its viewport's height (a graph or a
+   * sequence recomposed to scroll the least): the least height it asks
+   * for when laid out for a viewport `height` CSS pixels tall at its width
+   * now. What it asks on the stage is the stage's drawing, which says
+   * nothing of the shared layout; this says what the shared one would ask.
+   */
+  relaid?: (height: number) => number;
 }
 
 /**
@@ -46,14 +52,18 @@ export function stageReport(need: StageNeed, shared: boolean, column: number, be
  * How far past its viewport in the shared layout a primitive's content
  * reaches, CSS pixels: as measured there, or its content now against the
  * viewport it had there (moved by as much as that column has since, should
- * the stage be resized). Measured only on the stage, or laid out again for
- * it, it is past the shared one for certain if it overflows even the stage;
+ * the stage be resized). A content laid out again for its viewport is
+ * weighed as it would be laid out for that one (`relaid`), so the word it
+ * gives on the stage is the word the shared layout would give: no fold
+ * that the shared layout would undo. Measured only on the stage, it is
+ * past the shared one for certain if it overflows even the stage;
  * otherwise `null`, as it cannot tell.
  */
 export function sharedExcess(report: StageReport, sharedColumn: number): number | null {
   if (report.shared) return report.excess;
-  if (!report.relaid && report.sharedViewport !== null && report.sharedColumn !== null) {
-    return report.viewport + report.excess - (report.sharedViewport + sharedColumn - report.sharedColumn);
+  if (report.sharedViewport !== null && report.sharedColumn !== null) {
+    const viewport = report.sharedViewport + sharedColumn - report.sharedColumn;
+    return Math.round(report.relaid ? report.relaid(viewport) : report.viewport + report.excess) - viewport;
   }
   return report.excess > 0 ? Number.POSITIVE_INFINITY : null;
 }

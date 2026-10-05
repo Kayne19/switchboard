@@ -305,15 +305,26 @@ layout. One whose content asks for more gets the stage's height:
   need on the line does not fold and unfold as it redraws. So a primary
   sent again with less in it (a week with one appointment left) gives the
   stage back: a viewport that stays the same drawing stays mounted across
-  the fold, and keeps what it measured in the shared layout. A graph laid
-  out again for the stage's taller viewport, or a drawing the stage's
-  height turns into another (a calendar too short for its grid in its
-  share draws its agenda there, and the grid on the stage), says nothing
-  of the shared layout unless it overflows even the stage, and a
-  primitive that cannot tell yet (a drawing whose fit has not followed
-  its box) leaves the layout as it is: such a primary keeps the stage
-  until another takes its place. A new primary is measured first in the
-  shared layout.
+  the fold, and keeps what it measured in the shared layout. A graph or
+  a sequence is laid out again for its viewport's height, so what it asks
+  on the stage is the stage's drawing; it is weighed instead by what it
+  would ask laid out for the viewport it had in the shared layout (a
+  drawing says, beside what it asks, what it would ask in a viewport of
+  any height at its width). That is the word the shared layout then
+  gives, so a graph sent again small enough for its share gives the
+  stage back once, and the share does not take it again. A drawing the
+  stage's height turns into another cannot say so: a calendar too short
+  for its grid in its share draws its agenda there and the grid on the
+  stage (on portrait screens under some 600 px tall), and what the
+  agenda would ask is the height of its rows as the browser lays out
+  their wrapped words, which the page does not know without drawing the
+  agenda. Its grid, a viewport mounted on the stage with no measure from
+  the shared layout, says nothing of the share unless it overflows even
+  the stage, so such a calendar keeps the stage until another primary
+  takes its place: given back on a guess, it would fold again whenever
+  the guess fell short. A primitive that cannot tell yet (a drawing whose
+  fit has not followed its box) leaves the layout as it is. A new primary
+  is measured first in the shared layout.
   Opening the rail changes nothing of this. A landscape stage, the rail
   beside the primary, never folds.
 - **The rail folds to a strip under the primary, down to the footer's

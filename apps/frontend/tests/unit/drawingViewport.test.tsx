@@ -4,8 +4,13 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { DrawingViewport } from '../../src/primitives/DrawingViewport';
 import { FocusableSurface } from '../../src/primitives/FocusableSurface';
-import type { DrawingFit } from '../../src/primitives/drawingFit';
+import type { DrawingFit, Size } from '../../src/primitives/drawingFit';
 import { RAIL, type DrawingMap } from '../../src/primitives/drawingScroll';
+
+// What the drawing would be laid out as in a box of another height: these cases never ask (no stage listens).
+const notAsked = (): { drawing: Size; fit: DrawingFit } => {
+  throw new Error('not asked here');
+};
 
 let host: HTMLDivElement;
 let root: Root;
@@ -63,7 +68,7 @@ describe('a drawing viewport', () => {
   it('opens a scrolling drawing on its lead, at rest, and keeps the reader there through an update that leaves its shape alone', () => {
     host = undefined as unknown as HTMLDivElement;
     render(
-      <DrawingViewport drawing={drawing} fit={scrollsDown} lead={{ x: 0, y: 500, width: 100, height: 100 }} map={rows} ariaLabel="d">
+      <DrawingViewport laidOutFor={notAsked} drawing={drawing} fit={scrollsDown} lead={{ x: 0, y: 500, width: 100, height: 100 }} map={rows} ariaLabel="d">
         <rect width="10" height="10" />
       </DrawingViewport>,
     );
@@ -76,14 +81,14 @@ describe('a drawing viewport', () => {
     scroller.scrollTop = 784;
     // A node changed state: same shape, a new drawing.
     render(
-      <DrawingViewport drawing={{ ...drawing }} fit={{ ...scrollsDown }} lead={{ x: 0, y: 500, width: 100, height: 100 }} map={rows} ariaLabel="d">
+      <DrawingViewport laidOutFor={notAsked} drawing={{ ...drawing }} fit={{ ...scrollsDown }} lead={{ x: 0, y: 500, width: 100, height: 100 }} map={rows} ariaLabel="d">
         <circle r="4" />
       </DrawingViewport>,
     );
     expect(scroller.scrollTop).toBe(784);
     // The lead moved (a note now names another node): the reader is taken to it.
     render(
-      <DrawingViewport drawing={drawing} fit={scrollsDown} lead={{ x: 0, y: 1200, width: 100, height: 100 }} map={rows} ariaLabel="d">
+      <DrawingViewport laidOutFor={notAsked} drawing={drawing} fit={scrollsDown} lead={{ x: 0, y: 1200, width: 100, height: 100 }} map={rows} ariaLabel="d">
         <circle r="4" />
       </DrawingViewport>,
     );
@@ -105,7 +110,7 @@ describe('a drawing viewport', () => {
     try {
       render(
         <FocusableSurface onActivate={() => expanded.push('expand')} ariaLabel="Expand">
-          <DrawingViewport drawing={drawing} fit={scrollsDown} map={rows} ariaLabel="d">
+          <DrawingViewport laidOutFor={notAsked} drawing={drawing} fit={scrollsDown} map={rows} ariaLabel="d">
             <rect width="10" height="10" />
           </DrawingViewport>
         </FocusableSurface>,
@@ -154,7 +159,7 @@ describe('a drawing viewport', () => {
     } as typeof HTMLElement.prototype.scrollTo;
     try {
       render(
-        <DrawingViewport drawing={drawing} fit={scrollsDown} map={rows} ariaLabel="d">
+        <DrawingViewport laidOutFor={notAsked} drawing={drawing} fit={scrollsDown} map={rows} ariaLabel="d">
           <rect width="10" height="10" />
         </DrawingViewport>,
       );
@@ -181,7 +186,7 @@ describe('a drawing viewport', () => {
     const expanded: string[] = [];
     render(
       <FocusableSurface onActivate={() => expanded.push('expand')} ariaLabel="Expand">
-        <DrawingViewport drawing={drawing} fit={scrollsDown} map={rows} ariaLabel="d">
+        <DrawingViewport laidOutFor={notAsked} drawing={drawing} fit={scrollsDown} map={rows} ariaLabel="d">
           <rect width="10" height="10" />
         </DrawingViewport>
       </FocusableSurface>,
@@ -198,14 +203,14 @@ describe('a drawing viewport', () => {
   it('pins its header band only when it scrolls down, and is contained otherwise', () => {
     host = undefined as unknown as HTMLDivElement;
     render(
-      <DrawingViewport drawing={drawing} fit={scrollsDown} pinned={{ height: 80, content: <text>HEADERS</text> }} map={rows} ariaLabel="d">
+      <DrawingViewport laidOutFor={notAsked} drawing={drawing} fit={scrollsDown} pinned={{ height: 80, content: <text>HEADERS</text> }} map={rows} ariaLabel="d">
         <rect width="10" height="10" />
       </DrawingViewport>,
     );
     expect(host.querySelector('.drawing-viewport__pinned')?.textContent).toBe('HEADERS');
     expect(host.querySelector('.drawing-viewport__pinned')?.getAttribute('aria-hidden')).toBe('true');
     render(
-      <DrawingViewport drawing={drawing} fit={{ scale: 0.2, width: 80, height: 400, scrollX: false, scrollY: false, minScale: 0.2 }} pinned={{ height: 80, content: <text>HEADERS</text> }} map={rows} ariaLabel="d">
+      <DrawingViewport laidOutFor={notAsked} drawing={drawing} fit={{ scale: 0.2, width: 80, height: 400, scrollX: false, scrollY: false, minScale: 0.2 }} pinned={{ height: 80, content: <text>HEADERS</text> }} map={rows} ariaLabel="d">
         <rect width="10" height="10" />
       </DrawingViewport>,
     );
