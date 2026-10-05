@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'motion/react';
 import type { MouseEvent } from 'react';
 import type {
+  CalendarData,
   ChartData,
   CodeData,
   ControllerState,
@@ -20,6 +21,7 @@ import type {
 import { ITEM_TYPES, markedItem, noteItemTarget } from '../app/noteItems';
 import { anchoredNote, objectsOfType } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
+import { CalendarPrimitive } from '../primitives/CalendarPrimitive';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { CodeViewport } from '../primitives/CodeViewport';
 import { DiagramObject } from './DiagramObject';
@@ -30,7 +32,6 @@ import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
 import { TablePrimitive } from '../primitives/TablePrimitive';
 import { TasksPrimitive } from '../primitives/TasksPrimitive';
 import { InboxPrimitive } from '../primitives/InboxPrimitive';
-import { TemporaryAssistantList } from '../primitives/TemporaryAssistantList';
 import { TimerPrimitive } from '../primitives/TimerPrimitive';
 import { WeatherPrimitive } from '../primitives/WeatherPrimitive';
 import { SurfaceBoundary } from './SurfaceBoundary';
@@ -71,6 +72,8 @@ function FocusedObject({ object, note, marked }: { object: SceneObject; note: No
       return <MetricsPrimitive metrics={[object as SceneObject<MetricData>]} />;
     case 'progress':
       return <ProgressPrimitive data={object.data as ProgressData} />;
+    case 'calendar':
+      return <CalendarPrimitive data={object.data as CalendarData} marked={marked} focused />;
     case 'tasks':
       return <TasksPrimitive data={object.data as TasksData} variant="focus" marked={marked} />;
     case 'inbox':
@@ -79,9 +82,6 @@ function FocusedObject({ object, note, marked }: { object: SceneObject; note: No
       return <TimerPrimitive data={object.data as TimerData} marked={marked} />;
     case 'weather':
       return <WeatherPrimitive data={object.data as WeatherData} marked={marked} />;
-    // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
-    case 'calendar':
-      return <TemporaryAssistantList type={object.type} data={object.data} marked={marked} />;
     default:
       return null;
   }

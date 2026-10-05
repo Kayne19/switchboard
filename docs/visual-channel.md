@@ -302,13 +302,18 @@ wire rules are in `docs/display-tool.md` ("Time values" and
 
 Each is a visual like a table: shown alone it takes the main slot, and
 beside another primary it takes a cell in the aux row. The fixtures
-(`calendar`, `tasks`, `timer`, `weather`, `inbox`, and `today`, an agenda
-with the forecast, the to-do list and the inbox beside it) show them. The
-to-do list, the inbox, the timer and the forecast have primitives of their
-own (below). Until its render slice lands, the `calendar` is drawn by one
-stand-in, a framed list of the fields as sent
-(`apps/frontend/src/primitives/TemporaryAssistantList.tsx`), so an accepted
-object is never dropped.
+(`calendar`, `calendar-day`, `calendar-month`, `calendar-agenda`, `tasks`,
+`timer`, `weather`, `inbox`, and `today`, an agenda with the forecast, the
+to-do list and the inbox beside it) show them. Each of the five has a
+primitive of its own.
+
+**A calendar** is drawn by its own primitive: a time grid for a day or a
+week, Monday-first rows for a month, a list of days for an agenda, each
+laid out from the box it is given rather than the device (a week too
+narrow for seven columns pages through them; a grid too short to read
+becomes the agenda of the same days; a month too small for titles marks
+its days). The wire rules and the drawing rules are in
+`docs/display-tool.md` ("calendar").
 
 **The to-do list and the inbox are read as the table and the rail's plan
 module are read**: rows between thin rules under a meta line that names

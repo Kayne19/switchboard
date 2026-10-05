@@ -72,6 +72,8 @@ The model controls semantic intent. The frontend controls composition, geometry,
 | `WeatherPrimitive` + `weatherLayout` + `WeatherGlyph` | the thirteen condition glyphs, the conditions now as the hero, the hourly strip thinned by its width, the days on one shared scale, the alert in the warning colour, how the three stand for the box |
 | `CodeViewport` | syntax presentation, safe scrolling, irregular clipping |
 | `DocumentViewport` | readable document layout and bounded scrolling |
+| `CalendarPrimitive` + `calendarLayout` | a calendar's four views from the box it is given (a day or week time grid, a Monday-first month, an agenda), the hours a grid shows and the empty ones it folds, overlapping events side by side or stepped, an event cut at midnight, all-day bars in lanes, a busy day's count, a week paged where its columns do not fit, today and the now line from the data, the NOTE badge on the item a note names |
+| `MetaTitle` | an object's title on its own meta line (table, calendar, to-do list, inbox): shown in an aux cell and in focus, left out under a scene frame that already shows it |
 | `MetricsPrimitive` | metric alignment and semantic values |
 | `TasksPrimitive` | a to-do list: sections by group, the step glyph for a task's state, the priority arrow, the due day judged against the list's `today`, done tasks quieter and counted where a slot is short of room, the compact rows beside a primary |
 | `InboxPrimitive` | an inbox: messages in the order sent, the columns of senders, channels and times, a snippet cut on its one line, the time of day on `today`, the unread, flagged and tinted marks, one line or stacked by the list's width |

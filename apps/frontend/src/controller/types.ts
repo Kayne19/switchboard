@@ -621,4 +621,4 @@ export type ControllerAction =
   | { op: 'focus'; id?: string | null }
   | { op: 'listen'; on: boolean };
 
-export type FixtureName = 'idle' | 'conversation' | 'training' | 'architecture' | 'email' | 'code' | 'results' | 'handoff' | 'comparison' | 'figure' | 'plan' | 'composed' | 'topology' | 'pipeline' | 'trace' | 'calendar' | 'tasks' | 'timer' | 'weather' | 'inbox' | 'today';
+export type FixtureName = 'idle' | 'conversation' | 'training' | 'architecture' | 'email' | 'code' | 'results' | 'handoff' | 'comparison' | 'figure' | 'plan' | 'composed' | 'topology' | 'pipeline' | 'trace' | 'calendar' | 'calendar-day' | 'calendar-month' | 'calendar-agenda' | 'tasks' | 'timer' | 'weather' | 'inbox' | 'today';
