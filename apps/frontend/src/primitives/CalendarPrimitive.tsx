@@ -4,6 +4,7 @@ import { parseTimeValue } from '../controller/validation';
 import { useElementSize, type ElementSize } from '../hooks/useElementSize';
 import {
   agendaEntries,
+  agendaLead,
   axisY,
   calendarDay,
   clockText,
@@ -354,7 +355,9 @@ function EventBox({ segment, axis, model, day, width, marked, first }: {
   // The box's lines, given out in order: the title (a narrow box gives it
   // every line it can use, as the grid already says the time), then the
   // time, where, and the detail.
-  const lines = Math.max(1, Math.floor((height - 2) / LINE_PX));
+  // A stepped event under a later one shows only what is above that one.
+  const shown = segment.coveredAt === undefined ? height : Math.min(height, axisY(axis, segment.coveredAt) - top);
+  const lines = Math.max(1, Math.floor((shown - 2) / LINE_PX));
   const narrow = width < 100;
   const wide = width >= 220;
   const titleLines = lines <= 1 ? 1 : narrow ? Math.min(3, lines) : Math.min(2, lines - 1);
@@ -688,16 +691,16 @@ function DayMarks({ cell, model, marked, isFirst }: { cell: WeekPlan['cells'][nu
 
 function AgendaList({ model, days, marked, compact = false }: { model: CalendarModel; days: number[]; marked?: string; compact?: boolean }) {
   const entries = agendaEntries(model.placed, days, model.today, model.now);
-  const markedShown = marked !== undefined && entries.some((entry) => entry.kind === 'day' && [...entry.allDay, ...entry.timed].some((item) => item.first && item.placed.event.id === marked));
+  const lead = agendaLead(entries, marked);
   return (
     <ListViewport
       noun={['EVENT', 'EVENTS']}
-      lead={markedShown ? marked : undefined}
+      lead={lead}
       className={`calendar-agenda__viewport${compact ? ' calendar-agenda__viewport--compact' : ''}`}
       scrollClassName="calendar-agenda__scroll"
       label="Agenda"
     >
-      <ol className="calendar-agenda">
+      <ol className={`calendar-agenda${days.length > 1 && !compact ? ' calendar-agenda--days' : ''}`}>
         {entries.map((entry) => {
           if (entry.kind === 'empty') {
             return (
@@ -758,14 +761,15 @@ function AgendaRow({ item, day, model, marked, overlaps = false }: { item: Agend
       </span>
       <span className="calendar-agenda__stripe" aria-hidden="true" />
       <span className="calendar-agenda__text">
-        <span className="calendar-agenda__title">{placed.event.title}</span>
+        {/* The tags follow the title on its line, wrapping under it where the row is narrow. */}
+        <span className="calendar-agenda__line">
+          <span className="calendar-agenda__title">{placed.event.title}</span>
+          {placed.event.active ? <span className="calendar-tag calendar-tag--active tech micro">ACTIVE</span> : null}
+          {status ? <span className={`calendar-tag calendar-tag--${placed.event.status} tech micro`}>{status}</span> : null}
+          {overlaps && placed.event.status !== 'cancelled' ? <span className="calendar-tag calendar-tag--overlap tech micro">OVERLAP</span> : null}
+          {isMarked ? <NoteBadge /> : null}
+        </span>
         {where.length > 0 ? <span className="calendar-agenda__where">{where.join(' / ')}</span> : null}
-      </span>
-      <span className="calendar-agenda__tags tech micro">
-        {placed.event.active ? <span className="calendar-tag calendar-tag--active">ACTIVE</span> : null}
-        {status ? <span className={`calendar-tag calendar-tag--${placed.event.status}`}>{status}</span> : null}
-        {overlaps && placed.event.status !== 'cancelled' ? <span className="calendar-tag calendar-tag--overlap">OVERLAP</span> : null}
-        {isMarked ? <NoteBadge /> : null}
       </span>
     </li>
   );

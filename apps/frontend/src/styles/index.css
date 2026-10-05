@@ -3240,8 +3240,9 @@ button {
   margin-top: clamp(8px, 1.4cqh, 14px);
 }
 
-/* The agenda: a day's head (sticky as its rows scroll under it), then a
-   row per event: its time, its stripe, its title and where, its tags. */
+/* The agenda: a day's head, then a row per event: its time, its stripe,
+   its title and where, its tags. The head scrolls with its rows: the
+   viewport's own rail holds the top edge. */
 .calendar-agenda {
   margin: 0;
   padding: 0 4px 0 0;
@@ -3251,9 +3252,6 @@ button {
   padding-bottom: clamp(6px, 1cqh, 12px);
 }
 .calendar-agenda__day-head {
-  position: sticky;
-  top: 0;
-  z-index: 2;
   display: flex;
   align-items: baseline;
   gap: 10px;
@@ -3286,9 +3284,18 @@ button {
   padding: 0;
   list-style: none;
 }
+/* An agenda of several days in a wide box runs its days in columns, as
+   many as fit at a reading width, rather than one long line per event. */
+.calendar-agenda--days {
+  column-width: 540px;
+  column-gap: clamp(24px, 2.4cqw, 48px);
+}
+.calendar-agenda--days > li {
+  break-inside: avoid;
+}
 .calendar-agenda__item {
   display: grid;
-  grid-template-columns: minmax(5.5ch, max-content) 2px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(5.5ch, max-content) 2px minmax(0, 1fr);
   column-gap: clamp(8px, 0.9cqw, 14px);
   align-items: start;
   padding: clamp(5px, 0.8cqh, 9px) 0;
@@ -3337,18 +3344,22 @@ button {
   color: rgba(232, 230, 223, 0.5);
   overflow-wrap: anywhere;
 }
-.calendar-agenda__tags {
+.calendar-agenda__line {
   display: flex;
   flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 4px 6px;
-  max-width: 24ch;
+  align-items: baseline;
+  gap: 3px 8px;
+  min-width: 0;
 }
 .calendar-tag {
+  flex: none;
   padding: 0 4px;
   border: 1px solid currentColor;
   line-height: 1.4;
   white-space: nowrap;
+}
+.calendar-agenda__line > .note-badge {
+  align-self: center;
 }
 .calendar-tag--active {
   border-color: var(--orange);

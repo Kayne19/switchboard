@@ -11,7 +11,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { CalendarData } from '../../src/controller/types';
 import { CalendarPrimitive, chooseLayout } from '../../src/primitives/CalendarPrimitive';
-import { assistantAgenda, assistantDay, assistantMonth, assistantWeek } from '../../src/fixtures/scenes';
+import { assistantAgenda, assistantAgendaWeek, assistantDay, assistantMonth, assistantWeek } from '../../src/fixtures/scenes';
 
 let host: HTMLDivElement | null = null;
 let root: Root | null = null;
@@ -147,7 +147,11 @@ describe('the month', () => {
     expect(calendar.querySelectorAll('.calendar-month__week')).toHaveLength(5);
     expect(calendar.querySelector('.calendar-month__cell--today')?.textContent).toContain('7');
     expect([...calendar.querySelectorAll('.calendar-more')].map((more) => more.textContent)).toContain('+3 MORE');
-    expect(calendar.querySelectorAll('.note-badge')).toHaveLength(1);
+    // The marked line wears the badge in its time's place: a cell has no room for both.
+    const dentist = boxes(calendar, 'dentist')[0];
+    expect(dentist.querySelector('.note-badge')).not.toBeNull();
+    expect(dentist.querySelector('.calendar-line__time')).toBeNull();
+    expect(boxes(calendar, 'standup-wed')[0].querySelector('.calendar-line__time')?.textContent).toBe('09:30');
   });
 
   it('marks each day\u2019s events in a box too small for titles, and lists them from today under the grid', () => {
@@ -165,7 +169,17 @@ describe('the agenda', () => {
     const names = rows.map((row) => row.getAttribute('data-item') ?? (row.classList.contains('calendar-agenda__now') ? 'NOW' : '?'));
     expect(names).toEqual(['ana-in-town', 'standup-wed', 'NOW', 'dentist', 'design-review', 'one-on-one', 'dry-cleaning']);
     expect(calendar.querySelectorAll('.calendar-tag--overlap')).toHaveLength(2);
-    expect(boxes(calendar, 'dentist')[0].querySelector('.note-badge')).not.toBeNull();
+    // Tags follow the title on its line.
+    expect(boxes(calendar, 'dentist')[0].querySelector('.calendar-agenda__line .note-badge')).not.toBeNull();
+    expect(boxes(calendar, 'standup-wed')[0].querySelector('.calendar-agenda__line .calendar-tag--active')).not.toBeNull();
+    // One day is one run of rows; several days may stand in columns.
+    expect(calendar.querySelector('.calendar-agenda')?.className).not.toContain('calendar-agenda--days');
+  });
+
+  it('runs several days so they may stand in columns, and makes the empty days one line', () => {
+    const calendar = render(assistantAgendaWeek);
+    expect(calendar.querySelector('.calendar-agenda')?.className).toContain('calendar-agenda--days');
+    expect([...calendar.querySelectorAll('.calendar-agenda__empty')].map((line) => line.textContent)).toEqual(['TUE OCT 13NOTHING SCHEDULED']);
   });
 });
 

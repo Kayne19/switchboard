@@ -8,6 +8,7 @@ import type { CalendarData, CalendarEvent } from '../../src/controller/types';
 import { parseTimeValue } from '../../src/controller/validation';
 import {
   agendaEntries,
+  agendaLead,
   AXIS,
   axisY,
   calendarDay,
@@ -147,6 +148,8 @@ describe('overlapping events', () => {
       { id: 'review', column: 0, span: 1, columns: 2, stepped: true },
       { id: 'one-on-one', column: 1, span: 1, columns: 2, stepped: true },
     ]);
+    // Only what lies above the event stepped over it shows.
+    expect(segments.map((segment) => segment.coveredAt)).toEqual([13 * 60 + 30, undefined]);
     // Closer than a title line: side by side.
     packColumns(segments, 20, 45);
     expect(segments.every((segment) => !segment.stepped)).toBe(true);
@@ -249,6 +252,24 @@ describe('the agenda', () => {
     const sat = entries[4];
     expect(sat.kind === 'day' && sat.timed.map((item) => [item.placed.event.id, item.fromBefore, item.first])).toEqual([['flight', true, false]]);
     expect(sat.kind === 'day' && sat.allDay.map((item) => [item.placed.event.id, item.dayOf, item.daysLong])).toEqual([['trip', 1, 2]]);
+  });
+
+  it('opens on the marked event, or on the now line when the marked event lies a few rows after it', () => {
+    const many = placeEvents([
+      event('standup', '2026-10-07T09:30', '2026-10-07T09:45'),
+      event('dentist', '2026-10-07T10:30', '2026-10-07T11:30'),
+      event('a', '2026-10-07T12:00'),
+      event('b', '2026-10-07T13:00'),
+      event('c', '2026-10-07T14:00'),
+      event('late', '2026-10-07T18:00'),
+    ]);
+    const today = day('2026-10-07');
+    const entries = agendaEntries(many, [today], today, today * 1440 + 9 * 60 + 40);
+    expect(agendaLead(entries, 'dentist')).toBeUndefined();
+    expect(agendaLead(entries, 'late')).toBe('late');
+    expect(agendaLead(entries, 'standup')).toBe('standup');
+    expect(agendaLead(entries, undefined)).toBeUndefined();
+    expect(agendaLead(agendaEntries(many, [today], today, undefined), 'dentist')).toBe('dentist');
   });
 
   it('keeps today a day of its own even with nothing on it', () => {

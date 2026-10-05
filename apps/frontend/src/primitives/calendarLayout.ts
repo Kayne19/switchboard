@@ -199,6 +199,9 @@ export interface GridSegment {
    * over the earlier ones, set in by its `column`, the earlier titles still
    * showing above it (`packColumns`). */
   stepped: boolean;
+  /** In a stepped cluster, the minute a later part starts to lie over this
+   * one: only what is above it shows. */
+  coveredAt?: number;
 }
 
 /** Each shown day's timed parts, in order of start (then the longer first, then as sent). */
@@ -245,6 +248,8 @@ export function packColumns(segments: GridSegment[], minDuration: number, stepGa
     for (const segment of cluster) {
       segment.columns = columns;
       segment.stepped = stepped;
+      const over = stepped ? cluster.filter((other) => other.column > segment.column && overlaps(other, segment)).map((other) => other.start) : [];
+      segment.coveredAt = over.length > 0 ? Math.min(...over) : undefined;
       let span = 1;
       while (!stepped && segment.column + span < columns && !cluster.some((other) => other !== segment && other.column === segment.column + span && overlaps(other, segment))) {
         span += 1;
@@ -525,6 +530,32 @@ export function agendaEntries(placed: PlacedEvent[], days: number[], today: numb
     entries.push(entry);
   }
   return entries;
+}
+
+const NOW_ROW = '\u0000now';
+/** How many rows from the now line a marked event may lie for the agenda to open on the now line. */
+export const NEAR_NOW_ROWS = 3;
+
+/**
+ * Where an agenda opens: on the marked event (its id), unless it lies within
+ * a few rows after the now line, where the now line leads (undefined) so
+ * the reader sees both; with nothing marked, the now line.
+ */
+export function agendaLead(entries: AgendaEntry[], marked: string | undefined): string | undefined {
+  const order: string[] = [];
+  for (const entry of entries) {
+    if (entry.kind !== 'day') continue;
+    for (const item of entry.allDay) order.push(item.first ? item.placed.event.id : '');
+    entry.timed.forEach((item, index) => {
+      if (entry.nowAt === index) order.push(NOW_ROW);
+      order.push(item.first ? item.placed.event.id : '');
+    });
+    if (entry.nowAt === entry.timed.length) order.push(NOW_ROW);
+  }
+  const markedAt = marked === undefined ? -1 : order.indexOf(marked);
+  if (markedAt < 0) return undefined;
+  const nowAt = order.indexOf(NOW_ROW);
+  return nowAt >= 0 && nowAt < markedAt && markedAt - nowAt <= NEAR_NOW_ROWS ? undefined : marked;
 }
 
 /** Overlaps: the timed events on a day that share some of their time with another. */
