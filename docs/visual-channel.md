@@ -295,7 +295,10 @@ from a card beside it. It runs through no other bar, point or line, never
 alongside the bar it names, and keeps the card's edge colour, a shade firmer,
 to the end. A card with no clear place at its own width, or a long way from its
 point, tries narrower widths its text still fits at; one whose text would
-scroll at its width takes a wider one.
+scroll at its width takes a wider one. These are the rules a card keeps where
+the chart has a place for it; where it has none, the rail takes a note (below),
+and a card the rail cannot take -- a second one astray, or one on a compare
+chart -- keeps the place that breaks the fewest of them.
 
 A card is astray where the best place the chart has for it breaks one of these
 rules: over the data, too far from its point for its leader to read as its

@@ -362,7 +362,7 @@ function shortOfEnd(line: Point[], length: number): Point[] {
   return [];
 }
 
-/** Options for `placeNotes`. */
+/** Options for `layoutNotes`. */
 export interface PlaceOptions {
   /** Space kept between two cards, and between a card and the point it must not cover. */
   gap?: number;
