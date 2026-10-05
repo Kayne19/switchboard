@@ -3,8 +3,8 @@ import { NoteBadge } from './NoteMarker';
 
 /*
  * TEMPORARY (pa-contract): the one stand-in renderer for the
- * personal-assistant types still without a primitive -- calendar, timer,
- * weather (tasks and inbox have theirs) -- until their render slices draw
+ * personal-assistant types still without a primitive -- timer, weather
+ * (calendar, tasks and inbox have theirs) -- until their render slice draws
  * each with a primitive of its own. It is a plain framed list of the
  * fields the agent sent, so the page neither crashes on nor drops an
  * accepted object and the fixtures load. It draws no clock: a
@@ -21,13 +21,12 @@ import { NoteBadge } from './NoteMarker';
  * sceneComposition.test.tsx).
  */
 
-export type TemporaryAssistantType = 'calendar' | 'timer' | 'weather';
+export type TemporaryAssistantType = 'timer' | 'weather';
 
 type Fields = Record<string, unknown>;
 
 /** The list each type is mostly made of, for the frame's count. */
 const MAIN_LIST: Record<TemporaryAssistantType, [string, string]> = {
-  calendar: ['events', 'EVENTS'],
   timer: ['timers', 'TIMERS'],
   weather: ['daily', 'DAYS'],
 };

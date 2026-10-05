@@ -5,6 +5,7 @@ import { ListViewport } from './ListViewport';
 import { NoteBadge } from './NoteMarker';
 import { StepGlyph } from './ProgressPrimitive';
 import { clockText, dayText, daysFrom, readToday } from './timeLabels';
+import { MetaTitle } from './MetaTitle';
 
 /**
  * Where a to-do list is drawn decides how much of each task shows:
@@ -184,9 +185,10 @@ function SectionHead({ section, today, doneCounted }: { section: TaskSection; to
  * in red and due today in orange, both from the list's own `today`. Done
  * tasks are quieter. A list that outgrows its slot scrolls inside its
  * frame with the list viewport's counts, and opens on the task a note
- * names (`marked`), which carries the NOTE badge.
+ * names (`marked`), which carries the NOTE badge. `framed`: the scene
+ * frame above shows the title (MetaTitle).
  */
-export function TasksPrimitive({ data, variant = 'full', marked }: { data: TasksData; variant?: TasksVariant; marked?: string }) {
+export function TasksPrimitive({ data, variant = 'full', marked, framed = false }: { data: TasksData; variant?: TasksVariant; marked?: string; framed?: boolean }) {
   const today = readToday(data.today);
   const sections = useMemo(() => taskSections(data.items), [data.items]);
   const counts = taskCounts(data);
@@ -195,7 +197,7 @@ export function TasksPrimitive({ data, variant = 'full', marked }: { data: Tasks
   const compact = variant === 'compact';
   const head = (
     <div className="tasks-primitive__meta tech micro">
-      <span className="tasks-primitive__title" data-object-title>{data.title ?? 'TASKS'}</span>
+      <MetaTitle title={data.title ?? 'TASKS'} framed={framed} className="tasks-primitive__title" />
       <span className="tasks-primitive__counts">
         {counts.open} OPEN{counts.done > 0 ? ` / ${counts.done} DONE` : ''}
         {counts.overdue > 0 ? <span className="tasks-primitive__overdue"> / {counts.overdue} OVERDUE</span> : null}

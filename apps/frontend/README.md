@@ -66,7 +66,9 @@ it, a note and two metrics in the rail: the visuals an agent can compose
 beside a visual primary). Reach them with `/?scene=figure`, `/?scene=plan`
 and `/?scene=composed`, or by swiping past `comparison`. The personal-assistant
 fixtures follow the hard diagrams: `calendar` (Kayne's week, with a note on the
-dentist appointment), `tasks`, `timer` (its instants set when the page loads,
+dentist appointment), `calendar-day`, `calendar-month` and `calendar-agenda`
+(the same calendar in the other three views: an overnight shift and a freeze
+past midnight, a busy day and bars over weekends, empty days), `tasks`, `timer` (its instants set when the page loads,
 so it counts down), `weather`, `inbox`, and `today` (the day's agenda with the
 forecast, the to-do list and the inbox beside it).
 
