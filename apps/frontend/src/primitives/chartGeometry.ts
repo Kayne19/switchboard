@@ -801,24 +801,23 @@ export function chartBarCallouts(data: ChartData, named: ChartAnchor[] = [], sca
  * what it names there: on a bar chart the bar's callout point, past its
  * end, with the bar and its printed value; on a line, area or scatter
  * chart the point's callout, past the value printed beside its ring, with
- * the ring and the value. `named` is every point the notes on the chart
- * name, the anchor's among them: a point's value keeps clear of the
- * callouts before it, so where it is printed depends on them.
+ * the ring and the value. `callouts` are the point callouts the chart
+ * draws (`chartPointCallouts` for every point its notes name): where a
+ * point's value is printed depends on the others, so a caller with several
+ * notes works them out once and passes them.
  */
 export function chartNoteTarget(
   data: ChartData,
   anchor: ChartAnchor,
   scales: ChartScales = chartScales(data),
-  named: ChartAnchor[] = [anchor],
+  callouts: ChartPointCallout[] = chartPointCallouts(data, [anchor], scales),
 ): { point: ViewPoint; from: ChartSide; mark: ViewRect; value: ViewRect } | undefined {
   if (scales.kind === 'bar') {
     const callout = chartBarCallout(data, anchor, scales);
     return callout ? { point: callout.point, from: callout.from, mark: callout.bar.rect, value: callout.label } : undefined;
   }
   const sample = seriesSample(data, anchor.x, anchor.series, scales);
-  if (!sample) return undefined;
-  const callouts = chartPointCallouts(data, named.includes(anchor) ? named : [...named, anchor], scales);
-  const callout = callouts.find((each) => each.series === sample.series && each.x === sample.x);
+  const callout = sample && callouts.find((each) => each.series === sample.series && each.x === sample.x);
   return callout ? { point: callout.point, from: callout.from, mark: callout.ring, value: callout.label } : undefined;
 }
 
@@ -1148,12 +1147,6 @@ function areaPieces(line: ViewPoint[], base: number): ViewPoint[][] {
 }
 
 /**
- * Everything a note laid over the chart must keep off: a bar or a scatter
- * point is an area, not a line round it, so it is a mark; a line is the
- * line it draws; an area chart's fill is softer, a place to go only where
- * nothing else is free; and the legend and the axes' labels are read too.
- */
-/**
  * The rect the chart clips its series and its marker to: the plot, grown
  * for a scatter chart by a point's radius and a unit, so a point on the
  * plot's edge is drawn whole.
@@ -1164,7 +1157,20 @@ export function chartClip(scales: ChartScales): ViewRect {
   return { left: plot.left - reach, top: plot.top - reach, right: plot.right + reach, bottom: plot.bottom + reach };
 }
 
-export function chartObstacles(data: ChartData, scales: ChartScales = chartScales(data), named: ChartAnchor[] = []): ChartObstacles {
+/**
+ * Everything a note laid over the chart must keep off: a bar or a scatter
+ * point is an area, not a line round it, so it is a mark; a line is the
+ * line it draws; an area chart's fill is softer, a place to go only where
+ * nothing else is free; and the legend and the axes' labels are read too.
+ * `named` is every point the notes name; a caller that has worked out the
+ * point callouts for them already passes those (`pointCallouts`).
+ */
+export function chartObstacles(
+  data: ChartData,
+  scales: ChartScales = chartScales(data),
+  named: ChartAnchor[] = [],
+  pointCallouts: ChartPointCallout[] = chartPointCallouts(data, named, scales),
+): ChartObstacles {
   const { plot, kind } = scales;
   // What the chart's clip lets through: the bars, the points and the ring
   // are drawn inside it.
@@ -1198,7 +1204,7 @@ export function chartObstacles(data: ChartData, scales: ChartScales = chartScale
     for (const callout of chartBarCallouts(data, named, scales)) marks.push(callout.label);
   } else {
     // A marked point's ring and its printed value, drawn whole past the plot's edge.
-    for (const callout of chartPointCallouts(data, named, scales)) marks.push(callout.ring, callout.label);
+    for (const callout of pointCallouts) marks.push(callout.ring, callout.label);
   }
   return { marks, lines, fills, labels: [chartLegendBox(data, scales.frame), ...chartAxisBoxes(plot, scales.frame)] };
 }

@@ -1,7 +1,7 @@
 // Where the notes over a chart sit, and how their leaders run (#26, #49).
 import { describe, expect, it } from 'vitest';
 import type { ChartData } from '../../src/controller/types';
-import { chartBarCallout, chartNoteTarget, chartObstacles, chartScales, chartSeriesPoint } from '../../src/primitives/chartGeometry';
+import { chartBarCallout, chartNoteTarget, chartObstacles, chartPointCallouts, chartScales, chartSeriesPoint } from '../../src/primitives/chartGeometry';
 import {
   DATA_CLEARANCE,
   calloutLeader,
@@ -618,8 +618,9 @@ describe('a note on a line, area or scatter chart', () => {
       labels: obstacles.labels.map(rect),
       wholly: true,
     };
+    const callouts = chartPointCallouts(data, anchors, scales);
     const targets = anchors.map((anchor) => {
-      const target = chartNoteTarget(data, anchor, scales, anchors)!;
+      const target = chartNoteTarget(data, anchor, scales, callouts)!;
       return { point: at(target.point), from: target.from, mark: rect(target.mark), value: rect(target.value) };
     });
     return { field, targets };
@@ -861,6 +862,34 @@ describe('placing notes on a dense bar chart', () => {
     const start = performance.now();
     layoutNotes(notes, field, { spill: true });
     expect(performance.now() - start).toBeLessThan(600);
+  });
+});
+
+// Every place a card tried was routed against every line segment: a line
+// chart of two 40-sample series with two notes took 70-120 ms a measure,
+// against about 1 ms before its notes had callouts (review finding). It
+// runs on every resize frame.
+describe('placing notes on a line chart', () => {
+  it('stays within a frame budget', () => {
+    let seed = 7;
+    const random = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+    const data: ChartData = {
+      xMax: 39,
+      series: Array.from({ length: 4 }, (_, s) => ({ name: `S${s}`, values: Array.from({ length: 40 }, (_, i) => 50 + 30 * Math.sin(i / 17 + s) + random() * 10) })),
+    };
+    const scales = chartScales(data);
+    const anchors = [{ x: 10, series: 'S0' }, { x: 20, series: 'S1' }, { x: 30, series: 'S2' }];
+    const callouts = chartPointCallouts(data, anchors, scales);
+    const obstacles = chartObstacles(data, scales, anchors, callouts);
+    const field: NoteField = { area: box(0, 0, 1000, 540), plot: scales.plot, traces: obstacles.lines, marks: obstacles.marks, labels: obstacles.labels, wholly: true };
+    const notes: NoteToPlace[] = anchors.map((anchor, index) => {
+      const target = chartNoteTarget(data, anchor, scales, callouts)!;
+      return { id: `n${index}`, width: 300, height: 80, ...target };
+    });
+    layoutNotes(notes, field, { spill: true });
+    const start = performance.now();
+    layoutNotes(notes, field, { spill: true });
+    expect(performance.now() - start).toBeLessThan(200);
   });
 });
 

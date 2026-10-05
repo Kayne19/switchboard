@@ -5,10 +5,13 @@ import { AnnotationCard } from '../primitives/AnnotationCard';
 import {
   chartFrame,
   chartObstacles,
+  chartPointCallouts,
   chartScales,
+  chartSeriesPoint,
   chartNoteTarget,
   chartTargetText,
   type ChartAnchor,
+  type ChartPointCallout,
   type ChartScales,
   type ChartSide,
   type ViewPoint,
@@ -44,17 +47,16 @@ const MAX_CARD_SHARE = 0.8;
 
 // Where on the chart a note names a point, if it names one there: the
 // point's callout -- where its leader lands, past the value the chart
-// prints, the side it comes from, and the mark and value it names.
-// `named` is every point the chart's notes name, which the callouts keep
-// clear of one another by.
+// prints, the side it comes from, and the mark and value it names. The
+// chart's point callouts are worked out once for every note.
 function chartNotePoint(
   note: NoteData,
   chart: SceneObject<ChartData>,
   scales: ChartScales,
-  named: ChartAnchor[],
+  callouts: ChartPointCallout[],
 ): { point: ViewPoint; from: ChartSide; mark: ViewRect; value: ViewRect } | undefined {
   if (note.anchor?.target !== chart.id || note.anchor.x === undefined) return undefined;
-  return chartNoteTarget(chart.data, { x: note.anchor.x, series: note.anchor.series }, scales, named);
+  return chartNoteTarget(chart.data, { x: note.anchor.x, series: note.anchor.series }, scales, callouts);
 }
 
 /** The points the notes on a chart name on it, for the chart to mark. */
@@ -198,8 +200,9 @@ export function ChartNotes({
       };
       const scales = chartScales(data, frame);
       const named = markedRef.current;
+      const callouts = chartPointCallouts(data, named, scales);
       if (toLayer) {
-        const obstacles = chartObstacles(data, scales, named);
+        const obstacles = chartObstacles(data, scales, named, callouts);
         field.plot = rectToLayer(scales.plot);
         field.traces = obstacles.lines.map((line) => line.map(toLayer!));
         field.marks = obstacles.marks.map(rectToLayer);
@@ -211,9 +214,9 @@ export function ChartNotes({
 
       // A card is measured at the width the stylesheet gives it, whatever
       // width the last layout set on it, and -- only where that has no clear
-      // place, or a long way to run to its bar -- at narrower widths its
-      // text still fits at. Widths are the
-      // layer's own pixels, which a panel in flight scales on screen.
+      // place, or a long way to run to its point -- at narrower widths its
+      // text still fits at. Widths are the layer's own pixels, which a panel
+      // in flight scales on screen.
       const sizeAt = (element: HTMLDivElement, width?: number) => {
         const set = element.style.width;
         element.style.width = width === undefined ? '' : `${width}px`;
@@ -237,7 +240,7 @@ export function ChartNotes({
           const wider = sizeAt(element, cssWidths.get(note.key)! * share);
           if (wider.fits) size = wider;
         }
-        const target = toLayer ? chartNotePoint(note.data, chartRef.current, scales, named) : undefined;
+        const target = toLayer ? chartNotePoint(note.data, chartRef.current, scales, callouts) : undefined;
         toPlace.push({
           id: note.key,
           width: size.width,
@@ -297,11 +300,18 @@ export function ChartNotes({
     return () => observer.disconnect();
   }, [signature, chart.data, spill]);
 
-  // Which notes name a point on the chart, worked out once a render.
+  // Which notes name a point the chart can draw.
   const anchored = useMemo(() => {
     const scales = chartScales(chart.data);
-    return new Set(notes.filter((note) => chartNotePoint(note.data, chart, scales, marked) !== undefined).map((note) => note.key));
-  }, [chart, notes, marked]);
+    return new Set(
+      notes
+        .filter((note) => {
+          const anchor = note.data.anchor;
+          return anchor?.target === chart.id && anchor.x !== undefined && chartSeriesPoint(chart.data, anchor.x, anchor.series, scales) !== undefined;
+        })
+        .map((note) => note.key),
+    );
+  }, [chart, notes]);
 
   // The rail shows the note this chart leaves out, for as long as it does:
   // the layer says, for its own chart, when the note leaves and when it is

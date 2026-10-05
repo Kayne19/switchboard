@@ -170,8 +170,12 @@ const LEADER_INSET = 16;
 // Past this many marks (a dense scatter), their edges are not tried one by
 // one; the even steps across the layer still find the gaps between them.
 const SEARCH_MARK_EDGES = 240;
-// From this many marks or line segments on, they are bucketed by where they lie.
-const BUCKETED_FROM = 256;
+// From this many marks, or line segments, on, they are bucketed by where
+// they lie. A leader is checked against every segment near it for every
+// place tried, so a line's few dozen are bucketed already; the marks a card
+// is checked against read faster one after another until they are many.
+const MARKS_BUCKETED_FROM = 256;
+const SEGMENTS_BUCKETED_FROM = 32;
 // Past this many marks, a scatter is read as the area its points cover:
 // each run of cells of a grid over the layer that they touch, along a row
 // of it, stands for them, so the search reads hundreds of rects, not thousands.
@@ -513,9 +517,9 @@ function envelope(trace: Point[], area: Rect, columns: number): Point[] {
 // one stretch of the layer reads only what lies near it: a scatter can
 // carry thousands of points. Calls `visit` once for each item whose box
 // meets `near`'s buckets (a superset of those that meet `near` itself).
-function bucketed<T>(items: T[], boxOf: (item: T) => Rect, area: Rect): (near: Rect, visit: (item: T) => void) => void {
+function bucketed<T>(items: T[], boxOf: (item: T) => Rect, area: Rect, from: number): (near: Rect, visit: (item: T) => void) => void {
   // A few are read faster one after another than through the buckets.
-  if (items.length <= BUCKETED_FROM) return (_near, visit) => items.forEach((item) => visit(item));
+  if (items.length <= from) return (_near, visit) => items.forEach((item) => visit(item));
   const across = 32;
   const width = Math.max(1, area.right - area.left) / across;
   const height = Math.max(1, area.bottom - area.top) / across;
@@ -584,8 +588,13 @@ function prepare(field: NoteField, leaderOverlap = 0): Prepared {
     marks,
     fills: field.fills ?? [],
     labels: field.labels ?? [],
-    segmentsNear: bucketed(segments, ([a, b]) => ({ left: Math.min(a.x, b.x), top: Math.min(a.y, b.y), right: Math.max(a.x, b.x), bottom: Math.max(a.y, b.y) }), area),
-    marksNear: bucketed(marks, (mark) => mark, area),
+    segmentsNear: bucketed(
+      segments,
+      ([a, b]) => ({ left: Math.min(a.x, b.x), top: Math.min(a.y, b.y), right: Math.max(a.x, b.x), bottom: Math.max(a.y, b.y) }),
+      area,
+      SEGMENTS_BUCKETED_FROM,
+    ),
+    marksNear: bucketed(marks, (mark) => mark, area, MARKS_BUCKETED_FROM),
   };
 }
 
@@ -706,29 +715,6 @@ function placeInOrder(
       // far cannot win -- and need not be routed.
       const beaten = () => best !== undefined && (falls > best.falls || (falls === best.falls && cost >= best.cost - 1e-6));
       if (beaten()) return;
-      // A callout's leader comes from past its value, clear of every other
-      // mark and line; a place with no such route has no leader that reads,
-      // which is still better than a place over the data.
-      const route =
-        point && from && !covers(rect, point)
-          ? calloutLeader(rect, point, from, marksNear, { mark: note.mark, value: note.value, overlap: leaderOverlap, linesNear: segmentsNear })
-          : undefined;
-      if (route && !route.clear) {
-        cost += COST.noLeader;
-        falls = Math.max(falls, SHORT.route);
-      }
-      // Its point further along than the leader should run beside the card;
-      // a callout's leader, longer than it should run at all.
-      const along = route
-        ? polylineLength(route.path) - farRun(width)
-        : point
-          ? Math.max(0, left + LEADER_INSET - point.x, point.x - (left + width - LEADER_INSET)) - width * SEARCH_REACH
-          : 0;
-      if (along > 0) {
-        cost += COST.far + along * COST.farAlong;
-        falls = Math.max(falls, SHORT.far);
-      }
-      if (beaten()) return;
       // The data, a clearance away: the lines and the marks the chart draws.
       const near = inflate(rect, DATA_CLEARANCE);
       const line = lineUnder(near);
@@ -756,6 +742,49 @@ function placeInOrder(
       }
       cost += hiddenTraceLength(rect, leaders) * COST.leaderLength;
       if (beaten()) return;
+      // What the place costs whatever its leader: its share of the plot, a
+      // row low on the layer, a corner on the right.
+      if (plot) cost += overlapArea(rect, plot) * COST.plotArea;
+      const nearTop = top - minTop <= maxTop - top;
+      if (!nearTop) cost += COST.bottomRow;
+      if (!point && left - minLeft > maxLeft - left) cost += COST.rightCorner;
+      if (beaten()) return;
+      // A callout's leader comes from past its value, clear of every other
+      // mark and line; a place with no such route has no leader that reads,
+      // which is still better than a place over the data. Routing is what
+      // costs, so it comes last, and a place whose leader would lose on the
+      // straight distance to its point alone is never routed.
+      const routed = point !== undefined && from !== undefined && !covers(rect, point);
+      if (routed && best) {
+        const least = Math.hypot(Math.max(rect.left - point.x, 0, point.x - rect.right), Math.max(rect.top - point.y, 0, point.y - rect.bottom));
+        const past = least - farRun(width);
+        const leastFalls = past > 0 ? Math.max(falls, SHORT.far) : falls;
+        const leastCost = cost + least * COST.calloutLeader + (past > 0 ? COST.far + past * COST.farAlong : 0);
+        if (leastFalls > best.falls || (leastFalls === best.falls && leastCost >= best.cost - 1e-6)) return;
+      }
+      const route = routed
+        ? calloutLeader(rect, point, from, marksNear, { mark: note.mark, value: note.value, overlap: leaderOverlap, linesNear: segmentsNear })
+        : undefined;
+      if (route && !route.clear) {
+        cost += COST.noLeader;
+        falls = Math.max(falls, SHORT.route);
+      }
+      // Its point further along than the leader should run beside the card;
+      // a callout's leader, longer than it should run at all.
+      const along = route
+        ? polylineLength(route.path) - farRun(width)
+        : point
+          ? Math.max(0, left + LEADER_INSET - point.x, point.x - (left + width - LEADER_INSET)) - width * SEARCH_REACH
+          : 0;
+      if (along > 0) {
+        cost += COST.far + along * COST.farAlong;
+        falls = Math.max(falls, SHORT.far);
+      }
+      if (route) {
+        // A callout's leader is as short as it can be: beside its value or past it.
+        cost += polylineLength(route.path) * COST.calloutLeader;
+      }
+      if (beaten()) return;
       const leader = route ? route.path : point ? routeLeader(rect, point) : [];
       if (point) {
         for (const other of others) cost += hiddenTraceLength(other, [leader]) * COST.leaderLength;
@@ -774,21 +803,13 @@ function placeInOrder(
           });
         }
       }
-      if (plot) cost += overlapArea(rect, plot) * COST.plotArea;
-      const nearTop = top - minTop <= maxTop - top;
-      if (route) {
-        // A callout's leader is as short as it can be: beside its value or past it.
-        cost += polylineLength(route.path) * COST.calloutLeader;
-      } else if (point) {
+      if (point && !route) {
         cost += Math.abs(left + width / 2 - point.x) * COST.shift;
         const leaderLength = point.y >= rect.bottom ? point.y - rect.bottom : point.y <= rect.top ? rect.top - point.y : 0;
         cost += leaderLength * COST.leader;
         // Nearer than a gap, a leader's first turn hugs the border it leaves.
         if (leaderLength > 0) cost += Math.max(0, gap - leaderLength) * COST.hug;
-      } else if (left - minLeft > maxLeft - left) {
-        cost += COST.rightCorner;
       }
-      if (!nearTop) cost += COST.bottomRow;
       if (!best || falls < best.falls || (falls === best.falls && cost < best.cost - 1e-6)) {
         best = { rect, cost, falls, astray: falls >= SHORT.far, leader };
       }
@@ -1077,18 +1098,19 @@ export function calloutLeader(card: Rect, point: Point, from: Side, marksNear: M
   // Past the value first; across it, from either side, at a price; never
   // from the mark's own side, which the mark itself blocks.
   const across: Side[] = from === 'above' || from === 'below' ? ['left', 'right'] : ['above', 'below'];
-  const routes: Array<{ path: Point[]; clear: boolean; length: number }> = [];
+  const routes: Array<{ path: Point[]; length: number }> = [];
   for (const side of [from, ...across]) {
     const penalty = side === from ? 0 : CALLOUT_ACROSS;
     for (const path of calloutRoutes(card, point, side, marksNear, linesNear, inset, overlap)) {
-      routes.push({ path, clear: clearOf(path), length: polylineLength(path) + penalty });
+      routes.push({ path, length: polylineLength(path) + penalty });
     }
   }
   if (routes.length === 0) return { path: routeLeader(card, point, { inset, overlap }), clear: false };
-  const clear = routes.filter((route) => route.clear);
-  const pool = clear.length > 0 ? clear : routes;
-  const shortest = pool.reduce((best, route) => (route.length < best.length ? route : best));
-  return { path: shortest.path, clear: clear.length > 0 };
+  // Shortest first, each checked only until one is clear: the check is
+  // what costs, and a placement asks for the leader of every place it tries.
+  routes.sort((a, b) => a.length - b.length);
+  const clear = routes.find((route) => clearOf(route.path));
+  return { path: (clear ?? routes[0]).path, clear: clear !== undefined };
 }
 
 // The routes onto the point from one side of it: from a card past the
