@@ -160,7 +160,7 @@ function truncateLabel(name: string, maxWidth: number, advance: number): { text:
   if (name.length * advance <= maxWidth) return { text: name, truncated: false };
   // Reserve one character's width for the ellipsis itself.
   const maxChars = Math.max(0, Math.floor(maxWidth / advance) - 1);
-  return { text: `${name.slice(0, maxChars)}${CHART_ELLIPSIS}`, truncated: true };
+  return { text: `${name.slice(0, maxChars).trimEnd()}${CHART_ELLIPSIS}`, truncated: true };
 }
 
 /**
@@ -262,8 +262,8 @@ const CHART_CATEGORY_LINES = 3;
  * A label set on at most `lines` lines of at most `width` characters: a
  * line breaks after a space, a path's separator or a dot, or inside a
  * camel-cased name before a capital, where it can; inside a word only where
- * a word alone is too long. A label that needs more
- * lines is cut with an ellipsis: at its start when it is a path, whose
+ * a word alone is too long. A label that needs more lines is cut with an
+ * ellipsis: at its start when it is a path (a slash and no space), whose
  * file name at the end is what tells it apart, else at its end.
  */
 export function wrapLabel(label: string, width: number, lines: number): { text: string; lines: string[]; truncated: boolean } {
@@ -271,18 +271,21 @@ export function wrapLabel(label: string, width: number, lines: number): { text: 
   if (label.length <= room) return { text: label, lines: [label], truncated: false };
   const pieces = labelPieces(label);
   const set = fill(pieces, room);
-  if (set.length <= lines) return { text: label, lines: set, truncated: false };
-  if (label.includes('/')) {
+  if (set.length <= lines) return { text: label, lines: set.map((line) => line.trim()), truncated: false };
+  if (label.includes('/') && !/\s/.test(label)) {
     // From the end: the pieces filled backward, the last lines kept, and
     // the first of them led by the ellipsis.
-    const back = fill([...pieces].reverse(), room - 1, true).reverse();
+    const back = fill([...pieces].reverse(), room - 1, true).reverse().map((line) => line.trim());
     const kept = back.slice(-lines);
     kept[0] = `${CHART_ELLIPSIS}${kept[0]}`;
     return { text: kept.join(' '), lines: kept, truncated: true };
   }
+  // The lines kept as set, and what the label says after them, cut.
   const kept = set.slice(0, lines - 1);
-  const last = truncateLabel(set.slice(lines - 1).join(' '), room * CHART_TICK_CHAR_ADVANCE, CHART_TICK_CHAR_ADVANCE).text;
-  return { text: [...kept, last].join(' '), lines: [...kept, last], truncated: true };
+  const rest = label.slice(kept.reduce((sum, line) => sum + line.length, 0)).trim();
+  const last = truncateLabel(rest, room * CHART_TICK_CHAR_ADVANCE, CHART_TICK_CHAR_ADVANCE).text;
+  const shown = [...kept.map((line) => line.trim()), last];
+  return { text: shown.join(' '), lines: shown, truncated: true };
 }
 
 // The pieces a line may end after: each run up to and including a space, a
@@ -306,8 +309,10 @@ function labelPieces(label: string): string[] {
   return pieces;
 }
 
-// Pieces set on lines of at most `room` characters, in order -- or, with
-// `backward`, the pieces given last first, each line grown at its start.
+// Pieces set on lines of at most `room` characters (spaces at a line's
+// ends not counted), in order -- or, with `backward`, the pieces given last
+// first, each line grown at its start. The lines keep their spaces, so in
+// order they join back into the label.
 function fill(pieces: string[], room: number, backward = false): string[] {
   const set: string[] = [];
   let line = '';
@@ -318,19 +323,24 @@ function fill(pieces: string[], room: number, backward = false): string[] {
       if (join(rest).trim().length <= room) {
         line = join(rest);
         rest = '';
-      } else if (line.length > 0) {
-        set.push(line.trim());
+      } else if (line.trim().length > 0) {
+        set.push(line);
         line = '';
       } else if (backward) {
-        set.push(rest.slice(-room));
+        set.push(rest.slice(-room) + line);
         rest = rest.slice(0, -room);
+        line = '';
       } else {
-        set.push(rest.slice(0, room));
+        set.push(line + rest.slice(0, room));
         rest = rest.slice(room);
+        line = '';
       }
     }
   }
-  if (line.trim().length > 0) set.push(line.trim());
+  if (line.length > 0) {
+    if (line.trim().length > 0 || set.length === 0) set.push(line);
+    else set[set.length - 1] = backward ? line + set[set.length - 1] : set[set.length - 1] + line;
+  }
   return set;
 }
 
@@ -406,8 +416,12 @@ export function chartCategoryLayout(data: ChartData, frame: ChartFrame = CHART_F
   if (widest <= slot && clear(laid(1, 1))) return upright(categories, laid(1, 1), 1, 1);
   if (kind === 'bar' && count * CHART_TICK_ROW_HEIGHT <= plotHeight) {
     // A label too long for its room wraps onto as many lines as its row
-    // holds, up to three, and is truncated only past them.
-    const lines = Math.max(1, Math.min(CHART_CATEGORY_LINES, Math.floor(plotHeight / count / CHART_TICK_ROW_HEIGHT)));
+    // holds, up to three, and is truncated only past them. The row is
+    // judged with the legend as it wraps over the narrowest plot the label
+    // column can leave, so the lines never outgrow it.
+    const narrowest = chartLegendLayout(data, frame.width - categoryPadMax(frame) - CHART_PAD.right).rows;
+    const rowsHeight = frame.height - CHART_PAD.top - legendRowsAbovePlot(kind, narrowest) * CHART_LEGEND_ROW_HEIGHT - CHART_PAD.bottom;
+    const lines = Math.max(1, Math.min(CHART_CATEGORY_LINES, Math.floor(rowsHeight / count / CHART_TICK_ROW_HEIGHT)));
     const room = Math.floor((categoryPadMax(frame) - CHART_CATEGORY_PAD_GAP) / CHART_TICK_CHAR_ADVANCE);
     const ticks = categories.map((label, index) => ({ index, ...wrapLabel(label, room, lines), row: 0 }));
     return { categories, horizontal: true, ticks, rows: 1, step: 1 };

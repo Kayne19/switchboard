@@ -126,11 +126,34 @@ describe('chart category layout', () => {
     expect(longest * CHART_TICK_CHAR_ADVANCE).toBeLessThanOrEqual(CHART_CATEGORY_PAD_MAX - 40);
   });
 
+  // The lines were counted with the legend laid over the full width; over
+  // the narrower plot beside the labels it wrapped a row further, and the
+  // rows came out shorter than their lines (review finding).
+  it('never sets a label on more lines than its row holds', () => {
+    const chart: ChartData = {
+      kind: 'bar',
+      labels: Array.from({ length: 8 }, (_, index) => `${index} a category label that is long enough to wrap onto all three of its lines`),
+      series: Array.from({ length: 3 }, (_, index) => ({ name: `SERIES ${index} WITH A LONG LEGEND NAME`, values: Array.from({ length: 8 }, () => index + 1) })),
+    };
+    const scales = chartScales(chart);
+    expect(scales.horizontal).toBe(true);
+    const row = (scales.plot.bottom - scales.plot.top) / 8;
+    for (const tick of scales.categories.ticks) expect(tick.lines.length * CHART_TICK_ROW_HEIGHT).toBeLessThanOrEqual(row + 1e-9);
+  });
+
   it('breaks a label after a space or a separator, inside a word only where the word alone is too long', () => {
     expect(wrapLabel('apps/frontend/tests/unit/notePlacement.test.ts', 26, 3).lines).toEqual(['apps/frontend/tests/unit/', 'notePlacement.test.ts']);
     expect(wrapLabel('frontend visual', 10, 2).lines).toEqual(['frontend', 'visual']);
     expect(wrapLabel('frontend visual', 20, 2)).toEqual({ text: 'frontend visual', lines: ['frontend visual'], truncated: false });
     expect(wrapLabel('abcdefghijklmnop', 6, 3).lines).toEqual(['abcdef', 'ghijkl', 'mnop']);
+    // Prose with a slash in it is cut at its end, not as a path, and the cut
+    // adds no space the label did not have (review finding).
+    const prose = wrapLabel('p50/p99 latency of the checkout service in eu-west', 25, 2);
+    expect(prose.lines[0].startsWith('p50/p99')).toBe(true);
+    expect(prose.lines[1].endsWith('…')).toBe(true);
+    const dashed = wrapLabel('one-two-three-four-five-six-seven', 9, 2);
+    expect(dashed.lines[1]).not.toContain(' ');
+    expect(dashed.lines[1]).not.toMatch(/ …$/);
     // A camel-cased file name breaks at its words and dots, not inside them.
     expect(wrapLabel('notePlacement.test.ts', 13, 3).lines).toEqual(['note', 'Placement.', 'test.ts']);
     // A path cut short keeps its file name: the ellipsis leads.
