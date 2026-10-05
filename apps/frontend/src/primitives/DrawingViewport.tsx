@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, type RefObject } from 'react';
 import { useElementSize } from '../hooks/useElementSize';
-import { useStageBoxHeight, useStageDemand } from '../hooks/useStageDemand';
+import { useLeastHeight } from '../hooks/useStageDemand';
 import { SLIVER, type DrawingFit, type Size } from './drawingFit';
 import {
   EXIT_CHARS,
@@ -162,10 +162,8 @@ export function DrawingViewport({
   const pinnedRef = useRef<HTMLDivElement>(null);
   const [reading, setReading] = useState<Reading | null>(null);
   // What the drawing asks of the stage: the height it is read whole in at
-  // its least readable scale (less the sliver it would be contained over),
-  // past the viewport's own.
-  const viewportHeight = useStageBoxHeight(viewportRef);
-  useStageDemand(viewportHeight > 0 ? drawing.height * fit.minScale * (1 - SLIVER) - viewportHeight : null);
+  // its least readable scale, less the sliver it would be contained over.
+  useLeastHeight(viewportRef, drawing.height * fit.minScale * (1 - SLIVER));
   const scrolling = fit.scrollX || fit.scrollY;
   const axis = fit.scrollX && fit.scrollY ? 'both' : fit.scrollX ? 'x' : fit.scrollY ? 'y' : 'none';
   const pinnedDepth = pinned && fit.scrollY ? pinned.height * fit.scale : 0;

@@ -6,7 +6,7 @@
 import { act, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { scrollContentHeight, StageDemandContext, useStageBoxHeight, useStageDemand } from '../../src/hooks/useStageDemand';
+import { scrollContentHeight, StageDemandContext, useLeastHeight, useStageDemand } from '../../src/hooks/useStageDemand';
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -17,9 +17,9 @@ function Says({ excess }: { excess: number | null }) {
   return null;
 }
 
-function Measures({ onHeight }: { onHeight: (height: number) => void }) {
+function Box({ least }: { least: number | null }) {
   const ref = useRef<HTMLDivElement>(null);
-  onHeight(useStageBoxHeight(ref));
+  useLeastHeight(ref, least);
   return <div ref={ref} />;
 }
 
@@ -42,11 +42,39 @@ describe('what a primitive says it lacks', () => {
   it('goes nowhere where nothing listens, and nothing is measured there', () => {
     const host = document.createElement('div');
     const root = createRoot(host);
-    const heights: number[] = [];
     // No ResizeObserver in jsdom: a measure here would throw.
-    act(() => root.render(<><Says excess={500} /><Measures onHeight={(height) => heights.push(height)} /></>));
-    expect(heights.every((height) => height === 0)).toBe(true);
+    expect(globalThis.ResizeObserver).toBeUndefined();
+    act(() => root.render(<><Says excess={500} /><Box least={900} /></>));
     act(() => root.unmount());
+  });
+
+  it('says what a box lacks for the least height its content reads in, again when that changes', () => {
+    const heard: Array<number | null> = [];
+    const observed: Element[] = [];
+    globalThis.ResizeObserver = class {
+      observe(element: Element) {
+        observed.push(element);
+      }
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => 374 });
+    try {
+      const host = document.createElement('div');
+      const root = createRoot(host);
+      const listen = (_key: string, excess: number | null) => heard.push(excess);
+      act(() => root.render(<StageDemandContext.Provider value={listen}><Box least={900.4} /></StageDemandContext.Provider>));
+      expect(heard.at(-1)).toBe(526);
+      expect(observed).toHaveLength(1);
+      act(() => root.render(<StageDemandContext.Provider value={listen}><Box least={300} /></StageDemandContext.Provider>));
+      expect(heard.at(-1)).toBe(-74);
+      act(() => root.unmount());
+      expect(heard.at(-1)).toBeNull();
+    } finally {
+      if (height) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', height);
+      delete (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
+    }
   });
 });
 

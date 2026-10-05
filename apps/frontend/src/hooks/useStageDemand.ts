@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useId, useState, type RefObject } from 'react';
+import { createContext, useContext, useEffect, useId, useRef, type RefObject } from 'react';
 
 // What a primary's content asks of the stage (docs/visual-channel.md, "A
 // primary that outgrows its slot"). A primitive whose content may outgrow
@@ -8,19 +8,22 @@ import { createContext, useContext, useEffect, useId, useState, type RefObject }
 // less (the room it leaves) when it fits. The shell gives the primary slot a
 // listener, and on a stage whose rail stands under the slot folds the rail
 // away while the primary needs the height (SceneShell). Anywhere else (an
-// aux cell, the focus layer) there is no listener and nothing is said.
+// aux cell, the focus layer) there is no listener: nothing is measured or
+// said. Saying renders nothing: a primitive is drawn as it would be anyway.
 
 /** Hears, for each reporting primitive in the primary slot, how much height it lacks; `null` once it has nothing to say. */
 export type StageDemandListener = (key: string, excess: number | null) => void;
 
 export const StageDemandContext = createContext<StageDemandListener | null>(null);
 
+// A whole pixel either way: sub-pixel churn is not a change of mind.
+const whole = (excess: number | null) => (excess === null || !Number.isFinite(excess) ? null : Math.round(excess));
+
 /** Says how much taller than its viewport a primitive's content asks to be (CSS pixels), or `null` while it cannot tell. */
 export function useStageDemand(excess: number | null): void {
   const listener = useContext(StageDemandContext);
   const key = useId();
-  // A whole pixel either way: sub-pixel churn is not a change of mind.
-  const said = excess === null || !Number.isFinite(excess) ? null : Math.round(excess);
+  const said = whole(excess);
   useEffect(() => {
     listener?.(key, said);
   }, [listener, key, said]);
@@ -28,22 +31,33 @@ export function useStageDemand(excess: number | null): void {
 }
 
 /**
- * The layout height of a box whose content the stage hears about, measured
- * only where something listens (the primary slot): 0 anywhere else.
+ * Says how much taller than a box (`ref`) a content needs it to be, given
+ * the least height the content is read whole in (`least`, CSS pixels):
+ * measured whenever the box is resized or the content's need changes.
  */
-export function useStageBoxHeight(ref: RefObject<HTMLElement | null>): number {
+export function useLeastHeight(ref: RefObject<HTMLElement | null>, least: number | null): void {
   const listener = useContext(StageDemandContext);
-  const [height, setHeight] = useState(0);
+  const key = useId();
+  const need = useRef(least);
+  need.current = least;
+  const tell = useRef<() => void>(() => {});
   useEffect(() => {
     const element = ref.current;
     if (!listener || !element) return undefined;
-    const measure = () => setHeight(element.offsetHeight);
-    measure();
-    const observer = new ResizeObserver(measure);
+    tell.current = () => {
+      const height = element.offsetHeight;
+      listener(key, height > 0 && need.current !== null ? whole(need.current - height) : null);
+    };
+    tell.current();
+    const observer = new ResizeObserver(() => tell.current());
     observer.observe(element);
-    return () => observer.disconnect();
-  }, [listener, ref]);
-  return listener ? height : 0;
+    return () => {
+      observer.disconnect();
+      tell.current = () => {};
+      listener(key, null);
+    };
+  }, [listener, ref, key]);
+  useEffect(() => tell.current(), [least]);
 }
 
 /**
@@ -76,11 +90,11 @@ export function scrollContentHeight(element: HTMLElement): number {
  */
 export function useScrollDemand(ref: RefObject<HTMLElement | null>): void {
   const listener = useContext(StageDemandContext);
-  const [excess, setExcess] = useState<number | null>(null);
+  const key = useId();
   useEffect(() => {
     const element = ref.current;
     if (!listener || !element) return undefined;
-    const measure = () => setExcess(element.clientHeight > 0 ? scrollContentHeight(element) - element.clientHeight : null);
+    const measure = () => listener(key, element.clientHeight > 0 ? whole(scrollContentHeight(element) - element.clientHeight) : null);
     const resized = new ResizeObserver(measure);
     const watch = () => {
       resized.disconnect();
@@ -94,7 +108,7 @@ export function useScrollDemand(ref: RefObject<HTMLElement | null>): void {
     return () => {
       resized.disconnect();
       changed.disconnect();
+      listener(key, null);
     };
-  }, [listener, ref]);
-  useStageDemand(listener ? excess : null);
+  }, [listener, ref, key]);
 }

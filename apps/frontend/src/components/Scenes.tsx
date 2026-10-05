@@ -625,38 +625,58 @@ function RailHandle({ open, items, onToggle }: { open: boolean; items: string[];
   );
 }
 
-// Where the rail stands and how tall the main column is, now and in the
-// layout it shares with the rail (the probe, sized by the same rule as that
-// row), in layout pixels: a box in a shared-layout animation is scaled on
-// screen, never in its offsets.
-function useStageGeometry(
+// Whether the primary takes the stage's height (stageFold.ts). What it hears from the primary and measures of the column is
+// kept out of render, and a decision that does not change renders nothing:
+// a scene that never folds is drawn exactly as it was. The columns are
+// read in layout pixels: a box in a shared-layout animation is scaled on
+// screen, never in its offsets. The shared column is the probe, sized by
+// the same rule as that grid row.
+function useStageFold(
   active: boolean,
+  railOpen: boolean,
   mainRef: RefObject<HTMLDivElement | null>,
   railRef: RefObject<HTMLElement | null>,
   probeRef: RefObject<HTMLDivElement | null>,
-): Omit<StageGeometry, 'excess'> {
-  const [geometry, setGeometry] = useState<Omit<StageGeometry, 'excess'>>({ stacked: false, column: 0, shared: 0 });
+): { foldable: boolean; onDemand: StageDemandListener } {
+  const [foldable, setFoldable] = useState(false);
+  const demands = useRef(new Map<string, number>());
+  const geometry = useRef<Omit<StageGeometry, 'excess'>>({ stacked: false, column: 0, shared: 0 });
+  const staged = useRef(false);
+  staged.current = foldable && !railOpen;
+  const decide = useCallback(() => {
+    const said = [...demands.current.values()];
+    setFoldable(wantsStage({ ...geometry.current, excess: said.length > 0 ? Math.max(...said) : null }, staged.current));
+  }, []);
+  const onDemand = useCallback<StageDemandListener>(
+    (key, excess) => {
+      if (excess === null) demands.current.delete(key);
+      else demands.current.set(key, excess);
+      decide();
+    },
+    [decide],
+  );
   useLayoutEffect(() => {
     const main = mainRef.current;
     const rail = railRef.current;
     const probe = probeRef.current;
     if (!active || !main || !rail || !probe) return undefined;
     const measure = () => {
-      const next = {
+      geometry.current = {
         stacked: rail.offsetTop >= main.offsetTop + main.offsetHeight - 1,
         column: main.offsetHeight,
         shared: probe.offsetHeight,
       };
-      setGeometry((current) =>
-        current.stacked === next.stacked && current.column === next.column && current.shared === next.shared ? current : next,
-      );
+      decide();
     };
     measure();
     const observer = new ResizeObserver(measure);
     for (const element of [main, rail, probe]) observer.observe(element);
     return () => observer.disconnect();
-  }, [active, mainRef, railRef, probeRef]);
-  return geometry;
+  }, [active, mainRef, railRef, probeRef, decide]);
+  // The layout it decides in changes with the caller's choice, and with it
+  // the margin it decides by.
+  useLayoutEffect(decide, [decide, railOpen, foldable]);
+  return { foldable, onDemand };
 }
 
 // ---- End of the folded rail ----
@@ -828,24 +848,11 @@ export function SceneShell(props: SceneProps) {
   const mainRef = useRef<HTMLDivElement>(null);
   const railRef = useRef<HTMLElement>(null);
   const probeRef = useRef<HTMLDivElement>(null);
-  const demands = useRef(new Map<string, number>());
-  const [demand, setDemand] = useState<number | null>(null);
-  const onDemand = useCallback<StageDemandListener>((key, excess) => {
-    if (excess === null) demands.current.delete(key);
-    else demands.current.set(key, excess);
-    const said = [...demands.current.values()];
-    setDemand(said.length > 0 ? Math.max(...said) : null);
-  }, []);
-  const geometry = useStageGeometry(content !== null, mainRef, railRef, probeRef);
   const primaryId = content ? (primaryObject(state)?.id ?? null) : null;
   const [openFor, setOpenFor] = useState<string | null>(null);
   const railOpen = primaryId !== null && openFor === primaryId;
-  const [foldable, setFoldable] = useState(false);
+  const { foldable, onDemand } = useStageFold(content !== null, railOpen, mainRef, railRef, probeRef);
   const staged = foldable && !railOpen;
-  const wanted = wantsStage({ ...geometry, excess: demand }, staged);
-  useLayoutEffect(() => {
-    if (wanted !== foldable) setFoldable(wanted);
-  }, [wanted, foldable]);
   const railNote = calloutPlaced ? null : (content?.note ?? null);
   const noteCut = useStripCut(railRef, staged, railNote);
   const presence = (
