@@ -280,8 +280,13 @@ layout. One whose content asks for more gets the stage's height:
   the height of what it scrolls through; a figure its height drawn across
   its field's width, never past its own size; a bar chart whose labels do
   not fit under its bars the height in which it lies on its side with a
-  labelled row per category. Only the primary speaks: a plan under a chart
-  or a table in the aux row never folds the rail.
+  labelled row per category; a calendar's hour grid and a forecast laid
+  down the box, which grow to fill whatever view they get, the height
+  their parts read whole in. A primitive laid out for its box (a
+  calendar, a forecast, timers) says nothing until it has measured the
+  box: the stand-in it draws before then is not what will stand. Only the
+  primary speaks: a plan under a chart or a table in the aux row never
+  folds the rail.
 - **The shell decides** (`app/stageFold.ts`): where the rail stands under
   the column (measured, not a media query), a primary whose content is
   more than a line of text past its viewport in the layout it shares with
@@ -290,11 +295,18 @@ layout. One whose content asks for more gets the stage's height:
   frame round it (a table's head, a document's heading, an aux row are
   fixed; a diagram's rails grow with it). Folded, it gives the stage back
   only once it would be within a few pixels of reading whole there, so a
-  need on the line does not fold and unfold as it redraws. A graph laid
-  out again for the stage's taller viewport says nothing of the shared
-  layout unless it overflows even the stage, and a primitive that cannot
-  tell yet (a drawing whose fit has not followed its box) leaves the
-  layout as it is. A new primary is measured first in the shared layout.
+  need on the line does not fold and unfold as it redraws. So a primary
+  sent again with less in it (a week with one appointment left) gives the
+  stage back: a viewport that stays the same drawing stays mounted across
+  the fold, and keeps what it measured in the shared layout. A graph laid
+  out again for the stage's taller viewport, or a drawing the stage's
+  height turns into another (a calendar too short for its grid in its
+  share draws its agenda there, and the grid on the stage), says nothing
+  of the shared layout unless it overflows even the stage, and a
+  primitive that cannot tell yet (a drawing whose fit has not followed
+  its box) leaves the layout as it is: such a primary keeps the stage
+  until another takes its place. A new primary is measured first in the
+  shared layout.
   Opening the rail changes nothing of this. A landscape stage, the rail
   beside the primary, never folds.
 - **The rail folds to a strip under the primary, down to the footer's
