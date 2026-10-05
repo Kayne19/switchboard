@@ -198,9 +198,11 @@ leader lands. A bar is marked as a bar: outlined in the annotation colour, its
 value printed past its end. A point on a line, area or scatter chart gets a
 ring, drawn whole even on the plot's edge (hollow on a scatter, round the point
 it marks), and its value printed by the ring as precisely as the series is
-written: above or below it where a leader can come straight onto it, run off
-to one side of a line that rises across the other, beside it only where
-neither is clear, and past an area's line rather than over its own fill.
+written: above or below it, where a leader comes straight onto it, by
+preference; run off to one side of a line that rises across the other; beside
+it where above and below have much less clear room past them (a peak whose
+line falls away under it, a point on the plot's top or bottom edge); past an
+area's line rather than over its own fill; and clear of the axes' text.
 
 A chart is drawn in a frame its slot decides, by the slot's geometry alone.
 The approved 1000x500 canvas holds wherever it reads: its text at or above

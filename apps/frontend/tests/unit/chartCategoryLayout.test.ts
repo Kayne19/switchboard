@@ -615,6 +615,8 @@ describe('what a note names on a chart', () => {
     // One series needs no naming unless the anchor names it; an axis with no name reads X, as it is drawn.
     expect(chartTargetText({ x: 2.5 }, { xMax: 10, series: [{ name: 'S', values: [1, 2] }] })).toBe('X 2.5');
     expect(chartTargetText({ x: 1.4 }, { kind: 'bar', series: [{ name: 'S', values: [1, 2, 3] }] })).toBe('X 1');
+    // An epoch read in full, not cut to six figures (review).
+    expect(chartTargetText({ x: 1696512345678 }, { xMax: 1696512399999, series: [{ name: 'S', values: [1, 2] }] })).toBe('X 1696512345678');
   });
 
   it('names the series alone for an anchor with no x, and nothing where the chart draws no point', () => {
@@ -657,6 +659,9 @@ describe('a marked point', () => {
   it('prints a value read between samples as precisely as the series is written', () => {
     expect(chartPointCallouts({ xMax: 1, series: [{ name: 'A', values: [1.25, 2.5] }] }, [{ x: 0.5 }])[0].value.text).toBe('1.88');
     expect(chartPointCallouts({ xMax: 3, series: [{ name: 'A', values: [1, 2] }] }, [{ x: 1 }])[0].value.text).toBe('1');
+    // A value too small for six decimals is not printed as 0, nor a large one cut to six figures (review).
+    expect(chartPointCallouts({ xMax: 1, series: [{ name: 'A', values: [1e-7, 2e-7] }] }, [{ x: 0 }])[0].value.text).toBe('1e-7');
+    expect(chartPointCallouts({ xMax: 1, series: [{ name: 'A', values: [1696512345678, 1696512399999] }] }, [{ x: 0 }])[0].value.text).toBe('1696512345678');
   });
 
   it('prints it below its ring where above would leave the plot, and is reached from below', () => {

@@ -670,6 +670,32 @@ describe('a note on a line, area or scatter chart', () => {
     });
   }
 
+  // A line chart's axis gets no headroom, so a peak on a round axis end sits
+  // on the plot's top border: its value went below the apex, into the wedge
+  // between the line's two sides, where no leader reached it clear of the
+  // line, and the note went to the rail (review finding). The value stands
+  // beside an apex the line falls away from, and the card comes from there.
+  for (const view of [
+    { name: 'at 1440x900', scale: 0.937, top: 47, layer: { width: 937, height: 562 } },
+    { name: 'at 2560x1080', scale: 1.294, top: 9, layer: { width: 2008, height: 665 } },
+  ]) {
+    for (const [name, data, anchor] of [
+      ['a peak on the axis end', { xLabel: 'DAY', xMax: 10, series: [{ name: 'REQ', values: [10, 12, 15, 20, 28, 40, 30, 22, 18, 15, 13] }] }, { x: 5 }],
+      ['a trough by the axis end', { xLabel: 'DAY', xMax: 10, series: [{ name: 'REQ', values: [40, 35, 30, 25, 20, 12, 20, 25, 30, 35, 40] }] }, { x: 5 }],
+      ['the first point of a falling line', { ...training, marker: undefined, series: [training.series[0]] }, { x: 0, series: 'TRAIN LOSS' }],
+    ] as Array<[string, ChartData, { x: number; series?: string }]>) {
+      it(`keeps a note on ${name} on the chart, its leader clear of the line, ${view.name}`, () => {
+        const { field, targets } = drawn(data, [anchor], view.scale, view.top, view.layer);
+        const sizes = [{ width: 315, height: 136 }, { width: 252, height: 160 }, { width: 180, height: 210 }];
+        const place = layoutNotes([{ id: 'note', width: 394, height: 118, sizes, ...targets[0] }], field, { spill: true, leaderOverlap: 1 }).get('note');
+        expect(place, 'the note keeps its place on the chart').toBeDefined();
+        expect(wholly(place!.rect, field.plot!)).toBe(true);
+        expect(place!.leader.at(-1)).toEqual(targets[0].point);
+        expect(nearest(place!.leader, field.traces!)).toBeGreaterThan(3);
+      });
+    }
+  }
+
   it('reaches a point under another line from below it, never across that line', () => {
     // TRAIN LOSS at epoch 6 lies just under VAL LOSS: its value is printed
     // below it, and the leader comes up from a card below.

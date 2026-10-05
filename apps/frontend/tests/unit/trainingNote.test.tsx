@@ -172,12 +172,12 @@ describe('chart notes', () => {
   });
 
   it('never covers the point it names, nor the value printed by it', () => {
-    // The point at x = 5 is near the top of the plot, where the top row of
-    // the layer would cover it: the card moves off it.
-    mount([chart, note('loss-note', { target: 'loss', x: 5 })]);
+    // The point at x = 0 is the top of the plot, where the top row of the
+    // layer would cover it: the card moves off it.
+    mount([chart, note('loss-note', { target: 'loss', x: 0 })]);
     const box = card('loss-note')!;
     expect(box.element.classList.contains('chart-note--away')).toBe(false);
-    const [callout] = chartPointCallouts(chartData, [{ x: 5 }]);
+    const [callout] = chartPointCallouts(chartData, [{ x: 0 }]);
     for (const rect of [callout.ring, callout.label]) {
       const apart = rect.right <= box.left || box.right <= rect.left || SVG_TOP + rect.bottom <= box.top || box.bottom <= SVG_TOP + rect.top;
       expect(apart).toBe(true);

@@ -226,12 +226,10 @@ function standing(rect: Rect, point: Point, clearance = POINT_CLEARANCE): Standi
   return point.y >= rect.top + clearance && point.y <= rect.bottom - clearance ? 'level' : 'skirting';
 }
 
-/**
- * The share of the segment from `a` to `b` that falls inside `rect`, as the
- * parameters it enters and leaves at (Liang-Barsky clipping), or undefined
- * when it misses the rect.
- */
-export function clipSegment(a: Point, b: Point, rect: Rect): [number, number] | undefined {
+// The share of the segment from `a` to `b` that falls inside `rect`, as the
+// parameters it enters and leaves at (Liang-Barsky clipping), or undefined
+// when it misses the rect.
+function clipSegment(a: Point, b: Point, rect: Rect): [number, number] | undefined {
   const dx = b.x - a.x;
   const dy = b.y - a.y;
   let t0 = 0;
