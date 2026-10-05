@@ -574,6 +574,29 @@ describe('a card narrower than its own width', () => {
   });
 });
 
+// The rail holds one note. A note that names no point loses nothing there,
+// so it goes first wherever its absence leaves no more cards astray; on the
+// short phone chart the observation itself went to the rail, out of view,
+// so that a general note could stay on the chart.
+describe('the note left out for the rail', () => {
+  it('is the one that names no point, where leaving it out leaves no more cards astray', () => {
+    // Lines across all but a narrow column on the left: the general note
+    // fits the column; the observation, wider, lies over a line wherever it
+    // goes, with or without the general note on the chart.
+    const area = box(0, 0, 400, 300);
+    const traces = [20, 80, 140, 200, 260].map((y) => [{ x: 110, y }, { x: 400, y }]);
+    const notes: NoteToPlace[] = [
+      { id: 'general', width: 90, height: 90 },
+      { id: 'observation', width: 280, height: 90, point: { x: 250, y: 140 } },
+    ];
+    const field = { area, plot: area, traces };
+    expect([...layoutNotes(notes, field)].map(([id, place]) => [id, place.settled])).toEqual([['general', true], ['observation', false]]);
+    const placed = placeNotes(notes, field, { spill: true });
+    expect(placed.has('general')).toBe(false);
+    expect(placed.has('observation')).toBe(true);
+  });
+});
+
 describe('hidden trace length', () => {
   it('measures the part of each line inside the card', () => {
     const traces = [[{ x: 0, y: 50 }, { x: 100, y: 50 }, { x: 100, y: 150 }]];

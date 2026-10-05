@@ -386,9 +386,11 @@ export function layoutNotes(notes: NoteToPlace[], field: NoteField, options: Pla
   const over = (placements: Map<string, Placement>) => [...placements.values()].filter((placement) => placement.astray).length;
   let chosen = all;
   if (options.spill && over(all) > 0) {
-    // Leave out the note whose absence leaves the fewest cards astray:
-    // sooner one that names no point, which loses nothing in the rail; then
-    // one that was astray itself; then the cheapest.
+    // Leave out a note that names no point first: it loses nothing in the
+    // rail, so it goes wherever its absence leaves no more cards astray. A
+    // note that names one goes only where its absence leaves fewer astray.
+    // Among those, the one whose absence leaves the fewest astray; then one
+    // that was astray itself; then the cheapest.
     const better = (a: number[], b: number[]) => {
       const index = a.findIndex((value, at) => Math.abs(value - b[at]) > 1e-6);
       return index >= 0 && a[index] < b[index];
@@ -396,13 +398,14 @@ export function layoutNotes(notes: NoteToPlace[], field: NoteField, options: Pla
     let best: { placements: Map<string, Placement>; rank: number[] } | undefined;
     for (const note of notes) {
       const placements = placeInOrder(notes, prepared, gap, note.id, all);
+      const astray = over(placements);
+      if (note.point ? astray >= over(all) : astray > over(all)) continue;
       const rank = [
-        over(placements),
         note.point ? 1 : 0,
+        astray,
         all.get(note.id)!.astray ? 0 : 1,
         [...placements.values()].reduce((sum, placement) => sum + placement.cost, 0),
       ];
-      if (rank[0] >= over(all)) continue;
       if (!best || better(rank, best.rank)) best = { placements, rank };
     }
     if (best) chosen = best.placements;
