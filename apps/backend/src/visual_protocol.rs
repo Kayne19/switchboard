@@ -1475,7 +1475,7 @@ fn read_time(value: Option<&Value>, forms: &[TimeForm], field: &str) -> Result<T
         .ok_or_else(|| {
             let forms: Vec<&str> = forms.iter().map(|form| form.text()).collect();
             format!(
-                "{field} must be {} in the years 1970-2199",
+                "{field} must be {}, on a real day in 1970-2199",
                 forms.join(" or ")
             )
         })

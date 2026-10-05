@@ -1182,7 +1182,7 @@ const TIME_FORM_TEXT: Record<TimeForm, string> = {
 function readTime(value: unknown, forms: TimeForm[], field: string): { ok: true; time: TimeValue } | { ok: false; error: string } {
   const time = parseTimeValue(value);
   if (time && forms.includes(time.form)) return { ok: true, time };
-  return { ok: false, error: `${field} must be ${forms.map((form) => TIME_FORM_TEXT[form]).join(' or ')} in the years 1970-2199` };
+  return { ok: false, error: `${field} must be ${forms.map((form) => TIME_FORM_TEXT[form]).join(' or ')}, on a real day in 1970-2199` };
 }
 
 // ---- personal-assistant types -------------------------------------------------
