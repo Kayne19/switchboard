@@ -67,6 +67,7 @@ The model controls semantic intent. The frontend controls composition, geometry,
 | `DiagramPrimitive` + `diagramLayout` | node layout, edge routing, portrait and landscape topology, a graph recomposed for its viewport, node corner tags inside the frame |
 | `SequencePrimitive` + `sequenceLayout` | actor columns, lifelines, message rows, arrowheads by kind, label wrapping over a span, a sequence recomposed to its viewport's width, headers in full or compact by the share of the view they would take pinned, the NOTE marker in the header of the actor a note names |
 | `DrawingViewport` + `drawingFit` + `drawingScroll` | a drawing's scale (never text below the page's type floors), scrolling one way inside its clipped viewport, pinned headers; where a scrolled drawing rests (never a part cut at the edge it is read from), the keys that move it from rest to rest, the rails on the edges it continues past (counts, fades, the names of lines leaving the view), its map in a strip of its own beside it |
+| `ListViewport` | an HTML list that outgrows its slot (tasks, messages, events, forecast days): scrolling up and down inside its frame under a pinned head, opening on the item a note names, and on each edge it continues past the drawing viewport's fade, cut line and count of the items that lie that way |
 | `CodeViewport` | syntax presentation, safe scrolling, irregular clipping |
 | `DocumentViewport` | readable document layout and bounded scrolling |
 | `MetricsPrimitive` | metric alignment and semantic values |

@@ -2041,6 +2041,45 @@ button {
   stroke-width: 1.4;
   vector-effect: non-scaling-stroke;
 }
+
+/* A list that outgrows its slot (primitives/ListViewport.tsx): its head
+   pinned, its rows scrolling under it inside the frame, and on each edge it
+   continues past the drawing viewport's own fade, cut line and count, by
+   the same classes, so a scrolled list and a scrolled drawing read alike.
+   The primitive gives the scroll its padding and type. */
+.list-viewport {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+.list-viewport__head {
+  flex: none;
+  min-width: 0;
+}
+.list-viewport__port {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+.list-viewport__scroll {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--orange-rgb), 0.46) transparent;
+}
+.list-viewport__scroll:focus-visible {
+  outline: 1px solid rgba(var(--orange-rgb), 0.6);
+  outline-offset: -1px;
+}
 /* Entry motion stays in CSS on elements that carry no SVG positioning
    transform: a CSS transform on a translated node group replaces its
    transform attribute and stacks every node in one corner. */
