@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 // A note's `anchor.item` names one item inside the object it targets (a
-// calendar event, a task, a timer, a message, a forecast hour or day). The
-// page marks that item with the NOTE badge wherever the object is drawn --
-// the main slot, an aux cell, focus -- and the rail card names it in the
-// object's own words with the same badge; a name the object does not hold
-// marks nothing. Before this, nothing was marked and the card read
+// calendar event, a task, a timer, a message, a forecast hour or day). While
+// that note is the one drawn for the object (the rail's, or focus's), the
+// page marks the item with the NOTE badge wherever the object is drawn --
+// the main slot, an aux cell, focus -- and the card names it in the
+// object's own words with the same badge; a name the object does not hold,
+// or a note the page does not draw, marks nothing. Before this, nothing was marked and the card read
 // "TARGET / todo" whatever the item.
 //
 // The convention every type keeps, whatever primitive draws it: each item
@@ -13,11 +14,10 @@
 import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { anchoredItem, itemTargetText } from '../../src/app/noteItems';
+import { itemTargetText, markedItem } from '../../src/app/noteItems';
 import { SceneRenderer } from '../../src/components/SceneRenderer';
 import { ControllerProvider, useController } from '../../src/controller/context';
-import { createInitialState, reduceActions } from '../../src/controller/reducer';
-import type { ControllerAction, ControllerState, SceneObject, SceneObjectType } from '../../src/controller/types';
+import type { ControllerAction, SceneObject, SceneObjectType } from '../../src/controller/types';
 
 // For each type: an object holding two items, and the name a note uses for
 // the second.
@@ -97,10 +97,6 @@ const markedItems = (scope: Element | null, type: ListType) =>
   badges(scope, type).map((badge) => badge.closest('[data-item]')!.getAttribute('data-item'));
 const scene = () => [...host!.querySelectorAll('[data-scene]')].at(-1)!;
 
-function stateOf(actions: ControllerAction[]): ControllerState {
-  return reduceActions(createInitialState(), actions);
-}
-
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   globalThis.ResizeObserver ??= class {
@@ -118,17 +114,16 @@ afterEach(() => {
   host = null;
 });
 
-describe('anchoredItem', () => {
-  it('is the item the first note naming one in the object names', () => {
-    const state = stateOf([object('tasks', 'primary'), noteOn('pr'), { ...noteOn('passport'), id: 'second-note' } as ControllerAction]);
-    expect(anchoredItem(state, 'list')).toBe('pr');
+describe('markedItem', () => {
+  it('is the item the drawn note names in the object', () => {
+    expect(markedItem({ segments: [], anchor: { target: 'list', item: 'pr' } }, 'list')).toBe('pr');
   });
 
   it('is nothing for a note on another object, a note with no item, or no note', () => {
-    expect(anchoredItem(stateOf([object('tasks', 'primary'), noteOn('pr', 'grid'), table]), 'list')).toBeUndefined();
-    const plain: ControllerAction = { op: 'show', id: 'n', type: 'note', data: { anchor: { target: 'list' }, segments: [{ text: 'x' }] } };
-    expect(anchoredItem(stateOf([object('tasks', 'primary'), plain]), 'list')).toBeUndefined();
-    expect(anchoredItem(stateOf([object('tasks', 'primary')]), 'list')).toBeUndefined();
+    expect(markedItem({ segments: [], anchor: { target: 'grid', item: 'pr' } }, 'list')).toBeUndefined();
+    expect(markedItem({ segments: [], anchor: { target: 'list' } }, 'list')).toBeUndefined();
+    expect(markedItem({ segments: [] }, 'list')).toBeUndefined();
+    expect(markedItem(null, 'list')).toBeUndefined();
   });
 });
 
@@ -175,6 +170,37 @@ describe('the item a note names is marked wherever its object is drawn', () => {
     const card = layer?.querySelector('.focus-layer__note .annotation-card');
     expect(card?.querySelector('.annotation-card__anchor')?.textContent).toBe(`TARGET / ${named}`);
     expect(card?.querySelectorAll('.note-badge')).toHaveLength(1);
+  });
+
+  // A badge always has its card on screen: an item is marked only while the
+  // note naming it is the one drawn for its object.
+  it('marks nothing when the note the rail shows is another one about the list', () => {
+    const plain: ControllerAction = { op: 'show', id: 'plain-note', type: 'note', data: { tag: 'PLAIN', anchor: { target: 'list' }, segments: [{ text: 'About the list.' }] } };
+    render([object('tasks', 'primary'), plain, noteOn('passport')]);
+    expect(badges(scene(), 'tasks')).toHaveLength(0);
+    const card = scene().querySelector('.content-rail .annotation-card');
+    expect(card?.querySelector('.annotation-card__tag')?.textContent).toBe('PLAIN');
+    expect(card?.querySelectorAll('.note-badge')).toHaveLength(0);
+  });
+
+  it('marks nothing in the aux row while the rail shows the primary\'s note', () => {
+    const onGrid: ControllerAction = { op: 'show', id: 'grid-note', type: 'note', data: { tag: 'GRID', anchor: { target: 'grid' }, segments: [{ text: 'About the table.' }] } };
+    render([table, object('inbox', 'secondary'), onGrid, noteOn('ci')]);
+    expect(badges(scene().querySelector('.composed-aux'), 'inbox')).toHaveLength(0);
+    expect(scene().querySelector('.content-rail .annotation-card__tag')?.textContent).toBe('GRID');
+  });
+
+  it('gives the card a line of its own for what it names, so the item is not cut beside the tag', () => {
+    render([object('tasks', 'primary'), noteOn('passport')]);
+    expect(scene().querySelector('.content-rail .annotation-card')?.classList.contains('annotation-card--item')).toBe(true);
+  });
+
+  it('gives a chart note naming an item no badge: a chart marks no items', () => {
+    const chart: ControllerAction = { op: 'show', id: 'trend', type: 'chart', role: 'primary', data: { series: [{ name: 'S', values: [1, 2, 3] }] } };
+    const stray: ControllerAction = { op: 'show', id: 'stray', type: 'note', data: { tag: 'STRAY', anchor: { target: 'trend', x: 1, item: 'x' }, segments: [{ text: 'On the chart.' }] } };
+    const tasksBeside: ControllerAction = { op: 'show', id: 'list', type: 'tasks', role: 'secondary', data: lists.tasks.data };
+    render([chart, tasksBeside, stray]);
+    expect(scene().querySelectorAll('.note-badge')).toHaveLength(0);
   });
 
   it.each(types)('a %s holding no item of the name marks nothing, and the card shows the anchor as sent with no badge', (type) => {

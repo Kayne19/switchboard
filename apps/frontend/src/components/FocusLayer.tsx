@@ -14,7 +14,7 @@ import type {
   SceneObject,
   TableData,
 } from '../controller/types';
-import { ITEM_TYPES, itemTargetText } from '../app/noteItems';
+import { ITEM_TYPES, markedItem, noteItemTarget } from '../app/noteItems';
 import { anchoredNote, objectsOfType } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { CalendarPrimitive } from '../primitives/CalendarPrimitive';
@@ -80,18 +80,10 @@ function FocusedObject({ object, note, marked }: { object: SceneObject; note: No
 
 // Where the note stands is the focus box's geometry, in the stylesheet
 // (`.focus-layer__content--noted`): beside a wide drawing, as the rail is,
-// and under a tall one.
-export function FocusLayer({
-  object,
-  note = null,
-  marked,
-  onClose,
-}: {
-  object: SceneObject | null;
-  note?: NoteData | null;
-  marked?: string;
-  onClose: () => void;
-}) {
+// and under a tall one. The item the note names is marked in the object,
+// and named on the card, as in the scene.
+export function FocusLayer({ object, note = null, onClose }: { object: SceneObject | null; note?: NoteData | null; onClose: () => void }) {
+  const item = noteItemTarget(object, note);
   return (
     <AnimatePresence>
       {object ? (
@@ -118,12 +110,12 @@ export function FocusLayer({
               <button type="button" onClick={onClose}>RETURN / ESC</button>
             </div>
             <SurfaceBoundary surfaceId={object.id} resetKey={object}>
-              <FocusedObject object={object} note={note} marked={marked} />
+              <FocusedObject object={object} note={note} marked={markedItem(note, object.id)} />
             </SurfaceBoundary>
             {note ? (
               <aside className="focus-layer__note">
                 <SurfaceBoundary surfaceId="focus-note" resetKey={note}>
-                  <AnnotationCard data={note} target={note.anchor?.item !== undefined ? itemTargetText(object, note.anchor.item) : undefined} />
+                  <AnnotationCard data={note} target={item} itemMarked={item !== undefined} />
                 </SurfaceBoundary>
               </aside>
             ) : null}

@@ -15,7 +15,7 @@ import type {
   TableData,
 } from '../controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
-import { anchoredItem, itemTargetText } from '../app/noteItems';
+import { markedItem, noteItemTarget } from '../app/noteItems';
 import { anchoredNote, besideVisuals, buildCompositionModel, cast, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { CalendarPrimitive, calendarFrame } from '../primitives/CalendarPrimitive';
@@ -136,7 +136,7 @@ interface ExplanationProps {
 // it resolves in and out only when an explanation appears or goes away. Its
 // layout animates position only: animating its size on a text change scales
 // the text while it reflows, which reads as a twitch.
-function RailNote({ note, noteObject, onFocus, onOpenHistory, target }: ExplanationProps & { target?: string }) {
+function RailNote({ note, noteObject, onFocus, onOpenHistory, target, itemMarked }: ExplanationProps & { target?: string; itemMarked?: boolean }) {
   return (
     <AnimatePresence initial={false}>
       {note ? (
@@ -147,6 +147,7 @@ function RailNote({ note, noteObject, onFocus, onOpenHistory, target }: Explanat
               onFocus={noteObject ? () => onFocus(noteObject.id) : undefined}
               onOpenHistory={noteObject ? undefined : onOpenHistory}
               target={target}
+              itemMarked={itemMarked}
             />
           </SurfaceBoundary>
         </ObjectMotion>
@@ -185,13 +186,15 @@ interface RailDetailsProps {
 
 // A rail note about a chart on stage names the category it points at, as
 // the same note on the chart does; one about an item of a list (a task, a
-// message, an event, a timer, a forecast hour or day) names the item.
-function railNoteTarget(state: ControllerState, note: NoteData | null): string | undefined {
+// message, an event, a timer, a forecast hour or day) names the item, which
+// is then marked where its object is drawn.
+function railNoteTarget(state: ControllerState, note: NoteData | null): { target?: string; itemMarked: boolean } {
   const anchor = note?.anchor;
   const named = anchor ? state.agentObjects[anchor.target] : undefined;
-  if (!anchor || !named) return undefined;
-  if (named.type === 'chart') return chartTargetText(anchor, (named as SceneObject<ChartData>).data);
-  return anchor.item !== undefined ? itemTargetText(named, anchor.item) : undefined;
+  if (!anchor || !named) return { itemMarked: false };
+  if (named.type === 'chart') return { target: chartTargetText(anchor, (named as SceneObject<ChartData>).data), itemMarked: false };
+  const item = noteItemTarget(named, note);
+  return { target: item, itemMarked: item !== undefined };
 }
 
 // The details column beside every content visual: the metrics and any
@@ -212,7 +215,7 @@ function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, 
       {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} variant="rail" /> : null}
       <RailProgress progressList={progressList} onFocus={onFocus} />
       {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
-      <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} target={railNoteTarget(state, note)} />
+      <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} {...railNoteTarget(state, note)} />
       <ToolActivity activity={state.activity} reserveSpace={reserveActivity} />
     </div>
   );
@@ -220,8 +223,8 @@ function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, 
 
 // One object drawn inside a composed workspace, as the primary or in the aux
 // row beneath it. A metric and a progress change with the slot: the aux row
-// has no room for a whole step list. `marked` is the item a note names in
-// the object (`anchoredItem`), which the object marks wherever it is drawn.
+// has no room for a whole step list. `marked` is the item the drawn note
+// names in the object (`markedItem`), which the object marks.
 function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux', marked?: string) {
   switch (object.type) {
     case 'chart':
@@ -507,7 +510,7 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         ...calendarFrame(data),
         footer: 'DISPLAY / CALENDAR',
         caption: sceneCaption(primary, `CALENDAR / ${data.view.toUpperCase()}`),
-        main: slot('calendar-object', <CalendarPrimitive data={data} marked={anchoredItem(state, primary.id)} />, <TechFrame variant="panel" />),
+        main: slot('calendar-object', <CalendarPrimitive data={data} marked={markedItem(note, primary.id)} />, <TechFrame variant="panel" />),
       };
     }
     // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
@@ -524,7 +527,7 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         caption: sceneCaption(primary, `${kind} / FIELDS AS SENT`),
         main: slot(
           'temporary-assistant-object',
-          <TemporaryAssistantList type={type} data={primary.data} marked={anchoredItem(state, primary.id)} />,
+          <TemporaryAssistantList type={type} data={primary.data} marked={markedItem(note, primary.id)} />,
           <TechFrame variant="panel" />,
         ),
       };
@@ -541,7 +544,7 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
 // never lost to the layout. A visual keeps a readable floor in its cell; a
 // row with no room for every cell scrolls inside itself rather than squeezing
 // one to nothing (`.composed-aux` in styles/index.css). Each object marks
-// the item a note names in it (`marked`).
+// the item the rail's note names in it (`marked`).
 function AuxRow({
   objects,
   onFocus,
@@ -616,6 +619,7 @@ function composedContent({ state, onFocus }: SceneProps): SceneContent | null {
   const metrics = comp.allAgentObjects.filter((o) => o.type === 'metric') as Array<SceneObject<MetricData>>;
   const progressList = comp.allAgentObjects.filter((o) => o.type === 'progress') as Array<SceneObject<ProgressData>>;
   const primaryMetricIds = new Set(primaryMetrics.map((m) => m.id));
+  const note = noteIsPrimary ? null : annotationForScene(state, noteObject, liveChatMessage(state));
   // Everything the rail does not carry shares one visible aux row below the
   // primary -- compare objects, the other visuals beside it, and progress --
   // so an accepted object is never lost to the layout. Metrics and the note
@@ -634,7 +638,7 @@ function composedContent({ state, onFocus }: SceneProps): SceneContent | null {
     footer: 'DISPLAY / COMPOSED',
     caption: sceneCaption(primary, 'SYSTEM / ACTIVE'),
     metrics: isMetricPrimary ? metrics.filter((metric) => !primaryMetricIds.has(metric.id)) : metrics,
-    note: noteIsPrimary ? null : annotationForScene(state, noteObject, liveChatMessage(state)),
+    note,
     noteObject: noteIsPrimary ? undefined : noteObject,
     progressList: [],
     aux: auxObjects,
@@ -666,7 +670,7 @@ function composedContent({ state, onFocus }: SceneProps): SceneContent | null {
                   onFocus={onFocus}
                 />
               ) : (
-                composedPrimitive(primary, 'primary', anchoredItem(state, primary.id))
+                composedPrimitive(primary, 'primary', markedItem(note, primary.id))
               )}
             </FocusableSurface>
           </ObjectSurface>
@@ -785,7 +789,7 @@ export function SceneShell(props: SceneProps) {
             <div className="scene-heading__sub tech micro">{content.subtitle}</div>
           </div>
           <div className="content-grid">
-            <MainWithAux variant={content.mainVariant} aux={content.aux} onFocus={onFocus} marked={(id) => anchoredItem(state, id)}>
+            <MainWithAux variant={content.mainVariant} aux={content.aux} onFocus={onFocus} marked={(id) => markedItem(calloutPlaced ? null : content.note, id)}>
               {content.main}
             </MainWithAux>
             <motion.aside className="content-rail" layout>
