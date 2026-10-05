@@ -216,6 +216,8 @@ export interface ChartTick {
   index: number;
   /** The label actually drawn: the category, or an ellipsis-truncated prefix of it. */
   text: string;
+  /** The lines it is drawn on: one, but a horizontal bar chart's label wraps where its row has the room. */
+  lines: string[];
   truncated: boolean;
   /** Which staggered row the label sits on below the plot, 0-based. */
   row: number;
@@ -231,6 +233,65 @@ export interface ChartCategoryLayout {
   /** How many rows the x labels stagger onto; 1 for a numeric axis. */
   rows: number;
   step: number;
+}
+
+// The most lines a horizontal bar chart's category label wraps onto.
+const CHART_CATEGORY_LINES = 3;
+
+/**
+ * A label set on at most `lines` lines of at most `width` characters: a
+ * line breaks after a space or a path's separator where it can, and inside
+ * a word only where a word alone is too long. A label that needs more
+ * lines is cut with an ellipsis: at its start when it is a path, whose
+ * file name at the end is what tells it apart, else at its end.
+ */
+export function wrapLabel(label: string, width: number, lines: number): { text: string; lines: string[]; truncated: boolean } {
+  const room = Math.max(2, width);
+  if (label.length <= room) return { text: label, lines: [label], truncated: false };
+  // The pieces a line may end after: each run up to and including a space
+  // or a separator.
+  const pieces = label.match(/[^\s/_-]*[\s/_-]+|[^\s/_-]+$/g) ?? [label];
+  const set = fill(pieces, room);
+  if (set.length <= lines) return { text: label, lines: set, truncated: false };
+  if (label.includes('/')) {
+    // From the end: the pieces filled backward, the last lines kept, and
+    // the first of them led by the ellipsis.
+    const back = fill([...pieces].reverse(), room - 1, true).reverse();
+    const kept = back.slice(-lines);
+    kept[0] = `${CHART_ELLIPSIS}${kept[0]}`;
+    return { text: kept.join(' '), lines: kept, truncated: true };
+  }
+  const kept = set.slice(0, lines - 1);
+  const last = truncateLabel(set.slice(lines - 1).join(' '), room * CHART_TICK_CHAR_ADVANCE, CHART_TICK_CHAR_ADVANCE).text;
+  return { text: [...kept, last].join(' '), lines: [...kept, last], truncated: true };
+}
+
+// Pieces set on lines of at most `room` characters, in order -- or, with
+// `backward`, the pieces given last first, each line grown at its start.
+function fill(pieces: string[], room: number, backward = false): string[] {
+  const set: string[] = [];
+  let line = '';
+  const join = (piece: string) => (backward ? piece + line : line + piece);
+  for (const piece of pieces) {
+    let rest = piece;
+    while (rest.length > 0) {
+      if (join(rest).trim().length <= room) {
+        line = join(rest);
+        rest = '';
+      } else if (line.length > 0) {
+        set.push(line.trim());
+        line = '';
+      } else if (backward) {
+        set.push(rest.slice(-room));
+        rest = rest.slice(0, -room);
+      } else {
+        set.push(rest.slice(0, room));
+        rest = rest.slice(room);
+      }
+    }
+  }
+  if (line.trim().length > 0) set.push(line.trim());
+  return set;
 }
 
 function upright(categories: string[] | undefined, ticks: ChartTick[], rows: number, step: number): ChartCategoryLayout {
@@ -286,7 +347,7 @@ export function chartCategoryLayout(data: ChartData, frame: ChartFrame = CHART_F
   // Every `step`-th category labelled, the labels taking `rows` rows in turn.
   const laid = (rows: number, step: number): ChartTick[] => {
     const ticks: ChartTick[] = [];
-    for (let index = 0; index < count; index += step) ticks.push({ index, text: categories[index], truncated: false, row: (index / step) % rows });
+    for (let index = 0; index < count; index += step) ticks.push({ index, text: categories[index], lines: [categories[index]], truncated: false, row: (index / step) % rows });
     return ticks;
   };
   // Where an upright chart puts each category along its x axis (`xAt`).
@@ -304,11 +365,11 @@ export function chartCategoryLayout(data: ChartData, frame: ChartFrame = CHART_F
   };
   if (widest <= slot && clear(laid(1, 1))) return upright(categories, laid(1, 1), 1, 1);
   if (kind === 'bar' && count * CHART_TICK_ROW_HEIGHT <= plotHeight) {
-    const ticks = categories.map((label, index) => ({
-      index,
-      ...truncateLabel(label, categoryPadMax(frame) - CHART_CATEGORY_PAD_GAP, CHART_TICK_CHAR_ADVANCE),
-      row: 0,
-    }));
+    // A label too long for its room wraps onto as many lines as its row
+    // holds, up to three, and is truncated only past them.
+    const lines = Math.max(1, Math.min(CHART_CATEGORY_LINES, Math.floor(plotHeight / count / CHART_TICK_ROW_HEIGHT)));
+    const room = Math.floor((categoryPadMax(frame) - CHART_CATEGORY_PAD_GAP) / CHART_TICK_CHAR_ADVANCE);
+    const ticks = categories.map((label, index) => ({ index, ...wrapLabel(label, room, lines), row: 0 }));
     return { categories, horizontal: true, ticks, rows: 1, step: 1 };
   }
   if (widest <= 2 * slot && clear(laid(2, 1))) return upright(categories, laid(2, 1), 2, 1);
@@ -333,7 +394,7 @@ export function chartPad(data: ChartData, frame: ChartFrame = CHART_FRAME): Char
   const categories = chartCategoryLayout(data, frame);
   let left: number = CHART_PAD.left;
   if (categories.horizontal) {
-    const widest = Math.max(0, ...categories.ticks.map((tick) => tick.text.length)) * CHART_TICK_CHAR_ADVANCE;
+    const widest = Math.max(0, ...categories.ticks.flatMap((tick) => tick.lines.map((line) => line.length))) * CHART_TICK_CHAR_ADVANCE;
     left = Math.min(categoryPadMax(frame), Math.max(CHART_PAD.left, Math.ceil(widest + CHART_CATEGORY_PAD_GAP)));
   }
   const legendRows = chartLegendLayout(data, frame.width - left - CHART_PAD.right).rows;

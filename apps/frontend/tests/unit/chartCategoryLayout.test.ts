@@ -29,6 +29,7 @@ import {
   chartScales,
   chartSeriesPoint,
   chartValueAxis,
+  wrapLabel,
 } from '../../src/primitives/chartGeometry';
 
 const plotWidth = CHART_VIEW_WIDTH - CHART_PAD.left - CHART_PAD.right;
@@ -100,17 +101,52 @@ describe('chart category layout', () => {
     expect(pad.left).toBeGreaterThanOrEqual(24 * CHART_TICK_CHAR_ADVANCE + 14);
   });
 
-  it('truncates a horizontal bar chart label past the room the plot gives it', () => {
-    const chart = labelled(3, 80, 'bar');
+  it('wraps a horizontal bar chart label onto the lines its row holds, and truncates it only past them', () => {
+    // Three rows a third of the plot tall: room for three lines each.
+    const roomy = chartCategoryLayout(labelled(3, 80, 'bar'));
+    expect(roomy.horizontal).toBe(true);
+    expect(roomy.ticks[0].truncated).toBe(false);
+    expect(roomy.ticks[0].lines).toHaveLength(3);
+    expect(roomy.ticks[0].lines.join('')).toBe(labelled(3, 80).labels![0]);
+    // Ten rows: two lines each, and a 120-character label runs past them.
+    const chart = labelled(10, 120, 'bar');
     const layout = chartCategoryLayout(chart);
     expect(layout.horizontal).toBe(true);
+    expect(layout.ticks[0].lines).toHaveLength(2);
     expect(layout.ticks[0].truncated).toBe(true);
-    expect(layout.ticks[0].text.endsWith('…')).toBe(true);
-    // The plot moves right only as far as the truncated label needs, never past the cap.
+    expect(layout.ticks[0].lines[1].endsWith('…')).toBe(true);
+    // The plot moves right only as far as the longest line needs, never past the cap.
     const pad = chartPad(chart);
+    const longest = Math.max(...layout.ticks.flatMap((tick) => tick.lines.map((line) => line.length)));
     expect(pad.left).toBeLessThanOrEqual(CHART_CATEGORY_PAD_MAX);
-    expect(pad.left).toBeGreaterThanOrEqual(layout.ticks[0].text.length * CHART_TICK_CHAR_ADVANCE + 14);
-    expect(layout.ticks[0].text.length * CHART_TICK_CHAR_ADVANCE).toBeLessThanOrEqual(CHART_CATEGORY_PAD_MAX - 40);
+    expect(pad.left).toBeGreaterThanOrEqual(longest * CHART_TICK_CHAR_ADVANCE + 14);
+    expect(longest * CHART_TICK_CHAR_ADVANCE).toBeLessThanOrEqual(CHART_CATEGORY_PAD_MAX - 40);
+  });
+
+  it('breaks a label after a space or a separator, inside a word only where the word alone is too long', () => {
+    expect(wrapLabel('apps/frontend/tests/unit/notePlacement.test.ts', 26, 3).lines).toEqual(['apps/frontend/tests/unit/', 'notePlacement.test.ts']);
+    expect(wrapLabel('frontend visual', 10, 2).lines).toEqual(['frontend', 'visual']);
+    expect(wrapLabel('frontend visual', 20, 2)).toEqual({ text: 'frontend visual', lines: ['frontend visual'], truncated: false });
+    expect(wrapLabel('abcdefghijklmnop', 6, 3).lines).toEqual(['abcdef', 'ghijkl', 'mnop']);
+    // A path cut short keeps its file name: the ellipsis leads.
+    const path = wrapLabel('apps/backend/tests/test_visual_protocol.rs', 16, 2);
+    expect(path.truncated).toBe(true);
+    expect(path.lines).toEqual(['…test_visual_', 'protocol.rs']);
+    const cut = wrapLabel('one two three four five six', 8, 2);
+    expect(cut.truncated).toBe(true);
+    expect(cut.lines[0]).toBe('one two');
+    expect(cut.lines[1].endsWith('…')).toBe(true);
+    expect(cut.lines[1].length).toBeLessThanOrEqual(8);
+  });
+
+  it('gives a narrow frame the same share of its width for the labels', () => {
+    const chart = labelled(6, 40, 'bar');
+    const narrow = { width: 538, height: 618 };
+    const layout = chartCategoryLayout(chart, narrow);
+    expect(layout.horizontal).toBe(true);
+    const pad = chartPad(chart, narrow);
+    expect(pad.left).toBeLessThanOrEqual(Math.ceil((CHART_CATEGORY_PAD_MAX * 538) / 1000));
+    for (const tick of layout.ticks) for (const line of tick.lines) expect(line.length * CHART_TICK_CHAR_ADVANCE).toBeLessThanOrEqual(pad.left - 40 + 1e-9);
   });
 
   it('keeps a bar chart upright and thins its labels when a row per category would not fit either', () => {

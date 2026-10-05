@@ -569,3 +569,22 @@ describe('chart frame', () => {
     expect(scales.plot.right).toBe(width - 28);
   });
 });
+
+describe('chart category labels down the left', () => {
+  it('wraps a long label onto lines centred on its row, its whole name kept', () => {
+    const labels = ['apps/backend/tests/test_visual_protocol.rs', 'apps/frontend/tests/unit/notePlacement.test.ts', 'skills/switchboard/tests/test_display.py'];
+    renderWith({ kind: 'bar', labels, series: [{ name: 'S', values: [3, 2, 1] }] });
+    const scales = chartScales({ kind: 'bar', labels, series: [{ name: 'S', values: [3, 2, 1] }] });
+    const texts = [...host.querySelectorAll<SVGTextElement>('.chart-grid__category')];
+    expect(texts).toHaveLength(3);
+    texts.forEach((text, index) => {
+      const lines = [...text.querySelectorAll('tspan')];
+      expect(lines.length).toBeGreaterThan(1);
+      expect(lines.map((line) => line.textContent).join('')).toBe(labels[index]);
+      expect(text.querySelector('title')!.textContent).toBe(labels[index]);
+      const ys = lines.map((line) => Number(line.getAttribute('y')));
+      const middle = (ys[0] + ys[ys.length - 1]) / 2;
+      expect(middle).toBeCloseTo(scales.xAt(index) + 4, 6);
+    });
+  });
+});

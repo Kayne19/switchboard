@@ -106,7 +106,14 @@ function Grid({ scales }: { scales: ChartScales }) {
       })}
       <line x1={plot.left} y1={plot.top} x2={plot.right} y2={plot.top}/>
       <line x1={plot.left} y1={plot.bottom} x2={plot.right} y2={plot.bottom}/>
-      {categories.ticks.map((tick) => <text key={tick.index} className="chart-grid__category" x={plot.left - 14} y={xAt(tick.index) + 4} textAnchor="end">{tick.text}{tick.truncated ? <title>{categories.categories![tick.index]}</title> : null}</text>)}
+      {categories.ticks.map((tick) => {
+        // A wrapped label's lines are centred on its row.
+        const top = xAt(tick.index) + 4 - ((tick.lines.length - 1) * CHART_TICK_ROW_HEIGHT) / 2;
+        return <text key={tick.index} className="chart-grid__category" x={plot.left - 14} y={top} textAnchor="end">
+          {tick.lines.length > 1 ? tick.lines.map((line, index) => <tspan key={index} x={plot.left - 14} y={top + index * CHART_TICK_ROW_HEIGHT}>{line}</tspan>) : tick.text}
+          {tick.truncated || tick.lines.length > 1 ? <title>{categories.categories![tick.index]}</title> : null}
+        </text>;
+      })}
     </g>;
   }
   const xTicks = categorical ? [] : chartXTicks(xMax);
