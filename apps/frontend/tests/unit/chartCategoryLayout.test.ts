@@ -131,6 +131,8 @@ describe('chart category layout', () => {
     expect(wrapLabel('frontend visual', 10, 2).lines).toEqual(['frontend', 'visual']);
     expect(wrapLabel('frontend visual', 20, 2)).toEqual({ text: 'frontend visual', lines: ['frontend visual'], truncated: false });
     expect(wrapLabel('abcdefghijklmnop', 6, 3).lines).toEqual(['abcdef', 'ghijkl', 'mnop']);
+    // A camel-cased file name breaks at its words and dots, not inside them.
+    expect(wrapLabel('notePlacement.test.ts', 13, 3).lines).toEqual(['note', 'Placement.', 'test.ts']);
     // A path cut short keeps its file name: the ellipsis leads.
     const path = wrapLabel('apps/backend/tests/test_visual_protocol.rs', 16, 2);
     expect(path.truncated).toBe(true);

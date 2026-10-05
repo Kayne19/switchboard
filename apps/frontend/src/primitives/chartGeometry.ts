@@ -254,17 +254,16 @@ const CHART_CATEGORY_LINES = 3;
 
 /**
  * A label set on at most `lines` lines of at most `width` characters: a
- * line breaks after a space or a path's separator where it can, and inside
- * a word only where a word alone is too long. A label that needs more
+ * line breaks after a space, a path's separator or a dot, or inside a
+ * camel-cased name before a capital, where it can; inside a word only where
+ * a word alone is too long. A label that needs more
  * lines is cut with an ellipsis: at its start when it is a path, whose
  * file name at the end is what tells it apart, else at its end.
  */
 export function wrapLabel(label: string, width: number, lines: number): { text: string; lines: string[]; truncated: boolean } {
   const room = Math.max(2, width);
   if (label.length <= room) return { text: label, lines: [label], truncated: false };
-  // The pieces a line may end after: each run up to and including a space
-  // or a separator.
-  const pieces = label.match(/[^\s/_-]*[\s/_-]+|[^\s/_-]+$/g) ?? [label];
+  const pieces = labelPieces(label);
   const set = fill(pieces, room);
   if (set.length <= lines) return { text: label, lines: set, truncated: false };
   if (label.includes('/')) {
@@ -278,6 +277,27 @@ export function wrapLabel(label: string, width: number, lines: number): { text: 
   const kept = set.slice(0, lines - 1);
   const last = truncateLabel(set.slice(lines - 1).join(' '), room * CHART_TICK_CHAR_ADVANCE, CHART_TICK_CHAR_ADVANCE).text;
   return { text: [...kept, last].join(' '), lines: [...kept, last], truncated: true };
+}
+
+// The pieces a line may end after: each run up to and including a space, a
+// path's separator or a dot, or up to a capital that starts a word inside
+// a camel-cased name (`note|Placement.|test.ts`).
+function labelPieces(label: string): string[] {
+  const pieces: string[] = [];
+  let piece = '';
+  for (let index = 0; index < label.length; index += 1) {
+    const char = label[index];
+    const next = label[index + 1] ?? '';
+    piece += char;
+    const separator = /[\s/_.:-]/.test(char) && !/[\s/_.:-]/.test(next);
+    const camel = /[a-z]/.test(char) && /[A-Z]/.test(next);
+    if (separator || camel) {
+      pieces.push(piece);
+      piece = '';
+    }
+  }
+  if (piece) pieces.push(piece);
+  return pieces;
 }
 
 // Pieces set on lines of at most `room` characters, in order -- or, with
