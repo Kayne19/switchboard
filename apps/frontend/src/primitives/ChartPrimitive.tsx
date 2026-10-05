@@ -5,6 +5,8 @@ import {
   CHART_LEGEND_KEY_WIDTH,
   CHART_LEGEND_ROW_HEIGHT,
   CHART_LEGEND_TEXT_X,
+  CHART_MARKER_RADIUS,
+  CHART_MARKER_STROKE,
   CHART_PAD,
   CHART_POINT_RADIUS,
   CHART_TICK_BASELINE,
@@ -13,6 +15,7 @@ import {
   CHART_VIEW_WIDTH,
   chartBars,
   chartCategoryLabelX,
+  chartClip,
   chartLegendLayout,
   chartScales,
   chartSeriesPoint,
@@ -160,14 +163,14 @@ export function ChartPrimitive({
   const markerPoint=data.marker ? chartSeriesPoint(data,data.marker.x,data.marker.series,scales) : undefined;
   const grounded=kind==='bar'||kind==='area';
   const base=valueAt(baseline);
-  const reach=kind==='scatter'?CHART_POINT_RADIUS+1:0;
+  const clip=chartClip(scales);
 
   return <div className={`chart-primitive${focused?' chart-primitive--focused':''}`} data-testid="chart" data-kind={kind} data-orientation={horizontal?'horizontal':'upright'}>
     <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label={data.title ?? 'Chart'}>
       <defs>
         {/* A scatter chart's points at the ends of its domain sit on the
             plot's edges, so its clip lets a point's radius through. */}
-        <clipPath id={clipId}><rect x={plot.left-reach} y={plot.top-reach} width={plotWidth+2*reach} height={plot.bottom-plot.top+2*reach}/></clipPath>
+        <clipPath id={clipId}><rect x={clip.left} y={clip.top} width={clip.right-clip.left} height={clip.bottom-clip.top}/></clipPath>
         {/* Each series resolves left to right behind a widening clip: a
             line draws itself, bars and points appear in order, and a
             horizontal bar is revealed along its length. The strokes are
@@ -195,7 +198,7 @@ export function ChartPrimitive({
         })}
         {markerPoint ? (
           <motion.g className="chart-marker" initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}>
-            <circle className="chart-marker__point" cx={markerPoint.x} cy={markerPoint.y} r={focused?7:5} fill="#000" stroke="var(--orange)" strokeWidth="2"/>
+            <circle className="chart-marker__point" cx={markerPoint.x} cy={markerPoint.y} r={focused?CHART_MARKER_RADIUS+2:CHART_MARKER_RADIUS} fill="#000" stroke="var(--orange)" strokeWidth={CHART_MARKER_STROKE}/>
           </motion.g>
         ) : null}
       </g>

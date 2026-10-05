@@ -351,14 +351,6 @@ export function chartScales(data: ChartData): ChartScales {
   };
 }
 
-/** The plot's grid for this data, inside the axes, in viewBox units: the
- * base padding, grown to clear a legend that wraps onto further rows and
- * the category labels. */
-export function chartPlot(data: ChartData): ViewRect {
-  const pad = chartPad(data);
-  return { left: pad.left, top: pad.top, right: CHART_VIEW_WIDTH - pad.right, bottom: CHART_VIEW_HEIGHT - pad.bottom };
-}
-
 /** One bar of a bar chart, in viewBox units. */
 export interface ChartBar {
   /** Which series, by index. */
@@ -403,29 +395,107 @@ export function chartBars(data: ChartData, scales: ChartScales = chartScales(dat
 
 /** The radius of a scatter chart's point markers, in viewBox units. */
 export const CHART_POINT_RADIUS = 4;
+/** The radius of the marker ring, and the width of its stroke, in viewBox units. */
+export const CHART_MARKER_RADIUS = 5;
+export const CHART_MARKER_STROKE = 2;
 
-function outline(rect: ViewRect): ViewPoint[] {
-  return [
-    { x: rect.left, y: rect.top },
-    { x: rect.right, y: rect.top },
-    { x: rect.right, y: rect.bottom },
-    { x: rect.left, y: rect.bottom },
-    { x: rect.left, y: rect.top },
-  ];
+/** What a note laid over a chart keeps clear of: everything the chart draws, as it draws it, in viewBox units. */
+export interface ChartObstacles {
+  /** The marks drawn as areas, cut to the plot as its clip cuts them: each bar, each scatter point, the marker ring. */
+  marks: ViewRect[];
+  /** The line through each series of a line or an area chart; the plot's clip cuts what runs past it. */
+  lines: ViewPoint[][];
+  /**
+   * An area chart's fill between each line and its baseline, as convex
+   * pieces: one per segment, or two triangles where the segment crosses the
+   * baseline. The plot's clip cuts what runs past it.
+   */
+  fills: ViewPoint[][];
+  /** The legend, and the strips the axes' labels sit in. */
+  labels: ViewRect[];
+}
+
+function cut(rect: ViewRect, clip: ViewRect): ViewRect | undefined {
+  const inside = {
+    left: Math.max(rect.left, clip.left),
+    top: Math.max(rect.top, clip.top),
+    right: Math.min(rect.right, clip.right),
+    bottom: Math.min(rect.bottom, clip.bottom),
+  };
+  return inside.right > inside.left && inside.bottom > inside.top ? inside : undefined;
+}
+
+// The fill between a line and the baseline at `base`, segment by segment.
+function areaPieces(line: ViewPoint[], base: number): ViewPoint[][] {
+  const pieces: ViewPoint[][] = [];
+  for (let index = 1; index < line.length; index += 1) {
+    const a = line[index - 1];
+    const b = line[index];
+    const above = a.y - base;
+    const below = b.y - base;
+    if (above * below < 0) {
+      const crossing = { x: a.x + ((b.x - a.x) * above) / (above - below), y: base };
+      pieces.push([a, crossing, { x: a.x, y: base }], [crossing, b, { x: b.x, y: base }]);
+    } else {
+      pieces.push([a, b, { x: b.x, y: base }, { x: a.x, y: base }]);
+    }
+  }
+  return pieces;
 }
 
 /**
- * What the chart draws for each series, as polylines in viewBox units: the
- * line through its samples for a line or area chart, the outline of each
- * of its points for a scatter chart, and the outline of each of its bars
- * for a bar chart. The notes laid over a chart keep clear of these.
+ * Everything a note laid over the chart must keep off: a bar or a scatter
+ * point is an area, not a line round it, so it is a mark; a line is the
+ * line it draws; an area chart's fill is softer, a place to go only where
+ * nothing else is free; and the legend and the axes' labels are read too.
  */
-export function chartTraces(data: ChartData, scales: ChartScales = chartScales(data)): ViewPoint[][] {
-  if (scales.kind === 'bar') return chartBars(data, scales).map((bar) => outline(bar.rect));
-  const traces = data.series.map((series) => series.values.map((value, index) => scales.pointAt(scales.sampleX(series, index), value)));
-  if (scales.kind !== 'scatter') return traces;
-  const r = CHART_POINT_RADIUS;
-  return traces.flatMap((trace) => trace.map((point) => outline({ left: point.x - r, top: point.y - r, right: point.x + r, bottom: point.y + r })));
+/**
+ * The rect the chart clips its series and its marker to: the plot, grown
+ * for a scatter chart by a point's radius and a unit, so a point on the
+ * plot's edge is drawn whole.
+ */
+export function chartClip(scales: ChartScales): ViewRect {
+  const reach = scales.kind === 'scatter' ? CHART_POINT_RADIUS + 1 : 0;
+  const { plot } = scales;
+  return { left: plot.left - reach, top: plot.top - reach, right: plot.right + reach, bottom: plot.bottom + reach };
+}
+
+export function chartObstacles(data: ChartData, scales: ChartScales = chartScales(data)): ChartObstacles {
+  const { plot, kind } = scales;
+  // What the chart's clip lets through: the bars, the points and the ring
+  // are drawn inside it.
+  const clip = chartClip(scales);
+  const marks: ViewRect[] = [];
+  const lines: ViewPoint[][] = [];
+  const fills: ViewPoint[][] = [];
+  if (kind === 'bar') {
+    for (const bar of chartBars(data, scales)) {
+      const rect = cut(bar.rect, clip);
+      if (rect) marks.push(rect);
+    }
+  } else {
+    const traces = data.series.map((series) => series.values.map((value, index) => scales.pointAt(scales.sampleX(series, index), value)));
+    if (kind === 'scatter') {
+      for (const point of traces.flat()) {
+        const r = CHART_POINT_RADIUS;
+        const rect = cut({ left: point.x - r, top: point.y - r, right: point.x + r, bottom: point.y + r }, clip);
+        if (rect) marks.push(rect);
+      }
+    } else {
+      lines.push(...traces);
+      if (kind === 'area') {
+        const base = scales.valueAt(scales.baseline);
+        for (const line of traces) fills.push(...areaPieces(line, base));
+      }
+    }
+  }
+  const marker = data.marker ? chartSeriesPoint(data, data.marker.x, data.marker.series, scales) : undefined;
+  if (marker) {
+    const r = CHART_MARKER_RADIUS + CHART_MARKER_STROKE / 2;
+    const ring = cut({ left: marker.x - r, top: marker.y - r, right: marker.x + r, bottom: marker.y + r }, clip);
+    if (ring) marks.push(ring);
+  }
+  return { marks, lines, fills, labels: [chartLegendBox(data), ...chartAxisBoxes(plot)] };
 }
 
 /**
