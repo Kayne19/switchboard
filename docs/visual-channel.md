@@ -569,15 +569,20 @@ an optional chart `x`/`series`, diagram `node`, or `item` inside a calendar, a
 to-do list, a timer, a forecast or an inbox; the browser owns the resulting
 placement. On a chart page a note lies over the chart it names, clear of what
 the chart draws: a bar or a scatter point is an area, not the line round it,
-and a card keeps a few pixels from it; lines, a marked point's ring and value,
-a bar's printed value, the legend and the axis labels are kept clear too, and
-an area chart's fill is given up only where nothing else is free. The page
+and a card keeps a few pixels from it (6); a line it keeps twice that (12), as
+a line along a card's border reads as the card resting on it; a marked
+point's ring and value, a bar's printed value, the legend and the axis labels
+are kept clear too, and an area chart's fill is given up only where nothing
+else is free. The page
 looks for such a place anywhere within reach of the named point, including
 the band above the plot. The card's tag names what it points at as the caller
 reads it, never the object's id or an index the agent sent: the category on a
 chart with labels (`TARGET / FRONTEND VISUAL / THIS RUN`), the x axis's name
 and the value on any other (`TARGET / EPOCH 32 / VAL LOSS`), and the series
-wherever the anchor names one or the chart draws more than one.
+wherever the anchor names one or the chart draws more than one. An anchor
+with no `x` names its series; one that names no series the chart carries
+and no `x`, or no point the chart draws, names the chart: its `title`, or
+`CHART`.
 
 On every kind of chart a card lies wholly inside the plot, a few pixels in
 from its border, in clear space, or wholly outside it, never across it. Its
@@ -614,6 +619,12 @@ a visual off the charts goes there (later ones lie on the primary chart, as
 before); while it does, the primary hands none over; and a compare chart's
 notes stay on it, over its data where it has no clear place.
 
+A resize places the notes again at most once a step of 16 pixels of the
+chart's size, as a graph is laid out again once a step: between steps each
+card moves with the point it names (one naming none keeps its corner), and
+once the size holds still for a moment the notes are placed for it, where
+they would stand had the page opened at that size.
+
 The note a chart hands over stays readable beside it. Where the rail stands
 under a chart (a portrait stage), the note is drawn in a band under it, full
 width, carved from its slot, rather than in the rail under its metrics (a
@@ -631,6 +642,18 @@ the layer), so a note too long for that is one the chart hands over rather
 than a card whose text scrolls out of sight. Every visual payload may also provide a short `caption` for the
 scene's supporting corner label, so that label describes real content instead
 of fixed decorative text.
+
+**Focus keeps the notes about its object.** Focus gives an object the stage
+and the rail goes, so the notes the scene drew about it come with it, in a
+panel of their own beside the object when the focus box is wide (where the
+rail stood) and under it when the box is tall: on a chart, every note that
+names it, one under another, each card's `TARGET` line naming its point, the
+chart ringing or outlining each point and printing its value; on any other
+object (a diagram, a table, code, a document, a figure, a list with items, a
+metric, a progress), the first note that names it (the rail's note when the
+object is the primary), and what that note names stays marked: a diagram's node or actor, a list's item with its NOTE
+badge. A note that names no object is about the scene, not the object, and
+stays out of focus; a focused note is itself the note.
 
 ### Replay & state
 

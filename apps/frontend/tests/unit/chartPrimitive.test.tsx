@@ -6,6 +6,9 @@ import type { ChartData } from '../../src/controller/types';
 import { ChartPrimitive, chartSeriesColor, chartXTicks } from '../../src/primitives/ChartPrimitive';
 import {
   CHART_LEGEND_ROW_HEIGHT,
+  CHART_MARKER_RADIUS,
+  CHART_MARKER_STROKE,
+  CHART_POINT_RADIUS,
   CHART_LEGEND_STEP,
   CHART_TICK_CHAR_ADVANCE,
   CHART_TICK_GAP,
@@ -231,6 +234,27 @@ describe('chart series point', () => {
     host.remove();
     renderWith({ xMax: 3, series: [{ name: 'A', values: [4, 3, 2, 1] }], marker: { x: 2 } });
     expect(host.querySelector('.chart-marker__point')!.getAttribute('fill')).toBe('#000');
+  });
+
+  // Focus drew the ring 2 units wider and a scatter's points 1 wider than
+  // the geometry the value beside the ring and the notes' clearances are
+  // worked out from, so in focus a value sat 2 units off its ring and the
+  // obstacle was smaller than the ring drawn (line-notes review L2).
+  it('draws the ring and the points in focus at the radius the geometry keeps clear of', () => {
+    for (const kind of ['line', 'scatter'] as const) {
+      const chart: ChartData = { kind, xMax: 3, series: [{ name: 'A', values: [4, 3, 2, 1] }], marker: { x: 2 } };
+      host = document.createElement('div');
+      document.body.append(host);
+      root = createRoot(host);
+      act(() => root.render(<ChartPrimitive data={chart} focused />));
+      const [callout] = chartPointCallouts(chart);
+      const ring = host.querySelector('.chart-marker__point')!;
+      expect(Number(ring.getAttribute('r'))).toBe(CHART_MARKER_RADIUS);
+      expect((callout.ring.right - callout.ring.left) / 2).toBe(Number(ring.getAttribute('r')) + CHART_MARKER_STROKE / 2);
+      for (const point of host.querySelectorAll('.chart-point')) expect(Number(point.getAttribute('r'))).toBe(CHART_POINT_RADIUS);
+      act(() => root.unmount());
+      host.remove();
+    }
   });
 
   it('marks a point with a ring and its value, with no guide line through the plot', () => {

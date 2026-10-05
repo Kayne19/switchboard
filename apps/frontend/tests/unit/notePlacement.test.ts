@@ -1,20 +1,19 @@
 // Where the notes over a chart sit, and how their leaders run (#26, #49).
 import { describe, expect, it } from 'vitest';
 import type { ChartData } from '../../src/controller/types';
-import { chartBarCallout, chartNoteTarget, chartObstacles, chartPointCallouts, chartScales, chartSeriesPoint } from '../../src/primitives/chartGeometry';
+import { chartBarCallout, chartNoteTarget, chartObstacles, chartPointCallouts, chartScales } from '../../src/primitives/chartGeometry';
 import {
   DATA_CLEARANCE,
+  LINE_CLEARANCE,
   calloutLeader,
   hiddenFillArea,
-  hiddenTraceLength,
   layoutNotes,
   routeLeader,
   type NoteField,
   type NoteToPlace,
   type PlaceOptions,
-  type Point,
-  type Rect,
 } from '../../src/primitives/notePlacement';
+import { hiddenTraceLength, type Point, type Rect } from '../../src/primitives/segments';
 import { leastCpuMs } from './cpuTime';
 
 // Each card's box, as most of these cases read it.
@@ -71,19 +70,6 @@ describe('leader route', () => {
     expect(leader[0].y).toBe(card.bottom - 1);
   });
 
-  it('leaves by the top edge for a point above, clear of the cut corner', () => {
-    const point = { x: 495, y: 0 };
-    const leader = routeLeader(box(100, 200, 400, 100), point, { cutTop: 0.08, inset: 16 });
-    expect(leader[0].y).toBe(200);
-    // The outline cuts 32 of the 400 from the top-right corner.
-    expect(leader[0].x).toBeLessThanOrEqual(500 - 32 - 16);
-    expect(leader[leader.length - 1]).toEqual(point);
-    for (const { dx, dy } of segments(leader)) {
-      // Every run is straight or at 45 degrees.
-      expect(dx === 0 || dy === 0 || Math.abs(Math.abs(dx) - Math.abs(dy)) < 1e-6).toBe(true);
-    }
-  });
-
   it('runs along before it steps when the point is further across than it has room for', () => {
     const point = { x: 900, y: 200 };
     const leader = routeLeader(card, point);
@@ -106,17 +92,72 @@ describe('leader route', () => {
   it('has no route to a point the card covers', () => {
     expect(routeLeader(card, { x: 300, y: 100 })).toEqual([]);
   });
-});
 
-describe('note placement', () => {
-  it('centres a note over the point it names, in the top row', () => {
-    const placed = placeNotes([{ id: 'a', width: 300, height: 80, point: { x: 500, y: 400 } }], { area });
-    expect(placed.get('a')).toEqual(box(350, 0, 300, 80));
+  // A step exactly as long as its room came out a rounding error longer, so
+  // the leader ran along by 1e-14 and drew the same vertex twice (line-notes
+  // review L9).
+  it('never repeats a vertex where its step takes all the room it has', () => {
+    const leader = routeLeader(box(106.5, 29, 352, 84), { x: 349.5, y: 128.6 }, { overlap: 1 });
+    leader.slice(1).forEach((point, index) => expect(Math.hypot(point.x - leader[index].x, point.y - leader[index].y)).toBeGreaterThan(1e-6));
+    expect(leader).toHaveLength(4);
+    expect(leader.at(-1)).toEqual({ x: 349.5, y: 128.6 });
   });
 
-  it('keeps a card inside the area when its point is near an edge', () => {
-    const placed = placeNotes([{ id: 'a', width: 300, height: 80, point: { x: 980, y: 400 } }], { area });
-    expect(placed.get('a')!.right).toBe(1000);
+  it("leaves a card below its point by the top edge, clear of the corner the card's outline cuts", () => {
+    const point = { x: 495, y: 0 };
+    const { path } = calloutLeader(box(100, 200, 400, 100), point, 'below', () => {});
+    expect(path[0].y).toBe(200);
+    // The outline cuts 32 of the 400 from the top-right corner.
+    expect(path[0].x).toBeLessThanOrEqual(500 - 32 - 16);
+    expect(path.at(-1)).toEqual(point);
+    for (const { dx, dy } of segments(path)) {
+      // Every run is straight or at 45 degrees.
+      expect(dx === 0 || dy === 0 || Math.abs(Math.abs(dx) - Math.abs(dy)) < 1e-6).toBe(true);
+    }
+  });
+});
+
+// How long a leader runs, and whether its last run comes onto its point
+// from the side the point's value is printed on: down onto a point whose
+// value stands above it, up onto one whose value stands below.
+const length = (line: Point[]) => line.slice(1).reduce((sum, p, index) => sum + Math.hypot(p.x - line[index].x, p.y - line[index].y), 0);
+function comesFrom(leader: Point[], side: 'above' | 'below'): boolean {
+  const [a, b] = leader.slice(-2);
+  return Math.abs(b.x - a.x) < 1e-6 && (side === 'above' ? b.y > a.y : b.y < a.y);
+}
+// The leader leaves the card by one of its sides, from a card level with its point.
+const leavesBySide = (rect: Rect, leader: Point[]) => leader.length > 1 && (leader[0].x === rect.left || leader[0].x === rect.right);
+
+// Every note that names a point on a chart names one the chart marks with a
+// callout, so it says the side its leader comes from: these cases give one,
+// as the page does.
+describe('note placement', () => {
+  it('sits just past the point it names, its leader short and coming down onto it', () => {
+    const point = { x: 500, y: 400 };
+    const place = layoutNotes([{ id: 'a', width: 300, height: 80, point, from: 'above' }], { area }).get('a')!;
+    expect(place.rect.bottom).toBeLessThanOrEqual(point.y - 14);
+    expect(place.rect.left).toBeLessThanOrEqual(point.x);
+    expect(place.rect.right).toBeGreaterThanOrEqual(point.x);
+    expect(place.leader.at(-1)).toEqual(point);
+    expect(comesFrom(place.leader, 'above')).toBe(true);
+    expect(length(place.leader)).toBeLessThan(40);
+  });
+
+  it('keeps a card inside the area when its point is near an edge, still just past it', () => {
+    const point = { x: 980, y: 400 };
+    const place = layoutNotes([{ id: 'a', width: 300, height: 80, point, from: 'above' }], { area }).get('a')!;
+    expect(place.rect.right).toBeLessThanOrEqual(1000);
+    // Over its point, a short leader down onto it, for all the edge.
+    expect(place.rect.right).toBeGreaterThanOrEqual(point.x);
+    expect(place.rect.bottom).toBeLessThanOrEqual(point.y - 14);
+    expect(comesFrom(place.leader, 'above')).toBe(true);
+    expect(length(place.leader)).toBeLessThan(40);
+  });
+
+  it('takes no point without the side its leader comes from', () => {
+    // @ts-expect-error a note that names a point says the side its value is printed on (NoteOnPoint)
+    const loose: NoteToPlace = { id: 'a', width: 300, height: 80, point: { x: 500, y: 400 } };
+    expect(loose.point).toBeDefined();
   });
 
   it('puts a note that names no point in the top-left corner of an empty field', () => {
@@ -124,19 +165,20 @@ describe('note placement', () => {
     expect(placed.get('a')).toEqual(box(0, 0, 300, 80));
   });
 
-  it('never covers the point its note names, taking the bottom row when the point is at the top', () => {
-    const placed = placeNotes([{ id: 'a', width: 300, height: 80, point: { x: 500, y: 40 } }], { area });
-    const card = placed.get('a')!;
-    expect(inside({ x: 500, y: 40 }, card)).toBe(false);
-    expect(card.bottom).toBe(600);
+  it('never covers the point its note names, and comes onto it from the side its value is printed on', () => {
+    const point = { x: 500, y: 40 };
+    const place = layoutNotes([{ id: 'a', width: 300, height: 80, point, from: 'below' }], { area }).get('a')!;
+    expect(inside(point, place.rect)).toBe(false);
+    expect(place.rect.top).toBeGreaterThan(point.y);
+    expect(comesFrom(place.leader, 'below')).toBe(true);
   });
 
   it('keeps every note on screen and no card over another (#49)', () => {
     const notes: NoteToPlace[] = [
-      { id: 'first', width: 400, height: 120, point: { x: 700, y: 420 } },
+      { id: 'first', width: 400, height: 120, point: { x: 700, y: 420 }, from: 'above' },
       { id: 'second', width: 400, height: 100 },
-      { id: 'third', width: 400, height: 80, point: { x: 150, y: 300 } },
-      { id: 'fourth', width: 400, height: 90, point: { x: 720, y: 500 } },
+      { id: 'third', width: 400, height: 80, point: { x: 150, y: 300 }, from: 'above' },
+      { id: 'fourth', width: 400, height: 90, point: { x: 720, y: 500 }, from: 'above' },
     ];
     const placed = placeNotes(notes, { area });
     expect([...placed.keys()].sort()).toEqual(['first', 'fourth', 'second', 'third']);
@@ -157,14 +199,14 @@ describe('note placement', () => {
   it('runs no leader under another card', () => {
     const notes: NoteToPlace[] = [
       { id: 'general', width: 400, height: 100 },
-      { id: 'pointed', width: 400, height: 120, point: { x: 780, y: 450 } },
+      { id: 'pointed', width: 400, height: 120, point: { x: 780, y: 450 }, from: 'above' },
       { id: 'late', width: 400, height: 90 },
     ];
-    const placed = placeNotes(notes, { area });
-    const pointed = placed.get('pointed')!;
-    const leader = routeLeader(pointed, notes[1].point!);
-    for (const [id, card] of placed) {
-      if (id !== 'pointed') expect(hiddenTraceLength(card, [leader])).toBe(0);
+    const placed = layoutNotes(notes, { area });
+    const leader = placed.get('pointed')!.leader;
+    expect(leader.at(-1)).toEqual(notes[1].point);
+    for (const [id, place] of placed) {
+      if (id !== 'pointed') expect(hiddenTraceLength(place.rect, [leader])).toBe(0);
     }
   });
 
@@ -176,87 +218,72 @@ describe('note placement', () => {
     expect(placed.get('a')!.bottom).toBe(600);
   });
 
-  // A short chart, as under a stepped plan: the card is too tall to sit
-  // above its point, and the bottom row would hide the trace. A place level
-  // with the point hides nothing, but its leader would leave by a side.
-  const shortField = { area: box(0, 0, 1000, 300), traces: [[{ x: 0, y: 150 }, { x: 1000, y: 240 }]] };
-  const shortNotes: NoteToPlace[] = [
-    { id: 'general', width: 250, height: 50 },
-    { id: 'pointed', width: 400, height: 70, point: { x: 900, y: 60 } },
-  ];
-
-  it('keeps a note above or below the point it names on a short chart, so its leader leaves by the top or bottom border', () => {
-    const card = placeNotes(shortNotes, shortField).get('pointed')!;
-    const point = shortNotes[1].point!;
-    const leader = routeLeader(card, point);
-    expect(leader.length).toBeGreaterThan(1);
-    expect([card.top, card.bottom]).toContain(leader[0].y);
-    const [out] = segments(leader);
-    expect(out.dx).toBe(0);
-    expect(out.dy).not.toBe(0);
+  it('sits beside its point on a short chart, clear of the trace, its leader out of its side and down onto the point', () => {
+    // A short chart, as under a stepped plan: the card is taller than the
+    // room above its point, and the bottom row would hide the trace.
+    const field = { area: box(0, 0, 1000, 300), traces: [[{ x: 0, y: 150 }, { x: 1000, y: 240 }]] };
+    const point = { x: 900, y: 60 };
+    const placed = layoutNotes([{ id: 'general', width: 250, height: 50 }, { id: 'pointed', width: 400, height: 70, point, from: 'above' }], field);
+    const { rect, leader } = placed.get('pointed')!;
+    expect(hiddenTraceLength(inflate(rect, DATA_CLEARANCE), field.traces)).toBe(0);
+    expect(overlaps(rect, placed.get('general')!.rect)).toBe(false);
+    expect(leavesBySide(rect, leader)).toBe(true);
+    expect(leader.at(-1)).toEqual(point);
+    expect(comesFrom(leader, 'above')).toBe(true);
   });
 
-  it('sits beside its point, not over it, only where it cannot clear the point above or below', () => {
+  it('sits beside its point, not over it, where it cannot clear the point above or below', () => {
     // 60 tall in a field 100 tall, its point at the middle: no place above or below.
     const point = { x: 500, y: 50 };
-    const card = placeNotes([{ id: 'a', width: 400, height: 60, point }], { area: box(0, 0, 1000, 100) }).get('a')!;
-    expect(inside(point, card)).toBe(false);
-    const leader = routeLeader(card, point);
-    expect([card.left, card.right]).toContain(leader[0].x);
-    expect(leader[leader.length - 1]).toEqual(point);
+    const { rect, leader } = layoutNotes([{ id: 'a', width: 400, height: 60, point, from: 'above' }], { area: box(0, 0, 1000, 100) }).get('a')!;
+    expect(inside(point, rect)).toBe(false);
+    expect(leavesBySide(rect, leader)).toBe(true);
+    expect(leader.at(-1)).toEqual(point);
   });
 
-  it('tries straight above or below its point when no row clears it', () => {
-    // Other notes' points hold the top row; the bottom row is level with the point.
+  it("keeps off the other notes' points where their cards hold the rows", () => {
+    // Two notes' points at the top row; the bottom row is level with the third's point.
     const notes: NoteToPlace[] = [
-      { id: 'a', width: 300, height: 80, point: { x: 500, y: 260 } },
-      { id: 'b', width: 150, height: 40, point: { x: 400, y: 40 } },
-      { id: 'c', width: 150, height: 40, point: { x: 600, y: 40 } },
+      { id: 'a', width: 300, height: 80, point: { x: 500, y: 260 }, from: 'above' },
+      { id: 'b', width: 150, height: 40, point: { x: 400, y: 40 }, from: 'above' },
+      { id: 'c', width: 150, height: 40, point: { x: 600, y: 40 }, from: 'above' },
     ];
-    const card = placeNotes(notes, { area: box(0, 0, 1000, 300) }).get('a')!;
-    for (const other of notes.slice(1)) expect(inside(other.point!, card)).toBe(false);
-    const leader = routeLeader(card, notes[0].point!);
-    expect([card.top, card.bottom]).toContain(leader[0].y);
+    const placed = layoutNotes(notes, { area: box(0, 0, 1000, 300) });
+    for (const note of notes) {
+      const { rect, leader } = placed.get(note.id)!;
+      for (const other of notes) expect(inside(other.point!, rect)).toBe(false);
+      expect(leader.at(-1)).toEqual(note.point);
+    }
   });
 
-  it('beside its point sits level with it, so its leader leaves by a side and never runs along a border', () => {
-    // The point is 3px under where the top row's bottom border would be.
-    const point = { x: 500, y: 63 };
-    const card = placeNotes([{ id: 'a', width: 400, height: 60, point }], { area: box(0, 0, 1000, 100) }).get('a')!;
-    expect(point.y).toBeGreaterThan(card.top + 6);
-    expect(point.y).toBeLessThan(card.bottom - 6);
-    const leader = routeLeader(card, point);
-    expect([card.left, card.right]).toContain(leader[0].x);
-  });
-
-  it('centres over its point clear of the trace, rather than in a row that hides some of it, or beside it', () => {
+  it('sits clear of the trace, rather than in a row that hides some of it', () => {
     // The trace falls across the top-right corner, so the top row would
-    // hide some of it; straight above the point is clear of it. The places
-    // beside the point are only for a card no place above or below can clear.
+    // hide some of it.
     const point = { x: 790, y: 220 };
     const traces = [[{ x: 0, y: 180 }, { x: 1000, y: 50 }]];
-    const card = placeNotes([{ id: 'a', width: 250, height: 70, point }], { area: box(0, 0, 1000, 260), traces }).get('a')!;
-    expect(card.left).toBe(665);
-    expect(hiddenTraceLength(inflate(card, DATA_CLEARANCE), traces)).toBe(0);
-    const leader = routeLeader(card, point);
-    expect(leader[0].y).toBe(card.bottom);
+    const { rect, leader } = layoutNotes([{ id: 'a', width: 250, height: 70, point, from: 'above' }], { area: box(0, 0, 1000, 260), traces }).get('a')!;
+    expect(hiddenTraceLength(inflate(rect, LINE_CLEARANCE), traces)).toBe(0);
+    expect(rect.top).toBeGreaterThan(0);
+    expect(leader.at(-1)).toEqual(point);
   });
 
-  it('centres over its point in a row that hides a trace, rather than beside it where none is', () => {
+  it('sits beside its point, clear of the traces, rather than over one in a row above it', () => {
     // Every place above the point hides one of the two traces; beside it,
-    // level with it, hides neither. Beside the point is still the last place.
+    // level with it, hides neither, and its leader leaves by its side.
     const point = { x: 790, y: 220 };
     const traces = [
       [{ x: 0, y: 60 }, { x: 1000, y: 60 }],
       [{ x: 0, y: 140 }, { x: 1000, y: 140 }],
     ];
-    const card = placeNotes([{ id: 'a', width: 250, height: 70, point }], { area: box(0, 0, 1000, 260), traces }).get('a')!;
-    expect(card).toEqual(box(665, 0, 250, 70));
+    const { rect, leader } = layoutNotes([{ id: 'a', width: 250, height: 70, point, from: 'above' }], { area: box(0, 0, 1000, 260), traces }).get('a')!;
+    expect(hiddenTraceLength(inflate(rect, DATA_CLEARANCE), traces)).toBe(0);
+    expect(leavesBySide(rect, leader)).toBe(true);
+    expect(leader.at(-1)).toEqual(point);
   });
 
   it('steps clear of an axis label rather than cover it, staying near its point', () => {
     const label = box(0, 60, 70, 400);
-    const placed = placeNotes([{ id: 'a', width: 300, height: 80, point: { x: 120, y: 300 } }], { area, labels: [label] });
+    const placed = placeNotes([{ id: 'a', width: 300, height: 80, point: { x: 120, y: 300 }, from: 'above' }], { area, labels: [label] });
     const card = placed.get('a')!;
     expect(overlaps(card, label)).toBe(false);
     expect(card.left).toBeLessThan(120);
@@ -270,39 +297,45 @@ describe('note placement over the data', () => {
   const card = (width = 300, height = 80) => ({ width, height });
   // A few pixels between a card and any mark, whatever the clearance placement keeps.
   const clearOf = (rect: Rect, marks: Rect[]) => marks.every((mark) => !overlaps(inflate(rect, 4), mark));
-  const leavesTopOrBottom = (rect: Rect, point: Point) => {
-    const leader = routeLeader(rect, point);
-    return leader.length > 1 && (leader[0].y === rect.top || leader[0].y === rect.bottom);
+  // A bar's callout, as the chart draws it: its value printed 6 past its
+  // top, 13 tall, and the leader landing 3 past that.
+  const callout = (bar: Rect) => {
+    const middle = (bar.left + bar.right) / 2;
+    const value = { left: middle - 15, right: middle + 15, top: bar.top - 19, bottom: bar.top - 6 };
+    return { point: { x: middle, y: value.top - 3 }, from: 'above' as const, mark: bar, value };
   };
 
   it('keeps a card off the whole of a bar, not just its outline, where a clear place exists', () => {
     // A tall bar under the point; the rows above it are level with the
     // point, and the bottom row lies inside the bar.
-    const point = { x: 300, y: 60 };
-    const marks = [box(250, 60, 100, 340)];
-    const placed = placeNotes([{ id: 'a', ...card(), point }], { area: box(0, 0, 1000, 400), marks }).get('a')!;
-    expect(clearOf(placed, marks)).toBe(true);
-    expect(leavesTopOrBottom(placed, point)).toBe(true);
+    const bar = box(250, 60, 100, 340);
+    const target = callout(bar);
+    const marks = [bar, target.value];
+    const { rect, leader } = layoutNotes([{ id: 'a', ...card(), ...target }], { area: box(0, 0, 1000, 400), marks }).get('a')!;
+    expect(clearOf(rect, marks)).toBe(true);
+    expect(leader.at(-1)).toEqual(target.point);
   });
 
   it('keeps a clearance from the bars, so a card never reads as resting on one', () => {
     // The top row centred over the point would end 2px above the taller
     // neighbour's top.
-    const point = { x: 440, y: 150 };
-    const marks = [box(400, 150, 80, 450), box(485, 82, 80, 518)];
-    const placed = placeNotes([{ id: 'a', ...card(), point }], { area: box(0, 0, 1000, 600), marks }).get('a')!;
-    expect(clearOf(placed, marks)).toBe(true);
-    expect(leavesTopOrBottom(placed, point)).toBe(true);
+    const bar = box(400, 150, 80, 450);
+    const target = callout(bar);
+    const marks = [bar, box(485, 82, 80, 518), target.value];
+    const { rect, leader } = layoutNotes([{ id: 'a', ...card(), ...target }], { area: box(0, 0, 1000, 600), marks }).get('a')!;
+    expect(clearOf(rect, marks)).toBe(true);
+    expect(leader.at(-1)).toEqual(target.point);
   });
 
   it('keeps off the points of a dense scatter, near the one it names', () => {
     const marks: Rect[] = [];
     for (let x = 300; x <= 700; x += 25) for (let y = 10; y <= 160; y += 25) marks.push(box(x - 4, y - 4, 8, 8));
     const point = { x: 500, y: 160 };
-    const placed = placeNotes([{ id: 'a', ...card(), point }], { area: box(0, 0, 1000, 500), marks }).get('a')!;
-    expect(clearOf(placed, marks.filter((mark) => mark.left !== 496 || mark.top !== 156))).toBe(true);
-    expect(placed.top).toBeGreaterThanOrEqual(point.y + 6);
-    expect((placed.left + placed.right) / 2).toBeCloseTo(point.x, 0);
+    const { rect, leader } = layoutNotes([{ id: 'a', ...card(), point, from: 'below' }], { area: box(0, 0, 1000, 500), marks }).get('a')!;
+    expect(clearOf(rect, marks.filter((mark) => mark.left !== 496 || mark.top !== 156))).toBe(true);
+    expect(rect.top).toBeGreaterThanOrEqual(point.y + 6);
+    expect(comesFrom(leader, 'below')).toBe(true);
+    expect(length(leader)).toBeLessThan(40);
   });
 
   it("keeps off an area chart's fill where a clear place exists", () => {
@@ -317,37 +350,39 @@ describe('note placement over the data', () => {
       fills: [[{ x: 0, y: 150 }, { x: 1000, y: 150 }, { x: 1000, y: 400 }, { x: 0, y: 400 }]],
       labels: [box(0, 0, 1000, 20)],
     };
-    const placed = placeNotes([{ id: 'a', ...card(), point }], field).get('a')!;
-    expect(hiddenFillArea(placed, field.fills)).toBe(0);
-    expect(overlaps(placed, field.labels[0])).toBe(false);
-    expect(hiddenTraceLength(inflate(placed, DATA_CLEARANCE), field.traces)).toBe(0);
-    expect(leavesTopOrBottom(placed, point)).toBe(true);
+    const { rect, leader } = layoutNotes([{ id: 'a', ...card(), point, from: 'above' }], field).get('a')!;
+    expect(hiddenFillArea(rect, field.fills)).toBe(0);
+    expect(overlaps(rect, field.labels[0])).toBe(false);
+    expect(hiddenTraceLength(inflate(rect, DATA_CLEARANCE), field.traces)).toBe(0);
+    expect(comesFrom(leader, 'above')).toBe(true);
   });
 
   it('takes the fill, near its point, rather than the line, where nothing else is free', () => {
+    // The line runs 60 down a field 400 tall: no card fits above it, so the
+    // value is printed under the point, into the fill, and the card comes from there.
     const point = { x: 500, y: 60 };
     const area = box(0, 0, 1000, 400);
     const traces = [[{ x: 0, y: 60 }, { x: 1000, y: 60 }]];
     const fills = [[{ x: 0, y: 60 }, { x: 1000, y: 60 }, { x: 1000, y: 400 }, { x: 0, y: 400 }]];
-    const placed = placeNotes([{ id: 'a', ...card(), point }], { area, plot: area, traces, fills }).get('a')!;
-    expect(hiddenTraceLength(inflate(placed, DATA_CLEARANCE), traces)).toBe(0);
-    expect(hiddenFillArea(placed, fills)).toBeGreaterThan(0);
-    expect(placed.top - point.y).toBeLessThanOrEqual(20);
-    expect(leavesTopOrBottom(placed, point)).toBe(true);
+    const { rect, leader } = layoutNotes([{ id: 'a', ...card(), point, from: 'below' }], { area, plot: area, traces, fills }).get('a')!;
+    expect(hiddenTraceLength(inflate(rect, DATA_CLEARANCE), traces)).toBe(0);
+    expect(hiddenFillArea(rect, fills)).toBeGreaterThan(0);
+    expect(rect.top - point.y).toBeLessThanOrEqual(20);
+    expect(comesFrom(leader, 'below')).toBe(true);
   });
 
   it('leaves a note out when it may, where no place is clear of the data, and places it when it may not', () => {
     // Bars stand to within 60px of the top, the card is 80 tall.
-    const point = { x: 500, y: 60 };
-    const field = { area: box(0, 0, 1000, 300), marks: [box(0, 60, 1000, 240)] };
-    const notes = [{ id: 'a', ...card(), point }];
+    const bars = box(0, 60, 1000, 240);
+    const field = { area: box(0, 0, 1000, 300), marks: [bars] };
+    const notes: NoteToPlace[] = [{ id: 'a', ...card(), point: { x: 500, y: 57 }, from: 'above', mark: bars }];
     expect(placeNotes(notes, field, { spill: true }).has('a')).toBe(false);
     expect(placeNotes(notes, field).has('a')).toBe(true);
   });
 
   it('keeps every note on the chart that has a clear place, when one may leave', () => {
-    const point = { x: 500, y: 200 };
-    const placed = placeNotes([{ id: 'a', ...card(), point }], { area: box(0, 0, 1000, 300), marks: [box(480, 200, 40, 100)] }, { spill: true });
+    const point = { x: 500, y: 197 };
+    const placed = placeNotes([{ id: 'a', ...card(), point, from: 'above' }], { area: box(0, 0, 1000, 300), marks: [box(480, 200, 40, 100)] }, { spill: true });
     expect(placed.has('a')).toBe(true);
   });
 
@@ -357,7 +392,7 @@ describe('note placement over the data', () => {
     const placed = placeNotes(
       [
         { id: 'general', ...card() },
-        { id: 'pointed', ...card(), point: { x: 250, y: 110 } },
+        { id: 'pointed', ...card(), point: { x: 250, y: 107 }, from: 'above' },
       ],
       field,
       { spill: true },
@@ -378,19 +413,21 @@ describe('note placement over the data', () => {
       marks.push(box(x - 4, y - 4, 8, 8));
     }
     const area = box(0, 0, 1000, 500);
-    const point = { x: 500, y: 360 };
-    const scattered = placeNotes([{ id: 'a', ...card(), point }], { area, marks }).get('a')!;
-    expect(marks.every((mark) => !overlaps(scattered, mark))).toBe(true);
-    expect(leavesTopOrBottom(scattered, point)).toBe(true);
+    const point = { x: 500, y: 368 };
+    const scattered = layoutNotes([{ id: 'a', ...card(), point, from: 'below' }], { area, marks }).get('a')!;
+    expect(marks.every((mark) => !overlaps(scattered.rect, mark))).toBe(true);
+    expect(scattered.leader.at(-1)).toEqual(point);
 
     // Two lines of 1000 samples each across the top half: past the count
     // where a line is read as its envelope.
     const traces = [0, 1].map((series) =>
       Array.from({ length: 1000 }, (_, index) => ({ x: (index / 999) * 1000, y: 120 + series * 60 + Math.sin(index / 7) * 40 + random() * 20 })),
     );
-    const lined = placeNotes([{ id: 'b', ...card(), point: traces[1][500] }], { area, plot: area, traces }).get('b')!;
-    expect(hiddenTraceLength(lined, traces)).toBe(0);
-    expect(leavesTopOrBottom(lined, traces[1][500])).toBe(true);
+    const named = traces[1][500];
+    const below = { x: named.x, y: named.y + 30 };
+    const lined = layoutNotes([{ id: 'b', ...card(), point: below, from: 'below' }], { area, plot: area, traces }).get('b')!;
+    expect(hiddenTraceLength(lined.rect, traces)).toBe(0);
+    expect(lined.leader.at(-1)).toEqual(below);
   });
 
   it("keeps the comparison chart's note off its bars (the bars stood under the card)", () => {
@@ -412,16 +449,18 @@ describe('note placement over the data', () => {
     const scales = chartScales(data);
     const obstacles = chartObstacles(data, scales);
     const marks = obstacles.marks.map(rect);
-    const point = at(chartSeriesPoint(data, 2, 'THIS RUN', scales)!);
-    const placed = placeNotes([{ id: 'note', width: 394, height: 118, point }], {
+    const target = chartNoteTarget(data, { x: 2, series: 'THIS RUN' }, scales)!;
+    const point = at(target.point);
+    const place = layoutNotes([{ id: 'note', width: 394, height: 118, point, from: target.from, mark: rect(target.mark), value: rect(target.value) }], {
       area: box(0, 0, 937, 596),
       plot: rect(scales.plot),
       marks,
       labels: obstacles.labels.map(rect),
     }).get('note')!;
-    // Clear of every bar, the one it names and its ring included.
-    expect(clearOf(placed, marks)).toBe(true);
-    expect(leavesTopOrBottom(placed, point)).toBe(true);
+    // Clear of every bar, the one it names and its printed value included.
+    expect(clearOf(place.rect, marks)).toBe(true);
+    expect(place.leader.at(-1)).toEqual(point);
+    expect(comesFrom(place.leader, 'above')).toBe(true);
   });
 });
 
@@ -672,26 +711,54 @@ describe('a note on a line, area or scatter chart', () => {
     });
   }
 
+  // At 2560x1080 the training card stood 6 px over the VAL line, the
+  // clearance a card keeps from a bar, and read as resting on the line
+  // (line-notes, open item 5). A line is kept a wider clearance.
+  for (const view of [
+    { name: 'at 1440x900', scale: 0.937, top: 47, layer: { width: 937, height: 562 }, card: { width: 394, height: 118 } },
+    { name: 'at 2560x1080', scale: 1.294, top: 9, layer: { width: 2008, height: 665 }, card: { width: 680, height: 86 } },
+  ]) {
+    it(`keeps the training card a line's clearance off the lines, wider than a bar's, ${view.name}`, () => {
+      const { field, targets } = drawn(training, [{ x: 32, series: 'VAL LOSS' }], view.scale, view.top, view.layer);
+      const place = layoutNotes([{ id: 'note', ...view.card, ...targets[0] }], field, { spill: true, leaderOverlap: 1 }).get('note');
+      expect(place, 'the note keeps its place on the chart').toBeDefined();
+      expect(LINE_CLEARANCE).toBeGreaterThanOrEqual(2 * DATA_CLEARANCE);
+      expect(hiddenTraceLength(inflate(place!.rect, LINE_CLEARANCE), field.traces!)).toBe(0);
+      expect(wholly(place!.rect, field.plot!)).toBe(true);
+      expect(place!.leader.at(-1)).toEqual(targets[0].point);
+    });
+  }
+
   // A line chart's axis gets no headroom, so a peak on a round axis end sits
   // on the plot's top border: its value went below the apex, into the wedge
   // between the line's two sides, where no leader reached it clear of the
   // line, and the note went to the rail (review finding). The value stands
   // beside an apex the line falls away from, and the card comes from there.
+  // A trough's card at 1440x900 fits under the line's rising arm only
+  // within 6 px of it, a bar's clearance: kept a line's (`LINE_CLEARANCE`),
+  // it has no place near enough its point, and the rail takes it, its
+  // point still marked on the chart.
   for (const view of [
-    { name: 'at 1440x900', scale: 0.937, top: 47, layer: { width: 937, height: 562 } },
-    { name: 'at 2560x1080', scale: 1.294, top: 9, layer: { width: 2008, height: 665 } },
+    { name: 'at 1440x900', scale: 0.937, top: 47, layer: { width: 937, height: 562 }, rail: ['a trough by the axis end'] },
+    { name: 'at 2560x1080', scale: 1.294, top: 9, layer: { width: 2008, height: 665 }, rail: [] as string[] },
   ]) {
     for (const [name, data, anchor] of [
       ['a peak on the axis end', { xLabel: 'DAY', xMax: 10, series: [{ name: 'REQ', values: [10, 12, 15, 20, 28, 40, 30, 22, 18, 15, 13] }] }, { x: 5 }],
       ['a trough by the axis end', { xLabel: 'DAY', xMax: 10, series: [{ name: 'REQ', values: [40, 35, 30, 25, 20, 12, 20, 25, 30, 35, 40] }] }, { x: 5 }],
       ['the first point of a falling line', { ...training, marker: undefined, series: [training.series[0]] }, { x: 0, series: 'TRAIN LOSS' }],
     ] as Array<[string, ChartData, { x: number; series?: string }]>) {
-      it(`keeps a note on ${name} on the chart, its leader clear of the line, ${view.name}`, () => {
+      const rail = view.rail.includes(name);
+      it(`${rail ? 'hands the rail' : 'keeps'} a note on ${name}${rail ? '' : ' on the chart, its leader clear of the line'}, ${view.name}`, () => {
         const { field, targets } = drawn(data, [anchor], view.scale, view.top, view.layer);
         const sizes = [{ width: 315, height: 136 }, { width: 252, height: 160 }, { width: 180, height: 210 }];
         const place = layoutNotes([{ id: 'note', width: 394, height: 118, sizes, ...targets[0] }], field, { spill: true, leaderOverlap: 1 }).get('note');
+        if (rail) {
+          expect(place, 'no place keeps a line clearance near the point').toBeUndefined();
+          return;
+        }
         expect(place, 'the note keeps its place on the chart').toBeDefined();
         expect(wholly(place!.rect, field.plot!)).toBe(true);
+        expect(hiddenTraceLength(inflate(place!.rect, LINE_CLEARANCE), field.traces!)).toBe(0);
         expect(place!.leader.at(-1)).toEqual(targets[0].point);
         expect(nearest(place!.leader, field.traces!)).toBeGreaterThan(3);
       });
@@ -762,7 +829,7 @@ describe('a card narrower than its own width', () => {
     // A clear column 300 wide beside what the chart draws.
     const marks = [box(0, 0, 600, 600)];
     const area = box(0, 0, 900, 600);
-    const note = { id: 'a', width: 400, height: 80, point: { x: 750, y: 590 }, sizes: [{ width: 320, height: 100 }, { width: 250, height: 120 }, { width: 200, height: 150 }] };
+    const note: NoteToPlace = { id: 'a', width: 400, height: 80, point: { x: 750, y: 590 }, from: 'above', sizes: [{ width: 320, height: 100 }, { width: 250, height: 120 }, { width: 200, height: 150 }] };
     const placed = layoutNotes([note], { area, marks }).get('a')!;
     expect(placed.rect.right - placed.rect.left).toBe(250);
     expect(placed.settled).toBe(true);
@@ -805,7 +872,7 @@ describe('the note left out for the rail', () => {
     const traces = [20, 80, 140, 200, 260].map((y) => [{ x: 110, y }, { x: 400, y }]);
     const notes: NoteToPlace[] = [
       { id: 'general', width: 90, height: 90 },
-      { id: 'observation', width: 280, height: 90, point: { x: 250, y: 140 } },
+      { id: 'observation', width: 280, height: 90, point: { x: 250, y: 140 }, from: 'above' },
     ];
     const field = { area, plot: area, traces };
     expect([...layoutNotes(notes, field)].map(([id, place]) => [id, place.settled])).toEqual([['general', true], ['observation', false]]);
@@ -821,7 +888,7 @@ describe('the note left out for the rail', () => {
     const area = box(0, 0, 400, 300);
     const traces = [20, 80, 140, 200, 260].map((y) => [{ x: 300, y }, { x: 400, y }]);
     const notes: NoteToPlace[] = [
-      { id: 'observation', width: 280, height: 160, point: { x: 150, y: 290 } },
+      { id: 'observation', width: 280, height: 160, point: { x: 150, y: 290 }, from: 'above' },
       { id: 'general', width: 280, height: 160 },
     ];
     const field = { area, plot: area, traces };
@@ -834,7 +901,7 @@ describe('the note left out for the rail', () => {
   it('is none while every card has a place that keeps the rules', () => {
     const area = box(0, 0, 1000, 600);
     const notes: NoteToPlace[] = [
-      { id: 'observation', width: 280, height: 100, point: { x: 500, y: 400 } },
+      { id: 'observation', width: 280, height: 100, point: { x: 500, y: 400 }, from: 'above' },
       { id: 'general', width: 280, height: 100 },
     ];
     expect([...layoutNotes(notes, { area }, { spill: true }).keys()].sort()).toEqual(['general', 'observation']);
@@ -883,9 +950,10 @@ describe('placing notes on a dense bar chart', () => {
 
 // Every place a card tried was routed against every line segment: a line
 // chart of two 40-sample series with two notes took 70-120 ms a measure,
-// against about 1 ms before its notes had callouts (review finding). It
-// runs on every resize frame. This chart of four series with three notes
-// and the rail takes some 40-70 ms of CPU time, up to 70 ms at load 50.
+// against about 1 ms before its notes had callouts (review finding). A
+// resize runs it once a size step (chartNotesResize.test.tsx). This chart
+// of four series with three notes and the rail takes some 40-70 ms of CPU
+// time, up to 70 ms at load 50.
 // The budget is CPU time, the least of three runs (cpuTime.ts says why).
 describe('placing notes on a line chart', () => {
   it('stays within a frame budget', () => {
@@ -905,13 +973,5 @@ describe('placing notes on a line chart', () => {
       return { id: `n${index}`, width: 300, height: 80, ...target };
     });
     expect(leastCpuMs(() => layoutNotes(notes, field, { spill: true }))).toBeLessThan(200);
-  });
-});
-
-describe('hidden trace length', () => {
-  it('measures the part of each line inside the card', () => {
-    const traces = [[{ x: 0, y: 50 }, { x: 100, y: 50 }, { x: 100, y: 150 }]];
-    expect(hiddenTraceLength(box(50, 0, 100, 100), traces)).toBeCloseTo(50 + 50, 6);
-    expect(hiddenTraceLength(box(200, 0, 100, 100), traces)).toBe(0);
   });
 });

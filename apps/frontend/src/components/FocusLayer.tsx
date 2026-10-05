@@ -18,8 +18,9 @@ import type {
   TimerData,
   WeatherData,
 } from '../controller/types';
-import { ITEM_TYPES, markedItem, noteItemTarget } from '../app/noteItems';
-import { anchoredNote, objectsOfType } from '../app/sceneModel';
+import { markedItem, noteTarget } from '../app/noteItems';
+import { anchoredNote, cast, objectsOfType } from '../app/sceneModel';
+import { chartNoteAnchors } from './ChartNotes';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { CalendarPrimitive } from '../primitives/CalendarPrimitive';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
@@ -37,24 +38,33 @@ import { WeatherPrimitive } from '../primitives/WeatherPrimitive';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
 /**
- * The note focus keeps beside a diagram, or beside a list with items (a
- * calendar, a to-do list, timers, a forecast, an inbox): the one the
- * scene's rail shows for it (`anchoredNote`). Focus gives the object the
- * stage and the rail goes, so the note comes with it: in a panel of its
- * own beside or under it, and the node, actor or item it names keeps its
- * NOTE marker, the view opening on it.
+ * The notes focus keeps beside an object: the ones the scene draws about
+ * it, so a note never goes when its object takes the stage. On a chart,
+ * every note that names it (the scene lays each one over it); on any other
+ * object, the first note that names it (`anchoredNote`, the one the rail
+ * shows when the object is the primary). Focus gives the
+ * object the stage and the rail goes, so the notes come with it, in a panel
+ * of their own beside or under it, and what they name stays marked in it:
+ * a chart's point its ring or outline and printed value, a diagram's node
+ * or actor, a list's item, its NOTE marker, the view opening on it. A
+ * focused note has none: it is the note.
  */
-export function focusNote(state: ControllerState, object: SceneObject | null): NoteData | null {
-  if (!object || (object.type !== 'diagram' && !ITEM_TYPES.has(object.type))) return null;
-  return anchoredNote(objectsOfType<NoteData>(state, 'note'), object.id)?.data ?? null;
+export function focusNotes(state: ControllerState, object: SceneObject | null): Array<SceneObject<NoteData>> {
+  if (!object || object.type === 'note') return [];
+  const notes = objectsOfType<NoteData>(state, 'note');
+  if (object.type === 'chart') return notes.filter((note) => note.data.anchor?.target === object.id);
+  const note = anchoredNote(notes, object.id);
+  return note ? [note] : [];
 }
 
-// `marked` is the item a note names in the object (`anchoredItem`), which
-// the object marks in focus as it does in the scene.
-function FocusedObject({ object, note, marked }: { object: SceneObject; note: NoteData | null; marked?: string }) {
+// What the notes kept beside the object name in it, marked in focus as in
+// the scene: a chart's points (`chartNoteAnchors`), a diagram's node or
+// actor (the first note's), a list's item (`marked`, `markedItem`).
+function FocusedObject({ object, notes, marked }: { object: SceneObject; notes: Array<SceneObject<NoteData>>; marked?: string }) {
+  const note = notes[0]?.data ?? null;
   switch (object.type) {
     case 'chart':
-      return <ChartPrimitive data={object.data as ChartData} focused />;
+      return <ChartPrimitive data={object.data as ChartData} focused named={chartNoteAnchors(cast.chart(object), notes.map((each) => ({ key: each.id, data: each.data, object: each })))} />;
     case 'diagram':
       // The note stands in its own panel here, never as a callout on the drawing.
       return <DiagramObject data={object.data as DiagramObjectData} id={object.id} focused note={note} callout={false} />;
@@ -87,12 +97,12 @@ function FocusedObject({ object, note, marked }: { object: SceneObject; note: No
   }
 }
 
-// Where the note stands is the focus box's geometry, in the stylesheet
-// (`.focus-layer__content--noted`): beside a wide drawing, as the rail is,
-// and under a tall one. The item the note names is marked in the object,
-// and named on the card, as in the scene.
-export function FocusLayer({ object, note = null, onClose }: { object: SceneObject | null; note?: NoteData | null; onClose: () => void }) {
-  const item = noteItemTarget(object, note);
+// Where the notes stand is the focus box's geometry, in the stylesheet
+// (`.focus-layer__content--noted`): beside a wide object, as the rail is,
+// and under a tall one. Each card names what its note is about in the
+// object's words, as the rail card does (`noteTarget`).
+export function FocusLayer({ object, notes = [], onClose }: { object: SceneObject | null; notes?: Array<SceneObject<NoteData>>; onClose: () => void }) {
+  const noted = notes.length > 0;
   return (
     <AnimatePresence>
       {object ? (
@@ -110,7 +120,7 @@ export function FocusLayer({ object, note = null, onClose }: { object: SceneObje
           }}
         >
           <motion.div
-            className={`focus-layer__content focus-layer__content--${object.type}${note ? ' focus-layer__content--noted' : ''}`}
+            className={`focus-layer__content focus-layer__content--${object.type}${noted ? ' focus-layer__content--noted' : ''}`}
             layoutId={`switchboard-object-${object.id}`}
             transition={{ layout: { duration: 0.46, ease: [0.22, 0.61, 0.36, 1] } }}
           >
@@ -119,13 +129,15 @@ export function FocusLayer({ object, note = null, onClose }: { object: SceneObje
               <button type="button" onClick={onClose}>RETURN / ESC</button>
             </div>
             <SurfaceBoundary surfaceId={object.id} resetKey={object}>
-              <FocusedObject object={object} note={note} marked={markedItem(note, object.id)} />
+              <FocusedObject object={object} notes={notes} marked={markedItem(notes[0]?.data, object.id)} />
             </SurfaceBoundary>
-            {note ? (
-              <aside className="focus-layer__note">
-                <SurfaceBoundary surfaceId="focus-note" resetKey={note}>
-                  <AnnotationCard data={note} target={item} itemMarked={item !== undefined} />
-                </SurfaceBoundary>
+            {noted ? (
+              <aside className="focus-layer__note" data-notes={notes.length}>
+                {notes.map((note) => (
+                  <SurfaceBoundary key={note.id} surfaceId={note.id} resetKey={note}>
+                    <AnnotationCard data={note.data} {...noteTarget(object, note.data)} />
+                  </SurfaceBoundary>
+                ))}
               </aside>
             ) : null}
           </motion.div>
