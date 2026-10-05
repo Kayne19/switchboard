@@ -628,8 +628,9 @@ describe('what a note names on a chart', () => {
     expect(chartTargetText({ series: 'NOPE' }, titled)).toBe('RUN / GRAPE-AMODAL-04');
     expect(chartTargetText({}, titled)).toBe('RUN / GRAPE-AMODAL-04');
     expect(chartTargetText({ x: 2 }, { ...titled, labels: undefined, xMax: 0, series: [{ name: 'S', values: [1, 2] }] })).toBe('RUN / GRAPE-AMODAL-04');
-    // A chart with no title is the chart.
+    // A chart with no title, or a blank one, is the chart.
     expect(chartTargetText({ series: 'NOPE' }, { labels: ['a'], series: [{ name: 'S', values: [1] }] })).toBe('CHART');
+    expect(chartTargetText({ series: 'NOPE' }, { ...titled, title: ' ' })).toBe('CHART');
   });
 
   it('names the series a labelled chart marks wherever it draws more than one', () => {

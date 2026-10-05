@@ -226,7 +226,7 @@ export function chartCategories(data: ChartData): string[] | undefined {
  * the chart itself: its title, or `CHART` where it has none.
  */
 export function chartTargetText(anchor: { x?: number; series?: string }, data: ChartData, scales: ChartScales = chartScales(data)): string {
-  const chart = data.title ?? 'CHART';
+  const chart = data.title?.trim() || 'CHART';
   if (anchor.x === undefined) return data.series.find((candidate) => candidate.name === anchor.series)?.name ?? chart;
   const sample = seriesSample(data, anchor.x, anchor.series, scales);
   if (!sample) return chart;
