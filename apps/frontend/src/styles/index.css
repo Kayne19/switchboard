@@ -2813,6 +2813,19 @@ button {
 .calendar-grid__column--today {
   background: rgba(var(--orange-rgb), 0.04);
 }
+/* The parts of a crowded cluster a column has no width for, counted. */
+.calendar-grid__more {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 2px;
+  border: 1px dashed rgba(var(--orange-rgb), 0.55);
+  background: #000;
+  color: rgba(var(--orange-rgb), 0.9);
+  letter-spacing: 0.04em;
+}
 .calendar-grid__nothing {
   position: absolute;
   top: 40%;
@@ -3041,6 +3054,11 @@ button {
   font-weight: 600;
   line-height: 16px;
   text-overflow: ellipsis;
+}
+.calendar-bar__time {
+  flex: none;
+  color: rgba(232, 230, 223, 0.6);
+  letter-spacing: 0.04em;
 }
 .calendar-bar__status {
   flex: none;

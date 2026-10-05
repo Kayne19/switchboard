@@ -102,6 +102,13 @@ export function placeEvents(events: CalendarEvent[]): PlacedEvent[] {
   return placed;
 }
 
+/** Drawn as a bar over its days, not in a time grid's hours: an all-day
+ * event, or a timed one a day long or longer (a conference, a stay), which
+ * would otherwise take a column of every day it covers. */
+export function isBar(placed: PlacedEvent): boolean {
+  return placed.allDay || placed.end - placed.start >= MINUTES_PER_DAY;
+}
+
 /** The moment `now` names, in minutes, or undefined when there is none. */
 export function nowMinutes(data: CalendarData): number | undefined {
   const now = data.now === undefined ? null : parseTimeValue(data.now);
@@ -202,6 +209,8 @@ export interface GridSegment {
   /** In a stepped cluster, the minute a later part starts to lie over this
    * one: only what is above it shows. */
   coveredAt?: number;
+  /** Which of the day's overlapping clusters it is in, counted from 0. */
+  cluster: number;
 }
 
 /** Each shown day's timed parts, in order of start (then the longer first, then as sent). */
@@ -209,14 +218,14 @@ export function daySegments(placed: PlacedEvent[], days: number[]): GridSegment[
   const index = new Map(days.map((day, at) => [day, at]));
   const byDay: GridSegment[][] = days.map(() => []);
   for (const item of placed) {
-    if (item.allDay) continue;
+    if (isBar(item)) continue;
     for (let day = item.firstDay; day <= item.lastDay; day += 1) {
       const at = index.get(day);
       if (at === undefined) continue;
       const dayStart = day * MINUTES_PER_DAY;
       const start = Math.max(item.start, dayStart) - dayStart;
       const end = Math.min(item.end, dayStart + MINUTES_PER_DAY) - dayStart;
-      byDay[at].push({ placed: item, dayIndex: at, start, end, fromBefore: item.start < dayStart, toAfter: item.end > dayStart + MINUTES_PER_DAY, column: 0, span: 1, columns: 1, stepped: false });
+      byDay[at].push({ placed: item, dayIndex: at, start, end, fromBefore: item.start < dayStart, toAfter: item.end > dayStart + MINUTES_PER_DAY, column: 0, span: 1, columns: 1, stepped: false, cluster: 0 });
     }
   }
   for (const list of byDay) list.sort((a, b) => a.start - b.start || b.end - a.end || a.placed.order - b.placed.order);
@@ -242,6 +251,7 @@ export function packColumns(segments: GridSegment[], minDuration: number, stepGa
   const overlaps = (a: GridSegment, b: GridSegment) => a.start < drawnEnd(b) && b.start < drawnEnd(a);
   let cluster: GridSegment[] = [];
   let clusterEnd = -Infinity;
+  let clusterIndex = 0;
   const settle = () => {
     const columns = cluster.reduce((most, segment) => Math.max(most, segment.column + 1), 0);
     const stepped = columns > 1 && cluster.every((segment, at) => cluster.slice(0, at).every((earlier) => !overlaps(earlier, segment) || segment.start - earlier.start >= stepGap));
@@ -255,9 +265,11 @@ export function packColumns(segments: GridSegment[], minDuration: number, stepGa
         span += 1;
       }
       segment.span = span;
+      segment.cluster = clusterIndex;
     }
     cluster = [];
     clusterEnd = -Infinity;
+    clusterIndex += 1;
   };
   for (const segment of segments) {
     if (cluster.length > 0 && segment.start >= clusterEnd) settle();
@@ -269,6 +281,48 @@ export function packColumns(segments: GridSegment[], minDuration: number, stepGa
     clusterEnd = Math.max(clusterEnd, drawnEnd(segment));
   }
   if (cluster.length > 0) settle();
+}
+
+/** The parts of a side-by-side cluster a column too narrow for all of them leaves out, counted in one chip. */
+export interface HiddenRun {
+  cluster: number;
+  /** Minutes into the day: from the first hidden part's start to the last one's drawn end. */
+  start: number;
+  end: number;
+  count: number;
+}
+
+/**
+ * Where a side-by-side cluster has more columns than a day column holds at
+ * `fit` parts across, the parts in the last `columns - fit + 1` columns are
+ * left out and counted in a chip in the last place, so each part drawn
+ * keeps a width its title reads in. Returns the parts drawn (their
+ * `columns` cut to `fit`, their spans held inside it) and the chips.
+ */
+export function crowdedColumns(segments: GridSegment[], fit: number, minDuration: number): { drawn: GridSegment[]; hidden: HiddenRun[] } {
+  const places = Math.max(1, fit);
+  const drawn: GridSegment[] = [];
+  const runs = new Map<number, HiddenRun>();
+  for (const segment of segments) {
+    if (segment.stepped || segment.columns <= places) {
+      drawn.push(segment);
+      continue;
+    }
+    if (segment.column < places - 1) {
+      drawn.push({ ...segment, columns: places, span: Math.min(segment.span, places - 1 - segment.column) });
+      continue;
+    }
+    const end = Math.max(segment.end, segment.start + minDuration);
+    const run = runs.get(segment.cluster);
+    if (run) {
+      run.start = Math.min(run.start, segment.start);
+      run.end = Math.max(run.end, end);
+      run.count += 1;
+    } else {
+      runs.set(segment.cluster, { cluster: segment.cluster, start: segment.start, end, count: 1 });
+    }
+  }
+  return { drawn, hidden: [...runs.values()] };
 }
 
 /** A stretch of a time grid's axis: hours drawn to scale, or a run of
@@ -394,14 +448,15 @@ export interface DayBar {
   lane: number;
 }
 
-/** The bars of the all-day events over `days` (one row of columns), each
- * in the first lane free along its run: the earlier first, then the longer. */
+/** The bars of the events drawn as bars (`isBar`) over `days` (one row of
+ * columns), each in the first lane free along its run: the earlier first,
+ * then the longer. */
 export function dayBars(placed: PlacedEvent[], days: number[]): DayBar[] {
   if (days.length === 0) return [];
   const first = days[0];
   const last = days[days.length - 1];
   const bars: DayBar[] = placed
-    .filter((item) => item.allDay && item.lastDay >= first && item.firstDay <= last)
+    .filter((item) => isBar(item) && item.lastDay >= first && item.firstDay <= last)
     .map((item) => ({
       placed: item,
       from: Math.max(item.firstDay, first) - first,
@@ -461,10 +516,10 @@ export function monthRowPlan(bars: DayBar[], timedCounts: number[], capacity: nu
   return { lanes, cells };
 }
 
-/** The timed events that start on `day`, in order of start, then as sent. */
+/** The timed events shorter than a day that start on `day`, in order of start, then as sent. */
 export function timedOn(placed: PlacedEvent[], day: number): PlacedEvent[] {
   return placed
-    .filter((item) => !item.allDay && item.firstDay === day)
+    .filter((item) => !isBar(item) && item.firstDay === day)
     .sort((a, b) => a.start - b.start || a.order - b.order);
 }
 

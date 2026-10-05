@@ -9,6 +9,7 @@ import {
   axisY,
   calendarDay,
   clockText,
+  crowdedColumns,
   dayBars,
   dayLabel,
   daySegments,
@@ -71,6 +72,8 @@ const MIN_EVENT_PX = 18;
 /** How far a later event must start below an earlier one it overlaps for
  * the earlier's title to show above it: the cluster is then stepped. */
 const STEP_GAP_PX = 13;
+/** The least width a side-by-side event is drawn at: the start of its title. */
+const MIN_PART_PX = 34;
 /** How far each step of a stepped cluster is set in. */
 const STEP_INSET_PX = 14;
 /** A line in an event box. */
@@ -278,22 +281,40 @@ function TimeGrid({ data, model, marked, size, columns }: GridProps) {
     >
       <div className="calendar-grid__body" style={{ ...template, height: `${Math.ceil(axis.height)}px` }}>
         <AxisRules axis={axis} />
-        {days.map((day, index) => (
-          <div key={day} className={`calendar-grid__column${day === model.today ? ' calendar-grid__column--today' : ''}`} style={{ gridColumn: at(index) }}>
-            {segments[index].map((segment) => (
-              <EventBox
-                key={`${segment.placed.order}-${day}`}
-                segment={segment}
-                axis={axis}
-                model={model}
-                day={day}
-                width={segment.stepped ? columnWidth - segment.column * STEP_INSET_PX : (columnWidth * segment.span) / segment.columns}
-                marked={marked}
-                first={firstBox(segment.placed.event.id)}
-              />
-            ))}
-          </div>
-        ))}
+        {days.map((day, index) => {
+          // A cluster wider than the column holds at a readable part width
+          // draws what fits and counts the rest in a chip in the last place.
+          const { drawn, hidden } = crowdedColumns(segments[index], Math.floor(columnWidth / MIN_PART_PX), minDuration);
+          return (
+            <div key={day} className={`calendar-grid__column${day === model.today ? ' calendar-grid__column--today' : ''}`} style={{ gridColumn: at(index) }}>
+              {drawn.map((segment) => (
+                <EventBox
+                  key={`${segment.placed.order}-${day}`}
+                  segment={segment}
+                  axis={axis}
+                  model={model}
+                  day={day}
+                  width={segment.stepped ? columnWidth - segment.column * STEP_INSET_PX : (columnWidth * segment.span) / segment.columns}
+                  marked={marked}
+                  first={firstBox(segment.placed.event.id)}
+                />
+              ))}
+              {hidden.map((run) => {
+                const top = axisY(axis, run.start);
+                const places = Math.max(1, Math.floor(columnWidth / MIN_PART_PX));
+                return (
+                  <div
+                    key={`more-${run.cluster}`}
+                    className="calendar-grid__more tech micro"
+                    style={{ top: `${top}px`, height: `${Math.max(MIN_EVENT_PX, axisY(axis, run.end) - top) - 1}px`, left: `calc(${((places - 1) / places) * 100}% + 1px)`, width: `calc(${100 / places}% - 3px)` }}
+                  >
+                    +{run.count}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
         {nowMinute !== undefined ? <NowLine axis={axis} minute={nowMinute} column={nowColumn} columns={columns} /> : null}
         {bars.length === 0 && segments.every((list) => list.length === 0) ? <div className="calendar-grid__nothing tech micro">NOTHING SCHEDULED</div> : null}
       </div>
@@ -425,6 +446,8 @@ function DayBarBox({ bar, model, marked, first, column }: { bar: DayBar; model: 
       data-item={placed.event.id}
       style={{ gridColumn: `${bar.from + column} / ${bar.to + column + 1}`, gridRow: bar.lane + 1 }}
     >
+      {/* A timed event long enough to be a bar says when it starts, on its first day. */}
+      {!placed.allDay && !bar.fromBefore ? <span className="calendar-bar__time tech micro">{clockText(placed.start % MINUTES_PER_DAY)}</span> : null}
       <span className="calendar-bar__title">{placed.event.title}</span>
       {status ? <span className="calendar-bar__status tech micro">{status}</span> : null}
       {isMarked ? <NoteBadge className="calendar-bar__note" /> : null}

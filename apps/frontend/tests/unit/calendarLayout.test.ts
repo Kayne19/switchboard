@@ -10,6 +10,7 @@ import {
   agendaEntries,
   agendaLead,
   AXIS,
+  crowdedColumns,
   axisY,
   calendarDay,
   dayBars,
@@ -155,6 +156,17 @@ describe('overlapping events', () => {
     expect(segments.every((segment) => !segment.stepped)).toBe(true);
   });
 
+  it('draws what a narrow column holds of a crowded cluster and counts the rest in its last place', () => {
+    const segments = segmentsOf(Array.from({ length: 6 }, (_, at) => event(`m${at}`, '2026-10-07T10:00', '2026-10-07T11:00')));
+    packColumns(segments, 20, 30);
+    expect(segments[0].columns).toBe(6);
+    const { drawn, hidden } = crowdedColumns(segments, 3, 20);
+    expect(drawn.map((segment) => [segment.placed.event.id, segment.column, segment.columns])).toEqual([['m0', 0, 3], ['m1', 1, 3]]);
+    expect(hidden).toEqual([{ cluster: 0, start: 600, end: 660, count: 4 }]);
+    // Room for all: nothing is left out.
+    expect(crowdedColumns(segments, 6, 20).hidden).toEqual([]);
+  });
+
   it('sets apart two short events back to back whose drawn boxes would touch', () => {
     const segments = segmentsOf([event('a', '2026-10-07T09:30', '2026-10-07T09:45'), event('b', '2026-10-07T09:45', '2026-10-07T10:00')]);
     packColumns(segments, 10);
@@ -216,6 +228,15 @@ describe('all-day bars', () => {
       { id: 'mom', from: 3, to: 3, lane: 1, fromBefore: false, toAfter: false },
       { id: 'trip', from: 5, to: 6, lane: 0, fromBefore: false, toAfter: true },
     ]);
+  });
+});
+
+describe('a timed event a day long or more', () => {
+  it('is a bar over its days, not a column of every day in the hours', () => {
+    const placed = placeEvents([event('conference', '2026-10-05T09:00', '2026-10-07T17:00'), event('meeting', '2026-10-06T10:00', '2026-10-06T11:00')]);
+    const days = shownDays(calendar({}));
+    expect(daySegments(placed, days).flat().map((segment) => segment.placed.event.id)).toEqual(['meeting']);
+    expect(dayBars(placed, days).map((bar) => [bar.placed.event.id, bar.from, bar.to])).toEqual([['conference', 0, 2]]);
   });
 });
 
