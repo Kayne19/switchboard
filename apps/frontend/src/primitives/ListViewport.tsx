@@ -35,14 +35,22 @@ export interface Extent {
 
 // Half a pixel either way is the edge itself, not past it.
 const EDGE = 0.5;
+// An item with no more of it in view than this is past the edge: what
+// shows of it is its padding, not its words. The least of a few pixels and
+// a share of its height.
+const SLIVER = 16;
+const SLIVER_SHARE = 0.4;
 
-/** How many items lie wholly past each edge of `view`. */
+/** How much of an item may show in the view while it still counts as past the edge. */
+const sliver = (item: Extent) => Math.max(EDGE, Math.min(SLIVER, (item.bottom - item.top) * SLIVER_SHARE));
+
+/** How many items lie past each edge of `view`: wholly, or with only a sliver of them in view. */
 export function countPast(items: Extent[], view: Extent): ListPast {
   let above = 0;
   let below = 0;
   for (const item of items) {
-    if (item.bottom <= view.top + EDGE) above += 1;
-    else if (item.top >= view.bottom - EDGE) below += 1;
+    if (item.bottom <= view.top + sliver(item)) above += 1;
+    else if (item.top >= view.bottom - sliver(item)) below += 1;
   }
   return { above, below };
 }
