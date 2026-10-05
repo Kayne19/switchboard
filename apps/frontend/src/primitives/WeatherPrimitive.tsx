@@ -7,6 +7,8 @@ import { MetaTitle } from './MetaTitle';
 import { NoteBadge } from './NoteMarker';
 import { conditionText, WeatherGlyph } from './WeatherGlyph';
 import {
+  COMPACT_FIGURE_GAP,
+  CONDITION_GAP,
   dayLabel,
   dayLong,
   dayRange,
@@ -70,22 +72,31 @@ function AlertLine({ text }: { text: string }) {
   );
 }
 
-function Now({ data, compact, temp, framed, spot, outlook, inline }: { data: WeatherData; compact: boolean; temp: number; framed: boolean; spot?: string; outlook: WeatherDay[] | null; inline: boolean }) {
+function Now({ data, compact, temp, framed, spot, outlook, figure, inline }: {
+  data: WeatherData;
+  compact: boolean;
+  temp: number;
+  framed: boolean;
+  spot?: string;
+  outlook: WeatherDay[] | null;
+  /** Beside an outlook, the figure's width (weatherLayout). */
+  figure: number;
+  inline: boolean;
+}) {
   const { current, units } = data;
   // The temperature is as large as the layout gives it, and no larger than
   // its row (glyph, digits, unit) fits the column the figure stands in:
   // `-12.5°C` needs more room than `61°F`.
   const mainRef = useRef<HTMLDivElement>(null);
   const { width } = useElementSize(mainRef);
-  // Beside the outlook the figure's column is as wide as the figure, so it
-  // is fitted to the body less the room of one day's column, never to its
-  // own width; the days then take the room the figure leaves, as many as
-  // whole columns fit there.
+  // Beside the outlook the figure stands as wide as the layout counted it
+  // (fitted to the body less one day's column), and the days take the room
+  // it leaves, as many as whole columns fit there.
   const bodyRef = useRef<HTMLDivElement>(null);
   const body = useElementSize(bodyRef).width;
   const tempText = formatTemp(current.temp);
-  const fitted = heroTempFit(outlook ? body - OUTLOOK_SPACE - OUTLOOK_COLUMN : width, tempText, temp);
-  const shown = outlook ? outlookDays(outlook, outlookCount(body - width - OUTLOOK_SPACE, outlook.length), spot) : [];
+  const fitted = outlook ? temp : heroTempFit(width, tempText, temp);
+  const shown = outlook ? outlookDays(outlook, outlookCount(body - figure - OUTLOOK_SPACE, outlook.length), spot) : [];
   const degree = (value: number) => `${formatTemp(value)}°`;
   const highLow = current.high !== undefined || current.low !== undefined
     ? [current.high !== undefined ? `H ${degree(current.high)}` : null, current.low !== undefined ? `L ${degree(current.low)}` : null].filter(Boolean).join(' ')
@@ -113,7 +124,7 @@ function Now({ data, compact, temp, framed, spot, outlook, inline }: { data: Wea
       <div
         ref={bodyRef}
         className={`weather-now__body${outlook ? ' weather-now__body--outlook' : ''}`}
-        style={outlook ? ({ '--outlook-column': `${OUTLOOK_COLUMN}px`, '--outlook-gap': `${OUTLOOK_GAP}px`, '--outlook-space': `${OUTLOOK_SPACE}px` } as CSSProperties) : undefined}
+        style={outlook ? ({ '--outlook-figure': `${figure}px`, '--outlook-column': `${OUTLOOK_COLUMN}px`, '--outlook-gap': `${OUTLOOK_GAP}px`, '--outlook-space': `${OUTLOOK_SPACE}px` } as CSSProperties) : undefined}
       >
         <div ref={mainRef} className="weather-now__main" style={{ '--weather-temp': `${fitted}px` } as CSSProperties}>
           <WeatherGlyph condition={current.condition} className="weather-now__glyph" />
@@ -357,6 +368,10 @@ export function WeatherPrimitive({ data, marked, framed = false }: { data: Weath
   const days = data.daily ?? [];
   // The days an outlook would stand beside the conditions: the days to come.
   const offered = outlookOffer(days, data.current, marked);
+  // The condition line's own width (its face follows the stage, so it is
+  // read, not counted): beside an outlook the figure stands as wide as it
+  // or its temperature row, whichever is wider (outlookFigure).
+  const [condition, setCondition] = useState(0);
   const layout = weatherLayout(size.width, size.height, {
     hourly: hours.length > 0,
     daily: days.length > 0,
@@ -364,8 +379,21 @@ export function WeatherPrimitive({ data, marked, framed = false }: { data: Weath
     markedHour: hours.some((hour) => hour.time === marked),
     markedDay: days.some((day) => day.date === marked),
     alert: Boolean(data.alert),
+    temp: formatTemp(data.current.temp),
+    condition,
   });
   const arrangement: WeatherArrangement = layout.arrangement;
+  useLayoutEffect(() => {
+    const line = arrangement === 'compact' ? boxRef.current?.querySelector<HTMLElement>('.weather-now__condition') : null;
+    if (!line) return undefined;
+    // Its parts at their own widths, with the gap it stands at under the
+    // temperature, whether or not it is set beside it now.
+    const measure = () => {
+      const parts = Array.from(line.children) as HTMLElement[];
+      setCondition(Math.ceil(parts.reduce((sum, part) => sum + part.scrollWidth, 0) + CONDITION_GAP * Math.max(0, parts.length - 1)));
+    };
+    return watchElement(line, measure, { children: true, changes: true });
+  }, [arrangement]);
   // Down the box, the forecast is one column read top to bottom, and it
   // scrolls as one when it is longer than the box, counting the days past
   // the edge; beside one another, each part keeps its place and the days
@@ -388,14 +416,14 @@ export function WeatherPrimitive({ data, marked, framed = false }: { data: Weath
   }, [tall]);
   const field = (
     <div ref={fieldRef} className="weather__field" data-parts={parts} style={{ '--weather-temp': `${layout.temp}px`, '--weather-strip-least': `${STRIP_LEAST}px` } as CSSProperties}>
-      <Now data={data} compact={arrangement === 'compact'} temp={layout.temp} framed={framed} spot={unshown} outlook={layout.outlook ? offered : null} inline={layout.inline} />
+      <Now data={data} compact={arrangement === 'compact'} temp={layout.temp} framed={framed} spot={unshown} outlook={layout.outlook ? offered : null} figure={layout.figure} inline={layout.inline} />
       {layout.hourly ? <Hours hours={hours} units={data.units} marked={marked} /> : null}
       {layout.daily ? <Days days={days} marked={marked} scroll={!tall} /> : null}
     </div>
   );
   const named = [...hours.map((hour) => hour.time), ...days.map((day) => day.date)].includes(marked ?? '') ? marked : undefined;
   return (
-    <div className={`weather weather--${arrangement}`} data-testid="weather" data-layout={arrangement}>
+    <div className={`weather weather--${arrangement}`} data-testid="weather" data-layout={arrangement} style={{ '--condition-gap': `${CONDITION_GAP}px`, '--figure-gap': `${COMPACT_FIGURE_GAP}px` } as CSSProperties}>
       {/* The box the forecast is laid out for, inside any padding its slot gives it. */}
       <div ref={boxRef} className="weather__box">
         {/* Before the box is measured the forecast is a stand-in: it says nothing to the stage. */}

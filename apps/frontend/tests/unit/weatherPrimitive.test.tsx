@@ -29,12 +29,13 @@ const forecast: WeatherData = {
 
 let host: HTMLElement | undefined;
 let root: Root | undefined;
-// `main`: the width the figure takes (its own, beside an outlook); the rest
-// of the box measures as the box.
-const box: { width: number; height: number; main?: number } = { width: 0, height: 0 };
+// `condition`: the widths the condition line's parts are drawn at (the
+// condition, the high and low), which jsdom does not lay out; the rest of
+// the box measures as the box.
+const box: { width: number; height: number; condition?: number[] } = { width: 0, height: 0 };
 
-function render(data: WeatherData, marked?: string, size: { width: number; height: number; main?: number } = { width: 0, height: 0 }): HTMLElement {
-  box.main = undefined;
+function render(data: WeatherData, marked?: string, size: { width: number; height: number; condition?: number[] } = { width: 0, height: 0 }): HTMLElement {
+  box.condition = undefined;
   Object.assign(box, size);
   const element = document.createElement('div');
   document.body.append(element);
@@ -54,10 +55,12 @@ beforeAll(() => {
     disconnect() {}
   };
   // The box the forecast measures: the one this test gives.
-  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {
+  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => box.width });
+  Object.defineProperty(HTMLElement.prototype, 'scrollWidth', {
     configurable: true,
     get(this: HTMLElement) {
-      return box.main !== undefined && this.classList.contains('weather-now__main') ? box.main : box.width;
+      const line = this.parentElement;
+      return line?.classList.contains('weather-now__condition') ? (box.condition?.[Array.from(line.children).indexOf(this)] ?? 0) : 0;
     },
   });
   Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => box.height });
@@ -166,7 +169,7 @@ describe('the head', () => {
 describe('a short slot', () => {
   it('stands the days beside the conditions: each its name, glyph, high and low', () => {
     // The today scene's forecast cell on a phone: 334x128, with an alert.
-    const page = render(forecast, undefined, { width: 334, height: 128, main: 140 });
+    const page = render(forecast, undefined, { width: 334, height: 128, condition: [24, 59] });
     expect(page.querySelector('.weather__field')!.getAttribute('data-parts')).toBe('now');
     // Today's high and low are the figure's (H 68° L 54°): the row is the days to come.
     const days = [...page.querySelectorAll('.weather-outlook__day')];
@@ -180,7 +183,7 @@ describe('a short slot', () => {
   });
 
   it('draws no outlook when the forecast holds no day to come', () => {
-    const page = render({ ...forecast, daily: [forecast.daily![0]] }, undefined, { width: 334, height: 128, main: 140 });
+    const page = render({ ...forecast, daily: [forecast.daily![0]] }, undefined, { width: 334, height: 128, condition: [24, 59] });
     expect(page.querySelector('.weather-outlook')).toBeNull();
     expect(page.querySelector('.weather-now__body--outlook')).toBeNull();
   });
@@ -250,8 +253,9 @@ describe('a note on one hour or day', () => {
       ...forecast,
       daily: Array.from({ length: 10 }, (_, index) => ({ date: `2026-10-${String(7 + index).padStart(2, '0')}`, high: 60 + index, low: 50 + index, condition: 'clear' as const })),
     };
-    // A 310px body, the figure 140px of it: the room beside it holds three columns.
-    const page = render(tenDays, '2026-10-14', { width: 310, height: 128, main: 140 });
+    // A 310px body, the figure 140px of it (its condition line under a 28px
+    // temperature, beside the glyph): the room beside it holds three columns.
+    const page = render(tenDays, '2026-10-14', { width: 310, height: 128, condition: [24, 59] });
     expect(page.querySelector('.weather__field')!.getAttribute('data-parts')).toBe('now');
     expect([...page.querySelectorAll('.weather-outlook__day')].map((day) => day.getAttribute('data-item'))).toEqual(['2026-10-07', '2026-10-08', '2026-10-14']);
     expect(marks(page)).toEqual(['2026-10-14']);
@@ -259,10 +263,12 @@ describe('a note on one hour or day', () => {
   });
 
   it('a short slot whose figure leaves no room for a column draws the marked day on the spot line', () => {
-    const page = render(forecast, '2026-10-09', { width: 180, height: 128, main: 170 });
+    const page = render(forecast, '2026-10-09', { width: 180, height: 128, condition: [24, 90] });
     expect(page.querySelector('.weather-outlook')).toBeNull();
     expect(marks(page)).toEqual(['2026-10-09']);
     expect(page.querySelector('.weather-spot')!.textContent).toBe('NOTEFRI OCT 9' + '52° / 66°');
+    // The layout kept the line's room: the figure stands on one line.
+    expect(page.querySelector('.weather-now--inline')).not.toBeNull();
   });
 
   it('marks nothing for a time the forecast does not hold', () => {

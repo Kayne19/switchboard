@@ -2643,7 +2643,7 @@ button {
 .weather-now__condition {
   display: flex;
   flex-wrap: wrap;
-  gap: 2px 16px;
+  gap: 2px var(--condition-gap);
   margin-top: 8px;
   color: var(--paper);
 }
@@ -2687,7 +2687,7 @@ button {
    The sizes come from weatherLayout (OUTLOOK_*), set on the body. */
 .weather-now__body--outlook,
 .weather__field[data-parts="now"] .weather-now__body--outlook {
-  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+  grid-template-columns: var(--outlook-figure) minmax(0, 1fr);
   column-gap: var(--outlook-space);
 }
 
@@ -3080,7 +3080,7 @@ button {
   gap: 6px;
 }
 .weather--compact .weather-now__main {
-  gap: 10px;
+  gap: var(--figure-gap);
 }
 .weather--compact .weather-now__condition {
   margin-top: 3px;

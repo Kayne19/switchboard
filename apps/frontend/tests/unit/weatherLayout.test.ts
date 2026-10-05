@@ -23,8 +23,11 @@ import {
   OUTLOOK_COLUMN,
   OUTLOOK_GAP,
   OUTLOOK_HEIGHT,
+  OUTLOOK_SPACE,
+  OUTLOOK_TEMP_LEAST,
   outlookCount,
   outlookDays,
+  outlookFigure,
   outlookOffer,
   rangeOnScale,
   placeBesideTitle,
@@ -138,6 +141,26 @@ describe('weatherLayout', () => {
     expect(weatherLayout(340, 110, { ...all, alert: true })).toMatchObject({ outlook: false, inline: false });
     // The outlook holds the day: no line to keep room for.
     expect(weatherLayout(334, 128, { ...all, alert: true, markedDay: true })).toMatchObject({ outlook: true, inline: false });
+  });
+
+  it('stands an outlook only where a whole column fits beside the figure, counted from its temperature row and its condition line', () => {
+    // A 219px cell (the today scene with a fourth cell beside it, 820x1180):
+    // the figure's condition line, 130px beside a 26px glyph, left no
+    // column, and the marked day stood on a spot line the layout had not
+    // kept room for.
+    const cell = { ...all, alert: true, markedDay: true, temp: '61', condition: 130 };
+    expect(weatherLayout(219, 176, cell)).toMatchObject({ outlook: false, figure: 0 });
+    // The same cell with a short condition line: a column fits.
+    const roomy = weatherLayout(219, 176, { ...cell, condition: 40 });
+    expect(roomy.outlook).toBe(true);
+    expect(219 - OUTLOOK_SPACE - roomy.figure).toBeGreaterThanOrEqual(OUTLOOK_COLUMN);
+    expect(roomy.figure).toBe(outlookFigure(roomy.temp, '61', 40));
+    // The temperature row counts by its digits: `-12.5` needs more room than `61`.
+    expect(outlookFigure(28, '-12.5', 0)).toBe(Math.ceil(28 * heroEms('-12.5')));
+    expect(outlookFigure(28, '-12.5', 0)).toBeGreaterThan(outlookFigure(28, '61', 0));
+    // A slot whose column would leave the figure under a compact figure's least holds none.
+    const narrow = OUTLOOK_SPACE + OUTLOOK_COLUMN + Math.floor((OUTLOOK_TEMP_LEAST - 1) * heroEms('-12.5'));
+    expect(weatherLayout(narrow, 128, { ...all, temp: '-12.5' }).outlook).toBe(false);
   });
 
   it('stands no outlook where it has no day to come to show', () => {
