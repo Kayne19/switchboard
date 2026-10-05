@@ -70,10 +70,23 @@ function nounFor(noun: ListNoun, count: number): string {
 const FADE_SHARE = 0.18;
 const FADE_MAX = 36;
 const FADE_MIN = 18;
-// A page is the view less a row's worth, so the row at the edge stays in sight.
+// A page is the view less a row's worth, so the row at the edge stays in
+// sight; an arrow moves a line.
 const PAGE_SHARE = 0.85;
+const LINE = 40;
 
-const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
+const pageLength = (viewHeight: number) => Math.max(1, Math.round(viewHeight * PAGE_SHARE));
+
+/** Where a scroll key moves a list's scroll to, or null for a key the list does not take. */
+export function keyScrollTop(key: string, shift: boolean, scrollTop: number, viewHeight: number, contentHeight: number): number | null {
+  const max = Math.max(0, contentHeight - viewHeight);
+  const page = pageLength(viewHeight);
+  const moves: Record<string, number> = { ArrowDown: LINE, ArrowUp: -LINE, PageDown: page, PageUp: -page, ' ': shift ? -page : page };
+  if (key === 'Home') return 0;
+  if (key === 'End') return max;
+  if (!(key in moves)) return null;
+  return Math.max(0, Math.min(max, scrollTop + moves[key]));
+}
 
 function reducedMotion(): boolean {
   return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -170,18 +183,26 @@ export function ListViewport({ children, noun, lead, head, className, scrollClas
     element.scrollTop = leadScrollTop({ top, bottom: top + rect.height }, element.scrollTop, element.clientHeight, element.scrollHeight);
   });
 
-  // Keys that scroll a focused list scroll it; they do not reach the
-  // surface around it, which would take Space as "expand".
-  const keepScrollKeys = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (SCROLL_KEYS.has(event.key)) event.stopPropagation();
+  // The keys that scroll a focused list scroll it here, and each one it
+  // takes is marked handled (FocusableSurface's rule: a child marks an
+  // event with preventDefault and never stops it), so the surface around it
+  // leaves Space alone rather than expanding the object, and Enter, which
+  // the list does not take, still expands it.
+  const scrollKeys = (event: KeyboardEvent<HTMLDivElement>) => {
+    const element = scrollRef.current;
+    if (!element || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+    const top = keyScrollTop(event.key, event.shiftKey, element.scrollTop, element.clientHeight, element.scrollHeight);
+    if (top === null) return;
+    event.preventDefault();
+    element.scrollTo({ top, behavior: reducedMotion() ? 'auto' : 'smooth' });
   };
-  // A tap on an edge's count turns a page that way; it does not expand the
-  // object around the list.
+  // A tap on an edge's count turns a page that way. The tap is marked
+  // handled, so the surface around the list does not expand the object.
   const page = (direction: -1 | 1) => (event: MouseEvent<HTMLDivElement>) => {
-    event.stopPropagation();
+    event.preventDefault();
     const element = scrollRef.current;
     if (!element) return;
-    element.scrollBy({ top: direction * Math.max(1, Math.round(element.clientHeight * PAGE_SHARE)), behavior: reducedMotion() ? 'auto' : 'smooth' });
+    element.scrollBy({ top: direction * pageLength(element.clientHeight), behavior: reducedMotion() ? 'auto' : 'smooth' });
   };
 
   const fade = Math.round(Math.max(FADE_MIN, Math.min(FADE_MAX, viewHeight * FADE_SHARE)));
@@ -210,7 +231,7 @@ export function ListViewport({ children, noun, lead, head, className, scrollClas
           aria-label={label}
           role={label ? 'region' : undefined}
           onScroll={onScroll}
-          onKeyDown={scrolls ? keepScrollKeys : undefined}
+          onKeyDown={scrolls ? scrollKeys : undefined}
         >
           {children}
         </div>

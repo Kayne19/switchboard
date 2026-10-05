@@ -5,7 +5,8 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { countPast, leadScrollTop, ListViewport } from '../../src/primitives/ListViewport';
+import { FocusableSurface } from '../../src/primitives/FocusableSurface';
+import { countPast, keyScrollTop, leadScrollTop, ListViewport } from '../../src/primitives/ListViewport';
 
 let host: HTMLDivElement | undefined;
 let root: Root | undefined;
@@ -45,7 +46,7 @@ function layOut(scroll: HTMLElement, scrollTop: number) {
 
 let surfaceClicks = 0;
 
-// The list inside a surface that expands on a click, as a primitive sits.
+// The list inside the surface that expands its object, as a primitive sits.
 function render(children: React.ReactNode, props: { lead?: string } = {}) {
   surfaceClicks = 0;
   const element = document.createElement('div');
@@ -53,9 +54,9 @@ function render(children: React.ReactNode, props: { lead?: string } = {}) {
   host = element;
   root = createRoot(element);
   act(() => root!.render(
-    <div onClick={() => (surfaceClicks += 1)}>
+    <FocusableSurface onActivate={() => (surfaceClicks += 1)} ariaLabel="Expand tasks">
       <ListViewport noun={['TASK', 'TASKS']} {...props}>{children}</ListViewport>
-    </div>,
+    </FocusableSurface>,
   ));
   return element.querySelector<HTMLElement>('.list-viewport__scroll')!;
 }
@@ -142,9 +143,9 @@ describe('ListViewport', () => {
     layOut(scroll, 0);
     const again = (lead: string) =>
       act(() => root!.render(
-        <div>
+        <FocusableSurface onActivate={() => (surfaceClicks += 1)} ariaLabel="Expand tasks">
           <ListViewport noun={['TASK', 'TASKS']} lead={lead}>{rows(10)}</ListViewport>
-        </div>,
+        </FocusableSurface>,
       ));
     again('t8');
     // Row 8 (240-270) would rest a quarter view down, at 215; the list's
@@ -164,8 +165,46 @@ describe('ListViewport', () => {
     });
     const calls: ScrollToOptions[] = [];
     scroll.scrollBy = ((options: ScrollToOptions) => calls.push(options)) as typeof scroll.scrollBy;
+    // The page hears every click (the audio unlock): the tap is marked
+    // handled, never stopped.
+    let heard = 0;
+    const hear = () => (heard += 1);
+    document.addEventListener('click', hear);
     act(() => page().querySelector<HTMLElement>('.drawing-viewport__rim--bottom')!.click());
+    document.removeEventListener('click', hear);
     expect(calls).toEqual([{ top: 85, behavior: expect.any(String) }]);
     expect(surfaceClicks).toBe(0);
+    expect(heard).toBe(1);
+  });
+
+  it('scrolls by its keys while it scrolls; Space does not expand the object, Enter still does', async () => {
+    const scroll = render(rows(10));
+    layOut(scroll, 0);
+    await act(async () => {
+      scroll.dispatchEvent(new Event('scroll'));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    const calls: ScrollToOptions[] = [];
+    scroll.scrollTo = ((options: ScrollToOptions) => calls.push(options)) as typeof scroll.scrollTo;
+    const press = (key: string) => act(() => scroll.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })));
+    press(' ');
+    press('End');
+    expect(calls.map((call) => call.top)).toEqual([85, 200]);
+    expect(surfaceClicks).toBe(0);
+    press('Enter');
+    expect(surfaceClicks).toBe(1);
+  });
+});
+
+describe('keyScrollTop', () => {
+  it('moves a line, a page, or to either end, and no further', () => {
+    expect(keyScrollTop('ArrowDown', false, 0, 100, 400)).toBe(40);
+    expect(keyScrollTop('ArrowUp', false, 10, 100, 400)).toBe(0);
+    expect(keyScrollTop('PageDown', false, 250, 100, 400)).toBe(300);
+    expect(keyScrollTop(' ', true, 200, 100, 400)).toBe(115);
+    expect(keyScrollTop('Home', false, 200, 100, 400)).toBe(0);
+    expect(keyScrollTop('End', false, 0, 100, 400)).toBe(300);
+    expect(keyScrollTop('Enter', false, 0, 100, 400)).toBeNull();
+    expect(keyScrollTop('a', false, 0, 100, 400)).toBeNull();
   });
 });
