@@ -831,3 +831,119 @@ fn an_image_is_capped_at_eight_mebibytes_and_its_action_at_twelve() {
         Err("action exceeds size limit".into())
     );
 }
+
+// ---- the shared corpus -------------------------------------------------------
+
+/// `{"$repeat": s, "times": n}` in the corpus stands for `s` repeated `n`
+/// times, so a case at a length cap stays one readable line. The browser's
+/// `validatorCorpus.test.ts` expands it the same way.
+fn expand_corpus_value(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            if map.len() == 2 {
+                if let (Some(Value::String(text)), Some(times)) =
+                    (map.get("$repeat"), map.get("times").and_then(Value::as_u64))
+                {
+                    return Value::String(text.repeat(times as usize));
+                }
+            }
+            Value::Object(
+                map.iter()
+                    .map(|(key, value)| (key.clone(), expand_corpus_value(value)))
+                    .collect(),
+            )
+        }
+        Value::Array(items) => Value::Array(items.iter().map(expand_corpus_value).collect()),
+        other => other.clone(),
+    }
+}
+
+/// JSON equality with numbers compared by value, as the browser compares
+/// them: the corpus's `1.0` and the validator's `1` are one number.
+fn same_json(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x.as_f64() == y.as_f64(),
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(x, y)| same_json(x, y))
+        }
+        (Value::Object(x), Value::Object(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .all(|(key, value)| y.get(key).is_some_and(|other| same_json(value, other)))
+        }
+        _ => a == b,
+    }
+}
+
+/// The two validators agree rule for rule (AGENTS.md): each case in
+/// `apps/frontend/tests/fixtures/validator-corpus.json` is an action and
+/// what both must make of it, either the exact error or acceptance (with
+/// the normalized action, when it is not the action as sent). The browser's
+/// `validatorCorpus.test.ts` runs the same file. An accepted action is
+/// accepted again, unchanged, when it is validated a second time: the
+/// browser validates what this side normalized.
+#[test]
+fn agrees_with_the_shared_validator_corpus() {
+    let corpus: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/apps/frontend/tests/fixtures/validator-corpus.json"
+    )))
+    .unwrap();
+    let cases = corpus["cases"].as_array().unwrap();
+    let mut failures = Vec::new();
+    for case in cases {
+        let name = case["name"].as_str().unwrap();
+        let action = expand_corpus_value(&case["action"]);
+        let got = validate_action(&action);
+        match (case.get("error"), case.get("accepted")) {
+            (Some(Value::String(error)), None) => {
+                if got.as_ref() != Err(error) {
+                    failures.push(format!("{name}: wanted the error {error:?}, got {got:?}"));
+                }
+            }
+            (None, Some(Value::Bool(true))) => {
+                let wanted = expand_corpus_value(case.get("normalized").unwrap_or(&case["action"]));
+                match got {
+                    Ok(normalized) if same_json(&normalized, &wanted) => {
+                        let again = validate_action(&normalized);
+                        if again.as_ref() != Ok(&normalized) {
+                            failures.push(format!(
+                                "{name}: its normalized action validates to {again:?}"
+                            ));
+                        }
+                    }
+                    Ok(normalized) => failures.push(format!("{name}: normalized to {normalized}")),
+                    Err(error) => failures.push(format!("{name}: refused with {error:?}")),
+                }
+            }
+            _ => panic!("{name}: a case is either accepted or names its error"),
+        }
+    }
+    // Every op and every show type is both accepted and refused somewhere.
+    for outcome in ["accepted", "error"] {
+        let mut wanted: Vec<String> = ["hide", "focus", "say", "clear"]
+            .iter()
+            .map(|op| op.to_string())
+            .chain(CONTENT_TYPES.iter().map(|kind| format!("show {kind}")))
+            .collect();
+        wanted.retain(|kind| {
+            !cases.iter().any(|case| {
+                let action = &case["action"];
+                let named = match (action["op"].as_str(), action["type"].as_str()) {
+                    (Some("show"), Some(kind)) => format!("show {kind}"),
+                    (Some(op), _) => op.to_owned(),
+                    _ => return false,
+                };
+                case.get(outcome).is_some() && named == *kind
+            })
+        });
+        assert!(wanted.is_empty(), "no {outcome} case for {wanted:?}");
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {} corpus cases disagree:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    )
+}
