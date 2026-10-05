@@ -118,11 +118,17 @@ and a card keeps a few pixels from it; lines, the marker ring, the legend and
 the axis labels are kept clear too, and an area chart's fill is given up only
 where nothing else is free. The page looks for such a place anywhere within
 reach of the named point, including the band above the plot. Where the chart
-has none (every bar standing to the top and the band shorter than the card,
-say), that one note is shown in the rail instead, still naming its target,
-and the point it names keeps a ring on the chart. A note anchored to a visual
-on a chart page that is not a chart (one in the aux row) is shown in the rail
-too. Every visual payload may also provide a short `caption` for the
+has none for a card (every bar standing to the top and the band shorter than
+the card, say), one note is shown in the rail instead -- the one whose absence
+leaves the others clear, a note naming no point first -- still naming its
+target, and the point it names keeps a ring on the chart. A note anchored to a
+visual on a chart page that is not a chart (one in the aux row) is shown in
+the rail too. The rail holds one note, so: only the primary chart hands one
+over; only the first note about a visual off the charts goes there (later
+ones lie on the primary chart, as before); while it does, the primary hands
+none over; and a compare chart's notes stay on it, over its data where it has
+no clear place. In portrait a rail already full of metrics shows the note
+below them, in its scroll. Every visual payload may also provide a short `caption` for the
 scene's supporting corner label, so that label describes real content instead
 of fixed decorative text.
 
