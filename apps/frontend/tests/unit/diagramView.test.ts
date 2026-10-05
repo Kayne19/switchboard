@@ -3,6 +3,7 @@ import type { DiagramData } from '../../src/controller/types';
 import { fixtures, pipelineDiagram, topologyDiagram } from '../../src/fixtures/scenes';
 import { GRAPH_MIN_SCALE, layoutDiagram, viewDiagram } from '../../src/primitives/diagramLayout';
 import { SLIVER } from '../../src/primitives/drawingFit';
+import { leastCpuMs } from './cpuTime';
 
 const architecture = { mode: 'graph', ...(fixtures.architecture[0] as { data: Omit<DiagramData, 'mode'> }).data } as DiagramData;
 
@@ -106,11 +107,14 @@ describe('a graph read in its viewport', () => {
   });
 
   it('chooses within a frame budget', () => {
-    for (const data of [topologyDiagram, pipelineDiagram]) {
-      for (const size of Object.values(viewports)) viewDiagram(data, { ...size, scrollbar: 0 });
-      const started = performance.now();
-      for (const size of Object.values(viewports)) viewDiagram(data, { ...size, scrollbar: 0 });
-      expect((performance.now() - started) / Object.keys(viewports).length).toBeLessThan(120);
+    // Each viewport laid out afresh: some 7-20 ms of CPU time on average, up
+    // to 35 ms at load 50. The budget is CPU time, the least of three runs
+    // (cpuTime.ts says why).
+    for (const [name, data] of [['topology', topologyDiagram], ['pipeline', pipelineDiagram]] as const) {
+      const spent = leastCpuMs(() => {
+        for (const size of Object.values(viewports)) viewDiagram(data, { ...size, scrollbar: 0 });
+      });
+      expect(spent / Object.keys(viewports).length, name).toBeLessThan(120);
     }
   });
 });

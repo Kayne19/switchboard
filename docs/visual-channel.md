@@ -441,22 +441,31 @@ A forecast is laid out for its box too (`weatherLayout`): on a wide box
 the conditions now stand beside the days and the hours run across the
 foot; on a tall one the three stand down the box and scroll as one; a
 small slot (an aux cell) holds the conditions on one line and one list,
-the days or, when the note names an hour, the hours; a slot too short for
-a list row holds the conditions alone. The hours are a strip, a column
-each: the temperature traced over the chance of rain, labelled every 1,
-2, 3, 4, 6, 8, 12 or 24 hours so the labels stand at least 34px apart,
-which keeps 48 hours readable on a phone without scrolling sideways; the
-hour a note names, each midnight (the day's name) and the first hour are
+the days or, when the note names an hour, the hours; a slot too short
+for a list row (a phone's cell in the today scene) holds the conditions
+with the days to come beside them as a row of columns (a first day whose
+high and low the figure shows is left out), each its name, glyph, high
+and low, as many as whole columns fit beside the figure, a day the note
+names taking the last column when it lies past them; one too short even
+for those columns holds the conditions alone, the condition beside the
+temperature where stacked they would run past its foot (on one line, the
+high and low giving way first). The hours are a strip, a column each:
+the temperature traced over the chance of rain, labelled every 1, 2, 3,
+4, 6, 8, 12 or 24 hours so the labels stand at least 34px apart, which
+keeps 48 hours readable on a phone without scrolling sideways; the hour
+a note names, each midnight (the day's name) and the first hour are
 labelled too, in that order of claim, and one gives way to an earlier
-claim within a step of it, so no two labels crowd (a strip that starts at
-23:00 names the new day at midnight, not the hour before it). The days are rows whose ranges
-are bars on one scale, the lowest low to the highest high, so a cold day
-reads as cold beside a warm one. An alert stands on an amber rule.
+claim within a step of it, so no two labels crowd (a strip that starts
+at 23:00 names the new day at midnight, not the hour before it). The
+days are rows whose ranges are bars on one scale, the lowest low to the
+highest high, so a cold day reads as cold beside a warm one. An alert
+stands on an amber rule.
 
 A title shows once. In the main slot the scene's frame carries it; in an
 aux cell and in focus, where no frame does, the forecast's head leads with
-it (the place it is for beside it) and the timers carry it over their
-field. The forecast's head names its place in every role.
+it (beside it, what of the place it is for the title does not name
+already: `CA` beside `WEATHER / SAN FRANCISCO`) and the timers carry it
+over their field. The forecast's head names its place in every role.
 
 ### Lists that outgrow the frame
 

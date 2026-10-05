@@ -391,7 +391,9 @@ cargo clippy --locked --all-targets -- -D warnings
 
 These are the CI gates (`.github/workflows/ci.yml`). `static/` and
 `static-debug/` are committed build output, so a change that alters them
-commits the rebuild too.
+commits the rebuild too. The browser unit tests need Node 22.19 or later
+(their time budgets read the thread's CPU time, `process.threadCpuUsage`);
+the host agent itself runs on 22.18.
 
 `build.rs` stamps the binary with the commit it was built from, logged at
 startup as `git=` and reported by `/healthz` as `git`. It takes

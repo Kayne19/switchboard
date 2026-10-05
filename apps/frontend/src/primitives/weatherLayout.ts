@@ -44,6 +44,21 @@ export function hourLong(time: string): string {
   return value ? `${weekday(value.dayNumber)} ${String(value.hour).padStart(2, '0')}:${String(value.minute).padStart(2, '0')}` : time;
 }
 
+/**
+ * What a head that leads with the forecast's title says of its place
+ * beside it: the place, or where the title names its first part as words
+ * (`San Francisco` of `San Francisco, CA`, whatever their case) the rest of
+ * it (`CA`), or nothing when the title names all of it. The place is said
+ * once, and none of it is lost.
+ */
+export function placeBesideTitle(title: string | undefined, location: string): string {
+  const words = (text: string) => ` ${text.toUpperCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()} `;
+  const comma = location.indexOf(',');
+  const first = comma < 0 ? location : location.slice(0, comma);
+  if (title === undefined || words(first).trim() === '' || !words(title).includes(words(first))) return location;
+  return comma < 0 ? '' : location.slice(comma + 1).trim();
+}
+
 /** A forecast hour or day a note names, in the forecast's own words; undefined when it holds none of that name. */
 export function weatherItemName(data: WeatherData, item: string): string | undefined {
   const hour = (data.hourly ?? []).find((candidate) => candidate.time === item);
@@ -61,7 +76,10 @@ export function weatherItemName(data: WeatherData, item: string): string | undef
  * - `compact` (an aux cell, a small slot): conditions now on one line and
  *   one list under it -- the days, or the hours where there are no days or
  *   the note names an hour -- or, in a slot too short for a list's rows,
- *   the conditions alone.
+ *   the conditions with the days beside them as a row of columns (the
+ *   outlook), as many as the room beside the conditions holds; in one too
+ *   short for those columns, the conditions alone, the condition beside
+ *   the temperature where the slot is too short to stack them.
  */
 export type WeatherArrangement = 'wide' | 'tall' | 'compact';
 
@@ -71,14 +89,32 @@ export interface WeatherLayout {
   temp: number;
   hourly: boolean;
   daily: boolean;
+  /** The days as a row of columns beside the conditions, where no list fits. */
+  outlook: boolean;
+  /** The condition and the high and low beside the temperature, not under it: a slot too short for both. */
+  inline: boolean;
 }
 
 /** Below either, the box is a small slot. */
 export const COMPACT_HEIGHT = 300;
 export const COMPACT_WIDTH = 280;
-/** A small slot shorter than this holds the conditions alone: a list under
- * them would show its head and no row. The rest is a focus away. */
+/** A small slot shorter than this has no room for a list under the
+ * conditions: a list there would show its head and no row. The days stand
+ * beside the conditions instead (the outlook); the rest is a focus away. */
 export const COMPACT_LIST_HEIGHT = 200;
+/** A short slot holds the outlook where it is this tall: the head and a
+ * column of the outlook (a day's name, glyph, high and low) under it, and
+ * an alert's line more where there is one. Shorter, the conditions stand
+ * alone: a column cut at the foot is no reading. */
+export const OUTLOOK_HEIGHT = 96;
+/** The room an alert's line takes above the figure, and a spot line (the
+ * hour a note names, `Spot`) under it, with their gaps. */
+export const ALERT_LINE = 30;
+export const SPOT_LINE = 30;
+/** A short slot lower than this (an alert's line more where there is one)
+ * sets the condition beside the temperature: stacked under it, the figure
+ * would run past the slot's foot. */
+export const STACKED_HERO_HEIGHT = 72;
 /** A small slot shorter than this has no room for the hourly strip under
  * the conditions (the strip's rows need 120px); it shows the days. */
 export const COMPACT_STRIP_HEIGHT = 260;
@@ -88,24 +124,74 @@ const clamp = (value: number, low: number, high: number) => Math.min(high, Math.
 export function weatherLayout(
   width: number,
   height: number,
-  has: { hourly: boolean; daily: boolean; markedHour?: boolean },
+  // `ahead`: the days an outlook would show (outlookOffer), where they are
+  // not all of `daily`; `markedDay`/`markedHour`: a note names one.
+  has: { hourly: boolean; daily: boolean; ahead?: boolean; markedHour?: boolean; markedDay?: boolean; alert?: boolean },
 ): WeatherLayout {
+  const none = { outlook: false, inline: false };
   if (width < COMPACT_WIDTH || height < COMPACT_HEIGHT) {
     const temp = Math.round(clamp(Math.min(width * 0.13, height * 0.22), 26, 48));
     // Before the box is measured (0) it is drawn whole, as it is in a test.
-    if (height > 0 && height < COMPACT_LIST_HEIGHT) return { arrangement: 'compact', temp, hourly: false, daily: false };
+    if (height > 0 && height < COMPACT_LIST_HEIGHT) {
+      // What stands above and under the figure: an alert's line, and the
+      // spot line of an hour a note names (no list here draws it), or of a
+      // day where the outlook does not stand.
+      const above = has.alert ? ALERT_LINE : 0;
+      const outlook = (has.ahead ?? has.daily) && height >= OUTLOOK_HEIGHT + above + (has.markedHour ? SPOT_LINE : 0);
+      const spot = has.markedHour === true || (has.markedDay === true && !outlook);
+      return { arrangement: 'compact', temp, hourly: false, daily: false, outlook, inline: height < STACKED_HERO_HEIGHT + above + (spot ? SPOT_LINE : 0) };
+    }
     const hourly = has.hourly && (!has.daily || has.markedHour === true) && (height === 0 || height >= COMPACT_STRIP_HEIGHT);
-    if (!hourly && !has.daily) return { arrangement: 'compact', temp, hourly: false, daily: false };
-    return { arrangement: 'compact', temp, hourly, daily: has.daily && !hourly };
+    if (!hourly && !has.daily) return { arrangement: 'compact', temp, hourly: false, daily: false, ...none };
+    return { arrangement: 'compact', temp, hourly, daily: has.daily && !hourly, ...none };
   }
   // Conditions alone stand larger: nothing else shares the box.
   if (!has.hourly && !has.daily) {
-    return { arrangement: width >= 1.3 * height && width >= 620 ? 'wide' : 'tall', temp: Math.round(clamp(Math.min(width * 0.12, height * 0.26), 56, 160)), hourly: false, daily: false };
+    return { arrangement: width >= 1.3 * height && width >= 620 ? 'wide' : 'tall', temp: Math.round(clamp(Math.min(width * 0.12, height * 0.26), 56, 160)), hourly: false, daily: false, ...none };
   }
   if (width >= 1.3 * height && width >= 620) {
-    return { arrangement: 'wide', temp: Math.round(clamp(Math.min(width * 0.075, height * 0.16), 48, 132)), hourly: has.hourly, daily: has.daily };
+    return { arrangement: 'wide', temp: Math.round(clamp(Math.min(width * 0.075, height * 0.16), 48, 132)), hourly: has.hourly, daily: has.daily, ...none };
   }
-  return { arrangement: 'tall', temp: Math.round(clamp(Math.min(width * 0.17, height * 0.1), 44, 112)), hourly: has.hourly, daily: has.daily };
+  return { arrangement: 'tall', temp: Math.round(clamp(Math.min(width * 0.17, height * 0.1), 44, 112)), hourly: has.hourly, daily: has.daily, ...none };
+}
+
+// ---- the outlook: the days beside the conditions in a short slot ------------
+
+/** An outlook column's width and the gap between two, and the space
+ * between the figure and the first, CSS pixels: room for `THU 8`, the
+ * glyph, and a high or low as long as `-12.5°`. The stylesheet takes them
+ * from the body's style, so the count and the drawing agree. */
+export const OUTLOOK_COLUMN = 46;
+export const OUTLOOK_GAP = 6;
+export const OUTLOOK_SPACE = 16;
+
+/** How many days an outlook `width` px wide shows: whole columns, none cut at its edge. */
+export function outlookCount(width: number, days: number): number {
+  if (width <= 0) return 0;
+  return Math.max(0, Math.min(days, Math.floor((width + OUTLOOK_GAP) / (OUTLOOK_COLUMN + OUTLOOK_GAP))));
+}
+
+/**
+ * The days an outlook offers: the days to come. A first day whose high and
+ * low the conditions now show already (`H 68° L 54°`: today, as a forecast
+ * usually opens) is left out, unless a note names it: the figure has said it.
+ */
+export function outlookOffer<T extends { date: string; high: number; low: number }>(days: T[], current: { high?: number; low?: number }, marked?: string): T[] {
+  const [first] = days;
+  const said = first !== undefined && first.date !== marked && current.high === first.high && current.low === first.low;
+  return said ? days.slice(1) : days;
+}
+
+/**
+ * The days an outlook of `count` columns shows: the first, in order; where
+ * a note names a day past them, that day takes the last column, so the day
+ * the card names is on screen with its badge.
+ */
+export function outlookDays<T extends { date: string }>(days: T[], count: number, marked?: string): T[] {
+  const shown = days.slice(0, Math.max(0, count));
+  const named = days.find((day) => day.date === marked);
+  if (!named || shown.length === 0 || shown.includes(named)) return shown;
+  return [...shown.slice(0, -1), named];
 }
 
 /**

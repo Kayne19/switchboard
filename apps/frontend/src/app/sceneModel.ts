@@ -254,6 +254,9 @@ export function deriveScreenState(
     } else if (typeof data.alt === 'string') {
       // An image's alt text is its title when it has none.
       title = data.alt;
+    } else if (typeof data.location === 'string') {
+      // So is a forecast's place.
+      title = data.location;
     }
   }
 

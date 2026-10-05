@@ -209,6 +209,20 @@
       "expected": { "has_visual": true, "kind": "image", "title": "fig-alt", "visible_ids": ["fig"] }
     },
     {
+      "name": "weather_title_is_its_title",
+      "actions": [
+        { "op": "show", "id": "sky", "type": "weather", "data": { "location": "San Francisco, CA", "units": "F", "current": { "temp": 61, "condition": "fog" }, "title": "WEATHER / TODAY" } }
+      ],
+      "expected": { "has_visual": true, "kind": "weather", "title": "WEATHER / TODAY", "visible_ids": ["sky"] }
+    },
+    {
+      "name": "weather_without_title_is_titled_by_its_location",
+      "actions": [
+        { "op": "show", "id": "sky", "type": "weather", "data": { "location": "San Francisco, CA", "units": "F", "current": { "temp": 61, "condition": "fog" } } }
+      ],
+      "expected": { "has_visual": true, "kind": "weather", "title": "San Francisco, CA", "visible_ids": ["sky"] }
+    },
+    {
       "name": "empty_stage_has_no_visual",
       "actions": [],
       "expected": { "has_visual": false, "kind": null, "title": null, "visible_ids": [] }

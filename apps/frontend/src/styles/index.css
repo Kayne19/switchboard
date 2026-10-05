@@ -2682,6 +2682,78 @@ button {
   line-height: 1.25;
   overflow-wrap: break-word;
 }
+/* Beside the outlook the figure's column is as wide as the figure, at most
+   the body's, so its condition line still wraps; the days take the rest.
+   The sizes come from weatherLayout (OUTLOOK_*), set on the body. */
+.weather-now__body--outlook,
+.weather__field[data-parts="now"] .weather-now__body--outlook {
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+  column-gap: var(--outlook-space);
+}
+
+/* The days beside the conditions in a slot too short for a list: whole
+   columns only (outlookCount), each its name, glyph, high and low. */
+.weather-outlook {
+  display: flex;
+  gap: var(--outlook-gap);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.weather-outlook__day {
+  position: relative;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: var(--outlook-column);
+  padding: 8px 0 2px;
+  border-top: 1px solid rgba(232, 230, 223, 0.16);
+  line-height: 1.15;
+}
+
+.weather-outlook__name {
+  color: rgba(232, 230, 223, 0.6);
+  white-space: nowrap;
+}
+
+.weather-outlook__glyph {
+  width: 18px;
+  height: 18px;
+}
+
+.weather-outlook__high {
+  color: var(--paper);
+}
+
+.weather-outlook__low {
+  color: rgba(232, 230, 223, 0.55);
+}
+
+.weather-outlook__day--marked {
+  border-top-color: var(--orange);
+  background: linear-gradient(180deg, rgba(var(--orange-rgb), 0.12), transparent 80%);
+}
+
+.weather-outlook__day--marked > .weather-outlook__name {
+  color: var(--orange);
+}
+
+.weather-outlook__badge {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  translate: -50% -50%;
+  /* Over the column's top rule, the badge's tint is laid on black. */
+  background: linear-gradient(rgba(var(--orange-rgb), 0.25), rgba(var(--orange-rgb), 0.25)) #000;
+}
+
 /* The item a note names, where the slot has no list to show it in: one
    line on the orange rule, its badge first. */
 .weather-spot {
@@ -2707,6 +2779,15 @@ button {
 }
 .weather-spot__precip {
   color: var(--cyan);
+}
+
+/* In a narrow cell the readings give way at the line's end, the day and
+   its badge first in line. */
+.weather-spot__temp,
+.weather-spot__precip {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* The alert: an amber rule, its sign and its words, the warning colour. */
 .weather-alert {
@@ -2992,6 +3073,35 @@ button {
 }
 .weather--compact .weather-now__condition {
   margin-top: 3px;
+}
+
+/* A slot too short to stack them: the condition beside the temperature, on
+   one line that ends in an ellipsis rather than wrap back under it. */
+.weather--compact .weather-now--inline .weather-now__figure {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.weather--compact .weather-now--inline .weather-now__condition {
+  flex: 0 1 auto;
+  flex-wrap: nowrap;
+  gap: 12px;
+  min-width: 0;
+  margin-top: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* The high and low give way first: the condition word stays whole. */
+.weather--compact .weather-now--inline .weather-now__condition > :first-child {
+  flex: none;
+}
+
+.weather--compact .weather-now--inline .weather-now__high-low {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .weather--compact .weather-alert {
   padding: 3px 8px;
@@ -3596,10 +3706,17 @@ button {
   color: rgba(var(--orange-rgb), 0.85);
 }
 
+/* The counts wrap part by part where the list is too narrow for them on
+   one line (an aux cell), never cut at its edge. */
 .tasks-primitive__counts,
 .inbox-primitive__counts {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
   margin-left: auto;
+  text-align: right;
+}
+
+.meta-count {
   white-space: nowrap;
 }
 

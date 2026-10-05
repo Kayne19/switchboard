@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { WeatherData, WeatherHour } from '../../src/controller/types';
 import {
+  ALERT_LINE,
+  SPOT_LINE,
+  STACKED_HERO_HEIGHT,
   COMPACT_HEIGHT,
   COMPACT_LIST_HEIGHT,
   COMPACT_STRIP_HEIGHT,
@@ -17,7 +20,14 @@ import {
   hourLabelStep,
   hourLong,
   labelledHours,
+  OUTLOOK_COLUMN,
+  OUTLOOK_GAP,
+  OUTLOOK_HEIGHT,
+  outlookCount,
+  outlookDays,
+  outlookOffer,
   rangeOnScale,
+  placeBesideTitle,
   tempScale,
   weatherItemName,
   weatherLayout,
@@ -63,6 +73,22 @@ describe('words', () => {
   });
 });
 
+describe('the place in the head', () => {
+  it('beside a title naming its first part as words, whatever their case, is the rest of it', () => {
+    expect(placeBesideTitle('WEATHER / SAN FRANCISCO', 'San Francisco, CA')).toBe('CA');
+    expect(placeBesideTitle('WEATHER / PORTLAND', 'Portland, ME')).toBe('ME');
+    expect(placeBesideTitle('Tromsø / this week', 'Tromsø')).toBe('');
+  });
+
+  it('beside any other title, or none, is the whole place', () => {
+    expect(placeBesideTitle('WEATHER', 'San Francisco, CA')).toBe('San Francisco, CA');
+    expect(placeBesideTitle('FRANCISCAN COAST', 'San Francisco')).toBe('San Francisco');
+    expect(placeBesideTitle('WASHINGTON STATE', 'Washington, D.C.')).toBe('D.C.');
+    expect(placeBesideTitle(undefined, 'San Francisco, CA')).toBe('San Francisco, CA');
+    expect(placeBesideTitle('WEATHER', ', CA')).toBe(', CA');
+  });
+});
+
 describe('weatherLayout', () => {
   const all = { hourly: true, daily: true };
 
@@ -89,8 +115,49 @@ describe('weatherLayout', () => {
     expect(weatherLayout(250, COMPACT_STRIP_HEIGHT, { ...all, markedHour: true })).toMatchObject({ hourly: true, daily: false });
   });
 
-  it('a slot too short for a list row holds the conditions alone', () => {
-    expect(weatherLayout(340, COMPACT_LIST_HEIGHT - 1, all)).toMatchObject({ arrangement: 'compact', hourly: false, daily: false });
+  it('a slot too short for a list row holds the conditions and the days beside them, where a column fits under the head', () => {
+    // The today scene's forecast cell on a phone (334x128, with an alert)
+    // showed the conditions alone.
+    expect(weatherLayout(334, 128, { ...all, alert: true })).toMatchObject({ arrangement: 'compact', hourly: false, daily: false, outlook: true });
+    expect(weatherLayout(340, COMPACT_LIST_HEIGHT - 1, all)).toMatchObject({ arrangement: 'compact', hourly: false, daily: false, outlook: true });
+    expect(weatherLayout(340, OUTLOOK_HEIGHT, all).outlook).toBe(true);
+    // An alert's line takes room above the columns.
+    expect(weatherLayout(340, OUTLOOK_HEIGHT + ALERT_LINE - 1, { ...all, alert: true }).outlook).toBe(false);
+    // Shorter (844x390's cell, 88px): the conditions alone, never a cut column.
+    expect(weatherLayout(252, 88, { ...all, alert: true })).toMatchObject({ hourly: false, daily: false, outlook: false });
+    expect(weatherLayout(340, OUTLOOK_HEIGHT - 1, all).outlook).toBe(false);
+    // No days, no outlook; and a slot with room for the list lists them.
+    expect(weatherLayout(340, 150, { hourly: true, daily: false }).outlook).toBe(false);
+    expect(weatherLayout(250, COMPACT_LIST_HEIGHT, all)).toMatchObject({ daily: true, outlook: false });
+    expect(weatherLayout(1000, 620, all).outlook).toBe(false);
+  });
+
+  it('keeps the room for the spot line of a day a note names where no outlook stands to hold it', () => {
+    // 340x110 with an alert: no outlook; stacked, the figure and the day's line ran past the foot.
+    expect(weatherLayout(340, 110, { ...all, alert: true, markedDay: true })).toMatchObject({ outlook: false, inline: true });
+    expect(weatherLayout(340, 110, { ...all, alert: true })).toMatchObject({ outlook: false, inline: false });
+    // The outlook holds the day: no line to keep room for.
+    expect(weatherLayout(334, 128, { ...all, alert: true, markedDay: true })).toMatchObject({ outlook: true, inline: false });
+  });
+
+  it('stands no outlook where it has no day to come to show', () => {
+    expect(weatherLayout(334, 128, { ...all, ahead: false }).outlook).toBe(false);
+  });
+
+  it('keeps the room for the spot line of an hour a note names, which no list there draws', () => {
+    expect(weatherLayout(334, 128, { ...all, alert: true, markedHour: true }).outlook).toBe(false);
+    expect(weatherLayout(334, OUTLOOK_HEIGHT + ALERT_LINE + SPOT_LINE, { ...all, alert: true, markedHour: true }).outlook).toBe(true);
+  });
+
+  it('sets the condition beside the temperature where the slot is too short to stack them', () => {
+    // 844x390's forecast cell, 88px with an alert: stacked, the condition
+    // and the high and low ran past its foot.
+    expect(weatherLayout(252, 88, { ...all, alert: true }).inline).toBe(true);
+    expect(weatherLayout(252, STACKED_HERO_HEIGHT - 1, all).inline).toBe(true);
+    expect(weatherLayout(252, STACKED_HERO_HEIGHT, all).inline).toBe(false);
+    expect(weatherLayout(334, 128, { ...all, alert: true }).inline).toBe(false);
+    expect(weatherLayout(250, 240, all).inline).toBe(false);
+    expect(weatherLayout(0, 0, all).inline).toBe(false);
   });
 
   it('sets the conditions larger when they stand alone', () => {
@@ -110,6 +177,39 @@ describe('weatherLayout', () => {
       expect(temp).toBeGreaterThanOrEqual(arrangement === 'compact' ? 26 : 44);
       expect(temp).toBeLessThanOrEqual(132);
     }
+  });
+});
+
+describe('the outlook', () => {
+  it('shows as many days as whole columns fit its width, none cut at the edge', () => {
+    const columns = (count: number) => count * OUTLOOK_COLUMN + (count - 1) * OUTLOOK_GAP;
+    expect(outlookCount(columns(3), 10)).toBe(3);
+    expect(outlookCount(columns(3) - 1, 10)).toBe(2);
+    expect(outlookCount(columns(12), 10)).toBe(10);
+    expect(outlookCount(OUTLOOK_COLUMN - 1, 10)).toBe(0);
+    expect(outlookCount(0, 10)).toBe(0);
+  });
+
+  it('offers the days to come: a first day whose high and low the figure shows already is left out', () => {
+    const days = [{ date: '2026-10-07', high: 68, low: 54 }, { date: '2026-10-08', high: 61, low: 55 }];
+    const dates = (offered: Array<{ date: string }>) => offered.map((day) => day.date);
+    expect(dates(outlookOffer(days, { high: 68, low: 54 }))).toEqual(['2026-10-08']);
+    // Not said by the figure: a different high, or none.
+    expect(dates(outlookOffer(days, { high: 70, low: 54 }))).toEqual(['2026-10-07', '2026-10-08']);
+    expect(dates(outlookOffer(days, {}))).toEqual(['2026-10-07', '2026-10-08']);
+    // A day a note names stays, in its place.
+    expect(dates(outlookOffer(days, { high: 68, low: 54 }, '2026-10-07'))).toEqual(['2026-10-07', '2026-10-08']);
+    expect(outlookOffer([], { high: 68, low: 54 })).toEqual([]);
+  });
+
+  it('shows the first days, and a day a note names past them in the last column', () => {
+    const days = ['2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11'].map((date) => ({ date }));
+    const dates = (shown: Array<{ date: string }>) => shown.map((day) => day.date);
+    expect(dates(outlookDays(days, 3))).toEqual(['2026-10-07', '2026-10-08', '2026-10-09']);
+    expect(dates(outlookDays(days, 3, '2026-10-08'))).toEqual(['2026-10-07', '2026-10-08', '2026-10-09']);
+    expect(dates(outlookDays(days, 3, '2026-10-11'))).toEqual(['2026-10-07', '2026-10-08', '2026-10-11']);
+    expect(dates(outlookDays(days, 3, '2026-10-20'))).toEqual(['2026-10-07', '2026-10-08', '2026-10-09']);
+    expect(outlookDays(days, 0, '2026-10-11')).toEqual([]);
   });
 });
 

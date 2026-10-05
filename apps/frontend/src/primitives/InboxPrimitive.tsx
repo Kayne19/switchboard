@@ -143,10 +143,11 @@ export function InboxPrimitive({ data, variant = 'full', marked, framed = false 
   const head = (
     <div className="inbox-primitive__meta tech micro">
       <MetaTitle title={data.title ?? 'INBOX'} framed={framed} className="inbox-primitive__title" />
+      {/* Each count whole: a narrow list wraps between them. */}
       <span className="inbox-primitive__counts">
-        {counts.messages} {counts.messages === 1 ? 'MESSAGE' : 'MESSAGES'}
-        {counts.unread > 0 ? <span className="inbox-primitive__unread"> / {counts.unread} UNREAD</span> : null}
-        {counts.flagged > 0 ? ` / ${counts.flagged} FLAGGED` : ''}
+        <span className="meta-count">{counts.messages} {counts.messages === 1 ? 'MESSAGE' : 'MESSAGES'}</span>
+        {counts.unread > 0 ? <>{' '}<span className="meta-count inbox-primitive__unread">/ {counts.unread} UNREAD</span></> : null}
+        {counts.flagged > 0 ? <>{' '}<span className="meta-count">/ {counts.flagged} FLAGGED</span></> : null}
       </span>
     </div>
   );

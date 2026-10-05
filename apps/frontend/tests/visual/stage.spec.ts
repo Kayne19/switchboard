@@ -279,6 +279,56 @@ test('a long live response on a folded strip is held to its newest lines, the st
   }
 });
 
+// A calendar week on a phone outgrows its share and folds the rail; a
+// small primary in its place gives the stage back. (The next test is the
+// one that holds the grid's `least`: this one passes without it, since a
+// new primary drops the week's reports.)
+const smallMetric = [
+  { op: 'show', id: 'week', type: 'metric', role: 'primary', data: { label: 'STEPS TODAY', value: '6,214' } },
+];
+
+test('a calendar week takes the stage at 390x844, and a small primary in its place gives it back', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, 'calendar');
+  await expect(page.locator('.content-rail--folded')).toBeVisible();
+  const staged = await boxes(page);
+  expect(staged.main.height).toBeGreaterThan(staged.stage.height * 0.69);
+  expect(staged.rail.height).toBeLessThan(staged.stage.height / 6);
+  await page.evaluate((list) => window.SwitchboardController!.run(list), smallMetric);
+  await expect(page.locator('.content-rail--folded')).toHaveCount(0);
+  await page.waitForTimeout(700);
+  const shared = await boxes(page);
+  expect(shared.foldable).toBe(false);
+});
+
+// The grid's `least` is what lets a calendar give the stage back. A long
+// day is a time grid in its share too (it has room for eight hours there)
+// and folds the rail. Sent again as one short appointment, the same grid on
+// the stage stretched its hours to fill the stage, so asked by its scroll
+// it read as needing all of it and kept the stage; asked by its least
+// readable height it reads whole in its share.
+const quietDay = [
+  {
+    op: 'show', id: 'week', type: 'calendar', role: 'primary', data: {
+      view: 'day', start: '2026-10-07', today: '2026-10-07', now: '2026-10-07T09:40',
+      events: [{ id: 'dentist', title: 'Dentist', start: '2026-10-07T10:30', end: '2026-10-07T11:30' }],
+    },
+  },
+];
+
+test('a long calendar day takes the stage at 390x844, and gives it back once the day is short', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, 'calendar-day');
+  await expect(page.locator('.content-rail--folded')).toBeVisible();
+  await expect(page.locator('[data-testid="calendar"]')).toHaveAttribute('data-layout', 'grid');
+  await page.evaluate((list) => window.SwitchboardController!.run(list), quietDay);
+  await expect(page.locator('.content-rail--folded')).toHaveCount(0);
+  await page.waitForTimeout(700);
+  const shared = await boxes(page);
+  expect(shared.foldable).toBe(false);
+  expect(Math.abs(shared.main.height - shared.stage.height * 0.59)).toBeLessThan(1.5);
+});
+
 for (const scene of ['tasks', 'inbox']) {
   test(`a ${scene} list longer than its share takes the stage at 390x844`, async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });

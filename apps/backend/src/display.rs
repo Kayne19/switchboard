@@ -303,6 +303,8 @@ impl DisplayProjection {
                 .or_else(|| o.data.get("label"))
                 // An image's alt text is its title when it has none.
                 .or_else(|| o.data.get("alt"))
+                // So is a forecast's place.
+                .or_else(|| o.data.get("location"))
                 .and_then(Value::as_str)
                 .map(String::from)
         });
