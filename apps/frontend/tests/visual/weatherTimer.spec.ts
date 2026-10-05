@@ -24,29 +24,64 @@ async function show(page: Page, actions: unknown[]) {
 }
 
 // What a reader would call broken, inside one primitive's box: text under
-// the page's floors, text cut by its own box, and parts outside the box.
+// the page's floors; text cut by a box that clips it (an ellipsis says so
+// and is allowed; a scroll region holds the rest down its length); text
+// outside the primitive across; and two texts drawn over each other (the
+// edge tag of a scrolled list lies over rows by design and is left out).
 async function readingFaults(page: Page, selector: string) {
   return page.evaluate((root) => {
     const faults: string[] = [];
     const scope = document.querySelector<HTMLElement>(root);
     if (!scope) return [`no ${root}`];
     const frame = scope.getBoundingClientRect();
+    const texts: Array<{ owner: HTMLElement; box: DOMRect }> = [];
+    const name = (element: Element) => `${element.className || element.tagName}`.slice(0, 60);
     for (const element of scope.querySelectorAll<HTMLElement>('*')) {
-      const text = [...element.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && node.textContent!.trim());
-      if (!text) continue;
+      const nodes = [...element.childNodes].filter((node) => node.nodeType === Node.TEXT_NODE && node.textContent!.trim());
+      if (nodes.length === 0) continue;
       const style = getComputedStyle(element);
-      const box = element.getBoundingClientRect();
-      if (box.width === 0 || style.visibility === 'hidden') continue;
-      if (parseFloat(style.fontSize) < 7) faults.push(`${element.className}: ${style.fontSize}`);
-      // Text cut without an ellipsis to say so.
-      if (element.scrollWidth > element.clientWidth + 1 && style.textOverflow !== 'ellipsis' && style.overflow !== 'visible') {
-        faults.push(`${element.className}: cut ${element.scrollWidth} > ${element.clientWidth}`);
+      const own = element.getBoundingClientRect();
+      if (own.width <= 1 || own.height <= 1 || style.visibility === 'hidden') continue;
+      if (element.closest('.drawing-viewport__rim')) continue;
+      if (parseFloat(style.fontSize) < 7) faults.push(`${name(element)}: ${style.fontSize}`);
+      for (const node of nodes) {
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const ellipsis = style.textOverflow === 'ellipsis' && style.overflowX !== 'visible';
+        for (const drawn of range.getClientRects()) {
+          // Text cut by its own ellipsis is drawn only inside its box; and
+          // a line is read within its line box (a large face's content
+          // area reaches past it, over the line below, where digits have
+          // no descenders).
+          const left = ellipsis ? Math.max(drawn.left, own.left) : drawn.left;
+          const right = ellipsis ? Math.min(drawn.right, own.right) : drawn.right;
+          const top = Math.max(drawn.top, own.top);
+          const bottom = Math.min(drawn.bottom, own.bottom);
+          const box = new DOMRect(left, top, Math.max(0, right - left), Math.max(0, bottom - top));
+          if (box.width < 1) continue;
+          texts.push({ owner: element, box });
+          if (box.left < frame.left - 1 || box.right > frame.right + 1) faults.push(`${name(element)}: outside across ${Math.round(box.left)}..${Math.round(box.right)}`);
+          for (let clip = element as HTMLElement | null; clip && clip !== scope.parentElement; clip = clip.parentElement) {
+            const clipStyle = getComputedStyle(clip);
+            if (clipStyle.overflowX === 'visible' && clipStyle.overflowY === 'visible') continue;
+            const edge = clip.getBoundingClientRect();
+            const scrollsDown = clip.scrollHeight > clip.clientHeight + 1 && clipStyle.overflowY !== 'hidden';
+            if (!ellipsis && (box.left < edge.left - 1 || box.right > edge.right + 1)) faults.push(`${name(element)}: cut across by ${name(clip)}`);
+            if (!scrollsDown && (box.top < edge.top - 1 || box.bottom > edge.bottom + 1)) faults.push(`${name(element)}: cut down by ${name(clip)}`);
+          }
+        }
       }
-      // Laid out past the primitive's own box across (a scroll region
-      // holds the rest down the box).
-      if (box.left < frame.left - 1 || box.right > frame.right + 1) faults.push(`${element.className}: outside ${Math.round(box.left)}..${Math.round(box.right)}`);
     }
-    return faults;
+    for (let a = 0; a < texts.length; a += 1) {
+      for (let b = a + 1; b < texts.length; b += 1) {
+        if (texts[a].owner === texts[b].owner || texts[a].owner.contains(texts[b].owner) || texts[b].owner.contains(texts[a].owner)) continue;
+        const [p, q] = [texts[a].box, texts[b].box];
+        const across = Math.min(p.right, q.right) - Math.max(p.left, q.left);
+        const down = Math.min(p.bottom, q.bottom) - Math.max(p.top, q.top);
+        if (across > 1 && down > 1) faults.push(`${name(texts[a].owner)} over ${name(texts[b].owner)}`);
+      }
+    }
+    return [...new Set(faults)];
   }, selector);
 }
 
@@ -135,6 +170,32 @@ for (const geometry of geometries) {
         await page.waitForTimeout(700);
         expect(await readingFaults(page, `.focus-layer [data-testid="${testid}"]`)).toEqual([]);
       }
+    });
+
+    test('a cold forecast in tenths reads whole: the conditions alone, and days below zero', async ({ page }) => {
+      await page.clock.setFixedTime(T0);
+      await page.goto('/?scene=idle&chrome=0');
+      const current = { temp: -12.5, condition: 'snow', summary: 'Blowing snow until the evening', high: -8.5, low: -17.5, feelsLike: -21.5, humidity: 88, wind: 'NE 40 km/h, gusts 70' };
+      await show(page, [{ op: 'show', id: 'cold', type: 'weather', role: 'primary', data: { location: 'Tromsø', units: 'C', current } }]);
+      await expect(page.locator('[data-scene="weather"] .weather__field')).toHaveAttribute('data-parts', 'now');
+      expect(await readingFaults(page, '[data-scene="weather"] [data-testid="weather"]')).toEqual([]);
+      const daily = Array.from({ length: 6 }, (_, index) => ({ date: `2026-10-${String(7 + index).padStart(2, '0')}`, high: -8.5 - index, low: -17.5 - index, condition: 'snow', precip: 60 }));
+      await show(page, [{ op: 'show', id: 'cold', type: 'weather', role: 'primary', data: { location: 'Tromsø', units: 'C', current, daily } }]);
+      await expect(page.locator('[data-scene="weather"] .weather-day')).toHaveCount(6);
+      await page.waitForTimeout(200);
+      expect(await readingFaults(page, '[data-scene="weather"] [data-testid="weather"]')).toEqual([]);
+    });
+
+    test('a forecast in a small slot with its note on an hour reads whole', async ({ page }) => {
+      await page.clock.setFixedTime(T0);
+      await page.goto('/?scene=today&chrome=0');
+      await page.evaluate(() => window.SwitchboardController!.dispatch({
+        op: 'show', id: 'dentist-note', type: 'note', data: { tag: 'RAIN', anchor: { target: 'weather', item: '2026-10-08T03:00' }, segments: [{ text: 'Heaviest at 3 am.' }] },
+      }));
+      const weather = page.locator('.composed-aux [data-testid="weather"]');
+      await expect(weather).toHaveAttribute('data-layout', 'compact');
+      await page.waitForTimeout(200);
+      expect(await readingFaults(page, '.composed-aux [data-testid="weather"]')).toEqual([]);
     });
 
     test('in the today scene the forecast is a small slot and reads whole', async ({ page }) => {

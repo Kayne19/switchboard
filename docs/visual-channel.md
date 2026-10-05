@@ -345,7 +345,9 @@ each: the temperature traced over the chance of rain, labelled every 1,
 2, 3, 4, 6, 8, 12 or 24 hours so the labels stand at least 34px apart,
 which keeps 48 hours readable on a phone without scrolling sideways; the
 hour a note names, each midnight (the day's name) and the first hour are
-always labelled, in that order of claim. The days are rows whose ranges
+labelled too, in that order of claim, and one gives way to an earlier
+claim within a step of it, so no two labels crowd (a strip that starts at
+23:00 names the new day at midnight, not the hour before it). The days are rows whose ranges
 are bars on one scale, the lowest low to the highest high, so a cold day
 reads as cold beside a warm one. An alert stands on an amber rule.
 
