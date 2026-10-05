@@ -122,19 +122,26 @@ export function DiagramPrimitive({
   const map = useMemo<DrawingMap>(() => {
     const indexOf = new Map(layout.nodes.map(({ node }, index) => [node.id, index]));
     const toneOf = (semantic?: Semantic) => colors[semantic ?? 'paper'];
-    const links = layout.edges.flatMap(({ edge, points }) => {
+    // An edge drawn as stubs is linked by its two stub lines: where one
+    // leaves the view, the rim names the edge's far end, as its names do (a
+    // line several edges share is a link for each, so each far end is
+    // named). The map draws each line once.
+    const links = layout.edges.flatMap(({ edge, points, stubs }) => {
       const from = indexOf.get(edge.from);
       const to = indexOf.get(edge.to);
-      return from === undefined || to === undefined ? [] : [{ points, from, to, tone: toneOf(edge.semantic) }];
+      if (from === undefined || to === undefined) return [];
+      return (stubs ? [stubs.from.points, stubs.to.points] : [points]).map((line) => ({ points: line, from, to, tone: toneOf(edge.semantic) }));
     });
+    const drawnOnce = new Set<Point[]>();
+    const stubNames = [...new Set(layout.edges.flatMap(({ stubs }) => (stubs ? [stubs.from.label, stubs.to.label] : [])))];
     return {
       parts: layout.nodes.map(({ node, box }) => ({ box, label: node.label })),
       noun: { one: 'NODE', many: 'NODES' },
-      marks: layout.edges.flatMap(({ label }) => (label ? [label.box] : [])),
+      marks: [...layout.edges.flatMap(({ label }) => (label ? [label.box] : [])), ...stubNames.map((label) => label.box)],
       links,
       sketch: {
         boxes: layout.nodes.map(({ node, box }) => ({ box, tone: node.id === anchor ? 'var(--orange)' : toneOf(node.semantic) })),
-        lines: links.map(({ points, tone }) => ({ points, tone })),
+        lines: links.filter(({ points }) => !drawnOnce.has(points) && drawnOnce.add(points)).map(({ points, tone }) => ({ points, tone })),
       },
     };
   }, [layout, anchor]);
