@@ -78,6 +78,7 @@ export function DiagramPrimitive({
   focused = false,
   id,
   note,
+  callout = true,
   onCalloutChange,
 }: {
   data: DiagramData;
@@ -85,6 +86,8 @@ export function DiagramPrimitive({
   /** This diagram's object id: an anchored note only belongs to it when its `anchor.target` matches. */
   id: string;
   note?: NoteData | null;
+  /** Whether the note may ride on the drawing as a callout where it fits; false where the host shows the note itself (focus). */
+  callout?: boolean;
   onCalloutChange?: (placed: boolean) => void;
 }) {
   const { hostRef, width, height, scrollbar } = useDrawingViewport();
@@ -161,7 +164,7 @@ export function DiagramPrimitive({
     (note?.tag?.length ?? 0) <= CALLOUT_TAG_CHARS;
   // A callout rides on the drawing; on one that scrolls it could sit out of
   // view, so there the note stays in the rail and the node carries the marker.
-  const calloutPlaced = Boolean(!portrait && !fit.scrollX && !fit.scrollY && layout.callout && calloutFits);
+  const calloutPlaced = Boolean(callout && !portrait && !fit.scrollX && !fit.scrollY && layout.callout && calloutFits);
 
   // The scene drops the note from the rail while the callout carries it. A
   // diagram that goes away (a new scene, or a render error that leaves its
