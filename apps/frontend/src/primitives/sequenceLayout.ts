@@ -8,11 +8,13 @@
 // the arrow. A self-message is a short loop out to the right of its
 // lifeline, its label beside it. Two rules keep a drawing readable:
 // - A message's span is wide enough for its label: when two lifelines are
-//   closer than the words between them need, the columns move apart and
-//   the SVG scales the wider drawing to fit, so a label never runs under a
-//   lifeline.
+//   closer than the words between them need, the columns move apart, so a
+//   label never runs under a lifeline it does not cross.
 // - The drawing grows with the message count rather than compressing the
-//   rows, so a long exchange scales down as a whole and stays in order.
+//   rows, so a long exchange grows down and stays in order.
+// Shown in a viewport (`viewSequence`), a drawing too wide to read at the
+// readable minimum is recomposed to the viewport's width (`layoutToWidth`)
+// and scrolls down (drawingFit.ts).
 
 import type { SequenceActor, SequenceDiagramData, SequenceMessage } from '../controller/types';
 import { fitDrawing, readableScale, type DrawingFit, type Viewport } from './drawingFit';
@@ -161,7 +163,7 @@ const HEADER_SUB_GAP = 6;
 const HEADER_ROW_GAP = 8;
 // Recomposed narrow, the drawing keeps this little room at its sides, and
 // two staggered headers this much between them.
-const NARROW_PAD_X = 8;
+const NARROW_PAD_X = 4;
 const STAGGER_GAP = 8;
 // A label between two lifelines needs room for this many characters a
 // line; with less it goes over its arrow.
@@ -203,12 +205,6 @@ export interface SequenceFrame {
   width: number;
 }
 
-/**
- * Lays a sequence out: each column as wide as its header and the labels
- * between its lifelines need, the drawing as wide as they add up to. Given
- * a frame narrower than that, it is recomposed to the frame's width instead
- * (`layoutToWidth`).
- */
 // A line still longer than `chars` (one long word, such as a path or a
 // call) breaks after the last separator that keeps it short enough, or
 // else at `chars` itself.
@@ -226,6 +222,12 @@ function breakLine(line: string, chars: number): string[] {
   return parts;
 }
 
+/**
+ * Lays a sequence out: each column as wide as its header and the labels
+ * between its lifelines need, the drawing as wide as they add up to. Given
+ * a frame narrower than that, it is recomposed to the frame's width instead
+ * (`layoutToWidth`).
+ */
 export function layoutSequence(data: SequenceDiagramData, orientation: SequenceOrientation, frame?: SequenceFrame): SequenceLayout {
   const natural = layoutNatural(data, orientation);
   return frame && natural.width > frame.width ? layoutToWidth(data, orientation, frame.width) : natural;
@@ -458,9 +460,24 @@ function layoutToWidth(data: SequenceDiagramData, orientation: SequenceOrientati
   // The columns share the width; never so narrow that a word of an actor's
   // label misses two columns of room. (A word of a sub may break.)
   const padX = Math.min(geometry.padX, NARROW_PAD_X);
-  const pitch = Math.max((frameWidth - 2 * padX) / count, (widestLabelWord + 2 * geometry.headerPad + STAGGER_GAP) / 2);
-  const width = Math.max(frameWidth, 2 * padX + pitch * count);
-  const xs = actors.map((_, index) => (width - pitch * count) / 2 + pitch * (index + 0.5));
+  const leastPitch = (widestLabelWord + 2 * geometry.headerPad + STAGGER_GAP) / 2;
+  // An end column reaches out to the drawing's edge: half a pitch, or more
+  // when its actor's longest word needs more than a staggered header beside
+  // the edge has (the room from the edge to a pitch past its lifeline).
+  const wordRoom = (actor: SequenceActor | undefined) => (actor ? longestWord(actor.label) * labelAdvance + 2 * geometry.headerPad : 0);
+  const reachFor = (at: number, actor: SequenceActor | undefined) => Math.max(at / 2, wordRoom(actor) - at + STAGGER_GAP / 2);
+  let pitch = Math.max((frameWidth - 2 * padX) / count, leastPitch);
+  for (let attempt = 0; attempt < 4 && count > 1; attempt += 1) {
+    const ends = reachFor(pitch, actors[0]) + reachFor(pitch, actors[count - 1]);
+    pitch = Math.max(leastPitch, (frameWidth - 2 * padX - ends) / (count - 1));
+  }
+  const reachFirst = reachFor(pitch, actors[0]);
+  const content = count > 1 ? reachFirst + pitch * (count - 1) + reachFor(pitch, actors[count - 1]) : pitch;
+  // The search settles a hair either side of the frame: within half a unit
+  // it is the frame.
+  const width = 2 * padX + content <= frameWidth + 0.5 ? frameWidth : 2 * padX + content;
+  const xs = actors.map((_, index) => (count > 1 ? (width - content) / 2 + reachFirst + pitch * index : width / 2));
+
   // A header has the room between the lifelines either side of its own
   // (one column; two when the headers stagger, since the lifelines beside
   // it start below its row), cut to the drawing's edges. It is centred on
@@ -475,10 +492,14 @@ function layoutToWidth(data: SequenceDiagramData, orientation: SequenceOrientati
   const headerFor = (actor: SequenceActor, index: number, columns: number) => {
     const { low, high } = roomOf(index, columns);
     const text = high - low - 2 * geometry.headerPad;
-    const labelLines = wrapWords(actor.label, Math.max(1, Math.floor(text / labelAdvance)));
-    const subChars = Math.max(1, Math.floor(text / subAdvance));
+    // A word too long even for this room (only an end header's, cut by the
+    // drawing's edge, can be) breaks, as a sub's long word does.
+    const labelChars = Math.max(1, Math.floor(text / labelAdvance + 1e-6));
+    const wrapped = wrapWords(actor.label, labelChars).flatMap((line) => breakLine(line, labelChars));
+    const labelLines = wrapped.length > 0 ? wrapped : [actor.label];
+    const subChars = Math.max(1, Math.floor(text / subAdvance + 1e-6));
     const subLines = actor.sub ? wrapWords(actor.sub, subChars).flatMap((line) => breakLine(line, subChars)) : [];
-    const widest = Math.max(...labelLines.map((line) => line.length * labelAdvance), ...subLines.map((line) => line.length * subAdvance));
+    const widest = Math.max(0, ...labelLines.map((line) => line.length * labelAdvance), ...subLines.map((line) => line.length * subAdvance));
     const boxWidth = Math.min(high - low, widest + 2 * geometry.headerPad);
     const x = Math.min(Math.max(xs[index] - boxWidth / 2, low), high - boxWidth);
     return { labelLines, subLines, x, width: boxWidth, fits: widest <= text + 0.5 && labelLines.length <= 2 };
@@ -510,7 +531,8 @@ function layoutToWidth(data: SequenceDiagramData, orientation: SequenceOrientati
         : Math.abs(to - from) * pitch - 2 * CLEARANCE;
     const chars = charsIn(room);
     const within = chars >= MIN_SPAN_CHARS ? wrapWords(message.label, chars) : [];
-    const fits = within.length > 0 && within.length <= (from === to ? 2 : 3) && within.every((line) => line.length <= chars);
+    // An empty label fits anywhere.
+    const fits = !message.label.trim() || (within.length > 0 && within.length <= (from === to ? 2 : 3) && within.every((line) => line.length <= chars));
     const lines = fits ? within : wrapWords(message.label, overChars).flatMap((line) => breakLine(line, overChars));
     return [{ message, index, from, to, lines: lines.length > 0 ? lines : [message.label], over: !fits }];
   });

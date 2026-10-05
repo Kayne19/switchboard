@@ -219,6 +219,15 @@ describe('sequence recomposed to a width', () => {
     ['handoff', handoffDiagram],
     ['wordy', sequences.wordy],
     ['tail', sequences.tail],
+    // An empty actor label and an empty message label are allowed.
+    [
+      'blanks',
+      {
+        mode: 'sequence',
+        actors: [{ id: 'a', label: '' }, ...traceDiagram.actors.slice(1)],
+        messages: [{ from: 'a', to: 'ws', label: '' }, ...traceDiagram.messages.slice(1, 6)],
+      },
+    ],
   ];
   for (const orientation of ['landscape', 'portrait'] as SequenceOrientation[]) {
     for (const [name, data] of cases) {
@@ -249,8 +258,11 @@ describe('sequence recomposed to a width', () => {
               expect(overlaps(actor.box, line), `${other.actor.id}'s lifeline through ${actor.actor.id}`).toBe(false);
             }
           });
-          // Every word of a header is drawn.
+          // Every word of a header is drawn, inside its box.
           for (const actor of layout.actors) {
+            for (const value of [actor.x, actor.box.x, actor.box.width, actor.box.height]) expect(Number.isFinite(value)).toBe(true);
+            const widest = Math.max(0, ...actor.labelLines.map((line) => line.length * layout.actorLabelSize * 0.7), ...actor.subLines.map((line) => line.length * layout.actorSubSize * 0.69));
+            expect(widest, actor.actor.id).toBeLessThanOrEqual(actor.box.width + 1e-6);
             expect(actor.labelLines.join(' ')).toBe(actor.actor.label);
             expect(actor.subLines.join('').replace(/\s/g, '')).toBe((actor.actor.sub ?? '').replace(/\s/g, ''));
           }
@@ -281,7 +293,8 @@ describe('sequence recomposed to a width', () => {
             } else if (!item.self) {
               // Over its arrow: centred on it as far as the edges allow.
               const centre = (item.points[0].x + item.points[1].x) / 2;
-              const clamped = Math.abs(box.x - 8) < 1 || Math.abs(box.x + box.width - (layout.width - 8)) < 1 || box.x < 1;
+              // (A label held off the drawing's edge, within its side padding, is not centred.)
+              const clamped = box.x <= 8 + 1e-6 || box.x + box.width >= layout.width - 8 - 1e-6;
               if (!clamped) expect(box.x + box.width / 2).toBeCloseTo(centre);
               expect(box.y + box.height).toBeLessThanOrEqual(item.points[0].y);
             }
