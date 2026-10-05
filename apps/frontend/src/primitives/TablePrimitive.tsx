@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import type { TableCell, TableData } from '../controller/types';
 import { useScrollDemand } from '../hooks/useStageDemand';
+import { MetaTitle } from './MetaTitle';
 import { TechFrame } from './TechFrame';
 
 export type ColumnAlignment = 'start' | 'end';
@@ -61,8 +62,9 @@ function CellText({ cell }: { cell: TableCell }) {
 // viewport uses). Thin rules separate rows; a highlighted row carries the
 // orange accent the code viewport gives a hot line. The meta line stays
 // above the scroll, so the sticky header is the scroll's top edge and a row
-// scrolling up passes under it rather than showing above it.
-export function TablePrimitive({ data, focused = false }: { data: TableData; focused?: boolean }) {
+// scrolling up passes under it rather than showing above it. `framed`: the
+// scene frame above shows the title (MetaTitle).
+export function TablePrimitive({ data, focused = false, framed = false }: { data: TableData; focused?: boolean; framed?: boolean }) {
   const alignment = inferColumnAlignment(data);
   const highlighted = new Set(data.highlight ?? []);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -72,7 +74,7 @@ export function TablePrimitive({ data, focused = false }: { data: TableData; foc
       <TechFrame variant="code" />
       <div className="table-viewport__mask">
         <div className="table-viewport__meta tech micro">
-          <span>{data.title ?? 'TABLE'}</span>
+          <MetaTitle title={data.title ?? 'TABLE'} framed={framed} />
           <span>{data.rows.length} ROWS / {data.columns.length} COLS</span>
         </div>
         <div ref={scrollRef} className="table-viewport__scroll" tabIndex={0}>

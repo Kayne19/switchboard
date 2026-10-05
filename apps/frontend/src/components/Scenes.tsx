@@ -20,6 +20,7 @@ import { anchoredNote, besideVisuals, buildCompositionModel, cast, objectsOfType
 import { stageReport, wantsStage, type StageReport } from '../app/stageFold';
 import { StageDemandContext, watchElement, type StageDemandListener } from '../hooks/useStageDemand';
 import { AnnotationCard } from '../primitives/AnnotationCard';
+import { CalendarPrimitive, calendarFrame } from '../primitives/CalendarPrimitive';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { chartKind, chartTargetText } from '../primitives/chartGeometry';
 import { CodeViewport } from '../primitives/CodeViewport';
@@ -276,17 +277,17 @@ function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux', marked?
       return <ProgressPrimitive data={(object as SceneObject<ProgressData>).data} variant={slot === 'aux' ? 'compact' : 'full'} />;
     case 'note':
       return <AnnotationCard data={(object as SceneObject<NoteData>).data} />;
-    // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
     case 'calendar':
-      return <TemporaryAssistantList type="calendar" data={object.data} marked={marked} />;
+      return <CalendarPrimitive data={cast.calendar(object).data} marked={marked} />;
     case 'tasks':
       return <TasksPrimitive data={cast.tasks(object).data} variant={slot === 'aux' ? 'compact' : 'full'} marked={marked} />;
+    case 'inbox':
+      return <InboxPrimitive data={cast.inbox(object).data} variant={slot === 'aux' ? 'compact' : 'full'} marked={marked} />;
+    // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
     case 'timer':
       return <TemporaryAssistantList type="timer" data={object.data} marked={marked} />;
     case 'weather':
       return <TemporaryAssistantList type="weather" data={object.data} marked={marked} />;
-    case 'inbox':
-      return <InboxPrimitive data={cast.inbox(object).data} variant={slot === 'aux' ? 'compact' : 'full'} marked={marked} />;
     default:
       return null;
   }
@@ -555,7 +556,7 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         context: data.context ?? 'TABLE',
         footer: 'FRAME / INTERRUPTED RAILS',
         caption: sceneCaption(primary, 'DISPLAY / TABLE'),
-        main: slot('table-object', <TablePrimitive data={data} />),
+        main: slot('table-object', <TablePrimitive data={data} framed />),
       };
     }
     case 'image': {
@@ -572,6 +573,16 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         main: slot('image-object', <ImagePrimitive data={data} />, <TechFrame variant="panel" />),
       };
     }
+    case 'calendar': {
+      const { data } = cast.calendar(primary);
+      return {
+        ...rail,
+        ...calendarFrame(data),
+        footer: 'DISPLAY / CALENDAR',
+        caption: sceneCaption(primary, `CALENDAR / ${data.view.toUpperCase()}`),
+        main: slot('calendar-object', <CalendarPrimitive data={data} marked={markedItem(note, primary.id)} framed />, <TechFrame variant="panel" />),
+      };
+    }
     case 'tasks': {
       // A to-do list heads the scene with its own words, else what it holds.
       const { data } = cast.tasks(primary);
@@ -583,7 +594,7 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         context: data.context ?? 'TASKS',
         footer: 'DISPLAY / TASKS',
         caption: sceneCaption(primary, `TASKS / ${data.items.length} ${data.items.length === 1 ? 'ITEM' : 'ITEMS'}`),
-        main: slot('tasks-object', <TasksPrimitive data={data} marked={markedItem(note, primary.id)} />, <TechFrame variant="panel" />),
+        main: slot('tasks-object', <TasksPrimitive data={data} marked={markedItem(note, primary.id)} framed />, <TechFrame variant="panel" />),
       };
     }
     case 'inbox': {
@@ -596,11 +607,10 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         context: data.context ?? 'INBOX',
         footer: 'DISPLAY / INBOX',
         caption: sceneCaption(primary, `INBOX / ${counts.messages} ${counts.messages === 1 ? 'MESSAGE' : 'MESSAGES'}`),
-        main: slot('inbox-object', <InboxPrimitive data={data} marked={markedItem(note, primary.id)} />, <TechFrame variant="panel" />),
+        main: slot('inbox-object', <InboxPrimitive data={data} marked={markedItem(note, primary.id)} framed />, <TechFrame variant="panel" />),
       };
     }
     // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
-    case 'calendar':
     case 'timer':
     case 'weather': {
       const type = primary.type as TemporaryAssistantType;
