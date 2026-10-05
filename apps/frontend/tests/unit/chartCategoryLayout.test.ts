@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { ChartData } from '../../src/controller/types';
 import { TYPE_FLOOR_PX } from '../../src/design/tokens';
+import { hiddenTraceLength } from '../../src/primitives/notePlacement';
 import {
   CHART_CATEGORY_PAD_MAX,
   CHART_FRAME,
@@ -26,8 +27,10 @@ import {
   chartClip,
   chartFrame,
   chartLegendBox,
+  chartNoteTarget,
   chartObstacles,
   chartPad,
+  chartPointCallouts,
   chartScales,
   chartSeriesPoint,
   chartTargetText,
@@ -298,12 +301,22 @@ describe('chart obstacles', () => {
     expect(tallest.bottom).toBeCloseTo(scales.plot.bottom);
   });
 
-  it('marks the marker ring where it is drawn, stroke and all', () => {
+  it('marks the marker ring where it is drawn, stroke and all, and the value printed by it', () => {
     const line: ChartData = { xMax: 2, series: [{ name: 'A', values: [1, 2, 3] }], marker: { x: 1 } };
     const scales = chartScales(line);
     const point = chartSeriesPoint(line, 1, undefined, scales)!;
     const reach = CHART_MARKER_RADIUS + CHART_MARKER_STROKE / 2;
-    expect(chartObstacles(line, scales).marks.at(-1)).toEqual({ left: point.x - reach, top: point.y - reach, right: point.x + reach, bottom: point.y + reach });
+    const [ring, value] = chartObstacles(line, scales).marks.slice(-2);
+    expect(ring).toEqual({ left: point.x - reach, top: point.y - reach, right: point.x + reach, bottom: point.y + reach });
+    expect(value).toEqual(chartPointCallouts(line, [], scales)[0].label);
+  });
+
+  it('keeps a note off the ring and the value of each point a note names', () => {
+    const line: ChartData = { xMax: 2, series: [{ name: 'A', values: [1, 2, 3] }] };
+    const scales = chartScales(line);
+    expect(chartObstacles(line, scales).marks).toEqual([]);
+    const [callout] = chartPointCallouts(line, [{ x: 2 }], scales);
+    expect(chartObstacles(line, scales, [{ x: 2 }]).marks).toEqual([callout.ring, callout.label]);
   });
 
   it("keeps a note off a marked bar's printed value, and off each bar a note names", () => {
@@ -315,15 +328,19 @@ describe('chart obstacles', () => {
     expect(named.at(-1)).toEqual(chartBarCallout(bars, { x: 0, series: 'ONE' })!.label);
   });
 
-  it("cuts the marker ring with the clip the chart draws it in, a scatter's wider one included", () => {
+  // The marker ring on a point at the plot's edge was cut in half by the
+  // plot's clip (wave 1 open item): it is drawn whole, past the edge.
+  it("keeps a scatter's point at the plot's edge whole in its wider clip, and the ring round it whole past that", () => {
     // The marker on the last point, on the plot's right edge.
     const scatter: ChartData = { kind: 'scatter', xMax: 2, series: [{ name: 'A', values: [1, 3, 2] }], marker: { x: 2 } };
     const scales = chartScales(scatter);
     const clip = chartClip(scales);
     expect(clip.right).toBe(scales.plot.right + CHART_POINT_RADIUS + 1);
-    const ring = chartObstacles(scatter, scales).marks.at(-1)!;
-    expect(ring.right).toBe(clip.right);
-    expect(ring.right).toBeGreaterThan(scales.plot.right);
+    const point = chartObstacles(scatter, scales).marks[2];
+    expect(point.right).toBe(scales.plot.right + CHART_POINT_RADIUS);
+    const [ring] = chartObstacles(scatter, scales).marks.slice(-2);
+    expect(ring.right).toBe(scales.plot.right + CHART_MARKER_RADIUS + CHART_MARKER_STROKE / 2);
+    expect(ring.right).toBeGreaterThan(clip.right);
     expect(chartClip(chartScales(bars))).toEqual(chartScales(bars).plot);
   });
 
@@ -588,10 +605,114 @@ describe('what a note names on a chart', () => {
     expect(chartTargetText({ x: 1, series: 'NOPE' }, short)).toBe('b / S');
   });
 
-  it('is left to the anchor as sent where the chart has no labels or the note no x', () => {
-    expect(chartTargetText({ x: 2 }, { xMax: 10, series: [{ name: 'S', values: [1, 2] }] })).toBeUndefined();
-    expect(chartTargetText({ x: 2 }, { kind: 'bar', series: [{ name: 'S', values: [1, 2, 3] }] })).toBeUndefined();
-    expect(chartTargetText({ series: 'S' }, { labels: ['a'], series: [{ name: 'S', values: [1] }] })).toBeUndefined();
+  // The tag read "TARGET / LOSS / X 32 / VAL LOSS": the chart's object id,
+  // which the caller never sees, where the axis below says EPOCH.
+  it("is the x axis's name and the value on a chart with a numeric x, as the caller reads it", () => {
+    const loss: ChartData = { xLabel: 'EPOCH', xMax: 40, series: [{ name: 'TRAIN', values: [3, 2, 1] }, { name: 'VAL', values: [3, 2, 2] }] };
+    expect(chartTargetText({ x: 32, series: 'VAL' }, loss)).toBe('EPOCH 32 / VAL');
+    // The point the chart marks: the series it draws, an x held to the domain.
+    expect(chartTargetText({ x: 50, series: 'NOPE' }, loss)).toBe('EPOCH 40 / TRAIN');
+    // One series needs no naming unless the anchor names it; an axis with no name reads X, as it is drawn.
+    expect(chartTargetText({ x: 2.5 }, { xMax: 10, series: [{ name: 'S', values: [1, 2] }] })).toBe('X 2.5');
+    expect(chartTargetText({ x: 1.4 }, { kind: 'bar', series: [{ name: 'S', values: [1, 2, 3] }] })).toBe('X 1');
+    // An epoch read in full, not cut to six figures (review).
+    expect(chartTargetText({ x: 1696512345678 }, { xMax: 1696512399999, series: [{ name: 'S', values: [1, 2] }] })).toBe('X 1696512345678');
+  });
+
+  it('names the series alone for an anchor with no x, and nothing where the chart draws no point', () => {
+    expect(chartTargetText({ series: 'S' }, { labels: ['a'], series: [{ name: 'S', values: [1] }] })).toBe('S');
+    expect(chartTargetText({ series: 'NOPE' }, { labels: ['a'], series: [{ name: 'S', values: [1] }] })).toBeUndefined();
+    expect(chartTargetText({}, { labels: ['a'], series: [{ name: 'S', values: [1] }] })).toBeUndefined();
+    expect(chartTargetText({ x: 2 }, { xMax: 0, series: [{ name: 'S', values: [1, 2] }] })).toBeUndefined();
+  });
+
+  it('names the series a labelled chart marks wherever it draws more than one', () => {
+    const two: ChartData = { labels: ['a', 'b'], series: [{ name: 'S', values: [1, 2] }, { name: 'T', values: [2, 1] }] };
+    expect(chartTargetText({ x: 1 }, two)).toBe('b / S');
+  });
+});
+
+// A noted point on a line was only ringed (and only while its note sat in
+// the rail): it is marked as a bar is, its value printed by the ring, and a
+// leader lands past that value, never on the line itself.
+describe('a marked point', () => {
+  const overlaps = (a: { left: number; top: number; right: number; bottom: number }, b: typeof a) =>
+    a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+
+  it('prints its value above its ring where that is clear, and is reached from past it, from above', () => {
+    const line: ChartData = { xMax: 4, yMin: 0, yMax: 10, series: [{ name: 'A', values: [1, 1.5, 4, 1.5, 1] }] };
+    const scales = chartScales(line);
+    const [callout] = chartPointCallouts(line, [{ x: 2 }], scales);
+    const point = chartSeriesPoint(line, 2, undefined, scales)!;
+    expect(callout.at).toEqual(point);
+    expect(callout.value.text).toBe('4');
+    expect(callout.from).toBe('above');
+    expect(callout.value.anchor).toBe('middle');
+    expect(callout.label.bottom).toBeLessThan(callout.ring.top);
+    expect(callout.point.x).toBeCloseTo(point.x);
+    expect(callout.point.y).toBeLessThan(callout.label.top);
+    // Inside the plot, clear of the line.
+    expect(callout.label.top).toBeGreaterThan(scales.plot.top);
+    expect(hiddenTraceLength(callout.label, [[0, 1, 2, 3, 4].map((x) => chartSeriesPoint(line, x, undefined, scales)!)])).toBe(0);
+  });
+
+  it('prints a value read between samples as precisely as the series is written', () => {
+    expect(chartPointCallouts({ xMax: 1, series: [{ name: 'A', values: [1.25, 2.5] }] }, [{ x: 0.5 }])[0].value.text).toBe('1.88');
+    expect(chartPointCallouts({ xMax: 3, series: [{ name: 'A', values: [1, 2] }] }, [{ x: 1 }])[0].value.text).toBe('1');
+    // A value too small for six decimals is not printed as 0, nor a large one cut to six figures (review).
+    expect(chartPointCallouts({ xMax: 1, series: [{ name: 'A', values: [1e-7, 2e-7] }] }, [{ x: 0 }])[0].value.text).toBe('1e-7');
+    expect(chartPointCallouts({ xMax: 1, series: [{ name: 'A', values: [1696512345678, 1696512399999] }] }, [{ x: 0 }])[0].value.text).toBe('1696512345678');
+  });
+
+  it('prints it below its ring where above would leave the plot, and is reached from below', () => {
+    const peak: ChartData = { xMax: 2, yMin: 0, yMax: 5, series: [{ name: 'A', values: [1, 5, 1] }] };
+    const scales = chartScales(peak);
+    const [callout] = chartPointCallouts(peak, [{ x: 1 }], scales);
+    expect(callout.at.y).toBeCloseTo(scales.plot.top);
+    expect(callout.from).toBe('below');
+    expect(callout.label.top).toBeGreaterThan(callout.ring.bottom);
+    expect(callout.point.y).toBeGreaterThan(callout.label.bottom);
+  });
+
+  it('runs its value off to one side of the ring, clear of a line that rises across the other', () => {
+    const rise: ChartData = { xMax: 4, yMin: 0, yMax: 100, series: [{ name: 'A', values: [12.5, 12.5, 12.5, 50.5, 88.5] }] };
+    const scales = chartScales(rise);
+    const [callout] = chartPointCallouts(rise, [{ x: 2 }], scales);
+    expect(callout.from).toBe('above');
+    expect(callout.value.anchor).toBe('end');
+    expect(callout.label.right).toBeCloseTo(callout.ring.right);
+    // The leader still lands over the ring.
+    expect(callout.point.x).toBeCloseTo(callout.at.x);
+    const line = [0, 1, 2, 3, 4].map((x) => chartSeriesPoint(rise, x, undefined, scales)!);
+    // Centred, it would lie over the line.
+    const width = callout.label.right - callout.label.left;
+    const centred = { ...callout.label, left: callout.at.x - width / 2, right: callout.at.x + width / 2 };
+    expect(hiddenTraceLength(centred, [line])).toBeGreaterThan(0);
+    expect(hiddenTraceLength(callout.label, [line])).toBe(0);
+  });
+
+  it("prints an area's value past its line, not over its own fill", () => {
+    const series = [{ name: 'TOP', values: [5, 5, 5] }, { name: 'LOW', values: [2, 3, 2] }];
+    const area: ChartData = { kind: 'area', labels: ['a', 'b', 'c'], yMin: 0, yMax: 10, series };
+    expect(chartPointCallouts(area, [{ x: 1, series: 'LOW' }])[0].from).toBe('above');
+    // The same lines, unfilled, leave more room below.
+    expect(chartPointCallouts({ ...area, kind: 'line' }, [{ x: 1, series: 'LOW' }])[0].from).toBe('below');
+  });
+
+  it('is marked once for its marker and every note that names it, each value clear of the others', () => {
+    const flat: ChartData = { xMax: 40, yMin: 0, yMax: 10, series: [{ name: 'A', values: [5, 5, 5, 5, 5] }], marker: { x: 20 } };
+    const callouts = chartPointCallouts(flat, [{ x: 20 }, { x: 21 }, { x: 20, series: 'A' }]);
+    expect(callouts.map((callout) => callout.x)).toEqual([20, 21]);
+    expect(overlaps(callouts[0].label, callouts[1].label)).toBe(false);
+    expect(overlaps(callouts[0].ring, callouts[1].label)).toBe(false);
+    expect(overlaps(callouts[1].ring, callouts[0].label)).toBe(false);
+  });
+
+  it("is what a note's leader lands by, as a bar's printed end is", () => {
+    const line: ChartData = { xMax: 4, yMin: 0, yMax: 10, series: [{ name: 'A', values: [1, 1.5, 4, 1.5, 1] }] };
+    const [callout] = chartPointCallouts(line, [{ x: 2 }]);
+    expect(chartNoteTarget(line, { x: 2 })).toEqual({ point: callout.point, from: callout.from, mark: callout.ring, value: callout.label });
+    expect(chartPointCallouts({ ...line, kind: 'bar', labels: ['a', 'b', 'c', 'd', 'e'] }, [{ x: 2 }])).toEqual([]);
   });
 });
 
