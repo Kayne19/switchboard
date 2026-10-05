@@ -428,6 +428,72 @@ class ProgrammingErrorTest(ModuleTestCase):
         self.assertTrue(result.delivered)
         self.assertEqual(host.calls()[-1]["args"], {"text": "Ship it \U0001F680"})
 
+    def test_an_integer_beyond_two_to_the_53_raises_naming_its_field(self):
+        # The service and the page read numbers as doubles: 2**53 + 1 arrived
+        # as 2**53, and an integer beyond a double's range as null.
+        host = self.host()
+
+        class ArrayLike:
+            def tolist(self):
+                return [1, 2**60]
+
+        chart = lambda values: {"op": "show", "id": "c", "type": "chart", "data": {"series": [{"name": "s", "values": values}]}}  # noqa: E731
+        for values, field in (
+            ([1, 2**53 + 1], "action.data.series[0].values[1]"),
+            ([-(2**53) - 1], "action.data.series[0].values[0]"),
+            ([10**400], "action.data.series[0].values[0]"),
+            (ArrayLike(), "action.data.series[0].values[1]"),
+        ):
+            with self.subTest(field=field):
+                with self.assertRaises(ValueError) as caught, contextlib.redirect_stdout(io.StringIO()):
+                    switchboard.display(chart(values))
+                self.assertEqual(
+                    str(caught.exception),
+                    f"{field} is an integer beyond 2**53, which the switchboard reads as a double and cannot hold "
+                    "exactly; send it as a float or as text",
+                )
+        self.assertEqual(host.connections, 0)
+        # Every integer a double holds exactly goes out as it is, and a float
+        # (already a double) whatever its size.
+        values = [2**53, -(2**53), True, 1e300]
+        result, _ = self.run_call(switchboard.display, chart(values))
+        self.assertTrue(result.delivered)
+        self.assertEqual(host.calls()[-1]["args"]["action"]["data"]["series"][0]["values"], values)
+
+    def test_nesting_deeper_than_the_service_reads_raises_before_anything_is_sent(self):
+        # The service refused such a call as unreadable, without the action's
+        # own error; a call that holds itself made json.dumps recurse.
+        host = self.host()
+
+        def depth(value):
+            if isinstance(value, dict):
+                return 1 + max(map(depth, value.values()), default=0)
+            if isinstance(value, list):
+                return 1 + max(map(depth, value), default=0)
+            return 0
+
+        def note(levels):
+            # The request line, its args, the action and its data are 4
+            # levels; `segments` and the lists in it are the rest.
+            segments = 1
+            for _ in range(levels - 4):
+                segments = [segments]
+            return {"op": "show", "id": "n", "type": "note", "data": {"segments": segments}}
+
+        result, _ = self.run_call(switchboard.display, note(switchboard._MAX_FRAME_DEPTH))
+        self.assertTrue(result.delivered)
+        self.assertEqual(depth(host.calls()[-1]), switchboard._MAX_FRAME_DEPTH)
+        looped = {"op": "show", "id": "n", "type": "note", "data": {"segments": []}}
+        looped["data"]["segments"].append(looped)
+        calls = len(host.requests)
+        for action in (note(switchboard._MAX_FRAME_DEPTH + 1), looped):
+            with self.assertRaises(ValueError) as caught, contextlib.redirect_stdout(io.StringIO()):
+                switchboard.display(action)
+            self.assertTrue(str(caught.exception).startswith(
+                "action.data.segments[0]... nests arrays and objects deeper than the switchboard reads (127 levels"
+            ), caught.exception)
+        self.assertEqual(len(host.requests), calls)
+
     def test_unknown_display_type_names_the_shapes(self):
         with self.assertRaises(ValueError) as caught:
             switchboard.display(op="show", id="x", type="gauge", data={})
@@ -713,6 +779,7 @@ class DisplayCorpusTests(unittest.TestCase):
             with self.subTest(case["name"]):
                 action = self._expand(case["action"])
                 self.assertEqual(switchboard._display_wire_action(action), action)
+                switchboard._check_call_args({"action": action})
 
     def test_refuses_the_faults_its_outline_names(self):
         by_name = {case["name"]: case for case in self.cases}

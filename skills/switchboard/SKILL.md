@@ -30,9 +30,11 @@ Every function prints one line saying what happened and returns a result with
 `status` (`delivered`, `accepted`, `refused` or `failed`), `reason`,
 `delivered`, `accepted` and `ok`. A refusal or a failure never raises. Only a
 wrong argument raises: a bad type, an unknown display type, op, role or view
-target, or a value JSON cannot carry (NaN, an infinity, or a string holding
-half of a surrogate pair). Values with `tolist()`, such as numpy arrays, are
-sent as lists.
+target, a value JSON cannot carry (NaN, an infinity, or a string holding
+half of a surrogate pair), or one the switchboard would read as another (an
+integer beyond 2**53, which it reads as a double; send a float or text), or
+data nested deeper than it reads. Values with `tolist()`, such as numpy
+arrays, are sent as lists.
 
 ## Functions
 

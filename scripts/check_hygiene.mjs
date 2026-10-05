@@ -134,9 +134,20 @@ const markdown = () => ["AGENTS.md", "README.md", "docs", "apps", "skills", "ext
 	}
 }
 
+// 10. The depth a host-link frame may nest is one number on both sides: the
+//     service's MAX_FRAME_DEPTH (serde_json's limit; a test in
+//     test_hosts.rs pins it) and the skill module's _MAX_FRAME_DEPTH, which
+//     holds a display call to it before sending.
+{
+	const rs = readFileSync(path.join(root, "apps/backend/src/hosts.rs"), "utf8").match(/const MAX_FRAME_DEPTH: usize = (\d+);/)?.[1];
+	const py = readFileSync(path.join(root, "skills/switchboard/src/switchboard/__init__.py"), "utf8").match(/^_MAX_FRAME_DEPTH = (\d+)$/m)?.[1];
+	if (!rs || !py) findings.push("frame depth: could not read it from hosts.rs or __init__.py (the check needs updating)");
+	else if (rs !== py) findings.push(`frame depth differs: service MAX_FRAME_DEPTH ${rs}, skill _MAX_FRAME_DEPTH ${py}`);
+}
+
 if (findings.length > 0) {
 	console.error(`check_hygiene: ${findings.length} finding(s):`);
 	for (const finding of findings) console.error(`  ${finding}`);
 	process.exit(1);
 }
-console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings");
+console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth");

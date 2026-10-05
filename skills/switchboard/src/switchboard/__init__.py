@@ -20,6 +20,15 @@ __all__ = ["speak", "request_to_speak", "display", "view"]
 
 _STATUSES = ("delivered", "accepted", "refused", "failed")
 _HELLO_TIMEOUT_S = 5.0
+# The service reads a frame whose arrays and objects nest at most this deep
+# (MAX_FRAME_DEPTH in hosts.rs; docs/host-link.md, "Frames the service cannot
+# read"). The host agent relays a call's args one level into its frame, as
+# they are one level into the request line written here, so the line is held
+# to the same depth. scripts/check_hygiene.mjs keeps the two numbers equal.
+_MAX_FRAME_DEPTH = 127
+# The service and the page read every number as a double, which holds each
+# integer exactly only up to 2**53.
+_MAX_EXACT_INT = 2**53
 # The host agent answers `failed` at its own deadline (the speech deadline for
 # speak, 30 s otherwise); wait a little longer than that for its reply.
 _RELAY_TIMEOUT_S = 30.0
@@ -149,6 +158,44 @@ def _encode(request):
             f"cannot be sent to the switchboard: a string holds {half!r}, half of a UTF-16 surrogate pair; "
             "send whole characters"
         ) from None
+
+
+def _field(path):
+    """`path` as a field is written: `action.data.series[0].values[1]`."""
+    return "".join(f"[{part}]" if isinstance(part, int) else f".{part}" for part in path).lstrip(".")
+
+
+def _check_values(value, depth, path):
+    """Raises ValueError, naming the field, for a value the service would read
+    as another: an integer beyond 2**53, or arrays and objects nested deeper
+    than it reads. `depth` is the level `value` stands at in the request line.
+    Array-likes with `tolist()` are judged as `_encode` sends them."""
+    if isinstance(value, (dict, list, tuple)):
+        if depth > _MAX_FRAME_DEPTH:
+            shown = _field(path[:4]) + ("..." if len(path) > 4 else "")
+            raise ValueError(
+                f"{shown} nests arrays and objects deeper than the switchboard reads "
+                f"({_MAX_FRAME_DEPTH} levels, the call around it included); send it flatter"
+            )
+        for key, item in value.items() if isinstance(value, dict) else enumerate(value):
+            _check_values(item, depth + 1, (*path, key))
+    elif isinstance(value, (bool, str, float, bytes, bytearray, memoryview)) or value is None:
+        # Raw image bytes become base64 text before they are sent.
+        return
+    elif isinstance(value, int):
+        if abs(value) > _MAX_EXACT_INT:
+            raise ValueError(
+                f"{_field(path)} is an integer beyond 2**53, which the switchboard reads as a double "
+                "and cannot hold exactly; send it as a float or as text"
+            )
+    elif hasattr(value, "tolist"):
+        _check_values(value.tolist(), depth, path)
+
+
+def _check_call_args(args):
+    """Raises for a value in a call's `args`, which stand one level into the
+    request line, that the service would read as another (`_check_values`)."""
+    _check_values(args, 2, ())
 
 
 def _exchange(stream, line):
@@ -443,6 +490,9 @@ def display(action=None, **fields):
         action = fields
     elif fields:
         raise TypeError("pass the display action as a dict or as keywords, not both")
+    # Before anything else walks the action: one that holds itself is caught
+    # here, at the depth cap, rather than recursing.
+    _check_call_args({"action": action})
     action = _display_wire_action(action)
 
     def describe(result):
