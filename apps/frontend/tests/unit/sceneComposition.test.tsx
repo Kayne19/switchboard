@@ -252,9 +252,11 @@ describe('the personal-assistant fixtures', () => {
     expect(page.querySelectorAll('.content-rail .annotation-card')).toHaveLength(1);
   });
 
-  it('the stand-in names each object by its title, where no frame does', () => {
+  // An object in the aux row has no scene frame to carry its title, so it
+  // names itself: each primitive marks the text with data-object-title.
+  it('each object in the aux row names itself by its title, where no frame does', () => {
     const page = render(fixtures.today);
-    expect([...page.querySelectorAll('.composed-aux .temporary-assistant__head')].map((node) => node.textContent))
+    expect([...page.querySelectorAll('.composed-aux [data-object-title]')].map((node) => node.textContent))
       .toEqual(['WEATHER / SAN FRANCISCO', 'TO DO / THIS WEEK', 'INBOX / UNREAD FIRST']);
   });
 

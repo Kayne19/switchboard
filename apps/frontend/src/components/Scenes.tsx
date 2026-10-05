@@ -31,6 +31,7 @@ import { ObjectMotion } from '../primitives/ObjectMotion';
 import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
 import { SceneFooter } from '../primitives/SceneFooter';
 import { TablePrimitive } from '../primitives/TablePrimitive';
+import { TasksPrimitive, taskCounts } from '../primitives/TasksPrimitive';
 import { TemporaryAssistantList, temporaryAssistantFrame, type TemporaryAssistantType } from '../primitives/TemporaryAssistantList';
 import { FocusableSurface } from '../primitives/FocusableSurface';
 import { TechFrame } from '../primitives/TechFrame';
@@ -245,7 +246,7 @@ function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux', marked?
     case 'calendar':
       return <TemporaryAssistantList type="calendar" data={object.data} marked={marked} />;
     case 'tasks':
-      return <TemporaryAssistantList type="tasks" data={object.data} marked={marked} />;
+      return <TasksPrimitive data={cast.tasks(object).data} variant={slot === 'aux' ? 'compact' : 'full'} marked={marked} />;
     case 'timer':
       return <TemporaryAssistantList type="timer" data={object.data} marked={marked} />;
     case 'weather':
@@ -499,9 +500,22 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         main: slot('image-object', <ImagePrimitive data={data} />, <TechFrame variant="panel" />),
       };
     }
+    case 'tasks': {
+      // A to-do list heads the scene with its own words, else what it holds.
+      const { data } = cast.tasks(primary);
+      const counts = taskCounts(data);
+      return {
+        ...rail,
+        title: data.title ?? 'TASKS / TO DO',
+        subtitle: data.subtitle ?? `${counts.open} OPEN / ${counts.done} DONE`,
+        context: data.context ?? 'TASKS',
+        footer: 'DISPLAY / TASKS',
+        caption: sceneCaption(primary, `TASKS / ${data.items.length} ${data.items.length === 1 ? 'ITEM' : 'ITEMS'}`),
+        main: slot('tasks-object', <TasksPrimitive data={data} marked={anchoredItem(state, primary.id)} />, <TechFrame variant="panel" />),
+      };
+    }
     // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
     case 'calendar':
-    case 'tasks':
     case 'timer':
     case 'weather':
     case 'inbox': {

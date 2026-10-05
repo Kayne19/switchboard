@@ -18,14 +18,13 @@ import { NoteBadge } from './NoteMarker';
  * primitive: the scene tests count objects by it.
  */
 
-export type TemporaryAssistantType = 'calendar' | 'tasks' | 'timer' | 'weather' | 'inbox';
+export type TemporaryAssistantType = 'calendar' | 'timer' | 'weather' | 'inbox';
 
 type Fields = Record<string, unknown>;
 
 /** The list each type is mostly made of, for the frame's count. */
 const MAIN_LIST: Record<TemporaryAssistantType, [string, string]> = {
   calendar: ['events', 'EVENTS'],
-  tasks: ['items', 'TASKS'],
   timer: ['timers', 'TIMERS'],
   weather: ['daily', 'DAYS'],
   inbox: ['messages', 'MESSAGES'],
@@ -116,7 +115,7 @@ export function TemporaryAssistantList({ type, data, marked }: { type: Temporary
   return (
     <div className="temporary-assistant" data-testid={type}>
       {/* The title here too: in an aux cell or in focus no frame shows it. */}
-      <div className="temporary-assistant__head tech micro">
+      <div className="temporary-assistant__head tech micro" data-object-title>
         {typeof fields.title === 'string' ? fields.title : `${type.toUpperCase()} / FIELDS AS SENT`}
       </div>
       {scalars.length > 0 ? <dl className="temporary-assistant__fields">{scalars}</dl> : null}
