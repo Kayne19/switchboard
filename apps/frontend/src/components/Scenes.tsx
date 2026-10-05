@@ -242,16 +242,17 @@ function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, 
 
 // One object drawn inside a composed workspace, as the primary or in the aux
 // row beneath it. A metric and a progress change with the slot: the aux row
-// has no room for a whole step list. `objects` are the objects on stage, by
+// has no room for a whole step list. `onStage` are the objects on stage, by
 // id, which a note names its object among; `drawn` is the note the page
 // draws for the scene (the rail's), and the object marks what it names in
-// it: a list's item (`markedItem`), a diagram's node or actor (its NOTE
-// marker; the note stays in the rail, never a callout in a cell).
-function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux', objects: ControllerState['agentObjects'], drawn: NoteData | null) {
+// it: a chart's point (ringed or outlined, its value printed), a list's
+// item (`markedItem`), a diagram's node or actor (its NOTE marker; the note
+// stays in the rail, never a callout in a cell).
+function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux', onStage: ControllerState['agentObjects'], drawn: NoteData | null) {
   const marked = markedItem(drawn, object.id);
   switch (object.type) {
     case 'chart':
-      return <ChartPrimitive data={(object as SceneObject<ChartData>).data} />;
+      return <ChartPrimitive data={cast.chart(object).data} named={drawn ? chartNoteAnchors(cast.chart(object), [{ key: 'drawn', data: drawn }]) : undefined} />;
     case 'diagram':
       return <DiagramObject data={(object as SceneObject<DiagramObjectData>).data} id={object.id} note={drawn} callout={false} />;
     case 'document':
@@ -267,7 +268,7 @@ function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux', objects
     case 'progress':
       return <ProgressPrimitive data={(object as SceneObject<ProgressData>).data} variant={slot === 'aux' ? 'compact' : 'full'} />;
     case 'note':
-      return <AnnotationCard data={cast.note(object).data} named={standingNoteTarget(objects, cast.note(object).data)} />;
+      return <AnnotationCard data={cast.note(object).data} named={standingNoteTarget(onStage, cast.note(object).data)} />;
     case 'timer':
       return <TimerPrimitive data={cast.timer(object).data} marked={marked} />;
     case 'weather':

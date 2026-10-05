@@ -403,3 +403,17 @@ describe('an event the calendar does not draw', () => {
     expect(scene().querySelectorAll('.content-rail .annotation-card .note-badge')).toHaveLength(1);
   });
 });
+
+// A rail note about a point of a chart in the aux row named the point
+// ("TARGET / b") while the cell drew the chart with nothing marked: the
+// card's words pointed at nothing on screen (last-gaps review L9).
+describe('a chart beside the primary marks the point the rail note names', () => {
+  it('rings the point in its cell while the rail shows that note', () => {
+    const trend: ControllerAction = { op: 'show', id: 'trend', type: 'chart', role: 'secondary', data: { title: 'TREND', labels: ['a', 'b', 'c'], series: [{ name: 'S', values: [1, 3, 2] }] } };
+    const onPoint: ControllerAction = { op: 'show', id: 'point-note', type: 'note', data: { tag: 'PEAK', anchor: { target: 'trend', x: 1 }, segments: [{ text: 'The peak.' }] } };
+    render([table, trend, onPoint]);
+    expect(scene().querySelector('.content-rail .annotation-card__anchor')?.textContent).toBe('TARGET / b');
+    const marker = scene().querySelector('.composed-aux .chart-marker');
+    expect(marker?.getAttribute('data-x')).toBe('1');
+  });
+});
