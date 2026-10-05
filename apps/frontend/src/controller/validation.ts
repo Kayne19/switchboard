@@ -126,8 +126,21 @@ function serializedSize(value: unknown): number {
   }
 }
 
+/**
+ * Anything but Unicode White_Space, the one whitespace set both validators
+ * use (docs/display-tool.md, "How the two validators agree"): the 25 code
+ * points listed here, which the backend's `WHITE_SPACE` lists too. Not
+ * `String.prototype.trim`, which also strips U+FEFF and keeps U+0085.
+ */
+const NOT_WHITE_SPACE = /[^\t\n\u000b\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/u;
+
+/** Whether `text` is empty or White_Space only: a blank identifier or alt. */
+export function isBlank(text: string): boolean {
+  return !NOT_WHITE_SPACE.test(text);
+}
+
 function checkIdentifier(val: unknown, fieldName: string): { ok: true; id: string } | { ok: false; error: string } {
-  if (typeof val !== 'string' || val.trim().length === 0) {
+  if (typeof val !== 'string' || isBlank(val)) {
     return { ok: false, error: `${fieldName} must be a non-empty identifier` };
   }
   if (val.length > MAX_ID_UTF16) {
@@ -479,7 +492,7 @@ function validateGraphDiagramData(data: Record<string, unknown>): { ok: true; da
     const nUnknown = checkUnknownKeys(n, nodeAllowed, 'diagram node');
     if (nUnknown) return { ok: false, error: nUnknown };
 
-    if (typeof n.id !== 'string' || n.id.trim().length === 0 || n.id.length > 128) {
+    if (typeof n.id !== 'string' || isBlank(n.id) || n.id.length > 128) {
       return { ok: false, error: 'diagram node id must be non-empty and <= 128 UTF-16 code units' };
     }
     if (nodeIds.has(n.id)) {
@@ -603,7 +616,7 @@ function validateSequenceDiagramData(data: Record<string, unknown>): { ok: true;
     const aUnknown = checkUnknownKeys(a, actorAllowed, 'diagram actor');
     if (aUnknown) return { ok: false, error: aUnknown };
 
-    if (typeof a.id !== 'string' || a.id.trim().length === 0 || a.id.length > 128) {
+    if (typeof a.id !== 'string' || isBlank(a.id) || a.id.length > 128) {
       return { ok: false, error: 'diagram actor id must be non-empty and <= 128 UTF-16 code units' };
     }
     if (actorIds.has(a.id)) {
@@ -946,17 +959,6 @@ export function imageSignatureMatches(format: ImageFormat, bytes: Uint8Array): b
     default:
       return false;
   }
-}
-
-/**
- * Unicode White_Space, the set Rust's `char::is_whitespace` uses. Not
- * `String.prototype.trim`: that also strips U+FEFF and keeps U+0085, so the
- * two validators would disagree on what a blank alt is.
- */
-const NOT_WHITE_SPACE = /[^\t\n\u000b\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/u;
-
-function isBlank(text: string): boolean {
-  return !NOT_WHITE_SPACE.test(text);
 }
 
 // Raster only: the format names the bytes' encoding, and the bytes must

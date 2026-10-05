@@ -36,8 +36,23 @@ fn utf16_len(s: &str) -> usize {
     s.encode_utf16().count()
 }
 
+/// Unicode White_Space, the one whitespace set both validators use
+/// (docs/display-tool.md, "How the two validators agree"). It is listed
+/// rather than left to `str::trim`, so the set is written down where it is
+/// used; the browser's `NOT_WHITE_SPACE` lists the same 25 code points.
+const WHITE_SPACE: [char; 25] = [
+    '\t', '\n', '\u{b}', '\u{c}', '\r', ' ', '\u{85}', '\u{a0}', '\u{1680}', '\u{2000}',
+    '\u{2001}', '\u{2002}', '\u{2003}', '\u{2004}', '\u{2005}', '\u{2006}', '\u{2007}', '\u{2008}',
+    '\u{2009}', '\u{200a}', '\u{2028}', '\u{2029}', '\u{202f}', '\u{205f}', '\u{3000}',
+];
+
+/// Whether `s` is empty or White_Space only: a blank identifier or alt.
+fn is_blank(s: &str) -> bool {
+    s.chars().all(|c| WHITE_SPACE.contains(&c))
+}
+
 fn check_identifier(s: &str, field_name: &str) -> Result<String, String> {
-    if s.trim().is_empty() {
+    if is_blank(s) {
         return Err(format!("{field_name} must be a non-empty identifier"));
     }
     if utf16_len(s) > MAX_ID_UTF16 {
@@ -562,7 +577,7 @@ fn validate_graph_diagram_data(data: &Map<String, Value>) -> Result<Value, Strin
         let id = nm
             .get("id")
             .and_then(Value::as_str)
-            .filter(|id| !id.trim().is_empty() && utf16_len(id) <= 128)
+            .filter(|id| !is_blank(id) && utf16_len(id) <= 128)
             .ok_or("diagram node id must be non-empty and <= 128 UTF-16 code units")?;
         if !node_ids.insert(id.to_string()) {
             return Err(format!("duplicate diagram node id: {id}"));
@@ -705,7 +720,7 @@ fn validate_sequence_diagram_data(data: &Map<String, Value>) -> Result<Value, St
             .get("id")
             .and_then(Value::as_str)
             .ok_or("diagram actor id must be non-empty and <= 128 UTF-16 code units")?;
-        if id.trim().is_empty() || utf16_len(id) > 128 {
+        if is_blank(id) || utf16_len(id) > 128 {
             return Err("diagram actor id must be non-empty and <= 128 UTF-16 code units".into());
         }
         if !actor_ids.insert(id.to_string()) {
@@ -1242,8 +1257,7 @@ fn validate_image_data(data: &Map<String, Value>) -> Result<Value, String> {
     if utf16_len(alt) > 256 {
         return Err("image.alt exceeds maximum length of 256 UTF-16 code units".into());
     }
-    // Unicode White_Space only; the browser's `isBlank` uses the same set.
-    if alt.chars().all(char::is_whitespace) {
+    if is_blank(alt) {
         return Err("image.alt must not be empty".into());
     }
 

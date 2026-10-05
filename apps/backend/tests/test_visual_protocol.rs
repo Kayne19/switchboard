@@ -832,6 +832,20 @@ fn an_image_is_capped_at_eight_mebibytes_and_its_action_at_twelve() {
     );
 }
 
+/// `WHITE_SPACE` is Unicode White_Space exactly, which `char::is_whitespace`
+/// is defined as; the browser's list is held to `\p{White_Space}` the same
+/// way (validation.test.ts).
+#[test]
+fn the_whitespace_set_is_unicode_white_space() {
+    let differ: Vec<String> = (char::MIN..=char::MAX)
+        .filter(|c| WHITE_SPACE.contains(c) != c.is_whitespace())
+        .map(|c| format!("U+{:04X}", c as u32))
+        .collect();
+    assert!(differ.is_empty(), "{differ:?}");
+    assert!(is_blank("") && is_blank(" \u{85}\u{3000}"));
+    assert!(!is_blank("\u{feff}") && !is_blank("\u{200b}") && !is_blank("\u{1c}"));
+}
+
 // ---- the shared corpus -------------------------------------------------------
 
 /// `{"$repeat": s, "times": n}` in the corpus stands for `s` repeated `n`
