@@ -226,17 +226,20 @@ export function ChartPrimitive({
           return <motion.g key={series.name} className="chart-series-group" data-series={series.name} clipPath={`url(#${clipId}-trace-${index})`} initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{duration:.3,delay:index*.08}}>
             {kind==='area' ? <path className="chart-area" d={series.area} fill={color} fillOpacity={0.16} stroke="none"/> : null}
             {kind==='line'||kind==='area' ? <path className="chart-series" d={series.path} fill="none" stroke={color} strokeWidth={focused?3:2.3} vectorEffect="non-scaling-stroke"/> : null}
-            {kind==='scatter' ? series.points.map((p,sample)=><circle key={sample} className="chart-point" cx={p.x} cy={p.y} r={focused?CHART_POINT_RADIUS+1:CHART_POINT_RADIUS} fill={color}/>) : null}
+            {kind==='scatter' ? series.points.map((p,sample)=><circle key={sample} className="chart-point" cx={p.x} cy={p.y} r={CHART_POINT_RADIUS} fill={color}/>) : null}
             {kind==='bar' ? series.bars.map((bar)=><rect key={bar.index} className="chart-bar" x={bar.rect.left} y={bar.rect.top} width={Math.max(0.5,bar.rect.right-bar.rect.left)} height={Math.max(0.5,bar.rect.bottom-bar.rect.top)} fill={color}/>) : null}
           </motion.g>;
         })}
       </g>
       {/* A marked point's ring and value are drawn whole, past the plot's
           edge where the point sits on it. The ring hides the line under it,
-          but rings a scatter's point, which it stands round. */}
+          but rings a scatter's point, which it stands round. The ring and
+          the points keep their radius in focus: the value beside the ring
+          and the notes' clearances are worked out from it, and focus draws
+          the whole chart larger already. */}
       {pointCallouts.map((callout)=>(
         <motion.g key={`${callout.series}-${callout.x}`} className="chart-marker" data-series={data.series[callout.series]?.name} data-x={callout.x} data-from={callout.from} initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}>
-          <circle className="chart-marker__point" cx={callout.at.x} cy={callout.at.y} r={focused?CHART_MARKER_RADIUS+2:CHART_MARKER_RADIUS} fill={kind==='scatter'?'none':'#000'} stroke="var(--orange)" strokeWidth={CHART_MARKER_STROKE}/>
+          <circle className="chart-marker__point" cx={callout.at.x} cy={callout.at.y} r={CHART_MARKER_RADIUS} fill={kind==='scatter'?'none':'#000'} stroke="var(--orange)" strokeWidth={CHART_MARKER_STROKE}/>
           <text className="chart-marker__value" x={callout.value.x} y={callout.value.y} textAnchor={callout.value.anchor}>{callout.value.text}</text>
         </motion.g>
       ))}
