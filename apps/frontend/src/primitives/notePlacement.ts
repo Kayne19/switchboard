@@ -1142,7 +1142,7 @@ function calloutRoutes(card: Rect, point: Point, from: Side, marksNear: MarksNea
     const highest = Math.min(hi, q.y - CALLOUT_DROP);
     if (highest < lo) continue;
     // The run as near the point as it can be, and just over each mark and
-    // line it would cross there: the nearest few.
+    // line it would cross there.
     const heights = [highest];
     const reach = { left: Math.min(sideX, q.x), right: Math.max(sideX, q.x), top: lo, bottom: highest };
     const over = (top: number) => {
@@ -1156,7 +1156,10 @@ function calloutRoutes(card: Rect, point: Point, from: Side, marksNear: MarksNea
       const [ta, tb] = [turn.to(a), turn.to(b)];
       over(Math.min(...share.map((t) => ta.y + (tb.y - ta.y) * t)));
     });
-    for (const y of [...new Set(heights)].sort((a, b) => b - a).slice(0, CALLOUT_RUN_HEIGHTS)) {
+    // The nearest few, and always the highest: over the topmost of what lies
+    // in the way, the one height a run along a sampled line may clear it at.
+    const nearest = [...new Set(heights)].sort((a, b) => b - a);
+    for (const y of new Set([...nearest.slice(0, CALLOUT_RUN_HEIGHTS - 1), nearest[nearest.length - 1]])) {
       const jog = Math.max(0, Math.min(CALLOUT_JOG, (q.y - y) / 2, Math.abs(q.x - sideX) / 2));
       const start = { x: sideX - direction * overlap, y };
       const path = jog >= 1 ? [start, { x: q.x - direction * jog, y }, { x: q.x, y: y + jog }, q] : [start, { x: q.x, y }, q];

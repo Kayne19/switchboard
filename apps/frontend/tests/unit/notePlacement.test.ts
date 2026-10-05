@@ -722,6 +722,22 @@ describe('a note on a line, area or scatter chart', () => {
     expect(wholly(place.rect, field.plot!)).toBe(true);
   });
 
+  // Only the four run heights nearest the point were tried, so a line drawn
+  // in more pieces lost the one height that clears it: over its topmost
+  // point (review finding).
+  it('runs along over the topmost of the line in its way, however many pieces it is drawn in', () => {
+    const card = box(100, 100, 200, 100);
+    const point = { x: 500, y: 260 };
+    const coarse: Point[] = [{ x: 310, y: 150 }, { x: 460, y: 178 }, { x: 490, y: 300 }, { x: 510, y: 300 }];
+    // The first segment again, in six collinear pieces: the same drawn line.
+    const fine: Point[] = [coarse[0], ...Array.from({ length: 6 }, (_, k) => ({ x: 310 + (150 * (k + 1)) / 6, y: 150 + (28 * (k + 1)) / 6 })), ...coarse.slice(2)];
+    for (const line of [coarse, fine]) {
+      const segments = line.slice(1).map((b, index) => [line[index], b] as [Point, Point]);
+      const route = calloutLeader(card, point, 'above', () => {}, { linesNear: (_near, visit) => segments.forEach(visit) });
+      expect(route.clear).toBe(true);
+    }
+  });
+
   it('has no clear route across a line it does not name', () => {
     // A card above a line, the point below it.
     const line: [Point, Point] = [{ x: 0, y: 300 }, { x: 1000, y: 300 }];
