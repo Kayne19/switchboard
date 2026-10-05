@@ -300,7 +300,7 @@ layout. One whose content asks for more gets the stage's height:
   the rail takes the stage. On the stage a content is weighed against the
   viewport it had in that shared layout, never against a model of the
   frame round it (a table's head, a document's heading, an aux row are
-  fixed; a diagram's rails grow with it). Folded, it gives the stage back
+  fixed; a diagram's rails grow with it, up to a cap on the stage). Folded, it gives the stage back
   only once it would be within a few pixels of reading whole there, so a
   need on the line does not fold and unfold as it redraws. So a primary
   sent again with less in it (a week with one appointment left) gives the
@@ -332,9 +332,10 @@ layout. One whose content asks for more gets the stage's height:
 - **What earns nothing while the primary has the stage gives its room
   back.** The frame's subtitle runs after its title on one line (each cut
   at the stage's edge, the title last), and the primary starts a line
-  higher. A diagram's rails keep the depth they have in a slot of some
-  400px (their steps at most 40px in from the slot's edges) rather than a
-  tenth of the stage's height, the drawing taking the rest. Opened, the
+  higher. A diagram's rails keep their lower steps at most 40px in from
+  the slot's edges, as in a slot of some 400px, rather than a tenth of the
+  stage's height (on a stage over some 870px a little more, so each rail
+  stays wholly inside the slot), the drawing taking the rest. Opened, the
   rail and the frame are as they were.
 
 At 390x844 a diagram's viewport grows from 374 px to some 518 px, a 40-row
@@ -488,8 +489,10 @@ for that line. Where the line is narrow its readings give way in an
 order: the chance of rain goes whole first, then the temperatures end in
 an ellipsis. Where a slot is too short for the head, the alert's line,
 the figure and that item's line (the today scene's cell at 844x390), the
-alert's line gives way to the item's, which the card on screen names:
-the alert's tag stays in the head, and focus draws its line whole. The hours are a strip, a column each:
+alert's line gives way to the item, which the card on screen names (its
+line, or its column in an outlook the freed room lets stand): the
+alert's tag stays in the head, and focus draws its line whole. The hours
+are a strip, a column each:
 the temperature traced over the chance of rain, labelled every 1, 2, 3,
 4, 6, 8, 12 or 24 hours so the labels stand at least 34px apart, which
 keeps 48 hours readable on a phone without scrolling sideways; the hour
