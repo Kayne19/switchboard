@@ -242,12 +242,8 @@ export function ChartNotes({
           if (wider.fits) size = wider;
         }
         const target = toLayer ? chartNotePoint(note.data, chartRef.current, scales, callouts) : undefined;
-        toPlace.push({
-          id: note.key,
-          width: size.width,
-          height: size.height,
-          ...(target ? { point: toLayer!(target.point), from: target.from, mark: rectToLayer(target.mark), value: rectToLayer(target.value) } : {}),
-        });
+        const card = { id: note.key, width: size.width, height: size.height };
+        toPlace.push(target ? { ...card, point: toLayer!(target.point), from: target.from, mark: rectToLayer(target.mark), value: rectToLayer(target.value) } : card);
       }
       const options = { spill, leaderOverlap: 1 };
       let placed = layoutNotes(toPlace, field, options);
