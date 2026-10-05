@@ -533,7 +533,9 @@ function validateGraphDiagramData(data: Record<string, unknown>): { ok: true; da
     if (e.from === e.to) {
       return { ok: false, error: `diagram edge self-loop is forbidden: ${e.from}` };
     }
-    const pairKey = `${e.from}-->${e.to}`;
+    // JSON keeps the two ids apart whatever they contain: `a-->b` to `c`
+    // and `a` to `b-->c` are two pairs, as the backend's tuple keeps them.
+    const pairKey = JSON.stringify([e.from, e.to]);
     if (edgePairs.has(pairKey)) {
       return { ok: false, error: `duplicate diagram edge pair: ${e.from} -> ${e.to}` };
     }
