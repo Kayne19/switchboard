@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react';
 import type { DiagramData, NoteData, Semantic } from '../controller/types';
-import { ARROW_LENGTH, cornerTagBoxes, nodeFramePath, viewDiagram, type Point } from './diagramLayout';
+import { ARROW_LENGTH, cornerTagBoxes, nodeFramePath, viewDiagram, type DiagramLayout, type Point } from './diagramLayout';
 import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
 
 const colors: Record<Semantic, string> = {
@@ -69,9 +69,12 @@ export function DiagramPrimitive({
   const anchor = hasAnchoredNode ? anchoredNodeId : undefined;
   // The layout is chosen for the viewport: as drawn for the approved canvas
   // when that reads, otherwise recomposed for this viewport and scrolled.
+  // Layouts of this graph and anchor are kept across resizes: the approved
+  // one does not depend on the size, and a frame's only on its step.
+  const layouts = useMemo(() => new Map<string, DiagramLayout>(), [data, anchor]);
   const { layout, fit, orientation } = useMemo(
-    () => viewDiagram(data, { width, height, scrollbar }, anchor),
-    [data, width, height, scrollbar, anchor],
+    () => viewDiagram(data, { width, height, scrollbar }, anchor, layouts),
+    [data, width, height, scrollbar, anchor, layouts],
   );
   const portrait = orientation === 'portrait';
   // A drawing that scrolls opens on the node its note names, or else on
@@ -243,7 +246,7 @@ export function DiagramPrimitive({
                   {tags.marker ? (
                     <g className="diagram-node__marker" transform={`translate(${tags.marker.x}, ${tags.marker.y})`}>
                       <rect width={tags.marker.width} height={tags.marker.height} rx="2" fill="rgba(var(--orange-rgb), 0.25)" stroke="var(--orange)" strokeWidth="1" />
-                      <text x={tags.marker.width / 2} y="11" textAnchor="middle" fill="var(--orange)" fontSize="8.5" fontWeight="700" fontFamily="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" letterSpacing="0.05em">
+                      <text x={tags.marker.width / 2} y="11" textAnchor="middle" fill="var(--orange)" fontSize="9" fontWeight="700" fontFamily="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" letterSpacing="0.05em">
                         NOTE
                       </text>
                     </g>

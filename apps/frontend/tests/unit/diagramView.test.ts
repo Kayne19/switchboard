@@ -37,6 +37,25 @@ describe('a graph read in its viewport', () => {
     }
   }
 
+  it('pins the approved canvas: the architecture drawing, box for box', () => {
+    // Laying a graph out for a frame must not move the approved drawing; a
+    // change here is a change to the canonical scene (and its golden).
+    const boxes = (orientation: 'landscape' | 'portrait') => {
+      const layout = layoutDiagram(architecture, orientation, 'session');
+      return { size: [layout.width, layout.height].map(Math.round), boxes: Object.fromEntries(layout.nodes.map((node) => [node.node.id, [node.box.x, node.box.y, node.box.width, node.box.height].map(Math.round)])) };
+    };
+    expect(boxes('landscape')).toEqual({
+      size: [1000, 620],
+      boxes: { damocles: [28, 266, 169, 88], session: [292, 257, 158, 107], planner: [548, 190, 150, 70], implementer: [545, 360, 155, 70], pool: [795, 269, 177, 83] },
+    });
+    expect(boxes('portrait')).toEqual({
+      size: [700, 1000],
+      boxes: { damocles: [264, 28, 169, 88], session: [270, 315, 158, 107], planner: [148, 620, 150, 70], implementer: [398, 620, 155, 70], pool: [260, 889, 177, 83] },
+    });
+    // A one-layer graph starts at the canvas's start, as it always has.
+    expect(layoutDiagram({ mode: 'graph', nodes: [{ id: 'a', label: 'A' }], edges: [] }, 'landscape').nodes[0].box.x).toBe(28);
+  });
+
   it('keeps a drawing that reads whole as the approved canvas draws it', () => {
     for (const size of [viewports['landscape 1440x900'], viewports['ultrawide 2560x1080'], viewports['focus 1440x900']]) {
       const view = viewDiagram(architecture, { ...size, scrollbar: 0 }, 'session');
@@ -71,6 +90,19 @@ describe('a graph read in its viewport', () => {
       const { fit } = viewDiagram(pipelineDiagram, { ...viewports[geometry], scrollbar: 11 });
       expect([fit.scrollX, fit.scrollY], geometry).toEqual([true, false]);
     }
+  });
+
+  it('lays a graph out once per step of a resize, not once per pixel', () => {
+    const layouts = new Map();
+    const first = viewDiagram(topologyDiagram, { width: 914, height: 526, scrollbar: 0 }, 'gate', layouts);
+    const made = layouts.size;
+    // One pixel narrower, the same step: nothing is laid out again.
+    const next = viewDiagram(topologyDiagram, { width: 913, height: 526, scrollbar: 0 }, 'gate', layouts);
+    expect(layouts.size).toBe(made);
+    expect(next.layout).toBe(first.layout);
+    // A step down, a new frame.
+    viewDiagram(topologyDiagram, { width: 890, height: 526, scrollbar: 0 }, 'gate', layouts);
+    expect(layouts.size).toBeGreaterThan(made);
   });
 
   it('chooses within a frame budget', () => {

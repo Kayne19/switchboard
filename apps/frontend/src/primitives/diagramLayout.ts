@@ -24,8 +24,10 @@
 //    gap, clear of the other labels and of the arrowheads at the gap's
 //    ends, and clear of the other edges' lines where the gap leaves a spot
 //    (otherwise on the spot that hides fewest).
-// The drawing grows when the approved canvas is too small, and the SVG
-// scales it to fit, rather than letting anything overlap.
+// The drawing grows when the approved canvas is too small rather than
+// letting anything overlap. Shown in a viewport (`viewDiagram`), a drawing
+// too large to read whole there is laid out again for a frame of the
+// viewport's size and scrolls (drawingFit.ts).
 
 import type { DiagramData, DiagramEdge, DiagramNode } from '../controller/types';
 import { fitDrawing, readableScale, scrollCost, type DrawingFit, type Viewport } from './drawingFit';
@@ -1259,7 +1261,7 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
   // A short drawing spreads its gaps to use the canvas; laid out for a
   // frame, only so far, and the rest is left either side of it.
   const stretch = gaps.length ? Math.min(packing.maxGapStretch, Math.max(0, (canvas.main - natural) / gaps.length)) : 0;
-  let cursor = packing.padMain + Math.max(0, canvas.main - natural - stretch * gaps.length) / 2;
+  let cursor = packing.padMain + (frame ? Math.max(0, canvas.main - natural - stretch * gaps.length) / 2 : 0);
   layers.forEach((layer, index) => {
     const front = rowExtent(layer, 0);
     for (const item of layer) {
@@ -1416,20 +1418,27 @@ export function frameFor(orientation: DiagramOrientation, viewport: Viewport): D
  * Lays a graph out for a frame. Edge labels may reach past the band its
  * boxes and lines keep to; when they take the drawing past the frame
  * across, the band narrows by that much and the layout runs again, a few
- * times at most.
+ * times at most. The narrowest try is kept.
  */
 function layoutForFrame(data: DiagramData, orientation: DiagramOrientation, anchorNodeId: string | undefined, frame: DiagramFrame): DiagramLayout {
+  const across = (layout: DiagramLayout) => (orientation === 'landscape' ? layout.height : layout.width);
   let band = frame;
   let layout = layoutDiagram(data, orientation, anchorNodeId, band);
+  let best = layout;
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const across = orientation === 'landscape' ? layout.height : layout.width;
-    const excess = across - frame.cross;
+    const excess = across(layout) - frame.cross;
     if (excess <= 0.5 || band.cross - excess < frame.cross / 2) break;
     band = { main: frame.main, cross: band.cross - excess - CLEARANCE };
     layout = layoutDiagram(data, orientation, anchorNodeId, band);
+    if (across(layout) < across(best)) best = layout;
   }
-  return layout;
+  return best;
 }
+
+// Frames are laid out for the viewport rounded down to this many pixels,
+// so a resize recomposes the drawing at most once a step, not on every
+// pixel; the fit still uses the viewport's own size.
+const FRAME_STEP = 16;
 
 /**
  * How a graph is shown in a viewport (CSS pixels). A drawing laid out for
@@ -1437,17 +1446,35 @@ function layoutForFrame(data: DiagramData, orientation: DiagramOrientation, anch
  * that does not is laid out again for the viewport itself, once in each
  * direction, its wide layers wrapped to the frame across; of those and the
  * approved drawing, the one asking for the least scrolling at the readable
- * minimum is kept, the stage's own direction preferred.
+ * minimum is kept, the stage's own direction preferred. `layouts` may carry
+ * layouts of this same graph and anchor from an earlier call, keyed by what
+ * they were laid out for; it is filled as they are made.
  */
-export function viewDiagram(data: DiagramData, viewport: Viewport, anchorNodeId?: string): DiagramView {
+export function viewDiagram(data: DiagramData, viewport: Viewport, anchorNodeId?: string, layouts = new Map<string, DiagramLayout>()): DiagramView {
+  const remembered = (key: string, make: () => DiagramLayout) => {
+    const known = layouts.get(key);
+    if (known) return known;
+    const made = make();
+    // A long resize leaves a layout per step it passed; only the last few matter.
+    if (layouts.size >= 32) layouts.clear();
+    layouts.set(key, made);
+    return made;
+  };
   const preferred: DiagramOrientation = viewport.height > viewport.width * 1.05 ? 'portrait' : 'landscape';
-  const approved = layoutDiagram(data, preferred, anchorNodeId);
+  const approved = remembered(`approved/${preferred}`, () => layoutDiagram(data, preferred, anchorNodeId));
   const fit = fitDrawing(approved, viewport, GRAPH_MIN_SCALE);
   if (!fit.scrollX && !fit.scrollY) return { orientation: preferred, layout: approved, fit };
+  const stepped: Viewport = {
+    width: Math.max(FRAME_STEP, Math.floor(viewport.width / FRAME_STEP) * FRAME_STEP),
+    height: Math.max(FRAME_STEP, Math.floor(viewport.height / FRAME_STEP) * FRAME_STEP),
+    scrollbar: viewport.scrollbar,
+  };
   const views = [
     { orientation: preferred, layout: approved, fit, cost: scrollCost(fit, viewport) },
     ...(['landscape', 'portrait'] as const).map((orientation) => {
-      const layout = layoutForFrame(data, orientation, anchorNodeId, frameFor(orientation, viewport));
+      const layout = remembered(`frame/${orientation}/${stepped.width}x${stepped.height}/${stepped.scrollbar}`, () =>
+        layoutForFrame(data, orientation, anchorNodeId, frameFor(orientation, stepped)),
+      );
       const fitted = fitDrawing(layout, viewport, GRAPH_MIN_SCALE);
       return { orientation, layout, fit: fitted, cost: scrollCost(fitted, viewport) * (orientation === preferred ? 1 : FLOW_SWITCH) };
     }),
