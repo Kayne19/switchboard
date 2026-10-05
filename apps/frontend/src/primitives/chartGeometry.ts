@@ -221,8 +221,14 @@ export function chartCategories(data: ChartData): string[] | undefined {
 export function chartTargetText(anchor: { x?: number; series?: string }, data: ChartData): string | undefined {
   const labels = data.labels;
   if (!labels || labels.length === 0 || anchor.x === undefined || !Number.isFinite(anchor.x)) return undefined;
-  const label = labels[Math.round(Math.min(labels.length - 1, Math.max(0, anchor.x)))];
-  return anchor.series ? `${label} / ${anchor.series}` : label;
+  // The series and the category the chart marks: a name the chart does
+  // not carry falls back to its first series, and an x past a short
+  // series' end to its last value, as the chart's point and callout do.
+  const named = anchor.series ? data.series.findIndex((candidate) => candidate.name === anchor.series) : -1;
+  const series = data.series[named >= 0 ? named : 0];
+  const last = Math.min(labels.length, series?.values.length ?? labels.length) - 1;
+  const label = labels[Math.round(Math.min(Math.max(0, last), Math.max(0, anchor.x)))];
+  return anchor.series && series ? `${label} / ${series.name}` : label;
 }
 
 /** One category label drawn on the axis. */

@@ -557,6 +557,14 @@ describe('what a note names on a chart', () => {
     expect(chartTargetText({ x: 9 }, chart)).toBe('frontend visual');
   });
 
+  // The tag named label 5 while the chart outlined bar 2, and a series the
+  // chart did not carry while the callout fell back to its first (review).
+  it('names the category and series the chart marks for it', () => {
+    const short: ChartData = { kind: 'bar', labels: ['a', 'b', 'c', 'd', 'e', 'f'], series: [{ name: 'S', values: [1, 2, 3] }] };
+    expect(chartTargetText({ x: 5, series: 'S' }, short)).toBe('c / S');
+    expect(chartTargetText({ x: 1, series: 'NOPE' }, short)).toBe('b / S');
+  });
+
   it('is left to the anchor as sent where the chart has no labels or the note no x', () => {
     expect(chartTargetText({ x: 2 }, { xMax: 10, series: [{ name: 'S', values: [1, 2] }] })).toBeUndefined();
     expect(chartTargetText({ x: 2 }, { kind: 'bar', series: [{ name: 'S', values: [1, 2, 3] }] })).toBeUndefined();
