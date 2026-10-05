@@ -160,7 +160,7 @@ function RailProgress({ progressList, onFocus }: { progressList: Array<SceneObje
         <ObjectMotion key={progress.id} objectId={progress.id} className="rail-progress">
           <ObjectSurface object={progress}>
             <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
-              <ProgressPrimitive data={progress.data} compact />
+              <ProgressPrimitive data={progress.data} variant="rail" />
             </FocusableSurface>
           </ObjectSurface>
         </ObjectMotion>
@@ -179,8 +179,9 @@ interface RailDetailsProps {
   onOpenHistory?: () => void;
 }
 
-// The details column beside every content visual: the metrics, live response,
-// note, any progress the main column has no slot for, and tool activity. It is
+// The details column beside every content visual: the metrics and any
+// progress the main column has no slot for, one stack of instruments read
+// the same way, then the live response, the note, and tool activity. It is
 // a permanent slot; an empty one renders nothing, and
 // the activity panel can linger after its end without the wrapper
 // unmounting it first.
@@ -194,9 +195,9 @@ function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, 
   return (
     <div className="content-rail__details">
       {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} variant="rail" /> : null}
+      <RailProgress progressList={progressList} onFocus={onFocus} />
       {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
       <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
-      <RailProgress progressList={progressList} onFocus={onFocus} />
       <ToolActivity activity={state.activity} reserveSpace={reserveActivity} />
     </div>
   );
@@ -222,7 +223,7 @@ function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux') {
     case 'metric':
       return <MetricsPrimitive metrics={[object as SceneObject<MetricData>]} variant={slot === 'primary' ? 'primary' : undefined} />;
     case 'progress':
-      return <ProgressPrimitive data={(object as SceneObject<ProgressData>).data} compact={slot === 'aux'} />;
+      return <ProgressPrimitive data={(object as SceneObject<ProgressData>).data} variant={slot === 'aux' ? 'compact' : 'full'} />;
     case 'note':
       return <AnnotationCard data={(object as SceneObject<NoteData>).data} />;
     default:

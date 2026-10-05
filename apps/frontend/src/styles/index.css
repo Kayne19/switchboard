@@ -1389,39 +1389,69 @@ button {
   flex: none;
   min-width: 0;
 }
-.rail-progress .progress-primitive,
 .composed-aux-object--progress .progress-primitive {
-  /* A rail or an aux cell is too narrow for the wide label | bar | text row:
-     the fixed label column and the gaps leave the bar no width at all. Here
-     the label takes its own line and the bar shares the next with the text. */
+  /* An aux cell is too narrow for the wide label | bar | text row: the
+     fixed label column and the gaps leave the bar no width at all. Here the
+     label takes its own line and the bar shares the next with the text. */
   grid-template-columns: minmax(0, 1fr) fit-content(50%);
   gap: 8px 12px;
   min-height: 0;
   padding-top: clamp(8px, 1cqh, 12px);
 }
-.rail-progress .progress-primitive__label,
 .composed-aux-object--progress .progress-primitive__label {
   grid-column: 1 / -1;
   min-width: 0;
 }
-.rail-progress .progress-primitive__label > *,
 .composed-aux-object--progress .progress-primitive__label > *,
-.rail-progress .progress-primitive__text,
 .composed-aux-object--progress .progress-primitive__text {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.rail-progress .progress-primitive__label strong,
 .composed-aux-object--progress .progress-primitive__label strong {
   font-size: clamp(14px, 1.3cqw, 22px);
 }
-.rail-progress .progress-primitive__text,
 .composed-aux-object--progress .progress-primitive__text {
   grid-column: 2;
   justify-self: end;
 }
+/* The rail's progress module reads as the metrics above it do: its head is
+   a metric row (the label in the tech face, the share done as the value),
+   the bar runs under it, then one row counts the steps done and each step
+   still to do is a row between the same thin rules, its state in the
+   glyph. The details and the agent's own wording wait for focus, which
+   lists the whole plan. */
+.progress-primitive.progress-primitive--rail {
+  display: block;
+  min-height: 0;
+  padding-top: 0;
+  border-top: 1px solid rgba(var(--orange-rgb), 0.48);
+}
+.progress-primitive--rail .progress-primitive__head {
+  border-top: 0;
+}
+.progress-primitive--rail .progress-primitive__track {
+  height: 3px;
+  margin-bottom: clamp(4px, 0.8cqh, 8px);
+}
+.progress-primitive--rail .progress-primitive__steps {
+  margin: 0;
+  padding: 0;
+  border-top: 0;
+  gap: 0;
+  overflow: visible;
+}
+.progress-primitive--rail .progress-step {
+  grid-template-columns: auto minmax(0, 1fr);
+  padding: clamp(3px, 0.55cqh, 7px) 0;
+  border-top: 1px solid rgba(232, 230, 223, 0.13);
+  line-height: 1.3;
+}
+.progress-primitive--rail .progress-step__detail {
+  display: none;
+}
+
 /* The live chat output: the current assistant turn in a contained
    scrollable card. It grows with the rail and scrolls inside; the note
    and the metrics keep their own space. */
