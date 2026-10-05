@@ -53,6 +53,7 @@ The renderer does not load bespoke route pages. It derives a broad composition f
 | code | source and diff analysis |
 | table | ruled rows of named columns |
 | image | figure: a raster image contained on the black field |
+| calendar, tasks, timer, weather, inbox | the personal-assistant views, each its own scene kind; drawn for now by one stand-in list of the fields as sent (`src/primitives/TemporaryAssistantList.tsx`) until the render slice gives each a primitive |
 
 Additional metrics, progress, notes, comparisons, and speech modify that composition incrementally. Any other visual on stage that the composition does not draw itself (`besideVisuals` in `src/app/sceneModel.ts`) goes in the aux row under the primary; see "Scene shell".
 

@@ -11,6 +11,7 @@ delivery; the checks here only catch malformed arguments early.
 """
 
 import base64 as _base64
+import datetime as _datetime
 import json as _json
 import os as _os
 import socket as _socket
@@ -42,7 +43,21 @@ _SHAPES = {
     "note": (("segments",), "{segments:[{text}]}"),
     # The wire shape; `_image_data` makes it from a path or raw bytes first.
     "image": (("format", "bytes", "alt"), '{alt, path:"/tmp/fig.png"} or {alt, bytes:<raw bytes>}'),
+    # Times are "YYYY-MM-DD", a wall time "YYYY-MM-DDTHH:MM", or (a timer's
+    # only) an instant "YYYY-MM-DDTHH:MM:SS-07:00"; `_wire_times` writes them
+    # from date and datetime values.
+    "calendar": (
+        ("view", "start", "events"),
+        '{view:"day"|"week"|"month"|"agenda", start:"YYYY-MM-DD", events:[{id, title, start:"YYYY-MM-DD" or "YYYY-MM-DDTHH:MM"}]}',
+    ),
+    "tasks": (("items",), '{items:[{id, text, state?, due?:"YYYY-MM-DD"}]}'),
+    "timer": (("timers",), '{timers:[{id, label, endsAt:"YYYY-MM-DDTHH:MM:SS-07:00"}]}'),
+    "weather": (("location", "units", "current"), '{location, units:"C"|"F", current:{temp, condition}}'),
+    "inbox": (("messages",), '{messages:[{id, from, time:"YYYY-MM-DD" or "YYYY-MM-DDTHH:MM"}]}'),
 }
+# How `view` names a visual kind in a sentence, where the type name does not
+# read as a noun: "Showing a to-do list", not "a tasks".
+_VISUAL_WORDS = {"tasks": "to-do list", "weather": "forecast"}
 # A diagram's other required keys depend on its mode.
 _DIAGRAM_MODES = {"graph": ("nodes", "edges"), "sequence": ("actors", "messages")}
 
@@ -332,9 +347,54 @@ def _check_display_action(action):
         raise ValueError(f"{kind} data needs {' or '.join(one_of)}; its shape is {hint}")
 
 
+# ---- time values ---------------------------------------------------------------
+
+# A timer's two times are instants, measured against the page clock; every
+# other time a display takes is a date or the caller's wall time
+# (docs/display-tool.md, "Time values").
+_INSTANT_KEYS = ("endsAt", "startedAt")
+
+
+def _wire_instant(value, key):
+    """An aware datetime as an instant with its offset. A naive one names no
+    moment, so it raises; an offset with seconds (no instant has one) is
+    written in UTC instead."""
+    offset = value.utcoffset()
+    if offset is None:
+        raise ValueError(
+            f"{key} is an instant: give an aware datetime, such as "
+            "datetime.now(timezone.utc) + timedelta(minutes=9), or text like 2026-10-05T18:42:00-07:00"
+        )
+    if offset.seconds % 60 or offset.microseconds:
+        value = value.astimezone(_datetime.timezone.utc)
+    return value.isoformat(timespec="seconds" if value.microsecond == 0 else "microseconds")
+
+
+def _wire_times(value, key=None):
+    """`value` with each date and datetime written as the time text the
+    display takes, by the field it is in: a date as "YYYY-MM-DD"; a
+    datetime as a wall time on its own clock, "YYYY-MM-DDTHH:MM" (to the
+    minute, as the page draws it), except a timer's `endsAt` and
+    `startedAt`, which are instants."""
+    if isinstance(value, dict):
+        return {name: _wire_times(item, name) for name, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_wire_times(item, key) for item in value]
+    if isinstance(value, _datetime.datetime):
+        if key in _INSTANT_KEYS:
+            return _wire_instant(value, key)
+        return value.strftime("%Y-%m-%dT%H:%M")
+    if isinstance(value, _datetime.date):
+        return value.isoformat()
+    return value
+
+
 def _display_wire_action(action):
-    """The action as it is sent: an image's path or raw bytes become its wire
-    fields, then its outline is checked (a malformed one raises)."""
+    """The action as it is sent: dates and datetimes become time text, an
+    image's path or raw bytes become its wire fields, then its outline is
+    checked (a malformed one raises)."""
+    if isinstance(action, dict) and action.get("op") == "show" and isinstance(action.get("data"), dict):
+        action = {**action, "data": _wire_times(action["data"])}
     if isinstance(action, dict) and action.get("op") == "show" and action.get("type") == "image" and isinstance(action.get("data"), dict):
         action = {**action, "data": _image_data(action["data"])}
     _check_display_action(action)
@@ -390,14 +450,15 @@ def view(target=None):
         screen = data.get("screen", data)
         if not isinstance(screen, dict):
             screen = {}
-        kind = screen.get("visual_kind") or "visual"
+        kind = _VISUAL_WORDS.get(screen.get("visual_kind"), screen.get("visual_kind") or "visual")
+        a_kind = f"{'an' if kind[:1] in 'aeiou' else 'a'} {kind}"
         titled = f" titled '{screen['title']}'" if screen.get("title") else ""
         if not screen.get("has_visual"):
             text = "Nothing is on the caller's screen right now."
         elif screen.get("confirmed"):
-            text = f"Showing a {kind}{titled} on the caller's screen."
+            text = f"Showing {a_kind}{titled} on the caller's screen."
         else:
-            text = f"Requested a {kind}{titled}, but the caller's screen has not confirmed it yet."
+            text = f"Requested {a_kind}{titled}, but the caller's screen has not confirmed it yet."
         if screen.get("connected") is False:
             text += " No browser is connected."
         return text

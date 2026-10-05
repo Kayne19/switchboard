@@ -1,6 +1,6 @@
 # The `display` channel & Visual Stage
 
-A project agent pushes anything it wants the caller to *see* — a diagram, a chart, a metric, a progress list, a document, code, a table, an image, or a plain note — to the caller's page mid-turn, the same way it pushes speech. The caller sees it render while the agent is still working. **The agent chooses what to show and how it is composed; the page owns the pixels.** `docs/visual-channel.md` is the product/capability companion to this wire contract.
+A project agent pushes anything it wants the caller to *see* — a diagram, a chart, a metric, a progress list, a document, code, a table, an image, a calendar, a to-do list, timers, the weather, an inbox, or a plain note — to the caller's page mid-turn, the same way it pushes speech. The caller sees it render while the agent is still working. **The agent chooses what to show and how it is composed; the page owns the pixels.** `docs/visual-channel.md` is the product/capability companion to this wire contract.
 
 ## Wire shape and transport
 
@@ -32,13 +32,13 @@ type DisplayAction =
 ```
 
 - **ops** (one per call): `show | focus | hide | clear | say`. There is **no** `listen` on this public channel (`listen` is internal-only).
-- **content types** (for `show`): `chart | metric | progress | diagram | document | code | table | note | image`. `message` is a runtime-owned transcript, **not** an agent display type.
+- **content types** (for `show`): `chart | metric | progress | diagram | document | code | table | note | image | calendar | tasks | timer | weather | inbox`. `message` is a runtime-owned transcript, **not** an agent display type.
 - **roles** (composition slot): `primary | compare | secondary | ambient`.
 - **`id`**: agent-owned and stable across updates (re-sending the same `id` replaces the object in place). Agent IDs must not begin with the reserved `__runtime/` namespace.
 - **`target`**: the object id to anchor a `say` action (must not begin with `__runtime/`); `null` is the same as no target and is dropped.
 - **`at`**: speech anchor object containing at least one of `x` (finite number) and `series` (string <= 128 UTF-16 code units), or explicit `null`; omitted `at` normalizes to `null`.
 - **`caption`**: optional content-owned supporting text (<= 128 UTF-16 code units) rendered in the scene's small corner label. It is available on every `show` data shape.
-- **`note.anchor`**: optional persistent annotation target `{ target, x?, series?, node? }`. `target` is another display object id; the remaining fields identify a semantic location inside a chart or diagram without prescribing pixels.
+- **`note.anchor`**: optional persistent annotation target `{ target, x?, series?, node?, item? }`. `target` is another display object id; the remaining fields identify a semantic location inside a chart, a diagram or a personal-assistant object without prescribing pixels (`item`: see "Personal-assistant types").
 
 ### show (create or update)
 ```json
@@ -79,8 +79,13 @@ type DisplayAction =
 | `document` | `{ subject, paragraphs: string[], kind?: "email"\|"document", context?, caption?, source?, from?, timestamp? }` | document reader; each paragraph is read as Markdown (see below) |
 | `code` | `{ source: { text, language?, highlight? }, title?, file?, context?, caption? }` | syntax/diff view |
 | `table` | `{ columns: [{ label, semantic? }], rows: Cell[][], highlight?: number[], title?, subtitle?, context?, caption? }`; `Cell = string \| number \| { text, semantic?, bold? }` | ruled data table in a scroll viewport (see below) |
-| `note` | `{ segments: [{ text, accent?, bold?, semantic? }], tag?, caption?, anchor?: { target, x?, series?, node? } }` | persistent annotation |
+| `note` | `{ segments: [{ text, accent?, bold?, semantic? }], tag?, caption?, anchor?: { target, x?, series?, node?, item? } }` | persistent annotation |
 | `image` | `{ format: "png"\|"jpeg"\|"webp", bytes: <standard base64>, alt, title?, subtitle?, context?, caption? }` | raster figure, contained, with its alt text and decoded size |
+| `calendar` | `{ view: "day"\|"week"\|"month"\|"agenda", start: Date, days?, today?: Date, now?: WallTime, events: [{ id, title, start, end?, location?, detail?, semantic?, status?, active? }], title?, subtitle?, context?, caption? }` | a day, a week, a month or an agenda of events (see "Personal-assistant types") |
+| `tasks` | `{ items: [{ id, text, state?, due?, priority?, group?, detail?, tags? }], today?: Date, title?, subtitle?, context?, caption? }` | a to-do list, in groups, overdue marked against `today` |
+| `timer` | `{ timers: [{ id, label, endsAt: Instant, startedAt?, state?, remaining? }], title?, subtitle?, context?, caption? }` | countdowns and reminders, counted on the page clock (by the render slice; a field list until then) |
+| `weather` | `{ location, units: "C"\|"F", current: { temp, condition, ... }, hourly?, daily?, alert?, title?, subtitle?, context?, caption? }` | conditions now, by the hour and by the day |
+| `inbox` | `{ messages: [{ id, from, subject?, snippet?, time, channel?, unread?, flagged?, semantic? }], today?: Date, title?, subtitle?, context?, caption? }` | a list of messages in the order sent |
 
 Each document paragraph is read as the same small Markdown subset the conversation surfaces use (`apps/frontend/src/primitives/markdown.ts`): `#` headings (shown as a bold line), `**bold**`, `*italic*`, `` `inline code` ``, `-` and `1.` lists, and fenced code blocks. A newline inside a paragraph is a line break; a blank line starts a new paragraph. It is never HTML: markup stays literal text, and a link shows only its label.
 
@@ -131,6 +136,124 @@ Notes have their own display lifecycle. A chat or spoken response does not updat
 
 The page lays a graph out in layers along the reading axis (left to right in landscape, top to bottom in portrait) and owns every pixel of it: cycles are fine (a feedback edge is drawn back toward its target), a long edge threads between the nodes of the layers it skips, each node's box grows to its text, a crowded layer is staggered into two rows, and every edge ends in an arrowhead at a port of its own. A graph too large to read whole scrolls; there an edge longer than the viewport is drawn as a stub pair naming its far ends (`-> target` by its source, `source ->` by its target, with the edge's label under the name), and so are the longest of more than four long edges running side by side (`docs/visual-channel.md`). A node's `state` is visible: `done` recedes with a check in its corner tag, `active` is lit, `blocked` is framed in red with a cross, and `todo` is the plain frame.
 
+### Time values
+
+Every time in a display action is a string in one of three forms. Each validator has one parser for them (`parseTimeValue` in `validation.ts`, `parse_time_value` in `visual_protocol.rs`), and every type that carries a time uses it.
+
+| form | written | example | where |
+| --- | --- | --- | --- |
+| Date | `YYYY-MM-DD` | `2026-10-05` | a calendar's `start` and `today`, an all-day event, a task's `due`, a forecast day, an inbox message's `time`, every `today` |
+| WallTime | `YYYY-MM-DDTHH:MM` | `2026-10-05T14:30` | a calendar's `now`, a timed event, a task's `due`, a forecast hour, an inbox message's `time` |
+| Instant | `YYYY-MM-DDTHH:MM:SS` with `Z` or an offset | `2026-10-05T14:30:00-07:00`, `2026-10-05T21:30:00Z` | a timer's `endsAt` and `startedAt`, and nothing else |
+
+- A date is a real Gregorian day in the years 1970 to 2199, with two-digit months and days: `2024-02-29` is a date; `2026-02-29`, `2100-02-29`, `2026-04-31`, `1969-12-31` and `2026-1-5` are not.
+- Hours are `00` to `23` (`24:00` is refused); minutes and seconds are `00` to `59` (a leap second, `:60`, is refused).
+- A wall time has no seconds and no offset. It is the caller's own clock, and the page draws it as written.
+- An instant has seconds and an offset: `Z`, or `+HH:MM`/`-HH:MM` with hours `00` to `23` (`-00:00` is UTC). A fraction of 1 to 9 digits may follow the seconds (`18:42:00.250Z`), as JavaScript's `toISOString()` and Python's `isoformat()` write one. An instant without an offset is refused. Its year is read as written: `1970-01-01T00:30:00+01:00` is accepted.
+- Upper-case `T` and `Z`, ASCII digits, and nothing before or after: no spaces, no `+0700`, no zone names. RFC 3339 also allows `t` and `z`; here they are refused, so every time has one spelling. A note names a forecast hour by the same text the hour carries, and the page compares the text.
+- A refusal names the forms the field takes: `calendar event.start must be a date (YYYY-MM-DD) or a wall time (YYYY-MM-DDTHH:MM), on a real day in 1970-2199`.
+
+**Why there is no page clock, except for a timer.** A calendar, a to-do list, a forecast and an inbox are drawn only from what the agent sends. The page converts no time zone, and it does not read its own clock to draw them: "today" and "now" are fields (`today`, `now`), so the now line, an overdue task and a message from today all come from data. A frame is then the same on every screen and in every test; a caller whose browser is in another zone still sees the times the agent meant; and the agent, which knows the caller's day, decides what today is. A timer is the exception: it counts down, so it is measured against the page clock, and it is the one type that takes instants, whose offsets make that measurement exact.
+
+### Personal-assistant types
+
+Five types show a person's day: `calendar`, `tasks`, `timer`, `weather` and `inbox`. They keep the conventions of the other types: an optional `title`, `subtitle`, `context` (each <= 256) and `caption` (<= 128); camelCase keys; an unknown key is refused. An item id (an event, a task, a timer, a message) is non-blank and <= 128 UTF-16 code units, like a diagram node id, and is unique in its list.
+
+Status: both validators, the schema and the skill module hold the whole contract below. The page draws the five with one stand-in for now, a framed list of the fields as sent (`apps/frontend/src/primitives/TemporaryAssistantList.tsx`), so none is dropped. The drawing rules below (a timer's countdown, a marked item, an overdue task, the condition glyphs, the half-hour block) are what the render slice implements; until it lands the page does not do them.
+
+#### calendar
+
+- `view` (required): `day`, `week`, `month` or `agenda`. `start` (required, a date): for `day` the day shown; for `week` the first column; for `month` any day in the month; for `agenda` the first day listed.
+- `days`: an integer, 1 to 7 on the week view (7 when absent) and 1 to 31 on the agenda view (7 when absent). It is refused on the day and month views.
+- `today` (a date) and `now` (a wall time) mark the day and the time. When both are given, `now` falls on `today`.
+- `events`: 0 to 200, each `{ id, title (<= 256), start, end?, location? (<= 128), detail? (<= 256), semantic?, status?, active? }`. `status` is `confirmed`, `tentative` or `cancelled`; `active` (a boolean) marks the event on now or the one being talked about.
+- A date `start` is an all-day event. A wall time `start` is a timed event; with no `end` the page draws it as a 30-minute block. `end` is written like `start` (both dates or both wall times) and is not before it. A date `end` is inclusive: `start: "2026-10-10", end: "2026-10-11"` is two days. Events may overlap and may run past midnight.
+
+```json
+{ "op": "show", "id": "week", "type": "calendar", "role": "primary", "data": {
+  "view": "week", "start": "2026-10-05", "today": "2026-10-07", "now": "2026-10-07T09:40",
+  "events": [
+    { "id": "standup", "title": "Standup", "start": "2026-10-07T09:30", "end": "2026-10-07T09:45", "active": true },
+    { "id": "dentist", "title": "Dentist", "start": "2026-10-07T10:30", "end": "2026-10-07T11:30", "location": "Dr. Okafor, 14 Pine St" },
+    { "id": "birthday", "title": "Mom's birthday", "start": "2026-10-08" },
+    { "id": "flight", "title": "UA 1532 SFO to JFK", "start": "2026-10-09T18:05", "end": "2026-10-10T02:40", "detail": "Lands 05:40 New York time" }
+  ] } }
+```
+
+#### tasks
+
+- `items`: 1 to 100, each `{ id, text (<= 256), state?, due?, priority?, group? (<= 128), detail? (<= 256), tags? }`.
+- `state` is `todo`, `active`, `done` or `blocked`, the words of a progress step; absent reads as `todo`. `priority` is `high` or `low`; absent is normal (`normal` is refused). `due` is a date or a wall time. `tags` is 0 to 4 short strings (each <= 32).
+- `group` is a section heading; the sections stand in the order their groups are first met.
+- `today` (a date) is what overdue is measured against: a task is overdue when the day of its `due` is before `today` and it is not `done`. The day is compared, not the time: a task due at `09:00` on `today` is not overdue, because a list has no `now`. With no `today`, nothing is overdue.
+
+```json
+{ "op": "show", "id": "todo", "type": "tasks", "data": {
+  "today": "2026-10-07",
+  "items": [
+    { "id": "pr", "text": "Review the switchboard PR", "state": "active", "due": "2026-10-07T17:00", "group": "Work" },
+    { "id": "passport", "text": "Renew passport", "due": "2026-10-02", "priority": "high", "group": "Errands", "tags": ["travel"] },
+    { "id": "gift", "text": "Buy a gift for Mom", "state": "done", "group": "Errands" }
+  ] } }
+```
+
+#### timer
+
+- `timers`: 1 to 8, each `{ id, label (<= 128), endsAt, startedAt?, state?, remaining? }`. `endsAt` and `startedAt` are instants, and `startedAt` is before `endsAt` (offsets applied).
+- `state` is `running` or `paused`; absent reads as `running`. `remaining` is the seconds left (a number, 0 or more): it is required when the timer is `paused` and refused otherwise, because a running timer is counted down from `endsAt`.
+- A paused timer is drawn from `remaining` and is not counted; its `endsAt` is kept as the end it had when it last ran, and nothing is measured against it. `startedAt` and `endsAt` together give the whole span, so the page can show the share gone: `now` against them for a running timer, `remaining` against them for a paused one. When the agent resumes a timer, it sends `state: "running"` (or no state) with the new `endsAt`.
+- The page counts a running timer down against its own clock and shows it done at zero. It plays no sound: the agent says it is done. With reduced motion there is no animated sweep; the numbers still change.
+
+```json
+{ "op": "show", "id": "kitchen", "type": "timer", "data": {
+  "timers": [
+    { "id": "pasta", "label": "Pasta", "startedAt": "2026-10-05T18:33:00-07:00", "endsAt": "2026-10-05T18:42:00-07:00" },
+    { "id": "bread", "label": "Bread in the oven", "endsAt": "2026-10-05T19:05:00-07:00", "state": "paused", "remaining": 1260 },
+    { "id": "leave", "label": "Leave for the airport", "endsAt": "2026-10-06T00:30:00Z" }
+  ] } }
+```
+
+#### weather
+
+- `location` (required, <= 128) and `units` (required, `C` or `F`). Every temperature is in `units`; the page converts none.
+- `current` (required): `{ temp, condition, summary? (<= 256), high?, low?, feelsLike?, humidity?, precip?, wind? (<= 128) }`. Temperatures are finite numbers; `humidity` and `precip` (the chance of precipitation) are percents, 0 to 100.
+- `hourly`: 0 to 48 `{ time, temp, condition, precip? }`, `time` a wall time, no two hours with one `time`. `daily`: 0 to 14 `{ date, high, low, condition, precip? }`, no two days with one `date`. `alert`: <= 256.
+- `condition` is one of `clear`, `partly-cloudy`, `cloudy`, `fog`, `drizzle`, `rain`, `heavy-rain`, `thunder`, `snow`, `sleet`, `hail`, `wind`, `haze`. The page draws each as a glyph in the design system's sharp vector geometry, never as an emoji or an image.
+
+```json
+{ "op": "show", "id": "weather", "type": "weather", "data": {
+  "location": "San Francisco, CA", "units": "F",
+  "current": { "temp": 61, "condition": "fog", "summary": "Fog burning off by noon", "high": 68, "low": 54, "humidity": 84 },
+  "hourly": [ { "time": "2026-10-07T12:00", "temp": 64, "condition": "partly-cloudy" }, { "time": "2026-10-07T13:00", "temp": 67, "condition": "clear" } ],
+  "daily": [ { "date": "2026-10-08", "high": 61, "low": 55, "condition": "rain", "precip": 80 } ] } }
+```
+
+#### inbox
+
+- `messages`: 1 to 50, each `{ id, from (<= 128), subject? (<= 256), snippet? (<= 256), time, channel? (<= 32), unread?, flagged?, semantic? }`. `time` is a date or a wall time; `channel` is a short label (`email`, `slack`, `sms`); `unread` and `flagged` are booleans.
+- Messages are drawn in the order sent. A wall time on `today` (a date) shows as its time of day; any other `time`, a date on `today` included, shows as its date.
+- One message in full is a `document` of kind `email`, not an inbox.
+
+```json
+{ "op": "show", "id": "inbox", "type": "inbox", "data": {
+  "today": "2026-10-07",
+  "messages": [
+    { "id": "dentist", "from": "Dr. Okafor's office", "subject": "Appointment today", "snippet": "Reply C to confirm.", "time": "2026-10-07T08:12", "channel": "sms", "unread": true, "flagged": true },
+    { "id": "ci", "from": "GitHub", "subject": "CI failed on visual-palette", "time": "2026-10-07T07:41", "channel": "email", "unread": true, "semantic": "red" },
+    { "id": "shuttle", "from": "Sam and Lee", "subject": "Wedding weekend: shuttle times", "time": "2026-10-04", "channel": "email" }
+  ] } }
+```
+
+#### A note on one item: `note.anchor.item`
+
+A note's `anchor.item` names an item inside its target: a calendar event, a task, a timer or an inbox message by its `id`, or a forecast hour or day by its `time` or `date`. It is checked as an item id is (non-blank, <= 128 UTF-16 code units). As for `node` and `series`, the validators check only its shape: the note and its target are separate objects, and the target may change after the note. The page is to mark the named item the way a diagram marks the node a note names (the render slice; the stand-in marks nothing), and marks nothing when the target has no item of that name.
+
+```json
+{ "op": "show", "id": "dentist-note", "type": "note", "data": {
+  "tag": "LEAVE BY 10:05", "anchor": { "target": "week", "item": "dentist" },
+  "segments": [ { "text": "Traffic on 101 is slow; leave right after standup." } ] } }
+```
+
 ## Canonical schema & validation rules
 
 The canonical contract is defined in `docs/display-action-v1.schema.json` and exercised by `apps/frontend/tests/fixtures/display-actions.json`. Both the TypeScript frontend validator (`apps/frontend/src/controller/validation.ts`) and the Rust backend validator (`apps/backend/src/visual_protocol.rs`) enforce identical rules, down to the text of each error; `apps/frontend/tests/fixtures/validator-corpus.json` pins that (see "How the two validators agree" below):
@@ -143,7 +266,7 @@ The canonical contract is defined in `docs/display-action-v1.schema.json` and ex
 - **Safety**: Raw HTML/JS markup (`<script`, `<iframe`, `javascript:`, etc.) and external resource URLs are rejected in any string. A URL is any `scheme://` (`https://`, `ftp://`, `s3://`, `file:///`), a string that starts with `//`, or a `//` followed by a host name with a dot and a top-level part of two letters or more (`see //cdn.example.com`). A `//` with no host after it (`a // comment`) is text.
 - **Unknown fields**: All schema branches specify `additionalProperties: false`; unexpected fields are rejected.
 
-`docs/display-action-v1.schema.json` encodes as much of this as declarative JSON Schema can express (the progress rule "one of `value`/`steps`" is its `anyOf`), and `apps/frontend/tests/unit/schema.test.ts` holds it to `display-actions.json` fixture-by-fixture so it cannot drift from the two validators unnoticed. Five things it cannot express, so it does not attempt to: invariants that span sibling array items (duplicate node or actor IDs, an edge or message endpoint naming no node or actor, a self-loop, a duplicate edge pair, a table row with other than `columns.length` cells, a table highlight naming no row — each a relationship between items, not one item's shape); a chart series' value count against its `labels` count, a relationship between two sibling fields; the action-size caps (48,000 bytes, 12 MiB for an image), which bound the serialized envelope on the wire rather than the parsed instance; the UTF-16-code-unit string caps above for content containing astral characters, since JSON Schema's `maxLength` counts Unicode code points; and an image's format/signature match, a cross-field check over decoded bytes (the schema pins the base64 alphabet, padding and length only). Those stay enforced only by `validation.ts` and `visual_protocol.rs`; the test names each as a documented, asserted exception (`KNOWN_SCHEMA_GAPS`) rather than silently passing.
+`docs/display-action-v1.schema.json` encodes as much of this as declarative JSON Schema can express (the progress rule "one of `value`/`steps`" is its `anyOf`; each time form is a pattern, a date's holding each month's days and the leap years; a calendar's `days` per view, an event's `end` written like its `start` and a paused timer's `remaining` are `if`/`then` rules), and `apps/frontend/tests/unit/schema.test.ts` holds it to `display-actions.json` fixture-by-fixture so it cannot drift from the two validators unnoticed. Six things it cannot express, so it does not attempt to: invariants that span sibling array items (duplicate node, actor or item IDs, two forecast hours with one `time` or days with one `date`, an edge or message endpoint naming no node or actor, a self-loop, a duplicate edge pair, a table row with other than `columns.length` cells, a table highlight naming no row — each a relationship between items, not one item's shape); a chart series' value count against its `labels` count, a relationship between two sibling fields; two times compared as times (an event's `end` before its `start`, a calendar's `now` off its `today`, a timer's `startedAt` not before its `endsAt`, offsets applied); the action-size caps (48,000 bytes, 12 MiB for an image), which bound the serialized envelope on the wire rather than the parsed instance; the UTF-16-code-unit string caps above for content containing astral characters, since JSON Schema's `maxLength` counts Unicode code points; and an image's format/signature match, a cross-field check over decoded bytes (the schema pins the base64 alphabet, padding and length only). Those stay enforced only by `validation.ts` and `visual_protocol.rs`; the test names each as a documented, asserted exception (`KNOWN_SCHEMA_GAPS`) rather than silently passing.
 
 The schema cannot state the blank rule, the key order or the text of an error either; the corpus pins those, and `schema.test.ts` also holds the schema to accept every action the corpus accepts, so the schema is never the stricter of the three.
 
@@ -159,7 +282,7 @@ These rules decide which error an action gets:
 
 1. **Order of the checks.** The action is an object; it is within its size cap; its `op` is known. Then, anywhere in the action: no layout key, no unsafe string, no non-finite number. Then the op's own fields: for a `show`, its unknown keys, `id`, `type`, `role` and `data`, and inside `data` the unknown keys first and then each field in a fixed order (the corpus's `*_order_*` cases pin it). Last, the normalized action is held to the same size cap.
 2. **Order of the keys.** Where two keys could each give the error (two unknown fields, two layout keys, two unsafe strings), both sides walk an object's keys in code point order, depth first, and name the first one met: `{"zeta": 1, "alpha": 2}` is `unknown field in ...: alpha`, wherever the agent put it. Arrays go in index order. The service sorts the keys itself rather than rely on its JSON map's order, and the page compares code points, not UTF-16 units.
-3. **Blank.** An `id`, a `target`, a node or actor id, an anchor target and an image `alt` must not be blank: empty, or made only of Unicode White_Space. That is these 25 code points and no others: U+0009 to U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F and U+3000. U+FEFF, U+200B, U+180E and U+001C to U+001F are not whitespace here. (JavaScript's `trim` strips U+FEFF and keeps U+0085, so neither side uses it.) A `say` text need only be non-empty.
+3. **Blank.** An `id`, a `target`, a node, actor or item id, an anchor target or item, and an image `alt` must not be blank: empty, or made only of Unicode White_Space. That is these 25 code points and no others: U+0009 to U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F and U+3000. U+FEFF, U+200B, U+180E and U+001C to U+001F are not whitespace here. (JavaScript's `trim` strips U+FEFF and keeps U+0085, so neither side uses it.) A `say` text need only be non-empty.
 4. **A wrong type is refused, never dropped.** An optional field of the wrong type, such as a number for a node's `sub` or `null` for a `semantic`, is refused on both sides. Neither side drops the field and accepts the rest. The one place `null` is allowed is a `say`'s `target` and `at`, where it means "none" (see the protocol section above).
 5. **Numbers, size and URLs.** Both read a number as the same double: the page with `JSON.parse`, the service with serde_json's correctly rounded parse (its `float_roundtrip` feature; the default parse reads `6e23` one step off). Both count the size as `JSON.stringify` writes the action ("Action size" above), and both apply one URL rule ("Safety" above).
 

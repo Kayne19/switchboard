@@ -179,8 +179,9 @@ caller-pin precedence above.
 
 ## Visual artifacts
 
-The visual channel supports nine content types: chart, metric, progress,
-diagram, document, code, table, note, and image (raster bytes inline; see
+The visual channel supports fourteen content types: chart, metric, progress,
+diagram, document, code, table, note, image (raster bytes inline), and the
+personal-assistant calendar, tasks, timer, weather and inbox (see
 `docs/visual-channel.md`).
 
 Artifacts arrive during an agent turn as `display` calls from the

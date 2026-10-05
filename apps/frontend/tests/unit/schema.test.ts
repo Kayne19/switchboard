@@ -89,6 +89,20 @@ const KNOWN_SCHEMA_GAPS: Record<string, string> = {
   // padding and the length; the sniff stays in validation.ts and
   // visual_protocol.rs, where both validators decode the same head bytes.
   image_signature_mismatch: 'the format/signature match is a cross-field check over decoded bytes',
+  // The personal-assistant types (docs/display-tool.md, "Personal-assistant
+  // types") add the same kinds of rule. Ids unique in a list, and a forecast
+  // hour's time or day's date unique in theirs, are cross-item invariants.
+  // An event's end not before its start, `now` falling on `today` and a
+  // timer started before it ends compare two sibling time values as times
+  // (an instant with its offset applied), which a pattern cannot do. What
+  // the schema can say it does: the time patterns (a date's knows each
+  // month's days and the leap years of 1970-2199), an end written like its
+  // start, `days` per view, and `remaining` on a paused timer only.
+  calendar_duplicate_event_id: 'event id uniqueness is a cross-item invariant',
+  weather_duplicate_hour: 'a forecast hour unique by its time is a cross-item invariant',
+  calendar_event_end_before_start: 'end not before start compares two sibling times as times',
+  calendar_now_not_on_today: 'now falling on today compares two sibling times',
+  timer_started_after_it_ends: 'startedAt before endsAt compares two instants, offsets applied',
 };
 
 describe('display-action-v1.schema.json', () => {
@@ -187,6 +201,11 @@ describe('validateControllerAction follows display-action-v1.schema.json', () =>
     note: { segments: [{ text: 't' }] },
     // A real 1x1 PNG: the validator sniffs the bytes, so a placeholder would not do.
     image: { format: 'png', bytes: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mN48ew+AAVnAq5EDgAUAAAAAElFTkSuQmCC', alt: 'a' },
+    calendar: { view: 'week', start: '2026-10-05', events: [] },
+    tasks: { items: [{ id: 't', text: 'T' }] },
+    timer: { timers: [{ id: 't', label: 'T', endsAt: '2026-10-05T18:42:00Z' }] },
+    weather: { location: 'L', units: 'C', current: { temp: 1, condition: 'clear' } },
+    inbox: { messages: [{ id: 'm', from: 'F', time: '2026-10-05' }] },
   };
 
   it('knows exactly the schema\'s show types and their shapes', () => {
@@ -222,6 +241,17 @@ describe('validateControllerAction follows display-action-v1.schema.json', () =>
 // (KNOWN_SCHEMA_GAPS above), or for a blank id and the text of an error, it
 // is the weaker one, and the corpus pins the rule instead.
 describe('display-action-v1.schema.json and the validator corpus', () => {
+  // The time patterns state the whole of the time rules, real days and
+  // leap years included, so every corpus case refused only for how a time
+  // is written is refused by the schema too.
+  it('refuses every time the validators refuse for how it is written', () => {
+    const accepted = corpusCases
+      .filter((testCase) => testCase.name.startsWith('time_') && testCase.error !== undefined)
+      .filter((testCase) => validate(expandCorpusValue(testCase.action)))
+      .map((testCase) => testCase.name);
+    expect(accepted).toEqual([]);
+  });
+
   it('accepts every action both validators accept', () => {
     const refused = corpusCases
       .filter((testCase) => testCase.accepted)

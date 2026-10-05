@@ -1,11 +1,13 @@
 import type {
   AgentObjectType,
+  CalendarData,
   ChartData,
   CodeData,
   ControllerState,
   DiagramObjectData,
   DocumentData,
   ImageData,
+  InboxData,
   MessageData,
   MetricData,
   NoteData,
@@ -14,6 +16,9 @@ import type {
   SceneObjectType,
   ScreenStateReport,
   TableData,
+  TasksData,
+  TimerData,
+  WeatherData,
 } from '../controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
 
@@ -157,6 +162,11 @@ export const VISUAL_TYPES: ReadonlySet<SceneObjectType> = new Set<SceneObjectTyp
   'code',
   'table',
   'image',
+  'calendar',
+  'tasks',
+  'timer',
+  'weather',
+  'inbox',
 ]);
 
 /**
@@ -181,6 +191,11 @@ export type SceneKind =
   | 'code'
   | 'table'
   | 'image'
+  | 'calendar'
+  | 'tasks'
+  | 'timer'
+  | 'weather'
+  | 'inbox'
   | 'composed';
 
 export function sceneKind(state: ControllerState): SceneKind {
@@ -205,6 +220,11 @@ export function sceneKind(state: ControllerState): SceneKind {
   if (primary.type === 'code') return 'code';
   if (primary.type === 'table') return 'table';
   if (primary.type === 'image') return 'image';
+  if (primary.type === 'calendar') return 'calendar';
+  if (primary.type === 'tasks') return 'tasks';
+  if (primary.type === 'timer') return 'timer';
+  if (primary.type === 'weather') return 'weather';
+  if (primary.type === 'inbox') return 'inbox';
   return 'composed';
 }
 
@@ -253,6 +273,11 @@ export const cast = {
   code: (object: SceneObject) => object as SceneObject<CodeData>,
   table: (object: SceneObject) => object as SceneObject<TableData>,
   image: (object: SceneObject) => object as SceneObject<ImageData>,
+  calendar: (object: SceneObject) => object as SceneObject<CalendarData>,
+  tasks: (object: SceneObject) => object as SceneObject<TasksData>,
+  timer: (object: SceneObject) => object as SceneObject<TimerData>,
+  weather: (object: SceneObject) => object as SceneObject<WeatherData>,
+  inbox: (object: SceneObject) => object as SceneObject<InboxData>,
   message: (object: SceneObject) => object as SceneObject<MessageData>,
   note: (object: SceneObject) => object as SceneObject<NoteData>,
 };
