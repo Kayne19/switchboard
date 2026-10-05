@@ -249,8 +249,11 @@ export function heroEms(tempText: string): number {
   return 1.1 + 0.24 + tempText.length * 0.6 + 0.55;
 }
 
-/** The glyph's width beside a compact figure in ems of its temperature, and the gap after it, CSS pixels. */
+/** The glyph's width beside a compact figure in ems of its temperature
+ * (heroEms' first term, as its gap is its second), and the gap a compact
+ * figure draws after it, CSS pixels. */
 const GLYPH_EMS = 1.1;
+const HERO_GAP_EMS = 0.24;
 export const COMPACT_FIGURE_GAP = 10;
 /** The gap between the condition and the high and low on the condition
  * line under the temperature. The stylesheet takes it from the forecast's
@@ -264,7 +267,8 @@ export const CONDITION_GAP = 16;
  * outlook the figure stands this wide, and the days take the rest.
  */
 export function outlookFigure(temp: number, tempText: string, condition: number): number {
-  return Math.ceil(Math.max(temp * heroEms(tempText), temp * GLYPH_EMS + COMPACT_FIGURE_GAP + condition));
+  // The row's gap after the glyph is the compact figure's, not heroEms' 0.24em.
+  return Math.ceil(Math.max(temp * (heroEms(tempText) - HERO_GAP_EMS) + COMPACT_FIGURE_GAP, temp * GLYPH_EMS + COMPACT_FIGURE_GAP + condition));
 }
 
 /** The hero temperature for a column `width` wide: the layout's size, or less so the row fits. */

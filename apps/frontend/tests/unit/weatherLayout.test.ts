@@ -173,8 +173,9 @@ describe('weatherLayout', () => {
     expect(roomy.outlook).toBe(true);
     expect(219 - OUTLOOK_SPACE - roomy.figure).toBeGreaterThanOrEqual(OUTLOOK_COLUMN);
     expect(roomy.figure).toBe(outlookFigure(roomy.temp, '61', 40));
-    // The temperature row counts by its digits: `-12.5` needs more room than `61`.
-    expect(outlookFigure(28, '-12.5', 0)).toBe(Math.ceil(28 * heroEms('-12.5')));
+    // The temperature row counts by its digits (heroEms, its gap the compact
+    // figure's 10px): `-12.5` needs more room than `61`.
+    expect(outlookFigure(28, '-12.5', 0)).toBe(Math.ceil(28 * (heroEms('-12.5') - 0.24) + 10));
     expect(outlookFigure(28, '-12.5', 0)).toBeGreaterThan(outlookFigure(28, '61', 0));
     // A slot whose column would leave the figure under a compact figure's least holds none.
     const narrow = OUTLOOK_SPACE + OUTLOOK_COLUMN + Math.floor((OUTLOOK_TEMP_LEAST - 1) * heroEms('-12.5'));

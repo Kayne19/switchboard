@@ -428,7 +428,12 @@ export function WeatherPrimitive({ data, marked, framed = false }: { data: Weath
   const [least, setLeast] = useState<number | null>(null);
   useLayoutEffect(() => {
     const element = fieldRef.current;
-    if (!tall || !element) return undefined;
+    // Measured for this arrangement only: a forecast laid down the box
+    // again first says nothing, rather than what it said last time.
+    if (!tall || !element) {
+      setLeast(null);
+      return undefined;
+    }
     return watchElement(element, () => setLeast(fieldLeast(element)), { children: true });
   }, [tall]);
   const field = (
