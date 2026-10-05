@@ -46,11 +46,6 @@ function measureScrollbar(): number {
   return scrollbarThickness;
 }
 
-/**
- * The viewport a drawing is read in, in CSS pixels: the host's layout size
- * once measured. Until then the first frame falls back to the screen's, so
- * a tall screen never flashes a wide drawing before the observer reports.
- */
 // The height a drawing is read whole in at its least readable scale, less
 // the sliver it would be contained over.
 const leastHeight = (drawing: Size, fit: DrawingFit) => drawing.height * fit.minScale * (1 - SLIVER);
@@ -60,6 +55,11 @@ const leastHeight = (drawing: Size, fit: DrawingFit) => drawing.height * fit.min
 // bring on a scroll bar. The viewport is taken a pixel short of its box.
 const inBox = (length: number) => Math.max(1, Math.floor(length - 1));
 
+/**
+ * The viewport a drawing is read in, in CSS pixels: the host's layout size
+ * once measured. Until then the first frame falls back to the screen's, so
+ * a tall screen never flashes a wide drawing before the observer reports.
+ */
 export function useDrawingViewport(): { hostRef: RefObject<HTMLDivElement | null>; width: number; height: number; scrollbar: number } {
   const hostRef = useRef<HTMLDivElement>(null);
   const size = useElementSize(hostRef);

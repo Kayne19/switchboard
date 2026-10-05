@@ -55,9 +55,13 @@ export function stageReport(need: StageNeed, shared: boolean, column: number, be
  * the stage be resized). A content laid out again for its viewport is
  * weighed as it would be laid out for that one (`relaid`), so the word it
  * gives on the stage is the word the shared layout would give: no fold
- * that the shared layout would undo. Measured only on the stage, it is
- * past the shared one for certain if it overflows even the stage;
- * otherwise `null`, as it cannot tell.
+ * that the shared layout would undo. The viewport is moved by the whole of
+ * the column's move, though a frame round it takes a share: a stage that
+ * grows a long way while folded (a phone's address bar going) can give the
+ * stage back once on an estimate a few pixels too kind, and take it again
+ * when the shared layout measures; that measure then stands. Measured only
+ * on the stage, it is past the shared one for certain if it overflows even
+ * the stage; otherwise `null`, as it cannot tell.
  */
 export function sharedExcess(report: StageReport, sharedColumn: number): number | null {
   if (report.shared) return report.excess;

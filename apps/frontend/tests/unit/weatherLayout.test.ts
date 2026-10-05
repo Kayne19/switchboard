@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { WeatherData, WeatherHour } from '../../src/controller/types';
 import {
   ALERT_LINE,
@@ -101,11 +101,12 @@ describe('weatherLayout', () => {
 
   // Told nothing of the figure, the layout counted it narrow and stood an
   // outlook beside it where none fits; the primitive always tells it, and
-  // only a test could leave it out (phone-tidy review L7).
-  it('takes no slot without the figure it is laid out beside', () => {
-    // @ts-expect-error: the temperature as written and the condition line's width are required.
-    const untold = () => weatherLayout(334, 128, { hourly: true, daily: true });
-    expect(typeof untold).toBe('function');
+  // only a test could leave it out (phone-tidy review L7). A type, checked
+  // by `npm run typecheck`.
+  it('is always told the figure: its temperature as written and its condition line\'s width', () => {
+    type Told = Parameters<typeof weatherLayout>[2];
+    expectTypeOf<Told['temp']>().toEqualTypeOf<string>();
+    expectTypeOf<Told['condition']>().toEqualTypeOf<number>();
   });
 
   it('sets the conditions beside the days on a wide box, down a tall one', () => {

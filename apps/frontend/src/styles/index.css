@@ -754,11 +754,17 @@ button {
   text-align: left;
   overflow: hidden;
 }
+/* A card puts what it names on a line of its own where it does not fit
+   beside the tag, rather than cut it to an ellipsis there: the TARGET
+   line's words are the object's own (a title, a node's label, a list's
+   item), and they are its point: cut beside the tag in a folded strip,
+   they read `TARG…`. */
 .annotation-card__header {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
+  gap: 4px 12px;
   margin-bottom: clamp(8px, 1cqh, 13px);
 }
 .annotation-card__tag {
@@ -1107,16 +1113,6 @@ button {
   background: #000;
   pointer-events: auto;
 }
-/* A card puts what it names on a line of its own where it does not fit
-   beside the tag, rather than cut it to an ellipsis there: the TARGET
-   line's words are the object's own (a title, a node's label, a list's
-   item), and they are its point: cut beside the tag in a folded strip,
-   they read `TARG…`. */
-.annotation-card__header {
-  flex-wrap: wrap;
-  row-gap: 4px;
-}
-
 
 .chart-note .annotation-card {
   height: auto;
