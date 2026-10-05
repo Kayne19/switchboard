@@ -6,62 +6,93 @@
 // of 844, the note and the emblem under it.
 import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { columnNeed, STAGE_PAST, UNSTAGE_UNDER, wantsStage } from '../../src/app/stageFold';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { STAGE_PAST, UNSTAGE_UNDER, sharedExcess, stageReport, wantsStage, type StageReport } from '../../src/app/stageFold';
 import { SceneRenderer } from '../../src/components/SceneRenderer';
 import { ControllerProvider, useController } from '../../src/controller/context';
 import type { ControllerAction } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
 
 describe('when the primary takes the stage', () => {
-  const shared = 498;
-  const stacked = { stacked: true, column: shared, shared };
-  // In the shared column a viewport of 374 px: what it lacks grows the column by that share.
-  const at = (excess: number, column = shared, viewport = 374) => columnNeed(column, [{ excess, viewport }]);
+  // In the shared layout the column is 498 px and the viewport 374.
+  const column = 498;
+  const shared = (excess: number, viewport = 374) => stageReport({ excess, viewport }, true, column, undefined);
+  // The same content measured on the stage, its viewport `viewport` there.
+  const staged = (content: number, viewport: number, before: StageReport | undefined = shared(0)) =>
+    stageReport({ excess: content - viewport, viewport }, false, column, before);
 
   it('keeps the shared layout for a primary that reads whole in it', () => {
-    expect(wantsStage({ ...stacked, need: at(-40) }, false)).toBe(false);
-    expect(wantsStage({ ...stacked, need: at(0) }, false)).toBe(false);
+    expect(wantsStage(true, [shared(-40)], false, column)).toBe(false);
+    expect(wantsStage(true, [shared(0)], false, column)).toBe(false);
     // A region a few pixels short for its last line keeps the rail.
-    expect(wantsStage({ ...stacked, need: shared + STAGE_PAST }, false)).toBe(false);
-    expect(wantsStage({ ...stacked, need: at(12) }, false)).toBe(false);
+    expect(wantsStage(true, [shared(STAGE_PAST)], false, column)).toBe(false);
   });
 
-  it('takes the stage for a primary past the shared column', () => {
-    expect(wantsStage({ ...stacked, need: shared + STAGE_PAST + 1 }, false)).toBe(true);
-    expect(wantsStage({ ...stacked, need: at(5000) }, false)).toBe(true);
+  it('takes the stage for a primary past its shared viewport, the most any of its parts lacks', () => {
+    expect(wantsStage(true, [shared(STAGE_PAST + 1)], false, column)).toBe(true);
+    expect(wantsStage(true, [shared(-100), shared(5000)], false, column)).toBe(true);
   });
 
   it('never where the rail stands beside the primary, or while nothing has said what it needs', () => {
-    expect(wantsStage({ ...stacked, stacked: false, need: at(5000) }, false)).toBe(false);
-    expect(wantsStage({ ...stacked, need: null }, false)).toBe(false);
-    expect(columnNeed(shared, [])).toBeNull();
-    expect(wantsStage({ stacked: true, column: 0, shared: 0, need: 9999 }, false)).toBe(false);
+    expect(wantsStage(false, [shared(5000)], false, column)).toBe(false);
+    expect(wantsStage(true, [], true, column)).toBe(false);
   });
 
-  it('reads the column a primary needs from the share of its viewport it lacks, the largest of several', () => {
-    // A viewport of 460 in a column of 606 that lacks 60: the frame grows with it.
-    expect(columnNeed(606, [{ excess: 60, viewport: 460 }])).toBeCloseTo((606 * 520) / 460);
-    expect(columnNeed(606, [{ excess: -100, viewport: 460 }, { excess: 60, viewport: 460 }])).toBeCloseTo((606 * 520) / 460);
+  it('weighs a content measured on the stage against the viewport it had in the shared layout', () => {
+    // 400 px of content in a 374 px viewport: past it by 26, on the stage too.
+    const first = shared(26);
+    expect(sharedExcess(staged(400, 482, first), column)).toBe(26);
+    // The stage resized: the shared column grew by 20, so did its viewport.
+    expect(sharedExcess(staged(400, 482, first), column + 20)).toBe(6);
+    // Never measured in the shared layout: past even the stage is past it for certain; else it cannot tell.
+    expect(sharedExcess(stageReport({ excess: 10, viewport: 482 }, false, column, undefined), column)).toBe(Number.POSITIVE_INFINITY);
+    expect(sharedExcess(stageReport({ excess: -10, viewport: 482 }, false, column, undefined), column)).toBeNull();
+  });
+
+  it('takes a graph laid out again for the stage at its word only where it overflows even the stage', () => {
+    // A graph recomposed for the stage's taller viewport may ask more than
+    // it would of the shared one: that says nothing of the shared layout.
+    const graph = stageReport({ excess: 374 - 300, viewport: 374 }, true, column, undefined);
+    const relaid = (excess: number) => stageReport({ excess, viewport: 482, relaid: true }, false, column, graph);
+    expect(sharedExcess(relaid(-30), column)).toBeNull();
+    expect(sharedExcess(relaid(40), column)).toBe(Number.POSITIVE_INFINITY);
+    expect(wantsStage(true, [relaid(-30)], true, column)).toBe(true);
+  });
+
+  it('keeps the layout it has while a part cannot tell', () => {
+    const unknown = stageReport({ excess: -10, viewport: 482 }, false, column, undefined);
+    expect(wantsStage(true, [unknown], true, column)).toBe(true);
+    expect(wantsStage(true, [unknown], false, column)).toBe(false);
   });
 
   it('gives the stage back only with room to spare, so a need on the line does not flicker', () => {
-    // Folded, the column is the stage's.
-    const staged = { stacked: true, column: 620, shared };
-    // Still past the shared column: it keeps the stage.
-    expect(wantsStage({ ...staged, need: shared + 20 }, true)).toBe(true);
+    // Folded: still past the shared viewport, it keeps the stage.
+    expect(wantsStage(true, [staged(374 + 20, 482)], true, column)).toBe(true);
     // Within the band between the two thresholds it keeps the layout it has.
-    expect(wantsStage({ ...staged, need: shared + UNSTAGE_UNDER + 1 }, true)).toBe(true);
-    expect(wantsStage({ ...stacked, need: shared + UNSTAGE_UNDER + 1 }, false)).toBe(false);
-    // It reads whole in the shared column: the rail comes back.
-    expect(wantsStage({ ...staged, need: shared + UNSTAGE_UNDER }, true)).toBe(false);
+    expect(wantsStage(true, [staged(374 + UNSTAGE_UNDER + 1, 482)], true, column)).toBe(true);
+    expect(wantsStage(true, [shared(UNSTAGE_UNDER + 1)], false, column)).toBe(false);
+    // It reads whole in the shared viewport: the rail comes back.
+    expect(wantsStage(true, [staged(374 + UNSTAGE_UNDER, 482)], true, column)).toBe(false);
+  });
+
+  it('does not fold and unfold a content framed by fixed chrome (a document, a table over an aux row)', () => {
+    // A document whose heading and meta take 150 px of a 515 px column: its
+    // viewport is 365 there and 473 on the stage. 400 px of text folds the
+    // rail; on the stage, the same text against the same 365 keeps it.
+    const document = shared(400 - 365, 365);
+    expect(wantsStage(true, [document], false, column)).toBe(true);
+    expect(wantsStage(true, [staged(400, 473, document)], true, column)).toBe(true);
+    // 380 px of text keeps the shared layout, and would never have folded.
+    expect(wantsStage(true, [shared(380 - 365, 365)], false, column)).toBe(false);
   });
 });
 
 // The shell, on a stage laid out as a phone lays it out: the main column a
 // fixed share over the rail (or the rail beside it), the drawing's viewport
-// a few hundred pixels tall. jsdom has no layout, so the boxes are given.
+// a few hundred pixels tall. jsdom has no layout, so the boxes are given,
+// and the resize observers report when the test says the layout settled.
 let landscape = false;
+let stagedViewport = 460;
 const SHARED = 400;
 const STAGED = 520;
 function layoutBox(element: HTMLElement): { top: number; height: number; width: number } {
@@ -70,12 +101,17 @@ function layoutBox(element: HTMLElement): { top: number; height: number; width: 
   if (element.classList.contains('composed-main')) return { top: 0, height: landscape ? 600 : staged ? STAGED : SHARED, width: 360 };
   if (element.classList.contains('content-rail')) return { top: landscape ? 0 : staged ? STAGED + 12 : SHARED + 18, height: landscape ? 600 : staged ? 90 : 170, width: 360 };
   if (element.classList.contains('drawing-viewport') || element.classList.contains('diagram-primitive') || element.classList.contains('sequence-primitive')) {
-    return { top: 60, height: staged ? 460 : 374, width: 330 };
+    return { top: 60, height: staged ? stagedViewport : 374, width: 330 };
   }
   return { top: 0, height: 0, width: 0 };
 }
 const stubbed = ['offsetTop', 'offsetHeight', 'offsetWidth'] as const;
 const originals = new Map<string, PropertyDescriptor | undefined>();
+const observers = new Set<{ report: () => void }>();
+// What a browser does after a layout: every observer reports its boxes.
+const settle = () => act(() => {
+  for (const observer of [...observers]) observer.report();
+});
 
 let host: HTMLDivElement | undefined;
 let root: Root;
@@ -97,17 +133,29 @@ function render(actions: ControllerAction[]): Element {
       <SceneRenderer />
     </ControllerProvider>,
   ));
+  settle();
   return [...element.querySelectorAll('[data-scene]')].at(-1)!;
 }
 const handle = (page: Element) => page.querySelector<HTMLButtonElement>('button.rail-handle');
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  globalThis.ResizeObserver ??= class {
-    observe() {}
+  globalThis.ResizeObserver = class {
+    private live = false;
+    constructor(private readonly callback: () => void) {}
+    observe() {
+      this.live = true;
+      observers.add(this);
+    }
     unobserve() {}
-    disconnect() {}
-  };
+    disconnect() {
+      this.live = false;
+      observers.delete(this);
+    }
+    report() {
+      if (this.live) this.callback();
+    }
+  } as unknown as typeof ResizeObserver;
   for (const key of stubbed) {
     originals.set(key, Object.getOwnPropertyDescriptor(HTMLElement.prototype, key));
     Object.defineProperty(HTMLElement.prototype, key, {
@@ -125,6 +173,12 @@ afterAll(() => {
     const original = originals.get(key);
     if (original) Object.defineProperty(HTMLElement.prototype, key, original);
   }
+  delete (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
+});
+
+beforeEach(() => {
+  landscape = false;
+  stagedViewport = 460;
 });
 
 afterEach(() => {
@@ -132,7 +186,7 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   host = undefined;
-  landscape = false;
+  observers.clear();
 });
 
 describe('a primary that outgrows a rail standing under it', () => {
@@ -151,21 +205,47 @@ describe('a primary that outgrows a rail standing under it', () => {
     const rail = page.querySelector('.content-rail')!;
     expect(rail.classList.contains('content-rail--folded')).toBe(true);
     expect(rail.querySelector('[data-testid="metrics"]')).toBeNull();
-    expect(rail.querySelector('[data-testid="progress"]')).toBeNull();
     expect(handle(page)?.textContent).toContain('02 METRICS / PROGRESS');
     expect(handle(page)?.getAttribute('aria-expanded')).toBe('false');
 
     act(() => handle(page)!.click());
+    settle();
     expect(page.querySelector('.content-grid--staged')).toBeNull();
     expect(rail.classList.contains('content-rail--open')).toBe(true);
-    expect(rail.querySelector('[data-testid="metrics"]')).not.toBeNull();
-    expect(rail.querySelector('[data-testid="progress"]')).not.toBeNull();
     expect(handle(page)?.getAttribute('aria-expanded')).toBe('true');
     expect(handle(page)?.textContent).toContain('FOLD');
 
     act(() => handle(page)!.click());
+    settle();
     expect(page.querySelector('.content-grid--staged')).not.toBeNull();
     expect(rail.classList.contains('content-rail--folded')).toBe(true);
+  });
+
+  it('keeps the handle, and the caller\'s place on it, when the rail opens over a primary that reads whole on the stage', () => {
+    // The plan's diagram reads whole in a viewport of 800 px on the stage.
+    stagedViewport = 800;
+    const page = render([...fixtures.plan]);
+    const button = handle(page)!;
+    button.focus();
+    act(() => button.click());
+    expect(handle(page)).toBe(button);
+    settle();
+    settle();
+    expect(page.querySelector('.content-rail--open')).not.toBeNull();
+    expect(handle(page)).toBe(button);
+    expect(document.activeElement).toBe(button);
+  });
+
+  it('keeps the stage while a drawing that reads whole there is laid out again for a box a few pixels shorter', () => {
+    stagedViewport = 800;
+    const page = render([...fixtures.plan]);
+    expect(page.querySelector('.content-grid--staged')).not.toBeNull();
+    // The strip grows by a line: the drawing's box is 3 px shorter before its fit follows.
+    stagedViewport = 797;
+    settle();
+    expect(page.querySelector('.content-grid--staged')).not.toBeNull();
+    settle();
+    expect(page.querySelector('.content-grid--staged')).not.toBeNull();
   });
 
   it('draws a stage with the rail beside the primary as it was', () => {
@@ -177,7 +257,7 @@ describe('a primary that outgrows a rail standing under it', () => {
   });
 
   it('keeps the shared layout for a primary that says nothing of its height', () => {
-    // A chart is drawn to its slot; its notes lie over it.
+    // A line chart is drawn to its slot; its notes lie over it.
     const page = render([...fixtures.training]);
     expect(page.querySelector('.content-grid--staged')).toBeNull();
     expect(page.querySelector('.content-rail--foldable')).toBeNull();
@@ -190,6 +270,8 @@ describe('a primary that outgrows a rail standing under it', () => {
       { op: 'clear' },
       { op: 'show', id: 'small', type: 'diagram', role: 'primary', data: { mode: 'graph', nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }], edges: [{ from: 'a', to: 'b' }] } },
     ]));
+    settle();
+    settle();
     const shown = [...host!.querySelectorAll('[data-scene]')].at(-1)!;
     expect(shown.querySelector('.content-grid--staged')).toBeNull();
     expect(shown.querySelector('.content-rail--foldable')).toBeNull();

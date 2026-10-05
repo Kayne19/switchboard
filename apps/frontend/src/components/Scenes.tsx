@@ -16,7 +16,7 @@ import type {
 } from '../controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
 import { anchoredNote, besideVisuals, buildCompositionModel, cast, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
-import { columnNeed, wantsStage, type StageGeometry, type StageNeed } from '../app/stageFold';
+import { stageReport, wantsStage, type StageReport } from '../app/stageFold';
 import { StageDemandContext, type StageDemandListener } from '../hooks/useStageDemand';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
@@ -729,48 +729,56 @@ function RailHandle({ open, items, onToggle }: { open: boolean; items: string[];
 // read in layout pixels: a box in a shared-layout animation is scaled on
 // screen, never in its offsets. The shared column is the probe, sized by
 // the same rule as that grid row.
+//
+// Each report is kept with the layout it was measured in (the one the
+// primary shares with the rail, or the stage), so a content measured on the
+// stage is weighed against the viewport it had in the shared layout, not
+// against a model of the frame round it. Opening the rail changes neither
+// the reports nor the decision: the handle stays where it is.
 function useStageFold(
-  active: boolean,
+  subject: string | null,
   railOpen: boolean,
   watchStacked: boolean,
   mainRef: RefObject<HTMLDivElement | null>,
   railRef: RefObject<HTMLElement | null>,
   probeRef: RefObject<HTMLDivElement | null>,
-): { foldable: boolean; stacked: boolean; onDemand: StageDemandListener } {
+): { foldable: boolean; staged: boolean; stacked: boolean; onDemand: StageDemandListener } {
   const [foldable, setFoldable] = useState(false);
   const [stacked, setStacked] = useState(false);
-  const demands = useRef(new Map<string, StageNeed>());
-  const staged = useRef(false);
-  staged.current = foldable && !railOpen;
-  const watching = useRef(watchStacked);
-  watching.current = watchStacked;
-  // The column is read when the decision is made, from the same layout
-  // the primary measured what it lacks in: a column remembered from an
-  // earlier layout, beside a need measured in this one, told the primary
-  // it fitted where it did not, and the stage folded and unfolded without
-  // end.
-  const decide = useCallback(() => {
+  const staged = foldable && !railOpen;
+  const reports = useRef(new Map<string, StageReport>());
+  // What the page shows now, kept as it commits: a report is measured in
+  // the layout on screen, and a decision weighs what it decided last.
+  const shown = useRef({ foldable, staged, watchStacked });
+  useLayoutEffect(() => {
+    shown.current = { foldable, staged, watchStacked };
+  });
+  const measure = useCallback(() => {
     const main = mainRef.current;
     const rail = railRef.current;
-    const probe = probeRef.current;
     const column = main?.offsetHeight ?? 0;
-    const geometry: StageGeometry = {
+    return {
       stacked: main !== null && rail !== null && column > 0 && rail.offsetTop >= main.offsetTop + column - 1,
-      column,
-      shared: probe?.offsetHeight ?? 0,
-      need: columnNeed(column, [...demands.current.values()]),
+      shared: probeRef.current?.offsetHeight ?? 0,
     };
-    setFoldable(wantsStage(geometry, staged.current));
-    setStacked(watching.current && geometry.stacked);
   }, [mainRef, railRef, probeRef]);
+  const decide = useCallback(() => {
+    const now = measure();
+    setFoldable(wantsStage(now.stacked, [...reports.current.values()], shown.current.foldable, now.shared));
+    setStacked(shown.current.watchStacked && now.stacked);
+  }, [measure]);
   const onDemand = useCallback<StageDemandListener>(
     (key, said) => {
-      if (said === null) demands.current.delete(key);
-      else demands.current.set(key, said);
+      if (said === null) reports.current.delete(key);
+      else {
+        const now = measure();
+        reports.current.set(key, stageReport(said, now.stacked && !shown.current.staged, now.shared, reports.current.get(key)));
+      }
       decide();
     },
-    [decide],
+    [measure, decide],
   );
+  const active = subject !== null;
   useLayoutEffect(() => {
     const boxes = [mainRef.current, railRef.current, probeRef.current];
     if (!active || boxes.some((box) => !box)) return undefined;
@@ -779,11 +787,22 @@ function useStageFold(
     for (const box of boxes) observer.observe(box!);
     return () => observer.disconnect();
   }, [active, mainRef, railRef, probeRef, decide]);
-  // The layout it decides in changes with the caller's choice, and with it
-  // the margin it decides by.
-  useLayoutEffect(decide, [decide, railOpen, watchStacked, foldable]);
-  return { foldable, stacked, onDemand };
+  useLayoutEffect(decide, [decide, watchStacked]);
+  // A new primary is first measured in the layout it would share with the
+  // rail: its content has said nothing there yet (a primitive kept from the
+  // last one speaks for content that is gone), so the stage's height is not
+  // its until it does.
+  const shownSubject = useRef(subject);
+  useLayoutEffect(() => {
+    if (shownSubject.current === subject) return;
+    shownSubject.current = subject;
+    reports.current.clear();
+    shown.current = { ...shown.current, foldable: false };
+    setFoldable(false);
+  }, [subject]);
+  return { foldable, staged, stacked, onDemand };
 }
+
 
 // ---- End of the folded rail ----
 
@@ -970,11 +989,10 @@ export function SceneShell(props: SceneProps) {
   const primaryId = content ? (primaryObject(state)?.id ?? null) : null;
   const [openFor, setOpenFor] = useState<string | null>(null);
   const railOpen = primaryId !== null && openFor === primaryId;
-  const { foldable, stacked, onDemand: foldOnDemand } = useStageFold(content !== null, railOpen, content?.chartNotes !== undefined, mainRef, railRef, probeRef);
+  const { foldable, staged, stacked, onDemand: foldOnDemand } = useStageFold(primaryId, railOpen, content?.chartNotes !== undefined, mainRef, railRef, probeRef);
   useLayoutEffect(() => {
     foldListener.current = foldOnDemand;
   }, [foldOnDemand]);
-  const staged = foldable && !railOpen;
   const banding = stacked ? content?.chartNotes : undefined;
   const bandHeld = chartBand !== null && banding?.chart === chartBand.chart && banding.keys.includes(chartBand.note);
   useLayoutEffect(() => {

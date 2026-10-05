@@ -194,15 +194,19 @@ export function DrawingViewport({
   // Only a fit made for this viewport speaks for it: before its host is
   // measured a drawing is laid out for the screen, and a contained drawing
   // larger than its box, or a scrolling one wider or taller than it across
-  // the axis it does not scroll, was fitted to another.
+  // the axis it does not scroll, was fitted to another (or the box has
+  // just changed and the fit not yet followed). Until it is, what it said
+  // last stands.
   const least = drawing.height * fit.minScale * (1 - SLIVER);
   useLeastHeight(
     viewportRef,
     useCallback(
       (box: { width: number; height: number }) =>
-        (fit.scrollX || fit.width <= box.width + 1) && (fit.scrollY || fit.height <= box.height + 1) ? least : null,
+        (fit.scrollX || fit.width <= box.width + 1) && (fit.scrollY || fit.height <= box.height + 1) ? least : undefined,
       [fit.scrollX, fit.scrollY, fit.width, fit.height, least],
     ),
+    // A graph is laid out again for its viewport's height.
+    true,
   );
   const scrolling = fit.scrollX || fit.scrollY;
   const axis = fit.scrollX && fit.scrollY ? 'both' : fit.scrollX ? 'x' : fit.scrollY ? 'y' : 'none';

@@ -7,7 +7,7 @@ import { act, useRef } from 'react';
 import type { StageNeed } from '../../src/app/stageFold';
 import { createRoot } from 'react-dom/client';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { scrollContentHeight, StageDemandContext, useLeastHeight, useStageDemand } from '../../src/hooks/useStageDemand';
+import { scrollContentHeight, StageDemandContext, useLeastHeight } from '../../src/hooks/useStageDemand';
 import { DrawingViewport } from '../../src/primitives/DrawingViewport';
 import { SLIVER, type DrawingFit } from '../../src/primitives/drawingFit';
 import type { DrawingMap } from '../../src/primitives/drawingScroll';
@@ -16,11 +16,6 @@ beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 });
 
-function Says({ excess }: { excess: number | null }) {
-  useStageDemand(excess, 374);
-  return null;
-}
-
 function Box({ least }: { least: number | null }) {
   const ref = useRef<HTMLDivElement>(null);
   useLeastHeight(ref, least);
@@ -28,27 +23,12 @@ function Box({ least }: { least: number | null }) {
 }
 
 describe('what a primitive says it lacks', () => {
-  it('reaches the listener in whole pixels, and is taken back when the primitive goes', () => {
-    const heard: Array<[string, StageNeed | null]> = [];
-    const host = document.createElement('div');
-    const root = createRoot(host);
-    const listen = (key: string, need: StageNeed | null) => heard.push([key, need]);
-    act(() => root.render(<StageDemandContext.Provider value={listen}><Says excess={120.4} /></StageDemandContext.Provider>));
-    expect(heard.at(-1)?.[1]).toEqual({ excess: 120, viewport: 374 });
-    act(() => root.render(<StageDemandContext.Provider value={listen}><Says excess={-30.6} /></StageDemandContext.Provider>));
-    expect(heard.at(-1)?.[1]).toEqual({ excess: -31, viewport: 374 });
-    const key = heard.at(-1)![0];
-    act(() => root.render(<StageDemandContext.Provider value={listen} />));
-    expect(heard.at(-1)).toEqual([key, null]);
-    act(() => root.unmount());
-  });
-
   it('goes nowhere where nothing listens, and nothing is measured there', () => {
     const host = document.createElement('div');
     const root = createRoot(host);
     // No ResizeObserver in jsdom: a measure here would throw.
     expect(globalThis.ResizeObserver).toBeUndefined();
-    act(() => root.render(<><Says excess={500} /><Box least={900} /></>));
+    act(() => root.render(<Box least={900} />));
     act(() => root.unmount());
   });
 
