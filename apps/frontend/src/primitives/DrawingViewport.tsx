@@ -10,6 +10,7 @@ import {
   keyStop,
   leadStop,
   mapInStrip,
+  MAP_MARGIN,
   MAP_PAD,
   pageStop,
   placeExits,
@@ -658,7 +659,7 @@ export function DrawingViewport({
           {mapBox && mapWindow ? (
             <div
               className="drawing-viewport__map"
-              style={{ width: `${mapBox.width}px`, height: `${mapBox.height}px` }}
+              style={{ width: `${mapBox.width}px`, height: `${mapBox.height}px`, padding: `${MAP_PAD}px`, right: `${MAP_MARGIN}px`, bottom: `${MAP_MARGIN}px` }}
               aria-hidden="true"
               onPointerDown={(event) => {
                 if (event.button !== 0) return;

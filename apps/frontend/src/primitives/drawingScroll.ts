@@ -550,7 +550,7 @@ export function mapStrip(drawing: { width: number; height: number }, fit: { widt
 }
 
 /** The viewport a drawing is laid out and scrolled in beside its map's strip. */
-export function besideStrip<V extends { width: number; height: number }>(viewport: V, strip: MapStrip | null): V {
+function besideStrip<V extends { width: number; height: number }>(viewport: V, strip: MapStrip | null): V {
   if (!strip) return viewport;
   return strip.side === 'bottom' ? { ...viewport, height: Math.max(1, viewport.height - strip.depth) } : { ...viewport, width: Math.max(1, viewport.width - strip.depth) };
 }

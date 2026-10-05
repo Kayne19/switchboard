@@ -220,14 +220,16 @@ describe('a scrolled graph at rest', () => {
   });
 
   // The map, in the viewport's pixels: its box (the size it is drawn at
-  // and its padding) where it stands, in a corner of the whole viewport.
+  // and its padding) where it stands, at the far corner of the viewport.
+  // (Before, it stood in a corner its class named, over the drawing.)
   function mapBox() {
     const map = host.querySelector<HTMLElement>('.drawing-viewport__map')!;
-    const width = parseFloat(map.style.width) + 8;
-    const height = parseFloat(map.style.height) + 8;
+    const width = parseFloat(map.style.width) + 2 * (parseFloat(map.style.padding) || 4);
+    const height = parseFloat(map.style.height) + 2 * (parseFloat(map.style.padding) || 4);
     const corner = /drawing-viewport__map--(\w+-\w+)/.exec(map.className)?.[1] ?? 'bottom-right';
-    const left = corner.endsWith('left') ? 6 : size.width - 6 - width;
-    const top = corner.startsWith('top') ? 6 : size.height - 6 - height;
+    const margin = parseFloat(map.style.right) || 6;
+    const left = corner.endsWith('left') ? margin : size.width - margin - width;
+    const top = corner.startsWith('top') ? margin : size.height - margin - height;
     return { left, top, right: left + width, bottom: top + height };
   }
 
@@ -258,6 +260,15 @@ describe('a scrolled graph at rest', () => {
       const axis = host.querySelector('.drawing-viewport')?.getAttribute('data-scroll');
       expect(['x', 'y']).toContain(axis);
       const map = mapBox();
+      // The map stands in a strip of its own, beside the view the drawing
+      // is scrolled in, and the drawing is laid out for that view: across
+      // the way it does not scroll, it is no larger than the view.
+      const strip = host.querySelector('.drawing-viewport > .drawing-viewport__strip');
+      expect(strip?.previousElementSibling?.classList.contains('drawing-viewport__view')).toBe(true);
+      expect(strip?.querySelector('.drawing-viewport__map')).not.toBeNull();
+      const svg = scroller.querySelector('svg')!;
+      const fitted = axis === 'x' ? parseFloat(svg.style.height) : parseFloat(svg.style.width);
+      expect(fitted).toBeLessThanOrEqual((axis === 'x' ? view().height : view().width) + 0.5);
       const stops = [...host.querySelectorAll<HTMLElement>('.drawing-viewport__stop')].map((stop) => parseFloat(axis === 'x' ? stop.style.left : stop.style.top));
       expect(stops.length).toBeGreaterThan(2);
       const { width, height } = view();

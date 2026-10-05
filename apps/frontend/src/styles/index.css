@@ -1990,10 +1990,11 @@ button {
 }
 /* The map's strip: beside the drawing along the way it scrolls (under
    one that scrolls across, right of one that scrolls down), as deep as
-   the map and its margins (drawingScroll MAP_PAD, MAP_MARGIN), so the map
-   covers none of the drawing. The map stands at its far end: the whole
-   drawing, its parts and lines, and the view boxed in orange. A tap or a
-   drag on it moves the view there. */
+   the map, its padding and margins (drawingScroll MAP_PAD, MAP_MARGIN,
+   which DrawingViewport sets on the map), so the map covers none of the
+   drawing. The map stands at its far end: the whole drawing, its parts
+   and lines, and the view boxed in orange. A tap or a drag on it moves
+   the view there. */
 .drawing-viewport__strip {
   position: relative;
   flex: none;
@@ -2002,10 +2003,7 @@ button {
 }
 .drawing-viewport__map {
   position: absolute;
-  right: 6px;
-  bottom: 6px;
   box-sizing: content-box;
-  padding: 4px;
   background: #000;
   cursor: pointer;
   touch-action: none;
