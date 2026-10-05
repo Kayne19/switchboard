@@ -17,8 +17,8 @@ import {
   chartClip,
   chartFrame,
   chartLegendLayout,
+  chartPointCallouts,
   chartScales,
-  chartSeriesPoint,
   type ChartAnchor,
   type ChartScales,
 } from './chartGeometry';
@@ -153,7 +153,7 @@ export function ChartPrimitive({
 }: {
   data: ChartData;
   focused?: boolean;
-  /** The points the notes on this chart name: a bar chart marks each one's bar as it marks its marker's. */
+  /** The points the notes on this chart name: the chart marks each one as it marks its marker's. */
   named?: ChartAnchor[];
 }) {
   const reduced = useReducedMotion();
@@ -180,18 +180,17 @@ export function ChartPrimitive({
       return {...series,points,path:linePath(points),area:areaPath(points,baseY),bars:bars.filter((bar)=>bar.series===index)};
     });
   },[data,scales,baseline,valueAt]);
-  // A marker is a ring on the point it names, on the drawn series itself:
-  // the same interpolated point a note's leader reaches. It draws no guide
-  // of its own -- a full-height dashed rule read as a stray line through
-  // the plot, and ran on past the point beneath any leader that met it
-  // there.
-  // A bar is marked as a bar: outlined, its value printed past its end
-  // (`chartBarCallouts`), not a ring on its edge.
-  const markerPoint=data.marker && kind!=='bar' ? chartSeriesPoint(data,data.marker.x,data.marker.series,scales) : undefined;
+  // The marker and every point a note names are marked where the series
+  // is drawn: on a line, area or scatter chart a ring on the point, its
+  // value printed beside it where a note's leader lands
+  // (`chartPointCallouts`); a bar as a bar, outlined, its value printed past
+  // its end (`chartBarCallouts`). Neither draws a guide of its own -- a
+  // full-height dashed rule read as a stray line through the plot.
   // Kept while what the notes name is the same: the scene builds a new
-  // array of it every render, so the memo reads `named` through its key.
+  // array of it every render, so the memos read `named` through its key.
   const namedKey=(named??[]).map((anchor)=>`${anchor.x}\u0000${anchor.series??''}`).join('\u0001');
-  const callouts=useMemo(()=>chartBarCallouts(data,named,scales),[data,namedKey,scales]);
+  const barCallouts=useMemo(()=>chartBarCallouts(data,named,scales),[data,namedKey,scales]);
+  const pointCallouts=useMemo(()=>chartPointCallouts(data,named,scales),[data,namedKey,scales]);
   const grounded=kind==='bar'||kind==='area';
   const base=valueAt(baseline);
   const clip=chartClip(scales);
@@ -227,16 +226,19 @@ export function ChartPrimitive({
             {kind==='bar' ? series.bars.map((bar)=><rect key={bar.index} className="chart-bar" x={bar.rect.left} y={bar.rect.top} width={Math.max(0.5,bar.rect.right-bar.rect.left)} height={Math.max(0.5,bar.rect.bottom-bar.rect.top)} fill={color}/>) : null}
           </motion.g>;
         })}
-
-        {markerPoint ? (
-          <motion.g className="chart-marker" initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}>
-            <circle className="chart-marker__point" cx={markerPoint.x} cy={markerPoint.y} r={focused?CHART_MARKER_RADIUS+2:CHART_MARKER_RADIUS} fill="#000" stroke="var(--orange)" strokeWidth={CHART_MARKER_STROKE}/>
-          </motion.g>
-        ) : null}
       </g>
+      {/* A marked point's ring and value are drawn whole, past the plot's
+          edge where the point sits on it. The ring hides the line under it,
+          but rings a scatter's point, which it stands round. */}
+      {pointCallouts.map((callout)=>(
+        <motion.g key={`${callout.series}-${callout.x}`} className="chart-marker" data-series={data.series[callout.series]?.name} data-x={callout.x} data-from={callout.from} initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}>
+          <circle className="chart-marker__point" cx={callout.at.x} cy={callout.at.y} r={focused?CHART_MARKER_RADIUS+2:CHART_MARKER_RADIUS} fill={kind==='scatter'?'none':'#000'} stroke="var(--orange)" strokeWidth={CHART_MARKER_STROKE}/>
+          <text className="chart-marker__value" x={callout.value.x} y={callout.value.y} textAnchor={callout.value.anchor}>{callout.value.text}</text>
+        </motion.g>
+      ))}
       {/* A marked bar's printed value may stand past the plot's edge, so
           only its outline is cut to the plot, as the bar is. */}
-      {callouts.map((callout)=>{
+      {barCallouts.map((callout)=>{
         const {rect}=callout.bar;
         return <motion.g key={`${callout.bar.series}-${callout.bar.index}`} className="chart-callout" data-series={data.series[callout.bar.series]?.name} data-index={callout.bar.index} initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}>
           <rect className="chart-callout__outline" clipPath={`url(#${clipId})`} x={rect.left} y={rect.top} width={Math.max(0.5,rect.right-rect.left)} height={Math.max(0.5,rect.bottom-rect.top)}/>
