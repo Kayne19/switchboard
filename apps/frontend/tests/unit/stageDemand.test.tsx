@@ -4,16 +4,20 @@
 // shell folds a rail under the primary on it (stageFold.test.tsx); here, the
 // saying.
 import { act, useRef } from 'react';
+import type { StageNeed } from '../../src/app/stageFold';
 import { createRoot } from 'react-dom/client';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { scrollContentHeight, StageDemandContext, useLeastHeight, useStageDemand } from '../../src/hooks/useStageDemand';
+import { DrawingViewport } from '../../src/primitives/DrawingViewport';
+import { SLIVER, type DrawingFit } from '../../src/primitives/drawingFit';
+import type { DrawingMap } from '../../src/primitives/drawingScroll';
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 });
 
 function Says({ excess }: { excess: number | null }) {
-  useStageDemand(excess);
+  useStageDemand(excess, 374);
   return null;
 }
 
@@ -25,14 +29,14 @@ function Box({ least }: { least: number | null }) {
 
 describe('what a primitive says it lacks', () => {
   it('reaches the listener in whole pixels, and is taken back when the primitive goes', () => {
-    const heard: Array<[string, number | null]> = [];
+    const heard: Array<[string, StageNeed | null]> = [];
     const host = document.createElement('div');
     const root = createRoot(host);
-    const listen = (key: string, excess: number | null) => heard.push([key, excess]);
+    const listen = (key: string, need: StageNeed | null) => heard.push([key, need]);
     act(() => root.render(<StageDemandContext.Provider value={listen}><Says excess={120.4} /></StageDemandContext.Provider>));
-    expect(heard.at(-1)?.[1]).toBe(120);
+    expect(heard.at(-1)?.[1]).toEqual({ excess: 120, viewport: 374 });
     act(() => root.render(<StageDemandContext.Provider value={listen}><Says excess={-30.6} /></StageDemandContext.Provider>));
-    expect(heard.at(-1)?.[1]).toBe(-31);
+    expect(heard.at(-1)?.[1]).toEqual({ excess: -31, viewport: 374 });
     const key = heard.at(-1)![0];
     act(() => root.render(<StageDemandContext.Provider value={listen} />));
     expect(heard.at(-1)).toEqual([key, null]);
@@ -63,7 +67,7 @@ describe('what a primitive says it lacks', () => {
     try {
       const host = document.createElement('div');
       const root = createRoot(host);
-      const listen = (_key: string, excess: number | null) => heard.push(excess);
+      const listen = (_key: string, need: StageNeed | null) => heard.push(need?.excess ?? null);
       act(() => root.render(<StageDemandContext.Provider value={listen}><Box least={900.4} /></StageDemandContext.Provider>));
       expect(heard.at(-1)).toBe(526);
       expect(observed).toHaveLength(1);
@@ -106,3 +110,55 @@ describe('how tall a scroll region\'s content is', () => {
   });
 });
 
+describe('what a drawing asks of the stage', () => {
+  const map: DrawingMap = { parts: [], noun: { one: 'NODE', many: 'NODES' }, marks: [], links: [], sketch: { boxes: [], lines: [] } };
+  const drawing = { width: 400, height: 2000 };
+  // Its viewport: 330 x 374 px, a phone's diagram slot.
+  const sizes: Record<string, number> = { offsetWidth: 330, offsetHeight: 374, clientWidth: 330, clientHeight: 374 };
+
+  function said(fit: DrawingFit): Array<number | null> {
+    const heard: Array<number | null> = [];
+    globalThis.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    const saved = Object.keys(sizes).map((key) => [key, Object.getOwnPropertyDescriptor(HTMLElement.prototype, key)] as const);
+    for (const [key, value] of Object.entries(sizes)) {
+      Object.defineProperty(HTMLElement.prototype, key, {
+        configurable: true,
+        get(this: HTMLElement) {
+          return this.classList.contains('drawing-viewport') || this.classList.contains('drawing-viewport__scroll') ? value : 0;
+        },
+      });
+    }
+    try {
+      const host = document.createElement('div');
+      const root = createRoot(host);
+      act(() => root.render(
+        <StageDemandContext.Provider value={(_key, need) => heard.push(need?.excess ?? null)}>
+          <DrawingViewport drawing={drawing} fit={fit} map={map} ariaLabel="d"><rect /></DrawingViewport>
+        </StageDemandContext.Provider>,
+      ));
+      act(() => root.unmount());
+    } finally {
+      for (const [key, descriptor] of saved) {
+        if (descriptor) Object.defineProperty(HTMLElement.prototype, key, descriptor);
+        else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[key];
+      }
+      delete (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
+    }
+    return heard;
+  }
+
+  it('is the height it reads whole in at its least readable scale, past its viewport', () => {
+    const fit: DrawingFit = { scale: 0.8, width: 320, height: 1600, scrollX: false, scrollY: true, minScale: 0.6 };
+    expect(said(fit)[0]).toBe(Math.round(2000 * 0.6 * (1 - SLIVER) - 374));
+  });
+
+  it('says nothing for a fit made for another viewport, as before its host is measured', () => {
+    // Laid out for the screen: contained, and wider than the viewport it is in.
+    const forTheScreen: DrawingFit = { scale: 0.5, width: 800, height: 1000, scrollX: false, scrollY: false, minScale: 0.6 };
+    expect(said(forTheScreen).every((excess) => excess === null)).toBe(true);
+  });
+});

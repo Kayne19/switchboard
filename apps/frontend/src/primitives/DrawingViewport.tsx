@@ -163,7 +163,19 @@ export function DrawingViewport({
   const [reading, setReading] = useState<Reading | null>(null);
   // What the drawing asks of the stage: the height it is read whole in at
   // its least readable scale, less the sliver it would be contained over.
-  useLeastHeight(viewportRef, drawing.height * fit.minScale * (1 - SLIVER));
+  // Only a fit made for this viewport speaks for it: before its host is
+  // measured a drawing is laid out for the screen, and a contained drawing
+  // larger than its box, or a scrolling one wider or taller than it across
+  // the axis it does not scroll, was fitted to another.
+  const least = drawing.height * fit.minScale * (1 - SLIVER);
+  useLeastHeight(
+    viewportRef,
+    useCallback(
+      (box: { width: number; height: number }) =>
+        (fit.scrollX || fit.width <= box.width + 1) && (fit.scrollY || fit.height <= box.height + 1) ? least : null,
+      [fit.scrollX, fit.scrollY, fit.width, fit.height, least],
+    ),
+  );
   const scrolling = fit.scrollX || fit.scrollY;
   const axis = fit.scrollX && fit.scrollY ? 'both' : fit.scrollX ? 'x' : fit.scrollY ? 'y' : 'none';
   const pinnedDepth = pinned && fit.scrollY ? pinned.height * fit.scale : 0;

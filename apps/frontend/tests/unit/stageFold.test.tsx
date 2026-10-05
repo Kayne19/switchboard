@@ -7,7 +7,7 @@
 import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { STAGE_PAST, UNSTAGE_UNDER, wantsStage } from '../../src/app/stageFold';
+import { columnNeed, STAGE_PAST, UNSTAGE_UNDER, wantsStage } from '../../src/app/stageFold';
 import { SceneRenderer } from '../../src/components/SceneRenderer';
 import { ControllerProvider, useController } from '../../src/controller/context';
 import type { ControllerAction } from '../../src/controller/types';
@@ -16,35 +16,45 @@ import { fixtures } from '../../src/fixtures/scenes';
 describe('when the primary takes the stage', () => {
   const shared = 498;
   const stacked = { stacked: true, column: shared, shared };
+  // In the shared column a viewport of 374 px: what it lacks grows the column by that share.
+  const at = (excess: number, column = shared, viewport = 374) => columnNeed(column, [{ excess, viewport }]);
 
   it('keeps the shared layout for a primary that reads whole in it', () => {
-    expect(wantsStage({ ...stacked, excess: -40 }, false)).toBe(false);
-    expect(wantsStage({ ...stacked, excess: 0 }, false)).toBe(false);
+    expect(wantsStage({ ...stacked, need: at(-40) }, false)).toBe(false);
+    expect(wantsStage({ ...stacked, need: at(0) }, false)).toBe(false);
     // A region a few pixels short for its last line keeps the rail.
-    expect(wantsStage({ ...stacked, excess: STAGE_PAST }, false)).toBe(false);
+    expect(wantsStage({ ...stacked, need: shared + STAGE_PAST }, false)).toBe(false);
+    expect(wantsStage({ ...stacked, need: at(12) }, false)).toBe(false);
   });
 
   it('takes the stage for a primary past the shared column', () => {
-    expect(wantsStage({ ...stacked, excess: STAGE_PAST + 1 }, false)).toBe(true);
-    expect(wantsStage({ ...stacked, excess: 5000 }, false)).toBe(true);
+    expect(wantsStage({ ...stacked, need: shared + STAGE_PAST + 1 }, false)).toBe(true);
+    expect(wantsStage({ ...stacked, need: at(5000) }, false)).toBe(true);
   });
 
   it('never where the rail stands beside the primary, or while nothing has said what it needs', () => {
-    expect(wantsStage({ ...stacked, stacked: false, excess: 5000 }, false)).toBe(false);
-    expect(wantsStage({ ...stacked, excess: null }, false)).toBe(false);
-    expect(wantsStage({ stacked: true, column: 0, shared: 0, excess: 5000 }, false)).toBe(false);
+    expect(wantsStage({ ...stacked, stacked: false, need: at(5000) }, false)).toBe(false);
+    expect(wantsStage({ ...stacked, need: null }, false)).toBe(false);
+    expect(columnNeed(shared, [])).toBeNull();
+    expect(wantsStage({ stacked: true, column: 0, shared: 0, need: 9999 }, false)).toBe(false);
+  });
+
+  it('reads the column a primary needs from the share of its viewport it lacks, the largest of several', () => {
+    // A viewport of 460 in a column of 606 that lacks 60: the frame grows with it.
+    expect(columnNeed(606, [{ excess: 60, viewport: 460 }])).toBeCloseTo((606 * 520) / 460);
+    expect(columnNeed(606, [{ excess: -100, viewport: 460 }, { excess: 60, viewport: 460 }])).toBeCloseTo((606 * 520) / 460);
   });
 
   it('gives the stage back only with room to spare, so a need on the line does not flicker', () => {
-    // Folded, the column is the stage's; the need is what it has and lacks.
+    // Folded, the column is the stage's.
     const staged = { stacked: true, column: 620, shared };
     // Still past the shared column: it keeps the stage.
-    expect(wantsStage({ ...staged, excess: shared + 20 - 620 }, true)).toBe(true);
+    expect(wantsStage({ ...staged, need: shared + 20 }, true)).toBe(true);
     // Within the band between the two thresholds it keeps the layout it has.
-    expect(wantsStage({ ...staged, excess: shared + UNSTAGE_UNDER + 1 - 620 }, true)).toBe(true);
-    expect(wantsStage({ ...stacked, excess: UNSTAGE_UNDER + 1 }, false)).toBe(false);
+    expect(wantsStage({ ...staged, need: shared + UNSTAGE_UNDER + 1 }, true)).toBe(true);
+    expect(wantsStage({ ...stacked, need: shared + UNSTAGE_UNDER + 1 }, false)).toBe(false);
     // It reads whole in the shared column: the rail comes back.
-    expect(wantsStage({ ...staged, excess: shared + UNSTAGE_UNDER - 620 }, true)).toBe(false);
+    expect(wantsStage({ ...staged, need: shared + UNSTAGE_UNDER }, true)).toBe(false);
   });
 });
 

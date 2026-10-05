@@ -16,7 +16,7 @@ import type {
 } from '../controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
 import { besideVisuals, buildCompositionModel, cast, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
-import { wantsStage, type StageGeometry } from '../app/stageFold';
+import { columnNeed, wantsStage, type StageGeometry, type StageNeed } from '../app/stageFold';
 import { StageDemandContext, type StageDemandListener } from '../hooks/useStageDemand';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
@@ -711,42 +711,44 @@ function useStageFold(
 ): { foldable: boolean; stacked: boolean; onDemand: StageDemandListener } {
   const [foldable, setFoldable] = useState(false);
   const [stacked, setStacked] = useState(false);
-  const demands = useRef(new Map<string, number>());
-  const geometry = useRef<Omit<StageGeometry, 'excess'>>({ stacked: false, column: 0, shared: 0 });
+  const demands = useRef(new Map<string, StageNeed>());
   const staged = useRef(false);
   staged.current = foldable && !railOpen;
   const watching = useRef(watchStacked);
   watching.current = watchStacked;
+  // The column is read when the decision is made, from the same layout
+  // the primary measured what it lacks in: a column remembered from an
+  // earlier layout, beside a need measured in this one, told the primary
+  // it fitted where it did not, and the stage folded and unfolded without
+  // end.
   const decide = useCallback(() => {
-    const said = [...demands.current.values()];
-    setFoldable(wantsStage({ ...geometry.current, excess: said.length > 0 ? Math.max(...said) : null }, staged.current));
-    setStacked(watching.current && geometry.current.stacked);
-  }, []);
+    const main = mainRef.current;
+    const rail = railRef.current;
+    const probe = probeRef.current;
+    const column = main?.offsetHeight ?? 0;
+    const geometry: StageGeometry = {
+      stacked: main !== null && rail !== null && column > 0 && rail.offsetTop >= main.offsetTop + column - 1,
+      column,
+      shared: probe?.offsetHeight ?? 0,
+      need: columnNeed(column, [...demands.current.values()]),
+    };
+    setFoldable(wantsStage(geometry, staged.current));
+    setStacked(watching.current && geometry.stacked);
+  }, [mainRef, railRef, probeRef]);
   const onDemand = useCallback<StageDemandListener>(
-    (key, excess) => {
-      if (excess === null) demands.current.delete(key);
-      else demands.current.set(key, excess);
+    (key, said) => {
+      if (said === null) demands.current.delete(key);
+      else demands.current.set(key, said);
       decide();
     },
     [decide],
   );
   useLayoutEffect(() => {
-    const main = mainRef.current;
-    const rail = railRef.current;
-    const probe = probeRef.current;
-    if (!active || !main || !rail || !probe) return undefined;
-    const measure = () => {
-      geometry.current = {
-        // A column with no height (no layout yet) stands nowhere.
-        stacked: main.offsetHeight > 0 && rail.offsetTop >= main.offsetTop + main.offsetHeight - 1,
-        column: main.offsetHeight,
-        shared: probe.offsetHeight,
-      };
-      decide();
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    for (const element of [main, rail, probe]) observer.observe(element);
+    const boxes = [mainRef.current, railRef.current, probeRef.current];
+    if (!active || boxes.some((box) => !box)) return undefined;
+    decide();
+    const observer = new ResizeObserver(decide);
+    for (const box of boxes) observer.observe(box!);
     return () => observer.disconnect();
   }, [active, mainRef, railRef, probeRef, decide]);
   // The layout it decides in changes with the caller's choice, and with it
