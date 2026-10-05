@@ -88,13 +88,17 @@ primary's shorter cell, an aux cell, focus):
    inside it, and a top-down drawing in a narrow frame wraps its node text
    narrower. Every edge stays one a reader can follow: each end leaves or
    reaches its box at a port of its own (a box grows along a side too
-   short for its ports), so no two arrowheads stack; no more than four long
-   edges run side by side through a layer; and in a drawing more than two
-   frames long, an edge longer than the frame, whose ends cannot both be in
-   view, is drawn as a stub pair instead: a short line from its source to
-   `-> target`, and one from `source ->` into its target, the edge's own
-   label set quieter under the name. The stubs leaving one side of a node
-   share one line and one list of names. Of the two and the drawing as first laid out,
+   short for its ports), so no two arrowheads stack; of more than four
+   long edges running side by side through a layer, the longest are drawn
+   as stubs; and in a drawing more than two frames long, an edge longer
+   than the frame, whose ends cannot both be in view, is drawn as a stub
+   pair instead: a short line from its source to `-> target`, and one from
+   `source ->` into its target, the edge's own label set quieter under the
+   name (a feedback edge read across the page runs right to left, so its
+   arrows read `target <-` and `<- source`). The stubs leaving one side of
+   a node the same way, in one colour, lit or not alike, share one line and
+   one list of names; the names stand in the layer next to the node. On a
+   phone most of a dense graph's edges become stubs. Of the two and the drawing as first laid out,
    the one asking the least scrolling is kept (a viewport's worth of
    reading is the unit, so scrolling both ways costs most), the stage's own
    direction preferred. A sequence too wide is recomposed to the
