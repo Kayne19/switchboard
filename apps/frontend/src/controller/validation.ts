@@ -1119,12 +1119,34 @@ function validateNoteData(data: Record<string, unknown>): { ok: true; data: Note
   return { ok: true, data: result };
 }
 
+/**
+ * The byte cap an action is held to. An image action is the one kind allowed
+ * past the general cap; its own fields are capped in validateImageData, so
+ * nothing else can ride in under its limit.
+ */
+function actionSizeCap(value: Record<string, unknown>): number {
+  return value.op === 'show' && value.type === 'image' ? MAX_IMAGE_ACTION_BYTES : MAX_ACTION_BYTES;
+}
+
+/**
+ * Checks one display action and returns it normalized. The order of the
+ * checks is the backend's too (docs/display-tool.md, "How the two
+ * validators agree"): an object, within its size cap, with a known `op`;
+ * then no layout key, no unsafe string and no non-finite number anywhere in
+ * it; then the op's own rules; and last the normalized action, which may
+ * have gained a field (a say's `at: null`), is held to the same cap.
+ */
 export function validateControllerAction(value: unknown): ActionValidationResult {
+  const result = validateActionFields(value);
+  if (result.ok && isRecord(value) && serializedSize(result.action) > actionSizeCap(value)) {
+    return { ok: false, error: 'action exceeds size limit' };
+  }
+  return result;
+}
+
+function validateActionFields(value: unknown): ActionValidationResult {
   if (!isRecord(value)) return { ok: false, error: 'action must be an object' };
-  // An image action is the one kind allowed past the general cap; its own
-  // fields are capped below, so nothing else can ride in under its limit.
-  const sizeCap = value.op === 'show' && value.type === 'image' ? MAX_IMAGE_ACTION_BYTES : MAX_ACTION_BYTES;
-  if (serializedSize(value) > sizeCap) return { ok: false, error: 'action exceeds size limit' };
+  if (serializedSize(value) > actionSizeCap(value)) return { ok: false, error: 'action exceeds size limit' };
   if (typeof value.op !== 'string' || !ALLOWED_OPERATIONS.has(value.op)) {
     return { ok: false, error: 'unknown operation' };
   }

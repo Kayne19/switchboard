@@ -846,6 +846,68 @@ fn the_whitespace_set_is_unicode_white_space() {
     assert!(!is_blank("\u{feff}") && !is_blank("\u{200b}") && !is_blank("\u{1c}"));
 }
 
+/// The size cap counts the action as the browser's JSON.stringify writes it
+/// (validation.ts `serializedSize`), numbers included: each pair is the JSON
+/// an agent may send and what JSON.stringify writes once the browser has
+/// parsed it, both taken from node.
+#[test]
+fn the_size_is_counted_as_json_stringify_writes_the_action() {
+    for (sent, javascript) in [
+        ("0", "0"),
+        ("-0", "0"),
+        ("-0.0", "0"),
+        ("0.0", "0"),
+        ("1", "1"),
+        ("1.0", "1"),
+        ("-1.5", "-1.5"),
+        ("100", "100"),
+        ("1e2", "100"),
+        ("0.1", "0.1"),
+        ("0.000001", "0.000001"),
+        ("0.0000001", "1e-7"),
+        ("1e-7", "1e-7"),
+        ("1.5e-7", "1.5e-7"),
+        ("123.456", "123.456"),
+        ("1e16", "10000000000000000"),
+        ("1e+16", "10000000000000000"),
+        ("12345678901234567890", "12345678901234567000"),
+        ("18446744073709551615", "18446744073709552000"),
+        ("-9223372036854775808", "-9223372036854776000"),
+        ("1e21", "1e+21"),
+        ("1e20", "100000000000000000000"),
+        ("123456789012345680000", "123456789012345680000"),
+        ("1.7976931348623157e308", "1.7976931348623157e+308"),
+        ("5e-324", "5e-324"),
+        ("0.30000000000000004", "0.30000000000000004"),
+        ("4.35", "4.35"),
+        ("1e-6", "0.000001"),
+        ("999999999999999999999", "1e+21"),
+        ("2.5e+25", "2.5e+25"),
+        ("-1e-10", "-1e-10"),
+    ] {
+        let number: Value = serde_json::from_str(sent).unwrap();
+        assert_eq!(
+            json_len(&number),
+            javascript.len(),
+            "{sent} is {javascript}"
+        );
+    }
+    for (text, bytes) in [
+        ("", 2),
+        ("plain", 7),
+        ("a\"b\\c", 9),
+        ("\u{8}\u{c}\n\r\t", 12),
+        ("\u{1}\u{1f}", 14),
+        ("\u{7f}\u{2028}", 6),
+        ("\u{e9}\u{1f600}", 8),
+        ("<\u{0}>", 10),
+    ] {
+        assert_eq!(json_len(&json!(text)), bytes, "{text:?}");
+    }
+    let action: Value = serde_json::from_str(r#"{"op": "show", "id": "t", "type": "table", "data": {"columns": [{"label": "a\"\n"}], "rows": [[1.0], [-0.0], [1e+16], [{"text": "\u00e9", "bold": false}]], "highlight": [0]}}"#).unwrap();
+    assert_eq!(json_len(&action), 158);
+}
+
 // ---- the shared corpus -------------------------------------------------------
 
 /// `{"$repeat": s, "times": n}` in the corpus stands for `s` repeated `n`

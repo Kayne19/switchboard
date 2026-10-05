@@ -1408,15 +1408,91 @@ fn action_size_cap(action: &Value) -> usize {
     }
 }
 
+/// The bytes of `value` as the browser's `JSON.stringify` writes it, in
+/// UTF-8: what both validators hold to the size cap (docs/display-tool.md,
+/// "How the two validators agree"). serde_json's own output is not measured,
+/// because it spells some numbers differently (`1.0` and `1e+16` where
+/// JSON.stringify writes `1` and `10000000000000000`).
+fn json_len(value: &Value) -> usize {
+    match value {
+        Value::Null | Value::Bool(true) => 4,
+        Value::Bool(false) => 5,
+        Value::Number(n) => js_number_len(n),
+        Value::String(s) => json_string_len(s),
+        Value::Array(items) => {
+            2 + items.len().saturating_sub(1) + items.iter().map(json_len).sum::<usize>()
+        }
+        Value::Object(m) => {
+            2 + m.len().saturating_sub(1)
+                + m.iter()
+                    .map(|(key, value)| json_string_len(key) + 1 + json_len(value))
+                    .sum::<usize>()
+        }
+    }
+}
+
+/// A string's bytes in JSON: two quotes, its UTF-8, and the escapes
+/// JSON.stringify writes (`\"`, `\\`, `\b \f \n \r \t`, and `\u00XX` for
+/// the other control characters).
+fn json_string_len(s: &str) -> usize {
+    2 + s
+        .chars()
+        .map(|c| match c {
+            '"' | '\\' | '\u{8}' | '\u{c}' | '\n' | '\r' | '\t' => 2,
+            c if u32::from(c) < 0x20 => 6,
+            c => c.len_utf8(),
+        })
+        .sum::<usize>()
+}
+
+/// The length of `n` as JavaScript writes a number (Number::toString): the
+/// shortest digits that read back as the same double, written plainly from
+/// 1e-6 up to 1e21 and with an exponent outside that (`1e+21`, `1.5e-7`);
+/// zero, `-0` too, is `0`. serde_json already finds the shortest digits;
+/// only where it puts the point differs, so its text is re-spelled here.
+fn js_number_len(n: &serde_json::Number) -> usize {
+    let value = n.as_f64().unwrap_or(0.0);
+    if value == 0.0 {
+        return 1;
+    }
+    let text = serde_json::Number::from_f64(value.abs())
+        .map(|shortest| shortest.to_string())
+        .unwrap_or_default();
+    let (mantissa, exponent) = match text.split_once(['e', 'E']) {
+        Some((mantissa, exponent)) => (mantissa, exponent.parse::<i64>().unwrap_or(0)),
+        None => (text.as_str(), 0),
+    };
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let all_digits = format!("{whole}{fraction}");
+    let significant = all_digits.trim_start_matches('0');
+    let leading_zeros = (all_digits.len() - significant.len()) as i64;
+    // The value is 0.<digits> times ten to the `point`.
+    let digits = significant.trim_end_matches('0').len() as i64;
+    let point = whole.len() as i64 + exponent - leading_zeros;
+    let spelled = if digits <= point && point <= 21 {
+        point
+    } else if 0 < point && point <= 21 {
+        digits + 1
+    } else if -6 < point && point <= 0 {
+        2 - point + digits
+    } else {
+        // d[.ddd]e+N or e-N
+        let exponent_len = 2 + (point - 1).unsigned_abs().to_string().len() as i64;
+        digits + i64::from(digits > 1) + exponent_len
+    };
+    spelled as usize + usize::from(value < 0.0)
+}
+
 /// Checks one display action and returns it normalized. The checks run in
 /// the browser's order (docs/display-tool.md, "How the two validators
 /// agree"): an object, within its size cap, with a known `op`; then no
 /// layout key, no unsafe string and no non-finite number anywhere in it;
-/// then the op's own rules.
+/// then the op's own rules; and last the normalized action, which may have
+/// gained a field (a say's `at: null`), is held to the same cap.
 pub fn validate_action(action: &Value) -> Result<Value, String> {
     let map = action.as_object().ok_or("action must be an object")?;
-    let bytes = serde_json::to_vec(action).map_err(|_| "action must be valid JSON".to_string())?;
-    if bytes.len() > action_size_cap(action) {
+    let size_cap = action_size_cap(action);
+    if json_len(action) > size_cap {
         return Err("action exceeds size limit".into());
     }
     let op = map
@@ -1574,7 +1650,11 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
         _ => return Err("unknown operation".into()),
     }
 
-    Ok(Value::Object(out))
+    let normalized = Value::Object(out);
+    if json_len(&normalized) > size_cap {
+        return Err("action exceeds size limit".into());
+    }
+    Ok(normalized)
 }
 
 #[cfg(test)]
