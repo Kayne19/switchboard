@@ -338,17 +338,24 @@ export const assistantTimers: TimerData = {
   ],
 };
 
+// Two days by the hour and ten by the day, the most a phone's strip has to
+// keep readable: fog burning off, rain overnight into Thursday, clearing
+// for the flight on Friday evening.
 const FORECAST_HOURS: Array<[number, WeatherCondition, number]> = [
   [61, 'fog', 10], [62, 'fog', 10], [64, 'partly-cloudy', 5], [66, 'partly-cloudy', 0], [67, 'clear', 0], [68, 'clear', 0],
   [68, 'clear', 0], [67, 'clear', 0], [65, 'partly-cloudy', 0], [63, 'partly-cloudy', 5], [61, 'cloudy', 10], [60, 'cloudy', 15],
   [59, 'cloudy', 20], [58, 'drizzle', 35], [57, 'drizzle', 40], [57, 'rain', 55], [56, 'rain', 60], [56, 'rain', 65],
   [55, 'rain', 70], [55, 'heavy-rain', 80], [55, 'heavy-rain', 85], [55, 'rain', 75], [56, 'rain', 60], [56, 'drizzle', 45],
+  [57, 'rain', 55], [58, 'rain', 60], [59, 'thunder', 70], [60, 'heavy-rain', 80], [61, 'rain', 65], [61, 'rain', 50],
+  [60, 'drizzle', 35], [59, 'cloudy', 20], [58, 'cloudy', 15], [57, 'cloudy', 10], [57, 'partly-cloudy', 5], [56, 'partly-cloudy', 5],
+  [56, 'cloudy', 10], [55, 'cloudy', 10], [55, 'fog', 10], [54, 'fog', 10], [54, 'fog', 5], [54, 'fog', 5],
+  [53, 'fog', 5], [53, 'fog', 5], [54, 'haze', 0], [55, 'haze', 0], [57, 'partly-cloudy', 0], [59, 'partly-cloudy', 0],
 ];
 
 export const assistantWeather: WeatherData = {
-  title: 'WEATHER / SAN FRANCISCO', subtitle: 'NOW + 24 H + 5 DAYS', context: 'FORECAST', caption: 'NWS / ISSUED 09:30',
+  title: 'WEATHER / SAN FRANCISCO', subtitle: 'NOW + 48 H + 10 DAYS', context: 'FORECAST', caption: 'NWS / ISSUED 09:30',
   location: 'San Francisco, CA', units: 'F',
-  current: { temp: 61, condition: 'fog', summary: 'Fog burning off by noon; rain moves in overnight', high: 68, low: 54, feelsLike: 59, humidity: 84, precip: 10, wind: 'W 12 mph' },
+  current: { temp: 61, condition: 'fog', summary: 'Fog burning off by noon; rain moves in overnight and lasts through Thursday afternoon', high: 68, low: 54, feelsLike: 59, humidity: 84, precip: 10, wind: 'W 12 mph, gusts 25' },
   hourly: FORECAST_HOURS.map(([temp, condition, precip], hour) => ({
     time: `2026-10-${String(7 + Math.floor((10 + hour) / 24)).padStart(2, '0')}T${String((10 + hour) % 24).padStart(2, '0')}:00`,
     temp, condition, precip,
@@ -359,6 +366,11 @@ export const assistantWeather: WeatherData = {
     { date: '2026-10-09', high: 63, low: 53, condition: 'cloudy', precip: 30 },
     { date: '2026-10-10', high: 66, low: 52, condition: 'clear', precip: 0 },
     { date: '2026-10-11', high: 64, low: 53, condition: 'wind', precip: 5 },
+    { date: '2026-10-12', high: 65, low: 52, condition: 'partly-cloudy', precip: 10 },
+    { date: '2026-10-13', high: 63, low: 51, condition: 'drizzle', precip: 40 },
+    { date: '2026-10-14', high: 60, low: 50, condition: 'thunder', precip: 60 },
+    { date: '2026-10-15', high: 58, low: 49, condition: 'heavy-rain', precip: 90 },
+    { date: '2026-10-16', high: 62, low: 50, condition: 'haze', precip: 0 },
   ],
   alert: 'Small craft advisory on the bay until 21:00',
 };
@@ -686,7 +698,15 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
   ],
   tasks: [{ op: 'show', id: 'todo', type: 'tasks', role: 'primary', data: assistantTasks }],
   timer: [{ op: 'show', id: 'kitchen', type: 'timer', role: 'primary', data: assistantTimers }],
-  weather: [{ op: 'show', id: 'weather', type: 'weather', role: 'primary', data: assistantWeather }],
+  // A note on one day of the forecast, by its date: the day the page marks.
+  weather: [
+    { op: 'show', id: 'weather', type: 'weather', role: 'primary', data: assistantWeather },
+    { op: 'show', id: 'umbrella-note', type: 'note', data: { tag: 'DAMOCLES / UMBRELLA', anchor: { target: 'weather', item: '2026-10-08' }, segments: [
+      { text: 'Rain all of Thursday, heaviest before dawn. ' },
+      { text: 'Take the umbrella to Q4 planning', accent: true, bold: true },
+      { text: '; Friday clears in time for the flight.' },
+    ] } },
+  ],
   inbox: [{ op: 'show', id: 'inbox', type: 'inbox', role: 'primary', data: assistantInbox }],
   // The morning briefing: today's agenda leads, and the forecast, the
   // to-do list and the inbox stand beside it; the note names the dentist
