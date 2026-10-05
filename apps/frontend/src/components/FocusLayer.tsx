@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'motion/react';
 import type { MouseEvent } from 'react';
 import type {
+  CalendarData,
   ChartData,
   CodeData,
   ControllerState,
@@ -16,6 +17,7 @@ import type {
 import { ITEM_TYPES, itemTargetText } from '../app/noteItems';
 import { anchoredNote, objectsOfType } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
+import { CalendarPrimitive } from '../primitives/CalendarPrimitive';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { CodeViewport } from '../primitives/CodeViewport';
 import { DiagramObject } from './DiagramObject';
@@ -63,8 +65,9 @@ function FocusedObject({ object, note, marked }: { object: SceneObject; note: No
       return <MetricsPrimitive metrics={[object as SceneObject<MetricData>]} />;
     case 'progress':
       return <ProgressPrimitive data={object.data as ProgressData} />;
-    // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
     case 'calendar':
+      return <CalendarPrimitive data={object.data as CalendarData} marked={marked} focused />;
+    // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
     case 'tasks':
     case 'timer':
     case 'weather':

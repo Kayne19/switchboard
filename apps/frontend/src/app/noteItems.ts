@@ -1,4 +1,5 @@
 import type { CalendarData, ControllerState, InboxData, NoteData, SceneObject, SceneObjectType, TasksData, TimerData, WeatherData } from '../controller/types';
+import { eventTargetText } from '../primitives/calendarLayout';
 import { cast, objectsOfType } from './sceneModel';
 
 // A note on one item (docs/display-tool.md, "A note on one item"): a note's
@@ -30,7 +31,7 @@ const ITEM_NAMES: {
   weather: ItemName<WeatherData>;
   inbox: ItemName<InboxData>;
 } = {
-  calendar: (data, item) => data.events.find((event) => event.id === item)?.title,
+  calendar: (data, item) => eventTargetText(data, item),
 
   tasks: (data, item) => data.items.find((task) => task.id === item)?.text,
 

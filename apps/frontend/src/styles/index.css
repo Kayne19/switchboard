@@ -2602,6 +2602,837 @@ button {
   padding: clamp(4px, 0.6cqh, 7px) clamp(6px, 0.7cqw, 10px);
 }
 
+/* Calendar (CalendarPrimitive): the same instrument as the table and the
+   progress module -- thin rules, no cards, times in the mono face, titles
+   in the prose face. An event takes its colour from its `semantic` (the
+   tone), drawn as a stripe and a dark tint of it; tentative is dashed,
+   cancelled is struck and receded, an event over is receded, the active one
+   is lit, and an edge an event runs past (midnight, the view's first or
+   last day) is cut. Today's column or cell and the now line are orange.
+   The heights the layout reckons with (CalendarPrimitive.tsx: DAY_ROW_PX,
+   LANE_PX, LINE_PX, MONTH_*) are set inline or match these sizes. */
+.calendar-object {
+  background: #000;
+}
+.calendar-object .focusable-content {
+  position: relative;
+  z-index: 1;
+  padding: clamp(18px, 3cqh, 36px) clamp(18px, 2.2cqw, 38px) clamp(14px, 2.4cqh, 28px);
+}
+.calendar {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  color: #d9d7d1;
+}
+.calendar-tone--none {
+  --tone: rgba(232, 230, 223, 0.62);
+}
+.calendar-tone--paper {
+  --tone: var(--paper);
+}
+.calendar-tone--muted {
+  --tone: var(--muted);
+}
+.calendar-tone--red {
+  --tone: var(--red);
+}
+.calendar-tone--orange {
+  --tone: var(--orange);
+}
+.calendar-tone--green {
+  --tone: var(--green);
+}
+.calendar-tone--cyan {
+  --tone: var(--cyan);
+}
+.calendar-tone--amber {
+  --tone: var(--amber);
+}
+/* The meta line, as the table's: what the view shows and how much. */
+.calendar__meta {
+  display: flex;
+  flex: none;
+  justify-content: space-between;
+  gap: clamp(12px, 2cqw, 32px);
+  min-width: 0;
+  margin-bottom: clamp(8px, 1.4cqh, 16px);
+  color: rgba(232, 230, 223, 0.37);
+}
+.calendar__meta > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.calendar__meta-title {
+  color: rgba(var(--orange-rgb), 0.8);
+}
+.calendar__body {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+.calendar-grid,
+.calendar-agenda__viewport,
+.calendar-month {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+.calendar-more {
+  align-self: center;
+  min-width: 0;
+  padding: 0 4px;
+  overflow: hidden;
+  color: rgba(var(--orange-rgb), 0.85);
+  white-space: nowrap;
+}
+
+/* The time grid: a day row and the all-day strip pinned over the hours. */
+.calendar-grid__head {
+  display: grid;
+  border-bottom: 1px solid rgba(var(--orange-rgb), 0.48);
+}
+.calendar-grid__day {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 6px;
+  overflow: hidden;
+  border-left: 1px solid rgba(232, 230, 223, 0.08);
+  color: rgba(232, 230, 223, 0.55);
+  white-space: nowrap;
+  line-height: 36px;
+}
+.calendar-grid__date {
+  font-family: var(--font-mono);
+  font-size: clamp(15px, 1.15cqw, 21px);
+  color: var(--paper);
+  letter-spacing: -0.02em;
+}
+.calendar-grid__month {
+  color: rgba(232, 230, 223, 0.38);
+}
+.calendar-grid__day--today {
+  background: rgba(var(--orange-rgb), 0.07);
+  color: var(--orange);
+}
+.calendar-grid__day--today .calendar-grid__date {
+  padding: 0 4px;
+  background: var(--orange);
+  color: #000;
+  line-height: 1.25;
+}
+.calendar-grid__strip {
+  grid-column: 1 / -1;
+  display: grid;
+  padding: 3px 0;
+  border-top: 1px solid rgba(232, 230, 223, 0.1);
+}
+.calendar-grid__strip-label {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  color: rgba(232, 230, 223, 0.35);
+  font-size: 7px;
+  letter-spacing: 0.1em;
+}
+.calendar-grid__strip-cell {
+  grid-row: 1 / -1;
+  border-left: 1px solid rgba(232, 230, 223, 0.08);
+}
+.calendar-grid__strip-cell--today {
+  background: rgba(var(--orange-rgb), 0.05);
+}
+.calendar-grid__scroll {
+  scrollbar-width: none;
+}
+.calendar-grid__scroll::-webkit-scrollbar {
+  display: none;
+}
+.calendar-grid__body {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+}
+.calendar-grid__rules {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.calendar-grid__hour {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+}
+.calendar-grid__hour::after {
+  content: "";
+  position: absolute;
+  left: var(--grid-lead, var(--calendar-gutter));
+  right: var(--grid-trail, 0px);
+  border-top: 1px solid rgba(232, 230, 223, 0.08);
+}
+.calendar-grid__hour-text {
+  position: absolute;
+  left: 0;
+  top: 2px;
+  width: calc(var(--calendar-gutter) - 8px);
+  color: rgba(232, 230, 223, 0.4);
+  text-align: right;
+  letter-spacing: 0.06em;
+}
+/* A run of empty hours folded: hatched, its hours named, so the grid
+   reads as cut there rather than as hours missing. */
+.calendar-grid__fold {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  border-top: 1px dashed rgba(232, 230, 223, 0.18);
+  border-bottom: 1px dashed rgba(232, 230, 223, 0.18);
+  background: repeating-linear-gradient(-45deg, rgba(232, 230, 223, 0.06) 0 1px, transparent 1px 6px);
+}
+.calendar-grid__fold-text {
+  margin-left: calc(var(--calendar-gutter) + 8px);
+  padding: 0 5px;
+  background: #000;
+  color: rgba(232, 230, 223, 0.42);
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+.calendar-grid__column {
+  position: relative;
+  grid-row: 1;
+  min-width: 0;
+  border-left: 1px solid rgba(232, 230, 223, 0.08);
+}
+.calendar-grid__column--today {
+  background: rgba(var(--orange-rgb), 0.04);
+}
+.calendar-grid__nothing {
+  position: absolute;
+  top: 40%;
+  left: var(--calendar-gutter);
+  right: 0;
+  color: rgba(232, 230, 223, 0.36);
+  text-align: center;
+}
+/* The agent's now: its time in the gutter, a line across today, and a
+   faint one across the other days. */
+.calendar-grid__now {
+  position: absolute;
+  z-index: 3;
+  left: 0;
+  right: 0;
+  height: 0;
+  pointer-events: none;
+}
+.calendar-grid__now::before {
+  content: "";
+  position: absolute;
+  left: var(--grid-lead, var(--calendar-gutter));
+  right: var(--grid-trail, 0px);
+  border-top: 1px dashed rgba(var(--orange-rgb), 0.28);
+}
+.calendar-grid__now-text {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: calc(var(--calendar-gutter) - 3px);
+  padding: 0 2px;
+  translate: 0 -50%;
+  background: var(--orange);
+  color: #000;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.5;
+  text-align: center;
+}
+.calendar-grid__now-line {
+  position: absolute;
+  top: -1px;
+  left: calc(var(--grid-lead) + (100% - var(--grid-lead) - var(--grid-trail)) * var(--now-column) / var(--columns));
+  width: calc((100% - var(--grid-lead) - var(--grid-trail)) / var(--columns));
+  height: 2px;
+  background: var(--orange);
+  box-shadow: 0 0 8px rgba(var(--orange-rgb), 0.55);
+}
+
+/* An event in the grid: a slot of its place and size, and the box in it. */
+.calendar-event-slot {
+  position: absolute;
+  z-index: 1;
+}
+.calendar-event {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 2px 5px 2px 6px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--tone) 34%, transparent);
+  border-left: 2px solid var(--tone);
+  background: color-mix(in srgb, var(--tone) 13%, #000);
+  color: var(--paper);
+}
+.calendar-event__title {
+  display: -webkit-box;
+  flex: none;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-prose);
+  font-size: clamp(11px, 0.8cqw, 14px);
+  font-weight: 600;
+  line-height: 15px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--title-lines, 1);
+  /* A word too long for a narrow column breaks with a hyphen, not mid-letter. */
+  hyphens: auto;
+  overflow-wrap: break-word;
+}
+.calendar-event__time {
+  flex: none;
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(232, 230, 223, 0.55);
+  letter-spacing: 0.06em;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.calendar-event__where,
+.calendar-event__detail {
+  flex: none;
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(232, 230, 223, 0.58);
+  font-family: var(--font-prose);
+  font-size: clamp(10.5px, 0.7cqw, 13px);
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.calendar-event__detail {
+  white-space: normal;
+}
+.calendar-event__detail {
+  flex: 0 1 auto;
+}
+/* One line: the title on it, its top in the box's first pixels, so a
+   stepped cluster's earlier title reads above the event laid over it. */
+.calendar-event--line {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 6px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.calendar-event--line .calendar-event__title {
+  display: block;
+  flex: 0 1 auto;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.calendar-event--line .calendar-event__time--inline,
+.calendar-event--line .calendar-event__where--inline {
+  line-height: 14px;
+}
+.calendar-event__where--inline {
+  flex: 0 1 auto;
+}
+.calendar-event__time--inline {
+  flex: none;
+  color: rgba(232, 230, 223, 0.6);
+}
+/* A later event of a stepped cluster lies over the earlier ones, parted
+   from them by the black field. */
+.calendar-event--stepped {
+  box-shadow: 0 0 0 1px #000;
+}
+.calendar-event--stepped.calendar-event--active {
+  box-shadow: 0 0 0 1px var(--tone), 0 0 14px color-mix(in srgb, var(--tone) 40%, transparent);
+}
+.calendar-event__note {
+  position: absolute;
+  z-index: 1;
+  top: -7px;
+  right: 3px;
+  /* The badge's own tint, made opaque so the box edge under it does not show through. */
+  background: color-mix(in srgb, var(--orange) 25%, #000);
+}
+.calendar-event-slot--marked {
+  z-index: 4;
+}
+.calendar-event--past,
+.calendar-bar--past,
+.calendar-line--past,
+.calendar-mark--past {
+  opacity: 0.5;
+}
+.calendar-event--tentative {
+  border-style: dashed;
+  border-left-style: dashed;
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--tone) 14%, transparent) 0 3px, transparent 3px 7px), #000;
+}
+.calendar-event--cancelled,
+.calendar-bar--cancelled {
+  opacity: 0.55;
+  border-style: dotted;
+  background: transparent;
+}
+.calendar-event--cancelled .calendar-event__title,
+.calendar-bar--cancelled .calendar-bar__title,
+.calendar-line--cancelled .calendar-line__title,
+.calendar-agenda__item--cancelled .calendar-agenda__title {
+  text-decoration: line-through;
+  text-decoration-color: rgba(232, 230, 223, 0.7);
+}
+/* Lit, as an active diagram node is: in its own tone, orange when it has none. */
+.calendar-tone--none:is(.calendar-event--active, .calendar-bar--active, .calendar-line--active, .calendar-agenda__item--active) {
+  --tone: var(--orange);
+}
+.calendar-event--active {
+  border-color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 24%, #000);
+  box-shadow: 0 0 0 1px var(--tone), 0 0 14px color-mix(in srgb, var(--tone) 40%, transparent);
+}
+/* An event that runs on past the day's edge has that edge cut. */
+.calendar-event--from-before {
+  border-top-style: dashed;
+  clip-path: polygon(7px 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 0 100%, 0 7px);
+}
+.calendar-event--to-after {
+  border-bottom-style: dashed;
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 7px 100%, 0 calc(100% - 7px));
+}
+.calendar-event--from-before.calendar-event--to-after {
+  clip-path: polygon(7px 0, calc(100% - 7px) 0, 100% 7px, 100% calc(100% - 7px), calc(100% - 7px) 100%, 7px 100%, 0 calc(100% - 7px), 0 7px);
+}
+
+/* An all-day bar, over the days it runs; an end past the view is pointed. */
+.calendar-bar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 16px;
+  margin: 1px 2px;
+  padding: 0 6px;
+  overflow: hidden;
+  border-left: 2px solid var(--tone);
+  background: color-mix(in srgb, var(--tone) 22%, #000);
+  color: var(--paper);
+  white-space: nowrap;
+}
+.calendar-bar__title {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-prose);
+  font-size: clamp(10.5px, 0.75cqw, 13px);
+  font-weight: 600;
+  line-height: 16px;
+  text-overflow: ellipsis;
+}
+.calendar-bar__status {
+  flex: none;
+  color: rgba(232, 230, 223, 0.55);
+}
+.calendar-bar--tentative {
+  border-left-style: dashed;
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--tone) 20%, transparent) 0 3px, transparent 3px 7px), #000;
+  outline: 1px dashed color-mix(in srgb, var(--tone) 50%, transparent);
+  outline-offset: -1px;
+}
+.calendar-bar--active {
+  background: color-mix(in srgb, var(--tone) 34%, #000);
+  box-shadow: inset 0 0 0 1px var(--tone);
+}
+.calendar-bar--from-before {
+  padding-left: 11px;
+  border-left: 0;
+  clip-path: polygon(7px 0, 100% 0, 100% 100%, 7px 100%, 0 50%);
+}
+.calendar-bar--to-after {
+  padding-right: 11px;
+  clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 50%, calc(100% - 7px) 100%, 0 100%);
+}
+.calendar-bar--from-before.calendar-bar--to-after {
+  clip-path: polygon(7px 0, calc(100% - 7px) 0, 100% 50%, calc(100% - 7px) 100%, 7px 100%, 0 50%);
+}
+.calendar-bar__note {
+  flex: none;
+  margin-left: auto;
+}
+
+/* The paged week: the days a narrow grid has no room for are named on a
+   rail at each side, as a scrolled drawing's rails count its parts. */
+.calendar-pages {
+  touch-action: pan-y;
+}
+.calendar-pages__edges {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+.calendar-pages__edges > .drawing-viewport__rail {
+  width: 20px;
+}
+.calendar-pages__rim {
+  pointer-events: auto;
+}
+
+/* The month: a week to a row, Monday first. */
+.calendar-month {
+  display: flex;
+  flex-direction: column;
+}
+.calendar-month__grid {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+.calendar-month__weekdays {
+  display: grid;
+  flex: none;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  align-items: center;
+  border-bottom: 1px solid rgba(var(--orange-rgb), 0.48);
+  color: rgba(232, 230, 223, 0.45);
+}
+.calendar-month__weekdays > span {
+  padding: 0 5px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.calendar-month__weeks {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.calendar-month__week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  min-height: 0;
+  overflow: hidden;
+  border-bottom: 1px solid rgba(232, 230, 223, 0.1);
+}
+.calendar-month__cell {
+  grid-row: 1 / -1;
+  min-width: 0;
+  min-height: 0;
+  padding: 2px 4px;
+  border-left: 1px solid rgba(232, 230, 223, 0.07);
+}
+.calendar-month__number {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: clamp(11px, 0.8cqw, 14px);
+  line-height: 16px;
+  color: rgba(232, 230, 223, 0.75);
+}
+.calendar-month__cell--outside {
+  background: rgba(232, 230, 223, 0.02);
+}
+.calendar-month__cell--outside .calendar-month__number {
+  color: rgba(232, 230, 223, 0.25);
+}
+.calendar-month__cell--past .calendar-month__number {
+  color: rgba(232, 230, 223, 0.42);
+}
+.calendar-month__cell--today {
+  background: rgba(var(--orange-rgb), 0.07);
+  box-shadow: inset 0 0 0 1px rgba(var(--orange-rgb), 0.5);
+}
+.calendar-month__cell--today .calendar-month__number {
+  padding: 0 4px;
+  background: var(--orange);
+  color: #000;
+}
+.calendar-line {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 0 4px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.calendar-line::before {
+  content: "";
+  flex: none;
+  width: 5px;
+  height: 5px;
+  background: var(--tone);
+}
+.calendar-line--tentative::before {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--tone);
+}
+.calendar-line__time {
+  flex: none;
+  color: rgba(232, 230, 223, 0.5);
+  letter-spacing: 0.04em;
+}
+.calendar-line__title {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-prose);
+  font-size: clamp(10.5px, 0.75cqw, 13px);
+  line-height: 16px;
+  text-overflow: ellipsis;
+}
+.calendar-line--active .calendar-line__title {
+  color: var(--tone);
+  font-weight: 600;
+}
+.calendar-line__note {
+  flex: none;
+}
+/* A month too small for titles: a short mark per event under each day. */
+.calendar-month--marks .calendar-month__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.calendar-marks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 3px;
+  min-width: 0;
+}
+.calendar-mark {
+  flex: none;
+  width: 7px;
+  height: 4px;
+  background: var(--tone);
+}
+.calendar-mark--tentative {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--tone);
+}
+.calendar-mark--cancelled {
+  opacity: 0.35;
+}
+.calendar-mark:has(.note-badge) {
+  width: auto;
+  height: auto;
+  background: transparent;
+}
+.calendar-marks__more {
+  color: rgba(var(--orange-rgb), 0.85);
+  letter-spacing: 0.04em;
+}
+.calendar-month__list {
+  flex: none;
+  margin-top: clamp(8px, 1.4cqh, 14px);
+}
+
+/* The agenda: a day's head (sticky as its rows scroll under it), then a
+   row per event: its time, its stripe, its title and where, its tags. */
+.calendar-agenda {
+  margin: 0;
+  padding: 0 4px 0 0;
+  list-style: none;
+}
+.calendar-agenda__day {
+  padding-bottom: clamp(6px, 1cqh, 12px);
+}
+.calendar-agenda__day-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(232, 230, 223, 0.2);
+  background: #000;
+  color: rgba(232, 230, 223, 0.6);
+  white-space: nowrap;
+}
+.calendar-agenda__day--today .calendar-agenda__day-head {
+  border-bottom-color: rgba(var(--orange-rgb), 0.6);
+  color: var(--orange);
+}
+.calendar-agenda__day--past .calendar-agenda__day-head {
+  color: rgba(232, 230, 223, 0.38);
+}
+.calendar-agenda__today {
+  padding: 0 4px;
+  background: var(--orange);
+  color: #000;
+  font-weight: 700;
+}
+.calendar-agenda__day-count {
+  margin-left: auto;
+  color: rgba(232, 230, 223, 0.38);
+}
+.calendar-agenda__items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.calendar-agenda__item {
+  display: grid;
+  grid-template-columns: minmax(5.5ch, max-content) 2px minmax(0, 1fr) auto;
+  column-gap: clamp(8px, 0.9cqw, 14px);
+  align-items: start;
+  padding: clamp(5px, 0.8cqh, 9px) 0;
+  border-bottom: 1px solid rgba(232, 230, 223, 0.08);
+}
+.calendar-agenda__time {
+  display: grid;
+  min-width: 5.5ch;
+  font-family: var(--font-mono);
+  font-size: clamp(11px, 0.82cqw, 14px);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  color: var(--paper);
+  white-space: nowrap;
+}
+.calendar-agenda__to {
+  color: rgba(232, 230, 223, 0.45);
+  font-size: 0.86em;
+}
+.calendar-agenda__stripe {
+  align-self: stretch;
+  background: var(--tone);
+}
+.calendar-agenda__item--tentative .calendar-agenda__stripe {
+  background: repeating-linear-gradient(to bottom, var(--tone) 0 3px, transparent 3px 6px);
+}
+.calendar-agenda__text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.calendar-agenda__title {
+  min-width: 0;
+  font-family: var(--font-prose);
+  font-size: clamp(13px, 1.02cqw, 17px);
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--paper);
+  overflow-wrap: anywhere;
+}
+.calendar-agenda__where {
+  min-width: 0;
+  font-family: var(--font-prose);
+  font-size: clamp(11.5px, 0.82cqw, 14px);
+  line-height: 1.35;
+  color: rgba(232, 230, 223, 0.5);
+  overflow-wrap: anywhere;
+}
+.calendar-agenda__tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px 6px;
+  max-width: 24ch;
+}
+.calendar-tag {
+  padding: 0 4px;
+  border: 1px solid currentColor;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.calendar-tag--active {
+  border-color: var(--orange);
+  background: var(--orange);
+  color: #000;
+  font-weight: 700;
+}
+.calendar-tag--tentative {
+  border-style: dashed;
+  color: rgba(232, 230, 223, 0.6);
+}
+.calendar-tag--cancelled {
+  color: rgba(232, 230, 223, 0.45);
+}
+.calendar-tag--overlap {
+  color: var(--amber);
+}
+.calendar-agenda__item--active {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--tone) 12%, transparent), color-mix(in srgb, var(--tone) 3%, transparent) 76%, transparent);
+}
+.calendar-agenda__item--active .calendar-agenda__title {
+  font-weight: 600;
+}
+.calendar-agenda__item--past,
+.calendar-agenda__item--cancelled {
+  opacity: 0.5;
+}
+.calendar-agenda__item--again .calendar-agenda__title {
+  color: rgba(232, 230, 223, 0.7);
+}
+.calendar-agenda__now {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  color: var(--orange);
+}
+.calendar-agenda__now-text {
+  flex: none;
+  padding: 0 4px;
+  background: var(--orange);
+  color: #000;
+  font-weight: 700;
+}
+.calendar-agenda__now-line {
+  flex: 1 1 auto;
+  height: 2px;
+  background: var(--orange);
+  box-shadow: 0 0 8px rgba(var(--orange-rgb), 0.5);
+}
+.calendar-agenda__empty {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  padding: 6px 0;
+  border-bottom: 1px dashed rgba(232, 230, 223, 0.14);
+  color: rgba(232, 230, 223, 0.42);
+}
+.calendar-agenda__empty-text {
+  color: rgba(232, 230, 223, 0.3);
+}
+/* The agenda under a month too small for titles, and an agenda in an aux cell: tighter rows. */
+.calendar-agenda__viewport--compact .calendar-agenda__item,
+.composed-aux-object--calendar .calendar-agenda__item {
+  padding: 4px 0;
+}
+.composed-aux-object--calendar .calendar-agenda__title {
+  font-size: clamp(12px, 0.88cqw, 15px);
+}
+.composed-aux-object--calendar .calendar__meta {
+  margin-bottom: clamp(4px, 0.8cqh, 8px);
+}
+.focus-layer__content > .calendar {
+  padding: 3cqh 2cqw 2cqh;
+}
+
 /* TEMPORARY (pa-contract): the stand-in for calendar, tasks, timer, weather
    and inbox (primitives/TemporaryAssistantList.tsx), a plain list of the
    fields as sent until the render slice draws each type with a primitive of

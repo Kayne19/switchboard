@@ -2,9 +2,9 @@ import type { ReactNode } from 'react';
 import { NoteBadge } from './NoteMarker';
 
 /*
- * TEMPORARY (pa-contract): the one stand-in renderer for the five
- * personal-assistant types -- calendar, tasks, timer, weather, inbox -- until
- * the render slice draws each with a primitive of its own. It is a plain
+ * TEMPORARY (pa-contract): the one stand-in renderer for the
+ * personal-assistant types not yet drawn -- tasks, timer, weather, inbox
+ * (the calendar has CalendarPrimitive) -- until the render slice draws each with a primitive of its own. It is a plain
  * framed list of the fields the agent sent, so the page neither crashes on
  * nor drops an accepted object and the fixtures load. It draws no clock: a
  * timer's `endsAt` is shown as sent.
@@ -18,13 +18,12 @@ import { NoteBadge } from './NoteMarker';
  * primitive: the scene tests count objects by it.
  */
 
-export type TemporaryAssistantType = 'calendar' | 'tasks' | 'timer' | 'weather' | 'inbox';
+export type TemporaryAssistantType = 'tasks' | 'timer' | 'weather' | 'inbox';
 
 type Fields = Record<string, unknown>;
 
 /** The list each type is mostly made of, for the frame's count. */
 const MAIN_LIST: Record<TemporaryAssistantType, [string, string]> = {
-  calendar: ['events', 'EVENTS'],
   tasks: ['items', 'TASKS'],
   timer: ['timers', 'TIMERS'],
   weather: ['daily', 'DAYS'],

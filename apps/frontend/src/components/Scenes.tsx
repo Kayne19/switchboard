@@ -18,6 +18,7 @@ import { RUNTIME_CONVERSATION_ID } from '../controller/types';
 import { anchoredItem, itemTargetText } from '../app/noteItems';
 import { anchoredNote, besideVisuals, buildCompositionModel, cast, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
+import { CalendarPrimitive, calendarFrame } from '../primitives/CalendarPrimitive';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { chartKind, chartTargetText } from '../primitives/chartGeometry';
 import { CodeViewport } from '../primitives/CodeViewport';
@@ -241,9 +242,9 @@ function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux', marked?
       return <ProgressPrimitive data={(object as SceneObject<ProgressData>).data} variant={slot === 'aux' ? 'compact' : 'full'} />;
     case 'note':
       return <AnnotationCard data={(object as SceneObject<NoteData>).data} />;
-    // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
     case 'calendar':
-      return <TemporaryAssistantList type="calendar" data={object.data} marked={marked} />;
+      return <CalendarPrimitive data={cast.calendar(object).data} marked={marked} />;
+    // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
     case 'tasks':
       return <TemporaryAssistantList type="tasks" data={object.data} marked={marked} />;
     case 'timer':
@@ -499,8 +500,17 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         main: slot('image-object', <ImagePrimitive data={data} />, <TechFrame variant="panel" />),
       };
     }
+    case 'calendar': {
+      const { data } = cast.calendar(primary);
+      return {
+        ...rail,
+        ...calendarFrame(data),
+        footer: 'DISPLAY / CALENDAR',
+        caption: sceneCaption(primary, `CALENDAR / ${data.view.toUpperCase()}`),
+        main: slot('calendar-object', <CalendarPrimitive data={data} marked={anchoredItem(state, primary.id)} />, <TechFrame variant="panel" />),
+      };
+    }
     // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
-    case 'calendar':
     case 'tasks':
     case 'timer':
     case 'weather':
