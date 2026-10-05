@@ -113,14 +113,18 @@ Types and their `data` shapes (each type takes only its own shape):
   instant; the screen counts down to it and shows it done at zero, with no
   sound, so tell the caller yourself. Add `startedAt`, or
   `state: "paused"` with `remaining` (seconds left).
+
+Until the screen has its own views for these five types, it shows each as
+a plain list of the fields you sent: no countdown, grid or marks yet. Send
+them as described; the views read the same fields.
 - weather: `{location, units: "C" or "F", current: {temp, condition}}`,
   plus `hourly: [{time, temp, condition}]` (up to 48), `daily: [{date, high,
   low, condition}]` (up to 14) and an `alert`. `condition` is one of
   `clear`, `partly-cloudy`, `cloudy`, `fog`, `drizzle`, `rain`,
   `heavy-rain`, `thunder`, `snow`, `sleet`, `hail`, `wind`, `haze`.
 - inbox: `{messages: [{id, from, time}]}` (1 to 50, shown in your order),
-  each with optional `subject`, `snippet`, `channel` (`email`, `slack`,
-  `sms`), `unread`, `flagged`. Give `today` so today's messages show their
+  each with optional `subject`, `snippet`, `channel` (a short label such
+  as `email`, `slack` or `sms`), `unread`, `flagged`. Give `today` so today's messages show their
   time. One message in full is a `document` with `kind: "email"`.
 
 Times are text in three forms: a date `"2026-10-07"`, a wall time on the
@@ -129,7 +133,10 @@ instant `"2026-10-07T14:30:00-07:00"` (or `...Z`), which only a timer
 takes. Write the caller's local times; the screen draws them as written and
 never converts zones or reads its own clock, so give `today` and `now`
 yourself. A Python `date` or `datetime` is converted for you: a date to a
-date, a naive datetime to a wall time, an aware one to an instant.
+date, and a datetime to a wall time on its own clock, so give it in the
+caller's zone (`dt.astimezone(zone)`). A timer's `endsAt` and `startedAt`
+take an aware datetime (`datetime.now(timezone.utc) + timedelta(minutes=9)`)
+and become instants; a naive one raises.
 
 ```python
 switchboard.display(op="show", id="week", type="calendar", role="primary", data={

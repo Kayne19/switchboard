@@ -83,7 +83,7 @@ type DisplayAction =
 | `image` | `{ format: "png"\|"jpeg"\|"webp", bytes: <standard base64>, alt, title?, subtitle?, context?, caption? }` | raster figure, contained, with its alt text and decoded size |
 | `calendar` | `{ view: "day"\|"week"\|"month"\|"agenda", start: Date, days?, today?: Date, now?: WallTime, events: [{ id, title, start, end?, location?, detail?, semantic?, status?, active? }], title?, subtitle?, context?, caption? }` | a day, a week, a month or an agenda of events (see "Personal-assistant types") |
 | `tasks` | `{ items: [{ id, text, state?, due?, priority?, group?, detail?, tags? }], today?: Date, title?, subtitle?, context?, caption? }` | a to-do list, in groups, overdue marked against `today` |
-| `timer` | `{ timers: [{ id, label, endsAt: Instant, startedAt?, state?, remaining? }], title?, subtitle?, context?, caption? }` | countdowns and reminders, counted on the page clock |
+| `timer` | `{ timers: [{ id, label, endsAt: Instant, startedAt?, state?, remaining? }], title?, subtitle?, context?, caption? }` | countdowns and reminders, counted on the page clock (by the render slice; a field list until then) |
 | `weather` | `{ location, units: "C"\|"F", current: { temp, condition, ... }, hourly?, daily?, alert?, title?, subtitle?, context?, caption? }` | conditions now, by the hour and by the day |
 | `inbox` | `{ messages: [{ id, from, subject?, snippet?, time, channel?, unread?, flagged?, semantic? }], today?: Date, title?, subtitle?, context?, caption? }` | a list of messages in the order sent |
 
@@ -159,6 +159,8 @@ Every time in a display action is a string in one of three forms. Each validator
 
 Five types show a person's day: `calendar`, `tasks`, `timer`, `weather` and `inbox`. They keep the conventions of the other types: an optional `title`, `subtitle`, `context` (each <= 256) and `caption` (<= 128); camelCase keys; an unknown key is refused. An item id (an event, a task, a timer, a message) is non-blank and <= 128 UTF-16 code units, like a diagram node id, and is unique in its list.
 
+Status: both validators, the schema and the skill module hold the whole contract below. The page draws the five with one stand-in for now, a framed list of the fields as sent (`apps/frontend/src/primitives/TemporaryAssistantList.tsx`), so none is dropped. The drawing rules below (a timer's countdown, a marked item, an overdue task, the condition glyphs, the half-hour block) are what the render slice implements; until it lands the page does not do them.
+
 #### calendar
 
 - `view` (required): `day`, `week`, `month` or `agenda`. `start` (required, a date): for `day` the day shown; for `week` the first column; for `month` any day in the month; for `agenda` the first day listed.
@@ -183,7 +185,7 @@ Five types show a person's day: `calendar`, `tasks`, `timer`, `weather` and `inb
 - `items`: 1 to 100, each `{ id, text (<= 256), state?, due?, priority?, group? (<= 128), detail? (<= 256), tags? }`.
 - `state` is `todo`, `active`, `done` or `blocked`, the words of a progress step; absent reads as `todo`. `priority` is `high` or `low`; absent is normal (`normal` is refused). `due` is a date or a wall time. `tags` is 0 to 4 short strings (each <= 32).
 - `group` is a section heading; the sections stand in the order their groups are first met.
-- `today` (a date) is what overdue is measured against: a task is overdue when its `due` is before `today` and it is not `done`. With no `today`, nothing is overdue.
+- `today` (a date) is what overdue is measured against: a task is overdue when the day of its `due` is before `today` and it is not `done`. The day is compared, not the time: a task due at `09:00` on `today` is not overdue, because a list has no `now`. With no `today`, nothing is overdue.
 
 ```json
 { "op": "show", "id": "todo", "type": "tasks", "data": {
@@ -199,6 +201,7 @@ Five types show a person's day: `calendar`, `tasks`, `timer`, `weather` and `inb
 
 - `timers`: 1 to 8, each `{ id, label (<= 128), endsAt, startedAt?, state?, remaining? }`. `endsAt` and `startedAt` are instants, and `startedAt` is before `endsAt` (offsets applied).
 - `state` is `running` or `paused`; absent reads as `running`. `remaining` is the seconds left (a number, 0 or more): it is required when the timer is `paused` and refused otherwise, because a running timer is counted down from `endsAt`.
+- A paused timer is drawn from `remaining` and is not counted; its `endsAt` is kept as the end it had when it last ran, and nothing is measured against it. `startedAt` and `endsAt` together give the whole span, so the page can show the share gone: `now` against them for a running timer, `remaining` against them for a paused one. When the agent resumes a timer, it sends `state: "running"` (or no state) with the new `endsAt`.
 - The page counts a running timer down against its own clock and shows it done at zero. It plays no sound: the agent says it is done. With reduced motion there is no animated sweep; the numbers still change.
 
 ```json
@@ -228,7 +231,7 @@ Five types show a person's day: `calendar`, `tasks`, `timer`, `weather` and `inb
 #### inbox
 
 - `messages`: 1 to 50, each `{ id, from (<= 128), subject? (<= 256), snippet? (<= 256), time, channel? (<= 32), unread?, flagged?, semantic? }`. `time` is a date or a wall time; `channel` is a short label (`email`, `slack`, `sms`); `unread` and `flagged` are booleans.
-- Messages are drawn in the order sent. A `time` on `today` (a date) shows as its time of day; any other as its date.
+- Messages are drawn in the order sent. A wall time on `today` (a date) shows as its time of day; any other `time`, a date on `today` included, shows as its date.
 - One message in full is a `document` of kind `email`, not an inbox.
 
 ```json
@@ -243,7 +246,7 @@ Five types show a person's day: `calendar`, `tasks`, `timer`, `weather` and `inb
 
 #### A note on one item: `note.anchor.item`
 
-A note's `anchor.item` names an item inside its target: a calendar event, a task, a timer or an inbox message by its `id`, or a forecast hour or day by its `time` or `date`. It is checked as an item id is (non-blank, <= 128 UTF-16 code units). As for `node` and `series`, the validators check only its shape: the note and its target are separate objects, and the target may change after the note. The page marks the named item the way a diagram marks the node a note names, and marks nothing when the target has no item of that name.
+A note's `anchor.item` names an item inside its target: a calendar event, a task, a timer or an inbox message by its `id`, or a forecast hour or day by its `time` or `date`. It is checked as an item id is (non-blank, <= 128 UTF-16 code units). As for `node` and `series`, the validators check only its shape: the note and its target are separate objects, and the target may change after the note. The page is to mark the named item the way a diagram marks the node a note names (the render slice; the stand-in marks nothing), and marks nothing when the target has no item of that name.
 
 ```json
 { "op": "show", "id": "dentist-note", "type": "note", "data": {

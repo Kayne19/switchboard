@@ -255,7 +255,9 @@ wire rules are in `docs/display-tool.md` ("Time values" and
   end is a half-hour block; sections stand in the order their groups are
   first met; a weather condition is one of thirteen names that the page
   draws in its own sharp geometry (never an emoji or an image); a message
-  from `today` shows its time of day, and an older one its date.
+  at a wall time on `today` shows its time of day, and any other its date;
+  a task is overdue when the day it is due is before `today` (there is no
+  `now` on a list, so the time of day is not compared).
 - **One message in full stays a `document`** of kind `email`; an inbox is
   the list.
 
