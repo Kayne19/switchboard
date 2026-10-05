@@ -12,6 +12,7 @@ import {
   placeExits,
   placed,
   readRim,
+  restEnd,
   restStops,
   settleStop,
   tagLength,
@@ -80,6 +81,29 @@ describe('where a scrolled drawing rests', () => {
     for (const stop of stops.slice(1, -1)) expect(cuts(stop), `${stop}`).toBeLessThanOrEqual(1);
   });
 
+  it('a drawing that overflows by no more than a rail rests at its start only: the rest is its margin', () => {
+    expect(restStops([[0, 100]], 105, 100)).toEqual([0]);
+    expect(restStops([[0, 100], [110, 200]], 100 + RAIL, 100)).toEqual([0]);
+  });
+
+  it('a view too small to hold its rails gets no stretch of stops', () => {
+    expect(restStops([[0, 3000]], 3000, 10).length).toBeLessThanOrEqual(3);
+  });
+
+  it('reaches a little past the drawing\'s end when its last place to rest would cut a part, and no further', () => {
+    // At 690 (1140 - 450) the edge falls inside the layer [620, 820].
+    expect(restEnd(layers, 1140, 450)).toBe(1140 + (920 - REST_PAD - 690));
+    const end = restEnd(layers, 1140, 450);
+    const stops = restStops(layers, end, 450);
+    const last = stops.at(-1)!;
+    expect(layers.every(([start, finish]) => finish <= last + RAIL || start >= last + RAIL)).toBe(true);
+    // The last layer stays whole in view.
+    expect(last + 450).toBeGreaterThanOrEqual(1120);
+    // An end that cuts nothing is left alone; one that needs more than half a view of black is too.
+    expect(restEnd([[20, 220], [320, 520], [620, 820]], 840, 300)).toBe(840);
+    expect(restEnd([[0, 500], [900, 1300]], 1300, 450)).toBe(1300);
+  });
+
   it('a drawing that fits rests at its start only', () => {
     expect(restStops(layers, 400, 450)).toEqual([0]);
   });
@@ -131,7 +155,7 @@ describe('the hard diagrams at rest in the stage geometries', () => {
   ];
   for (const [name, data, anchor] of [['topology', topologyDiagram, 'gate'], ['pipeline', pipelineDiagram, 'visual']] as const) {
     for (const size of viewports) {
-      it(`${name} in ${size.width} x ${size.height}: every place it rests along its layers leaves no node cut at its edge`, () => {
+      it(`${name} in ${size.width} x ${size.height}: every place it rests along its layers, its far end too, leaves no node cut at its edge`, () => {
         const { layout, fit } = viewDiagram(data, { ...size, scrollbar: 0 }, anchor);
         const place = { scale: fit.scale, offsetX: Math.max(0, (size.width - fit.width) / 2), offsetY: Math.max(0, (size.height - fit.height) / 2) };
         const boxes = layout.nodes.map((node) => placed(node.box, place));
@@ -140,9 +164,9 @@ describe('the hard diagrams at rest in the stage geometries', () => {
           ...(fit.scrollY && !fit.scrollX ? [{ spans: boxes.map((box): Span => [box.top, box.bottom]), length: Math.max(size.height, fit.height), view: size.height }] : []),
         ];
         for (const { spans, length, view: span } of axes) {
-          const stops = restStops(spans, length, span);
+          const stops = restStops(spans, restEnd(spans, length, span), span);
           expect(stops.length).toBeGreaterThan(2);
-          for (const stop of stops.slice(0, -1)) {
+          for (const stop of stops) {
             const clear = stop + (stop > 0 ? RAIL : 0);
             const cut = spans.filter(([start, end]) => start < clear - 0.5 && end > clear + 0.5);
             expect(cut, `rest at ${stop}`).toEqual([]);
@@ -182,6 +206,14 @@ describe('what each rim says', () => {
     const labelled = readRim(parts, view(120, 0, 330, 200), { ...none, left: true }, [view(110, 60, 160, 70)]);
     expect(labelled.left?.depth).toBe(40);
     expect(labelled.left?.beyond).toBe(1);
+  });
+
+  it('fades only what is in view across the edge', () => {
+    // Scrolled both ways: a part wholly above the view reaches past its left rim.
+    const above = [view(0, 0, 300, 50)];
+    const rim = readRim(above, view(100, 100, 500, 400), { ...none, left: true, top: true });
+    expect(rim.left).toEqual({ beyond: 1, depth: 0 });
+    expect(rim.top?.beyond).toBe(1);
   });
 
   it('says nothing of an edge the drawing ends at', () => {

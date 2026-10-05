@@ -101,45 +101,34 @@ const STOP_MERGE = 8;
  * pinned band) falls in a gap between parts, so no part there is cut or
  * under the rail, and, where the gap allows, no `soft` span (a label in
  * the gap) either; and the axis's two ends. `spans` are the parts along
- * the axis, `length` the content's extent, `view` the viewport's.
+ * the axis, `length` the content's extent at rest (`restEnd`), `view` the
+ * viewport's. A drawing that overflows by no more than a rail rests at its
+ * start only: the little past its far edge is its own margin.
  */
 export function restStops(spans: readonly Span[], length: number, view: number, inset = 0, soft: readonly Span[] = []): number[] {
   const max = length - view;
-  if (max <= EPSILON) return [0];
-  const candidates = [0, max];
-  const between = gaps(spans);
-  for (const [gapStart, gapEnd] of between) {
-    const least = Math.min(gapStart, gapEnd - RAIL - REST_ROOM) - RAIL;
-    let rim = Math.max(gapEnd - REST_PAD, Math.min(gapStart, gapEnd - RAIL - REST_ROOM));
-    // A label the rail would cover or cut is kept whole in view, when the
-    // gap leaves room before it.
-    for (let tries = 0; tries < soft.length; tries += 1) {
-      const clear = rim + RAIL;
-      const cutting = soft.find(([start, end]) => start < clear - EPSILON && end > clear + EPSILON);
-      if (!cutting || cutting[0] - RAIL - REST_ROOM < least) break;
-      rim = cutting[0] - RAIL - REST_ROOM;
-    }
-    const stop = rim - inset;
-    if (stop > EPSILON && stop < max - EPSILON) candidates.push(stop);
-  }
+  if (max <= RAIL) return [0];
+  const candidates = [0, max, ...gapStops(spans, inset, soft).filter((stop) => stop > EPSILON && stop < max - EPSILON)];
   const clean: number[] = [];
   for (const stop of candidates.map(Math.round).sort((a, b) => a - b)) {
     const last = clean[clean.length - 1];
     if (last === undefined || stop - last >= STOP_MERGE) clean.push(stop);
+    // The far end is kept over a stop just short of it (never the start: the end is more than a rail on).
     else if (stop === Math.round(max)) clean[clean.length - 1] = stop;
   }
   // Two stops further apart than a view leave a stretch the reader could
   // not stop along: it gets stops of its own, at most STRETCH of a view
   // apart, each where its rail's inner edge cuts the fewest parts (none,
   // where a gap is near enough; across a drawing that scrolls both ways,
-  // as few as its rows allow), the furthest of those.
+  // as few as its rows allow), the furthest of those. A view too small to
+  // hold its rails (a box caught mid-animation) gets none.
   const cuts = (stop: number) => spans.filter(([start, end]) => start < stop + inset + RAIL - EPSILON && end > stop + inset + RAIL + EPSILON).length;
   const edges = spans.flatMap(([start, end]) => [start - RAIL - REST_ROOM - inset, end - RAIL + REST_ROOM - inset]);
   const stops: number[] = [];
   clean.forEach((stop, index) => {
     stops.push(stop);
     const next = clean[index + 1];
-    if (next === undefined || view <= 0 || next - stop <= view) return;
+    if (next === undefined || view < 2 * RAIL || next - stop <= view) return;
     let at = stop;
     while (next - at > view * STRETCH + STOP_MERGE) {
       const reach = at + view * STRETCH;
@@ -153,6 +142,46 @@ export function restStops(spans: readonly Span[], length: number, view: number, 
   });
   return stops;
 }
+
+// Where a gap's rest puts the scroll position: the gap at the edge the
+// drawing is read from, the next part clear of the rail.
+function gapStops(spans: readonly Span[], inset: number, soft: readonly Span[]): number[] {
+  return gaps(spans).map(([gapStart, gapEnd]) => {
+    const least = Math.min(gapStart, gapEnd - RAIL - REST_ROOM) - RAIL;
+    let rim = Math.max(gapEnd - REST_PAD, Math.min(gapStart, gapEnd - RAIL - REST_ROOM));
+    // A label the rail would cover or cut is kept whole in view, when the
+    // gap leaves room before it.
+    for (let tries = 0; tries < soft.length; tries += 1) {
+      const clear = rim + RAIL;
+      const cutting = soft.find(([start, end]) => start < clear - EPSILON && end > clear + EPSILON);
+      if (!cutting || cutting[0] - RAIL - REST_ROOM < least) break;
+      rim = cutting[0] - RAIL - REST_ROOM;
+    }
+    return rim - inset;
+  });
+}
+
+// The far end may be reached past the drawing's own end by at most this
+// share of a view.
+const END_ROOM = 0.5;
+
+/**
+ * The content's extent at rest along one axis: the drawing's (`length`),
+ * unless at its far end the edge it is read from would cut a part; then a
+ * little more, so the last place to rest is the next gap's and shows the
+ * rest of the drawing whole, with black past its end (at most half a view
+ * of it).
+ */
+export function restEnd(spans: readonly Span[], length: number, view: number, inset = 0, soft: readonly Span[] = []): number {
+  const max = length - view;
+  if (max <= RAIL) return length;
+  const clear = max + inset + RAIL;
+  if (!spans.some(([start, end]) => start < clear - EPSILON && end > clear + EPSILON)) return length;
+  const beyond = gapStops(spans, inset, soft).filter((stop) => stop > max + EPSILON);
+  const next = beyond.length > 0 ? Math.min(...beyond) : null;
+  return next !== null && next - max <= view * END_ROOM ? length + Math.ceil(next - max) : length;
+}
+
 // How far apart the stops along a stretch stand, at most, in views.
 const STRETCH = 0.6;
 
@@ -237,8 +266,8 @@ export interface RimSide {
 /**
  * What lies past each edge of `view` that the drawing continues past
  * (`continues`): the parts that lie that way, wholly or in part, past the
- * rail on that edge, and how deep the deepest part or mark the rail cuts
- * reaches into the view from the rim.
+ * rail on that edge, and how deep the deepest part or mark the rail cuts,
+ * of those in view across the edge, reaches into the view from the rim.
  */
 export function readRim(parts: readonly View[], view: View, continues: Record<Side, boolean>, marks: readonly View[] = []): Record<Side, RimSide | null> {
   const clear = clearOf(view, continues);
@@ -254,6 +283,9 @@ export function readRim(parts: readonly View[], view: View, continues: Record<Si
         return box.bottom > clear.bottom + EPSILON ? Math.max(0, view.bottom - box.top) : null;
     }
   };
+  // Only what is in view across the edge can be faded at it.
+  const across = (side: Side, box: View) =>
+    side === 'left' || side === 'right' ? box.bottom > view.top + EPSILON && box.top < view.bottom - EPSILON : box.right > view.left + EPSILON && box.left < view.right - EPSILON;
   const read = (side: Side): RimSide | null => {
     if (!continues[side]) return null;
     let beyond = 0;
@@ -262,9 +294,9 @@ export function readRim(parts: readonly View[], view: View, continues: Record<Si
       const past = reach(side, part);
       if (past === null) continue;
       beyond += 1;
-      depth = Math.max(depth, past);
+      if (across(side, part)) depth = Math.max(depth, past);
     }
-    for (const mark of marks) depth = Math.max(depth, reach(side, mark) ?? 0);
+    for (const mark of marks) if (across(side, mark)) depth = Math.max(depth, reach(side, mark) ?? 0);
     return { beyond, depth };
   };
   return { left: read('left'), right: read('right'), top: read('top'), bottom: read('bottom') };
