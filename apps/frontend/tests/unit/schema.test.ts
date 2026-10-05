@@ -6,11 +6,13 @@ import { corpusCases, expandCorpusValue } from '../fixtures/validatorCorpus';
 import { validateControllerAction } from '../../src/controller/validation';
 
 // docs/display-action-v1.schema.json is described (docs/display-tool.md) as
-// the canonical DisplayAction contract, exercised by this same fixture file.
-// Nothing previously checked the schema itself against it, so it could (and
-// did) drift from the two validators that actually run: the TypeScript
-// controller (src/controller/validation.ts) and the Rust backend
-// (apps/backend/src/visual_protocol.rs). This test is that check.
+// the canonical DisplayAction contract. Nothing previously checked the schema
+// itself, so it could (and did) drift from the two validators that actually
+// run: the TypeScript controller (src/controller/validation.ts) and the Rust
+// backend (apps/backend/src/visual_protocol.rs). This test holds it to the
+// shared validator corpus (validator-corpus.json), the record of what both
+// validators make of an action, and to the actions JSON cannot hold
+// (display-actions.json: a NaN or an infinity).
 //
 // The schema declares draft-07 ("$schema": "http://json-schema.org/draft-07/schema#"),
 // so it is compiled with plain `ajv`, not the draft 2019-09/2020-12 builds.
@@ -29,110 +31,115 @@ function errorSummary(): string {
   return ajv.errorsText(validate.errors, { separator: '; ' });
 }
 
-// Fixtures below are real, understood disagreements between the schema and
-// the validators that JSON Schema cannot close without either a
-// non-standard vendor keyword or a data model JSON Schema does not have
-// access to. Each is a deliberate, documented exception, not an oversight:
-// this set is asserted against directly so that closing a gap (or a fixture
-// change that no longer needs the exception) fails the test until this list
-// is updated, instead of the mismatch silently vanishing.
-const KNOWN_SCHEMA_GAPS: Record<string, string> = {
-  // Node/edge referential integrity and uniqueness are checks over
-  // *relationships between sibling array items* (duplicate ids, an edge
-  // endpoint that names no node, a self-loop, a duplicate edge pair).
-  // Standard JSON Schema (any draft) validates each item's own shape; it
-  // has no keyword for a computed property across an array's other items
-  // without a vendor extension (e.g. ajv-keywords' uniqueItemProperties, or
-  // an Ajv-only $data reference). The graph invariants stay enforced only
-  // by visual_protocol.rs and validation.ts.
-  diagram_duplicate_node_id: 'node id uniqueness is a cross-item invariant, not a per-node shape rule',
-  diagram_edge_missing_endpoint: 'edge endpoints referencing nodes[] is cross-array referential integrity',
-  diagram_edge_self_loop: 'from === to is an equality check between two sibling fields',
-  diagram_edge_duplicate_pair: 'duplicate (from, to) pairs is a cross-item uniqueness invariant',
-  // A table row's length must equal `columns.length`, and a highlight index
-  // must name a row: both relate one array to another in the same object.
-  // The schema bounds a row at 12 cells and an index at a non-negative
-  // integer; the exact fit stays with visual_protocol.rs and validation.ts.
-  table_ragged_row: 'a row having exactly columns.length cells relates two sibling arrays',
-  table_highlight_out_of_range: 'a highlight index naming an existing row relates two sibling arrays',
-  // The same two invariants in sequence mode, over actors and messages.
-  diagram_sequence_duplicate_actor_id: 'actor id uniqueness is a cross-item invariant, not a per-actor shape rule',
-  diagram_sequence_message_missing_endpoint: 'message endpoints referencing actors[] is cross-array referential integrity',
-  // A series' value count against the chart's label count is a relationship
-  // between two sibling fields of the chart data, the same kind of check.
-  chart_values_longer_than_labels: 'series.values.length <= labels.length compares two sibling fields',
-  // The 48,000 UTF-8 byte cap bounds the serialized envelope on the wire
-  // (see docs/display-tool.md, "Action size"). JSON Schema validates the
-  // shape of the parsed instance, not the byte length of its serialization;
-  // there is no keyword for "the JSON text you were decoded from is short
-  // enough". This stays an application/transport-level check.
-  oversized_action_bytes: 'total serialized byte size is a transport-level property, not part of the parsed instance',
-  // `maxLength` counts Unicode code points, per the JSON Schema
-  // specification (RFC 8259's definition of a JSON string's length) and
-  // Ajv's default (spec-compliant) behavior. The app's own `id`/text caps
-  // are deliberately defined in UTF-16 code units (docs/display-tool.md:
-  // "String caps (UTF-16 code units)"), so an astral character (one code
-  // point, two UTF-16 units) is cheaper against the schema's cap than
-  // against the app's. This fixture's id is 97 code points / 130 UTF-16
-  // units: under the schema's 128-code-point cap, over the app's 128-unit
-  // one. Reproducing UTF-16-unit counting in the schema is only possible by
-  // replacing `maxLength` with a hand-rolled, non-unicode `pattern`, which
-  // itself only counts UTF-16 units under Ajv's non-default
-  // `unicodeRegExp: false` option — i.e. by making the schema's meaning
-  // depend on a specific validator's non-default configuration. Left as an
-  // open contract question rather than silently patched over.
-  oversized_id_astral_utf16: 'maxLength is Unicode-code-point-based per spec; the app caps UTF-16 code units',
-  // An image's `bytes` must start with the file signature its `format`
-  // names (PNG, JPEG or WebP). That is a relationship between two sibling
-  // fields read through a base64 decode; JSON Schema has neither the
-  // decoder nor a cross-field keyword. The schema pins the alphabet, the
-  // padding and the length; the sniff stays in validation.ts and
-  // visual_protocol.rs, where both validators decode the same head bytes.
-  image_signature_mismatch: 'the format/signature match is a cross-field check over decoded bytes',
-  // The personal-assistant types (docs/display-tool.md, "Personal-assistant
-  // types") add the same kinds of rule. Ids unique in a list, and a forecast
-  // hour's time or day's date unique in theirs, are cross-item invariants.
-  // An event's end not before its start, `now` falling on `today` and a
-  // timer started before it ends compare two sibling time values as times
-  // (an instant with its offset applied), which a pattern cannot do. What
-  // the schema can say it does: the time patterns (a date's knows each
-  // month's days and the leap years of 1970-2199), an end written like its
-  // start, `days` per view, and `remaining` on a paused timer only.
-  calendar_duplicate_event_id: 'event id uniqueness is a cross-item invariant',
-  weather_duplicate_hour: 'a forecast hour unique by its time is a cross-item invariant',
-  calendar_event_end_before_start: 'end not before start compares two sibling times as times',
-  calendar_now_not_on_today: 'now falling on today compares two sibling times',
-  timer_started_after_it_ends: 'startedAt before endsAt compares two instants, offsets applied',
+// The corpus cases both validators refuse and the schema accepts: each breaks
+// a rule JSON Schema cannot state (docs/display-tool.md, "Canonical schema &
+// validation rules"), grouped by why. The list is exact both ways: a refused
+// case the schema accepts must be named here, and a case named here must be
+// one the schema still accepts, so closing a gap, or a corpus change that no
+// longer needs one, fails until this list follows it.
+const SCHEMA_GAPS: Record<string, { why: string; cases: string[] }> = {
+  items: {
+    why:
+      'a relationship between the items of a list (an id unique in its list, an endpoint naming a node or ' +
+      "an actor, a self-loop, an edge pair, a row with one cell per column, a highlight naming a row): JSON Schema checks " +
+      "each item's own shape and has no keyword for a property computed across the others without a vendor extension",
+    cases: [
+      'graph_node_id_duplicate', 'graph_edge_from_unknown', 'graph_edge_to_unknown', 'graph_edge_self_loop',
+      'graph_edge_duplicate_pair', 'graph_edge_order_from_before_to', 'graph_edge_order_endpoints_before_self_loop',
+      'sequence_actor_id_duplicate', 'sequence_message_from_unknown', 'sequence_message_to_unknown',
+      'table_row_ragged', 'table_row_too_long', 'table_highlight_past_the_rows', 'table_highlight_with_no_rows',
+      'calendar_event_duplicate_id', 'tasks_item_duplicate_id', 'timer_duplicate_id', 'weather_hour_duplicate_time',
+      'weather_day_duplicate_date', 'inbox_message_duplicate_id',
+    ],
+  },
+  blank: {
+    why: 'an id, a target or a node or actor id made only of whitespace (Unicode White_Space); the schema states the blank rule for an item id and an alt only',
+    cases: [
+      'show_id_blank_U+0009', 'show_id_blank_U+000A', 'show_id_blank_U+000B', 'show_id_blank_U+000C',
+      'show_id_blank_U+000D', 'show_id_blank_U+0020', 'show_id_blank_U+0085', 'show_id_blank_U+00A0',
+      'show_id_blank_U+1680', 'show_id_blank_U+2000', 'show_id_blank_U+2005', 'show_id_blank_U+200A',
+      'show_id_blank_U+2028', 'show_id_blank_U+2029', 'show_id_blank_U+202F', 'show_id_blank_U+205F',
+      'show_id_blank_U+3000', 'hide_id_blank', 'focus_id_blank', 'say_target_blank', 'graph_node_id_blank',
+      'graph_node_id_blank_U+0085', 'sequence_actor_id_blank', 'sequence_actor_id_blank_U+0085',
+      'note_anchor_target_blank', 'note_anchor_target_blank_U+0085',
+    ],
+  },
+  fields: {
+    why: "a series' value count against the chart's label count compares two sibling fields",
+    cases: ['chart_series_longer_than_labels'],
+  },
+  times: {
+    why: 'two times compared as times (an end before its start, `now` off `today`, a timer started at or after its end, offsets applied); a pattern reads one string',
+    cases: [
+      'calendar_now_after_today', 'calendar_now_before_today', 'calendar_event_end_a_minute_before_its_start',
+      'calendar_event_end_the_day_before_its_start', 'calendar_event_end_on_an_earlier_day_at_a_later_hour',
+      'timer_started_at_its_end', 'timer_started_at_its_end_in_another_offset', 'timer_started_after_its_end',
+      'timer_started_after_its_end_by_its_offset', 'timer_started_a_nanosecond_after',
+    ],
+  },
+  size: {
+    why: 'the action-size caps bound the action as JSON.stringify writes it, a transport-level property, not the parsed instance',
+    cases: [
+      'size_one_byte_over_the_cap', 'size_counts_utf8_bytes', 'size_cap_is_general_for_a_non_image_type',
+      'size_counts_long_numbers_as_javascript_writes_them', 'size_counts_exponents_as_javascript_writes_them',
+      'size_say_normalized_over_the_cap',
+    ],
+  },
+  utf16: {
+    // Reproducing UTF-16-unit counting in the schema would take a hand-rolled
+    // `pattern` that counts units only under Ajv's non-default
+    // `unicodeRegExp: false`: the schema's meaning would hang on one
+    // validator's configuration.
+    why: "maxLength counts code points (the JSON Schema specification, and Ajv's default); the caps count UTF-16 code units, so an astral character is cheaper against the schema",
+    cases: [
+      'show_id_65_astral', 'chart_label_33_astral', 'calendar_event_id_65_astral', 'note_anchor_item_65_astral',
+      'tasks_item_tag_17_astral', 'inbox_message_channel_17_astral',
+    ],
+  },
+  signature: {
+    why: "an image's bytes must start with the signature its format names: a cross-field check over decoded bytes (the schema pins the base64 alphabet, padding and length)",
+    cases: [
+      'image_bytes_jpeg_named_png', 'image_bytes_png_named_jpeg', 'image_bytes_riff_wave_named_webp',
+    ],
+  },
 };
 
-describe('display-action-v1.schema.json', () => {
-  it('accepts every canonical valid fixture', () => {
-    for (const testCase of fixtures.valid) {
-      const ok = validate(testCase.action);
-      expect(ok, `expected schema to accept valid fixture "${testCase.name}": ${errorSummary()}`).toBe(true);
-    }
+// The schema describes what the validators accept, so it must never be the
+// stricter of the two, and it refuses what they refuse wherever JSON Schema
+// can say why. The text of an error and the order of the checks are the
+// corpus's to pin, not the schema's.
+describe('display-action-v1.schema.json and the validator corpus', () => {
+  it('accepts every action both validators accept', () => {
+    const refused = corpusCases
+      .filter((testCase) => testCase.accepted)
+      .filter((testCase) => !validate(expandCorpusValue(testCase.action)))
+      .map((testCase) => testCase.name);
+    expect(refused).toEqual([]);
   });
 
-  it('rejects every canonical invalid fixture, except the documented schema gaps', () => {
-    for (const testCase of fixtures.invalid) {
-      const ok = validate(testCase.action);
-      const gapReason = KNOWN_SCHEMA_GAPS[testCase.name];
-      if (gapReason !== undefined) {
-        expect(
-          ok,
-          `"${testCase.name}" is tracked in KNOWN_SCHEMA_GAPS (${gapReason}) and expected to ` +
-            `still (wrongly) validate against the schema; if the schema now rejects it, drop it from that list`,
-        ).toBe(true);
-      } else {
-        expect(
-          ok,
-          `expected schema to reject invalid fixture "${testCase.name}" (${testCase.reason}), but it validated`,
-        ).toBe(false);
-      }
-    }
+  it('refuses every action both validators refuse, but for the rules it cannot state', () => {
+    const gaps = new Set(Object.values(SCHEMA_GAPS).flatMap((gap) => gap.cases));
+    const accepted = corpusCases
+      .filter((testCase) => testCase.error !== undefined)
+      .filter((testCase) => validate(expandCorpusValue(testCase.action)))
+      .map((testCase) => testCase.name);
+    expect(accepted.filter((name) => !gaps.has(name)), 'refused by both validators, accepted by the schema').toEqual([]);
+    expect([...gaps].filter((name) => !accepted.includes(name)), 'in SCHEMA_GAPS, but not a refused case the schema accepts').toEqual([]);
   });
 
-  it('rejects every non-finite mutation (NaN, Infinity, -Infinity)', () => {
+  // The time patterns state the whole of the time rules, real days and
+  // leap years included, so every corpus case refused only for how a time
+  // is written is refused by the schema too.
+  it('refuses every time the validators refuse for how it is written', () => {
+    const accepted = corpusCases
+      .filter((testCase) => testCase.name.startsWith('time_') && testCase.error !== undefined)
+      .filter((testCase) => validate(expandCorpusValue(testCase.action)))
+      .map((testCase) => testCase.name);
+    expect(accepted).toEqual([]);
+  });
+
+  // JSON cannot hold a NaN or an infinity, so these are not corpus cases.
+  it('refuses every non-finite mutation (NaN, Infinity, -Infinity)', () => {
     for (const mutation of fixtures.nonFiniteMutations) {
       const cloned = JSON.parse(JSON.stringify(mutation.baseAction));
       let target: any = cloned;
@@ -150,15 +157,6 @@ describe('display-action-v1.schema.json', () => {
 
       const ok = validate(cloned);
       expect(ok, `expected schema to reject non-finite mutation "${mutation.name}"`).toBe(false);
-    }
-  });
-
-  it('has no stale entries in KNOWN_SCHEMA_GAPS', () => {
-    const invalidNames = new Set(fixtures.invalid.map((c) => c.name));
-    for (const name of Object.keys(KNOWN_SCHEMA_GAPS)) {
-      expect(invalidNames.has(name), `KNOWN_SCHEMA_GAPS references "${name}", which is not in fixtures.invalid`).toBe(
-        true,
-      );
     }
   });
 });
@@ -232,31 +230,5 @@ describe('validateControllerAction follows display-action-v1.schema.json', () =>
     const action = { op: 'show', id: 'x', type: 'progress', data: { label: 'L', steps: [{ label: 'S' }] } };
     expect(validate(action), errorSummary()).toBe(true);
     expect(validateControllerAction(action).ok).toBe(true);
-  });
-});
-
-// The schema describes what the validators accept, so it must never be the
-// stricter of the two: every action the shared validator corpus says both
-// validators accept passes it. Where JSON Schema cannot state a rule
-// (KNOWN_SCHEMA_GAPS above), or for a blank id and the text of an error, it
-// is the weaker one, and the corpus pins the rule instead.
-describe('display-action-v1.schema.json and the validator corpus', () => {
-  // The time patterns state the whole of the time rules, real days and
-  // leap years included, so every corpus case refused only for how a time
-  // is written is refused by the schema too.
-  it('refuses every time the validators refuse for how it is written', () => {
-    const accepted = corpusCases
-      .filter((testCase) => testCase.name.startsWith('time_') && testCase.error !== undefined)
-      .filter((testCase) => validate(expandCorpusValue(testCase.action)))
-      .map((testCase) => testCase.name);
-    expect(accepted).toEqual([]);
-  });
-
-  it('accepts every action both validators accept', () => {
-    const refused = corpusCases
-      .filter((testCase) => testCase.accepted)
-      .filter((testCase) => !validate(expandCorpusValue(testCase.action)))
-      .map((testCase) => testCase.name);
-    expect(refused).toEqual([]);
   });
 });

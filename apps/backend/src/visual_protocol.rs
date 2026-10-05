@@ -2477,6 +2477,49 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
     Ok(normalized)
 }
 
+/// The shared validator corpus, `apps/frontend/tests/fixtures/validator-corpus.json`:
+/// each case an action and what both validators make of it, its exact
+/// `error`, or `accepted` with the `normalized` action when that is not the
+/// action as sent. `{"$repeat": s, "times": n}` in a case stands for `s`
+/// repeated `n` times, so a case at a length cap stays one readable line; it
+/// is expanded here as the browser's `validatorCorpus.ts` expands it. This
+/// module's tests run every case through `validate_action`, and the
+/// module-call tests run every refused one through a display call.
+#[cfg(test)]
+pub(crate) fn validator_corpus() -> Vec<Value> {
+    fn expand(value: &Value) -> Value {
+        match value {
+            Value::Object(map) => {
+                if map.len() == 2 {
+                    if let (Some(Value::String(text)), Some(times)) =
+                        (map.get("$repeat"), map.get("times").and_then(Value::as_u64))
+                    {
+                        return Value::String(text.repeat(times as usize));
+                    }
+                }
+                Value::Object(
+                    map.iter()
+                        .map(|(key, value)| (key.clone(), expand(value)))
+                        .collect(),
+                )
+            }
+            Value::Array(items) => Value::Array(items.iter().map(expand).collect()),
+            other => other.clone(),
+        }
+    }
+    let corpus: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/apps/frontend/tests/fixtures/validator-corpus.json"
+    )))
+    .unwrap();
+    corpus["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(expand)
+        .collect()
+}
+
 #[cfg(test)]
 #[path = "../tests/test_visual_protocol.rs"]
 mod tests;

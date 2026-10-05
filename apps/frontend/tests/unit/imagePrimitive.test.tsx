@@ -5,7 +5,7 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { ImageData } from '../../src/controller/types';
 import { ImagePrimitive, imageDataUrl } from '../../src/primitives/ImagePrimitive';
 
-/** A real 1x1 PNG, the one display-actions.json carries. */
+/** A real 1x1 PNG, the one the validator corpus carries. */
 const PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mN48ew+AAVnAq5EDgAUAAAAAElFTkSuQmCC';
 
 let host: HTMLDivElement | undefined;
