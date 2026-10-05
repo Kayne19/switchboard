@@ -198,8 +198,9 @@ The agent composes and the page lays out. One object is the primary and owns
 the main slot. Every other visual the agent shows is drawn: beside the primary
 where its scene has a place for it (a compare chart beside a chart), and
 otherwise in a row of framed cells under the primary. The row never takes the
-larger share from the primary and never squeezes a visual below a readable
-size; when it cannot show every cell, it scrolls inside its own bounds. So no
+larger share from a visual primary and never squeezes a visual below a
+readable size; when it cannot show every cell, it scrolls inside its own
+bounds. So no
 visual that the agent's `view` lists is missing from the caller's screen.
 `docs/visual-channel.md` ("Composition & focus") has the rules.
 

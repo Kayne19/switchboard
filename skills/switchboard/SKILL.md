@@ -108,8 +108,8 @@ rail); any other primary takes the main stage. Every other visual you show
 is drawn too: a chart beside a chart primary sits next to it, and any other
 visual goes in a row under the primary (compare first, then secondary, then
 ambient), such as a diagram with the table it summarises, or a chart with
-the image it came from. Metrics, notes and progress go in the side rail. A
-note can carry `anchor: {target, x?, series?, node?}` to attach it to
+the image it came from. Metrics, notes and progress keep their own places,
+mostly the side rail. A note can carry `anchor: {target, x?, series?, node?}` to attach it to
 another object. The
 live transcript belongs to the system; use a note for lasting on-screen
 annotations and `speak` for words.

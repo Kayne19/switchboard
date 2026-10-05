@@ -11,7 +11,7 @@ A project agent calls `switchboard.display(action)` from the `switchboard` Pytho
 | agent call | `switchboard.display(action)` or `switchboard.display(**action)` |
 | skill socket request | `{ op: "call", call: "display", token, args: { action } }` |
 | view | `switchboard.view(target=None)`, sent as `call: "view"` |
-| service intake endpoint | `POST /display` (outer envelope: `{ token, action }`) |
+| service intake | the host agent's `module_call` with `call: "display"` on the host link (`docs/host-link.md`, "Module calls"), carrying the call token and `{ action }` |
 | broadcast | `{"type":"display","action":<normalized>}` |
 
 `display` replaces separate per-kind tools with a single semantic function. One call carries exactly one `DisplayAction`.

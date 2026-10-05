@@ -72,7 +72,10 @@ slot over the aux row. A composition names the objects its slot does not
 draw (`SceneContent.aux`), and the shell gives each a framed cell in the row
 (`AuxRow`), so an accepted visual is never lost to the layout. The slot sits
 in the column whether or not the row is shown, so a visual arriving beside
-the primary resizes it in place; alone, it fills the column as before.
+the primary resizes it in place. Alone, a scene's slot fills the column: a
+chart, diagram, document, code, table or image page is drawn exactly as it
+was before the column existed, and the composed workspace no longer keeps
+an empty row's gap under a lone primary.
 
 Two exceptions are deliberate (decided 2026-10-02; see #121 and #124). Review them
 in a later refactor or audit instead of folding them in by habit:

@@ -83,15 +83,21 @@ drawn alone. Every other visual on stage (`chart`, `diagram`, `document`,
 - Every other visual takes a framed cell in the **aux row** under the primary:
   `compare` objects first, then `secondary`, then `ambient` (the rail has no
   room for a visual), each in the order shown.
-- Metrics, notes and progress stay in the rail beside the content. Under a
-  primary that is itself a metric, a progress or a note, the aux row also
-  holds the progress objects and every `compare` object.
+- Metrics, notes and progress keep the places they have without the row: the
+  rail beside the content, and on a chart page the notes over the charts.
+  Progress joins the aux row in two cases: under a primary that is itself a
+  metric, a progress or a note (with any `compare` object that the rail does
+  not already show), and on a chart page with a visual in the row, where the
+  progress that sat under the charts moves into the row so the charts keep
+  their share of a short stage.
 
-The aux row takes what its cells need, up to two fifths of the main column, so
-the primary keeps the larger share. Each visual keeps a readable floor in its
-cell (the head of a table and its first rows, a chart's plot, a figure and its
-caption). When the row has no room for every cell at its floor, it scrolls
-inside itself; it never shrinks a visual to nothing. A figure in a short cell is
+Under a chart, diagram, document, code, table, image, progress or note
+primary, the aux row takes what its cells need up to two fifths of the main
+column, so the primary keeps the larger share. Under a metric primary the
+card keeps its own height and the row takes the rest. Each visual keeps a
+readable floor in its cell (the head of a table and its first rows, a chart's
+plot, a figure and its caption). When the row has no room for every cell at
+its floor, it scrolls inside itself; it never shrinks a visual to nothing. A figure in a short cell is
 drawn smaller, never cropped, and a table in a narrow cell scrolls sideways
 rather than breaking a word. The cells sit side by side when the column is
 wide and stack when it is narrow, from the column's own width. A visual that

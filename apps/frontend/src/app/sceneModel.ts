@@ -147,8 +147,9 @@ export function primaryObject(state: ControllerState): SceneObject | null {
   return buildCompositionModel(state).primary;
 }
 
-/** The content types that need a slot of their own to be read; the rail
- * carries the others (metrics, notes, progress). */
+/** The content types that need a slot of their own to be read. The others
+ * (metrics, notes, progress) are small enough for the rail or a compact
+ * place in a scene. */
 export const VISUAL_TYPES: ReadonlySet<SceneObjectType> = new Set<SceneObjectType>([
   'chart',
   'diagram',
