@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { SequenceDiagramData, SequenceMessage } from '../../src/controller/types';
-import { layoutSequence, type Box, type SequenceOrientation } from '../../src/primitives/sequenceLayout';
+import { fixtures, traceDiagram } from '../../src/fixtures/scenes';
+import { layoutSequence, sequenceMinScale, viewSequence, type Box, type SequenceOrientation } from '../../src/primitives/sequenceLayout';
+
+const handoffDiagram = (fixtures.handoff[0] as { data: SequenceDiagramData }).data;
 
 const sequence = (actors: string[], messages: Array<[string, string, string, SequenceMessage['kind']?]>): SequenceDiagramData => ({
   mode: 'sequence',
@@ -201,5 +204,125 @@ describe('sequence layout / orientation', () => {
     for (let i = 0; i < portrait.actors.length; i += 1) {
       expect(portrait.actors[i].box.width).toBeLessThanOrEqual(landscape.actors[i].box.width);
     }
+  });
+});
+
+
+describe('sequence recomposed to a width', () => {
+  // The hard trace (8 actors, 32 messages), the handoff, and the wordy and
+  // self-message cases, recomposed to a phone's width at the readable
+  // minimum (377 units), to a focus layer's (418), and to the landscape
+  // slot's (1175).
+  const cases: Array<[string, SequenceDiagramData]> = [
+    ['trace', traceDiagram],
+    ['handoff', handoffDiagram],
+    ['wordy', sequences.wordy],
+    ['tail', sequences.tail],
+  ];
+  for (const orientation of ['landscape', 'portrait'] as SequenceOrientation[]) {
+    for (const [name, data] of cases) {
+      for (const frameWidth of [377, 418, 1175]) {
+        const natural = layoutSequence(data, orientation);
+        const layout = layoutSequence(data, orientation, { width: frameWidth });
+        it(`${orientation} / ${name} in ${frameWidth}: as wide as the frame, its headers clear of each other and of other lifelines`, () => {
+          if (natural.width <= frameWidth) {
+            expect(layout).toEqual(natural);
+            return;
+          }
+          // A landscape header's words are wider than a phone frame's
+          // columns allow; there it is as narrow as its words let it be.
+          if (orientation === 'portrait' || frameWidth > 1000) expect(layout.width).toBeLessThanOrEqual(frameWidth + 1e-6);
+          else expect(layout.width).toBeLessThan(natural.width);
+          const headerBottom = Math.max(...layout.actors.map((actor) => actor.box.y + actor.box.height));
+          layout.actors.forEach((actor, index) => {
+            expect(actor.box.x).toBeGreaterThanOrEqual(0);
+            expect(actor.box.x + actor.box.width).toBeLessThanOrEqual(layout.width + 1e-6);
+            // Its own lifeline drops from inside its box.
+            expect(actor.x).toBeGreaterThan(actor.box.x);
+            expect(actor.x).toBeLessThan(actor.box.x + actor.box.width);
+            for (const other of layout.actors.slice(index + 1)) expect(overlaps(actor.box, other.box), `${actor.actor.id} over ${other.actor.id}`).toBe(false);
+            // Another actor's lifeline, falling from a row above, passes it by.
+            for (const other of layout.actors) {
+              if (other === actor || other.box.y >= actor.box.y) continue;
+              const line: Box = { x: other.x, y: other.box.y + other.box.height, width: 0.001, height: headerBottom - other.box.y - other.box.height };
+              expect(overlaps(actor.box, line), `${other.actor.id}'s lifeline through ${actor.actor.id}`).toBe(false);
+            }
+          });
+          // Every word of a header is drawn.
+          for (const actor of layout.actors) {
+            expect(actor.labelLines.join(' ')).toBe(actor.actor.label);
+            expect(actor.subLines.join('').replace(/\s/g, '')).toBe((actor.actor.sub ?? '').replace(/\s/g, ''));
+          }
+        });
+
+        it(`${orientation} / ${name} in ${frameWidth}: messages in order, each label on its own row, clear of the headers and the others`, () => {
+          const headerBottom = Math.max(...layout.actors.map((actor) => actor.box.y + actor.box.height));
+          const indexOf = new Map(layout.actors.map((actor, index) => [actor.actor.id, index]));
+          let lastY = headerBottom;
+          for (const item of layout.messages) {
+            const top = Math.min(item.label.box.y, ...item.points.map((point) => point.y));
+            expect(top).toBeGreaterThan(lastY);
+            lastY = Math.max(item.label.box.y + item.label.box.height, ...item.points.map((point) => point.y));
+            const { box } = item.label;
+            expect(box.x).toBeGreaterThanOrEqual(0);
+            expect(box.x + box.width).toBeLessThanOrEqual(layout.width + 1e-6);
+            // Every character of the label is drawn (a word too long for a line breaks).
+            expect(item.label.lines.join('').replace(/\s/g, '')).toBe(item.message.label.replace(/\s/g, ''));
+            if (!item.label.over) {
+              // Between its lifelines: clear of every lifeline it does not cross.
+              const from = indexOf.get(item.message.from) ?? 0;
+              const to = indexOf.get(item.message.to) ?? 0;
+              layout.actors.forEach((actor, index) => {
+                if (!item.self && index > Math.min(from, to) && index < Math.max(from, to)) return;
+                const line: Box = { x: actor.x, y: headerBottom, width: 0.001, height: actor.lifelineEnd - headerBottom };
+                expect(overlaps(box, line), `${item.label.text} under ${actor.actor.id}`).toBe(false);
+              });
+            } else if (!item.self) {
+              // Over its arrow: centred on it as far as the edges allow.
+              const centre = (item.points[0].x + item.points[1].x) / 2;
+              const clamped = Math.abs(box.x - 8) < 1 || Math.abs(box.x + box.width - (layout.width - 8)) < 1 || box.x < 1;
+              if (!clamped) expect(box.x + box.width / 2).toBeCloseTo(centre);
+              expect(box.y + box.height).toBeLessThanOrEqual(item.points[0].y);
+            }
+          }
+          const labels = layout.messages.map((message) => message.label.box);
+          labels.forEach((label, index) => {
+            for (const other of labels.slice(index + 1)) expect(overlaps(label, other)).toBe(false);
+          });
+          for (const actor of layout.actors) expect(actor.lifelineEnd).toBeGreaterThan(lastY);
+        });
+      }
+    }
+  }
+});
+
+describe('a sequence read in its viewport', () => {
+  // The diagram slot's drawing viewport and the focus layer's at each
+  // canonical geometry, in CSS pixels.
+  const viewports = [
+    { width: 914, height: 526 },
+    { width: 330, height: 374 },
+    { width: 726, height: 531 },
+    { width: 1980, height: 604 },
+    { width: 1325, height: 792 },
+    { width: 366, height: 726 },
+  ];
+  for (const [name, data] of [['trace', traceDiagram], ['handoff', handoffDiagram]] as const) {
+    it(`${name}: never below the readable minimum, and never scrolled across in a stage or focus viewport`, () => {
+      for (const size of viewports) {
+        for (const scrollbar of [0, 11]) {
+          const { layout, fit } = viewSequence(data, { ...size, scrollbar });
+          expect(fit.scale, `${size.width}x${size.height}`).toBeGreaterThanOrEqual(sequenceMinScale(layout) - 1e-9);
+          expect(fit.scrollX, `${size.width}x${size.height}`).toBe(false);
+        }
+      }
+    });
+  }
+
+  it('reads the thirty-two-message trace at the readable minimum, not at a few pixels', () => {
+    const { fit } = viewSequence(traceDiagram, { width: 914, height: 526, scrollbar: 0 });
+    // Scaled to fit the slot, its 11-unit message labels came out at 3.6 px.
+    expect(11 * fit.scale).toBeGreaterThanOrEqual(8);
+    expect(fit.scrollY).toBe(true);
   });
 });

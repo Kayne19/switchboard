@@ -5,6 +5,8 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { SequenceDiagramData } from '../../src/controller/types';
 import { DiagramObject } from '../../src/components/DiagramObject';
 import { SequencePrimitive } from '../../src/primitives/SequencePrimitive';
+import { traceDiagram } from '../../src/fixtures/scenes';
+import { layoutSequence, sequenceMinScale } from '../../src/primitives/sequenceLayout';
 
 const data: SequenceDiagramData = {
   mode: 'sequence',
@@ -128,5 +130,20 @@ describe('DiagramObject', () => {
     render(<DiagramObject data={{ mode: 'graph', nodes: [{ id: 'a', label: 'A' }], edges: [] }} id="graph" />);
     expect(host.querySelector('[data-testid="diagram"]')).not.toBeNull();
     expect(host.querySelector('[data-testid="sequence"]')).toBeNull();
+  });
+});
+
+
+describe('a sequence too long to read whole', () => {
+  // Scaled to fit a 1024 x 768 screen, the 32-message trace drew its
+  // message labels at under 5 px.
+  it('is drawn no smaller than the readable minimum, and scrolls down its viewport instead', () => {
+    render(<SequencePrimitive data={traceDiagram} id="trace" />);
+    const svg = host.querySelector('svg')!;
+    const [, , width, height] = (svg.getAttribute('viewBox') ?? '').split(' ').map(Number);
+    const drawnWidth = svg.style.width ? parseFloat(svg.style.width) : Math.min(window.innerWidth, (width * window.innerHeight) / height);
+    expect(drawnWidth / width).toBeGreaterThanOrEqual(sequenceMinScale(layoutSequence(traceDiagram, 'landscape')) - 1e-9);
+    const viewport = host.querySelector('.drawing-viewport');
+    expect(viewport?.getAttribute('data-scroll')).toBe('y');
   });
 });

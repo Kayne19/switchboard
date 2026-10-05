@@ -37,6 +37,11 @@ export interface LaidOutActor {
   x: number;
   /** The header box. */
   box: Box;
+  /** The label, as the lines it is drawn on: one, unless the drawing is recomposed to a width too narrow for it. */
+  labelLines: string[];
+  /** Where the label's first line and the sub's first line are centred, down from the box's top. */
+  labelY: number;
+  subY: number;
   /** The sub, as the lines it is drawn on: one in landscape, wrapped in portrait. */
   subLines: string[];
   /** The lifeline runs from the header's bottom to here. */
@@ -53,6 +58,13 @@ export interface MessageLabel {
   anchor: 'middle' | 'start';
   /** The label's backing: what it paints over. */
   box: Box;
+  /**
+   * Set on its own line over the arrow, across the drawing as far as it
+   * needs, rather than between the arrow's two lifelines: a drawing
+   * recomposed to a narrow width has no room there for it. It may cover a
+   * lifeline it does not cross, on its backing.
+   */
+  over: boolean;
 }
 
 export interface LaidOutMessage {
@@ -72,6 +84,8 @@ export interface SequenceLayout {
   height: number;
   /** The actor label's size in user units; portrait sets it smaller for narrower columns. */
   actorLabelSize: number;
+  /** The pitch between the lines of a wrapped actor label. */
+  actorLabelLineHeight: number;
   actorSubSize: number;
   actors: LaidOutActor[];
   messages: LaidOutMessage[];
@@ -137,6 +151,21 @@ const ROW_TAIL = 14;
 const LOOP_WIDTH = 34;
 const LOOP_HEIGHT = 28;
 const LOOP_LABEL_GAP = 8;
+// A header recomposed to a narrow column: the pitch of its label's lines,
+// its padding, the gap from label to sub, and the gap between two
+// staggered rows of headers.
+const LABEL_LINE_PITCH = 1.3;
+const HEADER_PAD_TOP = 10;
+const HEADER_PAD_BOTTOM = 9;
+const HEADER_SUB_GAP = 6;
+const HEADER_ROW_GAP = 8;
+// Recomposed narrow, the drawing keeps this little room at its sides, and
+// two staggered headers this much between them.
+const NARROW_PAD_X = 8;
+const STAGGER_GAP = 8;
+// A label between two lifelines needs room for this many characters a
+// line; with less it goes over its arrow.
+const MIN_SPAN_CHARS = 8;
 // How far a lifeline runs past the last message, or under the headers when
 // there is none.
 const LIFELINE_TAIL = 36;
@@ -169,7 +198,40 @@ function wrapWords(text: string, chars: number): string[] {
   return lines;
 }
 
-export function layoutSequence(data: SequenceDiagramData, orientation: SequenceOrientation): SequenceLayout {
+/** The width, in user units, a sequence is recomposed to when it is too wide to read whole. */
+export interface SequenceFrame {
+  width: number;
+}
+
+/**
+ * Lays a sequence out: each column as wide as its header and the labels
+ * between its lifelines need, the drawing as wide as they add up to. Given
+ * a frame narrower than that, it is recomposed to the frame's width instead
+ * (`layoutToWidth`).
+ */
+// A line still longer than `chars` (one long word, such as a path or a
+// call) breaks after the last separator that keeps it short enough, or
+// else at `chars` itself.
+function breakLine(line: string, chars: number): string[] {
+  const parts: string[] = [];
+  let rest = line;
+  while (rest.length > chars) {
+    const head = rest.slice(0, chars);
+    const cut = Math.max(head.lastIndexOf('.'), head.lastIndexOf('/'), head.lastIndexOf('_'), head.lastIndexOf('-'), head.lastIndexOf('('));
+    const at = cut > 0 ? cut + 1 : chars;
+    parts.push(rest.slice(0, at).trimEnd());
+    rest = rest.slice(at).trimStart();
+  }
+  if (rest) parts.push(rest);
+  return parts;
+}
+
+export function layoutSequence(data: SequenceDiagramData, orientation: SequenceOrientation, frame?: SequenceFrame): SequenceLayout {
+  const natural = layoutNatural(data, orientation);
+  return frame && natural.width > frame.width ? layoutToWidth(data, orientation, frame.width) : natural;
+}
+
+function layoutNatural(data: SequenceDiagramData, orientation: SequenceOrientation): SequenceLayout {
   const geometry = GEOMETRY[orientation];
   const { actors } = data;
   const indexOf = new Map(actors.map((actor, index) => [actor.id, index]));
@@ -256,19 +318,84 @@ export function layoutSequence(data: SequenceDiagramData, orientation: SequenceO
     xs.push(cursorX);
   });
 
-  // --- Rows -----------------------------------------------------------------
   const headerTop = PAD_TOP;
   const headerBottom = headerTop + headerHeight;
+  const { messages, lifelineEnd } = layRows(
+    resolved.map((entry) => ({ ...entry, over: false })),
+    xs,
+    headerBottom,
+    width,
+    geometry.padX,
+  );
+  const laidOutActors: LaidOutActor[] = actors.map((actor, index) => ({
+    actor,
+    x: xs[index],
+    box: { x: xs[index] - headerWidths[index] / 2, y: headerTop, width: headerWidths[index], height: headerHeight },
+    labelLines: [actor.label],
+    labelY: actor.sub ? 22 : headerHeight / 2,
+    subY: 39,
+    subLines: headers[index].subLines,
+    lifelineEnd,
+  }));
+
+  return {
+    width,
+    height: lifelineEnd + PAD_BOTTOM,
+    actorLabelSize: geometry.actorLabelSize,
+    actorLabelLineHeight: geometry.actorLabelSize * LABEL_LINE_PITCH,
+    actorSubSize: geometry.actorSubSize,
+    actors: laidOutActors,
+    messages,
+  };
+}
+
+interface RowEntry {
+  message: SequenceMessage;
+  index: number;
+  from: number;
+  to: number;
+  lines: string[];
+  over: boolean;
+}
+
+/**
+ * Lays the messages out in order, one row each, under the headers. A label
+ * between its lifelines is centred over its arrow (beside its loop, for a
+ * self-message); one set `over` takes its own line over the arrow (or the
+ * loop), centred on it as far as the drawing's edges allow.
+ */
+function layRows(entries: RowEntry[], xs: number[], headerBottom: number, width: number, padX: number) {
   let cursorY = headerBottom + FIRST_ROW_GAP;
-  const messages: LaidOutMessage[] = resolved.map((entry) => {
-    const { message, index, from, to, lines } = entry;
+  // The first line's centre is this far under the backing's top.
+  const firstLine = LABEL_BACKING + LABEL_HEIGHT / 2;
+  const centred = (centre: number, boxWidth: number) => Math.min(Math.max(centre - boxWidth / 2, padX), width - padX - boxWidth);
+  const messages: LaidOutMessage[] = entries.map((entry) => {
+    const { message, index, from, to, lines, over } = entry;
     const self = from === to;
     const kind = message.kind ?? 'call';
     const backing = labelBacking(lines);
-    // The first line's centre is this far under the backing's top.
-    const firstLine = LABEL_BACKING + LABEL_HEIGHT / 2;
     if (self) {
       const x = xs[from];
+      if (over) {
+        const boxX = centred(x + LOOP_WIDTH / 2, backing.width);
+        const boxY = cursorY + ROW_LEAD;
+        const y = boxY + backing.height + LABEL_LIFT;
+        cursorY = y + LOOP_HEIGHT + ROW_TAIL;
+        return {
+          message,
+          index,
+          kind,
+          points: [
+            { x, y },
+            { x: x + LOOP_WIDTH, y },
+            { x: x + LOOP_WIDTH, y: y + LOOP_HEIGHT },
+            { x, y: y + LOOP_HEIGHT },
+          ],
+          direction: 'left',
+          self,
+          label: { text: message.label, lines, x: boxX + backing.width / 2, y: boxY + firstLine, anchor: 'middle', box: { x: boxX, y: boxY, ...backing }, over },
+        };
+      }
       const y = cursorY + ROW_LEAD;
       const loopHeight = Math.max(LOOP_HEIGHT, backing.height);
       cursorY = y + loopHeight + ROW_TAIL;
@@ -286,19 +413,13 @@ export function layoutSequence(data: SequenceDiagramData, orientation: SequenceO
         ],
         direction: 'left',
         self,
-        label: {
-          text: message.label,
-          lines,
-          x: labelX + LABEL_BACKING,
-          y: boxY + firstLine,
-          anchor: 'start',
-          box: { x: labelX, y: boxY, ...backing },
-        },
+        label: { text: message.label, lines, x: labelX + LABEL_BACKING, y: boxY + firstLine, anchor: 'start', box: { x: labelX, y: boxY, ...backing }, over },
       };
     }
     const y = cursorY + ROW_LEAD + backing.height + LABEL_LIFT;
     cursorY = y + ROW_TAIL;
     const centre = (xs[from] + xs[to]) / 2;
+    const boxX = over ? centred(centre, backing.width) : centre - backing.width / 2;
     const boxY = y - LABEL_LIFT - backing.height;
     return {
       message,
@@ -310,32 +431,110 @@ export function layoutSequence(data: SequenceDiagramData, orientation: SequenceO
       ],
       direction: to > from ? 'right' : 'left',
       self,
-      label: {
-        text: message.label,
-        lines,
-        x: centre,
-        y: boxY + firstLine,
-        anchor: 'middle',
-        box: { x: centre - backing.width / 2, y: boxY, ...backing },
-      },
+      label: { text: message.label, lines, x: boxX + backing.width / 2, y: boxY + firstLine, anchor: 'middle', box: { x: boxX, y: boxY, ...backing }, over },
     };
   });
-
   const lifelineEnd = messages.length > 0 ? cursorY - ROW_TAIL + LIFELINE_TAIL : headerBottom + EMPTY_LIFELINE;
-  const height = lifelineEnd + PAD_BOTTOM;
+  return { messages, lifelineEnd };
+}
 
-  const laidOutActors: LaidOutActor[] = actors.map((actor, index) => ({
-    actor,
-    x: xs[index],
-    box: { x: xs[index] - headerWidths[index] / 2, y: headerTop, width: headerWidths[index], height: headerHeight },
-    subLines: headers[index].subLines,
-    lifelineEnd,
-  }));
+/**
+ * A sequence recomposed to a width too narrow for its natural columns. The
+ * columns share the width evenly. A header wraps its label to two lines and
+ * its sub under it; when even that does not fit a column, the headers
+ * stand in two staggered rows, each as wide as two columns, every lifeline
+ * falling clear of the headers in the row below. A message label that fits
+ * between its lifelines in three lines stays there; one that does not takes
+ * its own line over its arrow, so a narrow drawing grows down, not across.
+ */
+function layoutToWidth(data: SequenceDiagramData, orientation: SequenceOrientation, frameWidth: number): SequenceLayout {
+  const geometry = GEOMETRY[orientation];
+  const { actors } = data;
+  const count = Math.max(1, actors.length);
+  const labelAdvance = actorAdvance(geometry.actorLabelSize);
+  const subAdvance = actorSubAdvance(geometry.actorSubSize);
+  const longestWord = (text: string) => Math.max(0, ...text.split(/\s+/).map((word) => word.length));
+  const widestLabelWord = Math.max(0, ...actors.map((actor) => longestWord(actor.label) * labelAdvance));
+  // The columns share the width; never so narrow that a word of an actor's
+  // label misses two columns of room. (A word of a sub may break.)
+  const padX = Math.min(geometry.padX, NARROW_PAD_X);
+  const pitch = Math.max((frameWidth - 2 * padX) / count, (widestLabelWord + 2 * geometry.headerPad + STAGGER_GAP) / 2);
+  const width = Math.max(frameWidth, 2 * padX + pitch * count);
+  const xs = actors.map((_, index) => (width - pitch * count) / 2 + pitch * (index + 0.5));
+  // A header has the room between the lifelines either side of its own
+  // (one column; two when the headers stagger, since the lifelines beside
+  // it start below its row), cut to the drawing's edges. It is centred on
+  // its lifeline as far as that room allows.
+  const roomOf = (index: number, columns: number) => {
+    const gap = columns === 1 ? geometry.columnGap : STAGGER_GAP;
+    return {
+      low: Math.max(padX, xs[index] - (columns * pitch) / 2 + gap / 2),
+      high: Math.min(width - padX, xs[index] + (columns * pitch) / 2 - gap / 2),
+    };
+  };
+  const headerFor = (actor: SequenceActor, index: number, columns: number) => {
+    const { low, high } = roomOf(index, columns);
+    const text = high - low - 2 * geometry.headerPad;
+    const labelLines = wrapWords(actor.label, Math.max(1, Math.floor(text / labelAdvance)));
+    const subChars = Math.max(1, Math.floor(text / subAdvance));
+    const subLines = actor.sub ? wrapWords(actor.sub, subChars).flatMap((line) => breakLine(line, subChars)) : [];
+    const widest = Math.max(...labelLines.map((line) => line.length * labelAdvance), ...subLines.map((line) => line.length * subAdvance));
+    const boxWidth = Math.min(high - low, widest + 2 * geometry.headerPad);
+    const x = Math.min(Math.max(xs[index] - boxWidth / 2, low), high - boxWidth);
+    return { labelLines, subLines, x, width: boxWidth, fits: widest <= text + 0.5 && labelLines.length <= 2 };
+  };
+  const single = actors.map((actor, index) => headerFor(actor, index, 1));
+  const rows = single.every((header) => header.fits) ? 1 : 2;
+  const headers = rows === 1 ? single : actors.map((actor, index) => headerFor(actor, index, 2));
+  const lineHeight = geometry.actorLabelSize * LABEL_LINE_PITCH;
+  const labelRows = Math.max(1, ...headers.map((header) => header.labelLines.length));
+  const subRows = Math.max(0, ...headers.map((header) => header.subLines.length));
+  const labelY = HEADER_PAD_TOP + lineHeight / 2;
+  const subY = HEADER_PAD_TOP + labelRows * lineHeight + HEADER_SUB_GAP + SUB_LINE_HEIGHT / 2;
+  const headerHeight = subRows > 0 ? subY - SUB_LINE_HEIGHT / 2 + subRows * SUB_LINE_HEIGHT + HEADER_PAD_BOTTOM : labelY + lineHeight / 2 + HEADER_PAD_BOTTOM;
+  const rowTop = (row: number) => PAD_TOP + row * (headerHeight + HEADER_ROW_GAP);
+  const headerBottom = rowTop(rows - 1) + headerHeight;
 
+  // Labels: between the lifelines when they fit there in three lines, else
+  // over the arrow, wrapped to the drawing's width.
+  const charsIn = (room: number) => Math.floor((room - 2 * LABEL_BACKING) / LABEL_ADVANCE);
+  const overChars = Math.max(1, charsIn(width - 2 * padX));
+  const indexOf = new Map(actors.map((actor, index) => [actor.id, index]));
+  const entries: RowEntry[] = data.messages.flatMap((message, index) => {
+    const from = indexOf.get(message.from);
+    const to = indexOf.get(message.to);
+    if (from === undefined || to === undefined) return [];
+    const room =
+      from === to
+        ? (from < actors.length - 1 ? xs[from + 1] : width - padX) - (xs[from] + LOOP_WIDTH + LOOP_LABEL_GAP) - CLEARANCE
+        : Math.abs(to - from) * pitch - 2 * CLEARANCE;
+    const chars = charsIn(room);
+    const within = chars >= MIN_SPAN_CHARS ? wrapWords(message.label, chars) : [];
+    const fits = within.length > 0 && within.length <= (from === to ? 2 : 3) && within.every((line) => line.length <= chars);
+    const lines = fits ? within : wrapWords(message.label, overChars).flatMap((line) => breakLine(line, overChars));
+    return [{ message, index, from, to, lines: lines.length > 0 ? lines : [message.label], over: !fits }];
+  });
+  const { messages, lifelineEnd } = layRows(entries, xs, headerBottom, width, padX);
+
+  const laidOutActors: LaidOutActor[] = actors.map((actor, index) => {
+    const header = headers[index];
+    const top = rowTop(rows === 2 ? index % 2 : 0);
+    return {
+      actor,
+      x: xs[index],
+      box: { x: header.x, y: top, width: header.width, height: headerHeight },
+      labelLines: header.labelLines,
+      labelY,
+      subY,
+      subLines: header.subLines,
+      lifelineEnd,
+    };
+  });
   return {
     width,
-    height,
+    height: lifelineEnd + PAD_BOTTOM,
     actorLabelSize: geometry.actorLabelSize,
+    actorLabelLineHeight: lineHeight,
     actorSubSize: geometry.actorSubSize,
     actors: laidOutActors,
     messages,
@@ -358,9 +557,18 @@ export interface SequenceView {
   fit: DrawingFit;
 }
 
-/** How a sequence is shown in a viewport (CSS pixels): the geometry for its shape, fitted (drawingFit.ts). */
+/**
+ * How a sequence is shown in a viewport (CSS pixels): the geometry for its
+ * shape, fitted (drawingFit.ts). One too wide to read at the readable
+ * minimum is recomposed to the viewport's width, so that it scrolls down,
+ * in the order its messages run, and never across.
+ */
 export function viewSequence(data: SequenceDiagramData, viewport: Viewport): SequenceView {
   const orientation: SequenceOrientation = viewport.height > viewport.width * 1.05 ? 'portrait' : 'landscape';
-  const layout = layoutSequence(data, orientation);
-  return { layout, fit: fitDrawing(layout, viewport, sequenceMinScale(layout)) };
+  const natural = layoutSequence(data, orientation);
+  const minScale = sequenceMinScale(natural);
+  const fit = fitDrawing(natural, viewport, minScale);
+  if (!fit.scrollX) return { layout: natural, fit };
+  const layout = layoutSequence(data, orientation, { width: (viewport.width - viewport.scrollbar) / minScale });
+  return { layout, fit: fitDrawing(layout, viewport, minScale) };
 }
