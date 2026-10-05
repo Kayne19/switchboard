@@ -159,7 +159,7 @@ rather than with a scroll bar (`primitives/drawingScroll.ts` decides,
 - **A line that leaves the view says where it goes.** On the rail where
   it crosses, the name of the node at its far end, in the line's colour,
   pointing out; several lines to one node are one name.
-- **A map shows the whole.** A drawing scrolled a view and a half or more
+- **A map shows the whole.** A drawing that scrolls 1.6 views or more
   carries a small map: every node and line, the view boxed in orange. A
   tap or a drag on it moves the view. The map stands in a strip of its
   own beside the drawing, along the way it scrolls (under a drawing that
@@ -168,7 +168,8 @@ rather than with a scroll bar (`primitives/drawingScroll.ts` decides,
   at rest or moving. A drawing in a viewport too small for a map (a
   phone's aux cell) has its rails only, and so does one the strip would
   cost its reading: one that would scroll a way it did not beside it, a
-  graph that would turn, or a sequence whose headers would stagger.
+  graph that would turn, or a sequence whose headers would change
+  (compact, or in two rows).
 
 Why a map, rather than opening on the whole drawing and then moving in to
 its anchor: an opening overview is gone a second later, a reader who
@@ -178,8 +179,8 @@ view is as well as what the whole is, and is a way to move. Why a strip
 rather than a corner over the drawing: a layered drawing fills its frame
 across, so no corner is free at every place it rests, and a map over a
 stub's names or an edge's label hides what the reader came for. The
-strip costs the drawing a band no deeper than the map (40 px at most,
-with its margins), the way a scroll bar would. Hidden scroll bars lose
+strip costs the drawing a band as deep as the map (held to 40 px) and its
+margins, 60 px at most, the way a scroll bar would. Hidden scroll bars lose
 nothing: the rails and the map say more, in sharp geometry, and a bar on
 a phone is not shown at all.
 
