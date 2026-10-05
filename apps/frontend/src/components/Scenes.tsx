@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useIsPresent } from 'motion/react';
-import { useCallback, useState, type ReactNode } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import type {
   ChartData,
   CodeData,
@@ -16,6 +16,8 @@ import type {
 } from '../controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
 import { besideVisuals, buildCompositionModel, cast, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
+import { wantsStage, type StageGeometry } from '../app/stageFold';
+import { StageDemandContext, type StageDemandListener } from '../hooks/useStageDemand';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { chartKind, chartTargetText } from '../primitives/chartGeometry';
@@ -178,6 +180,8 @@ interface RailDetailsProps {
   progressList: Array<SceneObject<ProgressData>>;
   onFocus: (id: string | null) => void;
   onOpenHistory?: () => void;
+  /** The rail is folded to a strip under a primary that takes the stage's height: it shows the note, or the live response when there is no note, and nothing else. */
+  folded?: boolean;
 }
 
 // A rail note about a chart on stage names the category it points at, as
@@ -193,8 +197,19 @@ function railNoteTarget(state: ControllerState, note: NoteData | null): string |
 // a permanent slot; an empty one renders nothing, and
 // the activity panel can linger after its end without the wrapper
 // unmounting it first.
-function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, onOpenHistory }: RailDetailsProps) {
+function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, onOpenHistory, folded = false }: RailDetailsProps) {
   const liveMessage = liveChatMessage(state);
+  if (folded) {
+    // The strip: the note, linked to what it names by its target line and
+    // the marker on the item, or else the live response; the presence
+    // beside it names the tool at work. The rest waits behind the handle.
+    return (
+      <div className="content-rail__details">
+        {note ? null : liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
+        <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} target={railNoteTarget(state, note)} />
+      </div>
+    );
+  }
   // The response and the note stretch into the column's free space, so while
   // either is shown the activity slot stays reserved and a tool starting or
   // clearing never resizes them. Metrics and progress keep their own size at
@@ -520,24 +535,131 @@ function AuxRow({ objects, onFocus }: { objects: SceneObject[]; onFocus: (id: st
 // than redrawing it; alone, the slot fills the column as it always did. The
 // primary keeps the larger share and the row takes what it needs up to its
 // cap (`.composed-main`).
+// The primary's own slot hears what its content asks of the stage
+// (useStageDemand); the aux row's cells do not speak for it.
 function MainWithAux({
   variant,
   aux,
   onFocus,
+  onDemand,
+  ref,
   children,
 }: {
   variant?: string;
   aux: SceneObject[];
   onFocus: (id: string | null) => void;
+  onDemand: StageDemandListener;
+  ref?: RefObject<HTMLDivElement | null>;
   children: ReactNode;
 }) {
   return (
-    <motion.div className={`content-main composed-main${variant ? ` ${variant}` : ''}`} layout>
-      {children}
+    <motion.div ref={ref} className={`content-main composed-main${variant ? ` ${variant}` : ''}`} layout>
+      <StageDemandContext.Provider value={onDemand}>{children}</StageDemandContext.Provider>
       {aux.length > 0 ? <AuxRow objects={aux} onFocus={onFocus} /> : null}
     </motion.div>
   );
 }
+
+// ---- The rail folded under a primary that takes the stage's height ----
+
+const pad2 = (count: number) => String(count).padStart(2, '0');
+
+// What a folded rail keeps behind its handle, in the handle's words: the
+// strip itself shows the note (or the live response) and Damocles, and the
+// rest of a note held to its first lines.
+function foldedItems(state: ControllerState, content: SceneContent, note: NoteData | null, noteCut: boolean): string[] {
+  const items: string[] = [];
+  if (noteCut) items.push(note ? 'NOTE' : 'LIVE');
+  if (content.metrics.length > 0) items.push(`${pad2(content.metrics.length)} ${content.metrics.length === 1 ? 'METRIC' : 'METRICS'}`);
+  if (content.progressList.length > 0) items.push('PROGRESS');
+  if (note && liveChatMessage(state)) items.push('LIVE');
+  if (state.activity) items.push('ACTIVITY');
+  return items;
+}
+
+// Whether the folded strip holds its text to fewer lines than it has.
+function useStripCut(railRef: RefObject<HTMLElement | null>, folded: boolean, text: unknown): boolean {
+  const [cut, setCut] = useState(false);
+  useLayoutEffect(() => {
+    const rail = railRef.current;
+    const element = folded ? rail?.querySelector<HTMLElement>('.content-rail__details :is(.annotation-card__text, .live-chat-card__text)') : null;
+    if (!element) {
+      setCut(false);
+      return undefined;
+    }
+    const measure = () => setCut(element.scrollHeight > element.clientHeight + 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [railRef, folded, text]);
+  return cut;
+}
+
+// The rail's handle, over it whenever its primary can take the stage: on
+// the folded strip it names what the rail keeps folded, and opens it; on
+// the open rail it folds it again. A strip that keeps nothing folded has a
+// rule there and no control.
+function RailHandle({ open, items, onToggle }: { open: boolean; items: string[]; onToggle: () => void }) {
+  if (!open && items.length === 0) {
+    return (
+      <div className="rail-handle rail-handle--bare" aria-hidden="true">
+        <span className="rail-handle__rule" />
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className={`rail-handle rail-handle--${open ? 'open' : 'folded'}`}
+      aria-expanded={open}
+      aria-label={open ? 'Fold the rail' : 'Open the rail'}
+      onClick={onToggle}
+    >
+      <span className="rail-handle__rule" aria-hidden="true" />
+      <span className="rail-handle__label tech micro">{open ? 'FOLD' : items.join(' / ')}</span>
+      <svg className="rail-handle__chevron" viewBox="0 0 8 6" aria-hidden="true">
+        <path d="M 4 0 L 8 6 L 0 6 Z" />
+      </svg>
+    </button>
+  );
+}
+
+// Where the rail stands and how tall the main column is, now and in the
+// layout it shares with the rail (the probe, sized by the same rule as that
+// row), in layout pixels: a box in a shared-layout animation is scaled on
+// screen, never in its offsets.
+function useStageGeometry(
+  active: boolean,
+  mainRef: RefObject<HTMLDivElement | null>,
+  railRef: RefObject<HTMLElement | null>,
+  probeRef: RefObject<HTMLDivElement | null>,
+): Omit<StageGeometry, 'excess'> {
+  const [geometry, setGeometry] = useState<Omit<StageGeometry, 'excess'>>({ stacked: false, column: 0, shared: 0 });
+  useLayoutEffect(() => {
+    const main = mainRef.current;
+    const rail = railRef.current;
+    const probe = probeRef.current;
+    if (!active || !main || !rail || !probe) return undefined;
+    const measure = () => {
+      const next = {
+        stacked: rail.offsetTop >= main.offsetTop + main.offsetHeight - 1,
+        column: main.offsetHeight,
+        shared: probe.offsetHeight,
+      };
+      setGeometry((current) =>
+        current.stacked === next.stacked && current.column === next.column && current.shared === next.shared ? current : next,
+      );
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    for (const element of [main, rail, probe]) observer.observe(element);
+    return () => observer.disconnect();
+  }, [active, mainRef, railRef, probeRef]);
+  return geometry;
+}
+
+// ---- End of the folded rail ----
 
 // ---- End of the aux row ----
 
@@ -700,6 +822,32 @@ export function SceneShell(props: SceneProps) {
   );
   const content = sceneContent(props, setCalloutPlaced, chartRailNote, onChartRailNote);
   const layout = content ? 'content' : kind === 'conversation' ? 'conversation' : 'idle';
+  // A primary that outgrows the column it shares with a rail standing under
+  // it takes the stage's height, the rail folded to a strip (stageFold.ts).
+  // The caller may open the rail again; that holds for this primary.
+  const mainRef = useRef<HTMLDivElement>(null);
+  const railRef = useRef<HTMLElement>(null);
+  const probeRef = useRef<HTMLDivElement>(null);
+  const demands = useRef(new Map<string, number>());
+  const [demand, setDemand] = useState<number | null>(null);
+  const onDemand = useCallback<StageDemandListener>((key, excess) => {
+    if (excess === null) demands.current.delete(key);
+    else demands.current.set(key, excess);
+    const said = [...demands.current.values()];
+    setDemand(said.length > 0 ? Math.max(...said) : null);
+  }, []);
+  const geometry = useStageGeometry(content !== null, mainRef, railRef, probeRef);
+  const primaryId = content ? (primaryObject(state)?.id ?? null) : null;
+  const [openFor, setOpenFor] = useState<string | null>(null);
+  const railOpen = primaryId !== null && openFor === primaryId;
+  const [foldable, setFoldable] = useState(false);
+  const staged = foldable && !railOpen;
+  const wanted = wantsStage({ ...geometry, excess: demand }, staged);
+  useLayoutEffect(() => {
+    if (wanted !== foldable) setFoldable(wanted);
+  }, [wanted, foldable]);
+  const railNote = calloutPlaced ? null : (content?.note ?? null);
+  const noteCut = useStripCut(railRef, staged, railNote);
   const presence = (
     <DamoclesPresence
       listening={state.listening}
@@ -725,20 +873,33 @@ export function SceneShell(props: SceneProps) {
             <div className="scene-heading__title tech">{content.title}</div>
             <div className="scene-heading__sub tech micro">{content.subtitle}</div>
           </div>
-          <div className="content-grid">
-            <MainWithAux variant={content.mainVariant} aux={content.aux} onFocus={onFocus}>
+          <div className={`content-grid${staged ? ' content-grid--staged' : ''}`} data-stage={foldable ? (staged ? 'primary' : 'shared') : undefined}>
+            <div ref={probeRef} className="content-grid__probe" aria-hidden="true" />
+            <MainWithAux ref={mainRef} variant={content.mainVariant} aux={content.aux} onFocus={onFocus} onDemand={onDemand}>
               {content.main}
             </MainWithAux>
-            <motion.aside className="content-rail" layout>
+            <motion.aside
+              ref={railRef}
+              className={`content-rail${foldable ? ` content-rail--foldable content-rail--${staged ? 'folded' : 'open'}` : ''}`}
+              layout
+            >
+              {foldable ? (
+                <RailHandle
+                  open={railOpen}
+                  items={foldedItems(state, content, railNote, noteCut)}
+                  onToggle={() => setOpenFor(railOpen ? null : primaryId)}
+                />
+              ) : null}
               {presence}
               <RailDetails
                 state={state}
                 metrics={content.metrics}
-                note={calloutPlaced ? null : content.note}
+                note={railNote}
                 noteObject={calloutPlaced ? undefined : content.noteObject}
                 progressList={content.progressList}
                 onFocus={onFocus}
                 onOpenHistory={onOpenHistory}
+                folded={staged}
               />
             </motion.aside>
           </div>
