@@ -356,6 +356,42 @@ test('a calendar week that takes the stage at 390x844 gives it back once it quie
   expect(Math.abs(shared.main.height - shared.stage.height * 0.59)).toBeLessThan(1.5);
 });
 
+// A week whose busy Monday lies before the days a phone shows (it opens on
+// today, Wednesday, three days a page). Before its body is measured the
+// calendar draws all seven days as a stand-in, and the stand-in's hours,
+// Monday's among them, would not fit its share; the three days drawn do.
+const busyMonday = [
+  { op: 'clear' },
+  {
+    op: 'show', id: 'week', type: 'calendar', role: 'primary', data: {
+      view: 'week', start: '2026-10-05', today: '2026-10-07', now: '2026-10-07T09:40',
+      events: [
+        ...Array.from({ length: 19 }, (_, index) => ({ id: `mon-${index}`, title: `Call ${index}`, start: `2026-10-05T${String(4 + index).padStart(2, '0')}:00`, end: `2026-10-05T${String(4 + index).padStart(2, '0')}:50` })),
+        { id: 'dentist', title: 'Dentist', start: '2026-10-07T10:30', end: '2026-10-07T11:30' },
+        { id: 'review', title: 'Review', start: '2026-10-08T10:00', end: '2026-10-08T11:00' },
+      ],
+    },
+  },
+];
+
+test('a week whose drawn days fit its share at 390x844 never takes the stage, not even for a frame', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(() => {
+    const seen: string[] = [];
+    (window as unknown as { stageSeen: string[] }).stageSeen = seen;
+    // Each change's value before it: a stage taken and given back within
+    // one task is gone from the page by the time the records are read.
+    new MutationObserver((records) => {
+      for (const record of records) seen.push(String(record.oldValue), String((record.target as Element).getAttribute('data-stage')));
+    }).observe(document, { subtree: true, attributes: true, attributeOldValue: true, attributeFilter: ['data-stage'] });
+  });
+  await open(page, 'idle', busyMonday);
+  await expect(page.locator('[data-testid="calendar"]')).toHaveAttribute('data-columns', '3');
+  const laid = await boxes(page);
+  expect(laid.foldable).toBe(false);
+  expect(await page.evaluate(() => (window as unknown as { stageSeen: string[] }).stageSeen)).not.toContain('primary');
+});
+
 for (const scene of ['tasks', 'inbox']) {
   test(`a ${scene} list longer than its share takes the stage at 390x844`, async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });

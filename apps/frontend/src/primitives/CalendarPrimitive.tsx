@@ -2,6 +2,7 @@ import { useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type
 import type { CalendarData } from '../controller/types';
 import { parseTimeValue } from '../controller/validation';
 import { useElementSize, type ElementSize } from '../hooks/useElementSize';
+import { MeasuredStageDemand } from '../hooks/useStageDemand';
 import {
   agendaEntries,
   agendaLead,
@@ -937,7 +938,8 @@ export function CalendarPrimitive({ data, marked, focused = false, framed = fals
     >
       {meta}
       <div className="calendar__body" ref={bodyRef}>
-        {body}
+        {/* Before the body is measured the view is drawn whole, as a stand-in: it says nothing to the stage. */}
+        <MeasuredStageDemand measured={size.width > 0 && size.height > 0}>{body}</MeasuredStageDemand>
       </div>
     </div>
   );

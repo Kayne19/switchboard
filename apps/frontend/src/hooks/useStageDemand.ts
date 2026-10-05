@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useId, useRef, type RefObject } from 'react';
+import { createContext, createElement, useContext, useEffect, useId, useRef, type ReactElement, type ReactNode, type RefObject } from 'react';
 import type { StageNeed } from '../app/stageFold';
 
 // What a primary's content asks of the stage (docs/visual-channel.md, "A
@@ -17,6 +17,21 @@ import type { StageNeed } from '../app/stageFold';
 export type StageDemandListener = (key: string, need: StageNeed | null) => void;
 
 export const StageDemandContext = createContext<StageDemandListener | null>(null);
+
+/**
+ * Passes the primary's listener on to `children` once `measured`, and none
+ * before. A primitive that lays itself out for its box (a calendar's grid
+ * or agenda, a forecast's arrangement, timers in cells or rows) draws a
+ * stand-in until it has measured the box, and what the stand-in lacks is
+ * no word on the drawing that will stand there: heard, it could fold the
+ * rail for content that is never drawn, and the drawing that is would then
+ * first speak on the stage, with no measure from the shared layout to be
+ * weighed against (stageFold.ts).
+ */
+export function MeasuredStageDemand({ measured, children }: { measured: boolean; children: ReactNode }): ReactElement {
+  const listener = useContext(StageDemandContext);
+  return createElement(StageDemandContext.Provider, { value: measured ? listener : null }, children);
+}
 
 // Whole pixels: sub-pixel churn is not a change of mind.
 const need = (excess: number, viewport: number, relaid = false): StageNeed => ({ excess: Math.round(excess), viewport: Math.round(viewport), relaid });

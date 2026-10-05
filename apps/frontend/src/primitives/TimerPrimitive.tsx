@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import type { Timer, TimerData } from '../controller/types';
 import { useElementSize } from '../hooks/useElementSize';
+import { MeasuredStageDemand } from '../hooks/useStageDemand';
 import { usePageClock } from '../hooks/usePageClock';
 import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
@@ -101,9 +102,12 @@ export function TimerPrimitive({ data, marked, framed = false }: { data: TimerDa
         {layout.kind === 'grid' ? (
           <ol className="timer-grid">{items}</ol>
         ) : (
-          <ListViewport noun={['TIMER', 'TIMERS']} lead={marked} scrollClassName="timer-list" label={data.title ?? 'Timers'}>
-            <ol className="timer-list__rows">{items}</ol>
-          </ListViewport>
+          // Before the field is measured the timers are listed as a stand-in: it says nothing to the stage.
+          <MeasuredStageDemand measured={size.width > 0 && size.height > 0}>
+            <ListViewport noun={['TIMER', 'TIMERS']} lead={marked} scrollClassName="timer-list" label={data.title ?? 'Timers'}>
+              <ol className="timer-list__rows">{items}</ol>
+            </ListViewport>
+          </MeasuredStageDemand>
         )}
       </div>
     </div>

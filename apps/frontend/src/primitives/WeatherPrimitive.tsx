@@ -1,6 +1,7 @@
 import { useRef, type CSSProperties } from 'react';
 import type { WeatherData, WeatherDay, WeatherHour } from '../controller/types';
 import { useElementSize } from '../hooks/useElementSize';
+import { MeasuredStageDemand } from '../hooks/useStageDemand';
 import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
 import { NoteBadge } from './NoteMarker';
@@ -345,13 +346,16 @@ export function WeatherPrimitive({ data, marked, framed = false }: { data: Weath
     <div className={`weather weather--${arrangement}`} data-testid="weather" data-layout={arrangement}>
       {/* The box the forecast is laid out for, inside any padding its slot gives it. */}
       <div ref={boxRef} className="weather__box">
-        {tall ? (
-          <ListViewport noun={['DAY', 'DAYS']} countSelector=".weather-day" lead={named} scrollClassName="weather__scroll" label="Forecast">
-            {field}
-          </ListViewport>
-        ) : (
-          field
-        )}
+        {/* Before the box is measured the forecast is a stand-in: it says nothing to the stage. */}
+        <MeasuredStageDemand measured={size.width > 0 && size.height > 0}>
+          {tall ? (
+            <ListViewport noun={['DAY', 'DAYS']} countSelector=".weather-day" lead={named} scrollClassName="weather__scroll" label="Forecast">
+              {field}
+            </ListViewport>
+          ) : (
+            field
+          )}
+        </MeasuredStageDemand>
       </div>
     </div>
   );

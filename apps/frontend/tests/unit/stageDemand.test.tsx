@@ -7,7 +7,7 @@ import { act, useRef } from 'react';
 import type { StageNeed } from '../../src/app/stageFold';
 import { createRoot } from 'react-dom/client';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { scrollContentHeight, StageDemandContext, useLeastHeight } from '../../src/hooks/useStageDemand';
+import { MeasuredStageDemand, scrollContentHeight, StageDemandContext, useLeastHeight } from '../../src/hooks/useStageDemand';
 import { DrawingViewport } from '../../src/primitives/DrawingViewport';
 import { SLIVER, type DrawingFit } from '../../src/primitives/drawingFit';
 import type { DrawingMap } from '../../src/primitives/drawingScroll';
@@ -53,6 +53,37 @@ describe('what a primitive says it lacks', () => {
       expect(observed).toHaveLength(1);
       act(() => root.render(<StageDemandContext.Provider value={listen}><Box least={300} /></StageDemandContext.Provider>));
       expect(heard.at(-1)).toBe(-74);
+      act(() => root.unmount());
+      expect(heard.at(-1)).toBeNull();
+    } finally {
+      if (height) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', height);
+      delete (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
+    }
+  });
+});
+
+describe('a primitive that lays itself out for its box', () => {
+  it('says nothing for the stand-in it draws before its box is measured, and speaks once it is', () => {
+    const heard: Array<number | null> = [];
+    globalThis.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => 374 });
+    try {
+      const host = document.createElement('div');
+      const root = createRoot(host);
+      const listen = (_key: string, need: StageNeed | null) => heard.push(need?.excess ?? null);
+      const draw = (measured: boolean, least: number) =>
+        act(() => root.render(<StageDemandContext.Provider value={listen}><MeasuredStageDemand measured={measured}><Box least={least} /></MeasuredStageDemand></StageDemandContext.Provider>));
+      // The stand-in, drawn whole for an unmeasured box, would ask for 526px.
+      draw(false, 900);
+      expect(heard).toEqual([]);
+      // Measured, the drawing that stands is heard, and only it.
+      draw(true, 400);
+      expect(heard).toEqual([26]);
       act(() => root.unmount());
       expect(heard.at(-1)).toBeNull();
     } finally {
