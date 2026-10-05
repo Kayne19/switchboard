@@ -413,6 +413,7 @@ export const assistantWeather: WeatherData = {
   title: 'WEATHER / SAN FRANCISCO', subtitle: 'NOW + 48 H + 10 DAYS', context: 'FORECAST', caption: 'NWS / ISSUED 09:30',
   location: 'San Francisco, CA', units: 'F',
   current: { temp: 61, condition: 'fog', summary: 'Fog burning off by noon; rain moves in overnight and lasts through Thursday afternoon', high: 68, low: 54, feelsLike: 59, humidity: 84, precip: 10, wind: 'W 12 mph, gusts 25' },
+  today: ASSISTANT_TODAY,
   hourly: FORECAST_HOURS.map(([temp, condition, precip], hour) => ({
     time: `2026-10-${String(7 + Math.floor((10 + hour) / 24)).padStart(2, '0')}T${String((10 + hour) % 24).padStart(2, '0')}:00`,
     temp, condition, precip,

@@ -379,6 +379,8 @@ export interface WeatherData {
   /** The unit every temperature is in; the page converts none. */
   units: WeatherUnits;
   current: WeatherCurrent;
+  /** The day the forecast is read on: the outlook offers the days after it. */
+  today?: DateValue;
   /** 0 to 48 hours. */
   hourly?: WeatherHour[];
   /** 0 to 14 days. */
