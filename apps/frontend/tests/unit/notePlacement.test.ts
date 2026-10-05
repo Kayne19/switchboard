@@ -975,3 +975,38 @@ describe('placing notes on a line chart', () => {
     expect(leastCpuMs(() => layoutNotes(notes, field, { spill: true }))).toBeLessThan(200);
   });
 });
+
+// No place within reach of its point is clear (lines run across the whole
+// plot), and no row the card first tries keeps off its point or the plot's
+// border. The search for a clear place finds none, as it keeps to places
+// clear of the data, so the card would stay across the border. It takes a
+// place over the data instead, wholly inside the plot and clear of its
+// point: straight above (or below) the point, or beside it, level with it.
+describe('a card with no clear place within reach of its point', () => {
+  const plotOf = (field: NoteField) => field.plot!;
+  const wholeIn = (rect: Rect, plot: Rect) => rect.left >= plot.left && rect.right <= plot.right && rect.top >= plot.top && rect.bottom <= plot.bottom;
+  const clearOfPoint = (rect: Rect, point: Point) => !inside(point, inflate(rect, 6));
+
+  it('stands straight above its point, inside the plot, where lines fill the plot and the rows it tries first cross its border', () => {
+    const traces = [40, 80, 120, 160, 200, 240].map((y) => [{ x: 20, y }, { x: 280, y }]);
+    const field: NoteField = { area: box(0, 0, 300, 300), plot: box(20, 20, 260, 260), traces, wholly: true };
+    const point = { x: 150, y: 200 };
+    const { rect, leader } = layoutNotes([{ id: 'a', width: 160, height: 50, point, from: 'above' }], field).get('a')!;
+    expect(wholeIn(rect, plotOf(field))).toBe(true);
+    expect(clearOfPoint(rect, point)).toBe(true);
+    // Above it, a gap away, so its leader drops straight onto it.
+    expect(rect.bottom).toBeLessThanOrEqual(point.y - 10);
+    expect(rect.left < point.x && rect.right > point.x).toBe(true);
+    expect(leader.at(-1)).toEqual(point);
+  });
+
+  it('stands beside its point, level with it, where its line runs across a plot too short for a row above or below it', () => {
+    const field: NoteField = { area: box(0, 0, 400, 140), plot: box(40, 20, 340, 100), traces: [[{ x: 40, y: 70 }, { x: 380, y: 70 }]], wholly: true };
+    const point = { x: 200, y: 70 };
+    const { rect, leader } = layoutNotes([{ id: 'a', width: 120, height: 40, point, from: 'above' }], field).get('a')!;
+    expect(wholeIn(rect, plotOf(field))).toBe(true);
+    expect(clearOfPoint(rect, point)).toBe(true);
+    expect(rect.top < point.y && rect.bottom > point.y).toBe(true);
+    expect(leader.at(-1)).toEqual(point);
+  });
+});
