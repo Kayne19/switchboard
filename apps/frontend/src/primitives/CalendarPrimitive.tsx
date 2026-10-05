@@ -894,6 +894,9 @@ export function CalendarPrimitive({ data, marked, focused = false, framed = fals
   const bodyRef = useRef<HTMLDivElement>(null);
   const size = useElementSize(bodyRef);
   const model = useMemo(() => calendarModel(data), [data]);
+  // The head is sized from the bars over every day the view has, not the
+  // page a narrow week shows: the choice of grid or agenda must not change
+  // as the reader turns the days.
   const choice = chooseLayout(data, size, model.days.length, gridHeadPx(laneCount(dayBars(model.placed, model.days))));
   const count = data.events.length;
   // The meta line: what is shown and how much, led by the title only where
