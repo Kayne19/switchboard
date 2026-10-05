@@ -689,6 +689,229 @@ async fn hosts_route_session_frames_and_refuse_module_calls_nobody_waits_for() {
     );
 }
 
+/// Sends `raw` as one text frame, as a host agent whose JSON the service
+/// cannot read would.
+async fn send_raw(agent: &mut HostAgent, raw: String) {
+    agent.send(Wire::Text(raw.into())).await.unwrap();
+}
+
+/// Values a host agent's JSON can hold and serde_json cannot read, each with
+/// the reason the service gives: a lone surrogate (half of an emoji), a
+/// number beyond a double, and nesting deeper than serde_json's limit of 128.
+fn unreadable_values() -> Vec<(String, &'static str)> {
+    vec![
+        (
+            r#""\ud83d""#.to_owned(),
+            "a string holds half of a UTF-16 surrogate pair",
+        ),
+        // A trailing half alone, and a leading half before something else.
+        (
+            r#""\ude00""#.to_owned(),
+            "a string holds half of a UTF-16 surrogate pair",
+        ),
+        (
+            r#""\ud83d\u0041""#.to_owned(),
+            "a string holds half of a UTF-16 surrogate pair",
+        ),
+        (
+            "1e400".to_owned(),
+            "a number is beyond what a double can hold",
+        ),
+        (
+            format!("{}1{}", "[".repeat(200), "]".repeat(200)),
+            "arrays and objects nest deeper than the service reads (128 levels)",
+        ),
+    ]
+}
+
+// A module call the service cannot read is refused at once, by its id, with
+// the reason. It used to be dropped, and the agent heard `failed` only when
+// the host agent stopped waiting, 30 s later.
+#[tokio::test]
+async fn hosts_refuse_a_module_call_they_cannot_read_at_once() {
+    let served = Served::start(slow()).await;
+    let hosts = served.state.0.switchboard.lock().await.hosts();
+    let (mut agent, _) = served.hello("scriptorium", TOKEN, json!(1)).await;
+    served
+        .until_host("scriptorium", |host| host["connected"] == true)
+        .await;
+    // Session a1 is listened to, so a readable call would reach it.
+    let mut frames = hosts.subscribe("scriptorium", "a1");
+    for (n, (value, cause)) in unreadable_values().into_iter().enumerate() {
+        let id = format!("m{n}");
+        send_raw(
+            &mut agent,
+            format!(
+                r#"{{"type":"module_call","id":"{id}","session":"a1","token":"t","call":"display","args":{{"action":{{"op":"say","text":{value}}}}}}}"#
+            ),
+        )
+        .await;
+        let reply = until_frame(&mut agent, |frame| frame["type"] == "module_reply").await;
+        assert_eq!(
+            (reply["id"].as_str(), reply["status"].as_str()),
+            (Some(id.as_str()), Some("refused")),
+            "{reply}"
+        );
+        let reason = reply["reason"].as_str().unwrap();
+        assert_eq!(reason, format!("this call cannot be read: {cause}"));
+    }
+    assert!(
+        frames.try_recv().is_err(),
+        "an unreadable call reaches no session"
+    );
+}
+
+// A call for a session whose listener has gone is refused as not on a call,
+// as when nobody ever listened; it used to come back `failed` with no reason.
+#[tokio::test]
+async fn hosts_refuse_a_module_call_whose_session_stopped_listening() {
+    let served = Served::start(slow()).await;
+    let hosts = served.state.0.switchboard.lock().await.hosts();
+    let (mut agent, _) = served.hello("scriptorium", TOKEN, json!(1)).await;
+    served
+        .until_host("scriptorium", |host| host["connected"] == true)
+        .await;
+    drop(hosts.subscribe("scriptorium", "a1"));
+    send(
+        &mut agent,
+        json!({"type":"module_call","id":"m1","session":"a1","token":"t","call":"speak","args":{"text":"hi"}}),
+    )
+    .await;
+    let reply = until_frame(&mut agent, |frame| frame["type"] == "module_reply").await;
+    assert_eq!(
+        reply,
+        json!({"type":"module_reply","id":"m1","status":"refused","reason":"not_on_call"})
+    );
+}
+
+// A reply the service cannot read fails its command at once. It used to be
+// dropped, so the command waited out its whole deadline.
+#[tokio::test]
+async fn hosts_fail_a_command_whose_reply_they_cannot_read_at_once() {
+    let served = Served::start(slow()).await;
+    let hosts = served.state.0.switchboard.lock().await.hosts();
+    let (mut agent, _) = served.hello("scriptorium", TOKEN, json!(1)).await;
+    served
+        .until_host("scriptorium", |host| host["connected"] == true)
+        .await;
+    for (value, cause) in unreadable_values() {
+        let asking = {
+            let hosts = hosts.clone();
+            tokio::spawn(async move {
+                hosts
+                    .command(
+                        "scriptorium",
+                        "list_saved_sessions",
+                        json!({"cwd": "/srv/homelab"}),
+                        Duration::from_secs(60),
+                    )
+                    .await
+            })
+        };
+        let command = until_frame(&mut agent, |frame| frame["type"] == "command").await;
+        // A first message cut inside a surrogate pair, say.
+        send_raw(
+            &mut agent,
+            format!(
+                r#"{{"type":"reply","id":"{}","epoch":1,"ok":true,"result":{{"sessions":[{{"first_message":{value}}}]}}}}"#,
+                command["id"].as_str().unwrap()
+            ),
+        )
+        .await;
+        let error = timeout(Duration::from_secs(5), asking)
+            .await
+            .expect("answered at once, not at the command's deadline")
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.code, "unreadable_reply");
+        assert_eq!(
+            error.message,
+            format!("host scriptorium answered, but the service cannot read the reply: {cause}")
+        );
+    }
+}
+
+// A frame with nothing to answer by is logged with why it was dropped, and
+// the link goes on.
+#[tokio::test]
+async fn hosts_log_an_unreadable_frame_they_cannot_answer_and_go_on() {
+    use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
+    let hosts = Hosts::new(tokens(), slow());
+    let mut link = hosts.connect_fake("scriptorium");
+    let mut frames = hosts.subscribe("scriptorium", "a1");
+    let bus = crate::debug::DebugBus::new();
+    let subscriber = tracing_subscriber::registry()
+        .with(EnvFilter::new("switchboard=info"))
+        .with(crate::debug::DebugLogLayer::new(bus.clone()));
+    tracing::subscriber::with_default(subscriber, || {
+        hosts.on_frame(
+            "scriptorium",
+            link.epoch,
+            r#"{"type":"event","session":"a1","cursor":"b:1","event":{"kind":"text","text":"\ud83d"}}"#,
+        );
+        hosts.on_frame("scriptorium", link.epoch, "not json");
+        // A module call without an id: nothing can be answered.
+        hosts.on_frame(
+            "scriptorium",
+            link.epoch,
+            r#"{"type":"module_call","session":"a1","call":"speak","args":{"text":"\ud83d"}}"#,
+        );
+    });
+    let logs: Vec<_> = bus
+        .snapshot()
+        .logs
+        .iter()
+        .map(|log| {
+            (
+                log.level.clone(),
+                log.fields["frame"].clone(),
+                log.fields["session"].clone(),
+                log.fields["cause"].clone(),
+            )
+        })
+        .collect();
+    let dropped = |frame: &str, session: &str, cause: &str| {
+        (
+            "WARN".to_owned(),
+            json!(frame),
+            json!(session),
+            json!(cause),
+        )
+    };
+    assert_eq!(
+        logs,
+        vec![
+            dropped(
+                "event",
+                "a1",
+                "a string holds half of a UTF-16 surrogate pair"
+            ),
+            dropped("unknown", "", "expected ident"),
+            dropped(
+                "module_call",
+                "a1",
+                "a string holds half of a UTF-16 surrogate pair"
+            ),
+        ]
+    );
+    assert!(bus.snapshot().logs.iter().all(|log| log.message
+        == "host sent a frame the service cannot read and nothing in it can be answered; dropped"));
+    // The link still carries the session's next frames.
+    link.send(
+        json!({"type":"event","session":"a1","cursor":"b:2","event":{"kind":"text","text":"ok"}}),
+    );
+    let Ok(SessionFrame::Event { event, .. }) = frames.try_recv() else {
+        panic!("the readable event is delivered");
+    };
+    assert_eq!(event["text"], "ok");
+    assert!(
+        timeout(Duration::from_millis(50), link.recv())
+            .await
+            .is_err(),
+        "nothing was answered"
+    );
+}
+
 #[test]
 fn hosts_load_the_tokens_file() {
     let root = std::env::temp_dir().join(format!(

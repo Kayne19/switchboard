@@ -119,15 +119,35 @@ def _identity():
 
 
 def _encode(request):
-    """One JSON line. Raises TypeError for a value JSON cannot carry (a programming error);
-    array-likes with `tolist()` (numpy values) are converted."""
+    """One JSON line. A value JSON cannot carry is a programming error and raises:
+    a type JSON has not (TypeError), or a NaN, an infinity or a string holding half
+    of a surrogate pair (ValueError). Array-likes with `tolist()` (numpy values) are
+    converted."""
 
     def plain(value):
         if hasattr(value, "tolist"):
             return value.tolist()
         raise TypeError(f"{type(value).__name__} cannot be sent to the switchboard")
 
-    return _json.dumps(request, default=plain).encode() + b"\n"
+    # Python writes NaN and Infinity, which no JSON reader takes: the host
+    # agent refused the line as a bad request. A lone surrogate it writes as a
+    # \ud83d escape, which the service cannot read. Both are caught here, with
+    # what is wrong, before anything is sent.
+    try:
+        text = _json.dumps(request, default=plain, allow_nan=False, ensure_ascii=False)
+    except ValueError as err:
+        raise ValueError(f"cannot be sent to the switchboard: {err}") from err
+    # A pair held as two code points ("\ud83d\ude00") is one character; it
+    # is joined first, so only a true lone half is refused.
+    text = text.encode("utf-16", "surrogatepass").decode("utf-16", "surrogatepass")
+    try:
+        return text.encode() + b"\n"
+    except UnicodeEncodeError as err:
+        half = err.object[err.start]
+        raise ValueError(
+            f"cannot be sent to the switchboard: a string holds {half!r}, half of a UTF-16 surrogate pair; "
+            "send whole characters"
+        ) from None
 
 
 def _exchange(stream, line):

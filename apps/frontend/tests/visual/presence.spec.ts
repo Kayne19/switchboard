@@ -112,3 +112,19 @@ test('presence stays centred on the sword through a continuous resize', async ({
     }
   }
 });
+
+// Under reduced motion a scene is drawn where it ends from its first frame.
+// The presence used to slide in from the centre (a layout animation, which
+// Playwright's `animations: 'disabled'` does not stop), so a golden was
+// compared with a frame from the middle of that move or with the settled
+// page, whichever came first: portrait-tablet code passed or failed by that.
+test('under reduced motion the presence is already in place on the first frame', async ({ page }) => {
+  await page.setViewportSize({ width: 820, height: 1180 });
+  await page.goto('/?scene=code&chrome=0');
+  await page.waitForSelector('[data-scene="code"]', { state: 'visible' });
+  const stage = page.locator('.stage');
+  const first = await stage.screenshot({ animations: 'disabled', caret: 'hide' });
+  await page.waitForTimeout(1000);
+  const settled = await stage.screenshot({ animations: 'disabled', caret: 'hide' });
+  expect(first.equals(settled)).toBe(true);
+});
