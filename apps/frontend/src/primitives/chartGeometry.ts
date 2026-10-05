@@ -213,22 +213,26 @@ export function chartCategories(data: ChartData): string[] | undefined {
 }
 
 /**
- * What a note's anchor names on a labelled chart, in the chart's own words:
- * the category at its x and the series, as `FRONTEND VISUAL / THIS RUN`
- * reads -- not the index the agent sent. Undefined where the chart has no
- * labels, or the anchor no x; a card then names the anchor as sent.
+ * What a note's anchor names on a chart, in the chart's own words, as the
+ * caller reads them -- never the object's id or a bare index: on a
+ * labelled chart the category at its x (`FRONTEND VISUAL / THIS RUN`), on
+ * any other the x axis's name and the value (`EPOCH 32 / VAL LOSS`), then
+ * the series wherever the anchor names one or the chart draws more than
+ * one. The series and the x are the ones the chart marks: a name the chart
+ * does not carry is its first series, and an x past the domain its nearest
+ * end. An anchor with no x names its series alone; undefined where it names
+ * neither, or no point the chart can draw.
  */
-export function chartTargetText(anchor: { x?: number; series?: string }, data: ChartData): string | undefined {
+export function chartTargetText(anchor: { x?: number; series?: string }, data: ChartData, scales: ChartScales = chartScales(data)): string | undefined {
+  if (anchor.x === undefined) return data.series.find((candidate) => candidate.name === anchor.series)?.name;
+  const sample = seriesSample(data, anchor.x, anchor.series, scales);
+  if (!sample) return undefined;
+  const series = anchor.series !== undefined || data.series.length > 1 ? ` / ${data.series[sample.series].name}` : '';
   const labels = data.labels;
-  if (!labels || labels.length === 0 || anchor.x === undefined || !Number.isFinite(anchor.x)) return undefined;
-  // The series and the category the chart marks: a name the chart does
-  // not carry falls back to its first series, and an x past a short
-  // series' end to its last value, as the chart's point and callout do.
-  const named = anchor.series ? data.series.findIndex((candidate) => candidate.name === anchor.series) : -1;
-  const series = data.series[named >= 0 ? named : 0];
-  const last = Math.min(labels.length, series?.values.length ?? labels.length) - 1;
-  const label = labels[Math.round(Math.min(Math.max(0, last), Math.max(0, anchor.x)))];
-  return anchor.series && series ? `${label} / ${series.name}` : label;
+  if (labels && labels.length > 0) return `${labels[Math.round(sample.x)]}${series}`;
+  // A bar stands for its whole category, so it names that category's index.
+  const x = scales.kind === 'bar' ? Math.round(sample.x) : sample.x;
+  return `${data.xLabel ?? 'X'} ${String(Number(x.toPrecision(6)))}${series}`;
 }
 
 /** One category label drawn on the axis. */
@@ -920,6 +924,36 @@ export function chartObstacles(data: ChartData, scales: ChartScales = chartScale
   return { marks, lines, fills, labels: [chartLegendBox(data, scales.frame), ...chartAxisBoxes(plot, scales.frame)] };
 }
 
+/** A series' sample at a domain x, as a line chart draws it. */
+interface SeriesSample {
+  /** Which series, by index: a name the chart does not carry is its first. */
+  series: number;
+  /** The domain x, held inside the series' own domain. */
+  x: number;
+  /** The value interpolated there, as the data has it (not held to the plot). */
+  value: number;
+}
+
+// The series named (its first, for a name the chart does not carry) at `x`,
+// held inside its own domain, its value interpolated between the samples
+// either side: undefined where there is no point to reach (a numeric chart
+// with no positive x domain, a series with no values).
+function seriesSample(data: ChartData, x: number, seriesName: string | undefined, scales: ChartScales): SeriesSample | undefined {
+  const named = seriesName ? data.series.findIndex((candidate) => candidate.name === seriesName) : -1;
+  const index = named >= 0 ? named : 0;
+  const series = data.series[index];
+  if (!series || series.values.length === 0 || !Number.isFinite(x)) return undefined;
+  const categorical = scales.categories.categories !== undefined;
+  if (!categorical && !(scales.xMax > 0)) return undefined;
+  const last = series.values.length - 1;
+  const domainX = Math.min(categorical ? last : scales.xMax, Math.max(0, x));
+  const position = categorical ? domainX : (domainX / scales.xMax) * last;
+  const lower = Math.floor(position);
+  const upper = Math.min(last, lower + 1);
+  const value = series.values[lower] + (series.values[upper] - series.values[lower]) * (position - lower);
+  return { series: index, x: domainX, value };
+}
+
 /**
  * The point on the drawn series at `x`, or undefined when there is none to
  * reach: a numeric chart with no positive x domain, or a series with no
@@ -936,25 +970,15 @@ export function chartSeriesPoint(
   seriesName?: string,
   scales: ChartScales = chartScales(data),
 ): ViewPoint | undefined {
-  const seriesIndex = seriesName ? data.series.findIndex((candidate) => candidate.name === seriesName) : -1;
-  const series = data.series[seriesIndex] ?? data.series[0];
-  if (!series || series.values.length === 0 || !Number.isFinite(x)) return undefined;
-  const categorical = scales.categories.categories !== undefined;
-  if (!categorical && !(scales.xMax > 0)) return undefined;
-  const last = series.values.length - 1;
   if (scales.kind === 'bar') {
-    const index = Math.round(Math.min(last, Math.max(0, x)));
-    const which = seriesIndex >= 0 ? seriesIndex : 0;
-    const bar = chartBars(data, scales).find((candidate) => candidate.series === which && candidate.index === index);
-    return bar?.end;
+    const sample = seriesSample(data, x, seriesName, scales);
+    if (!sample) return undefined;
+    const index = Math.round(sample.x);
+    return chartBars(data, scales).find((candidate) => candidate.series === sample.series && candidate.index === index)?.end;
   }
-  const domainX = Math.min(categorical ? last : scales.xMax, Math.max(0, x));
-  const position = categorical ? domainX : (domainX / scales.xMax) * last;
-  const lower = Math.floor(position);
-  const upper = Math.min(last, lower + 1);
-  const value = series.values[lower] + (series.values[upper] - series.values[lower]) * (position - lower);
+  const sample = seriesSample(data, x, seriesName, scales);
   // Held inside the plot, as the drawn series is by its clip.
-  return scales.pointAt(domainX, Math.min(scales.yMax, Math.max(scales.yMin, value)));
+  return sample && scales.pointAt(sample.x, Math.min(scales.yMax, Math.max(scales.yMin, sample.value)));
 }
 
 /** The legend's own box, across the top of the plot, in viewBox units: every

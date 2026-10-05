@@ -311,9 +311,11 @@ describe('chart notes', () => {
     expect(host.querySelector('.chart-note-leader[data-note="suite-note"]')!.classList.contains('chart-note-leader--bar')).toBe(true);
   });
 
-  it('names the anchor as sent on a chart with a numeric x', () => {
-    mount([chart, note('loss-note', { target: 'loss', x: 30, series: 'VAL LOSS' })]);
-    expect(card('loss-note')!.element.querySelector('.annotation-card__anchor')!.textContent).toBe('TARGET / loss / X 30 / VAL LOSS');
+  // The tag read "TARGET / LOSS / X 32 / VAL LOSS": the chart's object id,
+  // which the caller never sees, where the axis below says EPOCH.
+  it('names the x axis and the value a note points at on a chart with a numeric x, as the caller reads them', () => {
+    mount([{ ...chart, data: { ...chartData, xLabel: 'EPOCH' } } as ControllerAction, note('loss-note', { target: 'loss', x: 30, series: 'VAL LOSS' })]);
+    expect(card('loss-note')!.element.querySelector('.annotation-card__anchor')!.textContent).toBe('TARGET / EPOCH 30 / VAL LOSS');
   });
 
   it('keeps a note on its chart, and the rail empty, while the chart has a clear place for it', () => {

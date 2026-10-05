@@ -588,10 +588,28 @@ describe('what a note names on a chart', () => {
     expect(chartTargetText({ x: 1, series: 'NOPE' }, short)).toBe('b / S');
   });
 
-  it('is left to the anchor as sent where the chart has no labels or the note no x', () => {
-    expect(chartTargetText({ x: 2 }, { xMax: 10, series: [{ name: 'S', values: [1, 2] }] })).toBeUndefined();
-    expect(chartTargetText({ x: 2 }, { kind: 'bar', series: [{ name: 'S', values: [1, 2, 3] }] })).toBeUndefined();
-    expect(chartTargetText({ series: 'S' }, { labels: ['a'], series: [{ name: 'S', values: [1] }] })).toBeUndefined();
+  // The tag read "TARGET / LOSS / X 32 / VAL LOSS": the chart's object id,
+  // which the caller never sees, where the axis below says EPOCH.
+  it("is the x axis's name and the value on a chart with a numeric x, as the caller reads it", () => {
+    const loss: ChartData = { xLabel: 'EPOCH', xMax: 40, series: [{ name: 'TRAIN', values: [3, 2, 1] }, { name: 'VAL', values: [3, 2, 2] }] };
+    expect(chartTargetText({ x: 32, series: 'VAL' }, loss)).toBe('EPOCH 32 / VAL');
+    // The point the chart marks: the series it draws, an x held to the domain.
+    expect(chartTargetText({ x: 50, series: 'NOPE' }, loss)).toBe('EPOCH 40 / TRAIN');
+    // One series needs no naming unless the anchor names it; an axis with no name reads X, as it is drawn.
+    expect(chartTargetText({ x: 2.5 }, { xMax: 10, series: [{ name: 'S', values: [1, 2] }] })).toBe('X 2.5');
+    expect(chartTargetText({ x: 1.4 }, { kind: 'bar', series: [{ name: 'S', values: [1, 2, 3] }] })).toBe('X 1');
+  });
+
+  it('names the series alone for an anchor with no x, and nothing where the chart draws no point', () => {
+    expect(chartTargetText({ series: 'S' }, { labels: ['a'], series: [{ name: 'S', values: [1] }] })).toBe('S');
+    expect(chartTargetText({ series: 'NOPE' }, { labels: ['a'], series: [{ name: 'S', values: [1] }] })).toBeUndefined();
+    expect(chartTargetText({}, { labels: ['a'], series: [{ name: 'S', values: [1] }] })).toBeUndefined();
+    expect(chartTargetText({ x: 2 }, { xMax: 0, series: [{ name: 'S', values: [1, 2] }] })).toBeUndefined();
+  });
+
+  it('names the series a labelled chart marks wherever it draws more than one', () => {
+    const two: ChartData = { labels: ['a', 'b'], series: [{ name: 'S', values: [1, 2] }, { name: 'T', values: [2, 1] }] };
+    expect(chartTargetText({ x: 1 }, two)).toBe('b / S');
   });
 });
 
