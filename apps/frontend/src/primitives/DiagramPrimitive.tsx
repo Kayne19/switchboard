@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import type { DiagramData, NoteData, Semantic } from '../controller/types';
 import { useElementSize } from '../hooks/useElementSize';
-import { ARROW_LENGTH, layoutDiagram, type Point } from './diagramLayout';
+import { ARROW_LENGTH, cornerTagBoxes, layoutDiagram, nodeFramePath, type Point } from './diagramLayout';
 
 const colors: Record<Semantic, string> = {
   red: 'var(--red)',
@@ -19,9 +19,6 @@ const SEMANTICS = Object.keys(colors) as Semantic[];
 // frames do, while the stroke itself does not.
 // Edge label line pitch, in user units (.diagram-edge-label is 11 units).
 const LABEL_LINE = 14;
-// The small tag in a node's top-right corner that carries its state glyph.
-const TAG_WIDTH = 18;
-const TAG_HEIGHT = 15;
 
 const pathThrough = (points: Point[]) =>
   points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
@@ -194,11 +191,12 @@ export function DiagramPrimitive({
             // leaves it alone.
             const frameColor = state === 'blocked' ? 'var(--red)' : color;
             const lit = isAnchored || state === 'active';
-            const noteBadge = isAnchored && !calloutPlaced;
-            const tagged = state === 'done' || state === 'blocked';
-            // The tag sits left of the corner cut, and left of the note badge
-            // when that is shown too.
-            const tagX = box.width - (noteBadge ? 36 + 6 : 22 + 6) - TAG_WIDTH;
+            // The glyph and the NOTE marker stand in a row clear of the
+            // frame's cut corner and of the label (cornerTagBoxes).
+            const tags = cornerTagBoxes(box.width, {
+              glyph: state === 'done' || state === 'blocked',
+              marker: isAnchored && !calloutPlaced,
+            });
             return (
               <g key={node.id} transform={`translate(${box.x} ${box.y})`} data-state={state}>
                 <g
@@ -207,7 +205,7 @@ export function DiagramPrimitive({
                 >
                   <path
                     className="diagram-node__frame"
-                    d={`M 0 14 L 14 0 H ${box.width - 22} L ${box.width} 22 V ${box.height} H 18 L 0 ${box.height - 18} Z`}
+                    d={nodeFramePath(box.width, box.height)}
                     fill="var(--black, #000000)"
                     stroke={frameColor}
                     strokeOpacity={lit || state === 'blocked' ? '1' : '.64'}
@@ -229,9 +227,9 @@ export function DiagramPrimitive({
                       {line.text}
                     </text>
                   ))}
-                  {tagged ? (
-                    <g className={`diagram-node__tag diagram-node__tag--${state}`} transform={`translate(${tagX}, 6)`}>
-                      <rect width={TAG_WIDTH} height={TAG_HEIGHT} fill="#000" stroke={frameColor} strokeOpacity=".7" strokeWidth="1" />
+                  {tags.glyph ? (
+                    <g className={`diagram-node__tag diagram-node__tag--${state}`} transform={`translate(${tags.glyph.x}, ${tags.glyph.y})`}>
+                      <rect width={tags.glyph.width} height={tags.glyph.height} fill="#000" stroke={frameColor} strokeOpacity=".7" strokeWidth="1" />
                       {state === 'done' ? (
                         <polyline points="4,8 7.5,11.5 14,4" fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="square" />
                       ) : (
@@ -239,10 +237,10 @@ export function DiagramPrimitive({
                       )}
                     </g>
                   ) : null}
-                  {noteBadge ? (
-                    <g className="diagram-node__marker" transform={`translate(${box.width - 36}, 6)`}>
-                      <rect width="30" height="15" rx="2" fill="rgba(var(--orange-rgb), 0.25)" stroke="var(--orange)" strokeWidth="1" />
-                      <text x="15" y="11" textAnchor="middle" fill="var(--orange)" fontSize="8.5" fontWeight="700" fontFamily="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" letterSpacing="0.05em">
+                  {tags.marker ? (
+                    <g className="diagram-node__marker" transform={`translate(${tags.marker.x}, ${tags.marker.y})`}>
+                      <rect width={tags.marker.width} height={tags.marker.height} rx="2" fill="rgba(var(--orange-rgb), 0.25)" stroke="var(--orange)" strokeWidth="1" />
+                      <text x={tags.marker.width / 2} y="11" textAnchor="middle" fill="var(--orange)" fontSize="8.5" fontWeight="700" fontFamily="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" letterSpacing="0.05em">
                         NOTE
                       </text>
                     </g>

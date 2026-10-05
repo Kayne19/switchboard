@@ -407,3 +407,79 @@ describe('anchored note fit and ownership', () => {
     expect(host.querySelector('.diagram-node__marker')).toBeNull();
   });
 });
+
+
+describe('corner tags inside the node frame', () => {
+  // The frame's outline is a box with its top-left and top-right corners cut
+  // (DiagramPrimitive's frame path). A tag in the top-right corner that
+  // reaches past the start of that cut sits on the frame's line, half
+  // outside the node: the NOTE marker did, on every node.
+  const labels = [
+    'PBX',
+    'Operator agent',
+    'switchboard skill module',
+    'Speech-to-text transcription sidecar for the operator leg',
+    'supercalifragilisticexpialidocious',
+  ];
+  const states = [undefined, 'done', 'blocked', 'active'] as const;
+  const long = 'A note far too long for the callout box, so it stays in the rail and the node it names carries the NOTE marker in its corner.';
+  type Rect = { x: number; y: number; width: number; height: number };
+  const translate = (element: Element | null) => {
+    const match = /translate\(\s*([-\d.]+)[ ,]+([-\d.]+)\s*\)/.exec(element?.getAttribute('transform') ?? '');
+    return match ? { x: Number(match[1]), y: Number(match[2]) } : null;
+  };
+  const rectOf = (group: Element | null): Rect | null => {
+    const at = translate(group);
+    const rect = group?.querySelector('rect');
+    return at && rect ? { ...at, width: Number(rect.getAttribute('width')), height: Number(rect.getAttribute('height')) } : null;
+  };
+  const apart = (a: Rect, b: Rect, by: number) =>
+    a.x + a.width + by <= b.x || b.x + b.width + by <= a.x || a.y + a.height + by <= b.y || b.y + b.height + by <= a.y;
+
+  for (const label of labels) {
+    for (const state of states) {
+      it(`${label} / ${state ?? 'todo'}: the NOTE marker and the state tag sit inside the frame, clear of the cut and the label`, () => {
+        host = document.createElement('div');
+        document.body.append(host);
+        root = createRoot(host);
+        const node = { id: 'n', label, sub: 'prime-agent session in ~/projects/llm-wiki', detail: 'apps/backend/src/pbx.rs', ...(state ? { state } : {}) };
+        act(() =>
+          root.render(
+            <DiagramPrimitive
+              data={{ mode: 'graph', nodes: [{ id: 'a', label: 'A' }, node], edges: [{ from: 'a', to: 'n' }] }}
+              id="test-diagram"
+              note={{ segments: [{ text: long }], anchor: { target: 'test-diagram', node: 'n' } }}
+            />,
+          ),
+        );
+        const group = [...host.querySelectorAll('.diagram-nodes > g')][1];
+        const d = group.querySelector('.diagram-node__frame')?.getAttribute('d') ?? '';
+        const [, width, height] = /H [\d.]+ L ([\d.]+) [\d.]+ V ([\d.]+)/.exec(d)?.map(Number) ?? [];
+        expect(width).toBeGreaterThan(0);
+        const cutStart = width - 22;
+        const tags = [rectOf(group.querySelector('.diagram-node__marker')), rectOf(group.querySelector('.diagram-node__tag'))].filter(
+          (tag): tag is Rect => tag !== null,
+        );
+        expect(tags.length).toBe(state === 'done' || state === 'blocked' ? 2 : 1);
+        const textBoxes: Rect[] = [...group.querySelectorAll('.diagram-node-label')].map((text) => ({
+          x: Number(text.getAttribute('x')),
+          y: Number(text.getAttribute('y')) - 12,
+          width: (text.textContent ?? '').length * 10.8,
+          height: 15,
+        }));
+        for (const tag of tags) {
+          expect(tag.x, 'left edge').toBeGreaterThanOrEqual(4);
+          expect(tag.y, 'top edge').toBeGreaterThanOrEqual(4);
+          expect(tag.x + tag.width, 'right edge').toBeLessThanOrEqual(width - 4);
+          expect(tag.y + tag.height, 'bottom edge').toBeLessThanOrEqual(height - 4);
+          // The cut runs from (width - 22, 0) to (width, 22): the tag's
+          // top-right corner keeps clear of it.
+          const clearOfCut = (tag.y - (tag.x + tag.width - cutStart)) / Math.SQRT2;
+          expect(clearOfCut, 'clear of the clipped corner').toBeGreaterThanOrEqual(4);
+          for (const text of textBoxes) expect(apart(tag, text, 2), `clear of "${label}"`).toBe(true);
+        }
+        if (tags.length === 2) expect(apart(tags[0], tags[1], 2), 'marker clear of the state tag').toBe(true);
+      });
+    }
+  }
+});

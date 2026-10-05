@@ -120,10 +120,59 @@ const NODE_RULE_DROP = 11;
 const NODE_SUB_DROP = 19;
 const NODE_DETAIL_DROP = 18;
 const NODE_PAD_BOTTOM = 12;
-// Room beside the label for the corner tags: none, one (a state glyph or
-// the note badge), or both side by side (the renderer draws the glyph left
-// of the badge, 60 units in from the box's right edge).
-const NODE_TAG_ROOM = [0, 30, 46] as const;
+
+// A node's frame is its box with the top-left and top-right corners cut and
+// the bottom-left stepped; the renderer draws exactly this outline.
+const FRAME_CUT = { topLeft: 14, topRight: 22, bottomLeft: 18 } as const;
+
+export function nodeFramePath(width: number, height: number): string {
+  const { topLeft, topRight, bottomLeft } = FRAME_CUT;
+  return `M 0 ${topLeft} L ${topLeft} 0 H ${width - topRight} L ${width} ${topRight} V ${height} H ${bottomLeft} L 0 ${height - bottomLeft} Z`;
+}
+
+// The tags in a node's top-right corner: the state glyph of a done or
+// blocked node, and the NOTE marker of the node a rail note names. They
+// stand in one row under the frame's top edge that ends TAG_INSET short of
+// where the top-right cut begins, the marker outermost, so at any box size
+// neither reaches the cut; the label's measured width keeps TAG_GAP clear
+// of the row (`measureNode`).
+const TAG_SIZE = { glyph: { width: 18, height: 15 }, marker: { width: 30, height: 15 } } as const;
+const TAG_TOP = 6;
+const TAG_INSET = 6;
+const TAG_GAP = 6;
+
+export interface CornerTags {
+  glyph: boolean;
+  marker: boolean;
+}
+
+export interface CornerTagBoxes {
+  glyph: Box | null;
+  marker: Box | null;
+}
+
+/** Where a node's corner tags go, relative to its box's top-left corner. */
+export function cornerTagBoxes(width: number, tags: CornerTags): CornerTagBoxes {
+  let right = width - FRAME_CUT.topRight - TAG_INSET;
+  const place = (size: { width: number; height: number }): Box => {
+    const box = { x: right - size.width, y: TAG_TOP, width: size.width, height: size.height };
+    right = box.x - TAG_GAP;
+    return box;
+  };
+  const marker = tags.marker ? place(TAG_SIZE.marker) : null;
+  const glyph = tags.glyph ? place(TAG_SIZE.glyph) : null;
+  return { glyph, marker };
+}
+
+// Room the label's lines leave beside them for the tag row: the row's reach
+// in from the box's right edge, and a gap, less the side padding the box
+// already has.
+function tagRoom(tags: CornerTags): number {
+  if (!tags.glyph && !tags.marker) return 0;
+  const boxes = cornerTagBoxes(0, tags);
+  const left = Math.min(...[boxes.glyph, boxes.marker].flatMap((box) => (box ? [box.x] : [])));
+  return -left + TAG_GAP - NODE_PAD_SIDE;
+}
 
 // Edge labels are set in the monospace face at 11 user units with 0.06em
 // tracking (.diagram-edge-label), so a label's width is known before it is
@@ -219,7 +268,7 @@ interface NodeText {
   ruleY: number;
 }
 
-export function measureNode(node: DiagramNode, cornerTags: 0 | 1 | 2): NodeText {
+export function measureNode(node: DiagramNode, cornerTags: CornerTags): NodeText {
   const labelLines = wrapLine(node.label, NODE_TEXT.label.wrapAt, NODE_TEXT.label.maxLines);
   const subLines = node.sub ? wrapLine(node.sub, NODE_TEXT.sub.wrapAt, NODE_TEXT.sub.maxLines) : [];
   const detailLines = node.detail ? wrapLine(node.detail, NODE_TEXT.detail.wrapAt, NODE_TEXT.detail.maxLines) : [];
@@ -250,7 +299,7 @@ export function measureNode(node: DiagramNode, cornerTags: 0 | 1 | 2): NodeText 
   }
 
   const textWidth = Math.max(
-    ...labelLines.map((line) => line.length * NODE_TEXT.label.advance + NODE_TAG_ROOM[cornerTags]),
+    ...labelLines.map((line) => line.length * NODE_TEXT.label.advance + tagRoom(cornerTags)),
     ...subLines.map((line) => line.length * NODE_TEXT.sub.advance),
     ...detailLines.map((line) => line.length * NODE_TEXT.detail.advance),
   );
@@ -752,12 +801,11 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
   const layers: Item[][] = Array.from({ length: layerCount }, () => []);
   const itemOf = new Map<string, Item>();
   // A done or blocked node carries its state glyph in its corner, and the
-  // anchored node may carry the note badge there too.
-  const cornerTagsOf = (node: DiagramNode): 0 | 1 | 2 => {
-    const glyph = node.state === 'done' || node.state === 'blocked';
-    const badge = node.id === anchorNodeId;
-    return glyph && badge ? 2 : glyph || badge ? 1 : 0;
-  };
+  // anchored node may carry the NOTE marker there too.
+  const cornerTagsOf = (node: DiagramNode): CornerTags => ({
+    glyph: node.state === 'done' || node.state === 'blocked',
+    marker: node.id === anchorNodeId,
+  });
   const makeItem = (layer: number, node: DiagramNode | null): Item => {
     const text = node ? measureNode(node, cornerTagsOf(node)) : null;
     const item: Item = {
