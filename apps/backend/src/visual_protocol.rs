@@ -21,8 +21,9 @@ const MAX_PROGRESS_STEPS: usize = 30;
 const MAX_METRIC_DELTA_UTF16: usize = 32;
 /// What an agent may `show`. The browser reports the same kinds back in its
 /// screen state, so this list is the one both directions are checked against.
-pub const CONTENT_TYPES: [&str; 9] = [
+pub const CONTENT_TYPES: [&str; 14] = [
     "chart", "metric", "progress", "diagram", "document", "code", "table", "note", "image",
+    "calendar", "tasks", "timer", "weather", "inbox",
 ];
 
 // The table contract (docs/display-tool.md, "Table v1 rules"); the browser's
@@ -1309,6 +1310,800 @@ fn validate_image_data(data: &Map<String, Value>) -> Result<Value, String> {
     Ok(Value::Object(out))
 }
 
+// ---- time values -------------------------------------------------------------
+
+/// How a time is written (docs/display-tool.md, "Time values"): a date
+/// (`YYYY-MM-DD`), a wall time on the caller's clock (`YYYY-MM-DDTHH:MM`), or
+/// an instant (RFC 3339 with seconds and an offset). Only a timer takes an
+/// instant: it is the one thing measured against the page clock. The
+/// browser's `TimeForm` names the same three.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TimeForm {
+    Date,
+    Wall,
+    Instant,
+}
+
+impl TimeForm {
+    /// The form as an error names it; the browser's `TIME_FORM_TEXT`.
+    fn text(self) -> &'static str {
+        match self {
+            TimeForm::Date => "a date (YYYY-MM-DD)",
+            TimeForm::Wall => "a wall time (YYYY-MM-DDTHH:MM)",
+            TimeForm::Instant => "an instant (YYYY-MM-DDTHH:MM:SS with Z or an offset like -07:00)",
+        }
+    }
+}
+
+/// A time as `parse_time_value` read it: its form, the day it falls on as
+/// written (days from 1970-01-01), and its place on its form's own line --
+/// days for a date, minutes for a wall time, and for an instant the second
+/// and nanosecond it names, its offset applied.
+#[derive(Clone, Copy)]
+struct TimeValue {
+    form: TimeForm,
+    day_number: i64,
+    place: (i64, u32),
+}
+
+const MIN_TIME_YEAR: i64 = 1970;
+const MAX_TIME_YEAR: i64 = 2199;
+
+/// The number ASCII digits spell, or `None` for any other byte.
+fn ascii_number(digits: &[u8]) -> Option<u32> {
+    digits.iter().try_fold(0u32, |n, digit| {
+        digit
+            .is_ascii_digit()
+            .then(|| n * 10 + u32::from(digit - b'0'))
+    })
+}
+
+fn is_leap_year(year: i64) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+fn days_in_month(year: i64, month: i64) -> i64 {
+    match month {
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+/// Days from 1970-01-01 to a Gregorian date (Howard Hinnant's
+/// days_from_civil); the browser's `daysFromCivil`.
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let year_of_era = y - era * 400;
+    let day_of_year = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+/// Reads a time value, the one time parser the service has, used by every
+/// type that carries a time. The browser's `parseTimeValue` reads the same
+/// text with one pattern: a real Gregorian date in the years 1970-2199;
+/// hours 00-23 (no 24:00), minutes and seconds 00-59 (no leap second); an
+/// instant's fraction 1 to 9 digits and its offset `Z` or `+HH:MM`/`-HH:MM`
+/// (hours 00-23); upper-case `T` and `Z`, ASCII digits, nothing around it.
+fn parse_time_value(text: &str) -> Option<TimeValue> {
+    let b = text.as_bytes();
+    let field = |at: usize, len: usize| b.get(at..at + len).and_then(ascii_number).map(i64::from);
+    if b.get(4) != Some(&b'-') || b.get(7) != Some(&b'-') {
+        return None;
+    }
+    let (year, month, day) = (field(0, 4)?, field(5, 2)?, field(8, 2)?);
+    if !(MIN_TIME_YEAR..=MAX_TIME_YEAR).contains(&year)
+        || !(1..=12).contains(&month)
+        || day < 1
+        || day > days_in_month(year, month)
+    {
+        return None;
+    }
+    let day_number = days_from_civil(year, month, day);
+    if b.len() == 10 {
+        return Some(TimeValue {
+            form: TimeForm::Date,
+            day_number,
+            place: (day_number, 0),
+        });
+    }
+    if b.get(10) != Some(&b'T') || b.get(13) != Some(&b':') {
+        return None;
+    }
+    let (hour, minute) = (field(11, 2)?, field(14, 2)?);
+    if hour > 23 || minute > 59 {
+        return None;
+    }
+    if b.len() == 16 {
+        return Some(TimeValue {
+            form: TimeForm::Wall,
+            day_number,
+            place: (day_number * 1440 + hour * 60 + minute, 0),
+        });
+    }
+    if b.get(16) != Some(&b':') {
+        return None;
+    }
+    let second = field(17, 2)?;
+    if second > 59 {
+        return None;
+    }
+    let mut rest = b.get(19..)?;
+    let mut nanos = 0;
+    if let Some(fraction) = rest.strip_prefix(b".") {
+        let digits = fraction.iter().take_while(|c| c.is_ascii_digit()).count();
+        if !(1..=9).contains(&digits) {
+            return None;
+        }
+        nanos = ascii_number(&fraction[..digits])? * 10u32.pow(9 - digits as u32);
+        rest = &fraction[digits..];
+    }
+    let offset = match rest {
+        b"Z" => 0,
+        [sign @ (b'+' | b'-'), h1, h2, b':', m1, m2] => {
+            let hours = i64::from(ascii_number(&[*h1, *h2])?);
+            let minutes = i64::from(ascii_number(&[*m1, *m2])?);
+            if hours > 23 || minutes > 59 {
+                return None;
+            }
+            if *sign == b'-' {
+                -(hours * 60 + minutes)
+            } else {
+                hours * 60 + minutes
+            }
+        }
+        _ => return None,
+    };
+    let seconds = day_number * 86_400 + hour * 3600 + minute * 60 + second - offset * 60;
+    Some(TimeValue {
+        form: TimeForm::Instant,
+        day_number,
+        place: (seconds, nanos),
+    })
+}
+
+/// A field that holds a time of one of `forms`; the error names them, as
+/// the browser's `readTime` does.
+fn read_time(value: Option<&Value>, forms: &[TimeForm], field: &str) -> Result<TimeValue, String> {
+    value
+        .and_then(Value::as_str)
+        .and_then(parse_time_value)
+        .filter(|time| forms.contains(&time.form))
+        .ok_or_else(|| {
+            let forms: Vec<&str> = forms.iter().map(|form| form.text()).collect();
+            format!(
+                "{field} must be {} in the years 1970-2199",
+                forms.join(" or ")
+            )
+        })
+}
+
+// ---- personal-assistant types -------------------------------------------------
+//
+// calendar, tasks, timer, weather and inbox (docs/display-tool.md,
+// "Personal-assistant types"). Each item id is checked as a diagram node id
+// is (non-blank, <= 128 UTF-16 units) and is unique in its list; the
+// browser's validators hold the same rules in the same order.
+
+/// The scene-frame text every type may carry, checked last.
+fn copy_frame_text(
+    data: &Map<String, Value>,
+    out: &mut Map<String, Value>,
+    kind: &str,
+) -> Result<(), String> {
+    for key in ["title", "subtitle", "context"] {
+        copy_optional_string(data, out, key, 256, &format!("{kind}.{key}"))?;
+    }
+    copy_optional_string(data, out, "caption", 128, &format!("{kind}.caption"))
+}
+
+fn required_string<'a>(
+    data: &'a Map<String, Value>,
+    key: &str,
+    max_len: usize,
+    field: &str,
+) -> Result<&'a str, String> {
+    let text = data
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{field} must be a string"))?;
+    if utf16_len(text) > max_len {
+        return Err(format!(
+            "{field} exceeds maximum length of {max_len} UTF-16 code units"
+        ));
+    }
+    Ok(text)
+}
+
+fn copy_optional_bool(
+    data: &Map<String, Value>,
+    out: &mut Map<String, Value>,
+    key: &str,
+    field: &str,
+) -> Result<(), String> {
+    if let Some(value) = data.get(key) {
+        let b = value
+            .as_bool()
+            .ok_or_else(|| format!("{field} must be boolean"))?;
+        out.insert(key.into(), b.into());
+    }
+    Ok(())
+}
+
+/// An optional name from `allowed`; anything else, `null` included, is
+/// `invalid {field}`.
+fn copy_optional_name(
+    data: &Map<String, Value>,
+    out: &mut Map<String, Value>,
+    key: &str,
+    allowed: &[&str],
+    field: &str,
+) -> Result<(), String> {
+    if let Some(value) = data.get(key) {
+        let name = value
+            .as_str()
+            .filter(|name| allowed.contains(name))
+            .ok_or_else(|| format!("invalid {field}"))?;
+        out.insert(key.into(), name.into());
+    }
+    Ok(())
+}
+
+fn copy_number(
+    data: &Map<String, Value>,
+    out: &mut Map<String, Value>,
+    key: &str,
+    field: &str,
+    required: bool,
+) -> Result<(), String> {
+    match data.get(key) {
+        None if !required => Ok(()),
+        value => {
+            let number = value
+                .filter(|v| v.as_f64().is_some_and(f64::is_finite))
+                .ok_or_else(|| format!("{field} must be a finite number"))?;
+            out.insert(key.into(), number.clone());
+            Ok(())
+        }
+    }
+}
+
+fn copy_optional_percent(
+    data: &Map<String, Value>,
+    out: &mut Map<String, Value>,
+    key: &str,
+    field: &str,
+) -> Result<(), String> {
+    if let Some(value) = data.get(key) {
+        if !value
+            .as_f64()
+            .is_some_and(|v| v.is_finite() && (0.0..=100.0).contains(&v))
+        {
+            return Err(format!("{field} must be a number from 0 to 100"));
+        }
+        out.insert(key.into(), value.clone());
+    }
+    Ok(())
+}
+
+/// An item's id: non-blank, within the id cap, and the first of its name in
+/// `seen`.
+fn check_item_id<'a>(
+    item: &'a Map<String, Value>,
+    seen: &mut HashSet<String>,
+    context: &str,
+) -> Result<&'a str, String> {
+    let id = item
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !is_blank(id) && utf16_len(id) <= MAX_ID_UTF16)
+        .ok_or_else(|| {
+            format!("{context} id must be non-empty and <= {MAX_ID_UTF16} UTF-16 code units")
+        })?;
+    if !seen.insert(id.to_string()) {
+        return Err(format!("duplicate {context} id: {id}"));
+    }
+    Ok(id)
+}
+
+const CALENDAR_VIEWS: [&str; 4] = ["day", "week", "month", "agenda"];
+const MAX_CALENDAR_EVENTS: usize = 200;
+const CALENDAR_EVENT_STATUSES: [&str; 3] = ["confirmed", "tentative", "cancelled"];
+
+fn validate_calendar_event(event: &Value, seen: &mut HashSet<String>) -> Result<Value, String> {
+    let em = event
+        .as_object()
+        .ok_or("calendar event must be an object")?;
+    check_unknown_keys(
+        em,
+        &[
+            "id", "title", "start", "end", "location", "detail", "semantic", "status", "active",
+        ],
+        "calendar event",
+    )?;
+    let id = check_item_id(em, seen, "calendar event")?;
+    let title = required_string(em, "title", 256, "calendar event.title")?;
+    let both = [TimeForm::Date, TimeForm::Wall];
+    let start = read_time(em.get("start"), &both, "calendar event.start")?;
+    let mut out = Map::new();
+    out.insert("id".into(), id.into());
+    out.insert("title".into(), title.into());
+    out.insert("start".into(), em["start"].clone());
+    if let Some(end_value) = em.get("end") {
+        let end = read_time(Some(end_value), &both, "calendar event.end")?;
+        if end.form != start.form {
+            return Err(
+                "calendar event.end must be written like its start: both dates or both wall times"
+                    .into(),
+            );
+        }
+        if end.place < start.place {
+            return Err("calendar event.end is before its start".into());
+        }
+        out.insert("end".into(), end_value.clone());
+    }
+    copy_optional_string(em, &mut out, "location", 128, "calendar event.location")?;
+    copy_optional_string(em, &mut out, "detail", 256, "calendar event.detail")?;
+    copy_optional_semantic(em, &mut out, "calendar event.semantic")?;
+    copy_optional_name(
+        em,
+        &mut out,
+        "status",
+        &CALENDAR_EVENT_STATUSES,
+        "calendar event.status",
+    )?;
+    copy_optional_bool(em, &mut out, "active", "calendar event.active")?;
+    Ok(Value::Object(out))
+}
+
+fn validate_calendar_data(data: &Map<String, Value>) -> Result<Value, String> {
+    check_unknown_keys(
+        data,
+        &[
+            "title", "subtitle", "context", "caption", "view", "start", "days", "today", "now",
+            "events",
+        ],
+        "calendar data",
+    )?;
+    let view = data
+        .get("view")
+        .and_then(Value::as_str)
+        .filter(|view| CALENDAR_VIEWS.contains(view))
+        .ok_or("calendar.view must be one of day, week, month, agenda")?;
+    read_time(data.get("start"), &[TimeForm::Date], "calendar.start")?;
+    let mut out = Map::new();
+    out.insert("view".into(), view.into());
+    out.insert("start".into(), data["start"].clone());
+    if let Some(days) = data.get("days") {
+        // The most days a view may show; the day and month views take none.
+        let max = match view {
+            "week" => 7,
+            "agenda" => 31,
+            _ => return Err("calendar.days applies only to the week and agenda views".into()),
+        };
+        // An integer, as the browser's Number.isInteger counts it: 7.0 is one.
+        if !days
+            .as_f64()
+            .is_some_and(|d| d.fract() == 0.0 && (1.0..=f64::from(max)).contains(&d))
+        {
+            return Err(format!(
+                "calendar.days must be an integer from 1 to {max} on the {view} view"
+            ));
+        }
+        out.insert("days".into(), days.clone());
+    }
+    let today = match data.get("today") {
+        Some(value) => {
+            let today = read_time(Some(value), &[TimeForm::Date], "calendar.today")?;
+            out.insert("today".into(), value.clone());
+            Some(today)
+        }
+        None => None,
+    };
+    if let Some(value) = data.get("now") {
+        let now = read_time(Some(value), &[TimeForm::Wall], "calendar.now")?;
+        if today.is_some_and(|today| today.day_number != now.day_number) {
+            return Err("calendar.now must fall on calendar.today".into());
+        }
+        out.insert("now".into(), value.clone());
+    }
+    let events = data
+        .get("events")
+        .and_then(Value::as_array)
+        .filter(|events| events.len() <= MAX_CALENDAR_EVENTS)
+        .ok_or(format!(
+            "calendar.events must be an array of at most {MAX_CALENDAR_EVENTS} items"
+        ))?;
+    let mut seen = HashSet::new();
+    let events = events
+        .iter()
+        .map(|event| validate_calendar_event(event, &mut seen))
+        .collect::<Result<Vec<_>, _>>()?;
+    out.insert("events".into(), Value::Array(events));
+    copy_frame_text(data, &mut out, "calendar")?;
+    Ok(Value::Object(out))
+}
+
+const MAX_TASKS: usize = 100;
+const TASK_STATES: [&str; 4] = ["todo", "active", "done", "blocked"];
+const TASK_PRIORITIES: [&str; 2] = ["high", "low"];
+const MAX_TASK_TAGS: usize = 4;
+const MAX_TASK_TAG_UTF16: usize = 32;
+
+fn validate_task(task: &Value, seen: &mut HashSet<String>) -> Result<Value, String> {
+    let tm = task.as_object().ok_or("task must be an object")?;
+    check_unknown_keys(
+        tm,
+        &[
+            "id", "text", "state", "due", "priority", "group", "detail", "tags",
+        ],
+        "task",
+    )?;
+    let id = check_item_id(tm, seen, "task")?;
+    let text = required_string(tm, "text", 256, "task.text")?;
+    let mut out = Map::new();
+    out.insert("id".into(), id.into());
+    out.insert("text".into(), text.into());
+    copy_optional_name(tm, &mut out, "state", &TASK_STATES, "task.state")?;
+    if let Some(due) = tm.get("due") {
+        read_time(Some(due), &[TimeForm::Date, TimeForm::Wall], "task.due")?;
+        out.insert("due".into(), due.clone());
+    }
+    copy_optional_name(tm, &mut out, "priority", &TASK_PRIORITIES, "task.priority")?;
+    copy_optional_string(tm, &mut out, "group", 128, "task.group")?;
+    copy_optional_string(tm, &mut out, "detail", 256, "task.detail")?;
+    if let Some(tags) = tm.get("tags") {
+        let list = tags
+            .as_array()
+            .filter(|tags| tags.len() <= MAX_TASK_TAGS)
+            .ok_or(format!(
+                "task.tags must be an array of at most {MAX_TASK_TAGS} strings"
+            ))?;
+        for tag in list {
+            let text = tag.as_str().ok_or("task tag must be a string")?;
+            if utf16_len(text) > MAX_TASK_TAG_UTF16 {
+                return Err(format!(
+                    "task tag exceeds maximum length of {MAX_TASK_TAG_UTF16} UTF-16 code units"
+                ));
+            }
+        }
+        out.insert("tags".into(), tags.clone());
+    }
+    Ok(Value::Object(out))
+}
+
+fn validate_tasks_data(data: &Map<String, Value>) -> Result<Value, String> {
+    check_unknown_keys(
+        data,
+        &["title", "subtitle", "context", "caption", "today", "items"],
+        "tasks data",
+    )?;
+    let mut out = Map::new();
+    if let Some(today) = data.get("today") {
+        read_time(Some(today), &[TimeForm::Date], "tasks.today")?;
+        out.insert("today".into(), today.clone());
+    }
+    let items = data
+        .get("items")
+        .and_then(Value::as_array)
+        .filter(|items| !items.is_empty() && items.len() <= MAX_TASKS)
+        .ok_or(format!(
+            "tasks.items must be an array of 1 to {MAX_TASKS} items"
+        ))?;
+    let mut seen = HashSet::new();
+    let items = items
+        .iter()
+        .map(|task| validate_task(task, &mut seen))
+        .collect::<Result<Vec<_>, _>>()?;
+    out.insert("items".into(), Value::Array(items));
+    copy_frame_text(data, &mut out, "tasks")?;
+    Ok(Value::Object(out))
+}
+
+const MAX_TIMERS: usize = 8;
+const TIMER_STATES: [&str; 2] = ["running", "paused"];
+
+fn validate_timer(timer: &Value, seen: &mut HashSet<String>) -> Result<Value, String> {
+    let tm = timer.as_object().ok_or("timer must be an object")?;
+    check_unknown_keys(
+        tm,
+        &["id", "label", "endsAt", "startedAt", "state", "remaining"],
+        "timer",
+    )?;
+    let id = check_item_id(tm, seen, "timer")?;
+    let label = required_string(tm, "label", 128, "timer.label")?;
+    let ends_at = read_time(tm.get("endsAt"), &[TimeForm::Instant], "timer.endsAt")?;
+    let mut out = Map::new();
+    out.insert("id".into(), id.into());
+    out.insert("label".into(), label.into());
+    out.insert("endsAt".into(), tm["endsAt"].clone());
+    if let Some(value) = tm.get("startedAt") {
+        let started_at = read_time(Some(value), &[TimeForm::Instant], "timer.startedAt")?;
+        if started_at.place >= ends_at.place {
+            return Err("timer.startedAt must be before timer.endsAt".into());
+        }
+        out.insert("startedAt".into(), value.clone());
+    }
+    copy_optional_name(tm, &mut out, "state", &TIMER_STATES, "timer.state")?;
+    // A running timer is counted down on the page clock; a paused one is
+    // not, so it says how much is left, and a running one may not.
+    let paused = tm.get("state").and_then(Value::as_str) == Some("paused");
+    match tm.get("remaining") {
+        None if paused => return Err("timer.remaining is required when the timer is paused".into()),
+        None => {}
+        Some(_) if !paused => return Err("timer.remaining is only for a paused timer".into()),
+        Some(remaining) => {
+            if !remaining
+                .as_f64()
+                .is_some_and(|seconds| seconds.is_finite() && seconds >= 0.0)
+            {
+                return Err("timer.remaining must be a number of seconds, 0 or more".into());
+            }
+            out.insert("remaining".into(), remaining.clone());
+        }
+    }
+    Ok(Value::Object(out))
+}
+
+fn validate_timer_data(data: &Map<String, Value>) -> Result<Value, String> {
+    check_unknown_keys(
+        data,
+        &["title", "subtitle", "context", "caption", "timers"],
+        "timer data",
+    )?;
+    let timers = data
+        .get("timers")
+        .and_then(Value::as_array)
+        .filter(|timers| !timers.is_empty() && timers.len() <= MAX_TIMERS)
+        .ok_or(format!(
+            "timer.timers must be an array of 1 to {MAX_TIMERS} items"
+        ))?;
+    let mut seen = HashSet::new();
+    let timers = timers
+        .iter()
+        .map(|timer| validate_timer(timer, &mut seen))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut out = Map::new();
+    out.insert("timers".into(), Value::Array(timers));
+    copy_frame_text(data, &mut out, "timer")?;
+    Ok(Value::Object(out))
+}
+
+const WEATHER_CONDITIONS: [&str; 13] = [
+    "clear",
+    "partly-cloudy",
+    "cloudy",
+    "fog",
+    "drizzle",
+    "rain",
+    "heavy-rain",
+    "thunder",
+    "snow",
+    "sleet",
+    "hail",
+    "wind",
+    "haze",
+];
+const MAX_WEATHER_HOURS: usize = 48;
+const MAX_WEATHER_DAYS: usize = 14;
+
+fn copy_condition(
+    data: &Map<String, Value>,
+    out: &mut Map<String, Value>,
+    field: &str,
+) -> Result<(), String> {
+    let condition = data
+        .get("condition")
+        .and_then(Value::as_str)
+        .filter(|condition| WEATHER_CONDITIONS.contains(condition))
+        .ok_or_else(|| format!("{field} must be one of {}", WEATHER_CONDITIONS.join(", ")))?;
+    out.insert("condition".into(), condition.into());
+    Ok(())
+}
+
+fn validate_weather_current(current: Option<&Value>) -> Result<Value, String> {
+    let cm = current
+        .and_then(Value::as_object)
+        .ok_or("weather.current must be an object")?;
+    check_unknown_keys(
+        cm,
+        &[
+            "temp",
+            "condition",
+            "summary",
+            "high",
+            "low",
+            "feelsLike",
+            "humidity",
+            "precip",
+            "wind",
+        ],
+        "weather current",
+    )?;
+    let mut out = Map::new();
+    copy_number(cm, &mut out, "temp", "weather current.temp", true)?;
+    copy_condition(cm, &mut out, "weather current.condition")?;
+    copy_optional_string(cm, &mut out, "summary", 256, "weather current.summary")?;
+    copy_number(cm, &mut out, "high", "weather current.high", false)?;
+    copy_number(cm, &mut out, "low", "weather current.low", false)?;
+    copy_number(
+        cm,
+        &mut out,
+        "feelsLike",
+        "weather current.feelsLike",
+        false,
+    )?;
+    copy_optional_percent(cm, &mut out, "humidity", "weather current.humidity")?;
+    copy_optional_percent(cm, &mut out, "precip", "weather current.precip")?;
+    copy_optional_string(cm, &mut out, "wind", 128, "weather current.wind")?;
+    Ok(Value::Object(out))
+}
+
+fn validate_weather_hour(hour: &Value, seen: &mut HashSet<String>) -> Result<Value, String> {
+    let hm = hour.as_object().ok_or("weather hour must be an object")?;
+    check_unknown_keys(hm, &["time", "temp", "condition", "precip"], "weather hour")?;
+    read_time(hm.get("time"), &[TimeForm::Wall], "weather hour.time")?;
+    let time = hm["time"].as_str().unwrap_or_default();
+    // A note names an hour by its time, so no two hours share one.
+    if !seen.insert(time.to_string()) {
+        return Err(format!("duplicate weather hour: {time}"));
+    }
+    let mut out = Map::new();
+    out.insert("time".into(), time.into());
+    copy_number(hm, &mut out, "temp", "weather hour.temp", true)?;
+    copy_condition(hm, &mut out, "weather hour.condition")?;
+    copy_optional_percent(hm, &mut out, "precip", "weather hour.precip")?;
+    Ok(Value::Object(out))
+}
+
+fn validate_weather_day(day: &Value, seen: &mut HashSet<String>) -> Result<Value, String> {
+    let dm = day.as_object().ok_or("weather day must be an object")?;
+    check_unknown_keys(
+        dm,
+        &["date", "high", "low", "condition", "precip"],
+        "weather day",
+    )?;
+    read_time(dm.get("date"), &[TimeForm::Date], "weather day.date")?;
+    let date = dm["date"].as_str().unwrap_or_default();
+    // A note names a day by its date, so no two days share one.
+    if !seen.insert(date.to_string()) {
+        return Err(format!("duplicate weather day: {date}"));
+    }
+    let mut out = Map::new();
+    out.insert("date".into(), date.into());
+    copy_number(dm, &mut out, "high", "weather day.high", true)?;
+    copy_number(dm, &mut out, "low", "weather day.low", true)?;
+    copy_condition(dm, &mut out, "weather day.condition")?;
+    copy_optional_percent(dm, &mut out, "precip", "weather day.precip")?;
+    Ok(Value::Object(out))
+}
+
+fn validate_weather_data(data: &Map<String, Value>) -> Result<Value, String> {
+    check_unknown_keys(
+        data,
+        &[
+            "title", "subtitle", "context", "caption", "location", "units", "current", "hourly",
+            "daily", "alert",
+        ],
+        "weather data",
+    )?;
+    let location = required_string(data, "location", 128, "weather.location")?;
+    let units = data
+        .get("units")
+        .and_then(Value::as_str)
+        .filter(|units| matches!(*units, "C" | "F"))
+        .ok_or("weather.units must be \"C\" or \"F\"")?;
+    let current = validate_weather_current(data.get("current"))?;
+    let mut out = Map::new();
+    out.insert("location".into(), location.into());
+    out.insert("units".into(), units.into());
+    out.insert("current".into(), current);
+    if let Some(hourly) = data.get("hourly") {
+        let hours = hourly
+            .as_array()
+            .filter(|hours| hours.len() <= MAX_WEATHER_HOURS)
+            .ok_or(format!(
+                "weather.hourly must be an array of at most {MAX_WEATHER_HOURS} items"
+            ))?;
+        let mut seen = HashSet::new();
+        let hours = hours
+            .iter()
+            .map(|hour| validate_weather_hour(hour, &mut seen))
+            .collect::<Result<Vec<_>, _>>()?;
+        out.insert("hourly".into(), Value::Array(hours));
+    }
+    if let Some(daily) = data.get("daily") {
+        let days = daily
+            .as_array()
+            .filter(|days| days.len() <= MAX_WEATHER_DAYS)
+            .ok_or(format!(
+                "weather.daily must be an array of at most {MAX_WEATHER_DAYS} items"
+            ))?;
+        let mut seen = HashSet::new();
+        let days = days
+            .iter()
+            .map(|day| validate_weather_day(day, &mut seen))
+            .collect::<Result<Vec<_>, _>>()?;
+        out.insert("daily".into(), Value::Array(days));
+    }
+    copy_optional_string(data, &mut out, "alert", 256, "weather.alert")?;
+    copy_frame_text(data, &mut out, "weather")?;
+    Ok(Value::Object(out))
+}
+
+const MAX_INBOX_MESSAGES: usize = 50;
+const MAX_INBOX_CHANNEL_UTF16: usize = 32;
+
+fn validate_inbox_message(message: &Value, seen: &mut HashSet<String>) -> Result<Value, String> {
+    let mm = message
+        .as_object()
+        .ok_or("inbox message must be an object")?;
+    check_unknown_keys(
+        mm,
+        &[
+            "id", "from", "subject", "snippet", "time", "channel", "unread", "flagged", "semantic",
+        ],
+        "inbox message",
+    )?;
+    let id = check_item_id(mm, seen, "inbox message")?;
+    let from = required_string(mm, "from", 128, "inbox message.from")?;
+    let mut out = Map::new();
+    out.insert("id".into(), id.into());
+    out.insert("from".into(), from.into());
+    copy_optional_string(mm, &mut out, "subject", 256, "inbox message.subject")?;
+    copy_optional_string(mm, &mut out, "snippet", 256, "inbox message.snippet")?;
+    read_time(
+        mm.get("time"),
+        &[TimeForm::Date, TimeForm::Wall],
+        "inbox message.time",
+    )?;
+    out.insert("time".into(), mm["time"].clone());
+    copy_optional_string(
+        mm,
+        &mut out,
+        "channel",
+        MAX_INBOX_CHANNEL_UTF16,
+        "inbox message.channel",
+    )?;
+    copy_optional_bool(mm, &mut out, "unread", "inbox message.unread")?;
+    copy_optional_bool(mm, &mut out, "flagged", "inbox message.flagged")?;
+    copy_optional_semantic(mm, &mut out, "inbox message.semantic")?;
+    Ok(Value::Object(out))
+}
+
+fn validate_inbox_data(data: &Map<String, Value>) -> Result<Value, String> {
+    check_unknown_keys(
+        data,
+        &[
+            "title", "subtitle", "context", "caption", "today", "messages",
+        ],
+        "inbox data",
+    )?;
+    let mut out = Map::new();
+    if let Some(today) = data.get("today") {
+        read_time(Some(today), &[TimeForm::Date], "inbox.today")?;
+        out.insert("today".into(), today.clone());
+    }
+    let messages = data
+        .get("messages")
+        .and_then(Value::as_array)
+        .filter(|messages| !messages.is_empty() && messages.len() <= MAX_INBOX_MESSAGES)
+        .ok_or(format!(
+            "inbox.messages must be an array of 1 to {MAX_INBOX_MESSAGES} items"
+        ))?;
+    let mut seen = HashSet::new();
+    let messages = messages
+        .iter()
+        .map(|message| validate_inbox_message(message, &mut seen))
+        .collect::<Result<Vec<_>, _>>()?;
+    out.insert("messages".into(), Value::Array(messages));
+    copy_frame_text(data, &mut out, "inbox")?;
+    Ok(Value::Object(out))
+}
+
 // ---- note ------------------------------------------------------------------
 
 fn validate_note_data(data: &Map<String, Value>) -> Result<Value, String> {
@@ -1366,7 +2161,11 @@ fn validate_note_data(data: &Map<String, Value>) -> Result<Value, String> {
         let anchor = anchor_value
             .as_object()
             .ok_or("note.anchor must be an object")?;
-        check_unknown_keys(anchor, &["target", "x", "series", "node"], "note anchor")?;
+        check_unknown_keys(
+            anchor,
+            &["target", "x", "series", "node", "item"],
+            "note anchor",
+        )?;
         let target = anchor
             .get("target")
             .and_then(Value::as_str)
@@ -1388,6 +2187,22 @@ fn validate_note_data(data: &Map<String, Value>) -> Result<Value, String> {
                 128,
                 &format!("note.anchor.{key}"),
             )?;
+        }
+        // An item inside the target, named as the item names itself: an id,
+        // or a forecast hour's `time` or day's `date`. Like `node` and
+        // `series`, it is not looked up here: the note and its target are
+        // separate objects, and the page marks the item only when the target
+        // has one of that name.
+        if let Some(item) = anchor.get("item") {
+            let item = item
+                .as_str()
+                .filter(|item| !is_blank(item) && utf16_len(item) <= MAX_ID_UTF16)
+                .ok_or_else(|| {
+                    format!(
+                        "note.anchor.item must be non-empty and <= {MAX_ID_UTF16} UTF-16 code units"
+                    )
+                })?;
+            clean_anchor.insert("item".into(), item.into());
         }
         out.insert("anchor".into(), Value::Object(clean_anchor));
     }
@@ -1556,6 +2371,11 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
                 "table" => validate_table_data(data_obj)?,
                 "note" => validate_note_data(data_obj)?,
                 "image" => validate_image_data(data_obj)?,
+                "calendar" => validate_calendar_data(data_obj)?,
+                "tasks" => validate_tasks_data(data_obj)?,
+                "timer" => validate_timer_data(data_obj)?,
+                "weather" => validate_weather_data(data_obj)?,
+                "inbox" => validate_inbox_data(data_obj)?,
                 _ => return Err("show.type is unknown".into()),
             };
 

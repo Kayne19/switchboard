@@ -500,6 +500,17 @@ fn show_types_and_their_required_data_follow_the_schema() {
             ("table", None) => json!({"columns": [{"label": "c"}], "rows": []}),
             ("note", None) => json!({"segments": [{"text": "t"}]}),
             ("image", None) => json!({"format": "png", "bytes": PNG_1X1, "alt": "a"}),
+            ("calendar", None) => json!({"view": "week", "start": "2026-10-05", "events": []}),
+            ("tasks", None) => json!({"items": [{"id": "t", "text": "T"}]}),
+            ("timer", None) => {
+                json!({"timers": [{"id": "t", "label": "T", "endsAt": "2026-10-05T18:42:00Z"}]})
+            }
+            ("weather", None) => {
+                json!({"location": "L", "units": "C", "current": {"temp": 1, "condition": "clear"}})
+            }
+            ("inbox", None) => {
+                json!({"messages": [{"id": "m", "from": "F", "time": "2026-10-05"}]})
+            }
             other => panic!("no sample for {other:?}; the schema grew a type or a mode"),
         }
     };
@@ -926,6 +937,42 @@ fn numbers_parse_to_the_double_javascript_reads() {
         let parsed: Value = serde_json::from_str(text).unwrap();
         assert_eq!(parsed.as_f64(), Some(double), "{text}");
         assert_eq!(json_len(&parsed), javascript.len(), "{text}");
+    }
+}
+
+/// The service's one time parser (docs/display-tool.md, "Time values"). The
+/// shared corpus pins which texts both validators accept; this pins the day
+/// a time falls on and the order of two instants, which the browser's
+/// `timeValues.test.ts` pins for `parseTimeValue` too.
+#[test]
+fn time_values_count_days_from_1970_and_order_instants_by_the_moment() {
+    for (text, day_number) in [
+        ("1970-01-01", 0),
+        ("2000-02-29", 11_016),
+        ("2026-10-05", 20_731),
+        ("2100-03-01", 47_541),
+        ("2199-12-31", 84_005),
+        ("2026-10-05T23:59", 20_731),
+        ("2026-10-05T23:59:59-07:00", 20_731),
+    ] {
+        let time = parse_time_value(text).expect(text);
+        assert_eq!(time.day_number, day_number, "{text}");
+    }
+    let at = |text: &str| parse_time_value(text).expect(text).place;
+    assert_eq!(at("2026-10-05T18:42:00-07:00"), at("2026-10-06T01:42:00Z"));
+    assert_eq!(at("2026-10-05T18:42:00-00:00"), at("2026-10-05T18:42:00Z"));
+    assert!(at("2026-10-06T02:30:00+01:00") < at("2026-10-05T18:42:00-07:00"));
+    assert!(at("2026-10-05T18:42:00.000000001Z") > at("2026-10-05T18:42:00Z"));
+    assert!(at("2026-10-05T09:30") < at("2026-10-05T09:31"));
+    for text in [
+        "2026-02-29",
+        "2026-10-05T24:00",
+        "2026-10-05T09:00:00",
+        "2026-10-05t09:00",
+        "2026-10-05T18:42:00z",
+        "\u{ff12}026-10-05",
+    ] {
+        assert!(parse_time_value(text).is_none(), "{text}");
     }
 }
 

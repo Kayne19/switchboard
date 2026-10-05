@@ -1237,6 +1237,406 @@
           "alt": "WebP header bytes"
         }
       }
+    },
+    {
+      "name": "show_calendar_week",
+      "action": {
+        "op": "show",
+        "id": "kayne-week",
+        "type": "calendar",
+        "role": "primary",
+        "data": {
+          "title": "WEEK / OCT 5-9",
+          "view": "week",
+          "start": "2026-10-05",
+          "days": 5,
+          "today": "2026-10-07",
+          "now": "2026-10-07T09:40",
+          "events": [
+            {
+              "id": "standup-wed",
+              "title": "Standup",
+              "start": "2026-10-07T09:30",
+              "end": "2026-10-07T09:45",
+              "location": "Meet",
+              "active": true
+            },
+            {
+              "id": "dentist",
+              "title": "Dentist",
+              "start": "2026-10-07T10:00",
+              "end": "2026-10-07T11:00",
+              "location": "Dr. Okafor, 14 Pine St",
+              "semantic": "amber"
+            },
+            {
+              "id": "offsite",
+              "title": "Team offsite",
+              "start": "2026-10-08",
+              "end": "2026-10-09",
+              "status": "tentative"
+            }
+          ]
+        }
+      },
+      "normalized": {
+        "op": "show",
+        "id": "kayne-week",
+        "type": "calendar",
+        "role": "primary",
+        "data": {
+          "title": "WEEK / OCT 5-9",
+          "view": "week",
+          "start": "2026-10-05",
+          "days": 5,
+          "today": "2026-10-07",
+          "now": "2026-10-07T09:40",
+          "events": [
+            {
+              "id": "standup-wed",
+              "title": "Standup",
+              "start": "2026-10-07T09:30",
+              "end": "2026-10-07T09:45",
+              "location": "Meet",
+              "active": true
+            },
+            {
+              "id": "dentist",
+              "title": "Dentist",
+              "start": "2026-10-07T10:00",
+              "end": "2026-10-07T11:00",
+              "location": "Dr. Okafor, 14 Pine St",
+              "semantic": "amber"
+            },
+            {
+              "id": "offsite",
+              "title": "Team offsite",
+              "start": "2026-10-08",
+              "end": "2026-10-09",
+              "status": "tentative"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "show_tasks_grouped",
+      "action": {
+        "op": "show",
+        "id": "todo",
+        "type": "tasks",
+        "role": "secondary",
+        "data": {
+          "title": "TO DO",
+          "today": "2026-10-07",
+          "items": [
+            {
+              "id": "passport",
+              "text": "Renew passport",
+              "due": "2026-10-02",
+              "priority": "high",
+              "group": "Errands",
+              "tags": [
+                "travel"
+              ]
+            },
+            {
+              "id": "pr",
+              "text": "Review the switchboard PR",
+              "state": "active",
+              "due": "2026-10-07T17:00",
+              "group": "Work"
+            },
+            {
+              "id": "flowers",
+              "text": "Order flowers",
+              "state": "done",
+              "group": "Home"
+            }
+          ]
+        }
+      },
+      "normalized": {
+        "op": "show",
+        "id": "todo",
+        "type": "tasks",
+        "role": "secondary",
+        "data": {
+          "title": "TO DO",
+          "today": "2026-10-07",
+          "items": [
+            {
+              "id": "passport",
+              "text": "Renew passport",
+              "due": "2026-10-02",
+              "priority": "high",
+              "group": "Errands",
+              "tags": [
+                "travel"
+              ]
+            },
+            {
+              "id": "pr",
+              "text": "Review the switchboard PR",
+              "state": "active",
+              "due": "2026-10-07T17:00",
+              "group": "Work"
+            },
+            {
+              "id": "flowers",
+              "text": "Order flowers",
+              "state": "done",
+              "group": "Home"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "show_timer_kitchen",
+      "action": {
+        "op": "show",
+        "id": "kitchen",
+        "type": "timer",
+        "role": "ambient",
+        "data": {
+          "title": "KITCHEN",
+          "timers": [
+            {
+              "id": "pasta",
+              "label": "Pasta",
+              "startedAt": "2026-10-05T18:33:00-07:00",
+              "endsAt": "2026-10-05T18:42:00-07:00"
+            },
+            {
+              "id": "bread",
+              "label": "Bread",
+              "endsAt": "2026-10-05T18:55:00-07:00",
+              "state": "paused",
+              "remaining": 1260
+            }
+          ]
+        }
+      },
+      "normalized": {
+        "op": "show",
+        "id": "kitchen",
+        "type": "timer",
+        "role": "ambient",
+        "data": {
+          "title": "KITCHEN",
+          "timers": [
+            {
+              "id": "pasta",
+              "label": "Pasta",
+              "startedAt": "2026-10-05T18:33:00-07:00",
+              "endsAt": "2026-10-05T18:42:00-07:00"
+            },
+            {
+              "id": "bread",
+              "label": "Bread",
+              "endsAt": "2026-10-05T18:55:00-07:00",
+              "state": "paused",
+              "remaining": 1260
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "show_weather_forecast",
+      "action": {
+        "op": "show",
+        "id": "weather",
+        "type": "weather",
+        "role": "secondary",
+        "data": {
+          "location": "San Francisco, CA",
+          "units": "F",
+          "current": {
+            "temp": 61,
+            "condition": "fog",
+            "summary": "Fog burning off by noon",
+            "high": 68,
+            "low": 54,
+            "humidity": 84,
+            "wind": "W 12 mph"
+          },
+          "hourly": [
+            {
+              "time": "2026-10-05T12:00",
+              "temp": 64,
+              "condition": "partly-cloudy"
+            },
+            {
+              "time": "2026-10-05T13:00",
+              "temp": 67,
+              "condition": "clear",
+              "precip": 0
+            }
+          ],
+          "daily": [
+            {
+              "date": "2026-10-06",
+              "high": 70,
+              "low": 55,
+              "condition": "clear"
+            },
+            {
+              "date": "2026-10-07",
+              "high": 63,
+              "low": 55,
+              "condition": "rain",
+              "precip": 80
+            }
+          ],
+          "alert": "Small craft advisory until 9 PM"
+        }
+      },
+      "normalized": {
+        "op": "show",
+        "id": "weather",
+        "type": "weather",
+        "role": "secondary",
+        "data": {
+          "location": "San Francisco, CA",
+          "units": "F",
+          "current": {
+            "temp": 61,
+            "condition": "fog",
+            "summary": "Fog burning off by noon",
+            "high": 68,
+            "low": 54,
+            "humidity": 84,
+            "wind": "W 12 mph"
+          },
+          "hourly": [
+            {
+              "time": "2026-10-05T12:00",
+              "temp": 64,
+              "condition": "partly-cloudy"
+            },
+            {
+              "time": "2026-10-05T13:00",
+              "temp": 67,
+              "condition": "clear",
+              "precip": 0
+            }
+          ],
+          "daily": [
+            {
+              "date": "2026-10-06",
+              "high": 70,
+              "low": 55,
+              "condition": "clear"
+            },
+            {
+              "date": "2026-10-07",
+              "high": 63,
+              "low": 55,
+              "condition": "rain",
+              "precip": 80
+            }
+          ],
+          "alert": "Small craft advisory until 9 PM"
+        }
+      }
+    },
+    {
+      "name": "show_inbox_unread",
+      "action": {
+        "op": "show",
+        "id": "inbox",
+        "type": "inbox",
+        "role": "secondary",
+        "data": {
+          "today": "2026-10-05",
+          "messages": [
+            {
+              "id": "dentist",
+              "from": "Dr. Okafor's office",
+              "subject": "Appointment reminder",
+              "snippet": "Wednesday at 10:00. Reply C to confirm.",
+              "time": "2026-10-05T08:12",
+              "channel": "sms",
+              "unread": true,
+              "flagged": true
+            },
+            {
+              "id": "ana",
+              "from": "Ana",
+              "snippet": "lunch thursday?",
+              "time": "2026-10-04",
+              "channel": "slack"
+            }
+          ]
+        }
+      },
+      "normalized": {
+        "op": "show",
+        "id": "inbox",
+        "type": "inbox",
+        "role": "secondary",
+        "data": {
+          "today": "2026-10-05",
+          "messages": [
+            {
+              "id": "dentist",
+              "from": "Dr. Okafor's office",
+              "subject": "Appointment reminder",
+              "snippet": "Wednesday at 10:00. Reply C to confirm.",
+              "time": "2026-10-05T08:12",
+              "channel": "sms",
+              "unread": true,
+              "flagged": true
+            },
+            {
+              "id": "ana",
+              "from": "Ana",
+              "snippet": "lunch thursday?",
+              "time": "2026-10-04",
+              "channel": "slack"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "show_note_anchor_item",
+      "action": {
+        "op": "show",
+        "id": "dentist-note",
+        "type": "note",
+        "data": {
+          "tag": "LEAVE BY 9:40",
+          "segments": [
+            {
+              "text": "Traffic on 101 is slow; leave right after standup."
+            }
+          ],
+          "anchor": {
+            "target": "kayne-week",
+            "item": "dentist"
+          }
+        }
+      },
+      "normalized": {
+        "op": "show",
+        "id": "dentist-note",
+        "type": "note",
+        "data": {
+          "tag": "LEAVE BY 9:40",
+          "segments": [
+            {
+              "text": "Traffic on 101 is slow; leave right after standup."
+            }
+          ],
+          "anchor": {
+            "target": "kayne-week",
+            "item": "dentist"
+          }
+        }
+      }
     }
   ],
   "invalid": [
@@ -3575,6 +3975,439 @@
         }
       },
       "reason": "unknown field in image data"
+    },
+    {
+      "name": "calendar_view_unknown",
+      "action": {
+        "op": "show",
+        "id": "week",
+        "type": "calendar",
+        "data": {
+          "view": "year",
+          "start": "2026-10-05",
+          "events": []
+        }
+      },
+      "reason": "calendar.view must be one of day, week, month, agenda"
+    },
+    {
+      "name": "calendar_days_on_day_view",
+      "action": {
+        "op": "show",
+        "id": "week",
+        "type": "calendar",
+        "data": {
+          "view": "day",
+          "start": "2026-10-05",
+          "events": [],
+          "days": 1
+        }
+      },
+      "reason": "calendar.days applies only to the week and agenda views"
+    },
+    {
+      "name": "calendar_week_too_many_days",
+      "action": {
+        "op": "show",
+        "id": "week",
+        "type": "calendar",
+        "data": {
+          "view": "week",
+          "start": "2026-10-05",
+          "events": [],
+          "days": 8
+        }
+      },
+      "reason": "calendar.days must be 1-7 on the week view"
+    },
+    {
+      "name": "calendar_event_end_form_differs",
+      "action": {
+        "op": "show",
+        "id": "week",
+        "type": "calendar",
+        "data": {
+          "view": "week",
+          "start": "2026-10-05",
+          "events": [
+            {
+              "id": "standup",
+              "title": "Standup",
+              "start": "2026-10-05T09:30",
+              "end": "2026-10-06"
+            }
+          ]
+        }
+      },
+      "reason": "calendar event.end must be written like its start"
+    },
+    {
+      "name": "calendar_event_end_before_start",
+      "action": {
+        "op": "show",
+        "id": "week",
+        "type": "calendar",
+        "data": {
+          "view": "week",
+          "start": "2026-10-05",
+          "events": [
+            {
+              "id": "standup",
+              "title": "Standup",
+              "start": "2026-10-05T09:30",
+              "end": "2026-10-05T09:00"
+            }
+          ]
+        }
+      },
+      "reason": "calendar event.end is before its start"
+    },
+    {
+      "name": "calendar_now_not_on_today",
+      "action": {
+        "op": "show",
+        "id": "week",
+        "type": "calendar",
+        "data": {
+          "view": "week",
+          "start": "2026-10-05",
+          "events": [],
+          "today": "2026-10-07",
+          "now": "2026-10-08T09:00"
+        }
+      },
+      "reason": "calendar.now must fall on calendar.today"
+    },
+    {
+      "name": "calendar_duplicate_event_id",
+      "action": {
+        "op": "show",
+        "id": "week",
+        "type": "calendar",
+        "data": {
+          "view": "week",
+          "start": "2026-10-05",
+          "events": [
+            {
+              "id": "standup",
+              "title": "Standup",
+              "start": "2026-10-05T09:30"
+            },
+            {
+              "id": "standup",
+              "title": "Standup",
+              "start": "2026-10-05T09:30"
+            }
+          ]
+        }
+      },
+      "reason": "duplicate calendar event id"
+    },
+    {
+      "name": "time_not_a_real_day",
+      "action": {
+        "op": "show",
+        "id": "week",
+        "type": "calendar",
+        "data": {
+          "view": "week",
+          "start": "2026-02-30",
+          "events": []
+        }
+      },
+      "reason": "calendar.start must be a real date"
+    },
+    {
+      "name": "time_wall_time_with_seconds",
+      "action": {
+        "op": "show",
+        "id": "week",
+        "type": "calendar",
+        "data": {
+          "view": "week",
+          "start": "2026-10-05",
+          "events": [],
+          "now": "2026-10-05T09:00:00"
+        }
+      },
+      "reason": "a wall time has no seconds"
+    },
+    {
+      "name": "time_instant_without_offset",
+      "action": {
+        "op": "show",
+        "id": "kitchen",
+        "type": "timer",
+        "data": {
+          "timers": [
+            {
+              "id": "pasta",
+              "label": "Pasta",
+              "endsAt": "2026-10-05T18:42:00"
+            }
+          ]
+        }
+      },
+      "reason": "an instant carries its offset"
+    },
+    {
+      "name": "tasks_no_items",
+      "action": {
+        "op": "show",
+        "id": "todo",
+        "type": "tasks",
+        "data": {
+          "items": []
+        }
+      },
+      "reason": "tasks.items must hold 1 to 100 items"
+    },
+    {
+      "name": "tasks_bad_state",
+      "action": {
+        "op": "show",
+        "id": "todo",
+        "type": "tasks",
+        "data": {
+          "items": [
+            {
+              "id": "t1",
+              "text": "Renew passport",
+              "state": "paused"
+            }
+          ]
+        }
+      },
+      "reason": "invalid task.state"
+    },
+    {
+      "name": "timer_paused_without_remaining",
+      "action": {
+        "op": "show",
+        "id": "kitchen",
+        "type": "timer",
+        "data": {
+          "timers": [
+            {
+              "id": "pasta",
+              "label": "Pasta",
+              "endsAt": "2026-10-05T18:42:00-07:00",
+              "state": "paused"
+            }
+          ]
+        }
+      },
+      "reason": "timer.remaining is required when the timer is paused"
+    },
+    {
+      "name": "timer_running_with_remaining",
+      "action": {
+        "op": "show",
+        "id": "kitchen",
+        "type": "timer",
+        "data": {
+          "timers": [
+            {
+              "id": "pasta",
+              "label": "Pasta",
+              "endsAt": "2026-10-05T18:42:00-07:00",
+              "remaining": 60
+            }
+          ]
+        }
+      },
+      "reason": "timer.remaining is only for a paused timer"
+    },
+    {
+      "name": "timer_started_after_it_ends",
+      "action": {
+        "op": "show",
+        "id": "kitchen",
+        "type": "timer",
+        "data": {
+          "timers": [
+            {
+              "id": "pasta",
+              "label": "Pasta",
+              "endsAt": "2026-10-05T18:42:00-07:00",
+              "startedAt": "2026-10-05T18:50:00-07:00"
+            }
+          ]
+        }
+      },
+      "reason": "timer.startedAt must be before timer.endsAt"
+    },
+    {
+      "name": "timer_too_many",
+      "action": {
+        "op": "show",
+        "id": "kitchen",
+        "type": "timer",
+        "data": {
+          "timers": [
+            {
+              "id": "t0",
+              "label": "Pasta",
+              "endsAt": "2026-10-05T18:42:00-07:00"
+            },
+            {
+              "id": "t1",
+              "label": "Pasta",
+              "endsAt": "2026-10-05T18:42:00-07:00"
+            },
+            {
+              "id": "t2",
+              "label": "Pasta",
+              "endsAt": "2026-10-05T18:42:00-07:00"
+            },
+            {
+              "id": "t3",
+              "label": "Pasta",
+              "endsAt": "2026-10-05T18:42:00-07:00"
+            },
+            {
+              "id": "t4",
+              "label": "Pasta",
+              "endsAt": "2026-10-05T18:42:00-07:00"
+            },
+            {
+              "id": "t5",
+              "label": "Pasta",
+              "endsAt": "2026-10-05T18:42:00-07:00"
+            },
+            {
+              "id": "t6",
+              "label": "Pasta",
+              "endsAt": "2026-10-05T18:42:00-07:00"
+            },
+            {
+              "id": "t7",
+              "label": "Pasta",
+              "endsAt": "2026-10-05T18:42:00-07:00"
+            },
+            {
+              "id": "t8",
+              "label": "Pasta",
+              "endsAt": "2026-10-05T18:42:00-07:00"
+            }
+          ]
+        }
+      },
+      "reason": "timer.timers must hold 1 to 8 items"
+    },
+    {
+      "name": "weather_condition_unknown",
+      "action": {
+        "op": "show",
+        "id": "weather",
+        "type": "weather",
+        "data": {
+          "location": "San Francisco",
+          "units": "F",
+          "current": {
+            "temp": 64,
+            "condition": "sunny"
+          }
+        }
+      },
+      "reason": "weather current.condition must be one of the 13 conditions"
+    },
+    {
+      "name": "weather_units_unknown",
+      "action": {
+        "op": "show",
+        "id": "weather",
+        "type": "weather",
+        "data": {
+          "location": "San Francisco",
+          "units": "K",
+          "current": {
+            "temp": 64,
+            "condition": "partly-cloudy"
+          }
+        }
+      },
+      "reason": "weather.units must be C or F"
+    },
+    {
+      "name": "weather_duplicate_hour",
+      "action": {
+        "op": "show",
+        "id": "weather",
+        "type": "weather",
+        "data": {
+          "location": "San Francisco",
+          "units": "F",
+          "current": {
+            "temp": 64,
+            "condition": "partly-cloudy"
+          },
+          "hourly": [
+            {
+              "time": "2026-10-05T14:00",
+              "temp": 66,
+              "condition": "clear"
+            },
+            {
+              "time": "2026-10-05T14:00",
+              "temp": 66,
+              "condition": "clear"
+            }
+          ]
+        }
+      },
+      "reason": "duplicate weather hour"
+    },
+    {
+      "name": "inbox_no_messages",
+      "action": {
+        "op": "show",
+        "id": "inbox",
+        "type": "inbox",
+        "data": {
+          "messages": []
+        }
+      },
+      "reason": "inbox.messages must hold 1 to 50 items"
+    },
+    {
+      "name": "inbox_message_time_instant",
+      "action": {
+        "op": "show",
+        "id": "inbox",
+        "type": "inbox",
+        "data": {
+          "messages": [
+            {
+              "id": "m1",
+              "from": "Dr. Okafor's office",
+              "time": "2026-10-05T08:12:00Z"
+            }
+          ]
+        }
+      },
+      "reason": "inbox message.time is a date or a wall time"
+    },
+    {
+      "name": "note_anchor_item_blank",
+      "action": {
+        "op": "show",
+        "id": "note",
+        "type": "note",
+        "role": "secondary",
+        "data": {
+          "segments": [
+            {
+              "text": "Look here."
+            }
+          ],
+          "anchor": {
+            "target": "week",
+            "item": " "
+          }
+        }
+      },
+      "reason": "note.anchor.item must be non-empty"
     }
   ],
   "nonFiniteMutations": [

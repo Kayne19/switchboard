@@ -335,6 +335,8 @@ class ProgrammingErrorTest(ModuleTestCase):
             switchboard.display(op="show", id="x", type="gauge", data={})
         self.assertIn("chart: {series:[{name, values:[n]}]}", str(caught.exception))
         self.assertIn("table: {columns:[{label}], rows:[[cell]]}", str(caught.exception))
+        self.assertIn('calendar: {view:"day"|"week"|"month"|"agenda", start:"YYYY-MM-DD"', str(caught.exception))
+        self.assertIn('timer: {timers:[{id, label, endsAt:"YYYY-MM-DDTHH:MM:SS-07:00"}]}', str(caught.exception))
 
     def test_a_diagram_outline_is_judged_by_its_mode(self):
         host = self.host()
@@ -565,6 +567,9 @@ class DisplayCorpusTests(unittest.TestCase):
         "table_columns_missing", "table_rows_missing", "image_format_svg_before_bytes",
         "image_format_missing", "image_bytes_missing", "image_alt_missing", "note_segments_missing",
         "data___proto___is_a_key", "null_diagram_mode",
+        "calendar_view_missing", "calendar_start_missing", "calendar_events_missing", "tasks_items_missing",
+        "timer_timers_missing", "weather_location_missing", "weather_units_missing", "weather_current_missing",
+        "inbox_messages_missing",
     )
 
     @classmethod

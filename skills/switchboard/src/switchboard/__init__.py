@@ -42,6 +42,17 @@ _SHAPES = {
     "note": (("segments",), "{segments:[{text}]}"),
     # The wire shape; `_image_data` makes it from a path or raw bytes first.
     "image": (("format", "bytes", "alt"), '{alt, path:"/tmp/fig.png"} or {alt, bytes:<raw bytes>}'),
+    # Times are "YYYY-MM-DD", a wall time "YYYY-MM-DDTHH:MM", or (a timer's
+    # only) an instant "YYYY-MM-DDTHH:MM:SS-07:00" (docs/display-tool.md,
+    # "Time values").
+    "calendar": (
+        ("view", "start", "events"),
+        '{view:"day"|"week"|"month"|"agenda", start:"YYYY-MM-DD", events:[{id, title, start:"YYYY-MM-DD" or "YYYY-MM-DDTHH:MM"}]}',
+    ),
+    "tasks": (("items",), '{items:[{id, text, state?, due?:"YYYY-MM-DD"}]}'),
+    "timer": (("timers",), '{timers:[{id, label, endsAt:"YYYY-MM-DDTHH:MM:SS-07:00"}]}'),
+    "weather": (("location", "units", "current"), '{location, units:"C"|"F", current:{temp, condition}}'),
+    "inbox": (("messages",), '{messages:[{id, from, time:"YYYY-MM-DD" or "YYYY-MM-DDTHH:MM"}]}'),
 }
 # A diagram's other required keys depend on its mode.
 _DIAGRAM_MODES = {"graph": ("nodes", "edges"), "sequence": ("actors", "messages")}

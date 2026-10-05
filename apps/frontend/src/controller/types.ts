@@ -212,6 +212,207 @@ export interface ImageData {
   caption?: string;
 }
 
+// ---- Personal-assistant types ----------------------------------------------
+//
+// Times are written three ways (docs/display-tool.md, "Time values"), each a
+// string on the wire that `parseTimeValue` in validation.ts reads, the one
+// time parser the page has. A calendar, a to-do list, a forecast and an
+// inbox are drawn from the times the agent sends, with no page clock and no
+// zone maths: "today" and "now" are data. Only a timer runs on the page
+// clock, so only a timer takes an instant.
+
+/** `YYYY-MM-DD`: a real day in the years 1970-2199. */
+export type DateValue = string;
+/** `YYYY-MM-DDTHH:MM`: the caller's wall clock, 24 h, no seconds and no
+ * offset. The page draws it as written and never converts zones. */
+export type WallTimeValue = string;
+/** RFC 3339 with seconds and an offset: `2026-10-05T14:30:00-07:00`, or
+ * `...Z`. Only a timer takes one: it is measured against the page clock. */
+export type InstantValue = string;
+
+export type CalendarView = 'day' | 'week' | 'month' | 'agenda';
+export type CalendarEventStatus = 'confirmed' | 'tentative' | 'cancelled';
+
+export interface CalendarEvent {
+  /** Unique within the calendar; a note's `anchor.item` names it. */
+  id: string;
+  title: string;
+  /** A date is an all-day event; a wall time with no `end` is a 30-minute block. */
+  start: DateValue | WallTimeValue;
+  /** Written like `start`, and not before it. A date end is inclusive. */
+  end?: DateValue | WallTimeValue;
+  location?: string;
+  detail?: string;
+  semantic?: Semantic;
+  status?: CalendarEventStatus;
+  /** The event on now, or the one the agent is talking about. */
+  active?: boolean;
+}
+
+export interface CalendarData {
+  title?: string;
+  subtitle?: string;
+  context?: string;
+  caption?: string;
+  view: CalendarView;
+  /** day: that day; week: the first column; month: any day in the month;
+   * agenda: the first day listed. */
+  start: DateValue;
+  /** week: 1-7 (7 when absent); agenda: 1-31 (7 when absent); never on day or month. */
+  days?: number;
+  today?: DateValue;
+  /** Falls on `today` when both are given. */
+  now?: WallTimeValue;
+  /** 0 to 200 events. */
+  events: CalendarEvent[];
+}
+
+/** The progress-step words; absent reads as `todo`. */
+export type TaskState = 'todo' | 'active' | 'done' | 'blocked';
+/** Absent is normal priority. */
+export type TaskPriority = 'high' | 'low';
+
+export interface TaskItem {
+  /** Unique within the list; a note's `anchor.item` names it. */
+  id: string;
+  text: string;
+  state?: TaskState;
+  /** Overdue is a due before the list's `today` on a task not done. */
+  due?: DateValue | WallTimeValue;
+  priority?: TaskPriority;
+  /** A section heading; sections stand in the order their groups are first met. */
+  group?: string;
+  detail?: string;
+  /** 0 to 4 short tags. */
+  tags?: string[];
+}
+
+export interface TasksData {
+  title?: string;
+  subtitle?: string;
+  context?: string;
+  caption?: string;
+  /** What overdue is measured against: there is no page clock. */
+  today?: DateValue;
+  /** 1 to 100 items. */
+  items: TaskItem[];
+}
+
+/** Absent reads as `running`. */
+export type TimerState = 'running' | 'paused';
+
+export interface Timer {
+  /** Unique within the object; a note's `anchor.item` names it. */
+  id: string;
+  label: string;
+  /** When a running timer reaches zero, by the page clock. */
+  endsAt: InstantValue;
+  /** Before `endsAt`. */
+  startedAt?: InstantValue;
+  state?: TimerState;
+  /** Seconds left: given for a paused timer, and only for one. */
+  remaining?: number;
+}
+
+export interface TimerData {
+  title?: string;
+  subtitle?: string;
+  context?: string;
+  caption?: string;
+  /** 1 to 8 countdowns and reminders. */
+  timers: Timer[];
+}
+
+export type WeatherCondition =
+  | 'clear'
+  | 'partly-cloudy'
+  | 'cloudy'
+  | 'fog'
+  | 'drizzle'
+  | 'rain'
+  | 'heavy-rain'
+  | 'thunder'
+  | 'snow'
+  | 'sleet'
+  | 'hail'
+  | 'wind'
+  | 'haze';
+export type WeatherUnits = 'C' | 'F';
+
+export interface WeatherCurrent {
+  temp: number;
+  condition: WeatherCondition;
+  summary?: string;
+  high?: number;
+  low?: number;
+  feelsLike?: number;
+  /** Percent, 0-100. */
+  humidity?: number;
+  /** Chance of precipitation, percent, 0-100. */
+  precip?: number;
+  wind?: string;
+}
+
+export interface WeatherHour {
+  /** Unique within `hourly`; a note's `anchor.item` names the hour by it. */
+  time: WallTimeValue;
+  temp: number;
+  condition: WeatherCondition;
+  precip?: number;
+}
+
+export interface WeatherDay {
+  /** Unique within `daily`; a note's `anchor.item` names the day by it. */
+  date: DateValue;
+  high: number;
+  low: number;
+  condition: WeatherCondition;
+  precip?: number;
+}
+
+export interface WeatherData {
+  title?: string;
+  subtitle?: string;
+  context?: string;
+  caption?: string;
+  location: string;
+  /** The unit every temperature is in; the page converts none. */
+  units: WeatherUnits;
+  current: WeatherCurrent;
+  /** 0 to 48 hours. */
+  hourly?: WeatherHour[];
+  /** 0 to 14 days. */
+  daily?: WeatherDay[];
+  alert?: string;
+}
+
+export interface InboxMessage {
+  /** Unique within the inbox; a note's `anchor.item` names it. */
+  id: string;
+  from: string;
+  subject?: string;
+  snippet?: string;
+  /** Shown as its time of day when it falls on the inbox's `today`, else as its date. */
+  time: DateValue | WallTimeValue;
+  /** A short label: `email`, `slack`, `sms`. */
+  channel?: string;
+  unread?: boolean;
+  flagged?: boolean;
+  semantic?: Semantic;
+}
+
+/** A list of messages, drawn in the order sent; one message in full is a
+ * `document` of kind `email`. */
+export interface InboxData {
+  title?: string;
+  subtitle?: string;
+  context?: string;
+  caption?: string;
+  today?: DateValue;
+  /** 1 to 50 messages. */
+  messages: InboxMessage[];
+}
+
 /** A line the caller heard, in the live response's log (#113). */
 export interface SpokenLine {
   /** Stable across updates, for rendering. */
@@ -244,6 +445,9 @@ export interface NoteData {
     x?: number;
     series?: string;
     node?: string;
+    /** An item inside the target: a calendar event, task, timer or inbox
+     * message by its id, or a forecast hour or day by its `time` or `date`. */
+    item?: string;
   };
 }
 
@@ -256,7 +460,12 @@ export type AgentObjectType =
   | 'code'
   | 'table'
   | 'note'
-  | 'image';
+  | 'image'
+  | 'calendar'
+  | 'tasks'
+  | 'timer'
+  | 'weather'
+  | 'inbox';
 
 export type SceneObjectType = AgentObjectType | 'message';
 
@@ -375,6 +584,11 @@ export type DisplayAction =
   | { op: 'show'; id: string; type: 'table'; role?: SceneObjectRole; data: TableData }
   | { op: 'show'; id: string; type: 'note'; role?: SceneObjectRole; data: NoteData }
   | { op: 'show'; id: string; type: 'image'; role?: SceneObjectRole; data: ImageData }
+  | { op: 'show'; id: string; type: 'calendar'; role?: SceneObjectRole; data: CalendarData }
+  | { op: 'show'; id: string; type: 'tasks'; role?: SceneObjectRole; data: TasksData }
+  | { op: 'show'; id: string; type: 'timer'; role?: SceneObjectRole; data: TimerData }
+  | { op: 'show'; id: string; type: 'weather'; role?: SceneObjectRole; data: WeatherData }
+  | { op: 'show'; id: string; type: 'inbox'; role?: SceneObjectRole; data: InboxData }
   | { op: 'hide'; id: string }
   | { op: 'say'; text: string; target?: string | null; at?: SpeechState['at'] }
   | { op: 'focus'; id: string }
