@@ -93,11 +93,38 @@ const MAP_MARGIN = 6;
 const MAP_PAD = 4;
 const MAP_CUT = 7;
 // How long input that moves the drawing freely (a wheel, a drag on the
-// map) must pause before the drawing settles on a stop; and how long its
-// smooth settling may take before the stops hold it again, where a browser
-// does not say when a scroll ends.
+// map) must pause before the drawing settles on a stop; and how long a
+// scroller must go without moving to have stopped, where the browser does
+// not say when a scroll ends.
 const SETTLE_MS = 140;
-const SETTLED_MS = 700;
+const SCROLL_IDLE_MS = 120;
+
+/**
+ * Calls `done` once `element` has stopped moving: at the browser's
+ * `scrollend`, or once no scroll event has come for SCROLL_IDLE_MS, which
+ * holds in a browser that sends no `scrollend` (WebKit long had none)
+ * however long the scroll takes. Returns what stops listening.
+ */
+function whenScrollEnds(element: HTMLElement, done: () => void): () => void {
+  let timer = 0;
+  const stop = () => {
+    window.clearTimeout(timer);
+    element.removeEventListener('scroll', moved);
+    element.removeEventListener('scrollend', ended);
+  };
+  const ended = () => {
+    stop();
+    done();
+  };
+  const moved = () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(ended, SCROLL_IDLE_MS);
+  };
+  element.addEventListener('scroll', moved);
+  element.addEventListener('scrollend', ended);
+  moved();
+  return stop;
+}
 
 // A stop's band, CSS pixels: from the stop to the next (or to the
 // content's end), where the browser settles the drawing at its start.
@@ -277,9 +304,12 @@ export function DrawingViewport({
   // the input moved it on from where it rested, the next one that way, so
   // a single notch of a wheel still turns to the next part.
   const settleTimer = useRef<number | null>(null);
+  const settling = useRef<(() => void) | null>(null);
   const freeFrom = useRef<{ left: number; top: number } | null>(null);
   const settle = useCallback(() => {
     if (settleTimer.current !== null) window.clearTimeout(settleTimer.current);
+    settling.current?.();
+    settling.current = null;
     settleTimer.current = window.setTimeout(() => {
       settleTimer.current = null;
       const element = scrollRef.current;
@@ -295,16 +325,14 @@ export function DrawingViewport({
           top: settleStop(resting.y, from.top, element.scrollTop),
           behavior: smooth ? 'smooth' : 'auto',
         });
-        // The stops hold it again once it has arrived: a browser may snap
-        // afresh when they come back, and should not mid-flight.
+        // The stops hold it again once it has arrived, not before: a
+        // browser may snap afresh when they come back, and mid-flight that
+        // would be to the stop nearest wherever the scroll had got to.
         if (smooth) {
-          const hold = () => {
-            window.clearTimeout(fallback);
-            element.removeEventListener('scrollend', hold);
+          settling.current = whenScrollEnds(element, () => {
+            settling.current = null;
             if (freeFrom.current === null) element.style.scrollSnapType = '';
-          };
-          const fallback = window.setTimeout(hold, SETTLED_MS);
-          element.addEventListener('scrollend', hold);
+          });
           return;
         }
         element.style.scrollSnapType = '';
@@ -321,6 +349,7 @@ export function DrawingViewport({
   }, []);
   useEffect(() => () => {
     if (settleTimer.current !== null) window.clearTimeout(settleTimer.current);
+    settling.current?.();
   }, []);
 
   // A wheel or a trackpad moves the drawing freely, then it settles. A

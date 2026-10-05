@@ -224,6 +224,46 @@ describe('a scrolled graph at rest', () => {
     expect(scroller.style.scrollSnapType).toBe('');
   });
 
+  it('holds its stops again only once a long settling scroll has stopped, with no word from the browser that it ended', () => {
+    // A browser that sends no scrollend (WebKit long had none), and a smooth
+    // scroll that takes longer than the 700 ms the stops used to wait.
+    vi.useFakeTimers();
+    size = { width: 914, height: 526 };
+    render(<DiagramPrimitive data={pipelineDiagram} id="pipeline" />);
+    const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
+    act(() => {
+      scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: 60, bubbles: true, cancelable: true }));
+    });
+    act(() => vi.advanceTimersByTime(150));
+    for (let elapsed = 0; elapsed < 1200; elapsed += 16) {
+      act(() => {
+        scroller.dispatchEvent(new Event('scroll'));
+        vi.advanceTimersByTime(16);
+      });
+      // Before: the stops came back at 700 ms, mid-flight, and a browser
+      // snaps from wherever the scroll had got to.
+      expect(scroller.style.scrollSnapType, `${elapsed} ms into the scroll`).toBe('none');
+    }
+    act(() => vi.advanceTimersByTime(200));
+    expect(scroller.style.scrollSnapType).toBe('');
+  });
+
+  it('holds its stops again at once when the browser says the scroll ended', () => {
+    vi.useFakeTimers();
+    size = { width: 914, height: 526 };
+    render(<DiagramPrimitive data={pipelineDiagram} id="pipeline" />);
+    const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
+    act(() => {
+      scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: 60, bubbles: true, cancelable: true }));
+    });
+    act(() => vi.advanceTimersByTime(150));
+    act(() => {
+      scroller.dispatchEvent(new Event('scroll'));
+      scroller.dispatchEvent(new Event('scrollend'));
+    });
+    expect(scroller.style.scrollSnapType).toBe('');
+  });
+
   it('hears a wheel over its map and its counts, not only over the drawing', () => {
     vi.useFakeTimers();
     size = { width: 914, height: 526 };
