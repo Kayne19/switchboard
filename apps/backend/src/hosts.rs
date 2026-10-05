@@ -724,6 +724,10 @@ impl Hosts {
                         Answer::Nothing => {}
                     },
                     Some(Ok(Message::Close(_))) | None => return "disconnected",
+                    Some(Ok(Message::Binary(frame))) => {
+                        tracing::warn!(%host, epoch, bytes = frame.len(), "host sent a binary frame; the host link is JSON text, so it is dropped");
+                    }
+                    // WebSocket pings and pongs; the heartbeat is JSON.
                     Some(Ok(_)) => {}
                     Some(Err(_)) => return "read failed",
                 },
@@ -911,7 +915,10 @@ impl Hosts {
                     .outbound
                     .send(text(module_reply(&id, unreadable_call(&cause))));
             }
-            ("reply", Some(id)) if head.epoch == Some(epoch) => {
+            ("reply", Some(id)) if head.epoch != Some(epoch) => {
+                tracing::debug!(%host, epoch, %id, %cause, "unreadable reply for another link epoch ignored");
+            }
+            ("reply", Some(id)) => {
                 let Some(pending) = state.pending.remove(&id) else {
                     tracing::debug!(%host, epoch, %id, %cause, "unreadable reply for no pending command ignored");
                     return;
