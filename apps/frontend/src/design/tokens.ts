@@ -1,4 +1,4 @@
-export const sceneOrder = ['idle', 'conversation', 'training', 'architecture', 'email', 'code', 'results', 'handoff', 'comparison', 'figure', 'plan', 'composed', 'topology', 'pipeline', 'trace'] as const;
+export const sceneOrder = ['idle', 'conversation', 'training', 'architecture', 'email', 'code', 'results', 'handoff', 'comparison', 'figure', 'plan', 'composed', 'topology', 'pipeline', 'trace', 'calendar', 'tasks', 'timer', 'weather', 'inbox', 'today'] as const;
 
 // The page's smallest type, in CSS pixels: the floors of the two small
 // faces in styles/index.css (`.micro` clamps from 7px, `.tech` from 8px).

@@ -190,7 +190,8 @@ describe('a visual beside the primary', () => {
 });
 
 describe('a primary alone', () => {
-  const alone = (Object.keys(fixtures) as Array<keyof typeof fixtures>).filter((name) => name !== 'composed' && name !== 'idle' && name !== 'conversation');
+  const composedFixtures = new Set(['composed', 'today', 'idle', 'conversation']);
+  const alone = (Object.keys(fixtures) as Array<keyof typeof fixtures>).filter((name) => !composedFixtures.has(name));
 
   it.each(alone)('the %s fixture draws no aux row', (name) => {
     const page = render(fixtures[name]);
@@ -221,6 +222,43 @@ describe('the composed fixture', () => {
     for (const action of fixtures.composed) {
       expect(validateControllerAction(action)).toMatchObject({ ok: true });
     }
+  });
+});
+
+describe('the personal-assistant fixtures', () => {
+  // The five types draw through one stand-in until the render slice gives
+  // each a primitive of its own (primitives/TemporaryAssistantList.tsx);
+  // these hold what the scenes are, whatever draws them.
+  const names = ['calendar', 'tasks', 'timer', 'weather', 'inbox', 'today'] as const;
+
+  it.each(names)('the %s fixture holds only actions the validators accept', (name) => {
+    for (const action of fixtures[name]) {
+      expect(validateControllerAction(action), `${name} / ${'id' in action ? action.id : action.op}`).toMatchObject({ ok: true });
+    }
+  });
+
+  it.each(['calendar', 'tasks', 'timer', 'weather', 'inbox'] as const)('the %s fixture is its type, drawn in the main slot', (name) => {
+    const page = render(fixtures[name]);
+    expect(page.getAttribute('data-scene')).toBe(name);
+    expect(page.querySelectorAll(`.content-grid > .content-main [data-testid="${name}"]`)).toHaveLength(1);
+  });
+
+  it('today is the agenda, with the forecast, the to-do list and the inbox under it and the note in the rail', () => {
+    const page = render(fixtures.today);
+    expect(page.getAttribute('data-scene')).toBe('calendar');
+    expect(drawn(page, 'calendar')).toBe(1);
+    expect([...page.querySelectorAll('.composed-aux [data-testid]')].map((node) => node.getAttribute('data-testid')))
+      .toEqual(['weather', 'tasks', 'inbox']);
+    expect(page.querySelectorAll('.content-rail .annotation-card')).toHaveLength(1);
+  });
+
+  it('the calendar note names the dentist appointment by its id', () => {
+    const note = fixtures.calendar.find((action) => action.op === 'show' && action.type === 'note');
+    const week = fixtures.calendar.find((action) => action.op === 'show' && action.type === 'calendar');
+    const anchor = note && 'data' in note ? (note.data as { anchor?: { target: string; item?: string } }).anchor : undefined;
+    const events = week && 'data' in week ? (week.data as { events: Array<{ id: string }> }).events : [];
+    expect(anchor).toEqual({ target: 'week', item: 'dentist' });
+    expect(events.map((event) => event.id)).toContain('dentist');
   });
 });
 

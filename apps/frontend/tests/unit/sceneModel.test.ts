@@ -16,6 +16,12 @@ const expected = {
   figure: 'image',
   plan: 'architecture',
   composed: 'architecture',
+  calendar: 'calendar',
+  tasks: 'tasks',
+  timer: 'timer',
+  weather: 'weather',
+  inbox: 'inbox',
+  today: 'calendar',
 } as const;
 
 describe('scene classification', () => {

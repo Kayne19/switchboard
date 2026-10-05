@@ -25,6 +25,11 @@ const scenes: Array<[SceneKind, ControllerAction[]]> = [
   ['code', fixtures.code],
   ['table', fixtures.results],
   ['image', fixtures.figure],
+  ['calendar', fixtures.calendar],
+  ['tasks', fixtures.tasks],
+  ['timer', fixtures.timer],
+  ['weather', fixtures.weather],
+  ['inbox', fixtures.inbox],
   ['composed', composed],
 ];
 
