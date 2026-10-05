@@ -683,11 +683,16 @@ export function rangeText(data: CalendarData): string {
   return a.month === b.month ? `${monthName(a.month)} ${a.day} - ${b.day}` : `${monthName(a.month)} ${a.day} - ${monthName(b.month)} ${b.day}`;
 }
 
-/** An event as a note's TARGET line names it: its title and when it starts (`Dentist / WED OCT 7 10:30`), or undefined when the calendar holds no such event. */
-export function eventTargetText(data: CalendarData, id: string): string | undefined {
+/**
+ * An event as a note's TARGET line names it: its title and when it starts
+ * (`Dentist / WED OCT 7 10:30`), and whether the view reaches it (touches
+ * a day it draws), as only then is it drawn or counted there and marked;
+ * undefined when the calendar holds no such event.
+ */
+export function eventTarget(data: CalendarData, id: string): { text: string; inView: boolean } | undefined {
   const placed = placeEvents(data.events).find((item) => item.event.id === id);
   if (!placed) return undefined;
   const day = Math.floor(placed.start / MINUTES_PER_DAY);
   const when = placed.allDay ? dayLabel(placed.firstDay) : `${dayLabel(day)} ${clockText(placed.start - day * MINUTES_PER_DAY)}`;
-  return `${placed.event.title} / ${when}`;
+  return { text: `${placed.event.title} / ${when}`, inView: eventsOutside([placed], shownDays(data)) === 0 };
 }

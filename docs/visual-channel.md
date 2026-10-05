@@ -610,9 +610,11 @@ agent's view names it by: a table's title, a document's subject, a metric's or
 a progress's label, an image's alt text where it has no title, a forecast's
 place), or its type's name (`TABLE`, `CHART`) where it has none. A node, an
 actor or an item the object holds is marked where the object is drawn, and the
-card carries the NOTE badge that matches the mark; a node or an item it does
-not hold marks nothing, and the card names the object. A note about no object
-on stage has no `TARGET` line.
+card carries the NOTE badge that matches the mark (a calendar's event only
+where its view reaches the event's days: one past them is named, and nothing
+marks it, so its card has no badge); a node or an item it does not hold marks
+nothing, and the card names the object. A note about no object on stage has no
+`TARGET` line.
 
 On every kind of chart a card lies wholly inside the plot, a few pixels in
 from its border, in clear space, or wholly outside it, never across it. Its

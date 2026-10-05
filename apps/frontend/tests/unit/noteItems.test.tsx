@@ -374,3 +374,32 @@ describe('a diagram beside the primary marks the node the rail note names', () =
     expect(scene().querySelectorAll('.composed-aux .diagram-node__body--anchored')).toHaveLength(0);
   });
 });
+
+// A note about a calendar event the view does not reach (a day view of
+// Wednesday, an event on the 20th) named the event with the NOTE badge
+// while the calendar, which draws only its days, marked nothing: a badge
+// with no mark on screen (last-gaps review M1).
+describe('an event the calendar does not draw', () => {
+  const later = {
+    ...lists.calendar.data,
+    events: [...lists.calendar.data.events, { id: 'later', title: 'Later', start: '2026-10-20T10:30' }],
+  };
+  const calendar = (data: unknown): ControllerAction => ({ op: 'show', id: 'list', type: 'calendar', role: 'primary', data } as ControllerAction);
+
+  it.each([
+    ['a day', later],
+    ['an agenda of two days', { ...later, view: 'agenda', days: 2 }],
+  ])('in %s is named on the card, with no badge, as the calendar marks nothing', (_view, data) => {
+    render([calendar(data), noteOn('later')]);
+    expect(badges(scene(), 'calendar')).toHaveLength(0);
+    const card = scene().querySelector('.content-rail .annotation-card');
+    expect(card?.querySelector('.annotation-card__anchor')?.textContent).toBe('TARGET / Later / TUE OCT 20 10:30');
+    expect(card?.querySelectorAll('.note-badge')).toHaveLength(0);
+  });
+
+  it('in a week that holds it is marked, the card with its badge', () => {
+    render([calendar({ ...later, view: 'week', start: '2026-10-19', days: 7 }), noteOn('later')]);
+    expect(markedItems(scene(), 'calendar')).toEqual(['later']);
+    expect(scene().querySelectorAll('.content-rail .annotation-card .note-badge')).toHaveLength(1);
+  });
+});

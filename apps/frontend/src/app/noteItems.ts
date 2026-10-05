@@ -1,7 +1,7 @@
 import type { CalendarData, DiagramObjectData, InboxData, NoteData, SceneObject, TasksData, TimerData, WeatherData } from '../controller/types';
 import type { NoteTarget } from '../primitives/AnnotationCard';
 import { weatherItemName } from '../primitives/weatherLayout';
-import { eventTargetText } from '../primitives/calendarLayout';
+import { eventTarget } from '../primitives/calendarLayout';
 import { chartTargetText } from '../primitives/chartGeometry';
 import { cast } from './sceneModel';
 
@@ -25,7 +25,15 @@ export function markedItem(note: NoteData | null | undefined, objectId: string):
   return anchor?.target === objectId ? anchor.item : undefined;
 }
 
-type ItemName<T> = (data: T, item: string) => string | undefined;
+/** An item in its object's words, and whether the object marks it: it draws every item it holds but a calendar's events past its view. */
+interface ItemTarget {
+  text: string;
+  marked: boolean;
+}
+type ItemName<T> = (data: T, item: string) => ItemTarget | undefined;
+
+// An item a list draws wherever it holds it: marked with the badge.
+const drawn = (text: string | undefined): ItemTarget | undefined => (text === undefined ? undefined : { text, marked: true });
 
 // How each type names one of its items on a card's TARGET line, or
 // undefined when it holds no item of that name (the card then names the
@@ -37,24 +45,29 @@ const ITEM_NAMES: {
   weather: ItemName<WeatherData>;
   inbox: ItemName<InboxData>;
 } = {
-  calendar: (data, item) => eventTargetText(data, item),
+  // An event the view does not reach is named, but nothing on screen marks it.
+  calendar: (data, item) => {
+    const event = eventTarget(data, item);
+    return event ? { text: event.text, marked: event.inView } : undefined;
+  },
 
-  tasks: (data, item) => data.items.find((task) => task.id === item)?.text,
+  tasks: (data, item) => drawn(data.items.find((task) => task.id === item)?.text),
 
-  timer: (data, item) => data.timers.find((timer) => timer.id === item)?.label,
+  timer: (data, item) => drawn(data.timers.find((timer) => timer.id === item)?.label),
 
-  weather: weatherItemName,
+  // A small slot that draws neither list draws the item on its spot line.
+  weather: (data, item) => drawn(weatherItemName(data, item)),
 
   inbox: (data, item) => {
     const message = data.messages.find((candidate) => candidate.id === item);
-    return message ? [message.from, message.subject].filter(Boolean).join(' / ') : undefined;
+    return drawn(message ? [message.from, message.subject].filter(Boolean).join(' / ') : undefined);
   },
 };
 
-/** The item `item` of `object` in the object's own words, for a card's
- * TARGET line; undefined when the object is not a type with items or holds
- * no item of that name. */
-export function itemTargetText(object: SceneObject, item: string): string | undefined {
+/** The item `item` of `object` in the object's own words, and whether the
+ * object marks it; undefined when the object is not a type with items or
+ * holds no item of that name. */
+function itemTarget(object: SceneObject, item: string): ItemTarget | undefined {
   switch (object.type) {
     case 'calendar':
       return ITEM_NAMES.calendar(cast.calendar(object).data, item);
@@ -69,6 +82,13 @@ export function itemTargetText(object: SceneObject, item: string): string | unde
     default:
       return undefined;
   }
+}
+
+/** The item `item` of `object` in the object's own words, for a card's
+ * TARGET line; undefined when the object is not a type with items or holds
+ * no item of that name. */
+export function itemTargetText(object: SceneObject, item: string): string | undefined {
+  return itemTarget(object, item)?.text;
 }
 
 /** A diagram's node or a sequence's actor by its label; undefined when it holds none of that id. */
@@ -108,7 +128,8 @@ export function objectName(object: SceneObject): string {
  *   node's or actor's label; in a list the item (`itemTargetText`: an
  *   event's title and start, a task's text, a message's sender and
  *   subject, a timer's label, a forecast's day or hour). A node, an actor
- *   and an item are marked with the badge;
+ *   and an item are marked with the badge, but for a calendar's event the
+ *   view does not reach, which nothing on screen marks;
  * - otherwise the object itself (`objectName`), with no badge.
  * Nothing for a note about no object on stage, or with no anchor: an id
  * names nothing a caller can see, so no card ever shows one. Every card
@@ -120,12 +141,13 @@ export function noteTarget(objects: Readonly<Record<string, SceneObject | undefi
   const object = anchor ? objects[anchor.target] : undefined;
   if (!anchor || !object) return { marked: false };
   const named = (text: string | undefined, marked: boolean): NoteTarget | undefined => (text === undefined ? undefined : { target: text, marked });
+  const item = anchor.item === undefined ? undefined : itemTarget(object, anchor.item);
   const part =
     object.type === 'chart'
       ? named(chartTargetText(anchor, cast.chart(object).data), false)
       : object.type === 'diagram'
         ? named(anchor.node === undefined ? undefined : nodeLabel(cast.diagram(object).data, anchor.node), true)
-        : named(anchor.item === undefined ? undefined : itemTargetText(object, anchor.item), true);
+        : named(item?.text, item?.marked ?? false);
   return part ?? { target: objectName(object), marked: false };
 }
 
