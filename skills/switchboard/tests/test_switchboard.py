@@ -529,3 +529,77 @@ class DisplaySchemaTests(unittest.TestCase):
             ops.update(op.get("enum") or [op["const"]])
         self.assertEqual(set(switchboard._DISPLAY_OPS), ops)
         self.assertEqual(list(switchboard._ROLES), self.definitions["Role"]["enum"])
+
+
+class DisplayCorpusTests(unittest.TestCase):
+    """The module's outline check agrees with the two validators where it
+    overlaps them. apps/frontend/tests/fixtures/validator-corpus.json holds
+    display actions and what the service and the page make of each: the module
+    never raises for an action they accept, and it raises, before sending, for
+    each refused one whose fault its outline names (OUTLINE_REFUSES)."""
+
+    # No object, an unknown op, a missing or blank id, an unknown type or role,
+    # data that is not a dict, an empty say text, a required data key missing,
+    # an unknown diagram mode. Every other refusal is the service's to give.
+    OUTLINE_REFUSES = (
+        "action_is_a_string", "action_is_an_array", "action_is_null", "action_is_a_number",
+        "action_is_a_huge_string", "op_missing", "op_not_a_string", "op_listen_is_internal", "op_delete",
+        "op_case_matters", "op_checked_before_layout_keys", "op_checked_before_unsafe_strings",
+        "size_checked_before_op", "show_id_missing", "show_id_empty", "show_id_number", "show_id_null",
+        "show_id_blank_U+0009", "show_id_blank_U+000A", "show_id_blank_U+000B", "show_id_blank_U+000C",
+        "show_id_blank_U+000D", "show_id_blank_U+0020", "show_id_blank_U+0085", "show_id_blank_U+00A0",
+        "show_id_blank_U+1680", "show_id_blank_U+2000", "show_id_blank_U+2005", "show_id_blank_U+200A",
+        "show_id_blank_U+2028", "show_id_blank_U+2029", "show_id_blank_U+202F", "show_id_blank_U+205F",
+        "show_id_blank_U+3000", "show_type_missing", "show_type_card", "show_type_message_is_internal",
+        "show_type_number", "show_type_case_matters", "show_id_checked_before_type", "show_role_unknown",
+        "show_role_null", "show_role_number", "show_type_checked_before_role", "show_data_missing",
+        "show_data_array", "show_data_null", "show_data_string", "show_role_checked_before_data",
+        "hide_id_missing", "hide_id_number", "hide_id_blank", "focus_id_missing", "focus_id_number",
+        "focus_id_blank", "say_text_empty", "say_text_missing", "say_text_number",
+        "say_text_checked_before_target", "chart_series_missing", "metric_label_missing",
+        "metric_order_label_before_value", "progress_label_missing", "progress_neither_value_nor_steps",
+        "diagram_mode_missing", "diagram_mode_timeline", "diagram_mode_number",
+        "diagram_source_checked_before_mode", "graph_nodes_missing", "graph_edges_missing",
+        "sequence_actors_missing", "sequence_messages_missing", "document_subject_missing",
+        "document_paragraphs_missing", "code_source_missing", "code_order_source_before_title",
+        "table_columns_missing", "table_rows_missing", "image_format_svg_before_bytes",
+        "image_format_missing", "image_bytes_missing", "image_alt_missing", "note_segments_missing",
+        "data___proto___is_a_key", "null_diagram_mode",
+    )
+
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parents[3]
+        with open(root / "apps" / "frontend" / "tests" / "fixtures" / "validator-corpus.json", encoding="utf-8") as fh:
+            cls.cases = json.load(fh)["cases"]
+
+    @classmethod
+    def _expand(cls, value):
+        """`{"$repeat": s, "times": n}` in the corpus stands for s repeated n times."""
+        if isinstance(value, dict):
+            if set(value) == {"$repeat", "times"}:
+                return value["$repeat"] * value["times"]
+            return {key: cls._expand(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [cls._expand(item) for item in value]
+        return value
+
+    def test_never_refuses_an_action_the_validators_accept(self):
+        accepted = [case for case in self.cases if case.get("accepted")]
+        self.assertTrue(accepted)
+        for case in accepted:
+            with self.subTest(case["name"]):
+                action = self._expand(case["action"])
+                self.assertEqual(switchboard._display_wire_action(action), action)
+
+    def test_refuses_the_faults_its_outline_names(self):
+        by_name = {case["name"]: case for case in self.cases}
+        for name in self.OUTLINE_REFUSES:
+            with self.subTest(name):
+                self.assertIn("error", by_name[name], "the validators refuse it too")
+                with self.assertRaises((TypeError, ValueError)):
+                    switchboard._display_wire_action(self._expand(by_name[name]["action"]))
+
+    def test_a_blank_id_is_unicode_white_space(self):
+        # str.strip also strips U+001C to U+001F, which are not White_Space.
+        self.assertEqual(switchboard._WHITE_SPACE, {chr(c) for c in range(sys.maxunicode + 1) if chr(c).isspace()} - set("\x1c\x1d\x1e\x1f"))
