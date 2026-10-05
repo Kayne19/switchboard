@@ -103,13 +103,27 @@ primary's shorter cell, an aux cell, focus):
    reading is the unit, so scrolling both ways costs most), the stage's own
    direction preferred. A sequence too wide is recomposed to the
    viewport's width: the columns share it, headers wrap and, when they
-   must, stand in two staggered rows, and a label that does not fit
-   between its lifelines takes its own line over its arrow, so the
-   exchange grows down, in the order it runs. It scrolls across only when
-   its actors' names alone, two columns to a word, are wider than the
-   viewport at the minimum (a dozen actors in a phone's aux cell).
+   must, stand in two staggered rows (never with a name cut mid-word),
+   and a label that does not fit between its lifelines takes its own line
+   over its arrow, so the exchange grows down, in the order it runs. It
+   scrolls across only when its actors' names alone, two columns to a
+   word, are wider than the viewport at the minimum (a dozen actors in a
+   phone's aux cell). Its headers are pinned while it scrolls, so their
+   depth is taken from every view of the exchange: where its headers in
+   full (each actor's name and its `sub`) would take more than three
+   tenths of the view's height, they are compact, the names alone in
+   shallower boxes, the NOTE marker beside its actor's name rather than
+   under it. On a phone that is the difference between three messages in
+   view and six; a view with the room (focus, a wider slot) keeps the
+   details.
 4. **Focus gives it the stage.** The same rule runs in the focus layer's
-   larger viewport, so focus shows more of it at once.
+   larger viewport, so focus shows more of it at once. Focus keeps the
+   note about the diagram, which the rail carried: the node or actor it
+   names keeps its NOTE marker, a graph opens on that node, and the note
+   stands in a panel of its own, beside the drawing when the focus box is
+   wide (where the rail stood) and under it when the box is tall (where
+   the drawing needs the width). There the note is never a callout on the
+   drawing as well.
 
 A drawing that scrolls says where its reader is, in the frame's own marks
 rather than with a scroll bar (`primitives/drawingScroll.ts` decides,
@@ -145,19 +159,28 @@ rather than with a scroll bar (`primitives/drawingScroll.ts` decides,
   it crosses, the name of the node at its far end, in the line's colour,
   pointing out; several lines to one node are one name.
 - **A map shows the whole.** A drawing scrolled a view and a half or more
-  carries a small map in the corner it covers least of: every node and
-  line, the view boxed in orange. A tap or a drag on it moves the view.
-  A drawing in a viewport too small for a map (a phone's aux cell) has
-  its rails only.
+  carries a small map: every node and line, the view boxed in orange. A
+  tap or a drag on it moves the view. The map stands in a strip of its
+  own beside the drawing, along the way it scrolls (under a drawing that
+  scrolls across, right of one that scrolls down), and the drawing is
+  laid out for the rest of the viewport, so the map covers none of it,
+  at rest or moving. A drawing in a viewport too small for a map (a
+  phone's aux cell) has its rails only, and so does one the strip would
+  cost its reading: one that would scroll a way it did not beside it, a
+  graph that would turn, or a sequence whose headers would stagger.
 
 Why a map, rather than opening on the whole drawing and then moving in to
 its anchor: an opening overview is gone a second later, a reader who
 prefers reduced motion never sees it, and it says nothing once the reader
 has scrolled. The map is there whenever the reader looks, says where the
-view is as well as what the whole is, and is a way to move; it costs a
-corner of about a fiftieth of the view, chosen where the drawing has
-least. Hidden scroll bars lose nothing: the rails and the map say more,
-in sharp geometry, and a bar on a phone is not shown at all.
+view is as well as what the whole is, and is a way to move. Why a strip
+rather than a corner over the drawing: a layered drawing fills its frame
+across, so no corner is free at every place it rests, and a map over a
+stub's names or an edge's label hides what the reader came for. The
+strip costs the drawing a band no deeper than the map (40 px at most,
+with its margins), the way a scroll bar would. Hidden scroll bars lose
+nothing: the rails and the map say more, in sharp geometry, and a bar on
+a phone is not shown at all.
 
 Why this rule and not another. A diagram exists to be read; a drawing too
 small to read is not a smaller answer but no answer, and the caller cannot
