@@ -540,18 +540,13 @@ fn validate_graph_diagram_data(data: &Map<String, Value>) -> Result<Value, Strin
     let nodes_arr = data
         .get("nodes")
         .and_then(Value::as_array)
-        .ok_or("diagram.nodes must be an array")?;
-    if nodes_arr.is_empty() || nodes_arr.len() > 100 {
-        return Err("diagram.nodes must be an array of 1 to 100 items".into());
-    }
-
+        .filter(|nodes| !nodes.is_empty() && nodes.len() <= 100)
+        .ok_or("diagram.nodes must be an array of 1 to 100 items")?;
     let edges_arr = data
         .get("edges")
         .and_then(Value::as_array)
-        .ok_or("diagram.edges must be an array")?;
-    if edges_arr.len() > 200 {
-        return Err("diagram.edges must be an array of at most 200 items".into());
-    }
+        .filter(|edges| edges.len() <= 200)
+        .ok_or("diagram.edges must be an array of at most 200 items")?;
 
     let mut node_ids = HashSet::new();
     let mut clean_nodes = Vec::new();
@@ -567,10 +562,8 @@ fn validate_graph_diagram_data(data: &Map<String, Value>) -> Result<Value, Strin
         let id = nm
             .get("id")
             .and_then(Value::as_str)
-            .ok_or("diagram node.id must be a string")?;
-        if id.trim().is_empty() || utf16_len(id) > 128 {
-            return Err("diagram node id must be non-empty and <= 128 UTF-16 code units".into());
-        }
+            .filter(|id| !id.trim().is_empty() && utf16_len(id) <= 128)
+            .ok_or("diagram node id must be non-empty and <= 128 UTF-16 code units")?;
         if !node_ids.insert(id.to_string()) {
             return Err(format!("duplicate diagram node id: {id}"));
         }
@@ -613,14 +606,12 @@ fn validate_graph_diagram_data(data: &Map<String, Value>) -> Result<Value, Strin
             "diagram edge",
         )?;
 
-        let from = em
-            .get("from")
-            .and_then(Value::as_str)
-            .ok_or("diagram edge.from must be a string")?;
-        let to = em
-            .get("to")
-            .and_then(Value::as_str)
-            .ok_or("diagram edge.to must be a string")?;
+        let (Some(from), Some(to)) = (
+            em.get("from").and_then(Value::as_str),
+            em.get("to").and_then(Value::as_str),
+        ) else {
+            return Err("diagram edge from and to must be strings".into());
+        };
 
         if !node_ids.contains(from) {
             return Err(format!(
@@ -861,10 +852,10 @@ fn validate_document_data(data: &Map<String, Value>) -> Result<Value, String> {
     out.insert("paragraphs".into(), Value::Array(clean_paras));
 
     if let Some(kind) = data.get("kind") {
-        let k = kind.as_str().ok_or("document.kind must be a string")?;
-        if !matches!(k, "email" | "document") {
-            return Err("invalid document.kind".into());
-        }
+        let k = kind
+            .as_str()
+            .filter(|k| matches!(*k, "email" | "document"))
+            .ok_or("invalid document.kind")?;
         out.insert("kind".into(), k.into());
     }
 
@@ -1481,7 +1472,9 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
 
             if let Some(t_val) = map.get("target") {
                 if !t_val.is_null() {
-                    let t_str = t_val.as_str().ok_or("say.target is invalid")?;
+                    let t_str = t_val
+                        .as_str()
+                        .ok_or("say.target must be a non-empty identifier")?;
                     let clean_target = check_identifier(t_str, "say.target")?;
                     out.insert("target".into(), clean_target.into());
                 }
