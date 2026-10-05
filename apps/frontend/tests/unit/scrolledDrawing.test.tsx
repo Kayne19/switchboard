@@ -305,27 +305,68 @@ describe('a scrolled graph at rest', () => {
     expect(scroller.style.scrollSnapType).toBe('');
   });
 
+  // A browser with no scrollend (WebKit long had none): the event handler
+  // property is taken off the element's prototypes for the test.
+  function withoutScrollEnd(run: () => void) {
+    const owners: Array<[object, PropertyDescriptor]> = [];
+    for (let proto: object | null = HTMLElement.prototype; proto; proto = Object.getPrototypeOf(proto)) {
+      const descriptor = Object.getOwnPropertyDescriptor(proto, 'onscrollend');
+      if (descriptor) owners.push([proto, descriptor]);
+    }
+    for (const [proto] of owners) delete (proto as Record<string, unknown>).onscrollend;
+    try {
+      run();
+    } finally {
+      for (const [proto, descriptor] of owners) Object.defineProperty(proto, 'onscrollend', descriptor);
+    }
+  }
+
   it('holds its stops again only once a long settling scroll has stopped, with no word from the browser that it ended', () => {
-    // A browser that sends no scrollend (WebKit long had none), and a smooth
-    // scroll that takes longer than the 700 ms the stops used to wait.
+    // A smooth scroll that takes longer than the 700 ms the stops used to wait.
+    withoutScrollEnd(() => {
+      vi.useFakeTimers();
+      size = { width: 914, height: 526 };
+      render(<DiagramPrimitive data={pipelineDiagram} id="pipeline" />);
+      const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
+      expect('onscrollend' in scroller).toBe(false);
+      act(() => {
+        scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: 60, bubbles: true, cancelable: true }));
+      });
+      act(() => vi.advanceTimersByTime(150));
+      for (let elapsed = 0; elapsed < 1200; elapsed += 16) {
+        act(() => {
+          scroller.dispatchEvent(new Event('scroll'));
+          vi.advanceTimersByTime(16);
+        });
+        // Before: the stops came back at 700 ms, mid-flight, and a browser
+        // snaps from wherever the scroll had got to.
+        expect(scroller.style.scrollSnapType, `${elapsed} ms into the scroll`).toBe('none');
+      }
+      act(() => vi.advanceTimersByTime(200));
+      expect(scroller.style.scrollSnapType).toBe('');
+    });
+  });
+
+  it('waits for scrollend where the browser sends it, through a slow frame mid-scroll', () => {
     vi.useFakeTimers();
     size = { width: 914, height: 526 };
     render(<DiagramPrimitive data={pipelineDiagram} id="pipeline" />);
     const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
+    expect('onscrollend' in scroller).toBe(true);
     act(() => {
       scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: 60, bubbles: true, cancelable: true }));
     });
     act(() => vi.advanceTimersByTime(150));
-    for (let elapsed = 0; elapsed < 1200; elapsed += 16) {
-      act(() => {
-        scroller.dispatchEvent(new Event('scroll'));
-        vi.advanceTimersByTime(16);
-      });
-      // Before: the stops came back at 700 ms, mid-flight, and a browser
-      // snaps from wherever the scroll had got to.
-      expect(scroller.style.scrollSnapType, `${elapsed} ms into the scroll`).toBe('none');
-    }
-    act(() => vi.advanceTimersByTime(200));
+    act(() => {
+      scroller.dispatchEvent(new Event('scroll'));
+      // A frame that stalls 300 ms is not the end of the scroll.
+      vi.advanceTimersByTime(300);
+    });
+    expect(scroller.style.scrollSnapType).toBe('none');
+    act(() => {
+      scroller.dispatchEvent(new Event('scroll'));
+      scroller.dispatchEvent(new Event('scrollend'));
+    });
     expect(scroller.style.scrollSnapType).toBe('');
   });
 

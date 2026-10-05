@@ -90,18 +90,23 @@ const FADE_LEAD = 10;
 const MAP_CUT = 7;
 // How long input that moves the drawing freely (a wheel, a drag on the
 // map) must pause before the drawing settles on a stop; and how long a
-// scroller must go without moving to have stopped, where the browser does
-// not say when a scroll ends.
+// scroller must go without moving to have stopped: briefly where the
+// browser does not say when a scroll ends, and only as a guard where it
+// does (a scroll asked to go where it already is never ends).
 const SETTLE_MS = 140;
 const SCROLL_IDLE_MS = 120;
+const SCROLL_GUARD_MS = 1000;
 
 /**
  * Calls `done` once `element` has stopped moving: at the browser's
- * `scrollend`, or once no scroll event has come for SCROLL_IDLE_MS, which
- * holds in a browser that sends no `scrollend` (WebKit long had none)
- * however long the scroll takes. Returns what stops listening.
+ * `scrollend`; in a browser that sends none (WebKit long had none), once no
+ * scroll event has come for SCROLL_IDLE_MS, however long the scroll takes.
+ * Where `scrollend` exists the quiet spell must last SCROLL_GUARD_MS, so a
+ * slow frame mid-scroll is not taken for its end. Returns what stops
+ * listening.
  */
 function whenScrollEnds(element: HTMLElement, done: () => void): () => void {
+  const quiet = 'onscrollend' in element ? SCROLL_GUARD_MS : SCROLL_IDLE_MS;
   let timer = 0;
   const stop = () => {
     window.clearTimeout(timer);
@@ -114,7 +119,7 @@ function whenScrollEnds(element: HTMLElement, done: () => void): () => void {
   };
   const moved = () => {
     window.clearTimeout(timer);
-    timer = window.setTimeout(ended, SCROLL_IDLE_MS);
+    timer = window.setTimeout(ended, quiet);
   };
   element.addEventListener('scroll', moved);
   element.addEventListener('scrollend', ended);
