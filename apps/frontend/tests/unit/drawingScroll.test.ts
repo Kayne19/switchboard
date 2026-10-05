@@ -7,8 +7,11 @@ import {
   findExits,
   keyStop,
   leadStop,
-  mapCorner,
+  MAP_MARGIN,
+  MAP_PAD,
+  mapInStrip,
   mapSize,
+  mapStrip,
   pageStop,
   placeExits,
   placed,
@@ -17,6 +20,7 @@ import {
   restStops,
   settleStop,
   tagLength,
+  viewWithMap,
   wantsMap,
   type DrawingMap,
   type Span,
@@ -335,18 +339,55 @@ describe('the map', () => {
     }
   });
 
-  it('takes the corner that covers least of the parts, where the drawing opens and as it scrolls', () => {
-    const box = { width: 200, height: 60 };
-    const viewport = { width: 900, height: 500 };
-    // A drawing scrolling across, its parts along the bottom band.
-    const bottomHeavy = [view(0, 440, 2000, 500), view(100, 200, 300, 260)];
-    expect(mapCorner(bottomHeavy, viewport, { width: 2000, height: 500 }, { left: 0, top: 0 }, box, false)).toMatch(/^top-/);
-    // A part where it opens, at the top right: the top left.
-    const topRight = [view(750, 0, 900, 60), view(0, 440, 2000, 500)];
-    expect(mapCorner(topRight, viewport, { width: 2000, height: 500 }, { left: 0, top: 0 }, box, false)).toBe('top-left');
-    // Nothing anywhere: bottom right.
-    expect(mapCorner([], viewport, { width: 2000, height: 500 }, { left: 0, top: 0 }, box, false)).toBe('bottom-right');
-    // A pinned band at the top leaves it the bottom.
-    expect(mapCorner(bottomHeavy, viewport, { width: 2000, height: 500 }, { left: 0, top: 0 }, box, true)).toMatch(/^bottom-/);
+  it('takes a strip of its own beside the drawing, along the way it scrolls', () => {
+    const viewport = { width: 914, height: 526 };
+    const across = mapStrip({ width: 4459, height: 658 }, { width: 3469, height: 512, scrollX: true, scrollY: false }, viewport)!;
+    expect(across.side).toBe('bottom');
+    // As deep as the map's short side, its padding and margins.
+    expect(across.depth).toBe(Math.ceil(mapSize({ width: 4459, height: 658 }, viewport).height + 2 * MAP_PAD + 2 * MAP_MARGIN));
+    const down = mapStrip({ width: 1175, height: 2400 }, { width: 914, height: 1867, scrollX: false, scrollY: true }, viewport)!;
+    expect(down.side).toBe('right');
+    // A squarish drawing's map is held thin: its strip costs the drawing little.
+    expect(mapSize({ width: 1175, height: 2400 }, viewport).width).toBeGreaterThan(40);
+    expect(down.depth).toBe(40 + 2 * MAP_PAD + 2 * MAP_MARGIN);
+    // Both ways: along the way it scrolls further.
+    expect(mapStrip({ width: 3000, height: 1000 }, { width: 2400, height: 800, scrollX: true, scrollY: true }, viewport)?.side).toBe('bottom');
+    // No map, no strip: a drawing that fits, scrolls a little, or sits in a small viewport.
+    expect(mapStrip({ width: 900, height: 500 }, { width: 900, height: 500, scrollX: false, scrollY: false }, viewport)).toBeNull();
+    expect(mapStrip({ width: 1200, height: 500 }, { width: 1200, height: 500, scrollX: true, scrollY: false }, viewport)).toBeNull();
+    expect(mapStrip({ width: 3000, height: 128 }, { width: 1000, height: 128, scrollX: true, scrollY: false }, { width: 334, height: 128 })).toBeNull();
+  });
+
+  it('lays a drawing that carries a map out again for the viewport less its strip', () => {
+    const viewport = { width: 726, height: 531, scrollbar: 0 };
+    const seen: Array<{ width: number; height: number }> = [];
+    const shown = viewWithMap(viewport, (room) => {
+      seen.push({ width: room.width, height: room.height });
+      return viewDiagram(pipelineDiagram, room, 'visual');
+    });
+    expect(shown.strip?.side).toBe('bottom');
+    expect(seen).toEqual([{ width: 726, height: 531 }, { width: 726, height: 531 - shown.strip!.depth }]);
+    // Drawn in the rest, the drawing reaches no further across than the room it was laid out for.
+    expect(shown.fit.height).toBeLessThanOrEqual(531 - shown.strip!.depth + 0.5);
+    // One that scrolls too little to carry a map (the topology across an
+    // ultrawide slot, 1.3 views) is laid out once, for the whole viewport.
+    const once: unknown[] = [];
+    const wide = viewWithMap({ width: 1980, height: 604, scrollbar: 0 }, (room) => {
+      once.push(room);
+      return viewDiagram(topologyDiagram, room, 'gate');
+    });
+    expect(wide.fit.scrollX).toBe(true);
+    expect(wide.strip).toBeNull();
+    expect(once).toHaveLength(1);
+  });
+
+  it('is as deep as its strip holds and as long as the drawing\'s shape makes it', () => {
+    const across = mapInStrip({ width: 4459, height: 658 }, { side: 'bottom', depth: 58 }, 914);
+    expect(across.height).toBeCloseTo(58 - 2 * MAP_PAD - 2 * MAP_MARGIN);
+    expect(across.width / across.height).toBeCloseTo(4459 / 658);
+    const down = mapInStrip({ width: 453, height: 7207 }, { side: 'right', depth: 40 }, 700);
+    expect(down.height).toBeLessThanOrEqual(300);
+    expect(down.width / down.height).toBeCloseTo(453 / 7207);
+    expect(down.width).toBeLessThanOrEqual(40 - 2 * MAP_PAD - 2 * MAP_MARGIN + 1e-9);
   });
 });

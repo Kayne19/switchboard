@@ -9,8 +9,8 @@ import {
   findExits,
   keyStop,
   leadStop,
-  mapCorner,
-  mapSize,
+  mapInStrip,
+  MAP_PAD,
   pageStop,
   placeExits,
   placed,
@@ -19,9 +19,8 @@ import {
   restStops,
   settleStop,
   tagLength,
-  wantsMap,
-  type Corner,
   type DrawingMap,
+  type MapStrip,
   type Placement,
   type Side,
   type Span,
@@ -87,10 +86,7 @@ const FADE_MAX = 0.22;
 // The fade reaches this far past the inner edge of what it covers, so the
 // cut part's frame there is dimmed too.
 const FADE_LEAD = 10;
-// The map's margin from the viewport's corner, its padding inside its
-// frame (.drawing-viewport__map), and the cut of the frame's corner.
-const MAP_MARGIN = 6;
-const MAP_PAD = 4;
+// The cut of the map frame's corner that faces the drawing.
 const MAP_CUT = 7;
 // How long input that moves the drawing freely (a wheel, a drag on the
 // map) must pause before the drawing settles on a stop; and how long a
@@ -130,17 +126,11 @@ function whenScrollEnds(element: HTMLElement, done: () => void): () => void {
 // content's end), where the browser settles the drawing at its start.
 const bandLength = (stop: number, next: number | undefined, content: number) => Math.max(1, (next ?? content) - stop);
 
-// The map's frame: its box with the corner that faces the drawing cut.
-function mapFrame(width: number, height: number, corner: Corner): string {
+// The map's frame: its box with the corner that faces the drawing (it
+// stands at the far end of its strip, so that is the top left) cut.
+function mapFrame(width: number, height: number): string {
   const [x0, y0, x1, y1] = [0.5, 0.5, width - 0.5, height - 0.5];
-  const points =
-    corner === 'bottom-right'
-      ? [[x0, y0 + MAP_CUT], [x0 + MAP_CUT, y0], [x1, y0], [x1, y1], [x0, y1]]
-      : corner === 'bottom-left'
-        ? [[x0, y0], [x1 - MAP_CUT, y0], [x1, y0 + MAP_CUT], [x1, y1], [x0, y1]]
-        : corner === 'top-right'
-          ? [[x0, y0], [x1, y0], [x1, y1], [x0 + MAP_CUT, y1], [x0, y1 - MAP_CUT]]
-          : [[x0, y0], [x1, y0], [x1, y1 - MAP_CUT], [x1 - MAP_CUT, y1], [x0, y1]];
+  const points = [[x0, y0 + MAP_CUT], [x0 + MAP_CUT, y0], [x1, y0], [x1, y1], [x0, y1]];
   return `M ${points.map(([x, y]) => `${x} ${y}`).join(' L ')} Z`;
 }
 
@@ -159,8 +149,10 @@ const cut = (label: string) => (label.length > EXIT_CHARS ? `${label.slice(0, EX
  * opening on `lead` (what its note names, or where it begins); each edge it
  * continues past counts what lies that way and fades over what it still
  * cuts; a line that leaves the view names the part it goes to, at the rim;
- * and a map of the whole, the view boxed on it, stands in the corner, where
- * a tap or a drag moves the view. A `pinned` band (a sequence's actor
+ * and a map of the whole, the view boxed on it, stands in its `strip`
+ * beside the drawing, where a tap or a drag moves the view. The strip is
+ * the primitive's to reserve (drawingScroll `viewWithMap`), since the
+ * drawing is laid out for the room it leaves. A `pinned` band (a sequence's actor
  * headers) stays at the viewport's top once the drawing has scrolled under
  * it, so a message far down still names its lifelines.
  */
@@ -170,6 +162,7 @@ export function DrawingViewport({
   lead,
   pinned,
   map,
+  strip,
   ariaLabel,
   children,
 }: {
@@ -180,6 +173,8 @@ export function DrawingViewport({
   pinned?: { height: number; content: ReactNode } | null;
   /** What the viewport tells its reader about the drawing when it scrolls. */
   map: DrawingMap;
+  /** Where its map stands, beside the drawing; none for a drawing that carries no map. */
+  strip?: MapStrip | null;
   ariaLabel: string;
   children: ReactNode;
 }) {
@@ -273,7 +268,6 @@ export function DrawingViewport({
   const shape = `${lead ? `${drawing.width}x${drawing.height}` : 'start'}@${fit.scale}/${axis}/${leadX},${leadY}`;
   const endRef = useRef<HTMLSpanElement>(null);
   const shownShape = useRef<string | null>(null);
-  const [openedAt, setOpenedAt] = useState({ left: 0, top: 0 });
   useLayoutEffect(() => {
     const element = scrollRef.current;
     if (element && scrolling && shownShape.current !== shape) {
@@ -291,7 +285,6 @@ export function DrawingViewport({
       endRef.current?.style.setProperty('top', `${opened.endY - 1}px`);
       element.scrollLeft = leadBox ? leadStop(opened.x, [leadBox.left, leadBox.right], sizes.width, 0, boxes.map((box): Span => [box.left, box.right])) : 0;
       element.scrollTop = leadBox ? leadStop(opened.y, [leadBox.top, leadBox.bottom], sizes.height, pinnedDepth, boxes.map((box): Span => [box.top, box.bottom])) : 0;
-      setOpenedAt({ left: element.scrollLeft, top: element.scrollTop });
     }
     shownShape.current = shape;
     // The rims and the band follow every render: a resize or an update
@@ -443,20 +436,10 @@ export function DrawingViewport({
     };
   }, [reading, contentWidth, contentHeight]);
   const rim = useMemo(() => (view ? readRim(parts, view, continues, marks) : null), [parts, marks, view, continues]);
-  // The map, for a drawing that scrolls far enough to need one, in the
-  // corner it covers least of, chosen where the drawing opens: it stays put
-  // while the reader scrolls, and is chosen again only when the box or the
-  // drawing changes.
-  const mapBox = useMemo(
-    () => (boxWidth && boxHeight && wantsMap(fit, { width: boxWidth, height: boxHeight }) ? mapSize(drawing, { width: boxWidth, height: boxHeight }) : null),
-    [drawing, fit, boxWidth, boxHeight],
-  );
-  const corner = useMemo<Corner>(() => {
-    if (!mapBox) return 'bottom-right';
-    const outer = { width: mapBox.width + 2 * MAP_PAD + 2 * MAP_MARGIN, height: mapBox.height + 2 * MAP_PAD + 2 * MAP_MARGIN };
-    const content = { width: Math.max(boxWidth, fit.width), height: Math.max(boxHeight, fit.height) };
-    return mapCorner(parts, { width: boxWidth, height: boxHeight }, content, openedAt, outer, pinnedDepth > 0);
-  }, [mapBox, parts, boxWidth, boxHeight, fit.width, fit.height, pinnedDepth, openedAt]);
+  // The map, in its strip, at the strip's far end: as deep as the strip
+  // and as long as the drawing's shape makes it.
+  const stripLength = strip?.side === 'bottom' ? boxWidth : boxHeight;
+  const mapBox = useMemo(() => (strip && stripLength ? mapInStrip(drawing, strip, stripLength) : null), [drawing, strip, stripLength]);
   // Each rim's count of what lies that way: "07 NODES".
   const rimTexts = useMemo(() => {
     const text = (side: Side) => {
@@ -465,33 +448,18 @@ export function DrawingViewport({
     };
     return { left: text('left'), right: text('right'), top: text('top'), bottom: text('bottom') };
   }, [rim, map]);
-  // Along each rail, what the map takes of it (when the map stands at that
-  // edge), and where the count stands: in the middle of the rest.
+  // Where each rail's count stands: in its middle (the side rails start
+  // under a pinned band).
   const rails = useMemo(() => {
-    const read = (side: Side) => {
-      const vertical = side === 'left' || side === 'right';
-      const start = vertical ? inset : 0;
-      const end = vertical ? boxHeight : boxWidth;
-      let mapped: Span | null = null;
-      if (mapBox && corner.includes(side)) {
-        const mapLength = (vertical ? mapBox.height : mapBox.width) + 2 * MAP_PAD + 2 * MAP_MARGIN;
-        const atEnd = vertical ? corner.startsWith('bottom') : corner.endsWith('right');
-        mapped = atEnd ? [end - mapLength, end] : [start, start + mapLength];
-      }
-      const free: Span = mapped ? (mapped[0] > start ? [start, mapped[0]] : [mapped[1], end]) : [start, end];
-      return { mapped, centre: (free[0] + free[1]) / 2 };
-    };
-    return { left: read('left'), right: read('right'), top: read('top'), bottom: read('bottom') };
-  }, [inset, boxWidth, boxHeight, mapBox, corner]);
+    const centre = (side: Side) => (side === 'left' || side === 'right' ? (inset + boxHeight) / 2 : boxWidth / 2);
+    return { left: centre('left'), right: centre('right'), top: centre('top'), bottom: centre('bottom') };
+  }, [inset, boxWidth, boxHeight]);
   const exits = useMemo(() => {
     if (!reading || !place || !view || map.links.length === 0) return [];
-    // Along each rail, the names keep off its count and off the map.
+    // Along each rail, the names keep off its count.
     const along = (side: Side): Span[] => {
-      const { mapped, centre } = rails[side];
       const text = rimTexts[side];
-      const taken: Span[] = mapped ? [mapped] : [];
-      if (text) taken.push([centre - tagLength(text.length) / 2 - 4, centre + tagLength(text.length) / 2 + 4]);
-      return taken;
+      return text ? [[rails[side] - tagLength(text.length) / 2 - 4, rails[side] + tagLength(text.length) / 2 + 4]] : [];
     };
     const found = findExits(parts, map.links, map.parts.map((part) => part.label), place, clearOf(view, continues));
     return placeExits(found, reading, reading, { left: along('left'), right: along('right'), top: along('top'), bottom: along('bottom') }, inset);
@@ -574,115 +542,125 @@ export function DrawingViewport({
   };
 
   return (
-    <div ref={viewportRef} className={`drawing-viewport${scrolling ? ' drawing-viewport--scrolling' : ''}`} data-scroll={axis}>
-      <div
-        ref={scrollRef}
-        className="drawing-viewport__scroll"
-        tabIndex={scrolling ? 0 : undefined}
-        onScroll={scrolling ? onScroll : undefined}
-        onKeyDown={scrolling ? scrollKeys : undefined}
-      >
-        <svg
-          viewBox={`0 0 ${drawing.width} ${drawing.height}`}
-          preserveAspectRatio="xMidYMid meet"
-          role="img"
-          aria-label={ariaLabel}
-          style={scrolling ? { width: `${fit.width}px`, height: `${fit.height}px` } : undefined}
-        >
-          {children}
-        </svg>
-        {bands}
-        {scrolling ? <span ref={endRef} className="drawing-viewport__end" style={{ left: `${contentWidth - 1}px`, top: `${contentHeight - 1}px` }} /> : null}
-      </div>
-      {pinned && fit.scrollY ? (
-        <div className={`drawing-viewport__pinned${inset > 0 ? ' drawing-viewport__pinned--shown' : ''}`} style={{ height: `${pinnedDepth}px` }} aria-hidden="true">
-          <div ref={pinnedRef} className="drawing-viewport__pinned-drawing" style={{ width: `${fit.width}px` }}>
-            <svg viewBox={`0 0 ${drawing.width} ${pinned.height}`} preserveAspectRatio="xMidYMin meet">
-              {pinned.content}
-            </svg>
-          </div>
-        </div>
-      ) : null}
-      {SIDES.map((side) =>
-        continues[side] ? (
-          <div
-            key={side}
-            className={`drawing-viewport__more drawing-viewport__more--${side}`}
-            style={{ [side === 'left' || side === 'right' ? 'width' : 'height']: `${fadeDepth(side)}px`, ...(side === 'bottom' ? null : { top: `${inset}px` }) }}
-            aria-hidden="true"
-          />
-        ) : null,
-      )}
-      {SIDES.map((side) =>
-        rimTexts[side] ? (
-          <div key={side} className={`drawing-viewport__rail drawing-viewport__rail--${side}`} style={side === 'bottom' ? undefined : { top: `${inset}px` }} aria-hidden="true" />
-        ) : null,
-      )}
-      {exits.length > 0 ? (
-        <div className="drawing-viewport__exits" aria-hidden="true">
-          {exits.map((exit) => (
-            <span
-              key={`${exit.side}/${exit.part}`}
-              className={`drawing-viewport__exit drawing-viewport__exit--${exit.side}`}
-              style={{
-                left: `${exit.x + exit.width / 2}px`,
-                top: `${exit.y + exit.height / 2}px`,
-                width: `${Math.max(exit.width, exit.height)}px`,
-                color: exit.tone,
-              }}
-            >
-              {cut(exit.label)}
-            </span>
-          ))}
-        </div>
-      ) : null}
-      {SIDES.map((side) => {
-        const text = rimTexts[side];
-        return text ? (
-          <div
-            key={side}
-            className={`drawing-viewport__rim drawing-viewport__rim--${side}`}
-            style={side === 'left' || side === 'right' ? { top: `${rails[side].centre}px` } : { left: `${rails[side].centre}px`, ...(side === 'top' ? { top: `${inset}px` } : null) }}
-            onClick={page(side)}
-            aria-hidden="true"
-          >
-            <span className="drawing-viewport__rim-text">{text}</span>
-            <svg className="drawing-viewport__chevron" viewBox="0 0 8 6" aria-hidden="true">
-              <path d="M 4 0 L 8 6 L 0 6 Z" />
-            </svg>
-          </div>
-        ) : null;
-      })}
-      {mapBox && mapWindow ? (
+    <div
+      ref={viewportRef}
+      className={`drawing-viewport${scrolling ? ' drawing-viewport--scrolling' : ''}${strip ? ` drawing-viewport--strip-${strip.side}` : ''}`}
+      data-scroll={axis}
+    >
+      <div className="drawing-viewport__view">
         <div
-          className={`drawing-viewport__map drawing-viewport__map--${corner}`}
-          style={{ width: `${mapBox.width}px`, height: `${mapBox.height}px` }}
-          aria-hidden="true"
-          onPointerDown={(event) => {
-            if (event.button !== 0) return;
-            dragging.current = true;
-            event.currentTarget.setPointerCapture?.(event.pointerId);
-            letGo();
-            showAt(event);
-          }}
-          onPointerMove={(event) => {
-            if (dragging.current) showAt(event);
-          }}
-          onPointerUp={(event) => {
-            event.currentTarget.releasePointerCapture?.(event.pointerId);
-            endDrag();
-          }}
-          onPointerCancel={endDrag}
-          onLostPointerCapture={endDrag}
-          onClick={(event) => event.preventDefault()}
+          ref={scrollRef}
+          className="drawing-viewport__scroll"
+          tabIndex={scrolling ? 0 : undefined}
+          onScroll={scrolling ? onScroll : undefined}
+          onKeyDown={scrolling ? scrollKeys : undefined}
         >
-          <svg className="drawing-viewport__map-frame" viewBox={`0 0 ${mapBox.width + 2 * MAP_PAD} ${mapBox.height + 2 * MAP_PAD}`} preserveAspectRatio="none">
-            <path d={mapFrame(mapBox.width + 2 * MAP_PAD, mapBox.height + 2 * MAP_PAD, corner)} />
+          <svg
+            viewBox={`0 0 ${drawing.width} ${drawing.height}`}
+            preserveAspectRatio="xMidYMid meet"
+            role="img"
+            aria-label={ariaLabel}
+            style={scrolling ? { width: `${fit.width}px`, height: `${fit.height}px` } : undefined}
+          >
+            {children}
           </svg>
-          <svg className="drawing-viewport__map-sketch" viewBox={`0 0 ${drawing.width} ${drawing.height}`} preserveAspectRatio="none">
-            {sketch}
-            <rect className="drawing-viewport__map-view" x={mapWindow.x} y={mapWindow.y} width={mapWindow.width} height={mapWindow.height} />
-          </svg>
+          {bands}
+          {scrolling ? <span ref={endRef} className="drawing-viewport__end" style={{ left: `${contentWidth - 1}px`, top: `${contentHeight - 1}px` }} /> : null}
+        </div>
+        {pinned && fit.scrollY ? (
+          <div className={`drawing-viewport__pinned${inset > 0 ? ' drawing-viewport__pinned--shown' : ''}`} style={{ height: `${pinnedDepth}px` }} aria-hidden="true">
+            <div ref={pinnedRef} className="drawing-viewport__pinned-drawing" style={{ width: `${fit.width}px` }}>
+              <svg viewBox={`0 0 ${drawing.width} ${pinned.height}`} preserveAspectRatio="xMidYMin meet">
+                {pinned.content}
+              </svg>
+            </div>
+          </div>
+        ) : null}
+        {SIDES.map((side) =>
+          continues[side] ? (
+            <div
+              key={side}
+              className={`drawing-viewport__more drawing-viewport__more--${side}`}
+              style={{ [side === 'left' || side === 'right' ? 'width' : 'height']: `${fadeDepth(side)}px`, ...(side === 'bottom' ? null : { top: `${inset}px` }) }}
+              aria-hidden="true"
+            />
+          ) : null,
+        )}
+        {SIDES.map((side) =>
+          rimTexts[side] ? (
+            <div key={side} className={`drawing-viewport__rail drawing-viewport__rail--${side}`} style={side === 'bottom' ? undefined : { top: `${inset}px` }} aria-hidden="true" />
+          ) : null,
+        )}
+        {exits.length > 0 ? (
+          <div className="drawing-viewport__exits" aria-hidden="true">
+            {exits.map((exit) => (
+              <span
+                key={`${exit.side}/${exit.part}`}
+                className={`drawing-viewport__exit drawing-viewport__exit--${exit.side}`}
+                style={{
+                  left: `${exit.x + exit.width / 2}px`,
+                  top: `${exit.y + exit.height / 2}px`,
+                  width: `${Math.max(exit.width, exit.height)}px`,
+                  color: exit.tone,
+                }}
+              >
+                {cut(exit.label)}
+              </span>
+            ))}
+          </div>
+        ) : null}
+        {SIDES.map((side) => {
+          const text = rimTexts[side];
+          return text ? (
+            <div
+              key={side}
+              className={`drawing-viewport__rim drawing-viewport__rim--${side}`}
+              style={side === 'left' || side === 'right' ? { top: `${rails[side]}px` } : { left: `${rails[side]}px`, ...(side === 'top' ? { top: `${inset}px` } : null) }}
+              onClick={page(side)}
+              aria-hidden="true"
+            >
+              <span className="drawing-viewport__rim-text">{text}</span>
+              <svg className="drawing-viewport__chevron" viewBox="0 0 8 6" aria-hidden="true">
+                <path d="M 4 0 L 8 6 L 0 6 Z" />
+              </svg>
+            </div>
+          ) : null;
+        })}
+      </div>
+      {strip ? (
+        <div className="drawing-viewport__strip" style={{ [strip.side === 'bottom' ? 'height' : 'width']: `${strip.depth}px` }}>
+          {mapBox && mapWindow ? (
+            <div
+              className="drawing-viewport__map"
+              style={{ width: `${mapBox.width}px`, height: `${mapBox.height}px` }}
+              aria-hidden="true"
+              onPointerDown={(event) => {
+                if (event.button !== 0) return;
+                dragging.current = true;
+                event.currentTarget.setPointerCapture?.(event.pointerId);
+                letGo();
+                showAt(event);
+              }}
+              onPointerMove={(event) => {
+                if (dragging.current) showAt(event);
+              }}
+              onPointerUp={(event) => {
+                event.currentTarget.releasePointerCapture?.(event.pointerId);
+                endDrag();
+              }}
+              onPointerCancel={endDrag}
+              onLostPointerCapture={endDrag}
+              onClick={(event) => event.preventDefault()}
+            >
+              <svg className="drawing-viewport__map-frame" viewBox={`0 0 ${mapBox.width + 2 * MAP_PAD} ${mapBox.height + 2 * MAP_PAD}`} preserveAspectRatio="none">
+                <path d={mapFrame(mapBox.width + 2 * MAP_PAD, mapBox.height + 2 * MAP_PAD)} />
+              </svg>
+              <svg className="drawing-viewport__map-sketch" viewBox={`0 0 ${drawing.width} ${drawing.height}`} preserveAspectRatio="none">
+                {sketch}
+                <rect className="drawing-viewport__map-view" x={mapWindow.x} y={mapWindow.y} width={mapWindow.width} height={mapWindow.height} />
+              </svg>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

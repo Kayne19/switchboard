@@ -10,8 +10,9 @@
 //   way, and a fade over whatever the edge still cuts (`readRim`).
 // - A line that leaves the view names the part at its far end, on the
 //   rail where it leaves (`findExits`, `placeExits`).
-// - A map of the whole drawing, the view boxed on it, stands in the corner
-//   it covers least of (`mapSize`, `mapCorner`).
+// - A map of the whole drawing, the view boxed on it, stands in a strip of
+//   its own beside the drawing, which is laid out for the rest of the
+//   viewport, so the map covers none of it (`mapStrip`, `viewWithMap`).
 
 export interface Point {
   x: number;
@@ -497,6 +498,14 @@ const MAP_MAX = 300;
 // map would cover too much of what it maps.
 const MAP_ROOM = 180;
 
+/** The map's padding inside its frame, and the room its strip keeps on either side of it, CSS pixels (.drawing-viewport__map, .drawing-viewport__strip). */
+export const MAP_PAD = 4;
+export const MAP_MARGIN = 6;
+// Its strip costs the drawing at most this much of the map's depth across
+// it (plus padding and margins): a map is an overview, and a squarish
+// drawing's would otherwise take a wide strip for little.
+const MAP_THIN = 40;
+
 /** Whether a drawing `fitted` (its size on screen, CSS pixels) in `viewport` scrolls far enough, in room enough, to carry a map. */
 export function wantsMap(fitted: { width: number; height: number }, viewport: { width: number; height: number }): boolean {
   return Math.min(viewport.width, viewport.height) >= MAP_ROOM && Math.max(fitted.width / viewport.width, fitted.height / viewport.height) >= MAP_FROM;
@@ -518,43 +527,72 @@ export function mapSize(drawing: { width: number; height: number }, viewport: { 
   return { width, height };
 }
 
-export type Corner = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
-const CORNERS: readonly Corner[] = ['bottom-right', 'bottom-left', 'top-right', 'top-left'];
+/**
+ * The strip a map stands in: along the viewport's bottom for a drawing
+ * that scrolls across, along its right side for one that scrolls down
+ * (for one that scrolls both ways, along the side it scrolls further),
+ * `depth` CSS pixels deep: the map's depth across it (never past
+ * MAP_THIN), its padding and margins. The drawing is laid out and scrolled in the
+ * rest of the viewport (`viewWithMap`), so the map covers no part of it,
+ * at rest or as it moves.
+ */
+export interface MapStrip {
+  side: 'bottom' | 'right';
+  depth: number;
+}
+
+/** The strip the map of a drawing (`drawing`, user units, fitted as `fit`) takes in `viewport`, or null for one that carries no map. */
+export function mapStrip(drawing: { width: number; height: number }, fit: { width: number; height: number; scrollX: boolean; scrollY: boolean }, viewport: { width: number; height: number }): MapStrip | null {
+  if (!(fit.scrollX || fit.scrollY) || !wantsMap(fit, viewport)) return null;
+  const across = fit.scrollX && (!fit.scrollY || fit.width / viewport.width >= fit.height / viewport.height);
+  const map = mapSize(drawing, viewport);
+  return { side: across ? 'bottom' : 'right', depth: Math.ceil(Math.min(MAP_THIN, across ? map.height : map.width) + 2 * MAP_PAD + 2 * MAP_MARGIN) };
+}
+
+/** The viewport a drawing is laid out and scrolled in beside its map's strip. */
+export function besideStrip<V extends { width: number; height: number }>(viewport: V, strip: MapStrip | null): V {
+  if (!strip) return viewport;
+  return strip.side === 'bottom' ? { ...viewport, height: Math.max(1, viewport.height - strip.depth) } : { ...viewport, width: Math.max(1, viewport.width - strip.depth) };
+}
 
 /**
- * The corner the map stands in: the one that covers least of the drawing's
- * parts, where the drawing opens (`scroll`) and, as a reader scrolls, on
- * average over the views the drawing passes under it, the first counted
- * twice. The bottom right is kept on a tie, and the top is left to a
- * pinned band. `box` is the map's outer size with its margin, `parts` the
- * drawing's parts in content pixels, `viewport` the scroller's box,
- * `content` the scroll content's size.
+ * A drawing shown in `viewport` (`view` lays it out and fits it there),
+ * with room for its map: one that scrolls far enough to carry a map is
+ * laid out again for the viewport less the map's strip, so the map never
+ * covers it. The strip is chosen from the first view; the drawing keeps it
+ * even if, laid out narrower, it would ask for less. The map is a help to
+ * reading, never at its cost: a strip is taken only where the drawing,
+ * laid out beside it, reads as it did (it scrolls no way it did not, and
+ * `reading`, what the drawing says of how it is composed, is unchanged: a
+ * graph's orientation, a sequence's header rows). Elsewhere the drawing
+ * has its rails and no map.
  */
-export function mapCorner(
-  parts: readonly View[],
-  viewport: { width: number; height: number },
-  content: { width: number; height: number },
-  scroll: { left: number; top: number },
-  box: { width: number; height: number },
-  pinned: boolean,
-): Corner {
-  const overlap = (low: number, high: number, start: number, end: number) => Math.max(0, Math.min(high, end) - Math.max(low, start));
-  const covered = (x: Span, y: Span) => parts.reduce((sum, part) => sum + overlap(x[0], x[1], part.left, part.right) * overlap(y[0], y[1], part.top, part.bottom), 0);
-  // How many views the drawing is along each axis: everything along an
-  // axis that scrolls passes under the map once per view.
-  const viewsX = Math.max(1, content.width / viewport.width);
-  const viewsY = Math.max(1, content.height / viewport.height);
-  const score = (corner: Corner) => {
-    const right = corner.endsWith('right');
-    const bottom = corner.startsWith('bottom');
-    const at = (start: number, size: number, length: number, far: boolean): Span => (far ? [start + size - length, start + size] : [start, start + length]);
-    const opening = covered(at(scroll.left, viewport.width, box.width, right), at(scroll.top, viewport.height, box.height, bottom));
-    const sweepX: Span = viewsX > 1 ? [0, content.width] : at(0, viewport.width, box.width, right);
-    const sweepY: Span = viewsY > 1 ? [0, content.height] : at(0, viewport.height, box.height, bottom);
-    const passing = (viewsX > 1 ? covered(sweepX, at(scroll.top, viewport.height, box.height, bottom)) / viewsX : 0) +
-      (viewsY > 1 ? covered(at(scroll.left, viewport.width, box.width, right), sweepY) / viewsY : 0);
-    return 2 * opening + passing;
-  };
-  const candidates = CORNERS.filter((corner) => !(pinned && corner.startsWith('top')));
-  return candidates.reduce((best, corner) => (score(corner) < score(best) - 1 ? corner : best), candidates[0]);
+export function viewWithMap<V extends { layout: { width: number; height: number }; fit: { width: number; height: number; scrollX: boolean; scrollY: boolean } }, P extends { width: number; height: number }>(
+  viewport: P,
+  view: (viewport: P) => V,
+  reading: (view: V) => string = () => '',
+): V & { strip: MapStrip | null } {
+  const first = view(viewport);
+  const strip = mapStrip(first.layout, first.fit, viewport);
+  if (!strip) return { ...first, strip };
+  const beside = view(besideStrip(viewport, strip));
+  const kept = (beside.fit.scrollX ? first.fit.scrollX : true) && (beside.fit.scrollY ? first.fit.scrollY : true) && reading(beside) === reading(first);
+  return kept ? { ...beside, strip } : { ...first, strip: null };
+}
+
+/**
+ * The map's size in its strip, CSS pixels: as deep as the strip holds, as
+ * long as the drawing's shape makes it, no longer than MAP_LONG of the
+ * strip's length nor MAP_MAX (then shallower, keeping the shape).
+ */
+export function mapInStrip(drawing: { width: number; height: number }, strip: MapStrip, length: number): { width: number; height: number } {
+  const aspect = drawing.width / drawing.height;
+  const depth = Math.max(1, strip.depth - 2 * MAP_PAD - 2 * MAP_MARGIN);
+  const longest = Math.max(1, Math.min(MAP_MAX, length * MAP_LONG));
+  if (strip.side === 'bottom') {
+    const width = Math.min(depth * aspect, longest);
+    return { width, height: width / aspect };
+  }
+  const height = Math.min(depth / aspect, longest);
+  return { width: height * aspect, height };
 }

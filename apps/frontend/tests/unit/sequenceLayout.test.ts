@@ -4,7 +4,8 @@ import { fixtures, traceDiagram } from '../../src/fixtures/scenes';
 import { cornerTagBoxes } from '../../src/primitives/diagramLayout';
 import { SLIVER } from '../../src/primitives/drawingFit';
 import { NOTE_MARKER } from '../../src/primitives/NoteMarker';
-import { layoutSequence, pinnedDepth, sequenceMinScale, viewSequence, type Box, type SequenceOrientation } from '../../src/primitives/sequenceLayout';
+import { viewWithMap } from '../../src/primitives/drawingScroll';
+import { headerReading, layoutSequence, pinnedDepth, sequenceMinScale, viewSequence, type Box, type SequenceOrientation } from '../../src/primitives/sequenceLayout';
 
 const handoffDiagram = (fixtures.handoff[0] as { data: SequenceDiagramData }).data;
 
@@ -416,6 +417,19 @@ describe('a sequence read in its viewport', () => {
       }
     });
   }
+
+  it('beside its map\'s strip, scrolls no way it did not and keeps its header rows, or has no map', () => {
+    for (const size of viewports) {
+      for (const [data, anchor] of [[traceDiagram, 'pbx'], [handoffDiagram, undefined]] as const) {
+        const alone = viewSequence(data, { ...size, scrollbar: 0 }, anchor);
+        const shown = viewWithMap({ ...size, scrollbar: 0 }, (room) => viewSequence(data, room, anchor), headerReading);
+        // Before the rule, the phone's focus narrowed by a strip scrolled the trace both ways.
+        expect(shown.fit.scrollX, `${size.width}x${size.height}`).toBe(false);
+        expect(headerReading(shown), `${size.width}x${size.height}`).toBe(headerReading(alone));
+        if (shown.strip) expect(shown.strip.side).toBe('right');
+      }
+    }
+  });
 
   it('reads the thirty-two-message trace at the readable minimum, not at a few pixels', () => {
     const { fit } = viewSequence(traceDiagram, { width: 914, height: 526, scrollbar: 0 });

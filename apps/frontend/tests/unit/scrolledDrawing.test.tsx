@@ -16,6 +16,12 @@ let host: HTMLDivElement;
 let root: Root;
 let size = { width: 914, height: 526 };
 const descriptors: Record<string, PropertyDescriptor | undefined> = {};
+// The scroller is the view: the viewport less the map's strip, when the
+// drawing has one (its depth is the strip's own style).
+const strip = (element: HTMLElement) => {
+  const box = element.closest('.drawing-viewport')?.querySelector<HTMLElement>(':scope > .drawing-viewport__strip');
+  return { right: parseFloat(box?.style.width ?? '') || 0, bottom: parseFloat(box?.style.height ?? '') || 0 };
+};
 const measured = {
   offsetWidth(this: HTMLElement) {
     return this.classList.contains('diagram-primitive') || this.classList.contains('sequence-primitive') ? size.width + 1 : 0;
@@ -24,10 +30,10 @@ const measured = {
     return this.classList.contains('diagram-primitive') || this.classList.contains('sequence-primitive') ? size.height + 1 : 0;
   },
   clientWidth(this: HTMLElement) {
-    return this.classList.contains('drawing-viewport__scroll') ? size.width : 0;
+    return this.classList.contains('drawing-viewport__scroll') ? size.width - strip(this).right : 0;
   },
   clientHeight(this: HTMLElement) {
-    return this.classList.contains('drawing-viewport__scroll') ? size.height : 0;
+    return this.classList.contains('drawing-viewport__scroll') ? size.height - strip(this).bottom : 0;
   },
 };
 
@@ -75,13 +81,24 @@ function render(element: React.ReactElement) {
 
 const gateNote: NoteData = { tag: 'NOTE', anchor: { target: 'topology', node: 'gate' }, segments: [{ text: 'A display counts as shown only when the page confirms it, and this note is long enough to stay in the rail.' }] };
 
-// Each node's box on screen, in the scroll content's pixels.
-function nodeBoxes() {
+// The view the drawing is read in: the scroller's box.
+function view() {
+  const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
+  return { width: scroller.clientWidth, height: scroller.clientHeight };
+}
+
+// Where the drawing stands in the scroll content: its scale, and the margin
+// that centres it across an axis it does not fill.
+function placement() {
   const svg = host.querySelector<SVGSVGElement>('.drawing-viewport__scroll > svg')!;
   const [, , viewWidth, viewHeight] = (svg.getAttribute('viewBox') ?? '').split(' ').map(Number);
   const scale = parseFloat(svg.style.width) / viewWidth;
-  const offsetX = Math.max(0, (size.width - viewWidth * scale) / 2);
-  const offsetY = Math.max(0, (size.height - viewHeight * scale) / 2);
+  return { scale, offsetX: Math.max(0, (view().width - viewWidth * scale) / 2), offsetY: Math.max(0, (view().height - viewHeight * scale) / 2) };
+}
+
+// Each node's box on screen, in the scroll content's pixels.
+function nodeBoxes() {
+  const { scale, offsetX, offsetY } = placement();
   return [...host.querySelectorAll('.diagram-nodes > g')].map((group) => {
     const [x, y] = (/translate\(([-\d.]+) ([-\d.]+)\)/.exec(group.getAttribute('transform') ?? '') ?? []).slice(1).map(Number);
     const d = group.querySelector('.diagram-node__frame')?.getAttribute('d') ?? '';
@@ -114,7 +131,7 @@ describe('a scrolled graph at rest', () => {
         if (rim > 0 && end > rim + 0.5) expect(start, `${box.label} is clear of the rail it is read from`).toBeGreaterThanOrEqual(rim + RAIL - 0.5);
       }
       const gate = boxes.find((box) => box.label.startsWith('Display gate'))!;
-      const span = across ? size.width : size.height;
+      const span = across ? view().width : view().height;
       const [start, end] = across ? [gate.left, gate.right] : [gate.top, gate.bottom];
       expect(start).toBeGreaterThanOrEqual(rim);
       expect(end).toBeLessThanOrEqual(rim + span);
@@ -126,7 +143,7 @@ describe('a scrolled graph at rest', () => {
     render(<DiagramPrimitive data={topologyDiagram} id="topology" note={gateNote} />);
     const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
     const left = scroller.scrollLeft;
-    const right = left + size.width;
+    const right = left + view().width;
     const boxes = nodeBoxes();
     const past = { left: boxes.filter((box) => box.left < left + RAIL - 0.5), right: boxes.filter((box) => box.right > right - RAIL + 0.5) };
     expect(past.left.length).toBeGreaterThan(0);
@@ -199,8 +216,72 @@ describe('a scrolled graph at rest', () => {
     expect(map.querySelectorAll('.drawing-viewport__map-box')).toHaveLength(topologyDiagram.nodes.length);
     const box = map.querySelector('.drawing-viewport__map-view')!;
     expect(Number(box.getAttribute('x'))).toBeCloseTo(scroller.scrollLeft / scale);
-    expect(Number(box.getAttribute('width'))).toBeCloseTo(size.width / scale);
+    expect(Number(box.getAttribute('width'))).toBeCloseTo(view().width / scale);
   });
+
+  // The map, in the viewport's pixels: its box (the size it is drawn at
+  // and its padding) where it stands, in a corner of the whole viewport.
+  function mapBox() {
+    const map = host.querySelector<HTMLElement>('.drawing-viewport__map')!;
+    const width = parseFloat(map.style.width) + 8;
+    const height = parseFloat(map.style.height) + 8;
+    const corner = /drawing-viewport__map--(\w+-\w+)/.exec(map.className)?.[1] ?? 'bottom-right';
+    const left = corner.endsWith('left') ? 6 : size.width - 6 - width;
+    const top = corner.startsWith('top') ? 6 : size.height - 6 - height;
+    return { left, top, right: left + width, bottom: top + height };
+  }
+
+  // What the drawing draws that a reader reads: its nodes, and the backing
+  // of every edge label and stub name, in the scroll content's pixels.
+  function drawn() {
+    const { scale, offsetX, offsetY } = placement();
+    const labels = [...host.querySelectorAll('.diagram-edge-label-group, .sequence-message-label-group')].map((group) => {
+      const backing = group.querySelector('rect')!;
+      const [x, y, width, height] = ['x', 'y', 'width', 'height'].map((name) => Number(backing.getAttribute(name)));
+      return { label: group.textContent ?? '', left: offsetX + x * scale, right: offsetX + (x + width) * scale, top: offsetY + y * scale, bottom: offsetY + (y + height) * scale };
+    });
+    return [...nodeBoxes(), ...labels];
+  }
+
+  for (const [name, data, anchor, stage] of [
+    ['pipeline', pipelineDiagram, 'visual', { width: 726, height: 531 }],
+    ['pipeline', pipelineDiagram, 'visual', { width: 914, height: 526 }],
+    ['topology', topologyDiagram, 'gate', { width: 914, height: 526 }],
+    ['pipeline', pipelineDiagram, 'visual', { width: 367, height: 725 }],
+    ['trace', traceDiagram, 'pbx', { width: 726, height: 531 }],
+  ] as const) {
+    it(`keeps its map off everything it draws, wherever it rests (${name}, ${stage.width} x ${stage.height})`, () => {
+      size = stage;
+      const note: NoteData = { segments: [{ text: 'x' }], anchor: { target: name, node: anchor } };
+      render(data.mode === 'sequence' ? <SequencePrimitive data={data} id={name} note={note} /> : <DiagramPrimitive data={data} id={name} note={note} />);
+      const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
+      const axis = host.querySelector('.drawing-viewport')?.getAttribute('data-scroll');
+      expect(['x', 'y']).toContain(axis);
+      const map = mapBox();
+      const stops = [...host.querySelectorAll<HTMLElement>('.drawing-viewport__stop')].map((stop) => parseFloat(axis === 'x' ? stop.style.left : stop.style.top));
+      expect(stops.length).toBeGreaterThan(2);
+      const { width, height } = view();
+      for (const stop of stops) {
+        act(() => {
+          if (axis === 'x') scroller.scrollLeft = stop;
+          else scroller.scrollTop = stop;
+          scroller.dispatchEvent(new Event('scroll'));
+        });
+        for (const item of drawn()) {
+          // What of it is in view, in the viewport's pixels.
+          const left = Math.max(0, item.left - scroller.scrollLeft);
+          const right = Math.min(width, item.right - scroller.scrollLeft);
+          const top = Math.max(0, item.top - scroller.scrollTop);
+          const bottom = Math.min(height, item.bottom - scroller.scrollTop);
+          if (right <= left || bottom <= top) continue;
+          // Before: the map stood over the drawing's bottom-left corner and
+          // covered a stub's names there ("-> CI summary").
+          const covered = right > map.left && left < map.right && bottom > map.top && top < map.bottom;
+          expect(covered, `at ${stop}, the map covers "${'label' in item ? item.label : ''}"`).toBe(false);
+        }
+      }
+    });
+  }
 
   it('moves across with a wheel turned over it, then settles on the next place to rest', () => {
     vi.useFakeTimers();
