@@ -15,6 +15,7 @@ import {
   chartAxisBoxes,
   chartBars,
   chartCategoryLayout,
+  chartClip,
   chartLegendBox,
   chartObstacles,
   chartPad,
@@ -225,6 +226,18 @@ describe('chart obstacles', () => {
     const point = chartSeriesPoint(marked, 1, 'TWO', scales)!;
     const reach = CHART_MARKER_RADIUS + CHART_MARKER_STROKE / 2;
     expect(chartObstacles(marked, scales).marks.at(-1)).toEqual({ left: point.x - reach, top: point.y - reach, right: point.x + reach, bottom: point.y + reach });
+  });
+
+  it("cuts the marker ring with the clip the chart draws it in, a scatter's wider one included", () => {
+    // The marker on the last point, on the plot's right edge.
+    const scatter: ChartData = { kind: 'scatter', xMax: 2, series: [{ name: 'A', values: [1, 3, 2] }], marker: { x: 2 } };
+    const scales = chartScales(scatter);
+    const clip = chartClip(scales);
+    expect(clip.right).toBe(scales.plot.right + CHART_POINT_RADIUS + 1);
+    const ring = chartObstacles(scatter, scales).marks.at(-1)!;
+    expect(ring.right).toBe(clip.right);
+    expect(ring.right).toBeGreaterThan(scales.plot.right);
+    expect(chartClip(chartScales(bars))).toEqual(chartScales(bars).plot);
   });
 
   it('gives each scatter point its drawn box, and a line chart its lines', () => {

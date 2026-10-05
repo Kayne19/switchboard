@@ -351,14 +351,6 @@ export function chartScales(data: ChartData): ChartScales {
   };
 }
 
-/** The plot's grid for this data, inside the axes, in viewBox units: the
- * base padding, grown to clear a legend that wraps onto further rows and
- * the category labels. */
-export function chartPlot(data: ChartData): ViewRect {
-  const pad = chartPad(data);
-  return { left: pad.left, top: pad.top, right: CHART_VIEW_WIDTH - pad.right, bottom: CHART_VIEW_HEIGHT - pad.bottom };
-}
-
 /** One bar of a bar chart, in viewBox units. */
 export interface ChartBar {
   /** Which series, by index. */
@@ -457,22 +449,33 @@ function areaPieces(line: ViewPoint[], base: number): ViewPoint[][] {
  * line it draws; an area chart's fill is softer, a place to go only where
  * nothing else is free; and the legend and the axes' labels are read too.
  */
+/**
+ * The rect the chart clips its series and its marker to: the plot, grown
+ * for a scatter chart by a point's radius and a unit, so a point on the
+ * plot's edge is drawn whole.
+ */
+export function chartClip(scales: ChartScales): ViewRect {
+  const reach = scales.kind === 'scatter' ? CHART_POINT_RADIUS + 1 : 0;
+  const { plot } = scales;
+  return { left: plot.left - reach, top: plot.top - reach, right: plot.right + reach, bottom: plot.bottom + reach };
+}
+
 export function chartObstacles(data: ChartData, scales: ChartScales = chartScales(data)): ChartObstacles {
   const { plot, kind } = scales;
+  // What the chart's clip lets through: the bars, the points and the ring
+  // are drawn inside it.
+  const clip = chartClip(scales);
   const marks: ViewRect[] = [];
   const lines: ViewPoint[][] = [];
   const fills: ViewPoint[][] = [];
   if (kind === 'bar') {
     for (const bar of chartBars(data, scales)) {
-      const rect = cut(bar.rect, plot);
+      const rect = cut(bar.rect, clip);
       if (rect) marks.push(rect);
     }
   } else {
     const traces = data.series.map((series) => series.values.map((value, index) => scales.pointAt(scales.sampleX(series, index), value)));
     if (kind === 'scatter') {
-      // Its clip lets a point at the plot's edge through whole.
-      const reach = CHART_POINT_RADIUS + 1;
-      const clip = { left: plot.left - reach, top: plot.top - reach, right: plot.right + reach, bottom: plot.bottom + reach };
       for (const point of traces.flat()) {
         const r = CHART_POINT_RADIUS;
         const rect = cut({ left: point.x - r, top: point.y - r, right: point.x + r, bottom: point.y + r }, clip);
@@ -489,7 +492,7 @@ export function chartObstacles(data: ChartData, scales: ChartScales = chartScale
   const marker = data.marker ? chartSeriesPoint(data, data.marker.x, data.marker.series, scales) : undefined;
   if (marker) {
     const r = CHART_MARKER_RADIUS + CHART_MARKER_STROKE / 2;
-    const ring = cut({ left: marker.x - r, top: marker.y - r, right: marker.x + r, bottom: marker.y + r }, plot);
+    const ring = cut({ left: marker.x - r, top: marker.y - r, right: marker.x + r, bottom: marker.y + r }, clip);
     if (ring) marks.push(ring);
   }
   return { marks, lines, fills, labels: [chartLegendBox(data), ...chartAxisBoxes(plot)] };
