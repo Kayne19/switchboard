@@ -94,7 +94,19 @@ describe('the place in the head', () => {
 });
 
 describe('weatherLayout', () => {
-  const all = { hourly: true, daily: true };
+  // The figure as the primitive gives it: its temperature as written, and
+  // its condition line's width (0 until the page has read it).
+  const figure = { temp: '61', condition: 0 };
+  const all = { hourly: true, daily: true, ...figure };
+
+  // Told nothing of the figure, the layout counted it narrow and stood an
+  // outlook beside it where none fits; the primitive always tells it, and
+  // only a test could leave it out (phone-tidy review L7).
+  it('takes no slot without the figure it is laid out beside', () => {
+    // @ts-expect-error: the temperature as written and the condition line's width are required.
+    const untold = () => weatherLayout(334, 128, { hourly: true, daily: true });
+    expect(typeof untold).toBe('function');
+  });
 
   it('sets the conditions beside the days on a wide box, down a tall one', () => {
     expect(weatherLayout(1000, 620, all)).toMatchObject({ arrangement: 'wide', hourly: true, daily: true });
@@ -105,7 +117,7 @@ describe('weatherLayout', () => {
 
   it('a small slot holds the conditions and one list: the days, or the hours a note names', () => {
     expect(weatherLayout(250, 240, all)).toMatchObject({ arrangement: 'compact', hourly: false, daily: true });
-    expect(weatherLayout(250, 280, { hourly: true, daily: false })).toMatchObject({ hourly: true, daily: false });
+    expect(weatherLayout(250, 280, { ...figure, hourly: true, daily: false })).toMatchObject({ hourly: true, daily: false });
     expect(weatherLayout(250, 280, { ...all, markedHour: true })).toMatchObject({ hourly: true, daily: false });
     expect(weatherLayout(COMPACT_WIDTH - 1, 900, all).arrangement).toBe('compact');
     expect(weatherLayout(900, COMPACT_HEIGHT - 1, all).arrangement).toBe('compact');
@@ -115,7 +127,7 @@ describe('weatherLayout', () => {
     // The today scene's aux cell at 1440x900 is about 220px tall: the strip
     // (120px of rows under the conditions) ran past its bottom.
     expect(weatherLayout(250, COMPACT_STRIP_HEIGHT - 1, { ...all, markedHour: true })).toMatchObject({ hourly: false, daily: true });
-    expect(weatherLayout(250, COMPACT_STRIP_HEIGHT - 1, { hourly: true, daily: false })).toMatchObject({ hourly: false, daily: false });
+    expect(weatherLayout(250, COMPACT_STRIP_HEIGHT - 1, { ...figure, hourly: true, daily: false })).toMatchObject({ hourly: false, daily: false });
     expect(weatherLayout(250, COMPACT_STRIP_HEIGHT, { ...all, markedHour: true })).toMatchObject({ hourly: true, daily: false });
   });
 
@@ -131,7 +143,7 @@ describe('weatherLayout', () => {
     expect(weatherLayout(252, 88, { ...all, alert: true })).toMatchObject({ hourly: false, daily: false, outlook: false });
     expect(weatherLayout(340, OUTLOOK_HEIGHT - 1, all).outlook).toBe(false);
     // No days, no outlook; and a slot with room for the list lists them.
-    expect(weatherLayout(340, 150, { hourly: true, daily: false }).outlook).toBe(false);
+    expect(weatherLayout(340, 150, { ...figure, hourly: true, daily: false }).outlook).toBe(false);
     expect(weatherLayout(250, COMPACT_LIST_HEIGHT, all)).toMatchObject({ daily: true, outlook: false });
     expect(weatherLayout(1000, 620, all).outlook).toBe(false);
   });
@@ -203,10 +215,10 @@ describe('weatherLayout', () => {
   });
 
   it('sets the conditions larger when they stand alone', () => {
-    const alone = weatherLayout(1000, 620, { hourly: false, daily: false });
+    const alone = weatherLayout(1000, 620, { ...figure, hourly: false, daily: false });
     expect(alone).toMatchObject({ arrangement: 'wide', hourly: false, daily: false });
     expect(alone.temp).toBeGreaterThan(weatherLayout(1000, 620, all).temp);
-    expect(weatherLayout(3000, 1400, { hourly: false, daily: false }).temp).toBe(160);
+    expect(weatherLayout(3000, 1400, { ...figure, hourly: false, daily: false }).temp).toBe(160);
   });
 
   it('draws everything before the box is measured', () => {
