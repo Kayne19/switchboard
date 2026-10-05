@@ -745,12 +745,15 @@ describe('a card narrower than its own width', () => {
   });
 });
 
-// The rail holds one note. A note that names no point loses nothing there,
-// so it goes first wherever its absence leaves no more cards astray; on the
-// short phone chart the observation itself went to the rail, out of view,
-// so that a general note could stay on the chart.
+// The rail holds one note, and is for a card the chart has no place for.
+// Round 3 sent a note that names no point there first wherever its absence
+// left no more cards astray, even where that cleared none: the observation
+// then stayed over the data so that a general note could go (review
+// finding). A note leaves only where its absence leaves fewer cards astray:
+// the one whose absence leaves the fewest; of those a note naming no point
+// first, which loses no leader in the rail.
 describe('the note left out for the rail', () => {
-  it('is the one that names no point, where leaving it out leaves no more cards astray', () => {
+  it('is the card the chart has no place for, not a note naming no point whose absence clears nothing', () => {
     // Lines across all but a narrow column on the left: the general note
     // fits the column; the observation, wider, lies over a line wherever it
     // goes, with or without the general note on the chart.
@@ -763,8 +766,47 @@ describe('the note left out for the rail', () => {
     const field = { area, plot: area, traces };
     expect([...layoutNotes(notes, field)].map(([id, place]) => [id, place.settled])).toEqual([['general', true], ['observation', false]]);
     const placed = placeNotes(notes, field, { spill: true });
+    expect(placed.has('observation')).toBe(false);
+    expect(placed.get('general')).toEqual(placeNotes(notes, field).get('general'));
+  });
+
+  it('is a note that names no point, where its absence clears as many cards as any other', () => {
+    // A clear column on the left, lines across the rest: one card fits it.
+    // The general note settles in its corner first, and the observation has
+    // no clear place left; either one's absence leaves the other clear.
+    const area = box(0, 0, 400, 300);
+    const traces = [20, 80, 140, 200, 260].map((y) => [{ x: 300, y }, { x: 400, y }]);
+    const notes: NoteToPlace[] = [
+      { id: 'observation', width: 280, height: 160, point: { x: 150, y: 290 } },
+      { id: 'general', width: 280, height: 160 },
+    ];
+    const field = { area, plot: area, traces };
+    expect(layoutNotes(notes, field).get('observation')!.settled).toBe(false);
+    const placed = layoutNotes(notes, field, { spill: true });
     expect(placed.has('general')).toBe(false);
-    expect(placed.has('observation')).toBe(true);
+    expect(placed.get('observation')!.settled).toBe(true);
+  });
+
+  it('is none while every card has a place that keeps the rules', () => {
+    const area = box(0, 0, 1000, 600);
+    const notes: NoteToPlace[] = [
+      { id: 'observation', width: 280, height: 100, point: { x: 500, y: 400 } },
+      { id: 'general', width: 280, height: 100 },
+    ];
+    expect([...layoutNotes(notes, { area }, { spill: true }).keys()].sort()).toEqual(['general', 'observation']);
+  });
+
+  it('counts a card over another card astray, and gives the rail the one that has no place', () => {
+    // Two cards as tall as the field side by side would cover each other: one goes.
+    const area = box(0, 0, 500, 300);
+    const notes: NoteToPlace[] = [
+      { id: 'a', width: 300, height: 300 },
+      { id: 'b', width: 300, height: 300 },
+    ];
+    const all = placeNotes(notes, { area });
+    expect(overlaps(all.get('a')!, all.get('b')!)).toBe(true);
+    const placed = placeNotes(notes, { area }, { spill: true });
+    expect(placed.size).toBe(1);
   });
 });
 

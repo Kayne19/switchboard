@@ -46,12 +46,16 @@
 // data. A card with no clear place, or a long way from its point, tries the
 // other sizes its note gives (`sizes`).
 //
-// A chart whose data leaves a card no place near its point has that card
-// astray: given `spill`, one note is left out for the scene to show
-// elsewhere (the rail) -- a note naming no point wherever its absence
-// leaves no more cards astray, else the one whose absence leaves the
-// fewest -- and the others are placed without it; without, each card takes
-// the place that hides the least.
+// A card is astray where its best place breaks one of these rules: over
+// the data, too far from its point, with no clear leader, across the plot's
+// border, over another card or a named point. Given `spill`, where some
+// card is astray and leaving one note out leaves fewer astray, that note is
+// left out for the scene to show elsewhere (the rail): the one whose
+// absence leaves the fewest astray; of those, a note naming no point first
+// (it loses no leader in the rail), then one astray itself, then the one
+// whose absence costs the others least. The others are placed without it.
+// Without `spill`, or where no note's absence helps, each card takes the
+// place that hides the least.
 
 export interface Point {
   x: number;
@@ -186,7 +190,7 @@ type Standing = 'clear' | 'level' | 'skirting';
 // should run, no route to its callout clear of the other marks and lines,
 // the data under it, and last everything that was always ruled out (its
 // point, another's, another card, level with its point, across the plot's
-// border).
+// border). From `far` on, a card is astray.
 const SHORT = { clear: 0, fill: 1, label: 2, far: 3, route: 3.5, data: 4, more: 5 } as const;
 
 function overlapArea(a: Rect, b: Rect): number {
@@ -361,12 +365,12 @@ export interface PlaceOptions {
   /** Space kept between two cards, and between a card and the point it must not cover. */
   gap?: number;
   /**
-   * The scene can show one note elsewhere (the rail). Where some card has
-   * no place clear of the data within reach of its point, one note is then
-   * left out, its card not placed: a note naming no point (which may itself
-   * have had a clear place), wherever its absence leaves no more cards
-   * astray; else a note naming one, where its absence leaves fewer, the
-   * fewest first. Its point still stands in the other cards' way.
+   * The scene can show one note elsewhere (the rail). Where some card is
+   * astray and leaving one note out leaves fewer astray, that note is left
+   * out, its card not placed: the one whose absence leaves the fewest
+   * astray; of those a note naming no point first, then one astray itself,
+   * then the cheapest for the others. Its point still stands in the other
+   * cards' way.
    */
   spill?: boolean;
   /** How far inside a card's border a callout's leader begins, so it grows out of the border as drawn. */
@@ -378,7 +382,7 @@ interface Placement {
   cost: number;
   /** The worst of `SHORT` the place falls short by. */
   falls: number;
-  /** Over the data, or too far along from its point for its leader to read as its own. */
+  /** It breaks a rule a card keeps: it falls short by `far` or worse. */
   astray: boolean;
   /** The leader from the card to its point; empty for a note that names none. */
   leader: Point[];
@@ -421,11 +425,11 @@ export function layoutNotes(notes: NoteToPlace[], field: NoteField, options: Pla
   const over = (placements: Map<string, Placement>) => [...placements.values()].filter((placement) => placement.astray).length;
   let chosen = all;
   if (options.spill && over(all) > 0) {
-    // Leave out a note that names no point first: it loses nothing in the
-    // rail, so it goes wherever its absence leaves no more cards astray. A
-    // note that names one goes only where its absence leaves fewer astray.
-    // Among those, the one whose absence leaves the fewest astray; then one
-    // that was astray itself; then the cheapest.
+    // A note leaves only where its absence leaves fewer cards astray: the
+    // rail is for a card the chart has no place for, never to make room
+    // for nothing. Of those, the one whose absence leaves the fewest astray;
+    // then a note that names no point, which loses no leader in the rail;
+    // then one that was astray itself; then the cheapest for the others.
     const better = (a: number[], b: number[]) => {
       const index = a.findIndex((value, at) => Math.abs(value - b[at]) > 1e-6);
       return index >= 0 && a[index] < b[index];
@@ -434,10 +438,10 @@ export function layoutNotes(notes: NoteToPlace[], field: NoteField, options: Pla
     for (const note of notes) {
       const placements = placeInOrder(notes, prepared, gap, note.id, all);
       const astray = over(placements);
-      if (note.point ? astray >= over(all) : astray > over(all)) continue;
+      if (astray >= over(all)) continue;
       const rank = [
-        note.point ? 1 : 0,
         astray,
+        note.point ? 1 : 0,
         all.get(note.id)!.astray ? 0 : 1,
         [...placements.values()].reduce((sum, placement) => sum + placement.cost, 0),
       ];
@@ -626,9 +630,12 @@ function placeInOrder(
     // long leader to its callout, each narrower size it may take, kept only
     // where it falls short by less -- or, as clear, runs a leader much
     // shorter.
-    // Placed again without the note the rail takes, each card keeps the
-    // size it took with every note on the chart.
-    const sized = before?.get(note.id)?.rect;
+    // Placed again without the note the rail takes, a card that was
+    // settled keeps the size it took with every note on the chart; one that
+    // was not tries its sizes again, since the note left out may have been
+    // what kept it from a clear place.
+    const kept = before?.get(note.id);
+    const sized = kept && isSettled(note, kept) ? kept.rect : undefined;
     let chosen = sized ? placeSized(note, sized.right - sized.left, sized.bottom - sized.top) : placeSized(note, note.width, note.height);
     for (const size of sized ? [] : (note.sizes ?? [])) {
       if (isSettled(note, chosen)) break;
@@ -779,7 +786,7 @@ function placeInOrder(
       }
       if (!nearTop) cost += COST.bottomRow;
       if (!best || falls < best.falls || (falls === best.falls && cost < best.cost - 1e-6)) {
-        best = { rect, cost, falls, astray: data || along > 0 || (from !== undefined && falls >= SHORT.route), leader };
+        best = { rect, cost, falls, astray: falls >= SHORT.far, leader };
       }
     };
 
