@@ -320,8 +320,9 @@ test('a bar chart of sixty categories on a phone lies on its side and scrolls in
   await expect(chart.locator('.drawing-viewport__rim--top')).toHaveText(/\d+ BARS/);
 });
 
-// A note on a scrolled chart lies on its canvas, so its card and leader
-// keep to the bar they name as the rows scroll.
+// A note on a scrolled chart is laid over its whole canvas, so its card
+// and leader keep to the bar they name as the rows scroll; the card stays
+// a control of its own, beside the chart's expand control, not in it.
 const hundredShortBars = [
   { op: 'clear' },
   {
@@ -336,8 +337,9 @@ test('a note on a scrolled bar chart opens on its bar and keeps to it as the row
   await open(page, 'idle', hundredShortBars);
   const chart = page.locator('.chart-primitive');
   await expect(chart).toHaveClass(/chart-primitive--scrolls/);
-  const card = page.locator('.chart-primitive__canvas > .chart-notes .chart-note[data-note="slow-note"]');
+  const card = page.locator('.chart-object > .chart-notes .chart-note[data-note="slow-note"]');
   await expect(card).toBeVisible();
+  expect(await card.evaluate((element) => element.closest('.chart-object > .focusable-content') === null)).toBe(true);
   const row = chart.locator('.chart-grid__category[data-item="71"]');
   const offset = async () => (await card.boundingBox())!.y - (await row.boundingBox())!.y;
   // It opened on the named bar, in view.

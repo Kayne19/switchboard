@@ -1,6 +1,6 @@
 import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'motion/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { flushSync } from 'react-dom';
 import type { ChartData, NoteData, SceneObject } from '../controller/types';
 import { noteTarget } from '../app/noteItems';
 import { AnnotationCard } from '../primitives/AnnotationCard';
@@ -215,20 +215,65 @@ export function ChartNotes({
   markedRef.current = marked;
   const spill = onRailNote !== undefined;
   // A chart too long for its slot scrolls its canvas in it
-  // (ChartPrimitive): the layer is laid in that canvas, so its cards and
-  // leaders scroll with the bars they name and are laid out over the whole
-  // chart. Found from a mark left where the layer stands otherwise.
-  const markRef = useRef<HTMLSpanElement>(null);
+  // (ChartPrimitive). The layer stays where it is, beside the chart's
+  // expand control rather than inside it (a card is a control of its own),
+  // and follows the canvas: it is clipped to the scroll's port, and its
+  // frame -- the box the cards and leaders are placed in -- is the canvas's
+  // size, moved by the scroll, so the cards are laid out over the whole
+  // chart and keep to the bars they name. Found from the panel the layer
+  // stands in; found in the same frame the chart starts or stops scrolling.
+  const outerRef = useRef<HTMLDivElement>(null);
   const [canvas, setCanvas] = useState<HTMLElement | null>(null);
   useLayoutEffect(() => {
-    const panel = markRef.current?.parentElement;
+    const panel = outerRef.current?.parentElement;
     if (!panel) return undefined;
-    const find = () => setCanvas(panel.querySelector<HTMLElement>('.chart-primitive__canvas'));
+    const find = () => {
+      const found = panel.querySelector<HTMLElement>('.chart-primitive__canvas');
+      flushSync(() => setCanvas(found));
+    };
     find();
     const watcher = new MutationObserver(find);
     watcher.observe(panel, { childList: true, subtree: true });
     return () => watcher.disconnect();
   }, []);
+  useLayoutEffect(() => {
+    const outer = outerRef.current;
+    const frame = layerRef.current;
+    const scroll = canvas?.parentElement;
+    const port = scroll?.parentElement;
+    if (!outer || !frame || !canvas || !scroll || !port) return undefined;
+    const follow = () => {
+      frame.style.transform = `translateY(${-scroll.scrollTop}px)`;
+    };
+    const place = () => {
+      const panel = outer.offsetParent as HTMLElement | null;
+      if (!panel) return;
+      const at = port.getBoundingClientRect();
+      const from = panel.getBoundingClientRect();
+      Object.assign(outer.style, {
+        inset: 'auto',
+        left: `${at.left - from.left - panel.clientLeft}px`,
+        top: `${at.top - from.top - panel.clientTop}px`,
+        width: `${port.clientWidth}px`,
+        height: `${port.clientHeight}px`,
+        overflow: 'hidden',
+      });
+      frame.style.height = `${canvas.offsetHeight}px`;
+      follow();
+    };
+    place();
+    const resized = new ResizeObserver(place);
+    resized.observe(port);
+    resized.observe(canvas);
+    scroll.addEventListener('scroll', follow, { passive: true });
+    return () => {
+      resized.disconnect();
+      scroll.removeEventListener('scroll', follow);
+      for (const key of ['inset', 'left', 'top', 'width', 'height', 'overflow'] as const) outer.style[key] = '';
+      frame.style.height = '';
+      frame.style.transform = '';
+    };
+  }, [canvas]);
 
   // What moves a card without resizing anything: which notes there are and
   // what each one names. A size change reaches the observer instead.
@@ -240,7 +285,7 @@ export function ChartNotes({
   useLayoutEffect(() => {
     const layer = layerRef.current;
     if (!layer) return;
-    const svgOf = () => layer.parentElement?.querySelector<SVGSVGElement>('.chart-primitive > svg, .chart-primitive__canvas > svg') ?? null;
+    const svgOf = () => outerRef.current?.parentElement?.querySelector<SVGSVGElement>('.chart-primitive > svg, .chart-primitive__canvas > svg') ?? null;
 
     // Set while a resize is in flight: the placement for the size it rests at.
     let rest: ReturnType<typeof setTimeout> | undefined;
@@ -442,72 +487,68 @@ export function ChartNotes({
     return () => onRailNote(chartId, away, false);
   }, [away, chartId, onRailNote, present]);
 
-  const layer = (
-    <div className="chart-notes" ref={layerRef} data-note-count={notes.length}>
-      <svg className="chart-notes__leaders" aria-hidden="true">
+  return (
+    <div className="chart-notes" ref={outerRef} data-note-count={notes.length}>
+      <div className="chart-notes__frame" ref={layerRef}>
+        <svg className="chart-notes__leaders" aria-hidden="true">
+          <AnimatePresence initial={false}>
+            {notes.map((note) => {
+              const leader = layout?.leaders[note.key];
+              if (!leader) return null;
+              // In the card's edge colour, a shade firmer, the whole way: it
+              // lands by the value the chart prints, over data it must not
+              // fade into.
+              return (
+                <motion.g
+                  key={note.key}
+                  className="chart-note-leader"
+                  data-note={note.key}
+                  initial={reduced ? false : { opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2, delay: reduced ? 0 : 0.12 }}
+                >
+                  <polyline className="chart-note-leader__line" points={leader.map((point) => `${point.x},${point.y}`).join(' ')} fill="none" />
+                </motion.g>
+              );
+            })}
+          </AnimatePresence>
+        </svg>
         <AnimatePresence initial={false}>
           {notes.map((note) => {
-            const leader = layout?.leaders[note.key];
-            if (!leader) return null;
-            // In the card's edge colour, a shade firmer, the whole way: it
-            // lands by the value the chart prints, over data it must not
-            // fade into.
+            const card = layout?.cards[note.key];
+            // The note the rail carries keeps its card here out of view, so
+            // the layer still measures it and can take it back.
+            const away = layout?.away === note.key;
             return (
-              <motion.g
+              <motion.div
                 key={note.key}
-                className="chart-note-leader"
+                ref={(element: HTMLDivElement | null) => {
+                  if (element) cardRefs.current.set(note.key, element);
+                  else cardRefs.current.delete(note.key);
+                }}
+                className={`chart-note${anchored.has(note.key) ? ' chart-note--anchored' : ''}${away ? ' chart-note--away' : ''}`}
                 data-note={note.key}
-                initial={reduced ? false : { opacity: 0 }}
+                aria-hidden={away ? true : undefined}
+                style={card ? { left: card.left, top: card.top, ...(layout?.widths[note.key] !== undefined ? { width: layout.widths[note.key] } : {}) } : undefined}
+                initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                transition={{ duration: 0.2, delay: reduced ? 0 : 0.12 }}
+                transition={{ duration: 0.2 }}
               >
-                <polyline className="chart-note-leader__line" points={leader.map((point) => `${point.x},${point.y}`).join(' ')} fill="none" />
-              </motion.g>
+                <SurfaceBoundary surfaceId={note.object?.id ?? note.key} resetKey={note.object ?? note.data}>
+                  <AnnotationCard
+                    data={note.data}
+                    onFocus={note.object ? () => onFocus(note.object!.id) : undefined}
+                    onOpenHistory={note.object ? undefined : onOpenHistory}
+                    target={noteTarget(chart, note.data).target}
+                  />
+                </SurfaceBoundary>
+              </motion.div>
             );
           })}
         </AnimatePresence>
-      </svg>
-      <AnimatePresence initial={false}>
-        {notes.map((note) => {
-          const card = layout?.cards[note.key];
-          // The note the rail carries keeps its card here out of view, so
-          // the layer still measures it and can take it back.
-          const away = layout?.away === note.key;
-          return (
-            <motion.div
-              key={note.key}
-              ref={(element: HTMLDivElement | null) => {
-                if (element) cardRefs.current.set(note.key, element);
-                else cardRefs.current.delete(note.key);
-              }}
-              className={`chart-note${anchored.has(note.key) ? ' chart-note--anchored' : ''}${away ? ' chart-note--away' : ''}`}
-              data-note={note.key}
-              aria-hidden={away ? true : undefined}
-              style={card ? { left: card.left, top: card.top, ...(layout?.widths[note.key] !== undefined ? { width: layout.widths[note.key] } : {}) } : undefined}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.2 }}
-            >
-              <SurfaceBoundary surfaceId={note.object?.id ?? note.key} resetKey={note.object ?? note.data}>
-                <AnnotationCard
-                  data={note.data}
-                  onFocus={note.object ? () => onFocus(note.object!.id) : undefined}
-                  onOpenHistory={note.object ? undefined : onOpenHistory}
-                  target={noteTarget(chart, note.data).target}
-                />
-              </SurfaceBoundary>
-            </motion.div>
-          );
-        })}
-      </AnimatePresence>
+      </div>
     </div>
-  );
-  return (
-    <>
-      <span ref={markRef} hidden />
-      {canvas ? createPortal(layer, canvas) : layer}
-    </>
   );
 }

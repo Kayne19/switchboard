@@ -289,7 +289,7 @@ export function ChartPrimitive({
         least={null}
         className="chart-primitive__viewport"
         scrollClassName="chart-primitive__scroll"
-        label={data.title ?? 'Chart'}
+        label={`${data.title ?? 'Chart'}: rows`}
       >
         <div className="chart-primitive__canvas" style={{ height: `${scroll}px` }}>{svg}</div>
       </ListViewport>

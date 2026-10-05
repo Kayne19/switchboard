@@ -967,13 +967,7 @@ button {
 }
 
 .chart-primitive__axis {
-  flex: none;
-}
-
-/* The notes on a scrolled chart lie in its canvas (ChartNotes), over the
-   whole chart, and scroll with it. */
-.chart-primitive__canvas > .chart-notes {
-  inset: 0;
+  display: block;
 }
 .chart-grid line {
   stroke: rgba(232, 230, 223, 0.11);
@@ -1066,6 +1060,14 @@ button {
 .training-charts--compare .chart-notes {
   --note-width: min(80%, 440px);
 }
+/* The box the cards and leaders are placed in: the layer's own, or, over
+   a chart that scrolls, the chart's canvas, moved with its scroll inside
+   the layer, which is then clipped to the scroll's port (ChartNotes). */
+.chart-notes__frame {
+  position: absolute;
+  inset: 0;
+}
+
 .chart-notes__leaders {
   position: absolute;
   inset: 0;

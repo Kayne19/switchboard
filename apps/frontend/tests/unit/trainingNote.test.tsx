@@ -57,7 +57,8 @@ beforeAll(() => {
     disconnect() {}
   };
   Element.prototype.getBoundingClientRect = function (this: Element) {
-    if (this instanceof HTMLElement && this.classList.contains('chart-notes')) return rect(0, 0, 1000, 600);
+    // The layer's frame, the box the cards are placed in.
+    if (this instanceof HTMLElement && this.classList.contains('chart-notes__frame')) return rect(0, 0, 1000, 600);
     if (this instanceof HTMLElement && this.classList.contains('chart-note')) return rect(0, 0, CARD.width, CARD.height);
     if (this instanceof SVGSVGElement && this.closest('.chart-primitive')) return rect(0, SVG_TOP, svgWidth, 500);
     if (this instanceof SVGSVGElement && this.closest('.chart-object')) return rect(-40, -60, 1080, 700);
