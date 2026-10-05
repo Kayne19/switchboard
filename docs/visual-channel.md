@@ -111,8 +111,12 @@ rather than with a scroll bar (`primitives/drawingScroll.ts` decides,
   a wheel or a trackpad moves freely and settles when it pauses, a single
   notch on to the next place; a mouse wheel over a drawing that scrolls
   only across scrolls it across. It opens on its lead at such a place.
-  The far edge can still cut the part beyond the view: there a fade as
-  deep as that part reaches in makes it read as the next one coming.
+  At its far end it rests the same way, showing a little black past the
+  drawing's end rather than a cut part. Across a drawing that scrolls
+  both ways there may be no gap every row leaves: it rests where the
+  rail cuts the fewest parts. The far edge of the view can still cut the
+  part beyond it: there a fade as deep as that part reaches in makes it
+  read as the next one coming.
 - **Each edge it continues past carries a rail.** A dashed orange line on
   the cut, the count of what lies that way ("13 NODES", "23 MESSAGES")
   and a chevron pointing there; a tap on the count turns a page. Text on
