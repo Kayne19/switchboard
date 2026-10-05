@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DiagramData } from '../../src/controller/types';
+import { pipelineDiagram, topologyDiagram } from '../../src/fixtures/scenes';
 import { ARROW_LENGTH, breakCycles, layoutDiagram, measureNode, wrapEdgeLabel, type Box, type DiagramOrientation, type Point } from '../../src/primitives/diagramLayout';
 
 const graph = (nodes: string[], edges: Array<[string, string, string]>): DiagramData => ({
@@ -110,6 +111,10 @@ const graphs: Record<string, DiagramData> = {
     edges: Array.from({ length: 9 }, (_, index) => ({ from: 'root', to: `w${index}`, label: index % 3 === 0 ? 'high' : undefined })),
   },
 };
+// The hard canonical diagrams (fixtures `topology` and `pipeline`): the
+// switchboard's twenty-two parts, and a forty-step CI pipeline.
+graphs.topology = topologyDiagram;
+graphs.ciPipeline = pipelineDiagram;
 // The fan-out with every edge labelled, and with one edge coming back.
 graphs.wideLabelled = { ...graphs.wide, edges: graphs.wide.edges.map((edge) => ({ ...edge, label: 'go' })) };
 graphs.wideBack = { ...graphs.wide, edges: [...graphs.wide.edges, { from: 'w6', to: 'root', label: 'retry' }] };

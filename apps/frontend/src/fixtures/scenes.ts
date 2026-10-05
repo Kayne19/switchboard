@@ -1,4 +1,4 @@
-import type { ControllerAction, FixtureName } from '../controller/types';
+import type { ControllerAction, DiagramData, DiagramNode, FixtureName, Semantic, SequenceDiagramData } from '../controller/types';
 
 const trainingSeries = {
   xLabel: 'EPOCH',
@@ -40,6 +40,197 @@ const suiteDurations = {
 // zlib and struct and embedded here so the fixture needs no file or network.
 const FIGURE_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAUAAAADICAIAAAAWZq/8AAAEqklEQVR42u3cwU4TaxiAYWrihrgw0aSszZgY5QJqItuuWLDgArwT8RZYscM7oPcAJk1csTEuIOwILGXlxujEJrWZwrTTduj3zzxPujiak+kP9c33zTkjnZvrq40Yumf7QU5ysL0Z5CTnd8dLXmHQy/aGF0te5ORoN8g35HIY5CAbh/1+hGM82QCSJWAQMCBgQMAgYEDAgIABAUOzdDyJNS2tJ7EGvWyZt5jnOS1PYk3zJBaLy6Mdv+JcChPYBC6bwPc2Vj5CZz4LPc81TeCwE1jACQQ83dj8fz+h0l9meOiNBGyFZvH9djKn0aumt5u+vtU6OAEH9fntaf4qpPVo7154u86XH/nLhyJgqqVb98itNJBlLGBm1zv6h0/fd/JXkFP9+fgmf40z9jEJmLLBGyfdQsZGsYBJZvAaxQIm+cFrFAuYtAevUSxgyupN9EvQsIDVu5P0F6JhAbe03uTW5pnrtIYF3KJ6G/Z1aVjA6tUwAlavhgWMejUsYP7X2zYaFnCj6m3D+J0cwhoWcHO0p95CwwjYra+bYQTs1tfNsICxPFukBWx5tkgjYMuzRVrAWJ4t0gLG8myRFjAgYOPXEBYwIOCWjV/KGcICDs3+XL5FI2BAwDXsz8bvPEPYFi1gQMAgYOzPtmgBAwIGAQMCdgOM22ABAwIGAQMCBgQMAgYEDAgYEDA0X+fm+irIUbpn+0FOcrC9OflLP+lqjQo/hedyGOVgh/2+gNMIeKb6HqU8vzte8gqDXrY3vFjyIidHu6v/k/fvOcqqPyVLwFZocA8MCBgQMAgYEDAgYEDAIGBAwI01egbLE5fzW+wxLAQMAgYEDAjYbbAbYAEDAgYEbIu2PyNgEDBVGcLl4xcBh96iKWd/FjAg4NqGsC36of3Z+BUwIGBD2PgVMCU0PFkvAk5sCDPJ+BWwRdryjIAt0pZnAWORtjwL2CJteUbAFmnLs4CpdZFuT8Pjeo1fAbsZduuLgN0Mu/UVMBpWr4A1fKpeBKxh9QqY9TXcjIzzdNUr4DY23IBR7P8YCVjDp+pFwGk3nFbG47VZvQJue8PJjeLJdNUrYJIZxQavgEl1FBu8AibJUWzwCphFRvGgl41eazlJ4d0NXgGzSMbjlh453fEvpStgFrE3vMhfD43Eukfu9AEI9x8mbq6vghyle7Yf5CQH25tBTnJ+d1wI7N7Iy5uc+S/MvObJ0W6Qb8jlMEo5h/2+gAVcLeDy6lYy8O/9fQGHDdgKnfBqvZL9doWXwgQ2geeawJVua5cv0wQ2gQEBAwIGAQMCBgQMAgYEDDyKTpZlQY7y+vY2yEmevYjy8Xx99SHCMZ4//RbkG/Lu5+8gJ/n18r0JDAgYBAwIGBAwIGAQMCBgQMCAgEHAwFp1Vn7Fbrcb+YLBj7fyC25tbfl8Q11wtZ+ICQxWaEDAgIBBwICAAQEDAgYBAwIGBAwCBgQMCBgQMAgYEDAgYEDAIGBAwICAQcCAgAEBAwIGAQMCBgQMCBgEDAgYEDAIGBAwIGBAwCBgQMCAgEHAgIABAQMCBgEDAgYEDAgYBAwIGBAwCBgQMCBgQMAgYEDAgIABAYOAAQEDAgYBAwn5C/I3UR6npYO2AAAAAElFTkSuQmCC';
+
+// The switchboard itself, drawn the way an agent on a call would draw it:
+// twenty-two parts with their real names and long subs, labelled edges, the
+// transfer and hand-back loop, the display frame and its confirmation
+// coming back, skip edges from the deployment side, a fan-out to three
+// project sessions and the fan-in from them to the skill module. The note
+// is too long for a callout, so the node carries the NOTE marker.
+export const topologyDiagram: DiagramData = {
+  mode: 'graph', title: 'SYSTEM / SWITCHBOARD TOPOLOGY', subtitle: 'CALL PATH / DISPLAY PATH / DEPLOYMENT', context: 'SYSTEM MAP', caption: 'TOPOLOGY / 22 PARTS',
+  nodes: [
+    { id: 'role', label: 'homelab damocles role', sub: 'ansible / systemd units / secrets', state: 'done', semantic: 'muted' },
+    { id: 'env', label: 'Environment file', sub: 'SWITCHBOARD_* / docs/environment.md', state: 'done', semantic: 'muted' },
+    { id: 'registry', label: 'Project registry', sub: 'switchboard_projects / host + cwd', state: 'done', semantic: 'muted' },
+    { id: 'browser', label: 'Browser page', sub: 'React stage / mic + playback', detail: 'apps/frontend/src' },
+    { id: 'runtime', label: 'Call runtime', sub: 'clip outbox / epochs / transfers', detail: 'src/runtime/callRuntime.ts' },
+    { id: 'ws', label: 'Browser WebSocket', sub: '/ws / clips in, frames out', detail: 'apps/backend/src/browser.rs' },
+    { id: 'stt', label: 'STT sidecar', sub: 'local HTTP / webm in, text out' },
+    { id: 'whisper', label: 'Whisper', sub: 'speech model in the sidecar' },
+    { id: 'pbx', label: 'PBX', sub: 'Switchboard.handle() / the active leg', detail: 'apps/backend/src/pbx.rs', state: 'active', semantic: 'orange' },
+    { id: 'operator', label: 'Operator agent', sub: 'pi --mode rpc / route tool only', semantic: 'orange' },
+    { id: 'prewarm', label: 'Prewarm', sub: 'model catalogs / prepare reports', detail: 'apps/backend/src/prewarm.rs' },
+    { id: 'announcer', label: 'Leg announcer', sub: 'one scene reset per leg', detail: 'apps/backend/src/leg_announcer.rs' },
+    { id: 'host', label: 'Host agent', sub: 'dials /host / one per project host', semantic: 'cyan' },
+    { id: 'wiki', label: 'llm-wiki agent', sub: 'prime-agent session in ~/projects/llm-wiki', state: 'active', semantic: 'green' },
+    { id: 'board', label: 'switchboard agent', sub: 'prime-agent session in ~/projects/switchboard', state: 'blocked', semantic: 'green' },
+    { id: 'lab', label: 'homelab agent', sub: 'prime-agent session in ~/projects/homelab', state: 'todo', semantic: 'green' },
+    { id: 'skill', label: 'switchboard skill module', sub: 'speak / display / view / listen', detail: 'skills/switchboard', semantic: 'cyan' },
+    { id: 'socket', label: 'Skill socket', sub: 'local socket / depth 0 sessions only', semantic: 'cyan' },
+    { id: 'tts', label: 'ElevenLabs TTS', sub: 'reply text in, mp3 out', semantic: 'amber' },
+    { id: 'gate', label: 'Display gate', sub: 'validate / stamp seq / confirm watermark', detail: 'apps/backend/src/display.rs' },
+    { id: 'projection', label: 'Display projection', sub: 'objects, focus, replay snapshot', detail: 'DisplayProjection::apply' },
+    { id: 'debug', label: 'Debug page', sub: 'debug listener / event feed', semantic: 'muted' },
+  ],
+  edges: [
+    { from: 'role', to: 'env', label: 'writes', semantic: 'muted' },
+    { from: 'role', to: 'registry', label: 'templates', semantic: 'muted' },
+    { from: 'env', to: 'pbx', label: 'Config::from_env', semantic: 'muted' },
+    { from: 'registry', to: 'prewarm', label: 'projects + hosts', semantic: 'muted' },
+    { from: 'browser', to: 'runtime', label: 'mic clips' },
+    { from: 'runtime', to: 'ws', label: 'webm / opus' },
+    { from: 'ws', to: 'stt', label: 'clip' },
+    { from: 'stt', to: 'whisper', label: 'pcm' },
+    { from: 'stt', to: 'pbx', label: 'transcript' },
+    { from: 'pbx', to: 'operator', label: 'caller turn', semantic: 'orange' },
+    { from: 'operator', to: 'pbx', label: 'route signal', semantic: 'orange' },
+    { from: 'prewarm', to: 'pbx', label: 'launch plan' },
+    { from: 'prewarm', to: 'host', label: 'list_models / run_prepare' },
+    { from: 'pbx', to: 'host', label: 'create / prompt / steer', semantic: 'orange', active: true },
+    { from: 'host', to: 'wiki', label: 'session', semantic: 'green', active: true },
+    { from: 'host', to: 'board', label: 'session', semantic: 'green' },
+    { from: 'host', to: 'lab', label: 'session', semantic: 'green' },
+    { from: 'wiki', to: 'skill', label: 'speak / display', semantic: 'cyan' },
+    { from: 'board', to: 'skill', semantic: 'cyan' },
+    { from: 'lab', to: 'skill', semantic: 'cyan' },
+    { from: 'skill', to: 'socket', label: 'one action per line', semantic: 'cyan' },
+    { from: 'socket', to: 'host', label: 'module_call', semantic: 'cyan' },
+    { from: 'host', to: 'tts', label: 'spoken line', semantic: 'amber' },
+    { from: 'pbx', to: 'tts', label: 'operator reply', semantic: 'amber' },
+    { from: 'tts', to: 'ws', label: 'mp3', semantic: 'amber' },
+    { from: 'host', to: 'gate', label: 'display action' },
+    { from: 'pbx', to: 'announcer', label: 'leg settled' },
+    { from: 'announcer', to: 'gate', label: 'epoch / scene reset' },
+    { from: 'gate', to: 'projection', label: 'validated action' },
+    { from: 'projection', to: 'ws', label: 'display frame + seq' },
+    { from: 'ws', to: 'browser', label: 'frames + audio' },
+    { from: 'ws', to: 'gate', label: 'applied_seq confirm' },
+    { from: 'gate', to: 'debug', label: 'debug feed', semantic: 'muted' },
+    { from: 'pbx', to: 'debug', semantic: 'muted' },
+  ],
+};
+
+// A wide CI and release pipeline: forty steps in seven layers of up to ten,
+// with edges that skip layers (a release tag straight to the release build,
+// the lockfile to the checks that read it) and one roll-back loop. Drawn by
+// an agent, this is where a layered drawing runs out of width first.
+const pipelineNodes: Array<[string, string, string, DiagramNode['state']?, Semantic?]> = [
+  ['push', 'push to master', 'branch protection', 'done'],
+  ['pr', 'pull request', 'head must be up to date', 'done'],
+  ['nightly', 'nightly cron', '02:00 / full matrix', 'done'],
+  ['tag', 'release tag', 'v* / signed', 'todo'],
+  ['lock', 'package-lock.json', 'npm ci reads it', 'done'],
+  ['toolchain', 'rust-toolchain.toml', 'pinned toolchain', 'done'],
+  ['checkout', 'checkout', 'full history for the sha', 'done'],
+  ['rustup', 'rustup', 'clippy + rustfmt components', 'done'],
+  ['node', 'node 22', 'npm ci', 'done'],
+  ['cargo-cache', 'cargo cache', 'registry + target', 'done'],
+  ['npm-cache', 'npm cache', '~/.npm', 'done'],
+  ['python', 'python 3.12', 'stdlib only', 'done'],
+  ['chromium', 'playwright chromium', 'pinned by the lockfile', 'done'],
+  ['sha', 'stamp git sha', 'SWITCHBOARD_GIT_SHA', 'done'],
+  ['fmt', 'cargo fmt', '--all -- --check', 'done', 'green'],
+  ['clippy', 'cargo clippy', '-D warnings, all targets', 'done', 'green'],
+  ['cargo-test', 'cargo test', '--locked / 439 tests', 'active', 'cyan'],
+  ['typecheck', 'typecheck', 'tsc / app, node, host agent', 'done', 'green'],
+  ['vitest', 'vitest unit', '560 tests / jsdom', 'done', 'green'],
+  ['design-lock', 'design lock', 'verify-design-lock.mjs', 'done', 'green'],
+  ['hygiene', 'hygiene sweep', 'check_hygiene.mjs', 'done', 'green'],
+  ['skill-tests', 'skill tests', 'unittest discover', 'done', 'green'],
+  ['host-tests', 'host agent tests', 'node --test', 'active', 'cyan'],
+  ['no-ssh', 'no-ssh check', 'check_no_ssh.mjs', 'done', 'green'],
+  ['static', 'vite build static/', 'committed bundle', 'active', 'cyan'],
+  ['static-debug', 'vite build static-debug/', 'embedded debug page', 'todo'],
+  ['release', 'cargo build --release', 'binary from git archive', 'todo'],
+  ['visual', 'playwright visual', 'goldens / 4 geometries', 'blocked', 'red'],
+  ['integration', 'playwright integration', 'fake mic + fixture socket', 'todo'],
+  ['schema', 'schema parity', 'TS and Rust validators agree', 'todo'],
+  ['static-diff', 'static diff', 'git diff --exit-code', 'todo'],
+  ['binary', 'switchboard binary', 'stamped with the sha', 'todo'],
+  ['goldens', 'golden report', 'diff images for review', 'todo'],
+  ['checksums', 'checksums', 'sha256 per artifact', 'todo'],
+  ['summary', 'CI summary', 'one line per gate', 'todo'],
+  ['bundle', 'static bundle', 'static/ + static-debug/', 'todo'],
+  ['pin', 'bump switchboard_version', 'homelab pins by commit', 'todo'],
+  ['notify', 'notify Kayne', 'result + links', 'todo'],
+  ['publish', 'publish artifacts', 'binary, bundle, checksums', 'todo'],
+  ['homelab-pr', 'homelab pull request', 'deploys on merge', 'todo'],
+];
+const pipelineEdges: Array<[string, string, string?]> = [
+  ['push', 'checkout'], ['pr', 'checkout', 'head sha'], ['nightly', 'checkout'], ['tag', 'checkout'],
+  ['toolchain', 'rustup', 'pin'], ['toolchain', 'cargo-cache', 'cache key'], ['lock', 'node', 'npm ci'], ['lock', 'npm-cache', 'cache key'], ['lock', 'chromium'],
+  ['push', 'sha'], ['pr', 'sha'], ['tag', 'sha'], ['pr', 'python'], ['nightly', 'python'],
+  ['rustup', 'fmt'], ['rustup', 'clippy'], ['rustup', 'cargo-test'], ['cargo-cache', 'clippy'], ['cargo-cache', 'cargo-test'],
+  ['node', 'typecheck'], ['node', 'vitest'], ['node', 'design-lock'], ['node', 'host-tests'], ['npm-cache', 'vitest'],
+  ['checkout', 'hygiene'], ['checkout', 'no-ssh'], ['python', 'skill-tests'], ['toolchain', 'fmt', 'same rustfmt'],
+  ['typecheck', 'static'], ['typecheck', 'static-debug'], ['vitest', 'static'], ['sha', 'release', 'build.rs stamp'], ['tag', 'release', 'release only'],
+  ['cargo-test', 'release'], ['clippy', 'release'], ['chromium', 'visual'], ['chromium', 'integration'], ['vitest', 'schema'], ['cargo-test', 'schema'],
+  ['static', 'static-diff', 'must match'], ['static-debug', 'static-diff'], ['release', 'binary'], ['release', 'checksums'], ['visual', 'goldens', 'on failure'],
+  ['fmt', 'summary'], ['hygiene', 'summary'], ['skill-tests', 'summary'], ['host-tests', 'summary'], ['no-ssh', 'summary'], ['design-lock', 'summary'],
+  ['integration', 'summary'], ['schema', 'summary'], ['static', 'bundle'], ['static-debug', 'bundle'],
+  ['binary', 'pin', 'commit sha'], ['static-diff', 'pin'], ['summary', 'pin', 'all green'], ['summary', 'notify', 'red gates'], ['goldens', 'notify'],
+  ['binary', 'publish'], ['bundle', 'publish'], ['checksums', 'publish'],
+  ['pin', 'homelab-pr'], ['publish', 'homelab-pr', 'artifact links'], ['homelab-pr', 'notify', 'review'], ['nightly', 'notify', 'nightly digest'],
+  ['homelab-pr', 'pin', 'roll back'],
+];
+export const pipelineDiagram: DiagramData = {
+  mode: 'graph', title: 'CI / BUILD + RELEASE PIPELINE', subtitle: 'SWITCHBOARD / 40 STEPS / RUN 4182', context: 'PIPELINE', caption: 'PIPELINE / 40 STEPS',
+  nodes: pipelineNodes.map(([id, label, sub, state, semantic]) => ({ id, label, sub, ...(state ? { state } : {}), ...(semantic ? { semantic } : {}) })),
+  edges: pipelineEdges.map(([from, to, label]) => ({ from, to, ...(label ? { label } : {}) })),
+};
+
+// A whole transfer and the first display of the project agent's turn, as a
+// sequence: eight actors, thirty-two messages of every kind, self-messages,
+// one active. Long exchanges like this are what an agent sends when it
+// explains a call path, and where a drawing scaled to fit stops being read.
+export const traceDiagram: SequenceDiagramData = {
+  mode: 'sequence', title: 'CALL / TRANSFER + FIRST DISPLAY', subtitle: 'CALLER -> LLM-WIKI / 32 MESSAGES', context: 'CALL TRACE', caption: 'TRACE / 8 ACTORS / 32 MESSAGES',
+  actors: [
+    { id: 'caller', label: 'CALLER', sub: 'browser page / mic', semantic: 'paper' },
+    { id: 'ws', label: 'WEBSOCKET', sub: '/ws / browser.rs' },
+    { id: 'stt', label: 'STT SIDECAR', sub: 'whisper', semantic: 'muted' },
+    { id: 'pbx', label: 'PBX', sub: 'Switchboard.handle()', semantic: 'orange' },
+    { id: 'operator', label: 'OPERATOR', sub: 'pi rpc / route only', semantic: 'orange' },
+    { id: 'prewarm', label: 'PREWARM', sub: 'launch plans' },
+    { id: 'host', label: 'HOST AGENT', sub: 'host link / skill socket', semantic: 'cyan' },
+    { id: 'agent', label: 'PROJECT AGENT', sub: 'llm-wiki / prime-agent', semantic: 'green' },
+  ],
+  messages: [
+    { from: 'caller', to: 'ws', label: 'clip (webm / opus)' },
+    { from: 'ws', to: 'stt', label: 'transcribe' },
+    { from: 'stt', to: 'ws', label: '"put me through to llm-wiki"', kind: 'return' },
+    { from: 'ws', to: 'pbx', label: 'transcript', kind: 'async' },
+    { from: 'pbx', to: 'pbx', label: 'classify (Jev)' },
+    { from: 'pbx', to: 'operator', label: 'caller turn' },
+    { from: 'operator', to: 'pbx', label: 'route(llm-wiki) signal', kind: 'async' },
+    { from: 'pbx', to: 'prewarm', label: 'launch plan?' },
+    { from: 'prewarm', to: 'pbx', label: 'host, cwd, model, prepare report', kind: 'return' },
+    { from: 'pbx', to: 'host', label: 'create session' },
+    { from: 'host', to: 'agent', label: 'start in ~/projects/llm-wiki', kind: 'async' },
+    { from: 'agent', to: 'host', label: 'ready', kind: 'return' },
+    { from: 'host', to: 'pbx', label: 'session state', kind: 'return' },
+    { from: 'pbx', to: 'ws', label: 'epoch + leg: llm-wiki', kind: 'async' },
+    { from: 'ws', to: 'caller', label: 'relabel the page', kind: 'async' },
+    { from: 'pbx', to: 'host', label: 'intro prompt with the caller\'s words' },
+    { from: 'host', to: 'agent', label: 'prompt' },
+    { from: 'agent', to: 'agent', label: 'read git log' },
+    { from: 'agent', to: 'host', label: 'speak("three commits since yesterday")', kind: 'async' },
+    { from: 'host', to: 'pbx', label: 'module_call speak', kind: 'async' },
+    { from: 'pbx', to: 'ws', label: 'mp3', kind: 'async' },
+    { from: 'ws', to: 'caller', label: 'play', kind: 'async' },
+    { from: 'agent', to: 'host', label: 'display(diagram)' },
+    { from: 'host', to: 'pbx', label: 'module_call /display' },
+    { from: 'pbx', to: 'pbx', label: 'validate + stamp seq 41' },
+    { from: 'pbx', to: 'ws', label: 'display frame, seq 41', kind: 'async' },
+    { from: 'ws', to: 'caller', label: 'render', kind: 'async' },
+    { from: 'caller', to: 'ws', label: 'screen_state applied_seq 41' },
+    { from: 'ws', to: 'pbx', label: 'confirm watermark', kind: 'async' },
+    { from: 'pbx', to: 'host', label: 'rendered: true', kind: 'return', active: true },
+    { from: 'host', to: 'agent', label: 'On screen.', kind: 'return' },
+    { from: 'agent', to: 'host', label: 'turn settled', kind: 'return' },
+  ],
+};
 
 export const fixtures: Record<FixtureName, ControllerAction[]> = {
   idle: [],
@@ -242,6 +433,30 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
       { text: 'Four of seven steps are merged. ' },
       { text: 'The static rebuild waits on the graph layout', accent: true, bold: true },
       { text: ', which is in review.' },
+    ] } },
+  ],
+  // The hard canonical diagrams: what agents really send, where drawings
+  // break down (docs/visual-channel.md, "Diagrams that outgrow the frame").
+  topology: [
+    { op: 'show', id: 'topology', type: 'diagram', role: 'primary', data: topologyDiagram },
+    { op: 'show', id: 'topology-note', type: 'note', data: { tag: 'DAMOCLES / DISPLAY PATH', anchor: { target: 'topology', node: 'gate' }, segments: [
+      { text: 'A display counts as shown only when the page confirms it. ' },
+      { text: 'The gate stamps each action with a seq', accent: true, bold: true },
+      { text: ', the projection sends the frame, and the applied_seq coming back through the WebSocket moves the watermark the agent waits on.' },
+    ] } },
+  ],
+  pipeline: [
+    { op: 'show', id: 'pipeline', type: 'diagram', role: 'primary', data: pipelineDiagram },
+    { op: 'show', id: 'pipeline-note', type: 'note', data: { tag: 'DAMOCLES / BLOCKED', anchor: { target: 'pipeline', node: 'visual' }, segments: [
+      { text: 'The goldens differ on the new layout; they wait on approval.' },
+    ] } },
+  ],
+  trace: [
+    { op: 'show', id: 'trace', type: 'diagram', role: 'primary', data: traceDiagram },
+    { op: 'show', id: 'trace-note', type: 'note', data: { tag: 'DAMOCLES / CONFIRMATION', anchor: { target: 'trace', node: 'pbx' }, segments: [
+      { text: 'The PBX moves the caller, then ' },
+      { text: 'waits for the page to confirm', accent: true, bold: true },
+      { text: ' what it drew before the agent hears "On screen."' },
     ] } },
   ],
 };
