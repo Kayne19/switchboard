@@ -518,9 +518,9 @@ function composedContent({ state, onFocus }: SceneProps): SceneContent | null {
   // Everything the rail does not carry shares one visible aux row below the
   // primary -- compare objects, the other visuals beside it, and progress --
   // so an accepted object is never lost to the layout. Metrics and the note
-  // stay in the rail.
+  // stay in the rail; a compare metric or the rail's note is not drawn twice.
   const auxObjects: SceneObject[] = [
-    ...comp.compare,
+    ...comp.compare.filter((o) => o.type !== 'metric' && o.id !== noteObject?.id),
     ...besideVisuals(comp).filter((o) => o.role !== 'compare'),
     ...progressList.filter((p) => p.id !== primary.id && !comp.compare.some((c) => c.id === p.id)),
   ];

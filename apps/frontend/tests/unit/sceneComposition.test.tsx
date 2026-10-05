@@ -142,6 +142,20 @@ describe('a visual beside the primary', () => {
     expect(alone.querySelectorAll('[data-testid="progress"]')).toHaveLength(1);
   });
 
+  it('a compare metric or the rail note beside a metric primary is drawn once', () => {
+    const page = render([
+      show('main', 'metric', 'primary'),
+      show('other', 'metric', 'compare'),
+      show('remark', 'note', 'compare'),
+      show('matrix', 'table', 'compare'),
+    ]);
+    expect(page.getAttribute('data-scene')).toBe('composed');
+    expect(page.querySelectorAll('.content-rail .metric-row')).toHaveLength(1);
+    expect(page.querySelectorAll('.composed-aux [data-testid="metrics"]')).toHaveLength(0);
+    expect(page.querySelectorAll('.annotation-card')).toHaveLength(1);
+    expect(inAux(page, 'table')).toBe(1);
+  });
+
   // Every primary against every visual beside it: each visual on stage is
   // drawn exactly once, whatever the scene.
   for (const primary of primaries) {
