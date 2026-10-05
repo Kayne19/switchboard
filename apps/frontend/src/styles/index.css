@@ -2014,6 +2014,11 @@ button {
 .diagram-edge-label__backing {
   fill: #000;
 }
+/* A stub's names list where its edges go (or come from); an edge's own
+   label sits under its name, quieter, so the names read as the list. */
+.diagram-edge-label__note {
+  fill-opacity: 0.55;
+}
 .diagram-node__body {
   transform-box: fill-box;
   transform-origin: center;

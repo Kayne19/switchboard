@@ -165,6 +165,18 @@ describe('a scrolled graph at rest', () => {
     expect(activated).toEqual(['expand']);
   });
 
+  it('puts a dense graph\'s stubs on its map, each line once', () => {
+    size = { width: 914, height: 526 };
+    render(<DiagramPrimitive data={pipelineDiagram} id="pipeline" />);
+    const stubs = host.querySelectorAll('.diagram-edges path.diagram-edge--stub');
+    expect(stubs.length).toBeGreaterThan(0);
+    // Every line the drawing draws, routes and stubs alike; none empty for
+    // an edge whose route is its stubs.
+    const lines = [...host.querySelectorAll('.drawing-viewport__map-line')].map((line) => line.getAttribute('points') ?? '');
+    expect(lines).toHaveLength(host.querySelectorAll('.diagram-edges path').length);
+    for (const points of lines) expect(points.split(' ').length).toBeGreaterThanOrEqual(2);
+  });
+
   it('carries a map of the whole, the view boxed where it stands', () => {
     size = { width: 914, height: 526 };
     render(<DiagramPrimitive data={topologyDiagram} id="topology" note={gateNote} />);

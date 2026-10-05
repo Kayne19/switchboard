@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { DiagramData } from '../../src/controller/types';
 import { DiagramPrimitive } from '../../src/primitives/DiagramPrimitive';
-import { topologyDiagram } from '../../src/fixtures/scenes';
+import { pipelineDiagram, topologyDiagram } from '../../src/fixtures/scenes';
 import { GRAPH_MIN_SCALE } from '../../src/primitives/diagramLayout';
 
 const data: DiagramData = {
@@ -532,5 +532,31 @@ describe('a graph too large to read whole', () => {
     render();
     expect(host.querySelector('.drawing-viewport--scrolling')).toBeNull();
     expect(host.querySelector('svg')?.style.width).toBe('');
+  });
+});
+
+describe('an edge drawn as stubs', () => {
+  it('draws its two stubs, an arrowhead only where it arrives, and names its far ends beside them', () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    // Too large for the window it is drawn in, the pipeline is recomposed
+    // and its longest edges become stub pairs.
+    act(() => root.render(<DiagramPrimitive data={pipelineDiagram} id="test-diagram" />));
+    const stubs = [...host.querySelectorAll<SVGPathElement>('.diagram-edges path.diagram-edge--stub')];
+    expect(stubs.length).toBeGreaterThan(0);
+    const arriving = stubs.filter((stub) => stub.hasAttribute('marker-end'));
+    const leaving = stubs.filter((stub) => !stub.hasAttribute('marker-end'));
+    expect(arriving.length).toBeGreaterThan(0);
+    expect(leaving.length).toBeGreaterThan(0);
+    const names = [...host.querySelectorAll('.diagram-edge-labels .diagram-edge-label-group--stub')];
+    // One list of names per stub line.
+    expect(names).toHaveLength(stubs.length);
+    const texts = names.map((group) => [...group.querySelectorAll('tspan')].filter((line) => !line.classList.contains('diagram-edge-label__note')).map((line) => line.textContent).join(' '));
+    expect(texts.some((text) => text.startsWith('-> '))).toBe(true);
+    expect(texts.some((text) => text.endsWith(' ->'))).toBe(true);
+    // An edge's own label sits under its far end's name, quieter.
+    const notes = [...host.querySelectorAll('.diagram-edge-label-group--stub tspan.diagram-edge-label__note')].map((line) => line.textContent);
+    expect(notes.length).toBeGreaterThan(0);
   });
 });

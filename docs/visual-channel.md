@@ -85,8 +85,20 @@ primary's shorter cell, an aux cell, focus):
    size at the readable minimum, once in each direction: a layer too wide
    for the frame across wraps into several (its edges pass the other parts
    as long edges do), every layer whose boxes fit the frame across keeps
-   inside it, long edges run as a bundle, and a top-down drawing in a
-   narrow frame wraps its node text narrower. Of the two and the drawing as first laid out,
+   inside it, and a top-down drawing in a narrow frame wraps its node text
+   narrower. Every edge stays one a reader can follow: each end leaves or
+   reaches its box at a port of its own (a box grows along a side too
+   short for its ports), so no two arrowheads stack; of more than four
+   long edges running side by side through a layer, the longest are drawn
+   as stubs; and in a drawing more than two frames long, an edge longer
+   than the frame, whose ends cannot both be in view, is drawn as a stub
+   pair instead: a short line from its source to `-> target`, and one from
+   `source ->` into its target, the edge's own label set quieter under the
+   name (a feedback edge read across the page runs right to left, so its
+   arrows read `target <-` and `<- source`). The stubs leaving one side of
+   a node the same way, in one colour, lit or not alike, share one line and
+   one list of names; the names stand in the layer next to the node. On a
+   phone most of a dense graph's edges become stubs. Of the two and the drawing as first laid out,
    the one asking the least scrolling is kept (a viewport's worth of
    reading is the unit, so scrolling both ways costs most), the stage's own
    direction preferred. A sequence too wide is recomposed to the
@@ -150,10 +162,16 @@ from the page's own smallest type rather than a new number, so a diagram is
 never the least readable thing on screen. Recomposing rather than scaling
 is the portrait rule: a phone reads a graph top down with its wide layers
 wrapped, and a long exchange as a column, instead of a desktop drawing at a
-third of its size. What is still open: a dense graph (the forty-step
-pipeline) in a phone's slot scrolls both ways, since wrapping its layers
-multiplies the long edges past them; a lane layout (one column of nodes,
-edges in tracks beside it) would be the next step.
+third of its size. A dense graph (the forty-step pipeline) in a phone's
+slot reads top down and scrolls one way: wrapping its layers would
+multiply the long edges past them, so those become stub pairs, and the
+drawing reads as a column of steps, each with the names of its far ends
+beside it. It is long (some sixteen screens of a slot a third of a phone
+tall); that is the price of forty steps at a readable size. A stub pair is
+the standard answer to an edge too long to follow (an off-page connector),
+and the threshold is the frame itself: past one frame's length the reader
+can no longer see both ends, and has to track the line through the scroll
+among its neighbours.
 
 A chart's `kind` says how its series are drawn, and the page decides the rest
 from geometry. Categorical `labels` replace the numeric x ticks; when a row of

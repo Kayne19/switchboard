@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react';
 import type { DiagramData, NoteData, Semantic } from '../controller/types';
-import { ARROW_LENGTH, cornerTagBoxes, nodeFramePath, viewDiagram, type DiagramLayout, type Point } from './diagramLayout';
+import { ARROW_LENGTH, LABEL_INSET, cornerTagBoxes, litEdges, nodeFramePath, viewDiagram, type DiagramLayout, type EdgeLabel, type EdgeStub, type Point } from './diagramLayout';
 import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
 import type { DrawingMap } from './drawingScroll';
 import { NoteMarker } from './NoteMarker';
@@ -46,6 +46,31 @@ function wrapText(text: string, maxCharsPerLine = CALLOUT_LINE_CHARS): string[] 
   }
   if (current) lines.push(current);
   return lines;
+}
+
+/**
+ * An edge's label, or a stub's names, on a backing of its own. A stub's
+ * names line up on the side its line meets, so its arrow sits by the line.
+ */
+function EdgeLabelText({ label, color, align, delay, quiet }: { label: EdgeLabel; color: string; align: EdgeStub['align']; delay: number; quiet?: boolean[] }) {
+  const x = align === 'start' ? label.box.x + LABEL_INSET : align === 'end' ? label.box.x + label.box.width - LABEL_INSET : label.x;
+  return (
+    <g className={`diagram-edge-label-group${quiet ? ' diagram-edge-label-group--stub' : ''}`} style={{ animationDelay: `${delay}ms` }}>
+      <rect className="diagram-edge-label__backing" {...label.box} />
+      <text x={x} y={label.y} textAnchor={align} dominantBaseline="central" className="diagram-edge-label" fill={color}>
+        {label.lines.map((line, lineIndex) => (
+          <tspan
+            key={lineIndex}
+            x={x}
+            dy={lineIndex === 0 ? `${-(label.lines.length - 1) * 0.5 * LABEL_LINE}` : LABEL_LINE}
+            className={quiet?.[lineIndex] ? 'diagram-edge-label__note' : undefined}
+          >
+            {line}
+          </tspan>
+        ))}
+      </text>
+    </g>
+  );
 }
 
 export function DiagramPrimitive({
@@ -97,19 +122,26 @@ export function DiagramPrimitive({
   const map = useMemo<DrawingMap>(() => {
     const indexOf = new Map(layout.nodes.map(({ node }, index) => [node.id, index]));
     const toneOf = (semantic?: Semantic) => colors[semantic ?? 'paper'];
-    const links = layout.edges.flatMap(({ edge, points }) => {
+    // An edge drawn as stubs is linked by its two stub lines: where one
+    // leaves the view, the rim names the edge's far end, as its names do (a
+    // line several edges share is a link for each, so each far end is
+    // named). The map draws each line once.
+    const links = layout.edges.flatMap(({ edge, points, stubs }) => {
       const from = indexOf.get(edge.from);
       const to = indexOf.get(edge.to);
-      return from === undefined || to === undefined ? [] : [{ points, from, to, tone: toneOf(edge.semantic) }];
+      if (from === undefined || to === undefined) return [];
+      return (stubs ? [stubs.from.points, stubs.to.points] : [points]).map((line) => ({ points: line, from, to, tone: toneOf(edge.semantic) }));
     });
+    const drawnOnce = new Set<Point[]>();
+    const stubNames = [...new Set(layout.edges.flatMap(({ stubs }) => (stubs ? [stubs.from.label, stubs.to.label] : [])))];
     return {
       parts: layout.nodes.map(({ node, box }) => ({ box, label: node.label })),
       noun: { one: 'NODE', many: 'NODES' },
-      marks: layout.edges.flatMap(({ label }) => (label ? [label.box] : [])),
+      marks: [...layout.edges.flatMap(({ label }) => (label ? [label.box] : [])), ...stubNames.map((label) => label.box)],
       links,
       sketch: {
         boxes: layout.nodes.map(({ node, box }) => ({ box, tone: node.id === anchor ? 'var(--orange)' : toneOf(node.semantic) })),
-        lines: links.map(({ points, tone }) => ({ points, tone })),
+        lines: links.filter(({ points }) => !drawnOnce.has(points) && drawnOnce.add(points)).map(({ points, tone }) => ({ points, tone })),
       },
     };
   }, [layout, anchor]);
@@ -138,15 +170,27 @@ export function DiagramPrimitive({
     return () => onCalloutChange?.(false);
   }, [calloutPlaced, onCalloutChange]);
 
-  const activeNodes = new Set(data.nodes.filter((node) => node.state === 'active').map((node) => node.id));
-  const hasSingleActiveNode = activeNodes.size === 1;
+  const lit = litEdges(data);
   const edges = layout.edges.map((laidOut, index) => {
     const { edge } = laidOut;
-    const active = Boolean(
-      edge.active || (hasSingleActiveNode && (activeNodes.has(edge.from) || activeNodes.has(edge.to))),
-    );
-    return { ...laidOut, key: `${edge.from}-${edge.to}-${index}`, active, color: colors[edge.semantic ?? 'paper'] };
+    return { ...laidOut, key: `${edge.from}-${edge.to}-${index}`, index, active: lit(edge), color: colors[edge.semantic ?? 'paper'] };
   });
+  // Stubs, each drawn once: the stubs leaving one side of a node share a
+  // line and a label, and the layout shares them only between edges of one
+  // colour, lit or not alike (litEdges). A stub fades in with its first
+  // edge.
+  const stubs = (() => {
+    const drawn = new Map<EdgeStub, { key: string; index: number; points: Point[]; label: EdgeLabel; align: EdgeStub['align']; quiet: boolean[]; head: boolean; color: string; semantic: Semantic; active: boolean }>();
+    for (const edge of edges) {
+      if (!edge.stubs) continue;
+      for (const [end, stub] of [['from', edge.stubs.from], ['to', edge.stubs.to]] as const) {
+        if (drawn.has(stub)) continue;
+        const semantic = edge.edge.semantic ?? 'paper';
+        drawn.set(stub, { key: `${edge.key}-${end}`, index: edge.index, points: stub.points, label: stub.label, align: stub.align, quiet: stub.quiet, head: end === 'to', color: edge.color, semantic, active: edge.active });
+      }
+    }
+    return [...drawn.values()];
+  })();
 
   return (
     <div ref={hostRef} className={`diagram-primitive${focused ? ' diagram-primitive--focused' : ''}`} data-testid="diagram">
@@ -194,20 +238,41 @@ export function DiagramPrimitive({
           ))}
         </defs>
         <g className="diagram-edges">
-          {edges.map((edge, index) => (
+          {edges.map((edge, index) =>
+            edge.stubs ? null : (
+              <path
+                key={edge.key}
+                className={`diagram-edge${edge.active ? ' diagram-edge--active' : ''}`}
+                style={{ animationDelay: `${index * 60}ms` }}
+                d={pathThrough(edge.points)}
+                fill="none"
+                stroke={edge.color}
+                strokeOpacity={edge.active ? 0.85 : 0.48}
+                strokeWidth={edge.active ? 2 : 1.25}
+                strokeDasharray={edge.active ? '10 8' : undefined}
+                vectorEffect="non-scaling-stroke"
+                filter={edge.active ? 'url(#active-edge-glow)' : undefined}
+                markerEnd={`url(#diagram-arrow-${edge.edge.semantic ?? 'paper'})`}
+              />
+            ),
+          )}
+          {/* An edge too long to follow is drawn as two stubs. The one
+              leaving its source ends at the names of its targets, so it
+              carries no arrowhead; the one reaching its target does. */}
+          {stubs.map((stub) => (
             <path
-              key={edge.key}
-              className={`diagram-edge${edge.active ? ' diagram-edge--active' : ''}`}
-              style={{ animationDelay: `${index * 60}ms` }}
-              d={pathThrough(edge.points)}
+              key={stub.key}
+              className={`diagram-edge diagram-edge--stub${stub.active ? ' diagram-edge--active' : ''}`}
+              style={{ animationDelay: `${stub.index * 60}ms` }}
+              d={pathThrough(stub.points)}
               fill="none"
-              stroke={edge.color}
-              strokeOpacity={edge.active ? 0.85 : 0.48}
-              strokeWidth={edge.active ? 2 : 1.25}
-              strokeDasharray={edge.active ? '10 8' : undefined}
+              stroke={stub.color}
+              strokeOpacity={stub.active ? 0.85 : 0.48}
+              strokeWidth={stub.active ? 2 : 1.25}
+              strokeDasharray={stub.active ? '10 8' : undefined}
               vectorEffect="non-scaling-stroke"
-              filter={edge.active ? 'url(#active-edge-glow)' : undefined}
-              markerEnd={`url(#diagram-arrow-${edge.edge.semantic ?? 'paper'})`}
+              filter={stub.active ? 'url(#active-edge-glow)' : undefined}
+              markerEnd={stub.head ? `url(#diagram-arrow-${stub.semantic})` : undefined}
             />
           ))}
         </g>
@@ -318,20 +383,10 @@ export function DiagramPrimitive({
         {/* Labels paint last, each on a backing of its own, so no node or
             crossing edge can cover the words on an edge. */}
         <g className="diagram-edge-labels">
-          {edges.map((edge) =>
-            edge.label ? (
-              <g key={edge.key} className="diagram-edge-label-group" style={{ animationDelay: `${120 + edges.length * 50}ms` }}>
-                <rect className="diagram-edge-label__backing" {...edge.label.box} />
-                <text x={edge.label.x} y={edge.label.y} textAnchor="middle" dominantBaseline="central" className="diagram-edge-label" fill={edge.color}>
-                  {edge.label.lines.map((line, lineIndex) => (
-                    <tspan key={lineIndex} x={edge.label!.x} dy={lineIndex === 0 ? `${-(edge.label!.lines.length - 1) * 0.5 * LABEL_LINE}` : LABEL_LINE}>
-                      {line}
-                    </tspan>
-                  ))}
-                </text>
-              </g>
-            ) : null,
-          )}
+          {edges.map((edge) => (edge.label ? <EdgeLabelText key={edge.key} label={edge.label} color={edge.color} align="middle" delay={120 + edges.length * 50} /> : null))}
+          {stubs.map((stub) => (
+            <EdgeLabelText key={`${stub.key}-names`} label={stub.label} color={stub.color} align={stub.align} delay={120 + edges.length * 50} quiet={stub.quiet} />
+          ))}
         </g>
       </DrawingViewport>
     </div>
