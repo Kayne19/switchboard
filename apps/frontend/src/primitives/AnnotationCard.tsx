@@ -7,7 +7,7 @@ import { RichText } from './RichText';
 export interface NoteTarget {
   /** The TARGET line's words; none for a note about no object on stage, or about none at all. */
   target?: string;
-  /** What it names is marked where its object is drawn (a node, an actor, an item), so the card carries the badge that matches the mark and gives the line one of its own. */
+  /** What it names is marked where its object is drawn (a node, an actor, an item), so the card carries the badge that matches the mark. */
   marked: boolean;
 }
 
@@ -23,8 +23,7 @@ interface AnnotationCardProps {
    * app/noteItems.ts). Every card is given one, so none shows an id: a
    * card with no target, a note about nothing on stage, has no TARGET
    * line. A marked part (a node, an actor, an item) gives the card the
-   * badge that matches the mark, and a line of its own for what it names
-   * rather than cut it beside the tag.
+   * badge that matches the mark.
    */
   named: NoteTarget;
 }
@@ -39,15 +38,21 @@ export function AnnotationCard({ data, onFocus, onOpenHistory, named }: Annotati
   // expand, so its body opens the conversation it came from.
   const activate = onFocus ?? onOpenHistory;
   return (
-    <div className={`annotation-card${named.marked ? ' annotation-card--item' : ''}`} data-anchor-target={data.anchor?.target}>
+    <div className="annotation-card" data-anchor-target={data.anchor?.target}>
       <div className="annotation-card__header">
         <span className="annotation-card__tag tech micro">{data.tag ?? 'DAMOCLES / EXPLANATION'}</span>
-        {named.target !== undefined ? <span className="annotation-card__anchor tech micro">{`TARGET / ${named.target}`}</span> : null}
-        {/* The badge that matches the marker on the part it names (a node,
-            an actor, or an item marked where its object is drawn) sits
-            beside the anchor text, not inside it: the anchor text
-            ellipsizes in a narrow rail and would clip the badge with it. */}
-        {named.marked ? <NoteBadge /> : null}
+        {/* What it names and the badge that matches the mark on it (a
+            node, an actor, or an item marked where its object is drawn)
+            keep together, beside the tag or on a line of their own under
+            it. The badge stands beside the words, not inside them: they
+            end in an ellipsis where even their own line is too narrow,
+            and would cut the badge with them. */}
+        {named.target !== undefined || named.marked ? (
+          <span className="annotation-card__target">
+            {named.target !== undefined ? <span className="annotation-card__anchor tech micro">{`TARGET / ${named.target}`}</span> : null}
+            {named.marked ? <NoteBadge /> : null}
+          </span>
+        ) : null}
         {onOpenHistory ? (
           <button type="button" className="annotation-card__history tech micro" onClick={onOpenHistory} aria-label="Open conversation history">
             HISTORY

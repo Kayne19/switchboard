@@ -765,9 +765,16 @@ button {
   flex: none;
   color: rgba(232, 230, 223, 0.35);
 }
+.annotation-card__target {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  margin-left: auto;
+}
 .annotation-card__anchor {
   min-width: 0;
-  margin-left: auto;
   color: rgba(var(--orange-rgb), 0.7);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1110,11 +1117,6 @@ button {
   row-gap: 4px;
 }
 
-/* The item's name and its badge share their line: the name gives the
-   badge its room before it is cut. */
-.annotation-card--item .annotation-card__anchor {
-  max-width: calc(100% - 56px);
-}
 
 .chart-note .annotation-card {
   height: auto;

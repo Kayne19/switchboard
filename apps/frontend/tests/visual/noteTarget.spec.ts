@@ -30,11 +30,17 @@ async function open(page: Page, scene: string, actions: unknown[] = []) {
 
 // The card's TARGET line: its words, and whether they are cut.
 async function railTarget(page: Page) {
-  return page.locator('.content-rail .annotation-card__anchor').evaluate((anchor) => ({
-    text: anchor.textContent,
-    cut: anchor.scrollWidth > anchor.clientWidth + 1,
-    badge: anchor.closest('.annotation-card')!.querySelector('.annotation-card__header .note-badge') !== null,
-  }));
+  return page.locator('.content-rail .annotation-card__anchor').evaluate((anchor) => {
+    const badge = anchor.closest('.annotation-card')!.querySelector<HTMLElement>('.annotation-card__header .note-badge');
+    const middle = (element: Element) => { const box = element.getBoundingClientRect(); return box.top + box.height / 2; };
+    return {
+      text: anchor.textContent,
+      cut: anchor.scrollWidth > anchor.clientWidth + 1,
+      badge: badge !== null,
+      // The badge stands beside the words it matches, on their line.
+      ...(badge ? { besideBadge: Math.abs(middle(badge) - middle(anchor)) < 4 } : {}),
+    };
+  });
 }
 
 for (const geometry of geometries) {
@@ -47,7 +53,12 @@ for (const geometry of geometries) {
   test(`a rail card names a node by its label, whole, with its badge, at ${geometry.width}x${geometry.height}`, async ({ page }) => {
     await page.setViewportSize({ width: geometry.width, height: geometry.height });
     await open(page, 'topology');
-    expect(await railTarget(page)).toEqual({ text: 'TARGET / Display gate', cut: false, badge: true });
+    expect(await railTarget(page)).toEqual({ text: 'TARGET / Display gate', cut: false, badge: true, besideBadge: true });
+  });
+  test(`a rail card names a forecast's day with the badge beside it at ${geometry.width}x${geometry.height}`, async ({ page }) => {
+    await page.setViewportSize({ width: geometry.width, height: geometry.height });
+    await open(page, 'weather');
+    expect(await railTarget(page)).toEqual({ text: 'TARGET / THU OCT 8', cut: false, badge: true, besideBadge: true });
   });
 }
 
@@ -56,7 +67,7 @@ test('the folded strip on a phone names the node whole', async ({ page }) => {
   await open(page, 'topology');
   await expect(page.locator('.content-rail--folded')).toBeVisible();
   const target = await railTarget(page);
-  expect(target).toEqual({ text: 'TARGET / Display gate', cut: false, badge: true });
+  expect(target).toEqual({ text: 'TARGET / Display gate', cut: false, badge: true, besideBadge: true });
   // On a line of its own, under the tag.
   const [tag, anchor] = await Promise.all(['.annotation-card__tag', '.annotation-card__anchor'].map((selector) =>
     page.locator(`.content-rail ${selector}`).evaluate((element) => element.getBoundingClientRect().top)));

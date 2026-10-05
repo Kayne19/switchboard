@@ -191,9 +191,10 @@ describe('the item a note names is marked wherever its object is drawn', () => {
     expect(scene().querySelector('.content-rail .annotation-card__tag')?.textContent).toBe('GRID');
   });
 
-  it('gives the card a line of its own for what it names, so the item is not cut beside the tag', () => {
+  it('keeps what the card names and its badge together, so a line of its own takes both', () => {
     render([object('tasks', 'primary'), noteOn('passport')]);
-    expect(scene().querySelector('.content-rail .annotation-card')?.classList.contains('annotation-card--item')).toBe(true);
+    const target = scene().querySelector('.content-rail .annotation-card__target');
+    expect([...(target?.children ?? [])].map((child) => child.className)).toEqual(['annotation-card__anchor tech micro', 'note-badge tech micro']);
   });
 
   it('gives a chart note naming an item no badge: a chart marks no items', () => {
