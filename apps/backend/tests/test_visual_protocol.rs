@@ -908,6 +908,27 @@ fn the_size_is_counted_as_json_stringify_writes_the_action() {
     assert_eq!(json_len(&action), 158);
 }
 
+/// A number is read as the double JavaScript reads it from the same text
+/// (serde_json's `float_roundtrip`): the default parse reads these one step
+/// off, and the size and the normalized action would follow the wrong value.
+#[test]
+fn numbers_parse_to_the_double_javascript_reads() {
+    for (text, double, javascript) in [
+        ("6e23", 6e23_f64, "6e+23"),
+        ("6e+23", 6e23, "6e+23"),
+        ("3e27", 3e27, "3e+27"),
+        (
+            "970034019735371.5",
+            970_034_019_735_371.5,
+            "970034019735371.5",
+        ),
+    ] {
+        let parsed: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(parsed.as_f64(), Some(double), "{text}");
+        assert_eq!(json_len(&parsed), javascript.len(), "{text}");
+    }
+}
+
 // ---- the shared corpus -------------------------------------------------------
 
 /// `{"$repeat": s, "times": n}` in the corpus stands for `s` repeated `n`
