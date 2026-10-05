@@ -141,11 +141,12 @@ describe('leadScrollTop', () => {
 });
 
 describe('ListViewport', () => {
-  it('a list that fits draws no rail and does not scroll', () => {
+  it('a list that fits draws no rail and does not scroll', async () => {
     const scroll = render(rows(3));
     layOut(scroll, 0);
-    act(() => scroll.dispatchEvent(new Event('scroll')));
-    expect(page().querySelector('.list-viewport__rim')).toBeNull();
+    await measured(scroll);
+    expect(page().querySelector('.list-viewport__rim, .drawing-viewport__rail')).toBeNull();
+    expect(page().querySelector('.list-viewport--scrolling')).toBeNull();
     expect(scroll.tabIndex).toBe(-1);
   });
 

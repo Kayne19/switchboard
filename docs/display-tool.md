@@ -83,7 +83,7 @@ type DisplayAction =
 | `image` | `{ format: "png"\|"jpeg"\|"webp", bytes: <standard base64>, alt, title?, subtitle?, context?, caption? }` | raster figure, contained, with its alt text and decoded size |
 | `calendar` | `{ view: "day"\|"week"\|"month"\|"agenda", start: Date, days?, today?: Date, now?: WallTime, events: [{ id, title, start, end?, location?, detail?, semantic?, status?, active? }], title?, subtitle?, context?, caption? }` | a day, a week, a month or an agenda of events (see "Personal-assistant types") |
 | `tasks` | `{ items: [{ id, text, state?, due?, priority?, group?, detail?, tags? }], today?: Date, title?, subtitle?, context?, caption? }` | a to-do list, in groups, overdue marked against `today` |
-| `timer` | `{ timers: [{ id, label, endsAt: Instant, startedAt?, state?, remaining? }], title?, subtitle?, context?, caption? }` | countdowns and reminders, counted on the page clock (by the render slice; a field list until then) |
+| `timer` | `{ timers: [{ id, label, endsAt: Instant, startedAt?, state?, remaining? }], title?, subtitle?, context?, caption? }` | countdowns and reminders, counted on the page clock, done at zero (see "timer") |
 | `weather` | `{ location, units: "C"\|"F", current: { temp, condition, ... }, hourly?, daily?, alert?, title?, subtitle?, context?, caption? }` | conditions now, by the hour and by the day |
 | `inbox` | `{ messages: [{ id, from, subject?, snippet?, time, channel?, unread?, flagged?, semantic? }], today?: Date, title?, subtitle?, context?, caption? }` | a list of messages in the order sent |
 
@@ -161,7 +161,7 @@ Every time in a display action is a string in one of three forms. Each validator
 
 Five types show a person's day: `calendar`, `tasks`, `timer`, `weather` and `inbox`. They keep the conventions of the other types: an optional `title`, `subtitle`, `context` (each <= 256) and `caption` (<= 128); camelCase keys; an unknown key is refused. An item id (an event, a task, a timer, a message) is non-blank and <= 128 UTF-16 code units, like a diagram node id, and is unique in its list.
 
-Status: both validators, the schema and the skill module hold the whole contract below. The page draws `calendar`, `tasks` and `inbox` with primitives of their own (`CalendarPrimitive`, "How the page draws a calendar" below; `TasksPrimitive`, `InboxPrimitive`, how in `docs/visual-channel.md`), and marks the item a note names in any of the five. It draws `timer` and `weather` with one stand-in for now, a framed list of the fields as sent (`apps/frontend/src/primitives/TemporaryAssistantList.tsx`), so none is dropped. The drawing rules below for those two (a timer's countdown, the condition glyphs) are what their render slice implements; until it lands the page does not do them.
+Status: both validators, the schema and the skill module hold the whole contract below. The page draws all five with primitives of their own (`CalendarPrimitive`, "How the page draws a calendar" below; `TasksPrimitive`, `InboxPrimitive`, `TimerPrimitive`, `WeatherPrimitive`, how in `docs/visual-channel.md` and in each type's section), and marks the item a note names in any of the five.
 
 #### calendar
 
@@ -214,6 +214,7 @@ How the page draws a calendar (`CalendarPrimitive`, laid out by `calendarLayout.
 - `state` is `running` or `paused`; absent reads as `running`. `remaining` is the seconds left (a number, 0 or more): it is required when the timer is `paused` and refused otherwise, because a running timer is counted down from `endsAt`.
 - A paused timer is drawn from `remaining` and is not counted; its `endsAt` is kept as the end it had when it last ran, and nothing is measured against it. `startedAt` and `endsAt` together give the whole span, so the page can show the share gone: `now` against them for a running timer, `remaining` against them for a paused one. When the agent resumes a timer, it sends `state: "running"` (or no state) with the new `endsAt`.
 - The page counts a running timer down against its own clock and shows it done at zero. It plays no sound: the agent says it is done. With reduced motion there is no animated sweep; the numbers still change.
+- What the page draws: each timer's label, its countdown (`MM:SS`, `H:MM:SS` from an hour, `ND HH:MM:SS` from a day; rounded up, so `00:00` shows only at the end), its phase (running, paused, or done in the warning colour), and, with a `startedAt`, a bar of the share gone. Under the bar: when it ends (`ENDS 18:42`, its time of day as written, `UTC` added when it was written in UTC), the share gone of the whole span, or for a done timer how long ago it ended (`ENDED 18:42 / +01:15`). Several timers are laid out by the slot's geometry: a grid of large countdowns, or rows of a list where the slot is too small for readable digits. The timer a note names (`anchor.item`, its `id`) carries the NOTE badge.
 
 ```json
 { "op": "show", "id": "kitchen", "type": "timer", "data": {
@@ -230,6 +231,7 @@ How the page draws a calendar (`CalendarPrimitive`, laid out by `calendarLayout.
 - `current` (required): `{ temp, condition, summary? (<= 256), high?, low?, feelsLike?, humidity?, precip?, wind? (<= 128) }`. Temperatures are finite numbers; `humidity` and `precip` (the chance of precipitation) are percents, 0 to 100.
 - `hourly`: 0 to 48 `{ time, temp, condition, precip? }`, `time` a wall time, no two hours with one `time`. `daily`: 0 to 14 `{ date, high, low, condition, precip? }`, no two days with one `date`. `alert`: <= 256.
 - `condition` is one of `clear`, `partly-cloudy`, `cloudy`, `fog`, `drizzle`, `rain`, `heavy-rain`, `thunder`, `snow`, `sleet`, `hail`, `wind`, `haze`. The page draws each as a glyph in the design system's sharp vector geometry, never as an emoji or an image.
+- What the page draws: the conditions now as the hero (the glyph, the temperature large with its unit, the condition, high and low, the summary, and the readings it was given: feels like, humidity, chance of precipitation, wind), with `alert` on an amber rule; the hours as a strip, the temperature traced over each hour's chance of rain, labelled as often as the slot's width allows (a 48-hour strip stays on one screen); the days as rows, each day's low-to-high a bar on one scale shared by all the days. A temperature is shown to a tenth at most. Where the parts stand is the slot's decision; a small slot shows the conditions and one list. The hour or day a note names (`anchor.item`, the hour's `time` or the day's `date`) carries the NOTE badge, and the rail card names it in the forecast's words (`THU OCT 8`, `WED 14:00`).
 
 ```json
 { "op": "show", "id": "weather", "type": "weather", "data": {
