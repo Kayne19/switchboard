@@ -144,7 +144,7 @@ export function weatherLayout(
   // the figure's temperature as written (formatTemp), and `condition` the
   // width its condition line is drawn at (CSS pixels, read from the page:
   // its face follows the stage), for the room a figure leaves an outlook.
-  has: { hourly: boolean; daily: boolean; ahead?: boolean; markedHour?: boolean; markedDay?: boolean; alert?: boolean; temp?: string; condition?: number },
+  has: { hourly: boolean; daily: boolean; ahead?: boolean; markedHour?: boolean; markedDay?: boolean; alert?: boolean; temp: string; condition: number },
 ): WeatherLayout {
   const alertLine = has.alert === true;
   const none = { outlook: false, inline: false, alertLine, figure: 0 };
@@ -156,9 +156,8 @@ export function weatherLayout(
       // and the days take the room it leaves: none where the figure, as
       // wide as its temperature row or its condition line, leaves no
       // column, or would be drawn smaller than a compact figure's least.
-      const tempText = has.temp ?? '';
-      const fitted = heroTempFit(width - OUTLOOK_SPACE - OUTLOOK_COLUMN, tempText, temp);
-      const figure = outlookFigure(fitted, tempText, has.condition ?? 0);
+      const fitted = heroTempFit(width - OUTLOOK_SPACE - OUTLOOK_COLUMN, has.temp, temp);
+      const figure = outlookFigure(fitted, has.temp, has.condition);
       const beside = (has.ahead ?? has.daily) === true && fitted >= OUTLOOK_TEMP_LEAST && width - OUTLOOK_SPACE - figure >= OUTLOOK_COLUMN;
       // What stands above and under the figure: an alert's line, and the
       // spot line of an hour a note names (no list here draws it), or of a

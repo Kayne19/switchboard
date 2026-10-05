@@ -16,7 +16,7 @@ import {
   dayBars,
   daySegments,
   eventsOutside,
-  eventTargetText,
+  eventTarget,
   eventTense,
   eventTimeText,
   monthGrid,
@@ -120,9 +120,18 @@ describe('events in time', () => {
 
   it('names an event for a note by its title and when it starts, and nothing it does not hold', () => {
     const data = calendar({ events: [event('dentist', '2026-10-07T10:30', '2026-10-07T11:30', { title: 'Dentist' }), event('ana', '2026-10-07', undefined, { title: 'Ana in town' })] });
-    expect(eventTargetText(data, 'dentist')).toBe('Dentist / WED OCT 7 10:30');
-    expect(eventTargetText(data, 'ana')).toBe('Ana in town / WED OCT 7');
-    expect(eventTargetText(data, 'nope')).toBeUndefined();
+    expect(eventTarget(data, 'dentist')?.text).toBe('Dentist / WED OCT 7 10:30');
+    expect(eventTarget(data, 'ana')?.text).toBe('Ana in town / WED OCT 7');
+    expect(eventTarget(data, 'nope')).toBeUndefined();
+  });
+
+  it('says whether the view reaches the event a note names: only then is it drawn, or counted, and marked', () => {
+    const data = calendar({ events: [event('dentist', '2026-10-07T10:30'), event('later', '2026-10-20T10:30'), event('trip', '2026-10-01', '2026-10-05')] });
+    expect(eventTarget(data, 'dentist')?.inView).toBe(true);
+    expect(eventTarget(data, 'later')?.inView).toBe(false);
+    // An event that began before the view and runs into it is drawn from its first day.
+    expect(eventTarget(data, 'trip')?.inView).toBe(true);
+    expect(eventTarget({ ...data, view: 'day', start: '2026-10-07' }, 'trip')?.inView).toBe(false);
   });
 
   it('counts the events a view does not reach', () => {

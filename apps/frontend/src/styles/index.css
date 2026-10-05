@@ -754,20 +754,33 @@ button {
   text-align: left;
   overflow: hidden;
 }
+/* A card puts what it names on a line of its own where it does not fit
+   beside the tag, rather than cut it to an ellipsis there: the TARGET
+   line's words are the object's own (a title, a node's label, a list's
+   item), and they are its point: cut beside the tag in a folded strip,
+   they read `TARG…`. */
 .annotation-card__header {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
+  gap: 4px 12px;
   margin-bottom: clamp(8px, 1cqh, 13px);
 }
 .annotation-card__tag {
   flex: none;
   color: rgba(232, 230, 223, 0.35);
 }
+.annotation-card__target {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  margin-left: auto;
+}
 .annotation-card__anchor {
   min-width: 0;
-  margin-left: auto;
   color: rgba(var(--orange-rgb), 0.7);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1099,22 +1112,6 @@ button {
   max-height: max(36%, min(104px, 62%));
   background: #000;
   pointer-events: auto;
-}
-/* A narrow card puts what it names on a line of its own rather than cut
-   it to an ellipsis beside the tag; so does a card naming a list's item,
-   whose words are the point of its TARGET line, and a card focus keeps
-   beside its object, in a column as narrow as the rail. */
-.chart-note .annotation-card__header,
-.annotation-card--item .annotation-card__header,
-.focus-layer__note .annotation-card__header {
-  flex-wrap: wrap;
-  row-gap: 4px;
-}
-
-/* The item's name and its badge share their line: the name gives the
-   badge its room before it is cut. */
-.annotation-card--item .annotation-card__anchor {
-  max-width: calc(100% - 56px);
 }
 
 .chart-note .annotation-card {

@@ -316,7 +316,7 @@ describe('chart notes', () => {
       root.render(
         <div className="chart-object">
           <div className="chart-primitive"><svg /></div>
-          <ChartNotes chart={object} notes={[shown]} named={named} onFocus={() => {}} />
+          <ChartNotes chart={object} objects={{ flat: object }} notes={[shown]} named={named} onFocus={() => {}} />
         </div>,
       ),
     );

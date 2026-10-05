@@ -223,13 +223,13 @@ export function chartCategories(data: ChartData): string[] | undefined {
  * does not carry is its first series, and an x past the domain its nearest
  * end. An anchor with no x names its series alone. One that names no
  * series the chart carries and no x, or no point the chart can draw, names
- * the chart itself: its title, or `CHART` where it has none.
+ * no part of it: undefined, and the card names the chart itself, as it
+ * names any object (`noteTarget`, app/noteItems.ts).
  */
-export function chartTargetText(anchor: { x?: number; series?: string }, data: ChartData, scales: ChartScales = chartScales(data)): string {
-  const chart = data.title?.trim() || 'CHART';
-  if (anchor.x === undefined) return data.series.find((candidate) => candidate.name === anchor.series)?.name ?? chart;
+export function chartTargetText(anchor: { x?: number; series?: string }, data: ChartData, scales: ChartScales = chartScales(data)): string | undefined {
+  if (anchor.x === undefined) return data.series.find((candidate) => candidate.name === anchor.series)?.name;
   const sample = seriesSample(data, anchor.x, anchor.series, scales);
-  if (!sample) return chart;
+  if (!sample) return undefined;
   const series = anchor.series !== undefined || data.series.length > 1 ? ` / ${data.series[sample.series].name}` : '';
   const labels = data.labels;
   if (labels && labels.length > 0) return `${labels[Math.round(sample.x)]}${series}`;

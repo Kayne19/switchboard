@@ -827,8 +827,13 @@ function placeInOrder(
       for (const top of tops) consider(left, top);
     }
     if (point && best!.falls === SHORT.more) {
-      // No row clears the point: straight above or below it, a gap away,
-      // and beside it, level with it, its leader out of the card's side.
+      // No row clears the point (each covers it or another card, or lies
+      // across the plot's border): straight above or below it, a gap
+      // away, and beside it, level with it, its leader out of the card's
+      // side. The search below keeps to places clear of the data, so where
+      // nothing within reach is clear these are what keeps a card off its
+      // point and the border, over the data at worst (notePlacement.test.ts,
+      // "a card with no clear place within reach of its point").
       for (const top of unique([point.y - gap - height, point.y + gap].map(clampTop))) {
         for (const left of lefts) consider(left, top);
       }

@@ -179,6 +179,7 @@ function sameLayout(a: NotesLayout | null, b: NotesLayout): boolean {
  */
 export function ChartNotes({
   chart,
+  objects,
   notes,
   onFocus,
   onOpenHistory,
@@ -186,6 +187,8 @@ export function ChartNotes({
   named: namedPoints,
 }: {
   chart: SceneObject<ChartData>;
+  /** Every object on stage, by id: a card names the one its note is about (`noteTarget`). */
+  objects: Readonly<Record<string, SceneObject>>;
   notes: ChartNote[];
   onFocus: (id: string | null) => void;
   onOpenHistory?: () => void;
@@ -541,7 +544,7 @@ export function ChartNotes({
                     data={note.data}
                     onFocus={note.object ? () => onFocus(note.object!.id) : undefined}
                     onOpenHistory={note.object ? undefined : onOpenHistory}
-                    target={noteTarget(chart, note.data).target}
+                    named={noteTarget(objects, note.data)}
                   />
                 </SurfaceBoundary>
               </motion.div>

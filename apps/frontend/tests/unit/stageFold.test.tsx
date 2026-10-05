@@ -49,14 +49,34 @@ describe('when the primary takes the stage', () => {
     expect(sharedExcess(stageReport({ excess: -10, viewport: 482 }, false, column, undefined), column)).toBeNull();
   });
 
-  it('takes a graph laid out again for the stage at its word only where it overflows even the stage', () => {
-    // A graph recomposed for the stage's taller viewport may ask more than
-    // it would of the shared one: that says nothing of the shared layout.
-    const graph = stageReport({ excess: 374 - 300, viewport: 374 }, true, column, undefined);
-    const relaid = (excess: number) => stageReport({ excess, viewport: 482, relaid: true }, false, column, graph);
-    expect(sharedExcess(relaid(-30), column)).toBeNull();
-    expect(sharedExcess(relaid(40), column)).toBe(Number.POSITIVE_INFINITY);
-    expect(wantsStage(true, [relaid(-30)], true, column)).toBe(true);
+  // A graph laid out again for the stage's taller viewport asks what that
+  // drawing needs, which says nothing of the shared layout. It kept the
+  // stage, sent again small enough to read whole in its share, until
+  // another primary came (phone-tidy open 3). It is weighed as it would be
+  // laid out for the viewport it had there: the word the shared layout
+  // would give, so nothing it decides the shared layout undoes.
+  it('weighs a graph laid out again for the stage by what it would ask laid out for its shared viewport', () => {
+    const graph = stageReport({ excess: 600 - 374, viewport: 374 }, true, column, undefined);
+    // What it asks laid out for a viewport `height` tall: `shared` for the shared one's.
+    const asked: number[] = [];
+    const laidOut = (shared: number) => (height: number) => {
+      asked.push(height);
+      return height === 374 ? shared : height === 394 ? shared - 20 : 9999;
+    };
+    // On the stage (482 px) it reads whole, whatever it would ask in its share.
+    const relaid = (shared: number) => stageReport({ excess: -30, viewport: 482, relaid: laidOut(shared) }, false, column, graph);
+    expect(sharedExcess(relaid(300), column)).toBe(300 - 374);
+    expect(asked).toEqual([374]);
+    expect(sharedExcess(relaid(400), column)).toBe(400 - 374);
+    // The stage resized: the shared viewport moved with its column.
+    expect(sharedExcess(relaid(400), column + 20)).toBe(380 - 394);
+    // Folded, it gives the stage back once it would read whole in its share, with the same room to spare as any content.
+    expect(wantsStage(true, [relaid(300)], true, column)).toBe(false);
+    expect(wantsStage(true, [relaid(374 + UNSTAGE_UNDER)], true, column)).toBe(false);
+    expect(wantsStage(true, [relaid(374 + UNSTAGE_UNDER + 1)], true, column)).toBe(true);
+    // Never measured in the shared layout, it cannot tell that viewport: past even the stage is past it for certain.
+    expect(sharedExcess(stageReport({ excess: -30, viewport: 482, relaid: laidOut(300) }, false, column, undefined), column)).toBeNull();
+    expect(sharedExcess(stageReport({ excess: 40, viewport: 482, relaid: laidOut(300) }, false, column, undefined), column)).toBe(Number.POSITIVE_INFINITY);
   });
 
   it('keeps the layout it has while a part cannot tell', () => {
@@ -248,6 +268,38 @@ describe('a primary that outgrows a rail standing under it', () => {
     stagedViewport = 797;
     settle();
     expect(page.querySelector('.content-grid--staged')).not.toBeNull();
+    settle();
+    expect(page.querySelector('.content-grid--staged')).not.toBeNull();
+  });
+
+  // The same graph sent again small: on the stage it reads whole, and laid
+  // out for its share it would too. It kept the stage until another
+  // primary came (phone-tidy open 3).
+  it('gives the rail back when the same graph is sent again small enough to read whole in its share', () => {
+    const page = render([...fixtures.pipeline]);
+    expect(page.querySelector('.content-grid--staged')).not.toBeNull();
+    act(() => runActions([
+      { op: 'show', id: 'pipeline', type: 'diagram', role: 'primary', data: { mode: 'graph', nodes: [{ id: 'lint', label: 'LINT' }, { id: 'unit', label: 'UNIT' }, { id: 'visual', label: 'VISUAL' }], edges: [{ from: 'lint', to: 'unit' }, { from: 'unit', to: 'visual' }] } },
+    ]));
+    settle();
+    settle();
+    expect(page.querySelector('.content-grid--staged')).toBeNull();
+    expect(page.querySelector('.content-rail--foldable')).toBeNull();
+    // And the shared layout keeps it there: it does not take the stage again.
+    settle();
+    expect(page.querySelector('.content-grid--staged')).toBeNull();
+  });
+
+  it('keeps the stage when the same graph is sent again still too large for its share', () => {
+    const page = render([...fixtures.pipeline]);
+    expect(page.querySelector('.content-grid--staged')).not.toBeNull();
+    const pipeline = fixtures.pipeline[0] as Extract<ControllerAction, { op: 'show' }>;
+    const data = pipeline.data as { nodes: Array<{ id: string }>; edges: Array<{ from: string; to: string }> };
+    // One stage fewer: still forty-odd steps.
+    const nodes = data.nodes.slice(1);
+    const kept = new Set(nodes.map((node) => node.id));
+    act(() => runActions([{ ...pipeline, data: { ...data, nodes, edges: data.edges.filter((edge) => kept.has(edge.from) && kept.has(edge.to)) } } as ControllerAction]));
+    settle();
     settle();
     expect(page.querySelector('.content-grid--staged')).not.toBeNull();
   });

@@ -55,6 +55,7 @@ function SceneContent({
         />
         <FocusLayer
           object={focusedObject}
+          objects={state.agentObjects}
           notes={focusNotes(state, focusedObject)}
           onClose={() => dispatch({ op: "focus", id: null })}
         />

@@ -305,15 +305,26 @@ layout. One whose content asks for more gets the stage's height:
   need on the line does not fold and unfold as it redraws. So a primary
   sent again with less in it (a week with one appointment left) gives the
   stage back: a viewport that stays the same drawing stays mounted across
-  the fold, and keeps what it measured in the shared layout. A graph laid
-  out again for the stage's taller viewport, or a drawing the stage's
-  height turns into another (a calendar too short for its grid in its
-  share draws its agenda there, and the grid on the stage), says nothing
-  of the shared layout unless it overflows even the stage, and a
-  primitive that cannot tell yet (a drawing whose fit has not followed
-  its box) leaves the layout as it is: such a primary keeps the stage
-  until another takes its place. A new primary is measured first in the
-  shared layout.
+  the fold, and keeps what it measured in the shared layout. A graph or
+  a sequence is laid out again for its viewport's height, so what it asks
+  on the stage is the stage's drawing; it is weighed instead by what it
+  would ask laid out for the viewport it had in the shared layout (a
+  drawing says, beside what it asks, what it would ask in a viewport of
+  any height at its width). That is the word the shared layout then
+  gives, so a graph sent again small enough for its share gives the
+  stage back once, and the share does not take it again. A drawing the
+  stage's height turns into another cannot say so: a calendar too short
+  for its grid in its share draws its agenda there and the grid on the
+  stage (on portrait screens under some 600 px tall), and what the
+  agenda would ask is the height of its rows as the browser lays out
+  their wrapped words, which the page does not know without drawing the
+  agenda. Its grid, a viewport mounted on the stage with no measure from
+  the shared layout, says nothing of the share unless it overflows even
+  the stage, so such a calendar keeps the stage until another primary
+  takes its place: given back on a guess, it would fold again whenever
+  the guess fell short. A primitive that cannot tell yet (a drawing whose
+  fit has not followed its box) leaves the layout as it is. A new primary
+  is measured first in the shared layout.
   Opening the rail changes nothing of this. A landscape stage, the rail
   beside the primary, never folds.
 - **The rail folds to a strip under the primary, down to the footer's
@@ -433,7 +444,8 @@ the tech face for states, days and counts, no cards.
 is drawn, as a diagram marks the node a note names, while that note is the
 one the page draws (the rail's, or the one focus keeps): the item carries
 the NOTE badge, the card's twin, and the card's `TARGET` line names it in
-its object's words, on a line of its own. A note the rail does not show
+its object's words, the badge beside it, on a line of its own where it
+does not fit beside the tag. A note the rail does not show
 marks nothing, so a badge always has its card on screen. Every item
 element carries `data-item`, the name a note uses for it, which is also
 what the list viewport counts.
@@ -584,8 +596,27 @@ chart with labels (`TARGET / FRONTEND VISUAL / THIS RUN`), the x axis's name
 and the value on any other (`TARGET / EPOCH 32 / VAL LOSS`), and the series
 wherever the anchor names one or the chart draws more than one. An anchor
 with no `x` names its series; one that names no series the chart carries
-and no `x`, or no point the chart draws, names the chart: its `title`, or
-`CHART`.
+and no `x`, or no point the chart draws, names the chart, as a card names
+any object (below).
+
+**What a card names.** Every card's `TARGET` line, wherever it stands (on a
+chart, in the band, in the rail, beside a focused object, or a note drawn as
+an object of its own), names what its note is about in the words of the object
+its anchor names, never an id (`noteTarget`,
+`apps/frontend/src/app/noteItems.ts`): the point on a chart, as above; a
+diagram's node or a sequence's actor by its label; a list's item in the list's
+words (below); and otherwise the object itself, by the first of its `title`,
+`subject`, `label`, `alt` and `location` that is not blank (the field the
+agent's view names it by: a table's title, a document's subject, a metric's or
+a progress's label, an image's alt text where it has no title, a forecast's
+place); where it carries none, what the page shows of it in their stead
+(code's `file`, a note's `tag`, `SEQUENCE` for a sequence), or else its type's
+name (`TABLE`, `CHART`). A node, an actor or an item the object holds is
+marked where the object is drawn, and the card carries the NOTE badge that
+matches the mark (a calendar's event only where its view reaches the event's
+days: one past them is named, and nothing marks it, so its card has no badge);
+a node or an item it does not hold marks nothing, and the card names the
+object. A note about no object on stage has no `TARGET` line.
 
 On every kind of chart a card lies wholly inside the plot, a few pixels in
 from its border, in clear space, or wholly outside it, never across it. Its

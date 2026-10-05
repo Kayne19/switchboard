@@ -148,7 +148,7 @@ describe('what a drawing asks of the stage', () => {
       const root = createRoot(host);
       act(() => root.render(
         <StageDemandContext.Provider value={(_key, need) => heard.push(need?.excess ?? null)}>
-          <DrawingViewport drawing={drawing} fit={fit} map={map} ariaLabel="d"><rect /></DrawingViewport>
+          <DrawingViewport drawing={drawing} fit={fit} laidOutFor={() => ({ drawing, fit })} map={map} ariaLabel="d"><rect /></DrawingViewport>
         </StageDemandContext.Provider>,
       ));
       act(() => root.unmount());
