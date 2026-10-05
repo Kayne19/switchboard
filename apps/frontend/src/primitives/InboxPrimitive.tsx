@@ -4,6 +4,7 @@ import { parseTimeValue, type TimeValue } from '../controller/validation';
 import { ListViewport } from './ListViewport';
 import { NoteBadge } from './NoteMarker';
 import { clockText, dayText, daysFrom, readToday } from './timeLabels';
+import { MetaTitle } from './MetaTitle';
 
 /**
  * Where an inbox is drawn decides how much of each message shows:
@@ -129,9 +130,10 @@ function useListMeasure(boxRef: RefObject<HTMLDivElement | null>, scrollRef: Ref
  * message is strong and carries the orange mark; a flagged one the flag; a
  * semantic tint runs down its edge. A list that outgrows its slot scrolls
  * inside its frame with the list viewport's counts, and opens on the
- * message a note names (`marked`), which carries the NOTE badge.
+ * message a note names (`marked`), which carries the NOTE badge. `framed`:
+ * the scene frame above shows the title (MetaTitle).
  */
-export function InboxPrimitive({ data, variant = 'full', marked }: { data: InboxData; variant?: InboxVariant; marked?: string }) {
+export function InboxPrimitive({ data, variant = 'full', marked, framed = false }: { data: InboxData; variant?: InboxVariant; marked?: string; framed?: boolean }) {
   const today = readToday(data.today);
   const counts = inboxCounts(data);
   const boxRef = useRef<HTMLDivElement>(null);
@@ -140,7 +142,7 @@ export function InboxPrimitive({ data, variant = 'full', marked }: { data: Inbox
   const layout = inboxLayout(variant, width, em);
   const head = (
     <div className="inbox-primitive__meta tech micro">
-      <span className="inbox-primitive__title" data-object-title>{data.title ?? 'INBOX'}</span>
+      <MetaTitle title={data.title ?? 'INBOX'} framed={framed} className="inbox-primitive__title" />
       <span className="inbox-primitive__counts">
         {counts.messages} {counts.messages === 1 ? 'MESSAGE' : 'MESSAGES'}
         {counts.unread > 0 ? <span className="inbox-primitive__unread"> / {counts.unread} UNREAD</span> : null}

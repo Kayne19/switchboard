@@ -488,7 +488,7 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         context: data.context ?? 'TABLE',
         footer: 'FRAME / INTERRUPTED RAILS',
         caption: sceneCaption(primary, 'DISPLAY / TABLE'),
-        main: slot('table-object', <TablePrimitive data={data} />),
+        main: slot('table-object', <TablePrimitive data={data} framed />),
       };
     }
     case 'image': {
@@ -526,7 +526,7 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         context: data.context ?? 'TASKS',
         footer: 'DISPLAY / TASKS',
         caption: sceneCaption(primary, `TASKS / ${data.items.length} ${data.items.length === 1 ? 'ITEM' : 'ITEMS'}`),
-        main: slot('tasks-object', <TasksPrimitive data={data} marked={markedItem(note, primary.id)} />, <TechFrame variant="panel" />),
+        main: slot('tasks-object', <TasksPrimitive data={data} marked={markedItem(note, primary.id)} framed />, <TechFrame variant="panel" />),
       };
     }
     case 'inbox': {
@@ -539,7 +539,7 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         context: data.context ?? 'INBOX',
         footer: 'DISPLAY / INBOX',
         caption: sceneCaption(primary, `INBOX / ${counts.messages} ${counts.messages === 1 ? 'MESSAGE' : 'MESSAGES'}`),
-        main: slot('inbox-object', <InboxPrimitive data={data} marked={markedItem(note, primary.id)} />, <TechFrame variant="panel" />),
+        main: slot('inbox-object', <InboxPrimitive data={data} marked={markedItem(note, primary.id)} framed />, <TechFrame variant="panel" />),
       };
     }
     // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.

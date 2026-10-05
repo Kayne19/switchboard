@@ -39,6 +39,7 @@ import {
   type TimeAxis,
 } from './calendarLayout';
 import { ListViewport } from './ListViewport';
+import { MetaTitle } from './MetaTitle';
 import { NoteBadge } from './NoteMarker';
 
 // A calendar in the four views the agent picks (docs/display-tool.md,
@@ -888,25 +889,20 @@ export function calendarFrame(data: CalendarData): { title: string; subtitle: st
   };
 }
 
-/**
- * `framed`: the scene frame above names the calendar (the main slot), so the
- * meta line says only what the view shows; in an aux cell or focus, where
- * no frame names it, the meta line leads with its title.
- */
+/** `framed`: the scene frame above shows the calendar's title (the main slot); see MetaTitle. */
 export function CalendarPrimitive({ data, marked, focused = false, framed = false }: { data: CalendarData; marked?: string; focused?: boolean; framed?: boolean }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const size = useElementSize(bodyRef);
   const model = useMemo(() => calendarModel(data), [data]);
   const choice = chooseLayout(data, size, model.days.length, gridHeadPx(laneCount(dayBars(model.placed, model.days))));
   const count = data.events.length;
-  // The meta line: what is shown and how much. The title leads it only
-  // where no scene frame shows it already (an aux cell, focus).
-  const titled = !framed;
+  // The meta line: what is shown and how much, led by the title only where
+  // no scene frame shows it already (MetaTitle).
   const meta = (
     <div className="calendar__meta tech micro">
-      {titled ? <span className="calendar__meta-title">{data.title ?? `${VIEW_NAMES[data.view]} / ${rangeText(data)}`}</span> : null}
+      <MetaTitle title={data.title ?? `${VIEW_NAMES[data.view]} / ${rangeText(data)}`} framed={framed} className="calendar__meta-title" />
       <span className="calendar__meta-range">
-        {(!titled || data.title) && model.days.length > 1 ? `${rangeText(data)} / ` : ''}
+        {(framed || data.title) && model.days.length > 1 ? `${rangeText(data)} / ` : ''}
         {count} {count === 1 ? 'EVENT' : 'EVENTS'}
         {model.outside > 0 ? ` / ${model.outside} OUT OF VIEW` : ''}
       </span>
