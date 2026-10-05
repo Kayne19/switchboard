@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import type { NoteData, Semantic, SequenceDiagramData } from '../controller/types';
 import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
+import { NoteMarker } from './NoteMarker';
 import { LABEL_HEIGHT, SUB_LINE_HEIGHT, viewSequence, type LaidOutMessage, type Point } from './sequenceLayout';
 
 const colors: Record<Semantic, string> = {
@@ -61,13 +62,17 @@ export function SequencePrimitive({
   note?: NoteData | null;
 }) {
   const { hostRef, width, height, scrollbar } = useDrawingViewport();
-  // The geometry follows the viewport's shape, and the drawing is fitted to
-  // it, or scrolled in it once fitting would make it too small to read.
-  const { layout, fit } = useMemo(() => viewSequence(data, { width, height, scrollbar }), [data, width, height, scrollbar]);
   // The anchor's target is part of the protocol: a note aimed at another
   // object that happens to name one of these actors is not ours. The note
-  // itself stays in the rail; the actor it names is marked.
+  // itself stays in the rail; the actor it names carries the NOTE marker,
+  // the rail badge's twin, in its header.
   const anchoredActorId = note?.anchor && note.anchor.target === id ? note.anchor.node : undefined;
+  // The geometry follows the viewport's shape, and the drawing is fitted to
+  // it, or scrolled in it once fitting would make it too small to read.
+  const { layout, fit } = useMemo(
+    () => viewSequence(data, { width, height, scrollbar }, anchoredActorId),
+    [data, width, height, scrollbar, anchoredActorId],
+  );
   // Messages resolve in order, but a long exchange is not made to wait on
   // them: the stagger shrinks so the last one is in within about a second.
   const stagger = Math.min(60, Math.floor(900 / Math.max(1, layout.messages.length)));
@@ -76,7 +81,7 @@ export function SequencePrimitive({
   // pinned over the viewport's top once the drawing scrolls under them.
   const actors = (
     <g className="sequence-actors">
-      {layout.actors.map(({ actor, box, labelLines, labelY, subY, subLines }, index) => {
+      {layout.actors.map(({ actor, box, labelLines, labelY, subY, subLines, marker }, index) => {
         const isAnchored = anchoredActorId !== undefined && actor.id === anchoredActorId;
         const color = isAnchored ? 'var(--orange)' : colors[actor.semantic ?? 'paper'];
         const { width, height } = box;
@@ -126,6 +131,7 @@ export function SequencePrimitive({
                   ))}
                 </text>
               ) : null}
+              {marker ? <NoteMarker box={marker} className="sequence-actor__marker" /> : null}
             </g>
           </g>
         );

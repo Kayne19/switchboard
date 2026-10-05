@@ -2,6 +2,7 @@ import { useEffect, useMemo } from 'react';
 import type { DiagramData, NoteData, Semantic } from '../controller/types';
 import { ARROW_LENGTH, cornerTagBoxes, nodeFramePath, viewDiagram, type DiagramLayout, type Point } from './diagramLayout';
 import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
+import { NoteMarker } from './NoteMarker';
 
 const colors: Record<Semantic, string> = {
   red: 'var(--red)',
@@ -243,14 +244,7 @@ export function DiagramPrimitive({
                       )}
                     </g>
                   ) : null}
-                  {tags.marker ? (
-                    <g className="diagram-node__marker" transform={`translate(${tags.marker.x}, ${tags.marker.y})`}>
-                      <rect width={tags.marker.width} height={tags.marker.height} rx="2" fill="rgba(var(--orange-rgb), 0.25)" stroke="var(--orange)" strokeWidth="1" />
-                      <text x={tags.marker.width / 2} y="11" textAnchor="middle" fill="var(--orange)" fontSize="9" fontWeight="700" fontFamily="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" letterSpacing="0.05em">
-                        NOTE
-                      </text>
-                    </g>
-                  ) : null}
+                  {tags.marker ? <NoteMarker box={tags.marker} className="diagram-node__marker" /> : null}
                 </g>
               </g>
             );

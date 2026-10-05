@@ -340,3 +340,67 @@ describe('a sequence read in its viewport', () => {
     expect(fit.scrollY).toBe(true);
   });
 });
+
+
+describe('the NOTE marker on the actor a rail note names', () => {
+  // A rail note badge reads NOTE; the actor its note names carries the same
+  // badge, as a graph's node does, inside its header and clear of its words.
+  const anchored = (layout: ReturnType<typeof layoutSequence>, id: string) => layout.actors.find((actor) => actor.actor.id === id)!;
+  const noSubs: SequenceDiagramData = sequence(['caller', 'pbx', 'agent'], [['caller', 'pbx', 'route'], ['pbx', 'agent', 'launch']]);
+  // The anchored actor has the most sub lines of any, so its header has no
+  // spare room under its words: the headers must grow.
+  const deepest: SequenceDiagramData = {
+    ...handoffDiagram,
+    actors: handoffDiagram.actors.map((actor) => (actor.id === 'pbx' ? { ...actor, sub: 'SWITCHBOARD / ROUTING / THE ACTIVE LEG / handle()' } : actor)),
+  };
+  const cases: Array<[string, SequenceDiagramData, string, SequenceOrientation, number | undefined]> = [
+    ['trace / landscape', traceDiagram, 'pbx', 'landscape', undefined],
+    ['trace / portrait', traceDiagram, 'pbx', 'portrait', undefined],
+    ['trace / a phone, headers staggered', traceDiagram, 'pbx', 'portrait', 330 / 0.875],
+    ['trace / an aux cell', traceDiagram, 'caller', 'landscape', 420 / 0.778],
+    ['handoff / landscape', handoffDiagram, 'pbx', 'landscape', undefined],
+    ['handoff / a phone', handoffDiagram, 'agent', 'portrait', 330 / 0.875],
+    ['no subs', noSubs, 'pbx', 'landscape', undefined],
+    ['the deepest header', deepest, 'pbx', 'portrait', undefined],
+  ];
+  for (const [name, data, id, orientation, width] of cases) {
+    it(`${name}: inside the header, under its words, clear of the frame's corners`, () => {
+      const layout = layoutSequence(data, orientation, width === undefined ? undefined : { width }, id);
+      const actor = anchored(layout, id);
+      const marker = actor.marker!;
+      expect(marker, 'marked').not.toBeNull();
+      expect(marker.width).toBe(30);
+      expect(marker.height).toBe(15);
+      const { width: boxWidth, height } = actor.box;
+      expect(marker.x, 'left').toBeGreaterThanOrEqual(8 - 1e-9);
+      expect(marker.x + marker.width, 'right').toBeLessThanOrEqual(boxWidth - 8 + 1e-9);
+      expect(marker.y + marker.height, 'bottom').toBeLessThanOrEqual(height - 8 + 1e-9);
+      // The frame's bottom-left step runs from (0, height - 12) to (12, height).
+      expect(height - 12 + marker.x - (marker.y + marker.height), 'clear of the step').toBeGreaterThanOrEqual(4);
+      // Its words end where their last line's centre is, half a line on.
+      const words = actor.subLines.length > 0
+        ? actor.subY + (actor.subLines.length - 0.5) * 11
+        : actor.labelY + (actor.labelLines.length - 0.5) * layout.actorLabelLineHeight;
+      expect(marker.y, 'under the words').toBeGreaterThanOrEqual(words + 5 - 1e-9);
+      for (const other of layout.actors) if (other !== actor) expect(other.marker).toBeNull();
+      // Every header grows alike, so the lifelines still start level.
+      expect(new Set(layout.actors.map((other) => other.box.height)).size).toBe(1);
+    });
+  }
+
+  it('changes nothing when no note names an actor of this drawing', () => {
+    for (const orientation of ['landscape', 'portrait'] as const) {
+      for (const width of [undefined, 330 / 0.875]) {
+        const frame = width === undefined ? undefined : { width };
+        const plain = layoutSequence(traceDiagram, orientation, frame);
+        expect(layoutSequence(traceDiagram, orientation, frame, 'nobody')).toEqual(plain);
+        expect(plain.actors.every((actor) => actor.marker === null)).toBe(true);
+      }
+    }
+  });
+
+  it('is carried through a view of the drawing in its viewport', () => {
+    const { layout } = viewSequence(traceDiagram, { width: 330, height: 374, scrollbar: 0 }, 'pbx');
+    expect(anchored(layout, 'pbx').marker).not.toBeNull();
+  });
+});
