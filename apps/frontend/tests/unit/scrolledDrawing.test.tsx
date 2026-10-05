@@ -192,14 +192,88 @@ describe('a scrolled graph at rest', () => {
     });
     expect(scroller.scrollLeft).toBe(before + 60);
     expect(scroller.style.scrollSnapType).toBe('none');
-    act(() => vi.advanceTimersByTime(400));
+    act(() => vi.advanceTimersByTime(200));
     expect(stops).toContain(scroller.scrollLeft);
     expect(scroller.scrollLeft).toBeGreaterThan(before);
+    // The stops hold it again once the smooth settling has ended.
+    expect(scroller.style.scrollSnapType).toBe('none');
+    act(() => vi.advanceTimersByTime(1000));
+    expect(scroller.style.scrollSnapType).toBe('');
+  });
+
+  it('hears a wheel over its map and its counts, not only over the drawing', () => {
+    vi.useFakeTimers();
+    size = { width: 914, height: 526 };
+    render(<DiagramPrimitive data={topologyDiagram} id="topology" note={gateNote} />);
+    const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
+    const before = scroller.scrollLeft;
+    for (const target of [host.querySelector('.drawing-viewport__map')!, host.querySelector('.drawing-viewport__rim--left')!]) {
+      act(() => {
+        target.dispatchEvent(new WheelEvent('wheel', { deltaY: -40, bubbles: true, cancelable: true }));
+      });
+    }
+    expect(scroller.scrollLeft).toBe(before - 80);
+    act(() => vi.advanceTimersByTime(1000));
+  });
+
+  it('settles without the smooth scroll when the reader prefers reduced motion', () => {
+    vi.useFakeTimers();
+    const matchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({ matches: query.includes('reduce'), media: query })) as unknown as typeof window.matchMedia;
+    const calls: Array<ScrollToOptions | undefined> = [];
+    const scrollTo = HTMLElement.prototype.scrollTo;
+    HTMLElement.prototype.scrollTo = function record(this: HTMLElement, options?: ScrollToOptions | number) {
+      if (typeof options === 'object') calls.push(options);
+      return (scrollTo as (options?: ScrollToOptions) => void).call(this, options as ScrollToOptions);
+    } as typeof HTMLElement.prototype.scrollTo;
+    try {
+      size = { width: 914, height: 526 };
+      render(<DiagramPrimitive data={pipelineDiagram} id="pipeline" />);
+      const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
+      act(() => {
+        scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: 60, bubbles: true, cancelable: true }));
+      });
+      act(() => vi.advanceTimersByTime(200));
+      act(() => host.querySelector<HTMLElement>('.drawing-viewport__rim--right')?.click());
+      expect(calls.length).toBeGreaterThanOrEqual(2);
+      expect(calls.every((call) => call?.behavior === 'auto')).toBe(true);
+      expect(scroller.style.scrollSnapType).toBe('');
+    } finally {
+      window.matchMedia = matchMedia;
+    }
+  });
+
+  it('moves only for the main button on its map', () => {
+    size = { width: 914, height: 526 };
+    render(<DiagramPrimitive data={topologyDiagram} id="topology" note={gateNote} />);
+    const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
+    const before = scroller.scrollLeft;
+    const map = host.querySelector<HTMLElement>('.drawing-viewport__map')!;
+    act(() => {
+      map.dispatchEvent(new MouseEvent('pointerdown', { button: 2, clientX: 0, clientY: 0, bubbles: true }));
+    });
+    expect(scroller.scrollLeft).toBe(before);
     expect(scroller.style.scrollSnapType).toBe('');
   });
 });
 
 describe('a long exchange scrolled down', () => {
+  it('keeps the reader\'s place when a note comes to name an actor and the headers grow to hold its marker', async () => {
+    size = { width: 914, height: 526 };
+    // Actors with no sub: their headers grow to hold the NOTE marker.
+    const plain = { ...traceDiagram, actors: traceDiagram.actors.map(({ sub: _sub, ...actor }) => actor) };
+    render(<SequencePrimitive data={plain} id="trace" />);
+    const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
+    act(() => {
+      scroller.scrollTop = 600;
+      scroller.dispatchEvent(new Event('scroll'));
+    });
+    const grown = <SequencePrimitive data={plain} id="trace" note={{ segments: [{ text: 'x' }], anchor: { target: 'trace', node: 'pbx' } }} />;
+    act(() => root.render(grown));
+    expect(host.querySelector('.sequence-actor__marker')).not.toBeNull();
+    expect(scroller.scrollTop).toBe(600);
+  });
+
   it('counts the messages below on its bottom rail, and above under the pinned headers once scrolled', async () => {
     size = { width: 914, height: 526 };
     render(<SequencePrimitive data={traceDiagram} id="trace" />);

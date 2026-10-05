@@ -1694,10 +1694,12 @@ button {
   margin: auto;
 }
 /* At rest the drawing stands at a stop (restStops): each stop is a band
-   reaching to the next, so the drawing settles at the band's start, and a
-   band longer than the view (a part larger than it) scrolls freely
-   through. A wheel, a trackpad or a drag on the map lets go of the stops
-   (DrawingViewport sets the scroller's own snap type) until it pauses. */
+   reaching to the next, and the browser settles the drawing at a band's
+   start. The end marker holds the content open to where the last stop
+   needs it (restEnd), a little past the drawing's end when its last
+   place to rest must not cut a part. A wheel, a trackpad or a drag on
+   the map lets go of the stops (DrawingViewport sets the scroller's own
+   snap type) until it pauses. */
 .drawing-viewport[data-scroll="x"] > .drawing-viewport__scroll {
   scroll-snap-type: x mandatory;
 }
@@ -1721,6 +1723,12 @@ button {
   position: absolute;
   top: 0;
   left: 0;
+}
+.drawing-viewport__end {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
 }
 .drawing-viewport__pinned {
   position: absolute;

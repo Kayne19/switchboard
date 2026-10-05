@@ -14,6 +14,7 @@ import {
   placeExits,
   placed,
   readRim,
+  restEnd,
   restStops,
   settleStop,
   tagLength,
@@ -27,9 +28,10 @@ import {
 } from './drawingScroll';
 
 // How much room the viewport's scroll bar takes, measured once on a probe
-// styled as a scrolling viewport. The drawing's own map and rims stand in
+// styled as a scrolling viewport. The drawing's own map and rails stand in
 // for a bar, so the stylesheet hides it and this reads 0; a browser that
-// will not hide it still gets its room.
+// will not hide it still gets its room in the fit (drawingFit), though
+// the rails and fades do not keep off it.
 let scrollbarThickness: number | null = null;
 function measureScrollbar(): number {
   if (scrollbarThickness !== null) return scrollbarThickness;
@@ -78,8 +80,8 @@ const sameReading = (a: Reading | null, b: Reading) => a !== null && a.left === 
 
 const SCROLL_KEYS = new Set([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown', 'Home', 'End']);
 // A fade reaches past its rail at least this far, and covers what its edge
-// cuts, up to this share of the view: past that a part mostly in view stays
-// readable, its cut end faded.
+// cuts, up to this share of the view: a part mostly in view keeps the rest
+// of itself clear, only its cut end faded.
 const FADE_MIN = RAIL + 10;
 const FADE_MAX = 0.22;
 // The fade reaches this far past the inner edge of what it covers, so the
@@ -90,9 +92,12 @@ const FADE_LEAD = 10;
 const MAP_MARGIN = 6;
 const MAP_PAD = 4;
 const MAP_CUT = 7;
-// How long input that moves the drawing freely (a mapped wheel, a drag on
-// the map) must pause before the drawing settles on a stop.
+// How long input that moves the drawing freely (a wheel, a drag on the
+// map) must pause before the drawing settles on a stop; and how long its
+// smooth settling may take before the stops hold it again, where a browser
+// does not say when a scroll ends.
 const SETTLE_MS = 140;
+const SETTLED_MS = 700;
 
 // A stop's band, CSS pixels: from the stop to the next (or to the
 // content's end), where the browser settles the drawing at its start.
@@ -151,6 +156,7 @@ export function DrawingViewport({
   ariaLabel: string;
   children: ReactNode;
 }) {
+  const viewportRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef<HTMLDivElement>(null);
   const [reading, setReading] = useState<Reading | null>(null);
@@ -188,9 +194,6 @@ export function DrawingViewport({
   // not fill) and its parts there.
   const boxWidth = reading?.width ?? 0;
   const boxHeight = reading?.height ?? 0;
-  // The scroll content: the drawing, or the box across an axis the drawing does not fill.
-  const contentWidth = Math.max(boxWidth, fit.width);
-  const contentHeight = Math.max(boxHeight, fit.height);
   const place = useMemo<Placement | null>(() => {
     if (!boxWidth || !boxHeight) return null;
     return {
@@ -203,29 +206,45 @@ export function DrawingViewport({
   const marks = useMemo(() => (place ? map.marks.map((mark) => placed(mark, place)) : []), [map, place]);
   // The content's extent is the drawing's, or the box's across an axis the
   // drawing does not fill: read from the fit, never from the scroller,
-  // whose extent the stops themselves could stretch.
+  // whose extent the stops themselves stretch. At rest it may reach a
+  // little past the drawing's end (restEnd), so the last place to rest
+  // cuts no part either.
   const stopsFor = useCallback(
-    (box: Pick<Reading, 'width' | 'height'>, boxes: View[], labels: View[]) => ({
-      x: fit.scrollX
-        ? restStops(boxes.map((part): Span => [part.left, part.right]), Math.max(box.width, fit.width), box.width, 0, labels.map((mark): Span => [mark.left, mark.right]))
-        : [0],
-      y: fit.scrollY
-        ? restStops(boxes.map((part): Span => [part.top, part.bottom]), Math.max(box.height, fit.height), box.height, pinnedDepth, labels.map((mark): Span => [mark.top, mark.bottom]))
-        : [0],
-    }),
+    (box: Pick<Reading, 'width' | 'height'>, boxes: View[], labels: View[]) => {
+      const across = (part: View): Span => [part.left, part.right];
+      const down = (part: View): Span => [part.top, part.bottom];
+      const endX = fit.scrollX ? restEnd(boxes.map(across), Math.max(box.width, fit.width), box.width, 0, labels.map(across)) : box.width;
+      const endY = fit.scrollY ? restEnd(boxes.map(down), Math.max(box.height, fit.height), box.height, pinnedDepth, labels.map(down)) : box.height;
+      return {
+        x: fit.scrollX ? restStops(boxes.map(across), endX, box.width, 0, labels.map(across)) : [0],
+        y: fit.scrollY ? restStops(boxes.map(down), endY, box.height, pinnedDepth, labels.map(down)) : [0],
+        endX,
+        endY,
+      };
+    },
     [fit.scrollX, fit.scrollY, fit.width, fit.height, pinnedDepth],
   );
   // They follow the box and the drawing, not where the reader stands.
   const stops = useMemo(() => (place ? stopsFor({ width: boxWidth, height: boxHeight }, parts, marks) : null), [place, boxWidth, boxHeight, parts, marks, stopsFor]);
+  // The scroll content at rest: the drawing (or the box across an axis the
+  // drawing does not fill), and past its end what the last stop needs.
+  const contentWidth = stops?.endX ?? Math.max(boxWidth, fit.width);
+  const contentHeight = stops?.endY ?? Math.max(boxHeight, fit.height);
+  const extent = useRef({ width: contentWidth, height: contentHeight });
+  extent.current = { width: contentWidth, height: contentHeight };
 
   // The drawing opens on its lead region when it is first drawn and
   // whenever what is drawn changes shape (its size, its scale, or the
   // region it leads with), at the place to rest nearest centring it. An
   // update that leaves those alone (a node's state, a resize that does not
   // move the scale) keeps the reader where they are.
+  // A drawing with no lead (an exchange read from its start) opens at its
+  // start once, and is not sent back there when it only grows or shrinks:
+  // a message added, or headers grown to hold a NOTE marker.
   const leadX = lead ? lead.x + lead.width / 2 : null;
   const leadY = lead ? lead.y + lead.height / 2 : null;
-  const shape = `${drawing.width}x${drawing.height}@${fit.scale}/${axis}/${leadX},${leadY}`;
+  const shape = `${lead ? `${drawing.width}x${drawing.height}` : 'start'}@${fit.scale}/${axis}/${leadX},${leadY}`;
+  const endRef = useRef<HTMLSpanElement>(null);
   const shownShape = useRef<string | null>(null);
   const [openedAt, setOpenedAt] = useState({ left: 0, top: 0 });
   useLayoutEffect(() => {
@@ -240,6 +259,9 @@ export function DrawingViewport({
       const leadBox = lead ? placed(lead, opening) : null;
       const boxes = map.parts.map((part) => placed(part.box, opening));
       const opened = stopsFor(sizes, boxes, map.marks.map((mark) => placed(mark, opening)));
+      // The content's room at rest is made before the drawing is moved into it.
+      endRef.current?.style.setProperty('left', `${opened.endX - 1}px`);
+      endRef.current?.style.setProperty('top', `${opened.endY - 1}px`);
       element.scrollLeft = leadBox ? leadStop(opened.x, [leadBox.left, leadBox.right], sizes.width, 0, boxes.map((box): Span => [box.left, box.right])) : 0;
       element.scrollTop = leadBox ? leadStop(opened.y, [leadBox.top, leadBox.bottom], sizes.height, pinnedDepth, boxes.map((box): Span => [box.top, box.bottom])) : 0;
       setOpenedAt({ left: element.scrollLeft, top: element.scrollTop });
@@ -267,13 +289,26 @@ export function DrawingViewport({
         const sizes = { width: element.clientWidth, height: element.clientHeight };
         const now: Placement = { scale: fit.scale, offsetX: Math.max(0, (sizes.width - fit.width) / 2), offsetY: Math.max(0, (sizes.height - fit.height) / 2) };
         const resting = stopsFor(sizes, map.parts.map((part) => placed(part.box, now)), map.marks.map((mark) => placed(mark, now)));
+        const smooth = !reducedMotion();
         element.scrollTo({
           left: settleStop(resting.x, from.left, element.scrollLeft),
           top: settleStop(resting.y, from.top, element.scrollTop),
-          behavior: reducedMotion() ? 'auto' : 'smooth',
+          behavior: smooth ? 'smooth' : 'auto',
         });
+        // The stops hold it again once it has arrived: a browser may snap
+        // afresh when they come back, and should not mid-flight.
+        if (smooth) {
+          const hold = () => {
+            window.clearTimeout(fallback);
+            element.removeEventListener('scrollend', hold);
+            if (freeFrom.current === null) element.style.scrollSnapType = '';
+          };
+          const fallback = window.setTimeout(hold, SETTLED_MS);
+          element.addEventListener('scrollend', hold);
+          return;
+        }
+        element.style.scrollSnapType = '';
       }
-      if (element) element.style.scrollSnapType = '';
     }, SETTLE_MS);
   }, [map, fit.scale, fit.width, fit.height, stopsFor]);
   // The stops are let go on the element itself, at once: a scroll set
@@ -290,10 +325,12 @@ export function DrawingViewport({
 
   // A wheel or a trackpad moves the drawing freely, then it settles. A
   // wheel turned over a drawing that scrolls only across scrolls it across:
-  // a mouse has no other way there.
+  // a mouse has no other way there. It is heard over the whole viewport,
+  // the map and the rails' counts as well as the drawing.
   useEffect(() => {
     const element = scrollRef.current;
-    if (!element || axis === 'none') return;
+    const viewport = viewportRef.current;
+    if (!element || !viewport || axis === 'none') return;
     const onWheel = (event: WheelEvent) => {
       if (event.ctrlKey) return;
       const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? (axis === 'x' ? element.clientWidth : element.clientHeight) : 1;
@@ -302,10 +339,10 @@ export function DrawingViewport({
       if (axis === 'x' && Math.abs(dy) > Math.abs(dx)) [dx, dy] = [dy, 0];
       if (axis === 'x') dy = 0;
       if (axis === 'y') dx = 0;
-      // At its end that way, the wheel is not held: it may scroll what holds the drawing.
+      // At its end that way, the wheel is not held.
       const room = (delta: number, at: number, length: number) => (delta < 0 ? at > 0.5 : at < length - 0.5);
-      const maxLeft = Math.max(element.clientWidth, fit.width) - element.clientWidth;
-      const maxTop = Math.max(element.clientHeight, fit.height) - element.clientHeight;
+      const maxLeft = extent.current.width - element.clientWidth;
+      const maxTop = extent.current.height - element.clientHeight;
       if (!(dx && room(dx, element.scrollLeft, maxLeft)) && !(dy && room(dy, element.scrollTop, maxTop))) return;
       event.preventDefault();
       letGo();
@@ -313,9 +350,9 @@ export function DrawingViewport({
       element.scrollTop += dy;
       settle();
     };
-    element.addEventListener('wheel', onWheel, { passive: false });
-    return () => element.removeEventListener('wheel', onWheel);
-  }, [axis, fit.width, fit.height, letGo, settle]);
+    viewport.addEventListener('wheel', onWheel, { passive: false });
+    return () => viewport.removeEventListener('wheel', onWheel);
+  }, [axis, letGo, settle]);
 
   // Keys that scroll a focused viewport scroll it; they do not reach the
   // surface around it, which would take Space as "expand".
@@ -343,21 +380,24 @@ export function DrawingViewport({
     () => (reading ? { left: reading.left, top: reading.top + inset, right: reading.left + reading.width, bottom: reading.top + reading.height } : null),
     [reading, inset],
   );
-  const continues = useMemo<Record<Side, boolean>>(
-    () =>
-      reading
-        ? {
-            left: reading.left > 0.5,
-            right: reading.left + reading.width < Math.max(reading.width, fit.width) - 0.5,
-            top: reading.top > 0.5,
-            bottom: reading.top + reading.height < Math.max(reading.height, fit.height) - 0.5,
-          }
-        : { left: false, right: false, top: false, bottom: false },
-    [reading, fit.width, fit.height],
-  );
+  // An axis it overflows by no more than a rail is its own margin: it
+  // rests at its start (restStops) and has no rails.
+  const continues = useMemo<Record<Side, boolean>>(() => {
+    if (!reading) return { left: false, right: false, top: false, bottom: false };
+    const across = contentWidth - reading.width > RAIL;
+    const down = contentHeight - reading.height > RAIL;
+    return {
+      left: across && reading.left > 0.5,
+      right: across && reading.left + reading.width < contentWidth - 0.5,
+      top: down && reading.top > 0.5,
+      bottom: down && reading.top + reading.height < contentHeight - 0.5,
+    };
+  }, [reading, contentWidth, contentHeight]);
   const rim = useMemo(() => (view ? readRim(parts, view, continues, marks) : null), [parts, marks, view, continues]);
   // The map, for a drawing that scrolls far enough to need one, in the
-  // corner it covers least of, chosen when the drawing opens and kept.
+  // corner it covers least of, chosen where the drawing opens: it stays put
+  // while the reader scrolls, and is chosen again only when the box or the
+  // drawing changes.
   const mapBox = useMemo(
     () => (boxWidth && boxHeight && wantsMap(fit, { width: boxWidth, height: boxHeight }) ? mapSize(drawing, { width: boxWidth, height: boxHeight }) : null),
     [drawing, fit, boxWidth, boxHeight],
@@ -376,29 +416,37 @@ export function DrawingViewport({
     };
     return { left: text('left'), right: text('right'), top: text('top'), bottom: text('bottom') };
   }, [rim, map]);
-  const exits = useMemo(() => {
-    if (!reading || !place || !view || map.links.length === 0) return [];
-    // Along each rim, the tags keep off its count and off the map.
-    const along = (side: Side): Span[] => {
+  // Along each rail, what the map takes of it (when the map stands at that
+  // edge), and where the count stands: in the middle of the rest.
+  const rails = useMemo(() => {
+    const read = (side: Side) => {
       const vertical = side === 'left' || side === 'right';
-      const length = vertical ? reading.height : reading.width;
-      const text = rimTexts[side];
-      const room: Span[] = [];
-      if (text) {
-        const extent = tagLength(text.length);
-        const centre = vertical ? (inset + length) / 2 : length / 2;
-        room.push([centre - extent / 2 - 4, centre + extent / 2 + 4]);
-      }
+      const start = vertical ? inset : 0;
+      const end = vertical ? boxHeight : boxWidth;
+      let mapped: Span | null = null;
       if (mapBox && corner.includes(side)) {
         const mapLength = (vertical ? mapBox.height : mapBox.width) + 2 * MAP_PAD + 2 * MAP_MARGIN;
         const atEnd = vertical ? corner.startsWith('bottom') : corner.endsWith('right');
-        room.push(atEnd ? [length - mapLength, length] : [0, mapLength]);
+        mapped = atEnd ? [end - mapLength, end] : [start, start + mapLength];
       }
-      return room;
+      const free: Span = mapped ? (mapped[0] > start ? [start, mapped[0]] : [mapped[1], end]) : [start, end];
+      return { mapped, centre: (free[0] + free[1]) / 2 };
+    };
+    return { left: read('left'), right: read('right'), top: read('top'), bottom: read('bottom') };
+  }, [inset, boxWidth, boxHeight, mapBox, corner]);
+  const exits = useMemo(() => {
+    if (!reading || !place || !view || map.links.length === 0) return [];
+    // Along each rail, the names keep off its count and off the map.
+    const along = (side: Side): Span[] => {
+      const { mapped, centre } = rails[side];
+      const text = rimTexts[side];
+      const taken: Span[] = mapped ? [mapped] : [];
+      if (text) taken.push([centre - tagLength(text.length) / 2 - 4, centre + tagLength(text.length) / 2 + 4]);
+      return taken;
     };
     const found = findExits(parts, map.links, map.parts.map((part) => part.label), place, clearOf(view, continues));
     return placeExits(found, reading, reading, { left: along('left'), right: along('right'), top: along('top'), bottom: along('bottom') }, inset);
-  }, [map, reading, place, view, continues, parts, rimTexts, mapBox, corner, inset]);
+  }, [map, reading, place, view, continues, parts, rimTexts, rails, inset]);
 
   // The map: a tap or a drag centres the view where it points.
   const dragging = useRef(false);
@@ -421,6 +469,54 @@ export function DrawingViewport({
         }
       : null;
 
+  // The snap bands and the map's sketch change with the drawing and the
+  // box, not as the reader scrolls: they are not rebuilt every frame.
+  const bands = useMemo(
+    () =>
+      stops ? (
+        <div className="drawing-viewport__stops" aria-hidden="true">
+          {fit.scrollX
+            ? stops.x.map((stop, index) => (
+                <span
+                  key={`x${stop}`}
+                  className="drawing-viewport__stop"
+                  style={{ left: `${stop}px`, width: `${bandLength(stop, stops.x[index + 1], contentWidth)}px`, height: `${contentHeight}px`, scrollSnapAlign: 'none start' }}
+                />
+              ))
+            : null}
+          {fit.scrollY
+            ? stops.y.map((stop, index) => (
+                <span
+                  key={`y${stop}`}
+                  className="drawing-viewport__stop"
+                  style={{ top: `${stop}px`, height: `${bandLength(stop, stops.y[index + 1], contentHeight)}px`, width: `${contentWidth}px`, scrollSnapAlign: 'start none' }}
+                />
+              ))
+            : null}
+        </div>
+      ) : null,
+    [stops, fit.scrollX, fit.scrollY, contentWidth, contentHeight],
+  );
+  const sketch = useMemo(
+    () => (
+      <>
+        {map.sketch.lines.map((line, index) => (
+          <polyline key={`l${index}`} className="drawing-viewport__map-line" points={line.points.map((point) => `${point.x},${point.y}`).join(' ')} stroke={line.tone} />
+        ))}
+        {map.sketch.boxes.map((item, index) => (
+          <rect key={`b${index}`} className="drawing-viewport__map-box" x={item.box.x} y={item.box.y} width={item.box.width} height={item.box.height} fill={item.tone} />
+        ))}
+      </>
+    ),
+    [map],
+  );
+  // A drag on the map ends however the pointer leaves it.
+  const endDrag = () => {
+    if (!dragging.current) return;
+    dragging.current = false;
+    settle();
+  };
+
   const fadeDepth = (side: Side) => {
     const reach = rim?.[side];
     if (!reach || !reading) return 0;
@@ -429,7 +525,7 @@ export function DrawingViewport({
   };
 
   return (
-    <div className={`drawing-viewport${scrolling ? ' drawing-viewport--scrolling' : ''}`} data-scroll={axis}>
+    <div ref={viewportRef} className={`drawing-viewport${scrolling ? ' drawing-viewport--scrolling' : ''}`} data-scroll={axis}>
       <div
         ref={scrollRef}
         className="drawing-viewport__scroll"
@@ -446,28 +542,8 @@ export function DrawingViewport({
         >
           {children}
         </svg>
-        {stops && reading ? (
-          <div className="drawing-viewport__stops" aria-hidden="true">
-            {fit.scrollX
-              ? stops.x.map((stop, index) => (
-                  <span
-                    key={`x${stop}`}
-                    className="drawing-viewport__stop"
-                    style={{ left: `${stop}px`, width: `${bandLength(stop, stops.x[index + 1], contentWidth)}px`, height: `${contentHeight}px`, scrollSnapAlign: 'none start' }}
-                  />
-                ))
-              : null}
-            {fit.scrollY
-              ? stops.y.map((stop, index) => (
-                  <span
-                    key={`y${stop}`}
-                    className="drawing-viewport__stop"
-                    style={{ top: `${stop}px`, height: `${bandLength(stop, stops.y[index + 1], contentHeight)}px`, width: `${contentWidth}px`, scrollSnapAlign: 'start none' }}
-                  />
-                ))
-              : null}
-          </div>
-        ) : null}
+        {bands}
+        {scrolling ? <span ref={endRef} className="drawing-viewport__end" style={{ left: `${contentWidth - 1}px`, top: `${contentHeight - 1}px` }} /> : null}
       </div>
       {pinned && fit.scrollY ? (
         <div className={`drawing-viewport__pinned${inset > 0 ? ' drawing-viewport__pinned--shown' : ''}`} style={{ height: `${pinnedDepth}px` }} aria-hidden="true">
@@ -483,14 +559,14 @@ export function DrawingViewport({
           <div
             key={side}
             className={`drawing-viewport__more drawing-viewport__more--${side}`}
-            style={{ [side === 'left' || side === 'right' ? 'width' : 'height']: `${fadeDepth(side)}px`, ...(side === 'top' ? { top: `${inset}px` } : null) }}
+            style={{ [side === 'left' || side === 'right' ? 'width' : 'height']: `${fadeDepth(side)}px`, ...(side === 'bottom' ? null : { top: `${inset}px` }) }}
             aria-hidden="true"
           />
         ) : null,
       )}
       {SIDES.map((side) =>
         rimTexts[side] ? (
-          <div key={side} className={`drawing-viewport__rail drawing-viewport__rail--${side}`} style={side === 'top' ? { top: `${inset}px` } : undefined} aria-hidden="true" />
+          <div key={side} className={`drawing-viewport__rail drawing-viewport__rail--${side}`} style={side === 'bottom' ? undefined : { top: `${inset}px` }} aria-hidden="true" />
         ) : null,
       )}
       {exits.length > 0 ? (
@@ -517,7 +593,7 @@ export function DrawingViewport({
           <div
             key={side}
             className={`drawing-viewport__rim drawing-viewport__rim--${side}`}
-            style={side === 'top' ? { top: `${inset}px` } : side === 'left' || side === 'right' ? { top: `${(inset + (reading?.height ?? 0)) / 2}px` } : undefined}
+            style={side === 'left' || side === 'right' ? { top: `${rails[side].centre}px` } : { left: `${rails[side].centre}px`, ...(side === 'top' ? { top: `${inset}px` } : null) }}
             onClick={page(side)}
             aria-hidden="true"
           >
@@ -535,6 +611,7 @@ export function DrawingViewport({
           aria-hidden="true"
           onPointerDown={(event) => {
             event.stopPropagation();
+            if (event.button !== 0) return;
             dragging.current = true;
             event.currentTarget.setPointerCapture?.(event.pointerId);
             letGo();
@@ -544,26 +621,18 @@ export function DrawingViewport({
             if (dragging.current) showAt(event);
           }}
           onPointerUp={(event) => {
-            dragging.current = false;
             event.currentTarget.releasePointerCapture?.(event.pointerId);
-            settle();
+            endDrag();
           }}
-          onPointerCancel={() => {
-            dragging.current = false;
-            settle();
-          }}
+          onPointerCancel={endDrag}
+          onLostPointerCapture={endDrag}
           onClick={(event) => event.stopPropagation()}
         >
           <svg className="drawing-viewport__map-frame" viewBox={`0 0 ${mapBox.width + 2 * MAP_PAD} ${mapBox.height + 2 * MAP_PAD}`} preserveAspectRatio="none">
             <path d={mapFrame(mapBox.width + 2 * MAP_PAD, mapBox.height + 2 * MAP_PAD, corner)} />
           </svg>
           <svg className="drawing-viewport__map-sketch" viewBox={`0 0 ${drawing.width} ${drawing.height}`} preserveAspectRatio="none">
-            {map.sketch.lines.map((line, index) => (
-              <polyline key={`l${index}`} className="drawing-viewport__map-line" points={line.points.map((point) => `${point.x},${point.y}`).join(' ')} stroke={line.tone} />
-            ))}
-            {map.sketch.boxes.map((item, index) => (
-              <rect key={`b${index}`} className="drawing-viewport__map-box" x={item.box.x} y={item.box.y} width={item.box.width} height={item.box.height} fill={item.tone} />
-            ))}
+            {sketch}
             <rect className="drawing-viewport__map-view" x={mapWindow.x} y={mapWindow.y} width={mapWindow.width} height={mapWindow.height} />
           </svg>
         </div>
