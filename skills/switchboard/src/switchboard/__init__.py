@@ -55,6 +55,9 @@ _SHAPES = {
     "weather": (("location", "units", "current"), '{location, units:"C"|"F", current:{temp, condition}}'),
     "inbox": (("messages",), '{messages:[{id, from, time:"YYYY-MM-DD" or "YYYY-MM-DDTHH:MM"}]}'),
 }
+# How `view` names a visual kind in a sentence, where the type name does not
+# read as a noun: "Showing a to-do list", not "a tasks".
+_VISUAL_WORDS = {"tasks": "to-do list", "weather": "forecast"}
 # A diagram's other required keys depend on its mode.
 _DIAGRAM_MODES = {"graph": ("nodes", "edges"), "sequence": ("actors", "messages")}
 
@@ -418,14 +421,15 @@ def view(target=None):
         screen = data.get("screen", data)
         if not isinstance(screen, dict):
             screen = {}
-        kind = screen.get("visual_kind") or "visual"
+        kind = _VISUAL_WORDS.get(screen.get("visual_kind"), screen.get("visual_kind") or "visual")
+        a_kind = f"{'an' if kind[:1] in 'aeiou' else 'a'} {kind}"
         titled = f" titled '{screen['title']}'" if screen.get("title") else ""
         if not screen.get("has_visual"):
             text = "Nothing is on the caller's screen right now."
         elif screen.get("confirmed"):
-            text = f"Showing a {kind}{titled} on the caller's screen."
+            text = f"Showing {a_kind}{titled} on the caller's screen."
         else:
-            text = f"Requested a {kind}{titled}, but the caller's screen has not confirmed it yet."
+            text = f"Requested {a_kind}{titled}, but the caller's screen has not confirmed it yet."
         if screen.get("connected") is False:
             text += " No browser is connected."
         return text

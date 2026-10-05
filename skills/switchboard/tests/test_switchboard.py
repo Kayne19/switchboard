@@ -249,6 +249,18 @@ class CallsTest(ModuleTestCase):
         self.assertEqual(line, "switchboard.view: Showing a diff titled 'Code changes' on the caller's screen.")
         self.assertEqual(result.data, {"screen": screen})
 
+    def test_view_names_every_kind_as_a_noun(self):
+        screen = {"has_visual": True, "confirmed": True}
+        self.host(reply=lambda request: {"status": "delivered", "reason": None, "result": {"screen": screen}})
+        for kind, words in [
+            ("image", "an image"), ("inbox", "an inbox"), ("tasks", "a to-do list"),
+            ("weather", "a forecast"), ("calendar", "a calendar"), ("timer", "a timer"),
+        ]:
+            with self.subTest(kind=kind):
+                screen["visual_kind"] = kind
+                _, line = self.run_call(switchboard.view)
+                self.assertEqual(line, f"switchboard.view: Showing {words} on the caller's screen.")
+
     def test_display_describes_held_and_shown_results(self):
         mode = {"held": True}
         self.host(
