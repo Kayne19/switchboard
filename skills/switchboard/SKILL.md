@@ -104,8 +104,13 @@ Every `data` shape also takes an optional `caption`, a short supporting label.
 Compose a scene with roles: `primary`, `compare`, `secondary`, `ambient`.
 Metrics shown with role primary share the main stage as one cluster, up to
 nine in the order they claimed it (a tenth moves the earliest to the side
-rail); any other primary takes the main stage alone. A note can carry
-`anchor: {target, x?, series?, node?}` to attach it to another object. The
+rail); any other primary takes the main stage. Every other visual you show
+is drawn too: a chart beside a chart primary sits next to it, and any other
+visual goes in a row under the primary (compare first, then secondary, then
+ambient), such as a diagram with the table it summarises, or a chart with
+the image it came from. Metrics, notes and progress keep their own places,
+mostly the side rail. A note can carry `anchor: {target, x?, series?, node?}` to attach it to
+another object. The
 live transcript belongs to the system; use a note for lasting on-screen
 annotations and `speak` for words.
 

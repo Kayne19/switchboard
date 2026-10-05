@@ -19,6 +19,18 @@ export function compactStepWindow(steps: ProgressStep[]): { start: number; end: 
   return { start, end: start + COMPACT_STEPS };
 }
 
+/**
+ * The steps the rail shows: from the first step still to do, as many as a
+ * compact window holds. The rail is the plan's status beside the metrics,
+ * so what is done is counted ("N DONE") and what is left is listed; a plan
+ * all done lists nothing but its count.
+ */
+export function aheadStepWindow(steps: ProgressStep[]): { start: number; end: number } {
+  const firstOpen = steps.findIndex((step) => step.state !== 'done');
+  const start = firstOpen < 0 ? steps.length : firstOpen;
+  return { start, end: Math.min(steps.length, start + COMPACT_STEPS) };
+}
+
 function StepGlyph({ state }: { state: ProgressStepState }) {
   // One sharp square per step; its fill and mark say the state, its colour
   // comes from the step's class. The names are the semantic ones so a reader
@@ -36,8 +48,8 @@ function StepGlyph({ state }: { state: ProgressStepState }) {
   );
 }
 
-function StepList({ steps, compact }: { steps: ProgressStep[]; compact: boolean }) {
-  const { start, end } = compact ? compactStepWindow(steps) : { start: 0, end: steps.length };
+function StepList({ steps, window }: { steps: ProgressStep[]; window: 'all' | 'around' | 'ahead' }) {
+  const { start, end } = window === 'around' ? compactStepWindow(steps) : window === 'ahead' ? aheadStepWindow(steps) : { start: 0, end: steps.length };
   const after = steps.length - end;
   return (
     <ol className="progress-primitive__steps tech" data-testid="progress-steps" aria-label="Steps">
@@ -58,37 +70,71 @@ function StepList({ steps, compact }: { steps: ProgressStep[]; compact: boolean 
 }
 
 /**
- * A bar, and under it the plan the bar measures when the agent sent one. A
- * compact slot lists a window of the steps and counts the rest; the main
- * slot and focus list them all, scrolling inside the frame only when the
- * list outgrows it.
+ * Where a progress is drawn decides how much of it shows:
+ * - `full`: the main slot and focus, every step listed, scrolling inside the
+ *   frame only when the list outgrows it;
+ * - `compact`: a cell in the aux row, a window of the steps and a count of
+ *   the rest;
+ * - `rail`: the module beside the metrics, read the way they are read: a
+ *   row with the label and the share done, the bar under it, the steps
+ *   done counted on one row and a row per step still to do, up to the
+ *   compact window's size.
  */
-export function ProgressPrimitive({ data, compact = false }: { data: ProgressData; compact?: boolean }) {
+export type ProgressVariant = 'full' | 'compact' | 'rail';
+
+function ProgressTrack({ data, percentage }: { data: ProgressData; percentage: number }) {
+  return (
+    <div
+      className="progress-primitive__track"
+      role="progressbar"
+      aria-label={data.text ?? `${Math.round(percentage)} percent`}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={percentage}
+    >
+      <motion.div
+        className="progress-primitive__fill"
+        initial={{ width: '0%' }}
+        animate={{ width: `${percentage}%` }}
+        transition={{ duration: 0.54, ease: [0.22, 0.61, 0.36, 1] }}
+      />
+    </div>
+  );
+}
+
+/**
+ * A bar, and under it the plan the bar measures when the agent sent one.
+ * The full plan is always a focus away.
+ */
+export function ProgressPrimitive({ data, variant = 'full' }: { data: ProgressData; variant?: ProgressVariant }) {
   const percentage = Math.min(100, Math.max(0, data.value));
   const steps = data.steps && data.steps.length > 0 ? data.steps : null;
+  const className = `progress-primitive${steps ? ' progress-primitive--stepped' : ''}`;
+  if (variant === 'rail') {
+    // The head is a metric row, so the module shares the metrics' rhythm,
+    // faces and rules by construction rather than by imitation.
+    return (
+      <div className={`${className} progress-primitive--rail`} data-testid="progress">
+        <div className="metric-row progress-primitive__head">
+          <span className="metric-row__label tech micro">{data.label}</span>
+          <span className="metric-row__value">
+            <span className="metric-row__number">{`${Math.round(percentage)}%`}</span>
+          </span>
+        </div>
+        <ProgressTrack data={data} percentage={percentage} />
+        {steps ? <StepList steps={steps} window="ahead" /> : null}
+      </div>
+    );
+  }
   return (
-    <div className={`progress-primitive${steps ? ' progress-primitive--stepped' : ''}`} data-testid="progress">
+    <div className={className} data-testid="progress">
       <div className="progress-primitive__label">
         <strong>{data.label}</strong>
         <span className="tech micro muted">{data.detail}</span>
       </div>
-      <div
-        className="progress-primitive__track"
-        role="progressbar"
-        aria-label={data.text ?? `${Math.round(percentage)} percent`}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={percentage}
-      >
-        <motion.div
-          className="progress-primitive__fill"
-          initial={{ width: '0%' }}
-          animate={{ width: `${percentage}%` }}
-          transition={{ duration: 0.54, ease: [0.22, 0.61, 0.36, 1] }}
-        />
-      </div>
+      <ProgressTrack data={data} percentage={percentage} />
       <div className="progress-primitive__text tech micro">{data.text ?? `${Math.round(percentage)}% COMPLETE`}</div>
-      {steps ? <StepList steps={steps} compact={compact} /> : null}
+      {steps ? <StepList steps={steps} window={variant === 'compact' ? 'around' : 'all'} /> : null}
     </div>
   );
 }

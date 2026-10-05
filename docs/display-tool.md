@@ -11,7 +11,7 @@ A project agent calls `switchboard.display(action)` from the `switchboard` Pytho
 | agent call | `switchboard.display(action)` or `switchboard.display(**action)` |
 | skill socket request | `{ op: "call", call: "display", token, args: { action } }` |
 | view | `switchboard.view(target=None)`, sent as `call: "view"` |
-| service intake endpoint | `POST /display` (outer envelope: `{ token, action }`) |
+| service intake | the host agent's `module_call` with `call: "display"` on the host link (`docs/host-link.md`, "Module calls"), carrying the call token and `{ action }` |
 | broadcast | `{"type":"display","action":<normalized>}` |
 
 `display` replaces separate per-kind tools with a single semantic function. One call carries exactly one `DisplayAction`.
@@ -84,7 +84,7 @@ type DisplayAction =
 
 Each document paragraph is read as the same small Markdown subset the conversation surfaces use (`apps/frontend/src/primitives/markdown.ts`): `#` headings (shown as a bold line), `**bold**`, `*italic*`, `` `inline code` ``, `-` and `1.` lists, and fenced code blocks. A newline inside a paragraph is a line break; a blank line starts a new paragraph. It is never HTML: markup stays literal text, and a link shows only its label.
 
-A composed scene is built from multiple `show` actions with distinct `id`s and roles (e.g. `diagram` as `primary`, `note` as `secondary`, `metric` as `ambient`). The page owns layout, geometry, and styling.
+A composed scene is built from multiple `show` actions with distinct `id`s and roles (e.g. `diagram` as `primary`, `note` as `secondary`, `metric` as `ambient`). The page owns layout, geometry, and styling. Every visual beside the primary is drawn, whatever the primary's type: a chart beside a chart primary shares its row, and any other one takes a cell in the aux row under the primary (`docs/visual-channel.md`, "Composition & focus").
 
 Notes have their own display lifecycle. A chat or spoken response does not update an existing note; only another `show` using the note's stable id, `hide`, or `clear` changes it. An anchored note is selected for the visual object it targets and, when the target exposes the requested semantic coordinate, is placed near that location by the page.
 
@@ -97,7 +97,7 @@ Notes have their own display lifecycle. A chat or spoken response does not updat
 ### Progress steps
 - `steps`: 1 to 30 items, each `{ label (<= 128), state?, detail? (<= 256) }`. A step without a `state` reads as `todo`.
 - When `steps` is present, `value` may be left out: both validators fill it in as the share of steps whose state is `done` (`done / total * 100`, rounded to two decimals), so the normalized action and the page always carry a value. A `value` sent beside `steps` is kept as sent. A progress with neither is rejected (`progress requires value or steps`).
-- The page draws the bar as before and lists the steps under it with a glyph per state. A compact slot (the rail, a cell in the aux row) shows a window of a few steps around the first step still open and counts the rest; the main slot and focus list the whole plan, scrolling inside the frame when it is long.
+- The page draws the bar as before and lists the steps under it with a glyph per state. A cell in the aux row shows a window of a few steps around the first step still open and counts the rest. In the rail a progress reads as the metrics above it: a row with its label and the share done, the bar, one row counting the steps done, and a row per step still to do, a few at most. As the primary it is framed to its own height and centred in the column. The main slot and focus list the whole plan, scrolling inside the frame when it is longer than the slot.
 
 ### Diagram v1 rules
 - Diagram data requires `mode: "graph"` or `mode: "sequence"`; both validators read `mode` first and judge the rest by that mode's rules. Mermaid source (`source`) is rejected/deferred in v1 in either mode.

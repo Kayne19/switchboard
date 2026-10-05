@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { COMPACT_STEPS, ProgressPrimitive, compactStepWindow } from '../../src/primitives/ProgressPrimitive';
+import { COMPACT_STEPS, ProgressPrimitive, aheadStepWindow, compactStepWindow, type ProgressVariant } from '../../src/primitives/ProgressPrimitive';
 import type { ProgressData, ProgressStep } from '../../src/controller/types';
 
 let host: HTMLDivElement;
@@ -17,11 +17,12 @@ afterEach(() => {
   host.remove();
 });
 
-function render(data: ProgressData, compact = false) {
+function render(data: ProgressData, compact: boolean | ProgressVariant = false) {
+  const variant: ProgressVariant = compact === true ? 'compact' : compact === false ? 'full' : compact;
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  act(() => root.render(<ProgressPrimitive data={data} compact={compact} />));
+  act(() => root.render(<ProgressPrimitive data={data} variant={variant} />));
   return host.querySelector('[data-testid="progress"]') as HTMLElement;
 }
 
@@ -89,6 +90,51 @@ describe('ProgressPrimitive', () => {
     expect(items.map((item) => item.textContent)).toEqual(['6 DONE', 'S6', 'S7', 'S8', 'S9', '2 MORE']);
     expect(items.map((item) => item.getAttribute('data-state'))).toEqual([null, 'done', 'active', 'todo', 'todo', null]);
     expect(progress.querySelectorAll('.progress-step:not(.progress-step--elided)')).toHaveLength(COMPACT_STEPS);
+  });
+});
+
+describe('the rail module', () => {
+  const steps = Array.from({ length: 7 }, (_, i) => ({
+    label: `S${i}`,
+    detail: `D${i}`,
+    state: i < 4 ? ('done' as const) : i === 4 ? ('active' as const) : i === 5 ? ('blocked' as const) : undefined,
+  }));
+
+  it('heads the module with a metric row: the label and the share done', () => {
+    const progress = render({ label: 'SHIP', value: 57.14, steps }, 'rail');
+    expect(progress.classList.contains('progress-primitive--rail')).toBe(true);
+    const head = progress.querySelector('.progress-primitive__head')!;
+    expect(head.classList.contains('metric-row')).toBe(true);
+    expect(head.querySelector('.metric-row__label')?.textContent).toBe('SHIP');
+    expect(head.querySelector('.metric-row__label')?.classList.contains('micro')).toBe(true);
+    expect(head.querySelector('.metric-row__number')?.textContent).toBe('57%');
+    expect(progress.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('57.14');
+  });
+
+  it('counts the steps done and lists the ones still to do, each with its glyph', () => {
+    const progress = render({ label: 'SHIP', value: 57.14, steps }, 'rail');
+    const items = [...progress.querySelectorAll('.progress-step')];
+    expect(items.map((item) => item.querySelector('.progress-step__label')?.textContent ?? item.textContent)).toEqual(['4 DONE', 'S4', 'S5', 'S6']);
+    expect(items.slice(1).map((item) => item.querySelector('.progress-step__glyph')?.getAttribute('aria-label'))).toEqual(['active', 'blocked', 'todo']);
+  });
+
+  it('draws a bar alone as one metric row over the bar', () => {
+    const progress = render({ label: 'UPLOAD', value: 42 }, 'rail');
+    expect(progress.querySelector('.metric-row__number')?.textContent).toBe('42%');
+    expect(progress.querySelector('[data-testid="progress-steps"]')).toBeNull();
+  });
+});
+
+describe('aheadStepWindow', () => {
+  const steps = (states: Array<ProgressStep['state']>) => states.map((state, i) => ({ label: `S${i}`, state }));
+
+  it('starts at the first step still to do and holds a compact window of them', () => {
+    expect(aheadStepWindow(steps(['done', 'done', 'active', undefined, undefined, undefined, undefined]))).toEqual({ start: 2, end: 2 + COMPACT_STEPS });
+    expect(aheadStepWindow(steps(['done', 'done', 'done', 'done', 'active', 'blocked', undefined]))).toEqual({ start: 4, end: 7 });
+  });
+
+  it('lists nothing but the count when the plan is done', () => {
+    expect(aheadStepWindow(steps(['done', 'done', 'done']))).toEqual({ start: 3, end: 3 });
   });
 });
 

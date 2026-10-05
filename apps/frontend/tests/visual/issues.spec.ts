@@ -1131,7 +1131,7 @@ test('no live chat card stands in before the first response', async ({ page }) =
 });
 
 
-test('rail progress keeps a visible bar with its default text', async ({ page }) => {
+test('rail progress keeps a visible bar with its share done', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openController(page);
   await page.evaluate(() => {
@@ -1150,15 +1150,17 @@ test('rail progress keeps a visible bar with its default text', async ({ page })
   const geometry = await progress.evaluate((element) => {
     const rail = element.closest('.content-rail')!.getBoundingClientRect();
     const track = element.querySelector('.progress-primitive__track')!.getBoundingClientRect();
-    const text = element.querySelector('.progress-primitive__text')!.getBoundingClientRect();
+    const share = element.querySelector('.metric-row__value')!;
     return {
       trackWidth: track.width,
-      withinRail: track.right <= rail.right + 1 && text.right <= rail.right + 1,
+      withinRail: track.right <= rail.right + 1 && share.getBoundingClientRect().right <= rail.right + 1,
+      share: share.textContent,
       overflows: element.scrollWidth > element.clientWidth + 1,
     };
   });
   expect(geometry.trackWidth).toBeGreaterThan(80);
   expect(geometry.withinRail).toBe(true);
+  expect(geometry.share).toBe('57%');
   expect(geometry.overflows).toBe(false);
   await expect(progress.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '57');
 });

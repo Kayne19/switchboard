@@ -218,13 +218,36 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
       { text: ' It keeps the whole figure in view and reads its size on decode.' },
     ] } },
   ],
-  // An agent's plan as the primary: the bar is the share of steps done (the
-  // value the validators fill in from the steps, 4 of 7), the measures the
-  // work moves sit in the rail with which way each went, and the note says
-  // what holds the plan up.
+  // An agent's plan beside the work it is about: the merge path is the
+  // primary (each slice into the integration branch, then the rebuild and
+  // the pin), and the plan is a module in the rail, read the same way as the
+  // measures the work moves above it; the note says what holds the plan up.
+  // The whole plan is a focus away. The bar is the share of steps done, 4 of 7.
   plan: [
-    { op: 'show', id: 'ship-plan', type: 'progress', role: 'primary', data: {
-      label: 'VISUAL-PALETTE', detail: 'SHIP PLAN / 4 OF 7 STEPS DONE', value: 57.14, caption: 'PLAN / 7 STEPS',
+    { op: 'show', id: 'merge-path', type: 'diagram', role: 'primary', data: {
+      mode: 'graph', title: 'VISUAL-PALETTE / MERGE PATH', subtitle: 'SLICES -> INTEGRATION -> RELEASE', context: 'SHIP PLAN', caption: 'PLAN / 7 STEPS',
+      nodes: [
+        { id: 'chart-kinds', label: 'CHART KINDS', sub: 'vp/chart-kinds', state: 'done' },
+        { id: 'table-type', label: 'TABLE TYPE', sub: 'vp/table-type', state: 'done' },
+        { id: 'sequence', label: 'SEQUENCE DIAGRAMS', sub: 'vp/sequence-diagram', state: 'done' },
+        { id: 'small-primitives', label: 'STEPS + TRENDS', sub: 'vp/small-primitives', state: 'done' },
+        { id: 'diagram-layout', label: 'GRAPH LAYOUT', sub: 'vp/diagram-layout', semantic: 'orange', state: 'active' },
+        { id: 'integration', label: 'VISUAL-PALETTE', sub: 'INTEGRATION BRANCH', semantic: 'cyan' },
+        { id: 'static', label: 'REBUILD static/', sub: 'ONE BUILD, ALL SLICES', state: 'blocked' },
+        { id: 'pin', label: 'HOMELAB PIN', sub: 'switchboard_version', state: 'todo' },
+      ],
+      edges: [
+        { from: 'chart-kinds', to: 'integration' },
+        { from: 'table-type', to: 'integration' },
+        { from: 'sequence', to: 'integration' },
+        { from: 'small-primitives', to: 'integration' },
+        { from: 'diagram-layout', to: 'integration', label: 'in review', semantic: 'orange', active: true },
+        { from: 'integration', to: 'static' },
+        { from: 'static', to: 'pin' },
+      ],
+    } },
+    { op: 'show', id: 'ship-plan', type: 'progress', role: 'secondary', data: {
+      label: 'VISUAL-PALETTE', detail: 'SHIP PLAN / 4 OF 7 STEPS DONE', value: 57.14,
       steps: [
         { label: 'CHART KINDS + LABELS', state: 'done', detail: 'LINE / BAR / AREA / SCATTER' },
         { label: 'TABLE TYPE', state: 'done', detail: 'MERGED / AUDITED' },
@@ -237,11 +260,52 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
     } },
     { op: 'show', id: 'tests-passing', type: 'metric', data: { label: 'TESTS PASSING', value: '418', semantic: 'green', trend: 'up', delta: '+31' } },
     { op: 'show', id: 'build-time', type: 'metric', data: { label: 'BUILD TIME', value: '38.4 s', semantic: 'cyan', trend: 'down', delta: '-2.1 s' } },
-    { op: 'show', id: 'bundle', type: 'metric', data: { label: 'BUNDLE', value: '412 kB', trend: 'flat', delta: '+0.1%' } },
     { op: 'show', id: 'plan-note', type: 'note', data: { tag: 'DAMOCLES / PLAN', anchor: { target: 'ship-plan' }, segments: [
-      { text: 'Four of seven steps are merged. ' },
-      { text: 'The static rebuild waits on the graph layout', accent: true, bold: true },
-      { text: ', which is in review.' },
+      { text: 'The static rebuild ' },
+      { text: 'waits on the graph layout', accent: true, bold: true },
+      { text: '.' },
+    ] } },
+  ],
+
+  // A visual primary with visuals beside it: the diagram keeps the main
+  // slot, the table and the figure share the aux row under it, and the
+  // note and the metrics sit in the rail.
+  composed: [
+    { op: 'show', id: 'call-route', type: 'diagram', role: 'primary', data: {
+      mode: 'graph', title: 'CALL / ROUTE', subtitle: 'CALLER -> PROJECT AGENT / LEGS', context: 'CALL TRACE',
+      nodes: [
+        { id: 'caller', label: 'CALLER', sub: 'BROWSER / VOICE', state: 'done' },
+        { id: 'operator', label: 'OPERATOR', sub: 'DAMOCLES / FRONT DESK', semantic: 'orange', state: 'done' },
+        { id: 'pbx', label: 'PBX', sub: 'SWITCHBOARD / ROUTING', semantic: 'cyan', state: 'active' },
+        { id: 'agent', label: 'PROJECT AGENT', sub: 'HEADLESS PI / SSH', semantic: 'green', state: 'todo' },
+      ],
+      edges: [
+        { from: 'caller', to: 'operator', label: 'voice', semantic: 'orange' },
+        { from: 'operator', to: 'pbx', label: 'route', semantic: 'orange' },
+        { from: 'pbx', to: 'agent', label: 'launch', semantic: 'cyan', active: true },
+      ],
+    } },
+    { op: 'show', id: 'leg-latency', type: 'table', role: 'secondary', data: {
+      title: 'LEGS / LATENCY', caption: 'LEGS / LAST 20 CALLS',
+      columns: [{ label: 'LEG' }, { label: 'P50' }, { label: 'P95' }, { label: 'STATE' }],
+      rows: [
+        ['caller -> operator', '120 ms', '180 ms', { text: 'OK', semantic: 'green' }],
+        ['operator -> pbx', '40 ms', '65 ms', { text: 'OK', semantic: 'green' }],
+        ['pbx -> agent', '0.9 s', { text: '2.1 s', semantic: 'amber', bold: true }, { text: 'SLOW', semantic: 'amber' }],
+      ],
+      highlight: [2],
+    } },
+    { op: 'show', id: 'route-figure', type: 'image', role: 'secondary', data: {
+      format: 'png', bytes: FIGURE_PNG_BASE64,
+      alt: 'Test card: seven palette bars under a crosshair, over a grey step ramp',
+      title: 'FIGURE / TEST CARD',
+    } },
+    { op: 'show', id: 'live-calls', type: 'metric', data: { label: 'CALLS / LIVE', value: '3' } },
+    { op: 'show', id: 'handoff-p95', type: 'metric', data: { label: 'HANDOFF P95', value: '2.1 s', semantic: 'amber', trend: 'up', delta: '+0.4 s' } },
+    { op: 'show', id: 'route-note', type: 'note', data: { tag: 'OBSERVATION / PBX LEG', anchor: { target: 'call-route', node: 'pbx' }, segments: [
+      { text: 'The slow leg is the launch. ' },
+      { text: 'The PBX waits on the project session', accent: true, bold: true },
+      { text: ' before it transfers the caller; the other legs are well under a quarter second.' },
     ] } },
   ],
 };
