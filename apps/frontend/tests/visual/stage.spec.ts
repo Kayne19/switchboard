@@ -279,11 +279,10 @@ test('a long live response on a folded strip is held to its newest lines, the st
   }
 });
 
-// A calendar week on a phone outgrows its share, folds the rail, and on
-// the stage draws its hours as a grid that stretches to fill its view: the
-// room it lacks is not its scroll's excess, and it asks by its least
-// readable height (ListViewport `least`). A small primary in its place
-// gives the stage back.
+// A calendar week on a phone outgrows its share and folds the rail; a
+// small primary in its place gives the stage back. (The next test is the
+// one that holds the grid's `least`: this one passes without it, since a
+// new primary drops the week's reports.)
 const smallMetric = [
   { op: 'show', id: 'week', type: 'metric', role: 'primary', data: { label: 'STEPS TODAY', value: '6,214' } },
 ];
