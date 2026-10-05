@@ -1,9 +1,12 @@
 // The NOTE marker: the badge a rail note carries when it names a part of
-// a drawing (AnnotationCard's `.annotation-card__node-badge`), drawn on
-// that part, so the reader can match the two: a graph's node, in its
-// corner (diagramLayout `cornerTagBoxes`); a sequence's actor, in its
-// header (sequenceLayout `MARKER`). Its text is 9 user units, the size a
-// drawing's readable minimum holds at the page's micro floor.
+// what it is about (AnnotationCard, `NoteBadge`), drawn on that part, so
+// the reader can match the two: a graph's node, in its corner
+// (diagramLayout `cornerTagBoxes`); a sequence's actor, in its header
+// (sequenceLayout `MARKER`); an item of a list (`note.anchor.item`: a task,
+// a message, an event, a timer, a forecast hour or day), beside it. In a
+// drawing it is SVG (`NoteMarker`), its text 9 user units, the size a
+// drawing's readable minimum holds at the page's micro floor; on the card
+// and in a list it is the same badge in HTML (`NoteBadge`).
 
 export interface MarkerBox {
   x: number;
@@ -30,4 +33,10 @@ export function NoteMarker({ box, className }: { box: MarkerBox; className: stri
       </text>
     </g>
   );
+}
+
+/** The NOTE badge in HTML: on the rail card that names a part, and on the
+ * item of a list the note names. */
+export function NoteBadge({ className }: { className?: string }) {
+  return <span className={`note-badge tech micro${className ? ` ${className}` : ''}`}>NOTE</span>;
 }

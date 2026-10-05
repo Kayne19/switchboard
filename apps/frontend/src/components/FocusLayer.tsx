@@ -24,7 +24,9 @@ import { TablePrimitive } from '../primitives/TablePrimitive';
 import { TemporaryAssistantList } from '../primitives/TemporaryAssistantList';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
-function FocusedObject({ object }: { object: SceneObject }) {
+// `marked` is the item a note names in the object (`anchoredItem`), which
+// the object marks in focus as it does in the scene.
+function FocusedObject({ object, marked }: { object: SceneObject; marked?: string }) {
   switch (object.type) {
     case 'chart':
       return <ChartPrimitive data={object.data as ChartData} focused />;
@@ -50,13 +52,13 @@ function FocusedObject({ object }: { object: SceneObject }) {
     case 'timer':
     case 'weather':
     case 'inbox':
-      return <TemporaryAssistantList type={object.type} data={object.data} />;
+      return <TemporaryAssistantList type={object.type} data={object.data} marked={marked} />;
     default:
       return null;
   }
 }
 
-export function FocusLayer({ object, onClose }: { object: SceneObject | null; onClose: () => void }) {
+export function FocusLayer({ object, marked, onClose }: { object: SceneObject | null; marked?: string; onClose: () => void }) {
   return (
     <AnimatePresence>
       {object ? (
@@ -83,7 +85,7 @@ export function FocusLayer({ object, onClose }: { object: SceneObject | null; on
               <button type="button" onClick={onClose}>RETURN / ESC</button>
             </div>
             <SurfaceBoundary surfaceId={object.id} resetKey={object}>
-              <FocusedObject object={object} />
+              <FocusedObject object={object} marked={marked} />
             </SurfaceBoundary>
           </motion.div>
         </motion.div>

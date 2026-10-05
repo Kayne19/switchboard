@@ -1,5 +1,6 @@
 import type { NoteData } from '../controller/types';
 import { FocusableSurface } from './FocusableSurface';
+import { NoteBadge } from './NoteMarker';
 import { RichText } from './RichText';
 
 interface AnnotationCardProps {
@@ -10,8 +11,8 @@ interface AnnotationCardProps {
   onOpenHistory?: () => void;
   /**
    * What the anchor names, in its target's own words (a chart's category
-   * and series), where the target can say: it stands in for the anchor's
-   * id, x and series on the TARGET line.
+   * and series, the item of a list), where the target can say: it stands
+   * in for the anchor's id, x, series and item on the TARGET line.
    */
   target?: string;
 }
@@ -39,14 +40,16 @@ export function AnnotationCard({ data, onFocus, onOpenHistory, target }: Annotat
                 {data.anchor.node ? ` / NODE ${data.anchor.node}` : ''}
                 {data.anchor.x !== undefined ? ` / X ${data.anchor.x}` : ''}
                 {data.anchor.series ? ` / ${data.anchor.series}` : ''}
+                {data.anchor.item !== undefined ? ` / ITEM ${data.anchor.item}` : ''}
               </>
             )}
           </span>
         ) : null}
-        {/* The badge that matches the node's own marker sits beside the
-            anchor text, not inside it: the anchor text ellipsizes in a
-            narrow rail and would clip the badge with it. */}
-        {data.anchor?.node ? <span className="annotation-card__node-badge tech micro">NOTE</span> : null}
+        {/* The badge that matches the marker on the part it names (a node,
+            or an item its target holds and so names in its own words) sits
+            beside the anchor text, not inside it: the anchor text
+            ellipsizes in a narrow rail and would clip the badge with it. */}
+        {data.anchor?.node || (data.anchor?.item !== undefined && target !== undefined) ? <NoteBadge /> : null}
         {onOpenHistory ? (
           <button type="button" className="annotation-card__history tech micro" onClick={onOpenHistory} aria-label="Open conversation history">
             HISTORY

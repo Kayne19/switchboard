@@ -710,7 +710,9 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.annotation-card__node-badge {
+/* The NOTE badge (NoteBadge): on the rail card that names a part, and on
+   the item of a list a note names. */
+.note-badge {
   flex: none;
   display: inline-block;
   padding: 0 4px;

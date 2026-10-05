@@ -15,6 +15,7 @@ import type {
   TableData,
 } from '../controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
+import { anchoredItem, itemTargetText } from '../app/noteItems';
 import { besideVisuals, buildCompositionModel, cast, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
@@ -182,10 +183,14 @@ interface RailDetailsProps {
 }
 
 // A rail note about a chart on stage names the category it points at, as
-// the same note on the chart does.
+// the same note on the chart does; one about an item of a list (a task, a
+// message, an event, a timer, a forecast hour or day) names the item.
 function railNoteTarget(state: ControllerState, note: NoteData | null): string | undefined {
-  const named = note?.anchor ? state.agentObjects[note.anchor.target] : undefined;
-  return named?.type === 'chart' && note?.anchor ? chartTargetText(note.anchor, (named as SceneObject<ChartData>).data) : undefined;
+  const anchor = note?.anchor;
+  const named = anchor ? state.agentObjects[anchor.target] : undefined;
+  if (!anchor || !named) return undefined;
+  if (named.type === 'chart') return chartTargetText(anchor, (named as SceneObject<ChartData>).data);
+  return anchor.item !== undefined ? itemTargetText(named, anchor.item) : undefined;
 }
 
 // The details column beside every content visual: the metrics and any
@@ -214,8 +219,9 @@ function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, 
 
 // One object drawn inside a composed workspace, as the primary or in the aux
 // row beneath it. A metric and a progress change with the slot: the aux row
-// has no room for a whole step list.
-function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux') {
+// has no room for a whole step list. `marked` is the item a note names in
+// the object (`anchoredItem`), which the object marks wherever it is drawn.
+function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux', marked?: string) {
   switch (object.type) {
     case 'chart':
       return <ChartPrimitive data={(object as SceneObject<ChartData>).data} />;
@@ -237,15 +243,15 @@ function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux') {
       return <AnnotationCard data={(object as SceneObject<NoteData>).data} />;
     // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
     case 'calendar':
-      return <TemporaryAssistantList type="calendar" data={object.data} />;
+      return <TemporaryAssistantList type="calendar" data={object.data} marked={marked} />;
     case 'tasks':
-      return <TemporaryAssistantList type="tasks" data={object.data} />;
+      return <TemporaryAssistantList type="tasks" data={object.data} marked={marked} />;
     case 'timer':
-      return <TemporaryAssistantList type="timer" data={object.data} />;
+      return <TemporaryAssistantList type="timer" data={object.data} marked={marked} />;
     case 'weather':
-      return <TemporaryAssistantList type="weather" data={object.data} />;
+      return <TemporaryAssistantList type="weather" data={object.data} marked={marked} />;
     case 'inbox':
-      return <TemporaryAssistantList type="inbox" data={object.data} />;
+      return <TemporaryAssistantList type="inbox" data={object.data} marked={marked} />;
     default:
       return null;
   }
@@ -506,7 +512,11 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         ...temporaryAssistantFrame(type, primary.data),
         footer: `DISPLAY / ${kind}`,
         caption: sceneCaption(primary, `${kind} / FIELDS AS SENT`),
-        main: slot('temporary-assistant-object', <TemporaryAssistantList type={type} data={primary.data} />, <TechFrame variant="panel" />),
+        main: slot(
+          'temporary-assistant-object',
+          <TemporaryAssistantList type={type} data={primary.data} marked={anchoredItem(state, primary.id)} />,
+          <TechFrame variant="panel" />,
+        ),
       };
     }
     default:
@@ -520,8 +530,17 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
 // rail does not carry gets a framed cell of its own, so an accepted object is
 // never lost to the layout. A visual keeps a readable floor in its cell; a
 // row with no room for every cell scrolls inside itself rather than squeezing
-// one to nothing (`.composed-aux` in styles/index.css).
-function AuxRow({ objects, onFocus }: { objects: SceneObject[]; onFocus: (id: string | null) => void }) {
+// one to nothing (`.composed-aux` in styles/index.css). Each object marks
+// the item a note names in it (`marked`).
+function AuxRow({
+  objects,
+  onFocus,
+  marked,
+}: {
+  objects: SceneObject[];
+  onFocus: (id: string | null) => void;
+  marked: (objectId: string) => string | undefined;
+}) {
   return (
     <div className="composed-aux">
       {objects.map((object) => (
@@ -533,7 +552,7 @@ function AuxRow({ objects, onFocus }: { objects: SceneObject[]; onFocus: (id: st
           <TechFrame variant="panel" />
           <ObjectSurface object={object}>
             <FocusableSurface onActivate={() => onFocus(object.id)} ariaLabel={`Expand ${object.type}`}>
-              {composedPrimitive(object, 'aux')}
+              {composedPrimitive(object, 'aux', marked(object.id))}
             </FocusableSurface>
           </ObjectSurface>
         </ObjectMotion>
@@ -552,17 +571,19 @@ function MainWithAux({
   variant,
   aux,
   onFocus,
+  marked,
   children,
 }: {
   variant?: string;
   aux: SceneObject[];
   onFocus: (id: string | null) => void;
+  marked: (objectId: string) => string | undefined;
   children: ReactNode;
 }) {
   return (
     <motion.div className={`content-main composed-main${variant ? ` ${variant}` : ''}`} layout>
       {children}
-      {aux.length > 0 ? <AuxRow objects={aux} onFocus={onFocus} /> : null}
+      {aux.length > 0 ? <AuxRow objects={aux} onFocus={onFocus} marked={marked} /> : null}
     </motion.div>
   );
 }
@@ -635,7 +656,7 @@ function composedContent({ state, onFocus }: SceneProps): SceneContent | null {
                   onFocus={onFocus}
                 />
               ) : (
-                composedPrimitive(primary, 'primary')
+                composedPrimitive(primary, 'primary', anchoredItem(state, primary.id))
               )}
             </FocusableSurface>
           </ObjectSurface>
@@ -754,7 +775,7 @@ export function SceneShell(props: SceneProps) {
             <div className="scene-heading__sub tech micro">{content.subtitle}</div>
           </div>
           <div className="content-grid">
-            <MainWithAux variant={content.mainVariant} aux={content.aux} onFocus={onFocus}>
+            <MainWithAux variant={content.mainVariant} aux={content.aux} onFocus={onFocus} marked={(id) => anchoredItem(state, id)}>
               {content.main}
             </MainWithAux>
             <motion.aside className="content-rail" layout>
