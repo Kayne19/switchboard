@@ -731,6 +731,17 @@ describe('a marked point', () => {
     expect(at(0.65).from).not.toBe('above');
   });
 
+  // The slot's scale changes every pixel of a resize; the chart's geometry
+  // reads it in steps, so the chart is not worked out again every frame
+  // (notes-tidy review L3), and the chart and its notes read the same step.
+  it('reads the scale in steps of a twentieth', () => {
+    const line: ChartData = { xMax: 4, series: [{ name: 'A', values: [1, 2, 3, 2, 1] }] };
+    expect(chartScales(line, { width: 1000, height: 500, scale: 0.651 }).scale).toBe(0.65);
+    expect(chartScales(line, { width: 1000, height: 500, scale: 0.674 }).scale).toBe(0.65);
+    expect(chartScales(line, { width: 1000, height: 500, scale: 0.676 }).scale).toBe(0.7);
+    expect(chartScales(line).scale).toBe(1);
+  });
+
   it("is what a note's leader lands by, as a bar's printed end is", () => {
     const line: ChartData = { xMax: 4, yMin: 0, yMax: 10, series: [{ name: 'A', values: [1, 1.5, 4, 1.5, 1] }] };
     const [callout] = chartPointCallouts(line, [{ x: 2 }]);

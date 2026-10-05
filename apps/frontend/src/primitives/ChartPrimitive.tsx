@@ -19,6 +19,7 @@ import {
   chartLeastHeight,
   chartLegendLayout,
   chartPointCallouts,
+  chartScaleStep,
   chartScales,
   type ChartAnchor,
   type ChartScales,
@@ -169,8 +170,9 @@ export function ChartPrimitive({
   const fit = chartFrame(slot);
   const width = fit.width, height = fit.height;
   // At the scale the slot draws it, which the room past a marked point's
-  // value is measured at (a note's leader keeps its clearance in pixels).
-  const scale = fit.scale;
+  // value is measured at (a note's leader keeps its clearance in pixels):
+  // stepped, so a resize does not work the chart out again every pixel.
+  const scale = chartScaleStep(fit.scale);
   const scales=useMemo(()=>chartScales(data,{width,height,scale}),[data,width,height,scale]);
   const {plot,kind,horizontal,baseline,valueAt}=scales;
   // The plot's own padding grows to clear a legend that wraps, a second

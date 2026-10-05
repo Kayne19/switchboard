@@ -561,7 +561,7 @@ export function chartValueAxis(data: ChartData): ChartValueAxis {
 export interface ChartScales {
   /** The frame the chart is drawn in. */
   frame: ChartFrame;
-  /** The CSS pixels a unit of the frame is drawn at: its slot's (`chartFit`), 1 where no slot is given. */
+  /** The CSS pixels a unit of the frame is drawn at: its slot's (`chartFrame`), in steps (`chartScaleStep`); 1 where no slot is given. */
   scale: number;
   kind: ChartKind;
   categories: ChartCategoryLayout;
@@ -588,6 +588,17 @@ export interface ChartScales {
   sampleX: (series: ChartSeries, index: number) => number;
   /** The plot's grid for this data, accounting for a wrapped legend and the labels. */
   plot: ViewRect;
+}
+
+/**
+ * The scale a chart's geometry is worked out at, in steps of a twentieth.
+ * The slot's own scale changes with every pixel of a resize, and the only
+ * thing it moves is the clearance a note's leader keeps, in pixels, where a
+ * marked point's value is printed: stepped, a chart works its callouts out
+ * again only when that clearance changes by enough to matter.
+ */
+export function chartScaleStep(scale: number): number {
+  return Math.max(0.05, Math.round(scale * 20) / 20);
 }
 
 export function chartScales(data: ChartData, frame: ChartFrame & { scale?: number } = CHART_FRAME): ChartScales {
@@ -619,7 +630,7 @@ export function chartScales(data: ChartData, frame: ChartFrame & { scale?: numbe
     horizontal ? plot.left + share(value) * plotWidth : plot.top + (1 - share(value)) * plotHeight;
   return {
     frame,
-    scale: frame.scale ?? 1,
+    scale: chartScaleStep(frame.scale ?? 1),
     kind,
     categories,
     horizontal,
