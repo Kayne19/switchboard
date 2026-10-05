@@ -353,14 +353,19 @@ interface SceneContent {
   /** The rail's note is one the charts could not hold: in a rail too short for all it carries, it leads. */
   noteLeads?: boolean;
   progressList: Array<SceneObject<ProgressData>>;
+  /** The primary chart and the notes on it, by key: a band holds a note while it is one of them. */
+  chartNotes?: { chart: string; keys: string[] };
 }
 
 // `railNote` is the note a chart has said, through `onRailNote`, it leaves
 // out for the rail; the rail shows it while that chart is the primary.
+// `band` is the note the shell has moved from the rail to a band under the
+// charts, where the rail stands under them (SceneShell).
 function trainingContent(
   { state, onFocus, onOpenHistory }: SceneProps,
   railNote: ChartRailNote | null,
   onRailNote: (chartId: string, key: string, away: boolean) => void,
+  band: ChartRailNote | null,
 ): SceneContent | null {
   const charts = objectsOfType<ChartData>(state, 'chart');
   const [firstProgress, ...railProgress] = objectsOfType<ProgressData>(state, 'progress');
@@ -375,12 +380,18 @@ function trainingContent(
   const progress = besideCharts.length > 0 ? undefined : firstProgress;
   // The notes lie over the panel of the chart they annotate rather than in a
   // band that shrinks it; the layer keeps them clear of one another, of the
-  // points they name, and of the data the chart draws.
+  // points they name, and of the data the chart draws. Only the one note it
+  // cannot hold so, where the rail stands under the charts, takes a band.
   const { byPanel: notesByPanel, offCharts } = chartNotesByPanel(state, charts, primary);
+  const primaryNotes = notesByPanel.get(primary.id) ?? [];
+  // A note the primary chart left out, held in a band under the charts:
+  // the chart no longer places it, and the rail does not carry it.
+  const banded = band?.chart === primary.id ? primaryNotes.find((note) => note.key === band.note) : undefined;
   // The rail's one note slot: a note about a visual off the charts, else
   // the note the primary chart leaves out so the rest have clear places.
   const inRail =
-    offCharts ?? (railNote?.chart === primary.id ? (notesByPanel.get(primary.id) ?? []).find((note) => note.key === railNote.note) : undefined);
+    offCharts ??
+    (railNote?.chart === primary.id && railNote.note !== banded?.key ? primaryNotes.find((note) => note.key === railNote.note) : undefined);
   // Frame text the chart leaves out names what it is -- its kind -- and
   // nothing more: a bar chart of test durations is not a training run.
   const kind = chartKind(primary.data).toUpperCase();
@@ -397,6 +408,7 @@ function trainingContent(
     noteObject: inRail?.object,
     noteLeads: inRail !== undefined,
     progressList: railProgress,
+    chartNotes: { chart: primary.id, keys: primaryNotes.map((note) => note.key) },
     aux: firstProgress && !progress ? [...besideCharts, firstProgress] : besideCharts,
     main: (
       <motion.div className="content-main training-main" layout>
@@ -404,6 +416,8 @@ function trainingContent(
           <AnimatePresence mode="popLayout" initial={false}>
             {charts.map((chart) => {
               const notes = notesByPanel.get(chart.id) ?? [];
+              // Its bar or point stays marked; the card is in the band.
+              const onChart = banded ? notes.filter((note) => note.key !== banded.key) : notes;
               return (
                 <ObjectMotion key={chart.id} objectId={chart.id} className="chart-object" data-chart-id={chart.id}>
                   <TechFrame variant="panel" />
@@ -412,10 +426,10 @@ function trainingContent(
                       <ChartPrimitive data={chart.data} named={chartNoteAnchors(chart, notes)} />
                     </FocusableSurface>
                   </ObjectSurface>
-                  {notes.length > 0 ? (
+                  {onChart.length > 0 ? (
                     <ChartNotes
                       chart={chart}
-                      notes={notes}
+                      notes={onChart}
                       onFocus={onFocus}
                       onOpenHistory={onOpenHistory}
                       onRailNote={chart.id === primary.id && !offCharts ? onRailNote : undefined}
@@ -427,6 +441,20 @@ function trainingContent(
             })}
           </AnimatePresence>
         </div>
+        <AnimatePresence initial={false}>
+          {banded ? (
+            <ObjectMotion key="chart-note-band" objectId={banded.object?.id ?? banded.key} className="chart-note-band" layout="position">
+              <SurfaceBoundary surfaceId={banded.object?.id ?? banded.key} resetKey={banded.object ?? banded.data}>
+                <AnnotationCard
+                  data={banded.data}
+                  onFocus={banded.object ? () => onFocus(banded.object!.id) : undefined}
+                  onOpenHistory={banded.object ? undefined : onOpenHistory}
+                  target={banded.data.anchor?.target === primary.id ? chartTargetText(banded.data.anchor, primary.data) : undefined}
+                />
+              </SurfaceBoundary>
+            </ObjectMotion>
+          ) : null}
+        </AnimatePresence>
         {progress ? (
           <ObjectMotion objectId={progress.id} className="training-progress">
             <ObjectSurface object={progress}>
@@ -665,7 +693,9 @@ function RailHandle({ open, items, onToggle }: { open: boolean; items: string[];
   );
 }
 
-// Whether the primary takes the stage's height (stageFold.ts). What it hears from the primary and measures of the column is
+// Whether the primary takes the stage's height (stageFold.ts), and, where
+// a scene asks (`watchStacked`), whether the rail stands under the main
+// column. What it hears from the primary and measures of the column is
 // kept out of render, and a decision that does not change renders nothing:
 // a scene that never folds is drawn exactly as it was. The columns are
 // read in layout pixels: a box in a shared-layout animation is scaled on
@@ -674,18 +704,23 @@ function RailHandle({ open, items, onToggle }: { open: boolean; items: string[];
 function useStageFold(
   active: boolean,
   railOpen: boolean,
+  watchStacked: boolean,
   mainRef: RefObject<HTMLDivElement | null>,
   railRef: RefObject<HTMLElement | null>,
   probeRef: RefObject<HTMLDivElement | null>,
-): { foldable: boolean; onDemand: StageDemandListener } {
+): { foldable: boolean; stacked: boolean; onDemand: StageDemandListener } {
   const [foldable, setFoldable] = useState(false);
+  const [stacked, setStacked] = useState(false);
   const demands = useRef(new Map<string, number>());
   const geometry = useRef<Omit<StageGeometry, 'excess'>>({ stacked: false, column: 0, shared: 0 });
   const staged = useRef(false);
   staged.current = foldable && !railOpen;
+  const watching = useRef(watchStacked);
+  watching.current = watchStacked;
   const decide = useCallback(() => {
     const said = [...demands.current.values()];
     setFoldable(wantsStage({ ...geometry.current, excess: said.length > 0 ? Math.max(...said) : null }, staged.current));
+    setStacked(watching.current && geometry.current.stacked);
   }, []);
   const onDemand = useCallback<StageDemandListener>(
     (key, excess) => {
@@ -702,7 +737,8 @@ function useStageFold(
     if (!active || !main || !rail || !probe) return undefined;
     const measure = () => {
       geometry.current = {
-        stacked: rail.offsetTop >= main.offsetTop + main.offsetHeight - 1,
+        // A column with no height (no layout yet) stands nowhere.
+        stacked: main.offsetHeight > 0 && rail.offsetTop >= main.offsetTop + main.offsetHeight - 1,
         column: main.offsetHeight,
         shared: probe.offsetHeight,
       };
@@ -715,8 +751,8 @@ function useStageFold(
   }, [active, mainRef, railRef, probeRef, decide]);
   // The layout it decides in changes with the caller's choice, and with it
   // the margin it decides by.
-  useLayoutEffect(decide, [decide, railOpen, foldable]);
-  return { foldable, onDemand };
+  useLayoutEffect(decide, [decide, railOpen, watchStacked, foldable]);
+  return { foldable, stacked, onDemand };
 }
 
 // ---- End of the folded rail ----
@@ -839,13 +875,14 @@ function sceneContent(
   onCalloutChange: (placed: boolean) => void,
   chartRailNote: ChartRailNote | null,
   onChartRailNote: (chartId: string, key: string, away: boolean) => void,
+  chartBand: ChartRailNote | null,
 ): SceneContent | null {
   switch (props.kind) {
     case 'idle':
     case 'conversation':
       return null;
     case 'training':
-      return trainingContent(props, chartRailNote, onChartRailNote);
+      return trainingContent(props, chartRailNote, onChartRailNote, chartBand);
     case 'composed':
       return composedContent(props);
     default:
@@ -880,7 +917,14 @@ export function SceneShell(props: SceneProps) {
       }),
     [],
   );
-  const content = sceneContent(props, setCalloutPlaced, chartRailNote, onChartRailNote);
+  // Where the rail stands under the charts, the note the primary chart
+  // leaves out is drawn in a band under them, by what it is about, not in
+  // the rail under its metrics. It stays there while it is on that chart:
+  // the band takes its height from the charts, and a chart laid out again
+  // in less room, or for another note, must not take the note back and
+  // hand it out again, the band coming and going under it.
+  const [chartBand, setChartBand] = useState<ChartRailNote | null>(null);
+  const content = sceneContent(props, setCalloutPlaced, chartRailNote, onChartRailNote, chartBand);
   const layout = content ? 'content' : kind === 'conversation' ? 'conversation' : 'idle';
   // A primary that outgrows the column it shares with a rail standing under
   // it takes the stage's height, the rail folded to a strip (stageFold.ts).
@@ -891,8 +935,17 @@ export function SceneShell(props: SceneProps) {
   const primaryId = content ? (primaryObject(state)?.id ?? null) : null;
   const [openFor, setOpenFor] = useState<string | null>(null);
   const railOpen = primaryId !== null && openFor === primaryId;
-  const { foldable, onDemand } = useStageFold(content !== null, railOpen, mainRef, railRef, probeRef);
+  const { foldable, stacked, onDemand } = useStageFold(content !== null, railOpen, content?.chartNotes !== undefined, mainRef, railRef, probeRef);
   const staged = foldable && !railOpen;
+  const banding = stacked ? content?.chartNotes : undefined;
+  const bandHeld = chartBand !== null && banding?.chart === chartBand.chart && banding.keys.includes(chartBand.note);
+  useLayoutEffect(() => {
+    if (chartBand) {
+      if (!bandHeld) setChartBand(null);
+      return;
+    }
+    if (banding && chartRailNote?.chart === banding.chart) setChartBand(chartRailNote);
+  }, [banding, bandHeld, chartBand, chartRailNote]);
   const railNote = calloutPlaced ? null : (content?.note ?? null);
   const noteCut = useStripCut(railRef, staged, railNote);
   const presence = (

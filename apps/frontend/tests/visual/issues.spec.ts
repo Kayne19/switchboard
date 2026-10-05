@@ -236,9 +236,22 @@ for (const { chart, viewport } of chartNoteCases) {
         },
       });
     });
-    await expect(page.locator('.chart-note')).toHaveCount(3);
+    // A card the chart keeps over it, or the one it leaves out: in the rail,
+    // or where the rail stands under the chart (a portrait stage), in a band
+    // under the chart that takes its height from it (chartNotePlace.spec.ts).
+    await expect.poll(async () => (await page.locator('.chart-note').count()) + (await page.locator('.chart-note-band').count())).toBe(3);
     await page.waitForTimeout(400);
-    expect(await chartBox()).toEqual(before);
+    const band = await page.locator('.chart-note-band').evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().height));
+    if (band.length === 0) {
+      expect(await chartBox()).toEqual(before);
+    } else {
+      // The chart keeps its width and gives the band no more than its own
+      // height and the gap over it.
+      const after = await chartBox();
+      expect(viewport.height).toBeGreaterThan(viewport.width);
+      expect(after.width).toBe(before.width);
+      expect(before.height - after.height).toBeLessThanOrEqual(band[0] + 24);
+    }
 
     const geometry = await page.evaluate(() => {
       const panel = document.querySelector<HTMLElement>('.chart-object[data-chart-id="loss"]')!.getBoundingClientRect();
@@ -255,6 +268,7 @@ for (const { chart, viewport } of chartNoteCases) {
         text: element.querySelector('.annotation-card__text')?.textContent ?? '',
       }));
       const rail = document.querySelector<HTMLElement>('.content-rail .rail-note')?.textContent ?? '';
+      const band = document.querySelector<HTMLElement>('.chart-note-band')?.textContent ?? null;
       const leaders = [...document.querySelectorAll<SVGGElement>('.chart-note-leader')].map((group) => ({
         id: group.dataset.note!,
         points: group.querySelector('polyline')!.getAttribute('points')!.split(' ').map((pair) => {
@@ -262,13 +276,17 @@ for (const { chart, viewport } of chartNoteCases) {
           return { x: layer.left + x, y: layer.top + y };
         }),
       }));
-      return { panel: { left: panel.left, top: panel.top, right: panel.right, bottom: panel.bottom }, cards, leaders, away, rail };
+      return { panel: { left: panel.left, top: panel.top, right: panel.right, bottom: panel.bottom }, cards, leaders, away, rail, band };
     });
 
     // Every note is on screen: on the chart, or -- one at most, where the
-    // chart has no place for it clear of its data -- in the rail.
-    expect(geometry.cards.length + geometry.away.length).toBe(3);
+    // chart has no place for it clear of its data -- in the rail, and on a
+    // portrait stage one in the band under the chart.
+    expect(geometry.cards.length + geometry.away.length + (geometry.band === null ? 0 : 1)).toBe(3);
     expect(geometry.away.length).toBeLessThanOrEqual(1);
+    if (geometry.band !== null) {
+      expect(['Both losses fall together through the warmup.', 'A second note that names no point. It must still be on screen.', 'Validation loss'].some((text) => geometry.band!.includes(text))).toBe(true);
+    }
     for (const note of geometry.away) {
       expect(note.hidden, `${note.id} is out of view on the chart`).toBe(true);
       expect(geometry.rail, `${note.id} is in the rail`).toContain(note.text);
@@ -284,7 +302,10 @@ for (const { chart, viewport } of chartNoteCases) {
         expect(apart, `${card.id} and ${other.id} must not overlap`).toBe(true);
       }
     }
-    expect(geometry.leaders.map((leader) => leader.id).sort()).toEqual(['early-note', 'training-note']);
+    // Each anchored note on the chart runs a leader to its point; one in the
+    // band names its point in its target line instead.
+    expect(geometry.leaders.map((leader) => leader.id).sort()).toEqual(geometry.cards.map((card) => card.id).filter((id) => id !== 'general-note').sort());
+    if (geometry.band === null) expect(geometry.leaders).toHaveLength(2);
     for (const leader of geometry.leaders) {
       const card = geometry.cards.find((candidate) => candidate.id === leader.id)!;
       const start = leader.points[0];

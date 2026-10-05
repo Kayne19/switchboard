@@ -871,7 +871,21 @@ button {
 .training-main {
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
+  grid-auto-rows: auto;
   gap: clamp(12px, 2cqh, 22px);
+}
+/* The note the primary chart leaves out, where the rail stands under the
+   charts: a band under them, its card's text scrolling past a third of the
+   column. */
+.chart-note-band {
+  min-width: 0;
+  min-height: 0;
+  max-height: 34cqh;
+  display: flex;
+}
+.chart-note-band .annotation-card {
+  height: auto;
+  max-height: 100%;
 }
 .training-charts {
   position: relative;
