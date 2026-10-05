@@ -292,6 +292,10 @@ function TimeGrid({ data, model, marked, size, columns }: GridProps) {
     <ListViewport
       noun={['EVENT', 'EVENTS']}
       lead={markedInHours ? marked : undefined}
+      // The hours grow to fill whatever view they get, so their scroll
+      // content always measures the view: ask the stage by the grid's least
+      // readable height instead, or the fold never gives the stage back.
+      least={Math.floor(timeAxis(segments, nowMinute, 0, MIN_BOX_MINUTES).height)}
       head={head}
       className="calendar-grid__viewport"
       scrollClassName="calendar-grid__scroll"
