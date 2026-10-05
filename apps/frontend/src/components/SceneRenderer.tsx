@@ -1,4 +1,5 @@
 import { AnimatePresence, LayoutGroup, MotionConfig } from "motion/react";
+import { anchoredItem } from "../app/noteItems";
 import { buildCompositionModel, sceneKind } from "../app/sceneModel";
 import type { ControllerState } from "../controller/types";
 import { useController } from "../controller/context";
@@ -56,6 +57,7 @@ function SceneContent({
         <FocusLayer
           object={focusedObject}
           note={focusNote(state, focusedObject)}
+          marked={focusedObject ? anchoredItem(state, focusedObject.id) : undefined}
           onClose={() => dispatch({ op: "focus", id: null })}
         />
       </main>

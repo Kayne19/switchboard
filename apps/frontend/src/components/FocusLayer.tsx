@@ -13,6 +13,7 @@ import type {
   SceneObject,
   TableData,
 } from '../controller/types';
+import { ITEM_TYPES, itemTargetText } from '../app/noteItems';
 import { anchoredNote, objectsOfType } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
@@ -27,18 +28,21 @@ import { TemporaryAssistantList } from '../primitives/TemporaryAssistantList';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
 /**
- * The note focus keeps beside a diagram: the one the scene's rail shows
- * for it (`anchoredNote`). Focus gives the diagram the stage
- * and the rail goes, so the note comes with the diagram: in a panel of its
- * own beside or under it, and the node or actor it names keeps its NOTE
- * marker, the drawing opening on it.
+ * The note focus keeps beside a diagram, or beside a list with items (a
+ * calendar, a to-do list, timers, a forecast, an inbox): the one the
+ * scene's rail shows for it (`anchoredNote`). Focus gives the object the
+ * stage and the rail goes, so the note comes with it: in a panel of its
+ * own beside or under it, and the node, actor or item it names keeps its
+ * NOTE marker, the view opening on it.
  */
 export function focusNote(state: ControllerState, object: SceneObject | null): NoteData | null {
-  if (object?.type !== 'diagram') return null;
+  if (!object || (object.type !== 'diagram' && !ITEM_TYPES.has(object.type))) return null;
   return anchoredNote(objectsOfType<NoteData>(state, 'note'), object.id)?.data ?? null;
 }
 
-function FocusedObject({ object, note }: { object: SceneObject; note: NoteData | null }) {
+// `marked` is the item a note names in the object (`anchoredItem`), which
+// the object marks in focus as it does in the scene.
+function FocusedObject({ object, note, marked }: { object: SceneObject; note: NoteData | null; marked?: string }) {
   switch (object.type) {
     case 'chart':
       return <ChartPrimitive data={object.data as ChartData} focused />;
@@ -65,7 +69,7 @@ function FocusedObject({ object, note }: { object: SceneObject; note: NoteData |
     case 'timer':
     case 'weather':
     case 'inbox':
-      return <TemporaryAssistantList type={object.type} data={object.data} />;
+      return <TemporaryAssistantList type={object.type} data={object.data} marked={marked} />;
     default:
       return null;
   }
@@ -74,7 +78,17 @@ function FocusedObject({ object, note }: { object: SceneObject; note: NoteData |
 // Where the note stands is the focus box's geometry, in the stylesheet
 // (`.focus-layer__content--noted`): beside a wide drawing, as the rail is,
 // and under a tall one.
-export function FocusLayer({ object, note = null, onClose }: { object: SceneObject | null; note?: NoteData | null; onClose: () => void }) {
+export function FocusLayer({
+  object,
+  note = null,
+  marked,
+  onClose,
+}: {
+  object: SceneObject | null;
+  note?: NoteData | null;
+  marked?: string;
+  onClose: () => void;
+}) {
   return (
     <AnimatePresence>
       {object ? (
@@ -101,12 +115,12 @@ export function FocusLayer({ object, note = null, onClose }: { object: SceneObje
               <button type="button" onClick={onClose}>RETURN / ESC</button>
             </div>
             <SurfaceBoundary surfaceId={object.id} resetKey={object}>
-              <FocusedObject object={object} note={note} />
+              <FocusedObject object={object} note={note} marked={marked} />
             </SurfaceBoundary>
             {note ? (
               <aside className="focus-layer__note">
                 <SurfaceBoundary surfaceId="focus-note" resetKey={note}>
-                  <AnnotationCard data={note} />
+                  <AnnotationCard data={note} target={note.anchor?.item !== undefined ? itemTargetText(object, note.anchor.item) : undefined} />
                 </SurfaceBoundary>
               </aside>
             ) : null}

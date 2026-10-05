@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { NoteBadge } from './NoteMarker';
 
 /*
  * TEMPORARY (pa-contract): the one stand-in renderer for the five
@@ -47,11 +48,19 @@ function plain(value: unknown): string {
   return String(value);
 }
 
-function Item({ fields }: { fields: Fields }) {
-  const nameKey = NAME_KEYS.find((key) => typeof fields[key] === 'string');
-  const rest = Object.entries(fields).filter(([key]) => key !== nameKey);
+/** What a note's `anchor.item` names an item by: a forecast hour or day by
+ * its time or date, anything else by its id. */
+function itemKey(type: TemporaryAssistantType, fields: Fields): string | undefined {
+  const key = type === 'weather' ? (fields.time ?? fields.date) : fields.id;
+  return typeof key === 'string' ? key : undefined;
+}
+
+function Item({ fields, itemKey: key, marked }: { fields: Fields; itemKey?: string; marked: boolean }) {
+  const nameKey = NAME_KEYS.find((name) => typeof fields[name] === 'string');
+  const rest = Object.entries(fields).filter(([name]) => name !== nameKey);
   return (
-    <li className="temporary-assistant__item">
+    <li className="temporary-assistant__item" data-item={key}>
+      {marked ? <NoteBadge /> : null}
       {nameKey ? <span className="temporary-assistant__name">{fields[nameKey] as string}</span> : null}
       {rest.map(([key, value]) => (
         <span key={key} className="temporary-assistant__pair">
@@ -76,7 +85,7 @@ export function temporaryAssistantFrame(type: TemporaryAssistantType, data: unkn
   };
 }
 
-export function TemporaryAssistantList({ type, data }: { type: TemporaryAssistantType; data: unknown }) {
+export function TemporaryAssistantList({ type, data, marked }: { type: TemporaryAssistantType; data: unknown; marked?: string }) {
   const fields = fieldsOf(data);
   const scalars: ReactNode[] = [];
   const lists: ReactNode[] = [];
@@ -87,7 +96,11 @@ export function TemporaryAssistantList({ type, data }: { type: TemporaryAssistan
         <section key={key} className="temporary-assistant__list">
           <div className="temporary-assistant__list-head tech micro">{key.toUpperCase()} / {value.length}</div>
           <ol>
-            {value.map((item, index) => <Item key={index} fields={fieldsOf(item)} />)}
+            {value.map((item, index) => {
+              const fields = fieldsOf(item);
+              const key = itemKey(type, fields);
+              return <Item key={index} fields={fields} itemKey={key} marked={key !== undefined && key === marked} />;
+            })}
           </ol>
         </section>,
       );
