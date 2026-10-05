@@ -61,10 +61,12 @@ export interface NoteToPlace {
   from?: Side;
   /** The bar the point is past the end of: a leader never runs along its side. */
   bar?: Rect;
+  /** The value the bar prints, beside the point: what its leader lands by, not in its way. */
+  value?: Rect;
   /**
    * Narrower sizes the card may take, widest first, each with the height
    * its text needs there: tried, in turn, only where the card's own size
-   * has no clear place.
+   * has no clear place or runs a long leader to its bar.
    */
   sizes?: Array<{ width: number; height: number }>;
 }
@@ -662,7 +664,7 @@ function placeInOrder(
       // A bar's leader comes from past the bar's end, clear of every other
       // bar; a place with no such route has no leader that reads, which is
       // still better than a place over the data.
-      const route = point && from && !covers(rect, point) ? barLeader(rect, point, from, marksNear, { bar: note.bar, overlap: leaderOverlap }) : undefined;
+      const route = point && from && !covers(rect, point) ? barLeader(rect, point, from, marksNear, { bar: note.bar, value: note.value, overlap: leaderOverlap }) : undefined;
       if (route && !route.clear) {
         cost += COST.noLeader;
         falls = Math.max(falls, SHORT.route);
@@ -931,6 +933,8 @@ export interface BarLeaderOptions {
   inset?: number;
   /** The bar the point names: a leader never runs alongside it, short of its end. */
   bar?: Rect;
+  /** The value the bar prints beside the point, which the leader lands by. */
+  value?: Rect;
 }
 
 // How far from the side of the bar it names a leader keeps, short of the
@@ -985,8 +989,13 @@ export function barLeader(card: Rect, point: Point, from: Side, marksNear: Marks
   const inset = options.inset ?? LEADER_INSET;
   const overlap = options.overlap ?? 0;
   // The bar's own printed value, beside the point, is what the leader
-  // lands by, not in its way.
-  const own = (mark: Rect) => covers(mark, point, LEADER_CLEARANCE + 2);
+  // lands by, not in its way: that mark and no other (else whatever lies
+  // that near the point).
+  const value = options.value;
+  const own = (mark: Rect) =>
+    value
+      ? Math.abs(mark.left - value.left) < 0.01 && Math.abs(mark.top - value.top) < 0.01 && Math.abs(mark.right - value.right) < 0.01 && Math.abs(mark.bottom - value.bottom) < 0.01
+      : covers(mark, point, LEADER_CLEARANCE + 2);
   // The band along the named bar's sides, from its base to its end.
   const bar = options.bar;
   const alongside = bar

@@ -55,7 +55,7 @@ export function chartNotePoint(
   note: NoteData,
   chart: SceneObject<ChartData>,
   scales?: ChartScales,
-): { point: ViewPoint; from?: ChartSide; bar?: ViewRect } | undefined {
+): { point: ViewPoint; from?: ChartSide; bar?: ViewRect; value?: ViewRect } | undefined {
   if (note.anchor?.target !== chart.id || note.anchor.x === undefined) return undefined;
   return chartNoteTarget(chart.data, { x: note.anchor.x, series: note.anchor.series }, scales);
 }
@@ -234,6 +234,7 @@ export function ChartNotes({
           point: target && toLayer!(target.point),
           from: target?.from,
           bar: target?.bar && rectToLayer(target.bar),
+          value: target?.value && rectToLayer(target.value),
         });
       }
       const options = { spill, leaderOverlap: 1 };

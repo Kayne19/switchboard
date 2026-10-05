@@ -555,6 +555,21 @@ describe('a note on a bar chart', () => {
     expect(marks.every((mark) => !overlaps(placed.rect, mark))).toBe(true);
   });
 
+  // Any mark within a few pixels of the point was taken for the bar's own
+  // printed value, so a leader along a neighbour that close passed as clear
+  // (review finding).
+  it("takes only the bar's own printed value as what its leader lands by", () => {
+    const value = box(100, 184, 20, 13);
+    const neighbour = box(115, 150, 20, 350);
+    const marks = [box(100, 200, 14, 300), value, neighbour];
+    const near = (_near: Rect, visit: (mark: Rect) => void) => marks.forEach(visit);
+    // A card right of the neighbour, its run at the point's height.
+    const card = box(170, 120, 200, 120);
+    const route = barLeader(card, { x: 110, y: 181 }, 'left', near, { value });
+    expect(route.path.at(-1)).toEqual({ x: 110, y: 181 });
+    expect(route.clear).toBe(false);
+  });
+
   it('has no clear route from a card under the bar it names, nor one along its side', () => {
     // The bar, its printed value over it, and the point over that.
     const bar = box(100, 200, 40, 300);

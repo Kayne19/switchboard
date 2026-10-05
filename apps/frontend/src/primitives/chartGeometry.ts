@@ -779,17 +779,18 @@ export function chartBarCallouts(data: ChartData, named: ChartAnchor[] = [], sca
 
 /**
  * Where a note's leader lands on the chart, and from which side: on a bar
- * chart the bar's callout point, from past its end, and the bar itself;
+ * chart the bar's callout point, from past its end, the bar itself and its
+ * printed value;
  * elsewhere the point on the drawn series, from any side.
  */
 export function chartNoteTarget(
   data: ChartData,
   anchor: ChartAnchor,
   scales: ChartScales = chartScales(data),
-): { point: ViewPoint; from?: ChartSide; bar?: ViewRect } | undefined {
+): { point: ViewPoint; from?: ChartSide; bar?: ViewRect; value?: ViewRect } | undefined {
   if (scales.kind === 'bar') {
     const callout = chartBarCallout(data, anchor, scales);
-    return callout ? { point: callout.point, from: callout.from, bar: callout.bar.rect } : undefined;
+    return callout ? { point: callout.point, from: callout.from, bar: callout.bar.rect, value: callout.label } : undefined;
   }
   const point = chartSeriesPoint(data, anchor.x, anchor.series, scales);
   return point ? { point } : undefined;
