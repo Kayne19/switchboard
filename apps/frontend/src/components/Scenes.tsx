@@ -410,7 +410,10 @@ function trainingContent(
     noteObject: inRail?.object,
     noteLeads: inRail !== undefined,
     progressList: railProgress,
-    chartNotes: { chart: primary.id, keys: primaryNotes.map((note) => note.key) },
+    // A band is carved from one chart's slot. A compare pair on a portrait
+    // stage already scrolls in its row, and a band would push the second
+    // chart out of view: its note stays in the rail, leading it.
+    chartNotes: charts.length === 1 ? { chart: primary.id, keys: primaryNotes.map((note) => note.key) } : undefined,
     aux: firstProgress && !progress ? [...besideCharts, firstProgress] : besideCharts,
     main: (
       <motion.div className="content-main training-main" layout>

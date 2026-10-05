@@ -146,3 +146,20 @@ test('a card on the chart keeps clear of the value printed for the note in the b
     }
   }
 });
+
+test('a compare pair on a portrait phone keeps its second chart in view, the note leading the rail', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await show(page, 'training', [{"op": "show", "id": "previous-run", "type": "chart", "role": "compare", "data": {"xLabel": "EPOCH", "yLabel": "LOSS", "xMax": 40, "yMin": 0.08, "yMax": 0.3, "series": [{"name": "VAL LOSS", "semantic": "cyan", "values": [0.292, 0.278, 0.263, 0.249, 0.237, 0.226, 0.216, 0.207, 0.199, 0.192, 0.186, 0.181, 0.177, 0.174, 0.172, 0.171, 0.172, 0.174, 0.177, 0.181, 0.186, 0.192, 0.199, 0.207, 0.216, 0.224]}], "title": "RUN / GRAPE-AMODAL-03", "subtitle": "COMPARISON / PREVIOUS", "context": "TRAINING RUN", "compareLabel": "PREVIOUS"}}]);
+  await expect(page.locator('.chart-object')).toHaveCount(2);
+  // A band would push the compare chart out of the scrolling row.
+  await expect(page.locator('.chart-note-band')).toHaveCount(0);
+  const geometry = await page.evaluate(() => {
+    const row = document.querySelector('.training-charts')!.getBoundingClientRect();
+    const compare = document.querySelectorAll('.chart-object')[1].getBoundingClientRect();
+    const note = document.querySelector('.content-rail .rail-note')?.getBoundingClientRect() ?? null;
+    const details = document.querySelector('.content-rail__details')!.getBoundingClientRect();
+    return { row: { top: row.top, bottom: row.bottom }, compareTop: compare.top, note: note && { top: note.top, bottom: note.bottom }, details: { top: details.top, bottom: details.bottom } };
+  });
+  expect(geometry.compareTop).toBeLessThan(geometry.row.bottom - 40);
+  if (geometry.note) expect(geometry.note.top).toBeLessThanOrEqual(geometry.details.top + 2);
+});
