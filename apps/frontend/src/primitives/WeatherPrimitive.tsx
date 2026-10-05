@@ -314,7 +314,7 @@ export function WeatherPrimitive({ data, marked, framed = false }: { data: Weath
   const hours = data.hourly ?? [];
   const days = data.daily ?? [];
   // The days an outlook would stand beside the conditions: the days to come.
-  const offered = outlookOffer(days, data.current, marked);
+  const offered = outlookOffer(days, data, marked);
   const layout = weatherLayout(size.width, size.height, {
     hourly: hours.length > 0,
     daily: days.length > 0,
