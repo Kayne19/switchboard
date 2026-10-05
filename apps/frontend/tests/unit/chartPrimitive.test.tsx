@@ -14,6 +14,7 @@ import {
   chartBars,
   chartLegendLayout,
   chartPad,
+  chartPointCallouts,
   chartScales,
   chartSeriesPoint,
 } from '../../src/primitives/chartGeometry';
@@ -199,7 +200,40 @@ describe('chart series point', () => {
     expect(point.y).toBeCloseTo(Number(marker.getAttribute('cy')), 1);
   });
 
-  it('marks a point with a ring alone, with no guide line through the plot', () => {
+  // A point a note named on a line was not marked at all while its card sat
+  // on the chart, and the marker's ring was cut in half at the plot's edge.
+  it('marks each point a note names as it marks its marker: a ring, and its value printed by it, both whole past the plot\'s clip', () => {
+    const chart: ChartData = { xMax: 3, yMin: 0, yMax: 5, series: [{ name: 'LOSS', values: [5, 3, 2, 1] }], marker: { x: 3 } };
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root.render(<ChartPrimitive data={chart} named={[{ x: 0 }, { x: 3 }]} />));
+    const marked = [...host.querySelectorAll<SVGGElement>('.chart-marker')];
+    // The marker's point and the first note's, once each.
+    expect(marked.map((group) => group.getAttribute('data-x'))).toEqual(['3', '0']);
+    const callouts = chartPointCallouts(chart, [{ x: 0 }, { x: 3 }]);
+    marked.forEach((group, index) => {
+      expect(group.closest('[clip-path]')).toBeNull();
+      const ring = group.querySelector('.chart-marker__point')!;
+      expect(Number(ring.getAttribute('cx'))).toBeCloseTo(callouts[index].at.x, 3);
+      expect(Number(ring.getAttribute('cy'))).toBeCloseTo(callouts[index].at.y, 3);
+      const value = group.querySelector('.chart-marker__value')!;
+      expect(value.textContent).toBe(callouts[index].value.text);
+      expect(group.getAttribute('data-from')).toBe(callouts[index].from);
+    });
+    expect(marked[1].querySelector('.chart-marker__value')!.textContent).toBe('5');
+  });
+
+  it("rings a scatter's marked point without hiding it, and fills a line's ring over the line", () => {
+    renderWith({ kind: 'scatter', xMax: 3, series: [{ name: 'A', values: [4, 3, 2, 1] }], marker: { x: 2 } });
+    expect(host.querySelector('.chart-marker__point')!.getAttribute('fill')).toBe('none');
+    act(() => root.unmount());
+    host.remove();
+    renderWith({ xMax: 3, series: [{ name: 'A', values: [4, 3, 2, 1] }], marker: { x: 2 } });
+    expect(host.querySelector('.chart-marker__point')!.getAttribute('fill')).toBe('#000');
+  });
+
+  it('marks a point with a ring and its value, with no guide line through the plot', () => {
     renderWith({
       series: [{ name: 'LOSS', values: [4, 3, 2, 1] }],
       xMax: 3,
