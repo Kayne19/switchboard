@@ -57,6 +57,24 @@ function sideBySideOverlaps() {
   return hits;
 }
 
+/** Stepped events whose title a later step lies over before a line of it shows. */
+function coveredTitles() {
+  const hits: string[] = [];
+  for (const column of document.querySelectorAll('.calendar-grid__column')) {
+    const steps = [...column.querySelectorAll<HTMLElement>(':scope > .calendar-event-slot')].filter((slot) => slot.style.right !== '');
+    for (const earlier of steps) {
+      const title = earlier.querySelector('.calendar-event__title')!.getBoundingClientRect();
+      for (const later of steps) {
+        if (later === earlier || Number(later.style.zIndex) <= Number(earlier.style.zIndex)) continue;
+        const box = later.getBoundingClientRect();
+        const across = Math.min(box.right, title.right) - Math.max(box.left, title.left);
+        if (across > 1 && box.top < title.top + 9 && box.bottom > title.top) hits.push(`${earlier.dataset.item} under ${later.dataset.item}`);
+      }
+    }
+  }
+  return hits;
+}
+
 for (const geometry of geometries) {
   test.describe(geometry.name, () => {
     test.use({ viewport: { width: geometry.width, height: geometry.height } });
@@ -85,6 +103,7 @@ for (const geometry of geometries) {
         expect(fit.badges).toBe(1);
         expect(fit.badgeInView).toBe(true);
         expect(await page.evaluate(sideBySideOverlaps)).toEqual([]);
+        expect(await page.evaluate(coveredTitles)).toEqual([]);
       });
     }
 
@@ -99,7 +118,7 @@ for (const geometry of geometries) {
   });
 }
 
-test('a week on a phone pages its columns from today, names the hidden days, and turns on a tap', async ({ page }) => {
+test('a week in a narrow portrait box pages its columns from today, names the hidden days, and turns on a tap', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await open(page, 'calendar');
   const days = () => page.locator('.scene .calendar-grid__weekday').allTextContents();
