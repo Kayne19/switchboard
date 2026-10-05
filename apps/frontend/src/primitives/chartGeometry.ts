@@ -109,10 +109,10 @@ export const CHART_TICK_BASELINE = CHART_PAD.bottom - 20;
 // A horizontal bar chart's category labels end 14 before the plot, as the y
 // ticks do, and leave the rotated axis label its strip on the far left.
 const CHART_CATEGORY_PAD_GAP = 40;
-// The most of the width those labels may take; a longer one is truncated.
-// A frame narrower than the approved canvas gives them the same share of
-// its width.
-export const CHART_CATEGORY_PAD_MAX = 340;
+// The most of the width those labels may take, three tenths of it: a
+// longer one wraps (`wrapLabel`), so the bars keep the rest. A frame
+// narrower than the approved canvas gives them the same share of its width.
+export const CHART_CATEGORY_PAD_MAX = 300;
 function categoryPadMax(frame: ChartFrame): number {
   return Math.min(CHART_CATEGORY_PAD_MAX, (CHART_CATEGORY_PAD_MAX * frame.width) / CHART_VIEW_WIDTH);
 }

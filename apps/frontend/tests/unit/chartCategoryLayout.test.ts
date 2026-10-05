@@ -140,6 +140,12 @@ describe('chart category layout', () => {
     expect(cut.lines[1].length).toBeLessThanOrEqual(8);
   });
 
+  it('leaves the bars seven tenths of the width, a long label wrapping instead', () => {
+    const chart = labelled(6, 40, 'bar');
+    expect(chartScales(chart).plot.left).toBeLessThanOrEqual(300);
+    expect(chartCategoryLayout(chart).ticks[0].lines).toHaveLength(2);
+  });
+
   it('gives a narrow frame the same share of its width for the labels', () => {
     const chart = labelled(6, 40, 'bar');
     const narrow = { width: 538, height: 618 };

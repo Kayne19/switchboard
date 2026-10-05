@@ -418,7 +418,10 @@ describe('chart kinds', () => {
     expect(host.querySelector('.chart-primitive')!.getAttribute('data-orientation')).toBe('horizontal');
     const scales = chartScales(chart);
     const labels = [...host.querySelectorAll<SVGTextElement>('.chart-grid__category')];
-    expect(labels.map((label) => label.textContent)).toEqual(chart.labels);
+    // Each label whole, on its lines (a label past its column wraps).
+    const drawn = (label: SVGTextElement) =>
+      label.querySelectorAll('tspan').length > 0 ? [...label.querySelectorAll('tspan')].map((line) => line.textContent).join('') : label.textContent;
+    expect(labels.map(drawn)).toEqual(chart.labels);
     for (const label of labels) {
       expect(label.getAttribute('text-anchor')).toBe('end');
       expect(Number(label.getAttribute('x'))).toBeLessThan(scales.plot.left);
