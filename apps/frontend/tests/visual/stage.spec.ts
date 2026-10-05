@@ -276,6 +276,37 @@ test('a bar chart of sixty categories on a phone lies on its side and scrolls in
   await expect(chart.locator('.drawing-viewport__rim--top')).toHaveText(/\d+ BARS/);
 });
 
+// A note on a scrolled chart lies on its canvas, so its card and leader
+// keep to the bar they name as the rows scroll.
+const hundredShortBars = [
+  { op: 'clear' },
+  {
+    op: 'show', id: 'minutes', type: 'chart', role: 'primary',
+    data: { kind: 'bar', title: 'CI / 100 SERVICES', labels: Array.from({ length: 100 }, (_, index) => `service-${String(index).padStart(2, '0')}`), series: [{ name: 'THIS WEEK', values: Array.from({ length: 100 }, (_, index) => (index === 3 ? 100 : 5 + ((index * 7) % 20))) }] },
+  },
+  { op: 'show', id: 'slow-note', type: 'note', data: { tag: 'SLOWEST', segments: [{ text: 'service-71 doubled since last week.' }], anchor: { target: 'minutes', x: 71 } } },
+];
+
+test('a note on a scrolled bar chart opens on its bar and keeps to it as the rows scroll', async ({ page }) => {
+  await page.setViewportSize({ width: 820, height: 1180 });
+  await open(page, 'idle', hundredShortBars);
+  const chart = page.locator('.chart-primitive');
+  await expect(chart).toHaveClass(/chart-primitive--scrolls/);
+  const card = page.locator('.chart-primitive__canvas > .chart-notes .chart-note[data-note="slow-note"]');
+  await expect(card).toBeVisible();
+  const row = chart.locator('.chart-grid__category[data-item="71"]');
+  const offset = async () => (await card.boundingBox())!.y - (await row.boundingBox())!.y;
+  // It opened on the named bar, in view.
+  const view = (await chart.locator('.list-viewport__port').boundingBox())!;
+  const named = (await row.boundingBox())!;
+  expect(named.y).toBeGreaterThanOrEqual(view.y);
+  expect(named.y + named.height).toBeLessThanOrEqual(view.y + view.height);
+  const before = await offset();
+  await chart.locator('.list-viewport__scroll').evaluate((scroll) => scroll.scrollBy({ top: -240 }));
+  await page.waitForTimeout(300);
+  expect(Math.abs((await offset()) - before)).toBeLessThan(1);
+});
+
 for (const { name, scene, actions } of [
   { name: 'a stepped plan under a chart', scene: 'training', actions: chartOverPlan },
   { name: 'a long table beside a diagram that fits', scene: 'idle', actions: tableBeside },

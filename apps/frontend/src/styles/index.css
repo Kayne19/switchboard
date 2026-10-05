@@ -969,6 +969,12 @@ button {
 .chart-primitive__axis {
   flex: none;
 }
+
+/* The notes on a scrolled chart lie in its canvas (ChartNotes), over the
+   whole chart, and scroll with it. */
+.chart-primitive__canvas > .chart-notes {
+  inset: 0;
+}
 .chart-grid line {
   stroke: rgba(232, 230, 223, 0.11);
   stroke-width: 1;

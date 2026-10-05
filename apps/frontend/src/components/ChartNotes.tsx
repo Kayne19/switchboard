@@ -1,5 +1,6 @@
 import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'motion/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { ChartData, NoteData, SceneObject } from '../controller/types';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import {
@@ -153,6 +154,21 @@ export function ChartNotes({
   const markedRef = useRef(marked);
   markedRef.current = marked;
   const spill = onRailNote !== undefined;
+  // A chart too long for its slot scrolls its canvas in it
+  // (ChartPrimitive): the layer is laid in that canvas, so its cards and
+  // leaders scroll with the bars they name and are laid out over the whole
+  // chart. Found from a mark left where the layer stands otherwise.
+  const markRef = useRef<HTMLSpanElement>(null);
+  const [canvas, setCanvas] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    const panel = markRef.current?.parentElement;
+    if (!panel) return undefined;
+    const find = () => setCanvas(panel.querySelector<HTMLElement>('.chart-primitive__canvas'));
+    find();
+    const watcher = new MutationObserver(find);
+    watcher.observe(panel, { childList: true, subtree: true });
+    return () => watcher.disconnect();
+  }, []);
 
   // What moves a card without resizing anything: which notes there are and
   // what each one names. A size change reaches the observer instead.
@@ -164,7 +180,7 @@ export function ChartNotes({
   useLayoutEffect(() => {
     const layer = layerRef.current;
     if (!layer) return;
-    const svgOf = () => layer.parentElement?.querySelector<SVGSVGElement>('.chart-primitive > svg') ?? null;
+    const svgOf = () => layer.parentElement?.querySelector<SVGSVGElement>('.chart-primitive > svg, .chart-primitive__canvas > svg') ?? null;
 
     const measure = () => {
       const current = notesRef.current;
@@ -298,7 +314,7 @@ export function ChartNotes({
     if (svg?.parentElement) observer.observe(svg.parentElement);
     for (const element of cardRefs.current.values()) observer.observe(element);
     return () => observer.disconnect();
-  }, [signature, chart.data, spill]);
+  }, [signature, chart.data, spill, canvas]);
 
   // Which notes name a point the chart can draw.
   const anchored = useMemo(() => {
@@ -325,7 +341,7 @@ export function ChartNotes({
     return () => onRailNote(chartId, away, false);
   }, [away, chartId, onRailNote, present]);
 
-  return (
+  const layer = (
     <div className="chart-notes" ref={layerRef} data-note-count={notes.length}>
       <svg className="chart-notes__leaders" aria-hidden="true">
         <AnimatePresence initial={false}>
@@ -386,5 +402,11 @@ export function ChartNotes({
         })}
       </AnimatePresence>
     </div>
+  );
+  return (
+    <>
+      <span ref={markRef} hidden />
+      {canvas ? createPortal(layer, canvas) : layer}
+    </>
   );
 }
