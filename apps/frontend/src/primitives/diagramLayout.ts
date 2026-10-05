@@ -416,6 +416,20 @@ function labelBacking(text: string) {
   };
 }
 
+// --- Lit edges ---------------------------------------------------------------
+
+/**
+ * Which edges are drawn lit: those marked active, and, when exactly one
+ * node is active, every edge that touches it. The renderer lights them; the
+ * layout keeps lit and unlit stubs apart, so a shared stub is lit only when
+ * all its edges are.
+ */
+export function litEdges(data: DiagramData): (edge: DiagramEdge) => boolean {
+  const active = data.nodes.filter((node) => node.state === 'active').map((node) => node.id);
+  const single = active.length === 1 ? active[0] : null;
+  return (edge) => Boolean(edge.active || (single !== null && (edge.from === single || edge.to === single)));
+}
+
 // --- Cycle removal ---------------------------------------------------------
 
 export interface DirectedEdge {
@@ -1327,6 +1341,7 @@ function arrange(
     for (const [id, count] of ends) portRoom.set(id, Math.max(portSpan(count.out, count.outArrows), portSpan(count.in, count.inArrows)) + 2 * PORT_INSET);
   };
   measurePorts(directed);
+  const lit = litEdges(data);
   const extentOf = (id: string) => {
     const text = textOf.get(id);
     if (text) {
@@ -1366,7 +1381,7 @@ function arrange(
       // colour, share one terminal listing every far end, so a node sends
       // one stub to `-> a / -> b` rather than a row of them. It stands in
       // the layer next to its node.
-      const entries = new Map<string, { node: string; side: 'out' | 'in'; reversed: boolean; texts: string[]; quiet: boolean[] }>();
+      const entries = new Map<string, { node: string; side: 'out' | 'in'; reversed: boolean; texts: string[]; quiet: boolean[]; named: Set<string> }>();
       const wrapAt = wrap === NARROW_WRAP ? TERMINAL_WRAP.narrow : TERMINAL_WRAP.approved;
       for (const entry of directed) {
         if (!stubbed.has(entry)) continue;
@@ -1376,19 +1391,32 @@ function arrange(
         const note = edge.label ? wrapLine(edge.label, wrapAt, 2) : [];
         // By its true source a stub names the target; by its true target,
         // the source. Laid out backwards, the layout source is the target.
-        const style = `${edge.semantic ?? 'paper'}/${edge.active ? 'active' : ''}`;
+        const style = `${edge.semantic ?? 'paper'}/${lit(edge) ? 'lit' : ''}`;
         const ids = { out: `\u0000${entry.from}/out/${entry.reversed}/${style}`, in: `\u0000${entry.to}/in/${entry.reversed}/${style}` };
         // The arrow stays on the line with the name's first word (toward the
-        // target) or its last (from the source).
-        const toward = (name: string) => wrapLine(name, wrapAt - 3, 3).map((line, index) => (index === 0 ? `-> ${line}` : line));
-        const from = (name: string) => wrapLine(name, wrapAt - 3, 3).map((line, index, all) => (index === all.length - 1 ? `${line} ->` : line));
+        // target) or its last (from the source), next to where the stub
+        // meets the names. A feedback edge runs against the reading axis, so
+        // read across the page its arrow is drawn the other way round:
+        // `target <-` by its source, `<- source` by its target. Read down
+        // the page the arrow is a mark of direction, not of the line, and
+        // stays `->`.
+        const back = entry.reversed && landscape;
+        const first = (name: string, mark: string) => wrapLine(name, wrapAt - 3, 3).map((line, index) => (index === 0 ? `${mark} ${line}` : line));
+        const last = (name: string, mark: string) => wrapLine(name, wrapAt - 3, 3).map((line, index, all) => (index === all.length - 1 ? `${line} ${mark}` : line));
+        const toTarget = back ? last(target, '<-') : first(target, '->');
+        const fromSource = back ? first(source, '<-') : last(source, '->');
         for (const [id, node, side, lines] of [
-          [ids.out, entry.from, 'out', entry.reversed ? from(source) : toward(target)],
-          [ids.in, entry.to, 'in', entry.reversed ? toward(target) : from(source)],
+          [ids.out, entry.from, 'out', entry.reversed ? fromSource : toTarget],
+          [ids.in, entry.to, 'in', entry.reversed ? toTarget : fromSource],
         ] as const) {
-          const known = entries.get(id) ?? { node, side, reversed: entry.reversed, texts: [], quiet: [] };
-          known.texts.push(...lines, ...note);
-          known.quiet.push(...lines.map(() => false), ...note.map(() => true));
+          const known = entries.get(id) ?? { node, side, reversed: entry.reversed, texts: [], quiet: [], named: new Set<string>() };
+          // Two edges alike (the same far end and label) are named once.
+          const key = [...lines, '', ...note].join('\n');
+          if (!known.named.has(key)) {
+            known.named.add(key);
+            known.texts.push(...lines, ...note);
+            known.quiet.push(...lines.map(() => false), ...note.map(() => true));
+          }
           entries.set(id, known);
         }
         terminalsOf.set(entry, ids);

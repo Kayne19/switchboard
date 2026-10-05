@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react';
 import type { DiagramData, NoteData, Semantic } from '../controller/types';
-import { ARROW_LENGTH, LABEL_INSET, cornerTagBoxes, nodeFramePath, viewDiagram, type DiagramLayout, type EdgeLabel, type EdgeStub, type Point } from './diagramLayout';
+import { ARROW_LENGTH, LABEL_INSET, cornerTagBoxes, litEdges, nodeFramePath, viewDiagram, type DiagramLayout, type EdgeLabel, type EdgeStub, type Point } from './diagramLayout';
 import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
 
 const colors: Record<Semantic, string> = {
@@ -138,30 +138,23 @@ export function DiagramPrimitive({
     return () => onCalloutChange?.(false);
   }, [calloutPlaced, onCalloutChange]);
 
-  const activeNodes = new Set(data.nodes.filter((node) => node.state === 'active').map((node) => node.id));
-  const hasSingleActiveNode = activeNodes.size === 1;
+  const lit = litEdges(data);
   const edges = layout.edges.map((laidOut, index) => {
     const { edge } = laidOut;
-    const active = Boolean(
-      edge.active || (hasSingleActiveNode && (activeNodes.has(edge.from) || activeNodes.has(edge.to))),
-    );
-    return { ...laidOut, key: `${edge.from}-${edge.to}-${index}`, active, color: colors[edge.semantic ?? 'paper'] };
+    return { ...laidOut, key: `${edge.from}-${edge.to}-${index}`, index, active: lit(edge), color: colors[edge.semantic ?? 'paper'] };
   });
   // Stubs, each drawn once: the stubs leaving one side of a node share a
-  // line and a label (they share a colour too), lit when any of their
-  // edges is.
+  // line and a label, and the layout shares them only between edges of one
+  // colour, lit or not alike (litEdges). A stub fades in with its first
+  // edge.
   const stubs = (() => {
-    const drawn = new Map<EdgeStub, { key: string; points: Point[]; label: EdgeLabel; align: EdgeStub['align']; quiet: boolean[]; head: boolean; color: string; semantic: Semantic; active: boolean }>();
+    const drawn = new Map<EdgeStub, { key: string; index: number; points: Point[]; label: EdgeLabel; align: EdgeStub['align']; quiet: boolean[]; head: boolean; color: string; semantic: Semantic; active: boolean }>();
     for (const edge of edges) {
       if (!edge.stubs) continue;
       for (const [end, stub] of [['from', edge.stubs.from], ['to', edge.stubs.to]] as const) {
-        const known = drawn.get(stub);
-        if (known) {
-          known.active ||= edge.active;
-          continue;
-        }
+        if (drawn.has(stub)) continue;
         const semantic = edge.edge.semantic ?? 'paper';
-        drawn.set(stub, { key: `${edge.key}-${end}`, points: stub.points, label: stub.label, align: stub.align, quiet: stub.quiet, head: end === 'to', color: edge.color, semantic, active: edge.active });
+        drawn.set(stub, { key: `${edge.key}-${end}`, index: edge.index, points: stub.points, label: stub.label, align: stub.align, quiet: stub.quiet, head: end === 'to', color: edge.color, semantic, active: edge.active });
       }
     }
     return [...drawn.values()];
@@ -234,11 +227,11 @@ export function DiagramPrimitive({
           {/* An edge too long to follow is drawn as two stubs. The one
               leaving its source ends at the names of its targets, so it
               carries no arrowhead; the one reaching its target does. */}
-          {stubs.map((stub, index) => (
+          {stubs.map((stub) => (
             <path
               key={stub.key}
               className={`diagram-edge diagram-edge--stub${stub.active ? ' diagram-edge--active' : ''}`}
-              style={{ animationDelay: `${(edges.length + index) * 60}ms` }}
+              style={{ animationDelay: `${stub.index * 60}ms` }}
               d={pathThrough(stub.points)}
               fill="none"
               stroke={stub.color}

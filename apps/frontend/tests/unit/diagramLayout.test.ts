@@ -3,7 +3,6 @@ import type { DiagramData } from '../../src/controller/types';
 import { pipelineDiagram, topologyDiagram } from '../../src/fixtures/scenes';
 import {
   ARROW_LENGTH,
-  ARROW_PORT_PITCH,
   breakCycles,
   cornerTagBoxes,
   frameFor,
@@ -20,6 +19,8 @@ import {
 } from '../../src/primitives/diagramLayout';
 
 const NO_TAGS = { glyph: false, marker: false };
+// An arrowhead is 11 units wide; two keep a 3-unit gap between them.
+const ARROW_ROOM = 14;
 
 const graph = (nodes: string[], edges: Array<[string, string, string]>): DiagramData => ({
   mode: 'graph',
@@ -279,7 +280,7 @@ for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
           const text = edge.edge.label;
           if (!text) continue;
           if (edge.stubs) {
-            for (const stub of [edge.stubs.from, edge.stubs.to]) expect(stub.label.lines.filter((_, index) => stub.quiet[index]).join(' '), named(edge)).toContain(text.split(/\s+/)[0]);
+            for (const stub of [edge.stubs.from, edge.stubs.to]) expect(stub.label.lines.filter((_, index) => stub.quiet[index]).join(' '), named(edge)).toContain(text);
           } else {
             expect(edge.label?.text, named(edge)).toBe(text);
           }
@@ -380,7 +381,7 @@ for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
           for (const other of ends.slice(index + 1)) {
             const apart = Math.hypot(end.point.x - other.point.x, end.point.y - other.point.y);
             expect(apart).toBeGreaterThan(1e-6);
-            if (end.head && other.head) expect(apart).toBeGreaterThanOrEqual(ARROW_PORT_PITCH - 1e-6);
+            if (end.head && other.head) expect(apart).toBeGreaterThanOrEqual(ARROW_ROOM - 1e-6);
           }
         });
       });
@@ -442,7 +443,7 @@ for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
       const arrival = back.points[back.points.length - 1];
       for (const edge of layout.edges.filter((other) => other.edge.from === 'root')) {
         const start = edge.points[0];
-        expect(Math.hypot(start.x - arrival.x, start.y - arrival.y), `root->${edge.edge.to}`).toBeGreaterThanOrEqual(ARROW_PORT_PITCH - 1e-6);
+        expect(Math.hypot(start.x - arrival.x, start.y - arrival.y), `root->${edge.edge.to}`).toBeGreaterThanOrEqual(ARROW_ROOM - 1e-6);
       }
     });
 
