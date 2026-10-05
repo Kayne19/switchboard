@@ -313,30 +313,55 @@ class CallsTest(ModuleTestCase):
         self.assertEqual(host.calls()[-1]["args"]["action"]["data"]["series"][0]["values"], [1, 2, 3])
 
     def test_dates_and_datetimes_are_sent_as_the_time_forms(self):
-        # docs/display-tool.md, "Time values": a date, the caller's wall clock
-        # to the minute, or an instant with its offset (a timer's only).
+        # docs/display-tool.md, "Time values": a date; a wall time on the
+        # datetime's own clock, to the minute; and for a timer's endsAt and
+        # startedAt only, an instant with its offset.
         host = self.host()
         pacific = datetime.timezone(datetime.timedelta(hours=-7))
         week = {
             "view": "week",
             "start": datetime.date(2026, 10, 5),
             "now": datetime.datetime(2026, 10, 7, 9, 40, 27),
-            "events": [{"id": "dentist", "title": "Dentist", "start": datetime.datetime(2026, 10, 7, 10, 0)}],
+            "events": [
+                {"id": "dentist", "title": "Dentist", "start": datetime.datetime(2026, 10, 7, 10, 30)},
+                # A calendar API's aware datetime is drawn on its own clock.
+                {"id": "standup", "title": "Standup", "start": datetime.datetime(2026, 10, 7, 9, 30, tzinfo=pacific)},
+            ],
         }
         timers = {"timers": [
-            {"id": "pasta", "label": "Pasta", "endsAt": datetime.datetime(2026, 10, 5, 18, 42, tzinfo=pacific)},
+            {"id": "pasta", "label": "Pasta", "endsAt": datetime.datetime(2026, 10, 5, 18, 42, tzinfo=pacific),
+             "startedAt": datetime.datetime(2026, 10, 5, 18, 33, tzinfo=pacific)},
             {"id": "tea", "label": "Tea", "endsAt": datetime.datetime(2026, 10, 6, 1, 15, 0, 250000, tzinfo=datetime.timezone.utc)},
+            # No instant has an offset with seconds: it is written in UTC.
+            {"id": "odd", "label": "Odd zone", "endsAt": datetime.datetime(
+                2026, 10, 6, 1, 15, tzinfo=datetime.timezone(datetime.timedelta(hours=5, seconds=30)))},
         ]}
         self.run_call(switchboard.display, op="show", id="week", type="calendar", data=week)
         self.run_call(switchboard.display, op="show", id="kitchen", type="timer", data=timers)
         sent = [call["args"]["action"]["data"] for call in host.calls()]
         self.assertEqual(sent[0], {
             "view": "week", "start": "2026-10-05", "now": "2026-10-07T09:40",
-            "events": [{"id": "dentist", "title": "Dentist", "start": "2026-10-07T10:00"}],
+            "events": [
+                {"id": "dentist", "title": "Dentist", "start": "2026-10-07T10:30"},
+                {"id": "standup", "title": "Standup", "start": "2026-10-07T09:30"},
+            ],
         })
-        self.assertEqual([timer["endsAt"] for timer in sent[1]["timers"]], [
-            "2026-10-05T18:42:00-07:00", "2026-10-06T01:15:00.250000+00:00",
-        ])
+        self.assertEqual(
+            [(timer.get("startedAt"), timer["endsAt"]) for timer in sent[1]["timers"]],
+            [
+                ("2026-10-05T18:33:00-07:00", "2026-10-05T18:42:00-07:00"),
+                (None, "2026-10-06T01:15:00.250000+00:00"),
+                (None, "2026-10-05T20:14:30+00:00"),
+            ],
+        )
+
+    def test_a_naive_datetime_is_no_instant(self):
+        host = self.host()
+        timers = {"timers": [{"id": "pasta", "label": "Pasta", "endsAt": datetime.datetime(2026, 10, 5, 18, 42)}]}
+        with self.assertRaises(ValueError) as caught, contextlib.redirect_stdout(io.StringIO()):
+            switchboard.display(op="show", id="kitchen", type="timer", data=timers)
+        self.assertIn("endsAt is an instant: give an aware datetime", str(caught.exception))
+        self.assertEqual(host.connections, 0)
 
 
 class ProgrammingErrorTest(ModuleTestCase):

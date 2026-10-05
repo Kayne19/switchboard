@@ -44,7 +44,7 @@ _SHAPES = {
     # The wire shape; `_image_data` makes it from a path or raw bytes first.
     "image": (("format", "bytes", "alt"), '{alt, path:"/tmp/fig.png"} or {alt, bytes:<raw bytes>}'),
     # Times are "YYYY-MM-DD", a wall time "YYYY-MM-DDTHH:MM", or (a timer's
-    # only) an instant "YYYY-MM-DDTHH:MM:SS-07:00"; `_wire_time` writes them
+    # only) an instant "YYYY-MM-DDTHH:MM:SS-07:00"; `_wire_times` writes them
     # from date and datetime values.
     "calendar": (
         ("view", "start", "events"),
@@ -118,29 +118,13 @@ def _identity():
     return _os.path.basename(session_dir), depth
 
 
-def _wire_time(value):
-    """A date or datetime as the display contract writes a time
-    (docs/display-tool.md, "Time values"): a date is "YYYY-MM-DD"; a naive
-    datetime is the caller's wall clock, "YYYY-MM-DDTHH:MM" (to the minute,
-    as the page draws it); an aware one is an instant with its offset, the
-    form a timer's `endsAt` takes."""
-    if not isinstance(value, _datetime.datetime):
-        return value.isoformat()
-    if value.tzinfo is None or value.utcoffset() is None:
-        return value.strftime("%Y-%m-%dT%H:%M")
-    return value.isoformat(timespec="seconds" if value.microsecond == 0 else "microseconds")
-
-
 def _encode(request):
     """One JSON line. Raises TypeError for a value JSON cannot carry (a programming error);
-    array-likes with `tolist()` (numpy values) are converted, and so are dates and
-    datetimes (`_wire_time`)."""
+    array-likes with `tolist()` (numpy values) are converted."""
 
     def plain(value):
         if hasattr(value, "tolist"):
             return value.tolist()
-        if isinstance(value, _datetime.date):
-            return _wire_time(value)
         raise TypeError(f"{type(value).__name__} cannot be sent to the switchboard")
 
     return _json.dumps(request, default=plain).encode() + b"\n"
@@ -363,9 +347,54 @@ def _check_display_action(action):
         raise ValueError(f"{kind} data needs {' or '.join(one_of)}; its shape is {hint}")
 
 
+# ---- time values ---------------------------------------------------------------
+
+# A timer's two times are instants, measured against the page clock; every
+# other time a display takes is a date or the caller's wall time
+# (docs/display-tool.md, "Time values").
+_INSTANT_KEYS = ("endsAt", "startedAt")
+
+
+def _wire_instant(value, key):
+    """An aware datetime as an instant with its offset. A naive one names no
+    moment, so it raises; an offset with seconds (no instant has one) is
+    written in UTC instead."""
+    offset = value.utcoffset()
+    if offset is None:
+        raise ValueError(
+            f"{key} is an instant: give an aware datetime, such as "
+            "datetime.now(timezone.utc) + timedelta(minutes=9), or text like 2026-10-05T18:42:00-07:00"
+        )
+    if offset.seconds % 60 or offset.microseconds:
+        value = value.astimezone(_datetime.timezone.utc)
+    return value.isoformat(timespec="seconds" if value.microsecond == 0 else "microseconds")
+
+
+def _wire_times(value, key=None):
+    """`value` with each date and datetime written as the time text the
+    display takes, by the field it is in: a date as "YYYY-MM-DD"; a
+    datetime as a wall time on its own clock, "YYYY-MM-DDTHH:MM" (to the
+    minute, as the page draws it), except a timer's `endsAt` and
+    `startedAt`, which are instants."""
+    if isinstance(value, dict):
+        return {name: _wire_times(item, name) for name, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_wire_times(item, key) for item in value]
+    if isinstance(value, _datetime.datetime):
+        if key in _INSTANT_KEYS:
+            return _wire_instant(value, key)
+        return value.strftime("%Y-%m-%dT%H:%M")
+    if isinstance(value, _datetime.date):
+        return value.isoformat()
+    return value
+
+
 def _display_wire_action(action):
-    """The action as it is sent: an image's path or raw bytes become its wire
-    fields, then its outline is checked (a malformed one raises)."""
+    """The action as it is sent: dates and datetimes become time text, an
+    image's path or raw bytes become its wire fields, then its outline is
+    checked (a malformed one raises)."""
+    if isinstance(action, dict) and action.get("op") == "show" and isinstance(action.get("data"), dict):
+        action = {**action, "data": _wire_times(action["data"])}
     if isinstance(action, dict) and action.get("op") == "show" and action.get("type") == "image" and isinstance(action.get("data"), dict):
         action = {**action, "data": _image_data(action["data"])}
     _check_display_action(action)
