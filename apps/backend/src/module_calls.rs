@@ -15,6 +15,7 @@ use crate::speech::{
     reserve_speech, send_speech, trace_speech, ContinuationScope, ReserveFailure, SpeakUnder,
     SpeechAdmission, SpeechFailure, WhenQueueFull,
 };
+use crate::visual_protocol::invalid_name;
 use axum::extract::{State, WebSocketUpgrade};
 #[cfg(test)]
 use axum::http::StatusCode;
@@ -24,6 +25,14 @@ use axum::Json;
 use http_body_util::BodyExt;
 use serde::Deserialize;
 use serde_json::{json, Value};
+
+/// What `request_to_speak` takes as its `reason`, in the skill module's order
+/// (`_SPEAK_REASONS`).
+const SPEAK_REASONS: [&str; 3] = ["finished", "needs_decision", "problem"];
+/// The views `view` names when it refuses a target, in the skill module's
+/// order (`_VIEW_TARGETS`). The page also takes older names for them; this
+/// is the set an agent is told.
+const VIEW_TARGETS: [&str; 5] = ["visual", "comms", "system", "theater", "auto"];
 
 async fn promote_candidate_for_token(state: &AppState, token: &str) {
     if state
@@ -305,20 +314,20 @@ pub(crate) async fn request_to_speak(state: AppState, token: &str, raw: Value) -
         )
             .into_response();
     };
-    let Some(reason) = raw.get("reason").and_then(Value::as_str) else {
+    // Missing or not one of the three, it is refused as the display
+    // validators refuse a name (docs/display-tool.md, "How the two
+    // validators agree"), in the skill module's words.
+    let Some(reason) = raw
+        .get("reason")
+        .and_then(Value::as_str)
+        .filter(|reason| SPEAK_REASONS.contains(reason))
+    else {
         return (
             axum::http::StatusCode::BAD_REQUEST,
-            Json(json!({"detail":"reason is required"})),
+            Json(json!({"detail": invalid_name("reason", &SPEAK_REASONS)})),
         )
             .into_response();
     };
-    if !matches!(reason, "finished" | "needs_decision" | "problem") {
-        return (
-            axum::http::StatusCode::BAD_REQUEST,
-            Json(json!({"detail":"reason must be finished, needs_decision or problem"})),
-        )
-            .into_response();
-    }
     let request = AgentRequest {
         message: message.to_owned(),
         reason: reason.to_owned(),
@@ -680,7 +689,7 @@ async fn view(
             axum::http::StatusCode::BAD_REQUEST,
             Json(json!({
                 "delivered": false,
-                "detail": "target must be one of: auto, visual, comms, system, theater"
+                "detail": invalid_name("target", &VIEW_TARGETS)
             })),
         )
             .into_response();

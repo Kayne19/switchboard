@@ -142,7 +142,7 @@ pub enum ServerMessage {
         success: bool,
     },
     /// A display action for the stage. `action` is validated and normalized
-    /// by `visual_protocol` and pinned by `display-actions.json`. `seq` is the
+    /// by `visual_protocol` and pinned by `validator-corpus.json`. `seq` is the
     /// delivery sequence the browser confirms it by: the socket writer stamps
     /// it on a live action (`stamp_display_seq`), and a snapshot replay
     /// carries the watermark.

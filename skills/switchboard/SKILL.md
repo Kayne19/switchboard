@@ -30,9 +30,11 @@ Every function prints one line saying what happened and returns a result with
 `status` (`delivered`, `accepted`, `refused` or `failed`), `reason`,
 `delivered`, `accepted` and `ok`. A refusal or a failure never raises. Only a
 wrong argument raises: a bad type, an unknown display type, op, role or view
-target, or a value JSON cannot carry (NaN, an infinity, or a string holding
-half of a surrogate pair). Values with `tolist()`, such as numpy arrays, are
-sent as lists.
+target, a value JSON cannot carry (NaN, an infinity, or a string holding
+half of a surrogate pair), or one the switchboard would read as another (an
+integer beyond 2**53, which it reads as a double; send a float or text), or
+data nested deeper than it reads. Values with `tolist()`, such as numpy
+arrays, are sent as lists.
 
 ## Functions
 
@@ -118,7 +120,8 @@ Types and their `data` shapes (each type takes only its own shape):
   plus `hourly: [{time, temp, condition}]` (up to 48), `daily: [{date, high,
   low, condition}]` (up to 14) and an `alert`. `condition` is one of
   `clear`, `partly-cloudy`, `cloudy`, `fog`, `drizzle`, `rain`,
-  `heavy-rain`, `thunder`, `snow`, `sleet`, `hail`, `wind`, `haze`.
+  `heavy-rain`, `thunder`, `snow`, `sleet`, `hail`, `wind`, `haze`. Give
+  `today` so a small screen shows the days after it beside the conditions.
 - inbox: `{messages: [{id, from, time}]}` (1 to 50, shown in your order),
   each with optional `subject`, `snippet`, `channel` (a short label such
   as `email`, `slack` or `sms`), `unread`, `flagged`. Give `today` so today's messages show their
@@ -154,6 +157,7 @@ switchboard.display(op="show", id="kitchen", type="timer", data={"timers": [
 switchboard.display(op="show", id="weather", type="weather", data={
     "location": "San Francisco", "units": "F",
     "current": {"temp": 61, "condition": "fog", "summary": "Fog burning off by noon"},
+    "today": "2026-10-07",
     "daily": [{"date": "2026-10-08", "high": 61, "low": 55, "condition": "rain", "precip": 80}]})
 switchboard.display(op="show", id="inbox", type="inbox", data={"today": "2026-10-07", "messages": [
     {"id": "dentist", "from": "Dr. Okafor's office", "subject": "Appointment today",
@@ -182,4 +186,6 @@ trimming it to fit.
 
 The full contract is `docs/display-tool.md` in the switchboard repository;
 the switchboard validates every action and returns its reason when it
-rejects one.
+rejects one. A name outside its set comes back as the field and every name
+it takes: `invalid series.semantic: expected one of red, orange, green,
+cyan, amber, paper, muted`.

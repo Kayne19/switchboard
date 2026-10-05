@@ -697,7 +697,7 @@ async fn send_raw(agent: &mut HostAgent, raw: String) {
 
 /// Values a host agent's JSON can hold and serde_json cannot read, each with
 /// the reason the service gives: a lone surrogate (half of an emoji), a
-/// number beyond a double, and nesting deeper than serde_json's limit of 128.
+/// number beyond a double, and nesting deeper than serde_json reads.
 fn unreadable_values() -> Vec<(String, &'static str)> {
     vec![
         (
@@ -719,9 +719,23 @@ fn unreadable_values() -> Vec<(String, &'static str)> {
         ),
         (
             format!("{}1{}", "[".repeat(200), "]".repeat(200)),
-            "arrays and objects nest deeper than the service reads (128 levels)",
+            "arrays and objects nest deeper than the service reads (127 levels)",
         ),
     ]
+}
+
+// The depth the reason names, and the skill module holds a call to, is the
+// depth serde_json reads: a frame nested MAX_FRAME_DEPTH deep is read, one
+// level more is not. The reason said 128, the level serde_json refuses.
+#[test]
+fn the_depth_the_service_reads_is_the_depth_it_names() {
+    let nested = |depth: usize| format!("{}1{}", "[".repeat(depth), "]".repeat(depth));
+    assert!(serde_json::from_str::<Value>(&nested(MAX_FRAME_DEPTH)).is_ok());
+    let error = serde_json::from_str::<Value>(&nested(MAX_FRAME_DEPTH + 1)).unwrap_err();
+    assert_eq!(
+        parse_cause(&error),
+        format!("arrays and objects nest deeper than the service reads ({MAX_FRAME_DEPTH} levels)")
+    );
 }
 
 // A module call the service cannot read is refused at once, by its id, with

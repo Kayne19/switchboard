@@ -384,7 +384,7 @@ export function WeatherPrimitive({ data, marked, framed = false }: { data: Weath
   const hours = data.hourly ?? [];
   const days = data.daily ?? [];
   // The days an outlook would stand beside the conditions: the days to come.
-  const offered = outlookOffer(days, data.current, marked);
+  const offered = outlookOffer(days, data, marked);
   // The condition line's own width (its face follows the stage, so it is
   // read, not counted): beside an outlook the figure stands as wide as it
   // or its temperature row, whichever is wider (outlookFigure).

@@ -6,7 +6,8 @@ call's token. The socket contract is in docs/host-link.md ("Skill socket").
 
 Every function returns a small result object and prints one line. A refusal
 or a failure never raises; only a programming error (a bad argument type, an
-unknown display type or op) does. The host agent and the service decide
+unknown display type or op, a value JSON cannot carry or the service would
+read as another; SKILL.md, "Results") does. The host agent and the service decide
 delivery; the checks here only catch malformed arguments early.
 """
 
@@ -20,12 +21,22 @@ __all__ = ["speak", "request_to_speak", "display", "view"]
 
 _STATUSES = ("delivered", "accepted", "refused", "failed")
 _HELLO_TIMEOUT_S = 5.0
+# The service reads a frame whose arrays and objects nest at most this deep
+# (MAX_FRAME_DEPTH in hosts.rs; docs/host-link.md, "Frames the service cannot
+# read"). The host agent relays a call's args one level into its frame, as
+# they are one level into the request line written here, so the line is held
+# to the same depth. scripts/check_hygiene.mjs keeps the two numbers equal.
+_MAX_FRAME_DEPTH = 127
+# The service and the page read every number as a double, which holds each
+# integer exactly only up to 2**53.
+_MAX_EXACT_INT = 2**53
 # The host agent answers `failed` at its own deadline (the speech deadline for
 # speak, 30 s otherwise); wait a little longer than that for its reply.
 _RELAY_TIMEOUT_S = 30.0
 _MARGIN_S = 5.0
 
 _VIEW_TARGETS = ("visual", "comms", "system", "theater", "auto")
+_SPEAK_REASONS = ("finished", "needs_decision", "problem")
 _DISPLAY_OPS = ("show", "hide", "focus", "say", "clear")
 _ROLES = ("primary", "compare", "secondary", "ambient")
 # Required `data` keys per show type, and the shape hint given when one is missing.
@@ -150,6 +161,53 @@ def _encode(request):
         ) from None
 
 
+def _field(path):
+    """`path`, its steps written `.key` for an object's key and `[n]` for an
+    array's index, as a field is written: `action.data.series[0].values[1]`."""
+    return "".join(path).lstrip(".")
+
+
+def _check_values(value, depth, path):
+    """Raises ValueError, naming the field, for a value the service would read
+    as another: an integer beyond 2**53, or arrays and objects nested deeper
+    than it reads. `depth` is the level `value` stands at in the request line.
+    Array-likes with `tolist()` are judged as `_encode` sends them."""
+    if isinstance(value, (dict, list, tuple)):
+        if depth > _MAX_FRAME_DEPTH:
+            shown = _field(path[:4]) + ("..." if len(path) > 4 else "")
+            raise ValueError(
+                f"{shown} nests arrays and objects deeper than the switchboard reads "
+                f"({_MAX_FRAME_DEPTH} levels, the call around it included); send it flatter"
+            )
+        # JSON writes every key as text, so a key is `.3`, never an index.
+        if isinstance(value, dict):
+            steps = ((f".{key}", item) for key, item in value.items())
+        else:
+            steps = ((f"[{n}]", item) for n, item in enumerate(value))
+        for step, item in steps:
+            _check_values(item, depth + 1, (*path, step))
+    elif isinstance(value, (bool, str, float, bytes, bytearray, memoryview)) or value is None:
+        # Raw image bytes become base64 text before they are sent.
+        return
+    elif isinstance(value, int):
+        if abs(value) > _MAX_EXACT_INT:
+            raise ValueError(
+                f"{_field(path)} is an integer beyond 2**53, which the switchboard reads as a double "
+                "and cannot hold exactly; send it as a float or as text"
+            )
+    elif hasattr(value, "tolist"):
+        # Followed once; what is still array-like after that is `_encode`'s to judge.
+        plain = value.tolist()
+        if not hasattr(plain, "tolist"):
+            _check_values(plain, depth, path)
+
+
+def _check_call_args(args):
+    """Raises for a value in a call's `args`, which stand one level into the
+    request line, that the service would read as another (`_check_values`)."""
+    _check_values(args, 2, ())
+
+
 def _exchange(stream, line):
     stream.write(line)
     stream.flush()
@@ -235,6 +293,13 @@ _WHITE_SPACE = frozenset(
 )
 
 
+def _invalid_name(field, allowed):
+    """The refusal of a name outside its set, as the service and the page
+    word it (docs/display-tool.md, "How the two validators agree"): the
+    field and every name it takes."""
+    return f"invalid {field}: expected one of {', '.join(allowed)}"
+
+
 def _require_str(name, value, optional=False, blank_ok=False):
     """A string, and unless `blank_ok` one with something besides White_Space;
     with `blank_ok` it need only be non-empty, as a display `say` text is."""
@@ -273,8 +338,8 @@ def request_to_speak(message, reason):
     """
     _require_str("message", message)
     _require_str("reason", reason)
-    if reason not in ("finished", "needs_decision", "problem"):
-        raise ValueError("reason must be one of: finished, needs_decision, problem")
+    if reason not in _SPEAK_REASONS:
+        raise ValueError(_invalid_name("reason", _SPEAK_REASONS))
 
     def describe(result):
         if result.accepted or result.delivered:
@@ -334,7 +399,7 @@ def _check_display_action(action):
         raise TypeError(f"a display action must be a dict, not {type(action).__name__}")
     op = action.get("op")
     if op not in _DISPLAY_OPS:
-        raise ValueError(f"unknown display op {op!r}; use one of: {', '.join(_DISPLAY_OPS)}")
+        raise ValueError(_invalid_name("op", _DISPLAY_OPS))
     if op in ("show", "hide", "focus"):
         _require_str("id", action.get("id"))
     if op == "say":
@@ -343,22 +408,24 @@ def _check_display_action(action):
     if op != "show":
         return
     kind = action.get("type")
-    if kind not in _SHAPES:
+    if not isinstance(kind, str) or kind not in _SHAPES:
         shapes = " | ".join(f"{name}: {hint}" for name, (_, hint) in _SHAPES.items())
-        raise ValueError(f"unknown display type {kind!r}; each type takes only its own shape: {shapes}")
+        raise ValueError(f"{_invalid_name('show.type', _SHAPES)}; each type takes only its own shape: {shapes}")
     # A role, when the action has one, is a known name: `role=None` is sent as
     # null, which the service refuses, so it is caught here like any other.
-    if "role" in action and action["role"] not in _ROLES:
-        raise ValueError(f"unknown display role {action['role']!r}; use one of: {', '.join(_ROLES)}")
+    if "role" in action and (not isinstance(action["role"], str) or action["role"] not in _ROLES):
+        raise ValueError(_invalid_name("show.role", _ROLES))
     data = action.get("data")
     if not isinstance(data, dict):
         raise TypeError(f"data must be a dict, not {type(data).__name__}")
     required, hint = _SHAPES[kind]
-    if kind == "diagram" and "mode" in data:
-        mode = data["mode"]
+    if kind == "diagram":
+        # A diagram's other keys follow from its mode, so the mode comes first,
+        # missing or not, as the service checks it.
+        mode = data.get("mode")
         if not isinstance(mode, str) or mode not in _DIAGRAM_MODES:
-            raise ValueError(f"unknown diagram mode {mode!r}; use one of: {', '.join(_DIAGRAM_MODES)}")
-        required += _DIAGRAM_MODES[mode]
+            raise ValueError(f"{_invalid_name('diagram.mode', _DIAGRAM_MODES)}; its shape is {hint}")
+        required = _DIAGRAM_MODES[mode]
     missing = [key for key in required if key not in data]
     if missing:
         raise ValueError(f"{kind} data is missing {', '.join(missing)}; its shape is {hint}")
@@ -433,6 +500,11 @@ def display(action=None, **fields):
         action = fields
     elif fields:
         raise TypeError("pass the display action as a dict or as keywords, not both")
+    if not isinstance(action, dict):
+        raise TypeError(f"a display action must be a dict, not {type(action).__name__}")
+    # Before anything else walks the action: one that holds itself is caught
+    # here, at the depth cap, rather than recursing.
+    _check_call_args({"action": action})
     action = _display_wire_action(action)
 
     def describe(result):
@@ -457,7 +529,7 @@ def view(target=None):
     """Inspect the caller's screen (no target), or ask it to focus a target:
     visual, comms, system, theater or auto."""
     if target is not None and target not in _VIEW_TARGETS:
-        raise ValueError(f"unknown view target {target!r}; use one of: {', '.join(_VIEW_TARGETS)}")
+        raise ValueError(_invalid_name("target", _VIEW_TARGETS))
 
     def describe(result):
         if target is not None and result.reason == "caller_away":

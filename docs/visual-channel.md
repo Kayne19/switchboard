@@ -469,8 +469,9 @@ foot; on a tall one the three stand down the box and scroll as one; a
 small slot (an aux cell) holds the conditions on one line and one list,
 the days or, when the note names an hour, the hours; a slot too short
 for a list row (a phone's cell in the today scene) holds the conditions
-with the days to come beside them as a row of columns (a first day whose
-high and low the figure shows is left out), each its name, glyph, high
+with the days to come beside them as a row of columns (the days after
+the forecast's `today`; without one, a first day whose high and low the
+figure shows is taken for today and left out), each its name, glyph, high
 and low, as many as whole columns fit beside the figure, a day the note
 names taking the last column when it lies past them. The layout counts
 the figure's width itself -- its glyph and temperature row (in ems of

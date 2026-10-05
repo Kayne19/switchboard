@@ -203,6 +203,35 @@ async fn view_reports_the_object_with_role_primary_even_when_shown_first() {
     assert_eq!(response["screen"]["title"], "document-title");
 }
 
+// A refused reason or view target is worded as the display validators word
+// a refused name, and as the skill module raises it before sending: the
+// field and every name it takes, in the skill's order.
+#[tokio::test]
+async fn a_refused_reason_or_target_lists_the_names_it_takes() {
+    let state = state();
+    for args in [
+        json!({"message": "Done"}),
+        json!({"message": "Done", "reason": "later"}),
+        json!({"message": "Done", "reason": null}),
+    ] {
+        let response = request_to_speak(state.clone(), "background-token", args).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(
+            body,
+            json!({"detail": "invalid reason: expected one of finished, needs_decision, problem"})
+        );
+    }
+    let (code, body) = agent_call_json(&state, "/view", json!({"target": "screen"})).await;
+    assert_eq!(code, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        json!({"delivered": false, "detail": "invalid target: expected one of visual, comms, system, theater, auto"})
+    );
+}
+
 #[tokio::test]
 async fn a_view_call_with_an_unknown_field_is_refused_with_the_reason() {
     let (code, body) =
@@ -421,24 +450,9 @@ async fn display_protocol_validation_and_composition() {
     let state = state();
     let mut events = state.0.events.subscribe();
 
-    // 1. Conformance check against canonical fixtures
-    let fixtures_str = std::fs::read_to_string("apps/frontend/tests/fixtures/display-actions.json")
-        .expect("canonical display-actions.json fixtures must load");
-    let fixtures: Value = serde_json::from_str(&fixtures_str).unwrap();
-
-    for case in fixtures["valid"].as_array().unwrap() {
-        let name = case["name"].as_str().unwrap();
-        let action = &case["action"];
-        let expected = &case["normalized"];
-        let validated = crate::visual_protocol::validate_action(action)
-            .unwrap_or_else(|e| panic!("valid case '{name}' failed validation: {e}"));
-        assert_eq!(
-            &validated, expected,
-            "normalized mismatch for valid case '{name}'"
-        );
-    }
-
-    // 2. Composed scene HTTP intake and replay
+    // What `validate_action` makes of each action is the shared corpus's to
+    // pin (`agrees_with_the_shared_validator_corpus`). A composed scene
+    // arrives through display calls and is replayed.
     let show = json!({
         "token": "operator",
         "action": {
@@ -498,35 +512,30 @@ async fn display_protocol_validation_and_composition() {
     assert!(matches!(events.recv().await.unwrap(), Event::Json(_)));
 }
 
+// A refused action comes back to the agent with the validator's error,
+// word for word (docs/display-tool.md): every action the shared corpus says
+// both validators refuse is refused by a display call with its exact error.
 #[tokio::test]
 async fn display_protocol_rejects_invalid_actions() {
     let state = state();
-
-    let fixtures_str = std::fs::read_to_string("apps/frontend/tests/fixtures/display-actions.json")
-        .expect("canonical display-actions.json fixtures must load");
-    let fixtures: Value = serde_json::from_str(&fixtures_str).unwrap();
-
-    for case in fixtures["invalid"].as_array().unwrap() {
+    let mut failures = Vec::new();
+    for case in crate::visual_protocol::validator_corpus() {
+        let Some(error) = case["error"].as_str() else {
+            continue;
+        };
         let name = case["name"].as_str().unwrap();
-        let action = &case["action"];
-        let result = crate::visual_protocol::validate_action(action);
-        assert!(
-            result.is_err(),
-            "invalid case '{name}' should have been rejected by validate_action"
-        );
-
-        let (code, _) = agent_call_json(
+        let (code, body) = agent_call_json(
             &state,
             "/display",
-            json!({"token": "operator", "action": action.clone()}),
+            json!({"token": "operator", "action": case["action"].clone()}),
         )
         .await;
-        assert_eq!(
-            code,
-            StatusCode::BAD_REQUEST,
-            "HTTP /display should reject invalid case '{name}'"
-        );
+        let wanted = json!({"delivered": false, "detail": error});
+        if code != StatusCode::BAD_REQUEST || body != wanted {
+            failures.push(format!("{name}: {code} {body}"));
+        }
     }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 
     let oversized =
         json!({"token": "operator", "action": {"op": "say", "text": "x".repeat(50_001)}});

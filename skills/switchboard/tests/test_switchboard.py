@@ -336,9 +336,16 @@ class CallsTest(ModuleTestCase):
             {"id": "odd", "label": "Odd zone", "endsAt": datetime.datetime(
                 2026, 10, 6, 1, 15, tzinfo=datetime.timezone(datetime.timedelta(hours=5, seconds=30)))},
         ]}
+        forecast = {
+            "location": "San Francisco", "units": "F", "current": {"temp": 61, "condition": "fog"},
+            "today": datetime.date(2026, 10, 7),
+            "daily": [{"date": datetime.date(2026, 10, 8), "high": 61, "low": 55, "condition": "rain"}],
+        }
         self.run_call(switchboard.display, op="show", id="week", type="calendar", data=week)
         self.run_call(switchboard.display, op="show", id="kitchen", type="timer", data=timers)
+        self.run_call(switchboard.display, op="show", id="weather", type="weather", data=forecast)
         sent = [call["args"]["action"]["data"] for call in host.calls()]
+        self.assertEqual((sent[2]["today"], sent[2]["daily"][0]["date"]), ("2026-10-07", "2026-10-08"))
         self.assertEqual(sent[0], {
             "view": "week", "start": "2026-10-05", "now": "2026-10-07T09:40",
             "events": [
@@ -421,13 +428,112 @@ class ProgrammingErrorTest(ModuleTestCase):
         self.assertTrue(result.delivered)
         self.assertEqual(host.calls()[-1]["args"], {"text": "Ship it \U0001F680"})
 
+    def test_an_integer_beyond_two_to_the_53_raises_naming_its_field(self):
+        # The service and the page read numbers as doubles: 2**53 + 1 arrived
+        # as 2**53, and an integer beyond a double's range as null.
+        host = self.host()
+
+        class ArrayLike:
+            def tolist(self):
+                return [1, 2**60]
+
+        chart = lambda values: {"op": "show", "id": "c", "type": "chart", "data": {"series": [{"name": "s", "values": values}]}}  # noqa: E731
+        for values, field in (
+            ([1, 2**53 + 1], "action.data.series[0].values[1]"),
+            ([-(2**53) - 1], "action.data.series[0].values[0]"),
+            ([10**400], "action.data.series[0].values[0]"),
+            (ArrayLike(), "action.data.series[0].values[1]"),
+            # JSON writes a key as text: the field is `.3`, not `[3]`.
+            ([{3: 2**60}], "action.data.series[0].values[0].3"),
+        ):
+            with self.subTest(field=field):
+                with self.assertRaises(ValueError) as caught, contextlib.redirect_stdout(io.StringIO()):
+                    switchboard.display(chart(values))
+                self.assertEqual(
+                    str(caught.exception),
+                    f"{field} is an integer beyond 2**53, which the switchboard reads as a double and cannot hold "
+                    "exactly; send it as a float or as text",
+                )
+        self.assertEqual(host.connections, 0)
+        # An array-like whose tolist() is itself is followed once and left to
+        # the encoder, which finds the loop; a call that is no dict is a
+        # TypeError before anything walks it.
+        class Itself:
+            def tolist(self):
+                return self
+
+        with self.assertRaisesRegex(ValueError, "Circular reference"), contextlib.redirect_stdout(io.StringIO()):
+            switchboard.display(chart([Itself()]))
+        with self.assertRaises(TypeError) as caught, contextlib.redirect_stdout(io.StringIO()):
+            switchboard.display([[2**60]])
+        self.assertEqual(str(caught.exception), "a display action must be a dict, not list")
+        self.assertEqual(host.connections, 0)
+        # Every integer a double holds exactly goes out as it is, and a float
+        # (already a double) whatever its size.
+        values = [2**53, -(2**53), True, 1e300]
+        result, _ = self.run_call(switchboard.display, chart(values))
+        self.assertTrue(result.delivered)
+        self.assertEqual(host.calls()[-1]["args"]["action"]["data"]["series"][0]["values"], values)
+
+    def test_nesting_deeper_than_the_service_reads_raises_before_anything_is_sent(self):
+        # The service refused such a call as unreadable, without the action's
+        # own error; a call that holds itself made _wire_times recurse.
+        host = self.host()
+
+        def depth(value):
+            if isinstance(value, dict):
+                return 1 + max(map(depth, value.values()), default=0)
+            if isinstance(value, list):
+                return 1 + max(map(depth, value), default=0)
+            return 0
+
+        def note(levels):
+            # The request line, its args, the action and its data are 4
+            # levels; `segments` and the lists in it are the rest.
+            segments = 1
+            for _ in range(levels - 4):
+                segments = [segments]
+            return {"op": "show", "id": "n", "type": "note", "data": {"segments": segments}}
+
+        result, _ = self.run_call(switchboard.display, note(switchboard._MAX_FRAME_DEPTH))
+        self.assertTrue(result.delivered)
+        self.assertEqual(depth(host.calls()[-1]), switchboard._MAX_FRAME_DEPTH)
+        looped = {"op": "show", "id": "n", "type": "note", "data": {"segments": []}}
+        looped["data"]["segments"].append(looped)
+        calls = len(host.requests)
+        for action in (note(switchboard._MAX_FRAME_DEPTH + 1), looped):
+            with self.assertRaises(ValueError) as caught, contextlib.redirect_stdout(io.StringIO()):
+                switchboard.display(action)
+            self.assertTrue(str(caught.exception).startswith(
+                "action.data.segments[0]... nests arrays and objects deeper than the switchboard reads (127 levels"
+            ), caught.exception)
+        self.assertEqual(len(host.requests), calls)
+
     def test_unknown_display_type_names_the_shapes(self):
         with self.assertRaises(ValueError) as caught:
             switchboard.display(op="show", id="x", type="gauge", data={})
+        self.assertTrue(str(caught.exception).startswith(
+            "invalid show.type: expected one of chart, metric, progress, diagram, document, code, table, note, image, "
+            "calendar, tasks, timer, weather, inbox; each type takes only its own shape: "
+        ))
         self.assertIn("chart: {series:[{name, values:[n]}]}", str(caught.exception))
         self.assertIn("table: {columns:[{label}], rows:[[cell]]}", str(caught.exception))
         self.assertIn('calendar: {view:"day"|"week"|"month"|"agenda", start:"YYYY-MM-DD"', str(caught.exception))
         self.assertIn('timer: {timers:[{id, label, endsAt:"YYYY-MM-DDTHH:MM:SS-07:00"}]}', str(caught.exception))
+
+    def test_a_refused_name_lists_the_names_it_takes(self):
+        # One wording for every refusal of a name, the service's and the page's.
+        for call, args, kwargs, error in (
+            (switchboard.request_to_speak, ("Done", "later"), {}, "invalid reason: expected one of finished, needs_decision, problem"),
+            (switchboard.view, ("screen",), {}, "invalid target: expected one of visual, comms, system, theater, auto"),
+            (switchboard.display, (), {"op": "listen"}, "invalid op: expected one of show, hide, focus, say, clear"),
+            (switchboard.display, (), {"op": "show", "id": "x", "type": "metric", "role": "main", "data": {}},
+             "invalid show.role: expected one of primary, compare, secondary, ambient"),
+        ):
+            with self.subTest(error):
+                with self.assertRaises(ValueError) as caught:
+                    call(*args, **kwargs)
+                self.assertEqual(str(caught.exception), error)
 
     def test_a_diagram_outline_is_judged_by_its_mode(self):
         host = self.host()
@@ -442,9 +548,10 @@ class ProgrammingErrorTest(ModuleTestCase):
             switchboard.display(op="show", id="d", type="diagram", data={"mode": "sequence", "actors": []})
         self.assertIn("missing messages", str(caught.exception))
         self.assertIn('mode:"sequence", actors:', str(caught.exception))
-        with self.assertRaises(ValueError) as caught:
-            switchboard.display(op="show", id="d", type="diagram", data={"mode": "timeline"})
-        self.assertIn("unknown diagram mode 'timeline'", str(caught.exception))
+        for data in ({"mode": "timeline"}, {"nodes": [], "edges": []}):
+            with self.assertRaises(ValueError) as caught:
+                switchboard.display(op="show", id="d", type="diagram", data=data)
+            self.assertTrue(str(caught.exception).startswith("invalid diagram.mode: expected one of graph, sequence; its shape is"))
 
     def test_a_progress_needs_value_or_steps_and_takes_either(self):
         with self.assertRaises(ValueError) as caught:
@@ -687,6 +794,7 @@ class DisplayCorpusTests(unittest.TestCase):
             with self.subTest(case["name"]):
                 action = self._expand(case["action"])
                 self.assertEqual(switchboard._display_wire_action(action), action)
+                switchboard._check_call_args({"action": action})
 
     def test_refuses_the_faults_its_outline_names(self):
         by_name = {case["name"]: case for case in self.cases}
@@ -695,6 +803,24 @@ class DisplayCorpusTests(unittest.TestCase):
                 self.assertIn("error", by_name[name], "the validators refuse it too")
                 with self.assertRaises((TypeError, ValueError)):
                     switchboard._display_wire_action(self._expand(by_name[name]["action"]))
+
+    def test_refuses_a_name_in_the_validators_words(self):
+        """Where the outline refuses an op, a type, a role or a diagram mode,
+        its error starts with the validators' own: the field and every name it
+        takes. The type's and the mode's add the shapes."""
+        by_name = {case["name"]: case for case in self.cases}
+        named = ("invalid op:", "invalid show.type:", "invalid show.role:", "invalid diagram.mode:")
+        checked = 0
+        for name in self.OUTLINE_REFUSES:
+            error = by_name[name]["error"]
+            if not error.startswith(named):
+                continue
+            checked += 1
+            with self.subTest(name):
+                with self.assertRaises(ValueError) as caught:
+                    switchboard._display_wire_action(self._expand(by_name[name]["action"]))
+                self.assertTrue(str(caught.exception).startswith(error), str(caught.exception))
+        self.assertGreater(checked, 20)
 
     def test_a_blank_id_is_unicode_white_space(self):
         # str.strip also strips U+001C to U+001F, which are not White_Space.
