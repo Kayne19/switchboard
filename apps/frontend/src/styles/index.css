@@ -674,6 +674,10 @@ button {
   gap: 8px;
   width: 100%;
   min-width: 0;
+  /* A finger's reach round a thin rule: the button is 24 px tall or more,
+     its rule and label drawn as before, its row no taller. */
+  min-height: 24px;
+  margin-block: -6px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -698,6 +702,8 @@ button {
   fill: currentColor;
 }
 .rail-handle--bare {
+  min-height: 0;
+  margin-block: 0;
   cursor: default;
 }
 .rail-handle--open .rail-handle__chevron {
@@ -1512,6 +1518,7 @@ button {
    it: whole, the metrics after it in the column's scroll. */
 .content-rail__details > .rail-note--leads {
   flex: none;
+  order: -1;
 }
 .rail-note--leads .annotation-card {
   height: auto;
@@ -3178,6 +3185,22 @@ button {
   .content-rail--folded .live-chat-card {
     flex: none;
     min-height: 0;
+  }
+  /* The strip keeps the note, or the live response where there is no note;
+     the rest stays in the page, set aside until the rail opens. */
+  .content-rail--folded .content-rail__details > :is(.metrics, .rail-progress, .tool-activity-slot),
+  .content-rail--folded .content-rail__details--noted > .live-chat-card {
+    display: none;
+  }
+  .content-rail--folded .rail-note--leads {
+    order: 0;
+  }
+  /* A live response streams at its newest lines, held to three. */
+  .content-rail--folded .live-chat-card__text {
+    height: auto;
+    max-height: calc(3 * 1.38em);
+    overflow: hidden;
+    line-height: 1.38;
   }
   .content-rail--folded .annotation-card {
     height: auto;

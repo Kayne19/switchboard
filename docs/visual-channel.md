@@ -282,25 +282,34 @@ layout. One whose content asks for more gets the stage's height:
   not fit under its bars the height in which it lies on its side with a
   labelled row per category. Only the primary speaks: a plan under a chart
   or a table in the aux row never folds the rail.
-- **The shell decides from the column** (`app/stageFold.ts`): where the
-  rail stands under the column (measured, not a media query), a primary
-  whose need is more than a line of text past the column it shares with
-  the rail takes the stage. The need is the share of its viewport it lacks
-  applied to the column, since the frame round a viewport grows with it.
-  Folded, it gives the stage back only once it would read whole in the
-  shared column with room to spare, so a need on the line does not fold
-  and unfold as it redraws. A landscape stage, the rail beside the
-  primary, never folds.
+- **The shell decides** (`app/stageFold.ts`): where the rail stands under
+  the column (measured, not a media query), a primary whose content is
+  more than a line of text past its viewport in the layout it shares with
+  the rail takes the stage. On the stage a content is weighed against the
+  viewport it had in that shared layout, never against a model of the
+  frame round it (a table's head, a document's heading, an aux row are
+  fixed; a diagram's rails grow with it). Folded, it gives the stage back
+  only once it would be within a few pixels of reading whole there, so a
+  need on the line does not fold and unfold as it redraws. A graph laid
+  out again for the stage's taller viewport says nothing of the shared
+  layout unless it overflows even the stage, and a primitive that cannot
+  tell yet (a drawing whose fit has not followed its box) leaves the
+  layout as it is. A new primary is measured first in the shared layout.
+  Opening the rail changes nothing of this. A landscape stage, the rail
+  beside the primary, never folds.
 - **The rail folds to a strip under the primary, down to the footer's
   band.** The strip shows the note (held to three lines, its target line
   naming what it is about, and on a diagram the NOTE marker on the node or
   actor it names), or the live response where there is no note, beside a
   smaller Damocles whose caption still names the tool at work. A tap on
-  the note expands it in focus. Its top rule is a handle: it names what
-  the rail keeps folded (the rest of a cut note, the metrics, progress,
-  the live response, activity) and opens the rail as it was, the primary
-  back in its share; from there it folds again. The caller's choice holds
-  for that primary.
+  the note expands it in focus. A live response streams at its newest
+  three lines. Its top rule is a handle, a finger's reach tall round the
+  thin rule: it names what the rail keeps folded (the rest of a cut note,
+  the metrics, progress, the live response, activity) and opens the rail
+  as it was, the primary back in its share; from there it folds again.
+  Its accessible name holds the words it shows. What it folds is set
+  aside by the stylesheet, not taken out of the page, so folding draws
+  nothing afresh. The caller's choice holds for that primary.
 
 At 390x844 a diagram's viewport grows from 374 px to 460 px, a 40-row
 table's from 436 to 544, and a bar chart of 45 categories names every one

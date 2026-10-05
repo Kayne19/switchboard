@@ -102,7 +102,14 @@ for (const scene of ['training', 'comparison']) {
       const noteBox = note?.getBoundingClientRect();
       return {
         cards,
-        rail: note ? { whole: whole(note), first: details.firstElementChild === note, inView: noteBox!.top >= column.top - 1 && noteBox!.bottom <= column.bottom + 1 } : null,
+        // First in the column as it is read: above everything else shown there.
+        rail: note
+          ? {
+              whole: whole(note),
+              first: [...details.children].every((other) => other === note || other.getBoundingClientRect().height === 0 || other.getBoundingClientRect().top >= noteBox!.bottom - 1),
+              inView: noteBox!.top >= column.top - 1 && noteBox!.bottom <= column.bottom + 1,
+            }
+          : null,
       };
     });
     for (const card of geometry.cards) expect(card).toBe(true);

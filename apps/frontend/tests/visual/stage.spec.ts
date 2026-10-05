@@ -1,4 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
+import { DisplayFixtureServer } from '../integration/display-fixture-server.mjs';
+import { transcriptEntry } from '../fixtures/serverMessages';
 
 // A primary that outgrows the column it shares with a rail standing under it
 // takes the stage's height; the rail folds to a strip of its note and
@@ -204,7 +206,8 @@ test('the caller opens the folded rail and folds it again', async ({ page }) => 
   await open(page, 'plan');
   const handle = page.locator('button.rail-handle');
   await expect(handle).toHaveText(/02 METRICS \/ PROGRESS/);
-  await expect(page.locator('.content-rail [data-testid="metrics"]')).toHaveCount(0);
+  // Set aside, not dropped: the metrics are in the page, out of view.
+  await expect(page.locator('.content-rail [data-testid="metrics"]')).toBeHidden();
   await handle.click();
   await expect(page.locator('.content-rail--open')).toBeVisible();
   await expect(page.locator('.content-rail [data-testid="metrics"]')).toBeVisible();
@@ -214,7 +217,7 @@ test('the caller opens the folded rail and folds it again', async ({ page }) => 
   await expect(handle).toHaveText(/FOLD/);
   await handle.click();
   await expect(page.locator('.content-rail--folded')).toBeVisible();
-  await expect(page.locator('.content-rail [data-testid="metrics"]')).toHaveCount(0);
+  await expect(page.locator('.content-rail [data-testid="metrics"]')).toBeHidden();
 });
 
 test('a figure taller than its field takes the stage, drawn larger', async ({ page }) => {
@@ -249,3 +252,29 @@ for (const { name, scene, actions } of [
     expect(laid.foldable).toBe(false);
   });
 }
+
+test('a long live response on a folded strip is held to its newest lines, the strip no taller', async ({ page }) => {
+  const fixtureServer = new DisplayFixtureServer({ initialGeneration: 7 });
+  try {
+    const { wsUrl } = await fixtureServer.start();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+    await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === 'hello')).toBe(true);
+    fixtureServer.broadcast({ type: 'display', action: longTable[1] });
+    await expect(page.locator('.content-rail--folded')).toBeVisible();
+    const before = await boxes(page);
+    const speech = Array.from({ length: 12 }, (_, index) => `Sentence ${index} about which suite runs longest and why.`).join(' ');
+    fixtureServer.broadcast({ type: 'spoken', entry: transcriptEntry({ role: 'agent', text: speech, id: 'reply-1' }) });
+    await expect(page.locator('.content-rail .live-chat-card')).toBeVisible();
+    await page.waitForTimeout(600);
+    const after = await boxes(page);
+    // Still folded, the strip no taller than three lines and its header make it.
+    expect(after.folded).toBe(true);
+    expect(after.rail.height).toBeLessThan(before.stage.height / 6);
+    expect(after.main.height).toBeGreaterThan(before.main.height - 80);
+    // The handle says the response goes on past the strip.
+    await expect(page.locator('button.rail-handle')).toContainText('LIVE');
+  } finally {
+    await fixtureServer.stop();
+  }
+});

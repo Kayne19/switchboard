@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useIsPresent } from 'motion/react';
-import { useCallback, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useCallback, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import type {
   ChartData,
   CodeData,
@@ -17,7 +17,7 @@ import type {
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
 import { anchoredNote, besideVisuals, buildCompositionModel, cast, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
 import { stageReport, wantsStage, type StageReport } from '../app/stageFold';
-import { StageDemandContext, type StageDemandListener } from '../hooks/useStageDemand';
+import { StageDemandContext, watchElement, type StageDemandListener } from '../hooks/useStageDemand';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { chartKind, chartTargetText } from '../primitives/chartGeometry';
@@ -183,8 +183,10 @@ interface RailDetailsProps {
   onOpenHistory?: () => void;
   /** The rail is folded to a strip under a primary that takes the stage's height: it shows the note, or the live response when there is no note, and nothing else. */
   folded?: boolean;
-  /** The note is one the charts could not hold: where the column is too short for all it carries, the note leads it, whole, rather than fall under the fold of the metrics. */
+  /** The note is one the charts could not hold, or one about a visual off them: where the column is too short for all it carries, the note leads it, whole, rather than fall under the fold of the metrics. */
   noteLeads?: boolean;
+  /** The column's id, for the handle that opens and folds it. */
+  id?: string;
 }
 
 // Whether the rail's column holds more than it shows, measured only while
@@ -197,21 +199,7 @@ function useCrowded(ref: RefObject<HTMLDivElement | null>, watching: boolean): b
       setCrowded(false);
       return undefined;
     }
-    const measure = () => setCrowded(column.scrollHeight > column.clientHeight + 1);
-    const observer = new ResizeObserver(measure);
-    const watch = () => {
-      observer.disconnect();
-      observer.observe(column);
-      for (const child of Array.from(column.children)) observer.observe(child);
-      measure();
-    };
-    const changed = new MutationObserver(watch);
-    changed.observe(column, { childList: true });
-    watch();
-    return () => {
-      observer.disconnect();
-      changed.disconnect();
-    };
+    return watchElement(column, () => setCrowded(column.scrollHeight > column.clientHeight + 1), { children: true });
   }, [ref, watching]);
   return watching && crowded;
 }
@@ -228,41 +216,31 @@ function railNoteTarget(state: ControllerState, note: NoteData | null): string |
 // the same way, then the live response, the note, and tool activity. It is
 // a permanent slot; an empty one renders nothing, and
 // the activity panel can linger after its end without the wrapper
-// unmounting it first.
-function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, onOpenHistory, folded = false, noteLeads = false }: RailDetailsProps) {
+// unmounting it first. Its children stand in one order in every state:
+// folded to a strip, the stylesheet sets aside all but the note (or the
+// live response where there is no note); a note that leads a crowded
+// column does so by its order there. Folding or leading moves nothing in or
+// out of the page, so nothing is drawn afresh.
+function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, onOpenHistory, folded = false, noteLeads = false, id }: RailDetailsProps) {
   const liveMessage = liveChatMessage(state);
   const columnRef = useRef<HTMLDivElement>(null);
   const leads = useCrowded(columnRef, !folded && noteLeads && note !== null);
-  if (folded) {
-    // The strip: the note, linked to what it names by its target line and
-    // the marker on the item, or else the live response; the presence
-    // beside it names the tool at work. The rest waits behind the handle.
-    return (
-      <div className="content-rail__details">
-        {note ? null : liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
-        <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} target={railNoteTarget(state, note)} />
-      </div>
-    );
-  }
   // The response and the note stretch into the column's free space, so while
   // either is shown the activity slot stays reserved and a tool starting or
   // clearing never resizes them. Metrics and progress keep their own size at
   // the top and are not moved by a panel below them.
   const reserveActivity = liveMessage !== null || note !== null;
-  const railNote = (
-    <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} target={railNoteTarget(state, note)} leads={leads} />
-  );
   return (
-    <div ref={columnRef} className="content-rail__details">
-      {leads ? railNote : null}
+    <div ref={columnRef} id={id} className={`content-rail__details${folded && note ? ' content-rail__details--noted' : ''}`}>
       {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} variant="rail" /> : null}
       <RailProgress progressList={progressList} onFocus={onFocus} />
       {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
-      {leads ? null : railNote}
+      <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} target={railNoteTarget(state, note)} leads={leads} />
       <ToolActivity activity={state.activity} reserveSpace={reserveActivity} />
     </div>
   );
 }
+
 
 // One object drawn inside a composed workspace, as the primary or in the aux
 // row beneath it. A metric and a progress change with the slot: the aux row
@@ -362,7 +340,7 @@ interface SceneContent {
   metrics: Array<SceneObject<MetricData>>;
   note: NoteData | null;
   noteObject?: SceneObject<NoteData>;
-  /** The rail's note is one the charts could not hold: in a rail too short for all it carries, it leads. */
+  /** The rail's note is one the charts could not hold, or one about a visual off them: in a rail too short for all it carries, it leads. */
   noteLeads?: boolean;
   progressList: Array<SceneObject<ProgressData>>;
   /** The primary chart and the notes on it, by key: a band holds a note while it is one of them. */
@@ -663,9 +641,9 @@ const pad2 = (count: number) => String(count).padStart(2, '0');
 // What a folded rail keeps behind its handle, in the handle's words: the
 // strip itself shows the note (or the live response) and Damocles, and the
 // rest of a note held to its first lines.
-function foldedItems(state: ControllerState, content: SceneContent, note: NoteData | null, noteCut: boolean): string[] {
+function foldedItems(state: ControllerState, content: SceneContent, note: NoteData | null, cut: boolean): string[] {
   const items: string[] = [];
-  if (noteCut) items.push(note ? 'NOTE' : 'LIVE');
+  if (cut) items.push(note ? 'NOTE' : 'LIVE');
   if (content.metrics.length > 0) items.push(`${pad2(content.metrics.length)} ${content.metrics.length === 1 ? 'METRIC' : 'METRICS'}`);
   if (content.progressList.length > 0) items.push('PROGRESS');
   if (note && liveChatMessage(state)) items.push('LIVE');
@@ -673,30 +651,36 @@ function foldedItems(state: ControllerState, content: SceneContent, note: NoteDa
   return items;
 }
 
-// Whether the folded strip holds its text to fewer lines than it has.
-function useStripCut(railRef: RefObject<HTMLElement | null>, folded: boolean, text: unknown): boolean {
+// Whether the folded strip holds its text -- the note, or the live response
+// as it streams -- to fewer lines than it has.
+function useStripCut(railRef: RefObject<HTMLElement | null>, folded: boolean): boolean {
   const [cut, setCut] = useState(false);
   useLayoutEffect(() => {
-    const rail = railRef.current;
-    const element = folded ? rail?.querySelector<HTMLElement>('.content-rail__details :is(.annotation-card__text, .live-chat-card__text)') : null;
-    if (!element) {
+    const details = folded ? railRef.current?.querySelector<HTMLElement>('.content-rail__details') : null;
+    if (!details) {
       setCut(false);
       return undefined;
     }
-    const measure = () => setCut(element.scrollHeight > element.clientHeight + 1);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [railRef, folded, text]);
-  return cut;
+    const shown = () =>
+      [...details.querySelectorAll<HTMLElement>('.annotation-card__text, .live-chat-card__text')].find((text) => text.offsetParent !== null);
+    return watchElement(
+      details,
+      () => {
+        const text = shown();
+        setCut(text !== undefined && text.scrollHeight > text.clientHeight + 1);
+      },
+      { changes: true },
+    );
+  }, [railRef, folded]);
+  return folded && cut;
 }
 
 // The rail's handle, over it whenever its primary can take the stage: on
 // the folded strip it names what the rail keeps folded, and opens it; on
 // the open rail it folds it again. A strip that keeps nothing folded has a
-// rule there and no control.
-function RailHandle({ open, items, onToggle }: { open: boolean; items: string[]; onToggle: () => void }) {
+// rule there and no control. Its name holds the words it shows, so a
+// caller who says what they see reaches it.
+function RailHandle({ open, items, controls, onToggle }: { open: boolean; items: string[]; controls: string; onToggle: () => void }) {
   if (!open && items.length === 0) {
     return (
       <div className="rail-handle rail-handle--bare" aria-hidden="true">
@@ -704,16 +688,18 @@ function RailHandle({ open, items, onToggle }: { open: boolean; items: string[];
       </div>
     );
   }
+  const shown = open ? 'FOLD' : items.join(' / ');
   return (
     <button
       type="button"
       className={`rail-handle rail-handle--${open ? 'open' : 'folded'}`}
       aria-expanded={open}
-      aria-label={open ? 'Fold the rail' : 'Open the rail'}
+      aria-controls={controls}
+      aria-label={open ? `${shown} the rail` : `${shown}: open the rail`}
       onClick={onToggle}
     >
       <span className="rail-handle__rule" aria-hidden="true" />
-      <span className="rail-handle__label tech micro">{open ? 'FOLD' : items.join(' / ')}</span>
+      <span className="rail-handle__label tech micro">{shown}</span>
       <svg className="rail-handle__chevron" viewBox="0 0 8 6" aria-hidden="true">
         <path d="M 4 0 L 8 6 L 0 6 Z" />
       </svg>
@@ -1003,7 +989,8 @@ export function SceneShell(props: SceneProps) {
     if (banding && chartRailNote?.chart === banding.chart) setChartBand(chartRailNote);
   }, [banding, bandHeld, chartBand, chartRailNote]);
   const railNote = calloutPlaced ? null : (content?.note ?? null);
-  const noteCut = useStripCut(railRef, staged, railNote);
+  const stripCut = useStripCut(railRef, staged);
+  const detailsId = useId();
   const presence = (
     <DamoclesPresence
       listening={state.listening}
@@ -1042,7 +1029,8 @@ export function SceneShell(props: SceneProps) {
               {foldable ? (
                 <RailHandle
                   open={railOpen}
-                  items={foldedItems(state, content, railNote, noteCut)}
+                  items={foldedItems(state, content, railNote, stripCut)}
+                  controls={detailsId}
                   onToggle={() => setOpenFor(railOpen ? null : primaryId)}
                 />
               ) : null}
@@ -1057,6 +1045,7 @@ export function SceneShell(props: SceneProps) {
                 onOpenHistory={onOpenHistory}
                 folded={staged}
                 noteLeads={content.noteLeads}
+                id={detailsId}
               />
             </motion.aside>
           </div>

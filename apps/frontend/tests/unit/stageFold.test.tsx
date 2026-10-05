@@ -204,9 +204,13 @@ describe('a primary that outgrows a rail standing under it', () => {
     const page = render([...fixtures.plan]);
     const rail = page.querySelector('.content-rail')!;
     expect(rail.classList.contains('content-rail--folded')).toBe(true);
-    expect(rail.querySelector('[data-testid="metrics"]')).toBeNull();
+    // Set aside, not dropped: folding draws nothing afresh.
+    expect(rail.querySelector('[data-testid="metrics"]')).not.toBeNull();
     expect(handle(page)?.textContent).toContain('02 METRICS / PROGRESS');
     expect(handle(page)?.getAttribute('aria-expanded')).toBe('false');
+    // Its name holds what it shows, and it says what it opens.
+    expect(handle(page)?.getAttribute('aria-label')).toContain('02 METRICS / PROGRESS');
+    expect(handle(page)?.getAttribute('aria-controls')).toBe(rail.querySelector('.content-rail__details')?.id);
 
     act(() => handle(page)!.click());
     settle();
