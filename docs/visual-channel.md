@@ -301,12 +301,20 @@ wire rules are in `docs/display-tool.md` ("Time values" and
   the list.
 
 Each is a visual like a table: shown alone it takes the main slot, and
-beside another primary it takes a cell in the aux row. Until the render
-slice draws them, the page shows all five with one stand-in, a framed list
-of the fields as sent (`apps/frontend/src/primitives/TemporaryAssistantList.tsx`),
-so an accepted object is never dropped and the fixtures (`calendar`,
-`tasks`, `timer`, `weather`, `inbox`, and `today`, an agenda with the
-forecast, the to-do list and the inbox beside it) load.
+beside another primary it takes a cell in the aux row. A calendar is drawn
+by its own primitive: a time grid for a day or a week, Monday-first rows
+for a month, a list of days for an agenda, each laid out from the box it is
+given rather than the device (a week too narrow for seven columns pages
+through them; a grid too short to read becomes the agenda of the same
+days; a month too small for titles marks its days). The wire rules and the
+drawing rules are in `docs/display-tool.md` ("calendar"). Until their
+render slices draw them, the page shows the other four with one stand-in,
+a framed list of the fields as sent
+(`apps/frontend/src/primitives/TemporaryAssistantList.tsx`), so an accepted
+object is never dropped and the fixtures (`calendar`, `calendar-day`,
+`calendar-month`, `calendar-agenda`, `tasks`, `timer`, `weather`, `inbox`,
+and `today`, an agenda with the forecast, the to-do list and the inbox
+beside it) load.
 
 ### Composition & focus
 

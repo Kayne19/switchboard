@@ -159,7 +159,7 @@ Every time in a display action is a string in one of three forms. Each validator
 
 Five types show a person's day: `calendar`, `tasks`, `timer`, `weather` and `inbox`. They keep the conventions of the other types: an optional `title`, `subtitle`, `context` (each <= 256) and `caption` (<= 128); camelCase keys; an unknown key is refused. An item id (an event, a task, a timer, a message) is non-blank and <= 128 UTF-16 code units, like a diagram node id, and is unique in its list.
 
-Status: both validators, the schema and the skill module hold the whole contract below. The page draws the five with one stand-in for now, a framed list of the fields as sent (`apps/frontend/src/primitives/TemporaryAssistantList.tsx`), so none is dropped. The drawing rules below (a timer's countdown, a marked item, an overdue task, the condition glyphs, the half-hour block) are what the render slice implements; until it lands the page does not do them.
+Status: both validators, the schema and the skill module hold the whole contract below. The page draws a calendar with its own primitive (`CalendarPrimitive`, "How the page draws a calendar" below). It draws the other four with one stand-in for now, a framed list of the fields as sent (`apps/frontend/src/primitives/TemporaryAssistantList.tsx`), so none is dropped. The drawing rules below for those four (a timer's countdown, an overdue task, the condition glyphs) are what their render slices implement; until they land the page does not do them.
 
 #### calendar
 
@@ -179,6 +179,14 @@ Status: both validators, the schema and the skill module hold the whole contract
     { "id": "flight", "title": "UA 1532 SFO to JFK", "start": "2026-10-09T18:05", "end": "2026-10-10T02:40", "detail": "Lands 05:40 New York time" }
   ] } }
 ```
+
+How the page draws a calendar (`CalendarPrimitive`, laid out by `calendarLayout.ts`). The agent sends the view and the events; the page decides the rest from the box it has, in the main slot, an aux cell or focus:
+
+- **day and week** are a time grid: a row of days (today in orange), a strip of all-day bars under it, and the hours under that. The grid runs from the first hour anything is in to the last; a run of three or more empty hours between them is folded to a hatched band that names its hours, unless every hour fits at a roomy size. An hour is never drawn shorter than 26 px: a long day in a short box scrolls inside the frame, with the shared list viewport's counts of the events past each edge. A week too narrow for its columns at 76 px each shows the ones that fit, from the marked event's day (else today), and names the hidden days on a rail at each side with their event count; a tap on the rail or a swipe turns to them. A grid with room for fewer than eight hours, or for fewer than two columns, is drawn as the agenda of its days.
+- Overlapping timed events stand side by side. Where each starts at least a title line after the ones it overlaps, they are stepped instead: each later one lies over the earlier ones, set in, so every title shows at the day's full width. A part of an event shorter than a line is drawn a line tall, and two such parts that would touch are set apart too. An event past midnight is cut into a part on each day, its cut edges clipped and dashed, the later part saying `UNTIL 02:40`.
+- **month** is Monday-first rows (weeks start on Monday, ISO 8601), the days of the months either side dimmed. An all-day event is a bar over its days, pointed where it runs on past a row; a timed event is a line with its start. A day with more than its cell holds lists what fits and ends with `+N MORE`, counting the bars it has no lane for too. A month too small for titles marks each day's events with a short bar each, and lists them from today (or the month's first day) under the grid when there is room.
+- **agenda** lists each day's events: all-day first, then by start, an event over several days on each (`DAY 2 / 3`), one past midnight written `18:05` to `02:40 +1`. The now line stands before the first event that starts after `now`. Events that share time are tagged `OVERLAP`. A run of days with nothing on them is one line. In a wide box several days stand in columns.
+- Everywhere: a `semantic` colours the event's stripe and tint; `tentative` is dashed and `cancelled` struck through and receded; an event over by `now` (or a day before `today`) recedes; the `active` one is lit, in orange when it has no `semantic`. The note's `anchor.item` puts the NOTE badge on the event's first box, and the rail note's TARGET line names it with its start (`Dentist / WED 10:30`). The meta line counts the events the view does not reach (`2 OUT OF VIEW`).
 
 #### tasks
 
