@@ -454,9 +454,11 @@ export interface ChartValueAxis {
 // largest bar or area (and below its most negative one): room for the
 // value a noted bar prints past its end, and a place inside the plot for
 // the note itself.
-export const CHART_HEADROOM = 0.1;
-// About how many intervals a value axis is cut into.
+const CHART_HEADROOM = 0.1;
+// About how many intervals a value axis is cut into, and the most ticks it
+// is ever labelled at.
 const CHART_VALUE_INTERVALS = 5;
+const CHART_MAX_TICKS = 12;
 
 // A round step -- 1, 2, 2.5 or 5 times a power of ten -- that cuts `span`
 // into at most about `intervals` pieces.
@@ -466,10 +468,13 @@ function niceStep(span: number, intervals: number): number {
   return [1, 2, 2.5, 5, 10].map((factor) => factor * magnitude).find((candidate) => candidate >= raw * (1 - 1e-9)) ?? 10 * magnitude;
 }
 
+// How many decimals print a multiple of `step` exactly: 2 for 0.25, 0 for 50.
 function decimalsOf(step: number): number {
-  const text = String(Number(step.toPrecision(12)));
-  const point = text.indexOf('.');
-  return point < 0 ? 0 : text.length - point - 1;
+  for (let decimals = 0; decimals < 20; decimals += 1) {
+    const scaled = step * 10 ** decimals;
+    if (Math.round(scaled) >= 1 && Math.abs(scaled - Math.round(scaled)) < 1e-6 * scaled) return decimals;
+  }
+  return 20;
 }
 
 /**
@@ -498,21 +503,31 @@ export function chartValueAxis(data: ChartData): ChartValueAxis {
   const reachLow = data.yMin ?? (grounded && low < 0 ? low - span * CHART_HEADROOM : low);
   const flat = reachHigh - reachLow <= 0;
   const step = niceStep(flat ? span : reachHigh - reachLow, CHART_VALUE_INTERVALS);
-  const round = (value: number) => Number((Math.round(value / step) * step).toPrecision(12));
-  let min = data.yMin ?? Number((Math.floor(reachLow / step + 1e-9) * step).toPrecision(12));
-  let max = data.yMax ?? Number((Math.ceil(reachHigh / step - 1e-9) * step).toPrecision(12));
+  // Fifteen digits: a multiple of the step stays itself next to values as
+  // large as epoch milliseconds.
+  const precise = (value: number) => Number(value.toPrecision(15));
+  let min = data.yMin ?? precise(Math.floor(reachLow / step + 1e-9) * step);
+  let max = data.yMax ?? precise(Math.ceil(reachHigh / step - 1e-9) * step);
   // A flat series still gets a domain to stand in: a step either side of
   // a line, a step past the baseline for bars.
   if (max <= min) {
-    if (data.yMax !== undefined) min = Number((max - step).toPrecision(12));
-    else if (data.yMin !== undefined || grounded) max = Number((min + step).toPrecision(12));
+    if (data.yMax !== undefined) min = precise(max - step);
+    else if (data.yMin !== undefined || grounded) max = precise(min + step);
     else {
-      min = Number((min - step).toPrecision(12));
-      max = Number((max + step).toPrecision(12));
+      min = precise(min - step);
+      max = precise(max + step);
     }
   }
-  const ticks: number[] = [];
-  for (let value = round(Math.ceil(min / step - 1e-9) * step); value <= max + step * 1e-9; value = round(value + step)) ticks.push(value);
+  // The ticks by their index along the step, so there are always a few of
+  // them; a domain whose step its magnitude drowns falls back to even
+  // divisions.
+  const first = Math.ceil(min / step - 1e-9);
+  const count = Math.floor(max / step + 1e-9) - first + 1;
+  if (!(count >= 1 && count <= CHART_MAX_TICKS) || !(max > min)) {
+    const ticks = Array.from({ length: 4 }, (_, index) => max - ((max - min) * index) / 3);
+    return { min, max, ticks, decimals: 2 };
+  }
+  const ticks = Array.from({ length: count }, (_, index) => precise((first + index) * step));
   return { min, max, ticks, decimals: decimalsOf(step) };
 }
 

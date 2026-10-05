@@ -458,6 +458,26 @@ describe('chart value axis', () => {
     });
   });
 
+  // Ticks stepped one after another at twelve significant digits never
+  // reached the end of a domain as large as epoch milliseconds: the tab hung.
+  it('labels a domain of very large values, and stops', () => {
+    for (const values of [[5e12, 5e12 + 1], [1700000000000, 1700000000004]]) {
+      const axis = chartValueAxis({ series: [{ name: 'S', values }] });
+      expect(axis.ticks.length).toBeGreaterThanOrEqual(2);
+      expect(axis.ticks.length).toBeLessThanOrEqual(12);
+      expect(axis.min).toBeLessThanOrEqual(values[0]);
+      expect(axis.max).toBeGreaterThanOrEqual(values[1]);
+    }
+    const pinned = chartValueAxis({ kind: 'bar', labels: ['a', 'b'], yMin: 5e12, series: [{ name: 'S', values: [5e12 + 1, 5e12 + 2] }] });
+    expect(pinned.ticks.length).toBeLessThanOrEqual(12);
+  });
+
+  it('prints a very small step with the decimals it needs', () => {
+    const axis = chartValueAxis({ series: [{ name: 'S', values: [1e-7, 3e-7] }] });
+    expect(axis.decimals).toBeGreaterThanOrEqual(7);
+    expect(new Set(axis.ticks.map((tick) => tick.toFixed(axis.decimals))).size).toBe(axis.ticks.length);
+  });
+
   it('gives a flat series a domain to stand in', () => {
     expect(chartValueAxis({ series: [{ name: 'S', values: [5, 5, 5] }] })).toMatchObject({ min: 4, max: 6 });
     expect(chartValueAxis({ kind: 'bar', labels: ['a'], series: [{ name: 'S', values: [0] }] }).max).toBeGreaterThan(0);
