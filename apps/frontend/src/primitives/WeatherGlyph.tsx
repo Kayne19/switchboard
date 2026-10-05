@@ -85,7 +85,7 @@ export function conditionText(condition: WeatherCondition): string {
 }
 
 export function WeatherGlyph({ condition, className }: { condition: WeatherCondition; className?: string }) {
-  const parts = WEATHER_GLYPHS[condition] ?? [];
+  const parts = WEATHER_GLYPHS[condition];
   return (
     <svg className={`weather-glyph${className ? ` ${className}` : ''}`} viewBox="0 0 24 24" role="img" aria-label={conditionText(condition)} data-condition={condition}>
       {parts.map((part, index) => (

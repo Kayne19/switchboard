@@ -10,6 +10,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { WeatherData } from '../../src/controller/types';
 import { WeatherPrimitive } from '../../src/primitives/WeatherPrimitive';
+import { heroEms } from '../../src/primitives/weatherLayout';
 
 const forecast: WeatherData = {
   location: 'San Francisco, CA', units: 'F',
@@ -84,6 +85,14 @@ describe('the conditions now', () => {
     expect(rule).toMatch(/color: var\(--amber\)/);
   });
 
+  it('size the temperature so its row fits the column: a cold reading in tenths takes less', () => {
+    const cold = { ...forecast, current: { ...forecast.current, temp: -12.5 } };
+    const page = render(cold, undefined, { width: 340, height: 700 });
+    const size = parseFloat(page.querySelector<HTMLElement>('.weather-now__main')!.style.getPropertyValue('--weather-temp'));
+    expect(size * heroEms('-12.5')).toBeLessThanOrEqual(340);
+    expect(size).toBeGreaterThan(30);
+  });
+
   it('stand alone in the middle of the box when there is no forecast to list', () => {
     const page = render({ ...forecast, hourly: [], daily: undefined, alert: undefined }, undefined, { width: 1000, height: 620 });
     expect(page.querySelector('.weather__field')!.getAttribute('data-parts')).toBe('now');
@@ -106,6 +115,17 @@ describe('the days', () => {
   });
 });
 
+describe('flat days', () => {
+  it('still draw a bar, and the head names the days, not the padded scale', () => {
+    const flat = { ...forecast, daily: [{ date: '2026-10-07', high: 20, low: 20, condition: 'fog' as const }, { date: '2026-10-08', high: 20, low: 20, condition: 'fog' as const }] };
+    const page = render(flat, undefined, { width: 1000, height: 620 });
+    expect(page.querySelector('.weather-daily .weather-section__head')!.textContent).toBe('DAILY20° TO 20°');
+    for (const range of page.querySelectorAll<HTMLElement>('.weather-day__range')) {
+      expect(parseFloat(range.style.getPropertyValue('--to')) - parseFloat(range.style.getPropertyValue('--from'))).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe('the arrangement follows the box', () => {
   it.each([
     [{ width: 1000, height: 620 }, 'wide', 'now hourly daily'],
@@ -118,7 +138,7 @@ describe('the arrangement follows the box', () => {
     expect(page.querySelector('.weather__field')!.getAttribute('data-parts')).toBe(parts);
   });
 
-  it('down a tall box the forecast scrolls as one and counts its days', () => {
+  it('down a tall box the conditions, the hours and the days stand in one scroll', () => {
     const page = render(forecast, undefined, { width: 740, height: 690 });
     const scroll = page.querySelector('.weather__scroll')!;
     expect(scroll.querySelectorAll('.weather-now, .weather-hourly, .weather-day').length).toBe(5);
@@ -142,8 +162,8 @@ describe('a note on one hour or day', () => {
     expect(hour.querySelector('.weather-hour__time')!.textContent).toBe('13');
   });
 
-  it('a small slot shows the hours, not the days, when the note names an hour', () => {
-    const page = render(forecast, '2026-10-07T13:00', { width: 250, height: 240 });
+  it('a small slot shows the hours, not the days, when the note names an hour and the strip has room', () => {
+    const page = render(forecast, '2026-10-07T13:00', { width: 250, height: 280 });
     expect(page.querySelector('.weather__field')!.getAttribute('data-parts')).toBe('now hourly');
     expect(marks(page)).toEqual(['2026-10-07T13:00']);
   });
@@ -164,5 +184,13 @@ describe('the hours', () => {
     expect(times.every((time) => time !== '')).toBe(true);
     // The trace runs through every hour.
     expect(page.querySelector('.weather-hourly__line')!.getAttribute('points')!.split(' ')).toHaveLength(24);
+  });
+
+  it('give a screen reader every hour whole, however the strip is thinned for the eye', () => {
+    const page = render(forecast, undefined, { width: 300, height: 700 });
+    const readings = [...page.querySelectorAll('.weather-hour__reading')].map((reading) => reading.textContent);
+    expect(readings).toHaveLength(24);
+    expect(readings[1]).toBe('WED 11:00, 61°, clear, 4% precipitation');
+    expect(page.querySelector('.weather-hour__time')!.getAttribute('aria-hidden')).toBe('true');
   });
 });

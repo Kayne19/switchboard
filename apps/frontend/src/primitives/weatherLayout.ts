@@ -79,6 +79,9 @@ export const COMPACT_WIDTH = 280;
 /** A small slot shorter than this holds the conditions alone: a list under
  * them would show its head and no row. The rest is a focus away. */
 export const COMPACT_LIST_HEIGHT = 200;
+/** A small slot shorter than this has no room for the hourly strip under
+ * the conditions (the strip's rows need 120px); it shows the days. */
+export const COMPACT_STRIP_HEIGHT = 260;
 
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
 
@@ -91,7 +94,8 @@ export function weatherLayout(
     const temp = Math.round(clamp(Math.min(width * 0.13, height * 0.22), 26, 48));
     // Before the box is measured (0) it is drawn whole, as it is in a test.
     if (height > 0 && height < COMPACT_LIST_HEIGHT) return { arrangement: 'compact', temp, hourly: false, daily: false };
-    const hourly = has.hourly && (!has.daily || has.markedHour === true);
+    const hourly = has.hourly && (!has.daily || has.markedHour === true) && (height === 0 || height >= COMPACT_STRIP_HEIGHT);
+    if (!hourly && !has.daily) return { arrangement: 'compact', temp, hourly: false, daily: false };
     return { arrangement: 'compact', temp, hourly, daily: has.daily && !hourly };
   }
   // Conditions alone stand larger: nothing else shares the box.
@@ -104,7 +108,24 @@ export function weatherLayout(
   return { arrangement: 'tall', temp: Math.round(clamp(Math.min(width * 0.17, height * 0.1), 44, 112)), hourly: has.hourly, daily: has.daily };
 }
 
+/**
+ * The hero's row in ems of its temperature: the glyph (1.1), the gap
+ * (0.24), the digits (a mono advance, 0.6 each), and the unit after them
+ * (0.55). The hero sizes its temperature so the row fits its column.
+ */
+export function heroEms(tempText: string): number {
+  return 1.1 + 0.24 + tempText.length * 0.6 + 0.55;
+}
+
+/** The hero temperature for a column `width` wide: the layout's size, or less so the row fits. */
+export function heroTempFit(width: number, tempText: string, temp: number): number {
+  return width > 0 ? Math.max(1, Math.min(temp, Math.floor(width / heroEms(tempText)))) : temp;
+}
+
 // ---- the hourly strip ------------------------------------------------------------
+
+/** The strip's padding each side, so an edge column's centred label stays inside it. */
+export const STRIP_PAD = 10;
 
 /** The least room, CSS pixels, between two labelled hours on the strip. */
 export const HOUR_LABEL_SPACING = 34;
@@ -170,10 +191,24 @@ export function dayScale(days: Array<{ high: number; low: number }>): { min: num
   return max > min ? { min, max } : { min: min - 1, max: max + 1 };
 }
 
+/** The days' own range, lowest low to highest high: what the list's head says. */
+export function dayRange(days: Array<{ high: number; low: number }>): { min: number; max: number } | null {
+  if (days.length === 0) return null;
+  return { min: Math.min(...days.map((day) => Math.min(day.low, day.high))), max: Math.max(...days.map((day) => Math.max(day.low, day.high))) };
+}
+
+/** The least width of a day's bar, in percent of the track: a day whose low is its high still shows. */
+export const LEAST_RANGE = 1.5;
+
 /** Where a day's range stands on the shared scale, as percents of the track. */
 export function rangeOnScale(day: { high: number; low: number }, scale: { min: number; max: number }): { from: number; to: number } {
   const at = (value: number) => ((value - scale.min) / (scale.max - scale.min)) * 100;
-  const from = at(Math.min(day.low, day.high));
-  const to = at(Math.max(day.low, day.high));
+  let from = at(Math.min(day.low, day.high));
+  let to = at(Math.max(day.low, day.high));
+  if (to - from < LEAST_RANGE) {
+    const centre = Math.min(100 - LEAST_RANGE / 2, Math.max(LEAST_RANGE / 2, (from + to) / 2));
+    from = centre - LEAST_RANGE / 2;
+    to = centre + LEAST_RANGE / 2;
+  }
   return { from: Math.round(from * 100) / 100, to: Math.round(to * 100) / 100 };
 }

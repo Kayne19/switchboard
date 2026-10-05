@@ -3,11 +3,15 @@ import type { WeatherData, WeatherHour } from '../../src/controller/types';
 import {
   COMPACT_HEIGHT,
   COMPACT_LIST_HEIGHT,
+  COMPACT_STRIP_HEIGHT,
   COMPACT_WIDTH,
   dayLabel,
   dayLong,
+  dayRange,
   dayScale,
   formatTemp,
+  heroEms,
+  heroTempFit,
   HOUR_LABEL_SPACING,
   hourLabel,
   hourLabelStep,
@@ -71,10 +75,18 @@ describe('weatherLayout', () => {
 
   it('a small slot holds the conditions and one list: the days, or the hours a note names', () => {
     expect(weatherLayout(250, 240, all)).toMatchObject({ arrangement: 'compact', hourly: false, daily: true });
-    expect(weatherLayout(250, 240, { hourly: true, daily: false })).toMatchObject({ hourly: true, daily: false });
-    expect(weatherLayout(250, 240, { ...all, markedHour: true })).toMatchObject({ hourly: true, daily: false });
+    expect(weatherLayout(250, 280, { hourly: true, daily: false })).toMatchObject({ hourly: true, daily: false });
+    expect(weatherLayout(250, 280, { ...all, markedHour: true })).toMatchObject({ hourly: true, daily: false });
     expect(weatherLayout(COMPACT_WIDTH - 1, 900, all).arrangement).toBe('compact');
     expect(weatherLayout(900, COMPACT_HEIGHT - 1, all).arrangement).toBe('compact');
+  });
+
+  it('a small slot too short for the strip shows the days, or the conditions alone, never a cut strip', () => {
+    // The today scene's aux cell at 1440x900 is about 220px tall: the strip
+    // (120px of rows under the conditions) ran past its bottom.
+    expect(weatherLayout(250, COMPACT_STRIP_HEIGHT - 1, { ...all, markedHour: true })).toMatchObject({ hourly: false, daily: true });
+    expect(weatherLayout(250, COMPACT_STRIP_HEIGHT - 1, { hourly: true, daily: false })).toMatchObject({ hourly: false, daily: false });
+    expect(weatherLayout(250, COMPACT_STRIP_HEIGHT, { ...all, markedHour: true })).toMatchObject({ hourly: true, daily: false });
   });
 
   it('a slot too short for a list row holds the conditions alone', () => {
@@ -98,6 +110,19 @@ describe('weatherLayout', () => {
       expect(temp).toBeGreaterThanOrEqual(arrangement === 'compact' ? 26 : 44);
       expect(temp).toBeLessThanOrEqual(132);
     }
+  });
+});
+
+describe('the hero', () => {
+  it('sizes its temperature so the glyph, the digits and the unit fit the column', () => {
+    // "-12.5" at 160px would need 160 * heroEms > 700px; a 340px column gets less.
+    expect(heroTempFit(340, '-12.5', 160) * heroEms('-12.5')).toBeLessThanOrEqual(340);
+    expect(heroTempFit(340, '-12.5', 160)).toBeLessThan(160);
+    // Room to spare keeps the layout's size.
+    expect(heroTempFit(1200, '61', 132)).toBe(132);
+    // Not measured yet: the layout's size.
+    expect(heroTempFit(0, '-12.5', 64)).toBe(64);
+    expect(heroEms('-12.5')).toBeGreaterThan(heroEms('61'));
   });
 });
 
@@ -167,5 +192,17 @@ describe('the daily list', () => {
   it('a single flat day still has a scale, and a low above a high is drawn the right way round', () => {
     expect(dayScale([{ high: 5, low: 5 }])).toEqual({ min: 4, max: 6 });
     expect(rangeOnScale({ high: 50, low: 60 }, { min: 40, max: 80 })).toEqual({ from: 25, to: 50 });
+  });
+
+  it('a day whose low is its high still draws a bar, inside the track', () => {
+    expect(rangeOnScale({ high: 5, low: 5 }, { min: 4, max: 6 })).toEqual({ from: 49.25, to: 50.75 });
+    expect(rangeOnScale({ high: 6, low: 6 }, { min: 6, max: 10 })).toEqual({ from: 0, to: 1.5 });
+    expect(rangeOnScale({ high: 10, low: 10 }, { min: 6, max: 10 })).toEqual({ from: 98.5, to: 100 });
+  });
+
+  it("the list names the days' own range, not the padded scale", () => {
+    expect(dayRange([{ high: 20, low: 20 }, { high: 20, low: 20 }])).toEqual({ min: 20, max: 20 });
+    expect(dayRange(days)).toEqual({ min: 52, max: 68 });
+    expect(dayRange([])).toBeNull();
   });
 });

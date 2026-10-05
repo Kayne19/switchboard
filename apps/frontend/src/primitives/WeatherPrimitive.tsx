@@ -6,13 +6,17 @@ import { NoteBadge } from './NoteMarker';
 import { conditionText, WeatherGlyph } from './WeatherGlyph';
 import {
   dayLabel,
+  dayRange,
   dayScale,
   formatTemp,
+  heroTempFit,
   hourLabel,
   hourLabelStep,
+  hourLong,
   labelledHours,
   LEAST_TEMP_SPAN,
   rangeOnScale,
+  STRIP_PAD,
   tempScale,
   weatherLayout,
   type WeatherArrangement,
@@ -55,8 +59,14 @@ function AlertLine({ text }: { text: string }) {
   );
 }
 
-function Now({ data, compact }: { data: WeatherData; compact: boolean }) {
+function Now({ data, compact, temp }: { data: WeatherData; compact: boolean; temp: number }) {
   const { current, units } = data;
+  // The temperature is as large as the layout gives it, and no larger than
+  // its row (glyph, digits, unit) fits the column the figure stands in:
+  // `-12.5°C` needs more room than `61°F`.
+  const mainRef = useRef<HTMLDivElement>(null);
+  const { width } = useElementSize(mainRef);
+  const fitted = heroTempFit(width, `${formatTemp(current.temp)}`, temp);
   const degree = (value: number) => `${formatTemp(value)}°`;
   const highLow = current.high !== undefined || current.low !== undefined
     ? [current.high !== undefined ? `H ${degree(current.high)}` : null, current.low !== undefined ? `L ${degree(current.low)}` : null].filter(Boolean).join(' ')
@@ -77,7 +87,7 @@ function Now({ data, compact }: { data: WeatherData; compact: boolean }) {
           for both, under it where it is not (an intrinsic wrap, no
           breakpoint). */}
       <div className="weather-now__body">
-        <div className="weather-now__main">
+        <div ref={mainRef} className="weather-now__main" style={{ '--weather-temp': `${fitted}px` } as CSSProperties}>
           <WeatherGlyph condition={current.condition} className="weather-now__glyph" />
           <div className="weather-now__figure">
             <div className="weather-now__temp">
@@ -115,8 +125,8 @@ function SectionHead({ name, count }: { name: string; count: string }) {
 function Hours({ hours, units, marked }: { hours: WeatherHour[]; units: WeatherData['units']; marked?: string }) {
   const stripRef = useRef<HTMLDivElement>(null);
   const { width } = useElementSize(stripRef);
-  // The columns share the strip's width inside its padding (--strip-pad, 10px a side).
-  const step = hourLabelStep(width - 20, hours.length);
+  // The columns share the strip's width inside its padding.
+  const step = hourLabelStep(width - 2 * STRIP_PAD, hours.length);
   const labelled = labelledHours(hours, step, marked);
   const scale = tempScale(hours.map((hour) => hour.temp), LEAST_TEMP_SPAN[units]);
   const x = (index: number) => ((index + 0.5) / hours.length) * 100;
@@ -131,7 +141,7 @@ function Hours({ hours, units, marked }: { hours: WeatherHour[]; units: WeatherD
       <div
         ref={stripRef}
         className={`weather-hourly__strip${hours.some((hour) => hour.time === marked) ? ' weather-hourly__strip--marked' : ''}`}
-        style={{ gridTemplateColumns: `repeat(${hours.length}, minmax(0, 1fr))` }}
+        style={{ gridTemplateColumns: `repeat(${hours.length}, minmax(0, 1fr))`, '--strip-pad': `${STRIP_PAD}px` } as CSSProperties}
       >
         <svg className="weather-hourly__trace" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
           <polygon className="weather-hourly__area" points={area} />
@@ -150,14 +160,19 @@ function Hours({ hours, units, marked }: { hours: WeatherHour[]; units: WeatherD
               data-item={hour.time}
             >
               {hour.time === marked ? <NoteBadge className="weather-hour__badge" /> : null}
-              <span className="weather-hour__glyph">{shown ? <WeatherGlyph condition={hour.condition} /> : null}</span>
-              <span className="weather-hour__temp">{shown ? `${formatTemp(Math.round(hour.temp))}°` : ''}</span>
+              {/* Every hour is read whole by a screen reader; the strip's
+                  thinned labels are for the eye. */}
+              <span className="weather-hour__reading">
+                {[hourLong(hour.time), `${formatTemp(hour.temp)}°`, conditionText(hour.condition), hour.precip !== undefined ? `${formatTemp(hour.precip)}% precipitation` : null].filter(Boolean).join(', ')}
+              </span>
+              <span className="weather-hour__glyph" aria-hidden="true">{shown ? <WeatherGlyph condition={hour.condition} /> : null}</span>
+              <span className="weather-hour__temp" aria-hidden="true">{shown ? `${formatTemp(Math.round(hour.temp))}°` : ''}</span>
               <span className="weather-hour__plot" />
-              <span className="weather-hour__rain">
+              <span className="weather-hour__rain" aria-hidden="true">
                 {hour.precip ? <span className="weather-hour__rain-bar" style={{ height: `${hour.precip}%` }} /> : null}
               </span>
-              <span className="weather-hour__precip">{shown && hour.precip ? `${formatTemp(hour.precip)}%` : ''}</span>
-              <span className="weather-hour__time tech micro">{shown ? label : ''}</span>
+              <span className="weather-hour__precip" aria-hidden="true">{shown && hour.precip ? `${formatTemp(hour.precip)}%` : ''}</span>
+              <span className="weather-hour__time tech micro" aria-hidden="true">{shown ? label : ''}</span>
             </div>
           );
         })}
@@ -189,7 +204,8 @@ function Day({ day, scale, marked }: { day: WeatherDay; scale: { min: number; ma
 // in the forecast's one scroll where it stands down the box.
 function Days({ days, marked, scroll }: { days: WeatherDay[]; marked?: string; scroll: boolean }) {
   const scale = dayScale(days);
-  const head = <SectionHead name="DAILY" count={`${formatTemp(scale.min)}° TO ${formatTemp(scale.max)}°`} />;
+  const range = dayRange(days);
+  const head = <SectionHead name="DAILY" count={range ? `${formatTemp(range.min)}° TO ${formatTemp(range.max)}°` : ''} />;
   const list = (
     <ol className="weather-daily__days">
       {days.map((day) => <Day key={day.date} day={day} scale={scale} marked={day.date === marked} />)}

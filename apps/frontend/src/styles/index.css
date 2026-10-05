@@ -2398,6 +2398,10 @@ button {
 .weather__field[data-parts="now"] .weather-now {
   width: min(100%, 720px);
 }
+/* Alone, the words stand under the figure, so the figure has the width. */
+.weather__field[data-parts="now"] .weather-now__body {
+  grid-template-columns: minmax(0, 1fr);
+}
 
 /* The thirteen glyphs: strokes that keep their width at any size, each
    part in its kind's colour. */
@@ -2531,7 +2535,7 @@ button {
 }
 .weather-now__readings {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
   gap: 0 18px;
   margin: 0;
 }
@@ -2599,6 +2603,8 @@ button {
   margin-bottom: 4px;
   border-bottom: 1px solid rgba(232, 230, 223, 0.13);
 }
+/* --strip-pad is weatherLayout.ts STRIP_PAD, set by WeatherPrimitive: the
+   padding the label step counted. */
 .weather-hourly__strip {
   --badge-row: 0px;
   --glyph-row: 22px;
@@ -2606,7 +2612,6 @@ button {
   --rain-row: 24px;
   --precip-row: 14px;
   --time-row: 15px;
-  --strip-pad: 10px;
   position: relative;
   display: grid;
   flex: 1 1 auto;
@@ -2661,6 +2666,15 @@ button {
   align-self: stretch;
   display: flex;
   justify-content: center;
+  white-space: nowrap;
+}
+/* An hour's whole reading for a screen reader; out of sight. */
+.weather-hour > .weather-hour__reading {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
   white-space: nowrap;
 }
 .weather-hour__glyph {
@@ -2750,7 +2764,7 @@ button {
    glyphs, chances and ranges stand in line down the list. */
 .weather-daily__days {
   display: grid;
-  grid-template-columns: max-content 1.3em 3.2em 2.6em minmax(36px, 1fr) 2.6em;
+  grid-template-columns: max-content 1.3em max-content max-content minmax(36px, 1fr) max-content;
   column-gap: clamp(8px, 0.9cqw, 14px);
   margin: 0;
   padding: 0;
@@ -2837,7 +2851,7 @@ button {
   white-space: nowrap;
 }
 .weather--compact .weather-daily__days {
-  grid-template-columns: max-content 1.2em 2.9em 2.3em minmax(18px, 1fr) 2.3em;
+  grid-template-columns: max-content 1.2em max-content max-content minmax(18px, 1fr) max-content;
   column-gap: 7px;
   font-size: 12px;
 }
