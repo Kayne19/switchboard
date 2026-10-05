@@ -121,13 +121,18 @@ test('the shared content rail keeps one semantic surface order', async ({ page }
         return child.className;
       })
     ));
-    expect(surfaces).toEqual(['metrics', 'chat', 'note', 'progress', 'activity']);
+    // Telemetry first: the metrics, then the progress read as they are
+    // read, then the live response, the note, and the activity.
+    expect(surfaces).toEqual(['metrics', 'progress', 'chat', 'note', 'activity']);
   } finally {
     await fixtureServer.stop();
   }
 });
 
-test('rail progress uses spacing instead of a top border', async ({ page }) => {
+// The rail's progress is a module like the metrics above it, so it is
+// headed by the same rule (it once had none, #31, when it was a bare bar
+// that read as one more panel edge), and it sits above the note.
+test('rail progress is headed by a rule, as the rail metrics are', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/?scene=architecture&chrome=0');
   await page.evaluate(() => {
@@ -157,8 +162,8 @@ test('rail progress uses spacing instead of a top border', async ({ page }) => {
   const progressBox = await progress.boundingBox();
   expect(noteBox).not.toBeNull();
   expect(progressBox).not.toBeNull();
-  expect(await progress.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe('0px');
-  expect(progressBox!.y - (noteBox!.y + noteBox!.height)).toBeGreaterThan(0);
+  expect(await progress.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe('1px');
+  expect(noteBox!.y - (progressBox!.y + progressBox!.height)).toBeGreaterThan(0);
 });
 
 test('rail metrics are headed by a rule in the content rail, with no header line and no rule under the last metric', async ({ page }) => {

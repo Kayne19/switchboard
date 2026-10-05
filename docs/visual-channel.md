@@ -60,7 +60,11 @@ A progress object with `steps` may omit `value`: the service fills in the
 share of steps done, so "I am on step three of five" is spoken while the
 screen shows the five, their states, and a bar that agrees with them. The
 page decides how much of a long plan each slot shows; the whole plan is a
-focus away.
+focus away. A plan reads best beside the work it is about: shown next to a
+visual primary it is a module in the rail, read the way the metrics above
+it are (its label and share done on one row, the steps still to do under
+the bar). Shown as the primary, its frame fits the plan and sits in the
+middle of the column, and only a plan longer than the column fills it.
 
 ### Composition & focus
 
@@ -70,6 +74,39 @@ agent can `focus` a region, `hide` an object, `say` an aside on it, or `clear`
 the whole stage — one action per call. The old bespoke `plan`/`timeline`/`diff`
 renderers are gone; `progress`, `document`, and `code` are the general primitives
 that subsume them.
+
+Any primary can have visuals beside it, so the agent can show a diagram with
+the table it summarises, a chart with the image it came from, or code with a
+review document. The primary takes the main slot, drawn the way its type is
+drawn alone. Every other visual on stage (`chart`, `diagram`, `document`,
+`code`, `table`, `image`) is drawn once:
+
+- A chart beside a chart primary shares the chart row with it; a `compare`
+  chart is labelled as the comparison. This is the one scene that has a place
+  for a visual beside its primary.
+- Every other visual takes a framed cell in the **aux row** under the primary:
+  `compare` objects first, then `secondary`, then `ambient` (the rail has no
+  room for a visual), each in the order shown.
+- Metrics, notes and progress keep the places they have without the row: the
+  rail beside the content, and on a chart page the notes over the charts.
+  Progress joins the aux row in two cases: under a primary that is itself a
+  metric, a progress or a note (with any `compare` object that the rail does
+  not already show), and on a chart page with a visual in the row, where the
+  progress that sat under the charts moves into the row so the charts keep
+  their share of a short stage.
+
+Under a chart, diagram, document, code, table, image, progress or note
+primary, the aux row takes what its cells need up to two fifths of the main
+column, so the primary keeps the larger share. Under a metric primary the
+card keeps its own height and the row takes the rest. Each visual keeps a
+readable floor in its cell (the head of a table and its first rows, a chart's
+plot, a figure and its caption). When the row has no room for every cell at
+its floor, it scrolls inside itself; it never shrinks a visual to nothing. A figure in a short cell is
+drawn smaller, never cropped, and a table in a narrow cell scrolls sideways
+rather than breaking a word. The cells sit side by side when the column is
+wide and stack when it is narrow, from the column's own width. A visual that
+arrives beside the primary resizes the primary in place; it does not redraw
+it.
 
 Notes are durable objects rather than a mirror of the latest chat response.
 They change only through an explicit `show` update to their stable id, `hide`,

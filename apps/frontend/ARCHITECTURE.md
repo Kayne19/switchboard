@@ -54,7 +54,7 @@ The renderer does not load bespoke route pages. It derives a broad composition f
 | table | ruled rows of named columns |
 | image | figure: a raster image contained on the black field |
 
-Additional metrics, progress, notes, comparisons, and speech modify that composition incrementally.
+Additional metrics, progress, notes, comparisons, and speech modify that composition incrementally. Any other visual on stage that the composition does not draw itself (`besideVisuals` in `src/app/sceneModel.ts`) goes in the aux row under the primary; see "Scene shell".
 
 ## Scene shell
 
@@ -66,6 +66,16 @@ only fills the main slot and names what its rail carries. A feature that
 crosses compositions is added to the shell once; it is never wired into a
 composition by hand. The presence reads the voice level from the registered
 voice runtime, so no page can leave it out.
+
+The shell also owns the main column (`MainWithAux`): a composition's main
+slot over the aux row. A composition names the objects its slot does not
+draw (`SceneContent.aux`), and the shell gives each a framed cell in the row
+(`AuxRow`), so an accepted visual is never lost to the layout. The slot sits
+in the column whether or not the row is shown, so a visual arriving beside
+the primary resizes it in place. Alone, a scene's slot fills the column: a
+chart, diagram, document, code, table or image page is drawn exactly as it
+was before the column existed, and the composed workspace no longer keeps
+an empty row's gap under a lone primary.
 
 Two exceptions are deliberate (decided 2026-10-02; see #121 and #124). Review them
 in a later refactor or audit instead of folding them in by habit:
