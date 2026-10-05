@@ -162,23 +162,48 @@ function OutlookDay({ day, marked }: { day: WeatherDay; marked: boolean }) {
   );
 }
 
+/**
+ * Whether a spot line's parts, at their own widths, need more room across
+ * than the line has: its children's widths (a text's whole width, even
+ * where it ends in an ellipsis now or is set aside), the gaps between them
+ * and the line's padding.
+ */
+function lineOverflows(line: HTMLElement): boolean {
+  const style = getComputedStyle(line);
+  const parts = Array.from(line.children) as HTMLElement[];
+  const widths = parts.reduce((sum, part) => sum + Math.max(part.scrollWidth, part.getBoundingClientRect().width), 0);
+  const need = widths + (parseFloat(style.columnGap) || 0) * Math.max(0, parts.length - 1) + (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+  return need > line.clientWidth + 0.5;
+}
+
 // The hour or day a note names, where the slot has no room for the list
 // that holds it (a small slot shows the conditions and, at most, one
 // list): one line under the conditions, so the item the card names is on
-// screen with its badge.
+// screen with its badge. Where the line is narrow its readings give way in
+// an order: the chance of rain goes whole first, then the temperatures
+// lose their end to an ellipsis; the badge, the item's name and its glyph
+// stay. No reading is left cut in two while another could make room.
 function Spot({ data, marked }: { data: WeatherData; marked: string }) {
+  const lineRef = useRef<HTMLDivElement>(null);
+  const [dropped, setDropped] = useState(false);
   const hour = (data.hourly ?? []).find((candidate) => candidate.time === marked);
   const day = hour ? undefined : (data.daily ?? []).find((candidate) => candidate.date === marked);
+  const precip = (hour ?? day)?.precip;
+  useLayoutEffect(() => {
+    const line = lineRef.current;
+    if (!line || !precip) return undefined;
+    return watchElement(line, () => setDropped(lineOverflows(line)), { children: true, changes: true });
+  }, [precip]);
   if (!hour && !day) return null;
   const condition = (hour ?? day)!.condition;
-  const precip = (hour ?? day)!.precip;
   return (
-    <div className="weather-spot" data-item={marked}>
+    <div ref={lineRef} className="weather-spot" data-item={marked}>
       <NoteBadge />
       <span className="weather-spot__when tech micro">{hour ? hourLong(hour.time) : dayLong(day!.date)}</span>
       <WeatherGlyph condition={condition} className="weather-spot__glyph" />
       <span className="weather-spot__temp">{hour ? `${formatTemp(hour.temp)}°` : `${formatTemp(day!.low)}° / ${formatTemp(day!.high)}°`}</span>
-      {precip ? <span className="weather-spot__precip">{formatTemp(precip)}%</span> : null}
+      {/* Set aside, not taken out, so the line can tell when it fits again. */}
+      {precip ? <span className={`weather-spot__precip${dropped && precip ? ' weather-spot__precip--dropped' : ''}`}>{formatTemp(precip)}%</span> : null}
     </div>
   );
 }

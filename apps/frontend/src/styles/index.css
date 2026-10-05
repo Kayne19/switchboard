@@ -2783,11 +2783,22 @@ button {
 
 /* In a narrow cell the readings give way at the line's end, the day and
    its badge first in line. */
-.weather-spot__temp,
-.weather-spot__precip {
+/* Narrow, the line's readings give way in an order (WeatherPrimitive
+   Spot): the chance of rain is set aside whole first, then the
+   temperatures end in an ellipsis. */
+.weather-spot__temp {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.weather-spot__precip {
+  flex: none;
+}
+
+.weather-spot__precip--dropped {
+  position: absolute;
+  visibility: hidden;
 }
 /* The alert: an amber rule, its sign and its words, the warning colour. */
 .weather-alert {

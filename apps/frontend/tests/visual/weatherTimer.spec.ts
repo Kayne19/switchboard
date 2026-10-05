@@ -287,6 +287,33 @@ for (const note of [undefined, '2026-10-08']) {
   });
 }
 
+test('a narrow forecast cell\'s spot line drops the chance of rain whole before its temperatures lose their end', async ({ page }) => {
+  // A fourth object beside the today scene's agenda narrows the forecast's
+  // cell (219px at 820x1180): the day's line read `53° /…` and `3…`.
+  await page.setViewportSize({ width: 820, height: 1180 });
+  await page.clock.setFixedTime(T0);
+  await page.goto('/?scene=today&chrome=0');
+  await page.evaluate(() => window.SwitchboardController!.run([
+    { op: 'show', id: 'kitchen', type: 'timer', role: 'secondary', data: { timers: [{ id: 'pasta', label: 'Pasta', endsAt: '2026-10-07T23:00:00-07:00' }] } },
+    { op: 'show', id: 'dentist-note', type: 'note', data: { tag: 'RAIN', anchor: { target: 'weather', item: '2026-10-09' }, segments: [{ text: 'Friday stays dry for the flight.' }] } },
+  ]));
+  const spot = page.locator('.composed-aux [data-testid="weather"] .weather-spot');
+  await expect(spot.locator('.note-badge')).toBeVisible();
+  const readings = await spot.evaluate((line) => {
+    const box = line.getBoundingClientRect();
+    const temp = line.querySelector<HTMLElement>('.weather-spot__temp')!;
+    const precip = line.querySelector<HTMLElement>('.weather-spot__precip');
+    const drawn = precip?.getBoundingClientRect();
+    return {
+      tempWhole: temp.scrollWidth <= temp.clientWidth,
+      // Shown whole on the line, or set aside whole: never in part.
+      precip: !precip || !drawn ? 'none' : getComputedStyle(precip).visibility === 'hidden' ? 'set aside' : precip.scrollWidth <= precip.clientWidth && drawn.right <= box.right + 0.5 ? 'whole' : 'cut',
+    };
+  });
+  expect(readings).toEqual({ tempWhole: true, precip: 'set aside' });
+  expect(await readingFaults(page, '.composed-aux [data-testid="weather"]')).toEqual([]);
+});
+
 test('a forecast longer than a phone frame scrolls inside it and says so', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.clock.setFixedTime(T0);
