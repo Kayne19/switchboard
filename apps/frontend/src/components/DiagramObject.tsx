@@ -10,6 +10,7 @@ export function DiagramObject({
   id,
   focused,
   note,
+  callout,
   onCalloutChange,
 }: {
   data: DiagramObjectData;
@@ -17,10 +18,12 @@ export function DiagramObject({
   id: string;
   focused?: boolean;
   note?: NoteData | null;
+  /** Whether the note may ride on a graph as a callout (where it fits); false where the host shows the note itself. */
+  callout?: boolean;
   onCalloutChange?: (placed: boolean) => void;
 }) {
   if (data.mode === 'sequence') {
     return <SequencePrimitive data={data} id={id} focused={focused} note={note} />;
   }
-  return <DiagramPrimitive data={data} id={id} focused={focused} note={note} onCalloutChange={onCalloutChange} />;
+  return <DiagramPrimitive data={data} id={id} focused={focused} note={note} callout={callout} onCalloutChange={onCalloutChange} />;
 }

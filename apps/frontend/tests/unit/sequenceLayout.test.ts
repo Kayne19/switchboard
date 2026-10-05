@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { SequenceDiagramData, SequenceMessage } from '../../src/controller/types';
 import { fixtures, traceDiagram } from '../../src/fixtures/scenes';
+import { cornerTagBoxes } from '../../src/primitives/diagramLayout';
 import { SLIVER } from '../../src/primitives/drawingFit';
-import { layoutSequence, sequenceMinScale, viewSequence, type Box, type SequenceOrientation } from '../../src/primitives/sequenceLayout';
+import { NOTE_MARKER } from '../../src/primitives/NoteMarker';
+import { viewWithMap } from '../../src/primitives/drawingScroll';
+import { headerReading, layoutSequence, pinnedDepth, sequenceMinScale, viewSequence, type Box, type SequenceOrientation } from '../../src/primitives/sequenceLayout';
 
 const handoffDiagram = (fixtures.handoff[0] as { data: SequenceDiagramData }).data;
 
@@ -229,12 +232,12 @@ describe('sequence recomposed to a width', () => {
       },
     ],
   ];
-  for (const orientation of ['landscape', 'portrait'] as SequenceOrientation[]) {
+  for (const [orientation, headers] of [['landscape', 'full'], ['portrait', 'full'], ['landscape', 'compact'], ['portrait', 'compact']] as const) {
     for (const [name, data] of cases) {
       for (const frameWidth of [377, 418, 1175]) {
-        const natural = layoutSequence(data, orientation);
-        const layout = layoutSequence(data, orientation, { width: frameWidth });
-        it(`${orientation} / ${name} in ${frameWidth}: as wide as the frame, its headers clear of each other and of other lifelines`, () => {
+        const natural = layoutSequence(data, orientation, undefined, undefined, headers);
+        const layout = layoutSequence(data, orientation, { width: frameWidth }, undefined, headers);
+        it(`${orientation} / ${headers} / ${name} in ${frameWidth}: as wide as the frame, its headers clear of each other and of other lifelines`, () => {
           if (natural.width <= frameWidth) {
             expect(layout).toEqual(natural);
             return;
@@ -264,11 +267,12 @@ describe('sequence recomposed to a width', () => {
             const widest = Math.max(0, ...actor.labelLines.map((line) => line.length * layout.actorLabelSize * 0.7), ...actor.subLines.map((line) => line.length * layout.actorSubSize * 0.69));
             expect(widest, actor.actor.id).toBeLessThanOrEqual(actor.box.width + 1e-6);
             expect(actor.labelLines.join(' ')).toBe(actor.actor.label);
-            expect(actor.subLines.join('').replace(/\s/g, '')).toBe((actor.actor.sub ?? '').replace(/\s/g, ''));
+            // A compact header carries the name alone.
+            expect(actor.subLines.join('').replace(/\s/g, '')).toBe(headers === 'compact' ? '' : (actor.actor.sub ?? '').replace(/\s/g, ''));
           }
         });
 
-        it(`${orientation} / ${name} in ${frameWidth}: messages in order, each label on its own row, clear of the headers and the others`, () => {
+        it(`${orientation} / ${headers} / ${name} in ${frameWidth}: messages in order, each label on its own row, clear of the headers and the others`, () => {
           const headerBottom = Math.max(...layout.actors.map((actor) => actor.box.y + actor.box.height));
           const indexOf = new Map(layout.actors.map((actor, index) => [actor.actor.id, index]));
           let lastY = headerBottom;
@@ -310,6 +314,100 @@ describe('sequence recomposed to a width', () => {
   }
 });
 
+describe('headers that keep their words and their room', () => {
+  // Every width a trace may be recomposed to, from a phone's to a wide slot's.
+  const widths = Array.from({ length: 121 }, (_, index) => 360 + index * 7);
+
+  it('never break a word of an actor\'s name across lines when a stagger would hold it', () => {
+    for (const orientation of ['landscape', 'portrait'] as SequenceOrientation[]) {
+      for (const headers of ['full', 'compact'] as const) {
+        for (const width of widths) {
+          const layout = layoutSequence(traceDiagram, orientation, { width }, 'pbx', headers);
+          for (const actor of layout.actors) {
+            // Before: "WEBSOCKE / T" at 1098 units, "PROJEC / T / AGENT" at 373.
+            const words = actor.actor.label.split(/\s+/);
+            for (const line of actor.labelLines) for (const word of line.split(/\s+/)) expect(words, `${orientation} ${headers} ${width}: "${line}"`).toContain(word);
+          }
+        }
+      }
+    }
+  });
+
+  it('hold every line of a name inside their box, with no details or with them', () => {
+    const plain: SequenceDiagramData = { ...traceDiagram, actors: traceDiagram.actors.map(({ sub: _sub, ...actor }) => actor) };
+    for (const [data, headers] of [[plain, 'full'], [traceDiagram, 'compact'], [traceDiagram, 'full']] as const) {
+      for (const width of [377, 418, 600, 856]) {
+        const layout = layoutSequence(data, 'portrait', { width }, undefined, headers);
+        for (const actor of layout.actors) {
+          // The last line's foot, half a line under its centre. Before, a
+          // header with no sub was as deep as one line, so a wrapped name's
+          // second line ran out of its box.
+          const foot = actor.labelY + (actor.labelLines.length - 0.5) * layout.actorLabelLineHeight;
+          const last = actor.subLines.length > 0 ? actor.subY + (actor.subLines.length - 0.5) * 11 : foot;
+          expect(last, `${headers} ${width}: ${actor.actor.id}`).toBeLessThanOrEqual(actor.box.height - 4);
+        }
+      }
+    }
+  });
+});
+
+describe('the headers pinned over a long exchange', () => {
+  // Drawn messages wholly in view under the pinned band, at the start.
+  const shown = (view: ReturnType<typeof viewSequence>, height: number) =>
+    view.layout.messages.filter((item) => Math.max(item.label.box.y + item.label.box.height, ...item.points.map((point) => point.y)) * view.fit.scale <= height).length;
+
+  it('are compact in a phone\'s slot: names alone, so the exchange gets the room', () => {
+    for (const slot of [{ width: 330, height: 374 }, { width: 330, height: 600 }]) {
+      const view = viewSequence(traceDiagram, { ...slot, scrollbar: 0 }, 'pbx');
+      expect(view.fit.scrollY).toBe(true);
+      expect(view.fit.scrollX).toBe(false);
+      expect(view.layout.headers.style).toBe('compact');
+      expect(view.layout.actors.every((actor) => actor.subLines.length === 0)).toBe(true);
+      // Before: two staggered rows of headers with their details took 200 px
+      // of the 374 px slot (53%), and three messages showed whole.
+      const band = pinnedDepth(view.layout) * view.fit.scale;
+      expect(band, `${slot.height}`).toBeLessThanOrEqual(0.25 * slot.height);
+      expect(shown(view, slot.height), `${slot.height}`).toBeGreaterThanOrEqual(slot.height < 500 ? 6 : 11);
+    }
+  });
+
+  it('keep their details where the view has the room: a tall or a wide slot', () => {
+    for (const viewport of [{ width: 366, height: 726 }, { width: 726, height: 531 }, { width: 914, height: 526 }, { width: 1325, height: 792 }, { width: 1980, height: 604 }]) {
+      const view = viewSequence(traceDiagram, { ...viewport, scrollbar: 0 }, 'pbx');
+      expect(view.layout.headers.style, `${viewport.width}x${viewport.height}`).toBe('full');
+      expect(pinnedDepth(view.layout) * view.fit.scale).toBeLessThanOrEqual(0.3 * viewport.height);
+    }
+  });
+
+  it('keep their details in focus, a phone\'s held either way, its note beside or under the drawing', () => {
+    // Focus on a phone: upright with the note under the drawing, and on its
+    // side with and without the note's column.
+    for (const viewport of [{ width: 367, height: 640 }, { width: 776, height: 343 }, { width: 530, height: 343 }]) {
+      const slot = viewSequence(traceDiagram, { ...viewport, scrollbar: 0 }, 'pbx');
+      const focus = viewSequence(traceDiagram, { ...viewport, scrollbar: 0 }, 'pbx', true);
+      expect(slot.layout.headers.style, `${viewport.width}x${viewport.height}`).toBe('compact');
+      expect(focus.layout.headers.style, `focus ${viewport.width}x${viewport.height}`).toBe('full');
+      expect(focus.layout.actors.some((actor) => actor.subLines.length > 0)).toBe(true);
+      expect(pinnedDepth(focus.layout) * focus.fit.scale).toBeLessThanOrEqual(0.5 * viewport.height);
+    }
+  });
+
+  it('carry the NOTE marker beside a compact name, costing the row no depth', () => {
+    const marked = viewSequence(traceDiagram, { width: 330, height: 374, scrollbar: 0 }, 'pbx').layout;
+    const plain = viewSequence(traceDiagram, { width: 330, height: 374, scrollbar: 0 }).layout;
+    expect(marked.headers.style).toBe('compact');
+    expect(pinnedDepth(marked)).toBe(pinnedDepth(plain));
+    const pbx = marked.actors.find((actor) => actor.actor.id === 'pbx')!;
+    const marker = pbx.marker!;
+    const words = Math.max(...pbx.labelLines.map((line) => line.length)) * marked.actorLabelSize * 0.7;
+    // Beside the name, clear of it, inside the box and its stepped corners.
+    expect(marker.x).toBeGreaterThanOrEqual(pbx.labelX + words / 2 + 4);
+    expect(marker.x + marker.width).toBeLessThanOrEqual(pbx.box.width - 4);
+    expect(marker.y).toBeGreaterThanOrEqual(3);
+    expect(marker.y + marker.height).toBeLessThanOrEqual(pbx.box.height - 3);
+  });
+});
+
 describe('a sequence read in its viewport', () => {
   // The diagram slot's drawing viewport and the focus layer's at each
   // canonical geometry, in CSS pixels.
@@ -332,6 +430,19 @@ describe('a sequence read in its viewport', () => {
       }
     });
   }
+
+  it('beside its map\'s strip, scrolls no way it did not and keeps its header rows, or has no map', () => {
+    for (const size of viewports) {
+      for (const [data, anchor] of [[traceDiagram, 'pbx'], [handoffDiagram, undefined]] as const) {
+        const alone = viewSequence(data, { ...size, scrollbar: 0 }, anchor);
+        const shown = viewWithMap({ ...size, scrollbar: 0 }, (room) => viewSequence(data, room, anchor), headerReading);
+        // Before the rule, the phone's focus narrowed by a strip scrolled the trace both ways.
+        expect(shown.fit.scrollX, `${size.width}x${size.height}`).toBe(false);
+        expect(headerReading(shown), `${size.width}x${size.height}`).toBe(headerReading(alone));
+        if (shown.strip) expect(shown.strip.side).toBe('right');
+      }
+    }
+  });
 
   it('reads the thirty-two-message trace at the readable minimum, not at a few pixels', () => {
     const { fit } = viewSequence(traceDiagram, { width: 914, height: 526, scrollbar: 0 });
@@ -402,5 +513,13 @@ describe('the NOTE marker on the actor a rail note names', () => {
   it('is carried through a view of the drawing in its viewport', () => {
     const { layout } = viewSequence(traceDiagram, { width: 330, height: 374, scrollbar: 0 }, 'pbx');
     expect(anchored(layout, 'pbx').marker).not.toBeNull();
+  });
+
+  it('has one size, the marker\'s own, on an actor\'s header and on a graph\'s node alike', () => {
+    // Before, the graph's layout kept a size of its own beside the one
+    // NoteMarker draws (diagramLayout TAG_SIZE.marker).
+    const onNode = cornerTagBoxes(220, { glyph: true, marker: true }).marker!;
+    const onActor = anchored(layoutSequence(traceDiagram, 'landscape', undefined, 'pbx'), 'pbx').marker!;
+    for (const box of [onNode, onActor]) expect({ width: box.width, height: box.height }).toEqual(NOTE_MARKER);
   });
 });

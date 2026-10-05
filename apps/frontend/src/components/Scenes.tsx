@@ -15,7 +15,7 @@ import type {
   TableData,
 } from '../controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
-import { besideVisuals, buildCompositionModel, cast, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
+import { anchoredNote, besideVisuals, buildCompositionModel, cast, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { chartKind, chartTargetText } from '../primitives/chartGeometry';
@@ -94,7 +94,7 @@ function noteForTarget(
   notes: Array<SceneObject<NoteData>>,
   targetId: string,
 ): SceneObject<NoteData> | undefined {
-  return notes.find((note) => note.data.anchor?.target === targetId)
+  return anchoredNote(notes, targetId)
     ?? notes.find((note) => !note.data.anchor)
     ?? notes[0];
 }

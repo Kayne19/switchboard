@@ -34,6 +34,7 @@
 
 import type { DiagramData, DiagramEdge, DiagramNode } from '../controller/types';
 import { fitDrawing, readableScale, scrollCost, type DrawingFit, type Viewport } from './drawingFit';
+import { NOTE_MARKER } from './NoteMarker';
 
 export type DiagramOrientation = 'landscape' | 'portrait';
 
@@ -165,7 +166,7 @@ export function nodeFramePath(width: number, height: number): string {
 // where the top-right cut begins, the marker outermost, so at any box size
 // neither reaches the cut; the label's measured width keeps TAG_GAP clear
 // of the row (`measureNode`).
-const TAG_SIZE = { glyph: { width: 18, height: 15 }, marker: { width: 30, height: 15 } } as const;
+const TAG_SIZE = { glyph: { width: 18, height: 15 }, marker: NOTE_MARKER } as const;
 const TAG_TOP = 6;
 const TAG_INSET = 6;
 const TAG_GAP = 6;

@@ -1701,11 +1701,24 @@ button {
    in its own marks rather than with a scroll bar (drawingScroll.ts): it
    rests between its parts, each edge it continues past counts what lies
    that way and fades over what it cuts, a line leaving the view names
-   where it goes, and its map stands in the corner. */
+   where it goes, and its map stands in a strip of its own beside it (the
+   view takes the rest, and holds the scroller and everything drawn over
+   it). */
 .drawing-viewport {
   position: relative;
+  display: flex;
   width: 100%;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.drawing-viewport--strip-bottom {
+  flex-direction: column;
+}
+.drawing-viewport__view {
+  position: relative;
+  flex: 1 1 0;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -1728,11 +1741,11 @@ button {
   height: 100%;
   overflow: visible;
 }
-.drawing-viewport--scrolling > .drawing-viewport__scroll {
+.drawing-viewport--scrolling .drawing-viewport__scroll {
   overflow: auto;
   overscroll-behavior: contain;
 }
-.drawing-viewport--scrolling > .drawing-viewport__scroll > svg {
+.drawing-viewport--scrolling .drawing-viewport__scroll > svg {
   flex: none;
   margin: auto;
 }
@@ -1743,13 +1756,13 @@ button {
    place to rest must not cut a part. A wheel, a trackpad or a drag on
    the map lets go of the stops (DrawingViewport sets the scroller's own
    snap type) until it pauses. */
-.drawing-viewport[data-scroll="x"] > .drawing-viewport__scroll {
+.drawing-viewport[data-scroll="x"] .drawing-viewport__scroll {
   scroll-snap-type: x mandatory;
 }
-.drawing-viewport[data-scroll="y"] > .drawing-viewport__scroll {
+.drawing-viewport[data-scroll="y"] .drawing-viewport__scroll {
   scroll-snap-type: y mandatory;
 }
-.drawing-viewport[data-scroll="both"] > .drawing-viewport__scroll {
+.drawing-viewport[data-scroll="both"] .drawing-viewport__scroll {
   scroll-snap-type: both mandatory;
 }
 .drawing-viewport__stops {
@@ -1975,32 +1988,25 @@ button {
 .drawing-viewport__exit--bottom::before {
   rotate: 180deg;
 }
-/* The map: the whole drawing in a corner, its parts and lines, and the
-   view boxed in orange. A tap or a drag on it moves the view there. */
+/* The map's strip: beside the drawing along the way it scrolls (under
+   one that scrolls across, right of one that scrolls down), as deep as
+   the map, its padding and margins (drawingScroll MAP_PAD, MAP_MARGIN,
+   which DrawingViewport sets on the map), so the map covers none of the
+   drawing. The map stands at its far end: the whole drawing, its parts
+   and lines, and the view boxed in orange. A tap or a drag on it moves
+   the view there. */
+.drawing-viewport__strip {
+  position: relative;
+  flex: none;
+  min-width: 0;
+  min-height: 0;
+}
 .drawing-viewport__map {
   position: absolute;
-  z-index: 3;
   box-sizing: content-box;
-  padding: 4px;
-  background: rgba(0, 0, 0, 0.92);
+  background: #000;
   cursor: pointer;
   touch-action: none;
-}
-.drawing-viewport__map--bottom-right {
-  right: 6px;
-  bottom: 6px;
-}
-.drawing-viewport__map--bottom-left {
-  left: 6px;
-  bottom: 6px;
-}
-.drawing-viewport__map--top-right {
-  right: 6px;
-  top: 6px;
-}
-.drawing-viewport__map--top-left {
-  left: 6px;
-  top: 6px;
 }
 .drawing-viewport__map-frame {
   position: absolute;
@@ -2695,6 +2701,29 @@ button {
   width: 100%;
   height: 100%;
 }
+/* A focused diagram keeps the note about it (FocusLayer `focusNote`): in a
+   column beside the drawing, where the rail stood, when the box is wide;
+   in a band under it when the box is tall (the portrait rule below). The
+   card is as tall as its words up to the room; a longer note scrolls. */
+.focus-layer__content--noted {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(220px, 22%, 340px);
+  grid-template-rows: minmax(0, 1fr);
+  column-gap: clamp(18px, 2.4cqw, 40px);
+}
+.focus-layer__note {
+  min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  padding-top: clamp(12px, 2cqh, 28px);
+}
+.focus-layer__note .annotation-card {
+  height: auto;
+  max-height: 100%;
+}
 .focus-layer__content--note .annotation-card {
   height: auto;
   min-height: 220px;
@@ -3202,6 +3231,15 @@ button {
   .focus-layer__content--progress {
     width: 90vw;
     min-height: 220px;
+  }
+  .focus-layer__content--noted {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+    row-gap: clamp(10px, 1.6cqh, 18px);
+  }
+  .focus-layer__note {
+    max-height: 30cqh;
+    padding-top: 0;
   }
 }
 

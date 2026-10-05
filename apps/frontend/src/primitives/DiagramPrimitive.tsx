@@ -2,7 +2,7 @@ import { useEffect, useMemo } from 'react';
 import type { DiagramData, NoteData, Semantic } from '../controller/types';
 import { ARROW_LENGTH, LABEL_INSET, cornerTagBoxes, litEdges, nodeFramePath, viewDiagram, type DiagramLayout, type EdgeLabel, type EdgeStub, type Point } from './diagramLayout';
 import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
-import type { DrawingMap } from './drawingScroll';
+import { viewWithMap, type DrawingMap } from './drawingScroll';
 import { NoteMarker } from './NoteMarker';
 
 const colors: Record<Semantic, string> = {
@@ -78,6 +78,7 @@ export function DiagramPrimitive({
   focused = false,
   id,
   note,
+  callout = true,
   onCalloutChange,
 }: {
   data: DiagramData;
@@ -85,6 +86,8 @@ export function DiagramPrimitive({
   /** This diagram's object id: an anchored note only belongs to it when its `anchor.target` matches. */
   id: string;
   note?: NoteData | null;
+  /** Whether the note may ride on the drawing as a callout where it fits; false where the host shows the note itself (focus). */
+  callout?: boolean;
   onCalloutChange?: (placed: boolean) => void;
 }) {
   const { hostRef, width, height, scrollbar } = useDrawingViewport();
@@ -95,12 +98,13 @@ export function DiagramPrimitive({
   const hasAnchoredNode = Boolean(anchoredNodeId && data.nodes.some((n) => n.id === anchoredNodeId));
   const anchor = hasAnchoredNode ? anchoredNodeId : undefined;
   // The layout is chosen for the viewport: as drawn for the approved canvas
-  // when that reads, otherwise recomposed for this viewport and scrolled.
-  // Layouts of this graph and anchor are kept across resizes: the approved
-  // one does not depend on the size, and a frame's only on its step.
+  // when that reads, otherwise recomposed for this viewport and scrolled;
+  // one that scrolls far enough to carry a map is laid out beside the map's
+  // strip. Layouts of this graph and anchor are kept across resizes: the
+  // approved one does not depend on the size, and a frame's only on its step.
   const layouts = useMemo(() => new Map<string, DiagramLayout>(), [data, anchor]);
-  const { layout, fit, orientation } = useMemo(
-    () => viewDiagram(data, { width, height, scrollbar }, anchor, layouts),
+  const { layout, fit, orientation, strip } = useMemo(
+    () => viewWithMap({ width, height, scrollbar }, (viewport) => viewDiagram(data, viewport, anchor, layouts), (view) => view.orientation),
     [data, width, height, scrollbar, anchor, layouts],
   );
   const portrait = orientation === 'portrait';
@@ -160,7 +164,7 @@ export function DiagramPrimitive({
     (note?.tag?.length ?? 0) <= CALLOUT_TAG_CHARS;
   // A callout rides on the drawing; on one that scrolls it could sit out of
   // view, so there the note stays in the rail and the node carries the marker.
-  const calloutPlaced = Boolean(!portrait && !fit.scrollX && !fit.scrollY && layout.callout && calloutFits);
+  const calloutPlaced = Boolean(callout && !portrait && !fit.scrollX && !fit.scrollY && layout.callout && calloutFits);
 
   // The scene drops the note from the rail while the callout carries it. A
   // diagram that goes away (a new scene, or a render error that leaves its
@@ -194,7 +198,7 @@ export function DiagramPrimitive({
 
   return (
     <div ref={hostRef} className={`diagram-primitive${focused ? ' diagram-primitive--focused' : ''}`} data-testid="diagram">
-      <DrawingViewport drawing={layout} fit={fit} lead={lead} map={map} ariaLabel={data.title ?? 'System diagram'}>
+      <DrawingViewport drawing={layout} fit={fit} lead={lead} map={map} strip={strip} ariaLabel={data.title ?? 'System diagram'}>
         <defs>
           {/* The region is the whole drawing, not each edge's bounding box: a
               straight edge has a zero-height box, and a filter region derived
