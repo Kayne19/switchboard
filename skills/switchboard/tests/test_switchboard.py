@@ -424,10 +424,28 @@ class ProgrammingErrorTest(ModuleTestCase):
     def test_unknown_display_type_names_the_shapes(self):
         with self.assertRaises(ValueError) as caught:
             switchboard.display(op="show", id="x", type="gauge", data={})
+        self.assertTrue(str(caught.exception).startswith(
+            "invalid show.type: expected one of chart, metric, progress, diagram, document, code, table, note, image, "
+            "calendar, tasks, timer, weather, inbox; each type takes only its own shape: "
+        ))
         self.assertIn("chart: {series:[{name, values:[n]}]}", str(caught.exception))
         self.assertIn("table: {columns:[{label}], rows:[[cell]]}", str(caught.exception))
         self.assertIn('calendar: {view:"day"|"week"|"month"|"agenda", start:"YYYY-MM-DD"', str(caught.exception))
         self.assertIn('timer: {timers:[{id, label, endsAt:"YYYY-MM-DDTHH:MM:SS-07:00"}]}', str(caught.exception))
+
+    def test_a_refused_name_lists_the_names_it_takes(self):
+        # One wording for every refusal of a name, the service's and the page's.
+        for call, args, kwargs, error in (
+            (switchboard.request_to_speak, ("Done", "later"), {}, "invalid reason: expected one of finished, needs_decision, problem"),
+            (switchboard.view, ("screen",), {}, "invalid target: expected one of visual, comms, system, theater, auto"),
+            (switchboard.display, (), {"op": "listen"}, "invalid op: expected one of show, hide, focus, say, clear"),
+            (switchboard.display, (), {"op": "show", "id": "x", "type": "metric", "role": "main", "data": {}},
+             "invalid show.role: expected one of primary, compare, secondary, ambient"),
+        ):
+            with self.subTest(error):
+                with self.assertRaises(ValueError) as caught:
+                    call(*args, **kwargs)
+                self.assertEqual(str(caught.exception), error)
 
     def test_a_diagram_outline_is_judged_by_its_mode(self):
         host = self.host()
@@ -442,9 +460,10 @@ class ProgrammingErrorTest(ModuleTestCase):
             switchboard.display(op="show", id="d", type="diagram", data={"mode": "sequence", "actors": []})
         self.assertIn("missing messages", str(caught.exception))
         self.assertIn('mode:"sequence", actors:', str(caught.exception))
-        with self.assertRaises(ValueError) as caught:
-            switchboard.display(op="show", id="d", type="diagram", data={"mode": "timeline"})
-        self.assertIn("unknown diagram mode 'timeline'", str(caught.exception))
+        for data in ({"mode": "timeline"}, {"nodes": [], "edges": []}):
+            with self.assertRaises(ValueError) as caught:
+                switchboard.display(op="show", id="d", type="diagram", data=data)
+            self.assertTrue(str(caught.exception).startswith("invalid diagram.mode: expected one of graph, sequence; its shape is"))
 
     def test_a_progress_needs_value_or_steps_and_takes_either(self):
         with self.assertRaises(ValueError) as caught:
@@ -695,6 +714,24 @@ class DisplayCorpusTests(unittest.TestCase):
                 self.assertIn("error", by_name[name], "the validators refuse it too")
                 with self.assertRaises((TypeError, ValueError)):
                     switchboard._display_wire_action(self._expand(by_name[name]["action"]))
+
+    def test_refuses_a_name_in_the_validators_words(self):
+        """Where the outline refuses an op, a type, a role or a diagram mode,
+        its error starts with the validators' own: the field and every name it
+        takes. The type's and the mode's add the shapes."""
+        by_name = {case["name"]: case for case in self.cases}
+        named = ("invalid op:", "invalid show.type:", "invalid show.role:", "invalid diagram.mode:")
+        checked = 0
+        for name in self.OUTLINE_REFUSES:
+            error = by_name[name]["error"]
+            if not error.startswith(named):
+                continue
+            checked += 1
+            with self.subTest(name):
+                with self.assertRaises(ValueError) as caught:
+                    switchboard._display_wire_action(self._expand(by_name[name]["action"]))
+                self.assertTrue(str(caught.exception).startswith(error), str(caught.exception))
+        self.assertGreater(checked, 20)
 
     def test_a_blank_id_is_unicode_white_space(self):
         # str.strip also strips U+001C to U+001F, which are not White_Space.

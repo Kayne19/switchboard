@@ -26,6 +26,7 @@ _RELAY_TIMEOUT_S = 30.0
 _MARGIN_S = 5.0
 
 _VIEW_TARGETS = ("visual", "comms", "system", "theater", "auto")
+_SPEAK_REASONS = ("finished", "needs_decision", "problem")
 _DISPLAY_OPS = ("show", "hide", "focus", "say", "clear")
 _ROLES = ("primary", "compare", "secondary", "ambient")
 # Required `data` keys per show type, and the shape hint given when one is missing.
@@ -235,6 +236,13 @@ _WHITE_SPACE = frozenset(
 )
 
 
+def _invalid_name(field, allowed):
+    """The refusal of a name outside its set, as the service and the page
+    word it (docs/display-tool.md, "How the two validators agree"): the
+    field and every name it takes."""
+    return f"invalid {field}: expected one of {', '.join(allowed)}"
+
+
 def _require_str(name, value, optional=False, blank_ok=False):
     """A string, and unless `blank_ok` one with something besides White_Space;
     with `blank_ok` it need only be non-empty, as a display `say` text is."""
@@ -273,8 +281,8 @@ def request_to_speak(message, reason):
     """
     _require_str("message", message)
     _require_str("reason", reason)
-    if reason not in ("finished", "needs_decision", "problem"):
-        raise ValueError("reason must be one of: finished, needs_decision, problem")
+    if reason not in _SPEAK_REASONS:
+        raise ValueError(_invalid_name("reason", _SPEAK_REASONS))
 
     def describe(result):
         if result.accepted or result.delivered:
@@ -334,7 +342,7 @@ def _check_display_action(action):
         raise TypeError(f"a display action must be a dict, not {type(action).__name__}")
     op = action.get("op")
     if op not in _DISPLAY_OPS:
-        raise ValueError(f"unknown display op {op!r}; use one of: {', '.join(_DISPLAY_OPS)}")
+        raise ValueError(_invalid_name("op", _DISPLAY_OPS))
     if op in ("show", "hide", "focus"):
         _require_str("id", action.get("id"))
     if op == "say":
@@ -343,22 +351,24 @@ def _check_display_action(action):
     if op != "show":
         return
     kind = action.get("type")
-    if kind not in _SHAPES:
+    if not isinstance(kind, str) or kind not in _SHAPES:
         shapes = " | ".join(f"{name}: {hint}" for name, (_, hint) in _SHAPES.items())
-        raise ValueError(f"unknown display type {kind!r}; each type takes only its own shape: {shapes}")
+        raise ValueError(f"{_invalid_name('show.type', _SHAPES)}; each type takes only its own shape: {shapes}")
     # A role, when the action has one, is a known name: `role=None` is sent as
     # null, which the service refuses, so it is caught here like any other.
-    if "role" in action and action["role"] not in _ROLES:
-        raise ValueError(f"unknown display role {action['role']!r}; use one of: {', '.join(_ROLES)}")
+    if "role" in action and (not isinstance(action["role"], str) or action["role"] not in _ROLES):
+        raise ValueError(_invalid_name("show.role", _ROLES))
     data = action.get("data")
     if not isinstance(data, dict):
         raise TypeError(f"data must be a dict, not {type(data).__name__}")
     required, hint = _SHAPES[kind]
-    if kind == "diagram" and "mode" in data:
-        mode = data["mode"]
+    if kind == "diagram":
+        # A diagram's other keys follow from its mode, so the mode comes first,
+        # missing or not, as the service checks it.
+        mode = data.get("mode")
         if not isinstance(mode, str) or mode not in _DIAGRAM_MODES:
-            raise ValueError(f"unknown diagram mode {mode!r}; use one of: {', '.join(_DIAGRAM_MODES)}")
-        required += _DIAGRAM_MODES[mode]
+            raise ValueError(f"{_invalid_name('diagram.mode', _DIAGRAM_MODES)}; its shape is {hint}")
+        required = _DIAGRAM_MODES[mode]
     missing = [key for key in required if key not in data]
     if missing:
         raise ValueError(f"{kind} data is missing {', '.join(missing)}; its shape is {hint}")
@@ -457,7 +467,7 @@ def view(target=None):
     """Inspect the caller's screen (no target), or ask it to focus a target:
     visual, comms, system, theater or auto."""
     if target is not None and target not in _VIEW_TARGETS:
-        raise ValueError(f"unknown view target {target!r}; use one of: {', '.join(_VIEW_TARGETS)}")
+        raise ValueError(_invalid_name("target", _VIEW_TARGETS))
 
     def describe(result):
         if target is not None and result.reason == "caller_away":

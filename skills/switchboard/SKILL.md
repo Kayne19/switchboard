@@ -182,4 +182,6 @@ trimming it to fit.
 
 The full contract is `docs/display-tool.md` in the switchboard repository;
 the switchboard validates every action and returns its reason when it
-rejects one.
+rejects one. A name outside its set comes back as the field and every name
+it takes: `invalid series.semantic: expected one of red, orange, green,
+cyan, amber, paper, muted`.
