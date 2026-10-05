@@ -1100,13 +1100,12 @@ button {
   background: #000;
   pointer-events: auto;
 }
-/* A narrow card puts what it names on a line of its own rather than cut
-   it to an ellipsis beside the tag; so does a card naming a list's item,
-   whose words are the point of its TARGET line, and a card focus keeps
-   beside its object, in a column as narrow as the rail. */
-.chart-note .annotation-card__header,
-.annotation-card--item .annotation-card__header,
-.focus-layer__note .annotation-card__header {
+/* A card puts what it names on a line of its own where it does not fit
+   beside the tag, rather than cut it to an ellipsis there: the TARGET
+   line's words are the object's own (a title, a node's label, a list's
+   item), and they are its point: cut beside the tag in a folded strip,
+   they read `TARG…`. */
+.annotation-card__header {
   flex-wrap: wrap;
   row-gap: 4px;
 }
