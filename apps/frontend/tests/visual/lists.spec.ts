@@ -178,3 +178,25 @@ test('a tinted message a note names carries the marked edge as well as its tint'
   expect(shadow).toContain('241, 90, 36');
   expect(shadow).toContain('198, 21, 34');
 });
+
+// A list's meta line names its counts (`11 MESSAGES / 5 UNREAD / 4
+// FLAGGED`). In a narrow aux cell they ran past its edge on one line and
+// were cut there (820x1180's today scene: `4 FLAGGE`); they wrap whole,
+// part by part.
+for (const viewport of geometries) {
+  test(`a list's counts are never cut at its edge in the today scene / ${viewport.width}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.goto('/?scene=today&chrome=0');
+    await expect(page.locator('.composed-aux [data-testid="inbox"]')).toBeVisible();
+    await settle(page);
+    const cut = await page.evaluate(() =>
+      [...document.querySelectorAll<HTMLElement>('.composed-aux :is(.inbox-primitive__counts, .tasks-primitive__counts)')].flatMap((counts) => {
+        const list = counts.closest<HTMLElement>('[data-testid]')!.getBoundingClientRect();
+        const range = document.createRange();
+        range.selectNodeContents(counts);
+        return [...range.getClientRects()].filter((line) => line.width > 0 && (line.left < list.left - 1 || line.right > list.right + 1)).map((line) => `${counts.className}: ${Math.round(line.left)}..${Math.round(line.right)} outside ${Math.round(list.left)}..${Math.round(list.right)}`);
+      }),
+    );
+    expect(cut).toEqual([]);
+  });
+}

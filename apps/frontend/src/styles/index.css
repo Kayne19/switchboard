@@ -3676,10 +3676,17 @@ button {
   color: rgba(var(--orange-rgb), 0.85);
 }
 
+/* The counts wrap part by part where the list is too narrow for them on
+   one line (an aux cell), never cut at its edge. */
 .tasks-primitive__counts,
 .inbox-primitive__counts {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
   margin-left: auto;
+  text-align: right;
+}
+
+.meta-count {
   white-space: nowrap;
 }
 

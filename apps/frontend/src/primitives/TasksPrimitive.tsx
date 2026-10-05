@@ -198,9 +198,11 @@ export function TasksPrimitive({ data, variant = 'full', marked, framed = false 
   const head = (
     <div className="tasks-primitive__meta tech micro">
       <MetaTitle title={data.title ?? 'TASKS'} framed={framed} className="tasks-primitive__title" />
+      {/* Each count whole: a narrow list wraps between them. */}
       <span className="tasks-primitive__counts">
-        {counts.open} OPEN{counts.done > 0 ? ` / ${counts.done} DONE` : ''}
-        {counts.overdue > 0 ? <span className="tasks-primitive__overdue"> / {counts.overdue} OVERDUE</span> : null}
+        <span className="meta-count">{counts.open} OPEN</span>
+        {counts.done > 0 ? <>{' '}<span className="meta-count">/ {counts.done} DONE</span></> : null}
+        {counts.overdue > 0 ? <>{' '}<span className="meta-count tasks-primitive__overdue">/ {counts.overdue} OVERDUE</span></> : null}
       </span>
     </div>
   );
