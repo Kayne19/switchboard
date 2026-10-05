@@ -216,9 +216,10 @@ interface Packing {
   padCross: number;
   padMain: number;
   minGap: number;
+  maxGapStretch: number;
 }
-const APPROVED_PACKING: Packing = { dummy: DUMMY_SPACING, padCross: PAD_CROSS, padMain: PAD_MAIN, minGap: MIN_GAP };
-const FRAME_PACKING: Packing = { dummy: 12, padCross: 16, padMain: 12, minGap: 40 };
+const APPROVED_PACKING: Packing = { dummy: DUMMY_SPACING, padCross: PAD_CROSS, padMain: PAD_MAIN, minGap: MIN_GAP, maxGapStretch: Infinity };
+const FRAME_PACKING: Packing = { dummy: 12, padCross: 16, padMain: 12, minGap: 40, maxGapStretch: 120 };
 // A layer too crowded for the canvas is staggered into two rows along the
 // main axis, its boxes interleaved so each back-row box sits behind the
 // gap between two front-row boxes and its edges pass through that gap.
@@ -1255,8 +1256,10 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
     layer[0]?.staggered ? rowExtent(layer, 0) + ROW_GAP + rowExtent(layer, 1) : Math.max(0, ...layer.map((item) => item.mainExtent)),
   );
   const natural = bands.reduce((sum, band) => sum + band, 0) + gaps.reduce((sum, gap) => sum + gap.before + gap.after, 0) + 2 * packing.padMain;
-  const stretch = gaps.length ? Math.max(0, (canvas.main - natural) / gaps.length) : 0;
-  let cursor = packing.padMain;
+  // A short drawing spreads its gaps to use the canvas; laid out for a
+  // frame, only so far, and the rest is left either side of it.
+  const stretch = gaps.length ? Math.min(packing.maxGapStretch, Math.max(0, (canvas.main - natural) / gaps.length)) : 0;
+  let cursor = packing.padMain + Math.max(0, canvas.main - natural - stretch * gaps.length) / 2;
   layers.forEach((layer, index) => {
     const front = rowExtent(layer, 0);
     for (const item of layer) {
