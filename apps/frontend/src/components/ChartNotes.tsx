@@ -63,10 +63,12 @@ const step = (pixels: number) => Math.floor(pixels / PLACE_STEP);
 interface Placed {
   /** The layer's size and the chart's, by step. */
   key: string;
-  /** The same, to the pixel: a measure that finds them unchanged has nothing to do. */
+  /** The same, to the pixel: a measure that finds them unchanged keeps the place, unless a card changed size by itself. */
   exact: string;
-  /** The notes placed, by reference: a note shown again (new words, a new size) is placed again. */
-  notes: NoteData[];
+  /** The notes placed, by what they say: a note shown with new words is placed again; the same words in a new object (a spoken stand-in, built every render) are not. */
+  notes: string;
+  /** The size each card is drawn at: a card that changes size by itself (its words reflowed) is placed again. */
+  cards: Record<string, { width: number; height: number }>;
   layout: NotesLayout;
   /** The layer's room for cards when placed. */
   area: Rect;
@@ -263,15 +265,26 @@ export function ChartNotes({
       const exact = [...sizes, ...offset].map((value) => value.toFixed(1)).join('x');
       // A resize within the step the notes were placed in: the size they
       // were placed for is theirs again, any other the cards follow to, and
-      // where it rests they are placed for it.
+      // where it rests they are placed for it. A card that changed size by
+      // itself at the size they were placed for is placed again.
       const last = placedRef.current;
-      const sameNotes = last !== null && last.notes.length === current.length && current.every((note, index) => note.data === last.notes[index]);
+      const said = current.map((note) => `${note.key}\u0000${JSON.stringify(note.data)}`).join('\u0001');
       clearTimeout(rest);
-      if (resized && last && sameNotes && last.key === key) {
-        const next = last.exact === exact ? last.layout : follow(last, field.area, toLayer, frame);
-        setLayout((previous) => (sameLayout(previous, next) ? previous : next));
-        if (next !== last.layout) rest = setTimeout(() => measure(false), REST_MS);
-        return;
+      if (resized && last && last.notes === said && last.key === key) {
+        if (last.exact !== exact) {
+          const next = follow(last, field.area, toLayer, frame);
+          setLayout((previous) => (sameLayout(previous, next) ? previous : next));
+          rest = setTimeout(() => measure(false), REST_MS);
+          return;
+        }
+        const resizedCard = Object.entries(last.cards).some(([key, size]) => {
+          const rect = cardRefs.current.get(key)?.getBoundingClientRect();
+          return rect !== undefined && (Math.abs(rect.width / kx - size.width) > 1 || Math.abs(rect.height / ky - size.height) > 1);
+        });
+        if (!resizedCard) {
+          setLayout((previous) => (sameLayout(previous, last.layout) ? previous : last.layout));
+          return;
+        }
       }
       const rectToLayer = (rect: ViewRect): Rect => {
         const a = toLayer!({ x: rect.left, y: rect.top });
@@ -365,7 +378,13 @@ export function ChartNotes({
         // as one line: the route the placement scored on the card's whole pixels.
         if (place!.leader.length > 1) next.leaders[note.id] = crispLine(place!.leader);
       }
-      placedRef.current = { key, exact, notes: current.map((note) => note.data), layout: next, area: field.area, frame: { width: frame.width, height: frame.height }, points };
+      // The size each placed card is drawn at (the note the rail carries is not drawn here).
+      const cards: Placed['cards'] = {};
+      for (const note of toPlace) {
+        const rect = placed.get(note.id)?.rect;
+        if (rect) cards[note.id] = { width: rect.right - rect.left, height: rect.bottom - rect.top };
+      }
+      placedRef.current = { key, exact, notes: said, cards, layout: next, area: field.area, frame: { width: frame.width, height: frame.height }, points };
       setLayout((previous) => (sameLayout(previous, next) ? previous : next));
     };
 
