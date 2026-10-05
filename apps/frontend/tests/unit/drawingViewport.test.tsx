@@ -38,7 +38,7 @@ afterEach(() => {
 });
 
 const drawing = { width: 400, height: 2000 };
-const scrollsDown: DrawingFit = { scale: 0.8, width: 320, height: 1600, scrollX: false, scrollY: true };
+const scrollsDown: DrawingFit = { scale: 0.8, width: 320, height: 1600, scrollX: false, scrollY: true, minScale: 0.8 };
 // Twenty rows, 80 units deep with 20 between: on screen, rows of 64 px with 16 px gaps.
 const rows: DrawingMap = {
   parts: Array.from({ length: 20 }, (_, index) => ({ box: { x: 0, y: index * 100 + 10, width: 400, height: 80 }, label: `ROW ${index}` })),
@@ -120,7 +120,7 @@ describe('a drawing viewport', () => {
     expect(host.querySelector('.drawing-viewport__pinned')?.textContent).toBe('HEADERS');
     expect(host.querySelector('.drawing-viewport__pinned')?.getAttribute('aria-hidden')).toBe('true');
     render(
-      <DrawingViewport drawing={drawing} fit={{ scale: 0.2, width: 80, height: 400, scrollX: false, scrollY: false }} pinned={{ height: 80, content: <text>HEADERS</text> }} map={rows} ariaLabel="d">
+      <DrawingViewport drawing={drawing} fit={{ scale: 0.2, width: 80, height: 400, scrollX: false, scrollY: false, minScale: 0.2 }} pinned={{ height: 80, content: <text>HEADERS</text> }} map={rows} ariaLabel="d">
         <rect width="10" height="10" />
       </DrawingViewport>,
     );

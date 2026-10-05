@@ -49,6 +49,8 @@ export interface DrawingFit {
   /** Whether the viewport scrolls along each axis. */
   scrollX: boolean;
   scrollY: boolean;
+  /** The least scale the drawing reads at, the one it was fitted with: what it asks of a slot to be read whole (useStageDemand). */
+  minScale: number;
 }
 
 /**
@@ -63,7 +65,7 @@ export function fitDrawing(drawing: Size, viewport: Viewport, minScale: number):
   const fitHeight = viewport.height / drawing.height;
   const contain = Math.min(fitWidth, fitHeight);
   if (contain >= minScale * (1 - SLIVER)) {
-    return { scale: contain, width: drawing.width * contain, height: drawing.height * contain, scrollX: false, scrollY: false };
+    return { scale: contain, width: drawing.width * contain, height: drawing.height * contain, scrollX: false, scrollY: false, minScale };
   }
   const scrollsDown = fitHeight <= fitWidth;
   const room = {
@@ -74,7 +76,7 @@ export function fitDrawing(drawing: Size, viewport: Viewport, minScale: number):
   const scale = Math.max(minScale, Math.min(fill, MAX_SCROLLING_SCALE));
   const width = drawing.width * scale;
   const height = drawing.height * scale;
-  return { scale, width, height, scrollX: !scrollsDown || width > room.width + 0.5, scrollY: scrollsDown || height > room.height + 0.5 };
+  return { scale, width, height, scrollX: !scrollsDown || width > room.width + 0.5, scrollY: scrollsDown || height > room.height + 0.5, minScale };
 }
 
 /** How many viewports of reading a fit asks for: 1 when it fits, more the further it scrolls, most when it scrolls both ways. */
