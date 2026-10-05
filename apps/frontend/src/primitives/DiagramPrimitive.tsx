@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo } from 'react';
 import type { DiagramData, NoteData, Semantic } from '../controller/types';
-import { useElementSize } from '../hooks/useElementSize';
-import { ARROW_LENGTH, layoutDiagram, type Point } from './diagramLayout';
+import { ARROW_LENGTH, cornerTagBoxes, nodeFramePath, viewDiagram, type DiagramLayout, type Point } from './diagramLayout';
+import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
 
 const colors: Record<Semantic, string> = {
   red: 'var(--red)',
@@ -19,9 +19,6 @@ const SEMANTICS = Object.keys(colors) as Semantic[];
 // frames do, while the stroke itself does not.
 // Edge label line pitch, in user units (.diagram-edge-label is 11 units).
 const LABEL_LINE = 14;
-// The small tag in a node's top-right corner that carries its state glyph.
-const TAG_WIDTH = 18;
-const TAG_HEIGHT = 15;
 
 const pathThrough = (points: Point[]) =>
   points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
@@ -63,25 +60,34 @@ export function DiagramPrimitive({
   note?: NoteData | null;
   onCalloutChange?: (placed: boolean) => void;
 }) {
-  const hostRef = useRef<HTMLDivElement>(null);
-  const size = useElementSize(hostRef);
-  // Until the host has been measured, the first frame must already pick the
-  // right orientation: it falls back to the screen's own aspect ratio, so a
-  // portrait phone never flashes a landscape callout before the observer
-  // reports the real size.
-  const sizeMeasured = size.width > 0 && size.height > 0;
-  const portrait = sizeMeasured
-    ? size.height > size.width * 1.05
-    : window.innerHeight > window.innerWidth * 1.05;
+  const { hostRef, width, height, scrollbar } = useDrawingViewport();
   // The anchor's target is part of the protocol: a note aimed at another
   // object that happens to name one of this diagram's nodes is not ours.
   const anchoredNodeId =
     note?.anchor && note.anchor.target === id ? note.anchor.node : undefined;
   const hasAnchoredNode = Boolean(anchoredNodeId && data.nodes.some((n) => n.id === anchoredNodeId));
-  const layout = useMemo(
-    () => layoutDiagram(data, portrait ? 'portrait' : 'landscape', hasAnchoredNode ? anchoredNodeId : undefined),
-    [data, portrait, hasAnchoredNode, anchoredNodeId],
+  const anchor = hasAnchoredNode ? anchoredNodeId : undefined;
+  // The layout is chosen for the viewport: as drawn for the approved canvas
+  // when that reads, otherwise recomposed for this viewport and scrolled.
+  // Layouts of this graph and anchor are kept across resizes: the approved
+  // one does not depend on the size, and a frame's only on its step.
+  const layouts = useMemo(() => new Map<string, DiagramLayout>(), [data, anchor]);
+  const { layout, fit, orientation } = useMemo(
+    () => viewDiagram(data, { width, height, scrollbar }, anchor, layouts),
+    [data, width, height, scrollbar, anchor, layouts],
   );
+  const portrait = orientation === 'portrait';
+  // A drawing that scrolls opens on the node its note names, or else on
+  // where it begins: its first layer.
+  const lead = useMemo(() => {
+    const anchored = layout.nodes.find((node) => node.node.id === anchor);
+    if (anchored) return anchored.box;
+    const first = layout.nodes.filter((node) => node.layer === 0).map((node) => node.box);
+    if (!first.length) return null;
+    const x = Math.min(...first.map((box) => box.x));
+    const y = Math.min(...first.map((box) => box.y));
+    return { x, y, width: Math.max(...first.map((box) => box.x + box.width)) - x, height: Math.max(...first.map((box) => box.y + box.height)) - y };
+  }, [layout, anchor]);
   // The callout box fits three wrapped lines and a one-line tag. A longer
   // note — or a word or tag too wide for the box — is not truncated or
   // spilled over the diagram: it is treated as not fitting, so the note
@@ -95,7 +101,9 @@ export function DiagramPrimitive({
     calloutLines.length <= 3 &&
     calloutLines.every((line) => line.length <= CALLOUT_LINE_CHARS) &&
     (note?.tag?.length ?? 0) <= CALLOUT_TAG_CHARS;
-  const calloutPlaced = Boolean(!portrait && layout.callout && calloutFits);
+  // A callout rides on the drawing; on one that scrolls it could sit out of
+  // view, so there the note stays in the rail and the node carries the marker.
+  const calloutPlaced = Boolean(!portrait && !fit.scrollX && !fit.scrollY && layout.callout && calloutFits);
 
   // The scene drops the note from the rail while the callout carries it. A
   // diagram that goes away (a new scene, or a render error that leaves its
@@ -117,12 +125,7 @@ export function DiagramPrimitive({
 
   return (
     <div ref={hostRef} className={`diagram-primitive${focused ? ' diagram-primitive--focused' : ''}`} data-testid="diagram">
-      <svg
-        viewBox={`0 0 ${layout.width} ${layout.height}`}
-        preserveAspectRatio="xMidYMid meet"
-        role="img"
-        aria-label={data.title ?? 'System diagram'}
-      >
+      <DrawingViewport drawing={layout} fit={fit} lead={lead} ariaLabel={data.title ?? 'System diagram'}>
         <defs>
           {/* The region is the whole drawing, not each edge's bounding box: a
               straight edge has a zero-height box, and a filter region derived
@@ -194,11 +197,12 @@ export function DiagramPrimitive({
             // leaves it alone.
             const frameColor = state === 'blocked' ? 'var(--red)' : color;
             const lit = isAnchored || state === 'active';
-            const noteBadge = isAnchored && !calloutPlaced;
-            const tagged = state === 'done' || state === 'blocked';
-            // The tag sits left of the corner cut, and left of the note badge
-            // when that is shown too.
-            const tagX = box.width - (noteBadge ? 36 + 6 : 22 + 6) - TAG_WIDTH;
+            // The glyph and the NOTE marker stand in a row clear of the
+            // frame's cut corner and of the label (cornerTagBoxes).
+            const tags = cornerTagBoxes(box.width, {
+              glyph: state === 'done' || state === 'blocked',
+              marker: isAnchored && !calloutPlaced,
+            });
             return (
               <g key={node.id} transform={`translate(${box.x} ${box.y})`} data-state={state}>
                 <g
@@ -207,7 +211,7 @@ export function DiagramPrimitive({
                 >
                   <path
                     className="diagram-node__frame"
-                    d={`M 0 14 L 14 0 H ${box.width - 22} L ${box.width} 22 V ${box.height} H 18 L 0 ${box.height - 18} Z`}
+                    d={nodeFramePath(box.width, box.height)}
                     fill="var(--black, #000000)"
                     stroke={frameColor}
                     strokeOpacity={lit || state === 'blocked' ? '1' : '.64'}
@@ -229,9 +233,9 @@ export function DiagramPrimitive({
                       {line.text}
                     </text>
                   ))}
-                  {tagged ? (
-                    <g className={`diagram-node__tag diagram-node__tag--${state}`} transform={`translate(${tagX}, 6)`}>
-                      <rect width={TAG_WIDTH} height={TAG_HEIGHT} fill="#000" stroke={frameColor} strokeOpacity=".7" strokeWidth="1" />
+                  {tags.glyph ? (
+                    <g className={`diagram-node__tag diagram-node__tag--${state}`} transform={`translate(${tags.glyph.x}, ${tags.glyph.y})`}>
+                      <rect width={tags.glyph.width} height={tags.glyph.height} fill="#000" stroke={frameColor} strokeOpacity=".7" strokeWidth="1" />
                       {state === 'done' ? (
                         <polyline points="4,8 7.5,11.5 14,4" fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="square" />
                       ) : (
@@ -239,10 +243,10 @@ export function DiagramPrimitive({
                       )}
                     </g>
                   ) : null}
-                  {noteBadge ? (
-                    <g className="diagram-node__marker" transform={`translate(${box.width - 36}, 6)`}>
-                      <rect width="30" height="15" rx="2" fill="rgba(var(--orange-rgb), 0.25)" stroke="var(--orange)" strokeWidth="1" />
-                      <text x="15" y="11" textAnchor="middle" fill="var(--orange)" fontSize="8.5" fontWeight="700" fontFamily="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" letterSpacing="0.05em">
+                  {tags.marker ? (
+                    <g className="diagram-node__marker" transform={`translate(${tags.marker.x}, ${tags.marker.y})`}>
+                      <rect width={tags.marker.width} height={tags.marker.height} rx="2" fill="rgba(var(--orange-rgb), 0.25)" stroke="var(--orange)" strokeWidth="1" />
+                      <text x={tags.marker.width / 2} y="11" textAnchor="middle" fill="var(--orange)" fontSize="9" fontWeight="700" fontFamily="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" letterSpacing="0.05em">
                         NOTE
                       </text>
                     </g>
@@ -311,7 +315,7 @@ export function DiagramPrimitive({
             ) : null,
           )}
         </g>
-      </svg>
+      </DrawingViewport>
     </div>
   );
 }

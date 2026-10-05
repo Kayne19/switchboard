@@ -1,7 +1,7 @@
-import { useMemo, useRef } from 'react';
+import { useMemo } from 'react';
 import type { NoteData, Semantic, SequenceDiagramData } from '../controller/types';
-import { useElementSize } from '../hooks/useElementSize';
-import { LABEL_HEIGHT, SUB_LINE_HEIGHT, layoutSequence, type LaidOutMessage, type Point } from './sequenceLayout';
+import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
+import { LABEL_HEIGHT, SUB_LINE_HEIGHT, viewSequence, type LaidOutMessage, type Point } from './sequenceLayout';
 
 const colors: Record<Semantic, string> = {
   red: 'var(--red)',
@@ -17,6 +17,8 @@ const pathThrough = (points: Point[]) =>
   points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
 
 const ARROW_LENGTH = 10;
+// The pinned headers keep this much of the drawing under them.
+const PINNED_MARGIN = 6;
 const ARROW_HALF = 4.5;
 
 // The arrowhead at a message's tip. A call's is a filled triangle; an
@@ -58,17 +60,10 @@ export function SequencePrimitive({
   id: string;
   note?: NoteData | null;
 }) {
-  const hostRef = useRef<HTMLDivElement>(null);
-  const size = useElementSize(hostRef);
-  // Until the host has been measured, the first frame must already pick the
-  // right geometry: it falls back to the screen's own aspect ratio, so a
-  // portrait phone never flashes the wide columns before the observer
-  // reports the real size.
-  const sizeMeasured = size.width > 0 && size.height > 0;
-  const portrait = sizeMeasured
-    ? size.height > size.width * 1.05
-    : window.innerHeight > window.innerWidth * 1.05;
-  const layout = useMemo(() => layoutSequence(data, portrait ? 'portrait' : 'landscape'), [data, portrait]);
+  const { hostRef, width, height, scrollbar } = useDrawingViewport();
+  // The geometry follows the viewport's shape, and the drawing is fitted to
+  // it, or scrolled in it once fitting would make it too small to read.
+  const { layout, fit } = useMemo(() => viewSequence(data, { width, height, scrollbar }), [data, width, height, scrollbar]);
   // The anchor's target is part of the protocol: a note aimed at another
   // object that happens to name one of these actors is not ours. The note
   // itself stays in the rail; the actor it names is marked.
@@ -77,14 +72,71 @@ export function SequencePrimitive({
   // them: the stagger shrinks so the last one is in within about a second.
   const stagger = Math.min(60, Math.floor(900 / Math.max(1, layout.messages.length)));
 
+  // The headers are drawn twice when the exchange scrolls: in place, and
+  // pinned over the viewport's top once the drawing scrolls under them.
+  const actors = (
+    <g className="sequence-actors">
+      {layout.actors.map(({ actor, box, labelLines, labelY, subY, subLines }, index) => {
+        const isAnchored = anchoredActorId !== undefined && actor.id === anchoredActorId;
+        const color = isAnchored ? 'var(--orange)' : colors[actor.semantic ?? 'paper'];
+        const { width, height } = box;
+        return (
+          <g key={actor.id} transform={`translate(${box.x} ${box.y})`}>
+            <g className={`sequence-actor__body${isAnchored ? ' sequence-actor__body--anchored' : ''}`} style={{ animationDelay: `${index * 50}ms` }}>
+              <path
+                className="sequence-actor__frame"
+                d={`M 0 10 L 10 0 H ${width - 14} L ${width} 14 V ${height} H 12 L 0 ${height - 12} Z`}
+                fill="var(--black, #000000)"
+                stroke={color}
+                strokeOpacity={isAnchored ? '1' : '.64'}
+                strokeWidth={isAnchored ? '2.2' : '1.3'}
+                vectorEffect="non-scaling-stroke"
+                filter={isAnchored ? 'url(#sequence-anchor-glow)' : undefined}
+              />
+              <text
+                x={width / 2}
+                y={labelY}
+                textAnchor="middle"
+                dominantBaseline="central"
+                className="sequence-actor-label"
+                fontSize={layout.actorLabelSize}
+                fill={color}
+              >
+                {labelLines.length === 1
+                  ? labelLines[0]
+                  : labelLines.map((line, lineIndex) => (
+                      <tspan key={lineIndex} x={width / 2} dy={lineIndex === 0 ? 0 : layout.actorLabelLineHeight}>
+                        {line}
+                      </tspan>
+                    ))}
+              </text>
+              {subLines.length > 0 ? (
+                <text
+                  x={width / 2}
+                  y={subY}
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  className="sequence-actor-sub"
+                  fontSize={layout.actorSubSize}
+                >
+                  {subLines.map((line, lineIndex) => (
+                    <tspan key={lineIndex} x={width / 2} dy={lineIndex === 0 ? 0 : SUB_LINE_HEIGHT}>
+                      {line}
+                    </tspan>
+                  ))}
+                </text>
+              ) : null}
+            </g>
+          </g>
+        );
+      })}
+    </g>
+  );
+  const headerBottom = Math.max(0, ...layout.actors.map((actor) => actor.box.y + actor.box.height));
+
   return (
     <div ref={hostRef} className={`sequence-primitive${focused ? ' sequence-primitive--focused' : ''}`} data-testid="sequence">
-      <svg
-        viewBox={`0 0 ${layout.width} ${layout.height}`}
-        preserveAspectRatio="xMidYMid meet"
-        role="img"
-        aria-label={data.title ?? 'Sequence diagram'}
-      >
+      <DrawingViewport drawing={layout} fit={fit} pinned={{ height: headerBottom + PINNED_MARGIN, content: actors }} ariaLabel={data.title ?? 'Sequence diagram'}>
         <defs>
           {/* The region is the whole drawing, not each message's bounding box:
               a straight message has a zero-height box, and a filter region
@@ -125,56 +177,7 @@ export function SequencePrimitive({
             />
           ))}
         </g>
-        <g className="sequence-actors">
-          {layout.actors.map(({ actor, box, subLines }, index) => {
-            const isAnchored = anchoredActorId !== undefined && actor.id === anchoredActorId;
-            const color = isAnchored ? 'var(--orange)' : colors[actor.semantic ?? 'paper'];
-            const { width, height } = box;
-            return (
-              <g key={actor.id} transform={`translate(${box.x} ${box.y})`}>
-                <g className={`sequence-actor__body${isAnchored ? ' sequence-actor__body--anchored' : ''}`} style={{ animationDelay: `${index * 50}ms` }}>
-                  <path
-                    className="sequence-actor__frame"
-                    d={`M 0 10 L 10 0 H ${width - 14} L ${width} 14 V ${height} H 12 L 0 ${height - 12} Z`}
-                    fill="var(--black, #000000)"
-                    stroke={color}
-                    strokeOpacity={isAnchored ? '1' : '.64'}
-                    strokeWidth={isAnchored ? '2.2' : '1.3'}
-                    vectorEffect="non-scaling-stroke"
-                    filter={isAnchored ? 'url(#sequence-anchor-glow)' : undefined}
-                  />
-                  <text
-                    x={width / 2}
-                    y={actor.sub ? 22 : height / 2}
-                    textAnchor="middle"
-                    dominantBaseline="central"
-                    className="sequence-actor-label"
-                    fontSize={layout.actorLabelSize}
-                    fill={color}
-                  >
-                    {actor.label}
-                  </text>
-                  {subLines.length > 0 ? (
-                    <text
-                      x={width / 2}
-                      y={39}
-                      textAnchor="middle"
-                      dominantBaseline="central"
-                      className="sequence-actor-sub"
-                      fontSize={layout.actorSubSize}
-                    >
-                      {subLines.map((line, lineIndex) => (
-                        <tspan key={lineIndex} x={width / 2} dy={lineIndex === 0 ? 0 : SUB_LINE_HEIGHT}>
-                          {line}
-                        </tspan>
-                      ))}
-                    </text>
-                  ) : null}
-                </g>
-              </g>
-            );
-          })}
-        </g>
+        {actors}
         <g className="sequence-messages">
           {layout.messages.map((item) => {
             const active = Boolean(item.message.active);
@@ -220,7 +223,7 @@ export function SequencePrimitive({
             </g>
           ))}
         </g>
-      </svg>
+      </DrawingViewport>
     </div>
   );
 }

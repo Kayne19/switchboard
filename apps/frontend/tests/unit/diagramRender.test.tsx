@@ -5,6 +5,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { DiagramData } from '../../src/controller/types';
 import { DiagramPrimitive } from '../../src/primitives/DiagramPrimitive';
+import { topologyDiagram } from '../../src/fixtures/scenes';
+import { GRAPH_MIN_SCALE } from '../../src/primitives/diagramLayout';
 
 const data: DiagramData = {
   mode: 'graph',
@@ -405,5 +407,130 @@ describe('anchored note fit and ownership', () => {
     expect(host.querySelector('.diagram-callout')).toBeNull();
     expect(host.querySelector('.diagram-node__body--anchored')).toBeNull();
     expect(host.querySelector('.diagram-node__marker')).toBeNull();
+  });
+});
+
+
+describe('corner tags inside the node frame', () => {
+  // The frame's outline is a box with its top-left and top-right corners cut
+  // (DiagramPrimitive's frame path). A tag in the top-right corner that
+  // reaches past the start of that cut sits on the frame's line, half
+  // outside the node: the NOTE marker did, on every node.
+  const labels = [
+    'PBX',
+    'Operator agent',
+    'switchboard skill module',
+    'Speech-to-text transcription sidecar for the operator leg',
+    'supercalifragilisticexpialidocious',
+  ];
+  const states = [undefined, 'done', 'blocked', 'active'] as const;
+  const long = 'A note far too long for the callout box, so it stays in the rail and the node it names carries the NOTE marker in its corner.';
+  type Rect = { x: number; y: number; width: number; height: number };
+  const translate = (element: Element | null) => {
+    const match = /translate\(\s*([-\d.]+)[ ,]+([-\d.]+)\s*\)/.exec(element?.getAttribute('transform') ?? '');
+    return match ? { x: Number(match[1]), y: Number(match[2]) } : null;
+  };
+  const rectOf = (group: Element | null): Rect | null => {
+    const at = translate(group);
+    const rect = group?.querySelector('rect');
+    return at && rect ? { ...at, width: Number(rect.getAttribute('width')), height: Number(rect.getAttribute('height')) } : null;
+  };
+  const apart = (a: Rect, b: Rect, by: number) =>
+    a.x + a.width + by <= b.x || b.x + b.width + by <= a.x || a.y + a.height + by <= b.y || b.y + b.height + by <= a.y;
+
+  for (const label of labels) {
+    for (const state of states) {
+      it(`${label} / ${state ?? 'todo'}: the NOTE marker and the state tag sit inside the frame, clear of the cut and the label`, () => {
+        host = document.createElement('div');
+        document.body.append(host);
+        root = createRoot(host);
+        const node = { id: 'n', label, sub: 'prime-agent session in ~/projects/llm-wiki', detail: 'apps/backend/src/pbx.rs', ...(state ? { state } : {}) };
+        act(() =>
+          root.render(
+            <DiagramPrimitive
+              data={{ mode: 'graph', nodes: [{ id: 'a', label: 'A' }, node], edges: [{ from: 'a', to: 'n' }] }}
+              id="test-diagram"
+              note={{ segments: [{ text: long }], anchor: { target: 'test-diagram', node: 'n' } }}
+            />,
+          ),
+        );
+        const group = [...host.querySelectorAll('.diagram-nodes > g')][1];
+        const d = group.querySelector('.diagram-node__frame')?.getAttribute('d') ?? '';
+        const [, width, height] = /H [\d.]+ L ([\d.]+) [\d.]+ V ([\d.]+)/.exec(d)?.map(Number) ?? [];
+        expect(width).toBeGreaterThan(0);
+        const cutStart = width - 22;
+        const tags = [rectOf(group.querySelector('.diagram-node__marker')), rectOf(group.querySelector('.diagram-node__tag'))].filter(
+          (tag): tag is Rect => tag !== null,
+        );
+        expect(tags.length).toBe(state === 'done' || state === 'blocked' ? 2 : 1);
+        const textBoxes: Rect[] = [...group.querySelectorAll('.diagram-node-label')].map((text) => ({
+          x: Number(text.getAttribute('x')),
+          y: Number(text.getAttribute('y')) - 12,
+          width: (text.textContent ?? '').length * 10.8,
+          height: 15,
+        }));
+        for (const tag of tags) {
+          expect(tag.x, 'left edge').toBeGreaterThanOrEqual(4);
+          expect(tag.y, 'top edge').toBeGreaterThanOrEqual(4);
+          expect(tag.x + tag.width, 'right edge').toBeLessThanOrEqual(width - 4);
+          expect(tag.y + tag.height, 'bottom edge').toBeLessThanOrEqual(height - 4);
+          // The cut runs from (width - 22, 0) to (width, 22): the tag's
+          // top-right corner keeps clear of it.
+          const clearOfCut = (tag.y - (tag.x + tag.width - cutStart)) / Math.SQRT2;
+          expect(clearOfCut, 'clear of the clipped corner').toBeGreaterThanOrEqual(4);
+          for (const text of textBoxes) expect(apart(tag, text, 2), `clear of "${label}"`).toBe(true);
+        }
+        if (tags.length === 2) expect(apart(tags[0], tags[1], 2), 'marker clear of the state tag').toBe(true);
+      });
+    }
+  }
+});
+
+
+describe('a graph too large to read whole', () => {
+  // Scaled to fit a 1024 x 768 screen, the switchboard topology's text was
+  // drawn at a third of its size: node subs at 3 px, edge labels at 4 px.
+  it('is drawn no smaller than the readable minimum, and scrolls in its viewport instead', () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root.render(<DiagramPrimitive data={topologyDiagram} id="topology" />));
+    const svg = host.querySelector('svg')!;
+    const [, , width, height] = (svg.getAttribute('viewBox') ?? '').split(' ').map(Number);
+    // Unmeasured, the host stands in for the screen (jsdom: 1024 x 768).
+    const drawnWidth = svg.style.width ? parseFloat(svg.style.width) : Math.min(window.innerWidth, (width * window.innerHeight) / height);
+    expect(drawnWidth / width).toBeGreaterThanOrEqual(GRAPH_MIN_SCALE - 1e-9);
+    const viewport = host.querySelector('.drawing-viewport');
+    expect(viewport?.classList.contains('drawing-viewport--scrolling')).toBe(true);
+    // One way only: across, it fits.
+    expect(['x', 'y']).toContain(viewport?.getAttribute('data-scroll'));
+    expect(host.querySelector('.drawing-viewport__scroll')?.getAttribute('tabindex')).toBe('0');
+  });
+
+  it('keeps a note that names one of its nodes in the rail, the node carrying the marker', () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    const placed: boolean[] = [];
+    act(() =>
+      root.render(
+        <DiagramPrimitive
+          data={topologyDiagram}
+          id="topology"
+          note={{ tag: 'NOTE', anchor: { target: 'topology', node: 'gate' }, segments: [{ text: 'Short enough for a callout.' }] }}
+          onCalloutChange={(value) => placed.push(value)}
+        />,
+      ),
+    );
+    // A callout rides on the drawing and could sit out of view in a scroll.
+    expect(host.querySelector('.diagram-callout')).toBeNull();
+    expect(placed.at(-1)).toBe(false);
+    expect(host.querySelector('.diagram-node__marker')).not.toBeNull();
+  });
+
+  it('is contained, as before, when it reads whole', () => {
+    render();
+    expect(host.querySelector('.drawing-viewport--scrolling')).toBeNull();
+    expect(host.querySelector('svg')?.style.width).toBe('');
   });
 });

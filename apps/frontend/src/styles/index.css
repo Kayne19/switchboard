@@ -1615,20 +1615,132 @@ button {
   background: #000;
 }
 .diagram-object .focusable-content {
+  --slot-pad: clamp(18px, 2.2cqw, 38px);
   position: relative;
   z-index: 1;
-  padding: clamp(18px, 2.2cqw, 38px);
+  padding: var(--slot-pad);
 }
 .diagram-primitive {
   width: 100%;
   height: 100%;
   min-height: 0;
 }
-.diagram-primitive svg {
+/* In the diagram slot the drawing's viewport stands between the rails
+   (TechFrame "rails"): below the top rail's lower step (70 of the frame's
+   700 units) and above the bottom rail's upper step (624 of 700), with
+   room, so a drawing that fills it or scrolls in it never meets them. */
+.diagram-object :is(.diagram-primitive, .sequence-primitive) {
+  position: absolute;
+  top: calc(10% + 10px);
+  bottom: calc(10.86% + 10px);
+  left: var(--slot-pad);
+  right: var(--slot-pad);
+  width: auto;
+  height: auto;
+}
+/* A drawing's viewport (DrawingViewport): the drawing contained when it
+   reads at that size; otherwise drawn at its readable minimum and scrolled
+   inside it, along the axis it overflows, clipped to its box. Its auto
+   margins centre a drawing smaller than the box without ever cutting off
+   the start of one larger. An edge the drawing continues past fades into
+   the black field. */
+.drawing-viewport {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.drawing-viewport__scroll {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.drawing-viewport__scroll > svg {
+  display: block;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.drawing-viewport--scrolling > .drawing-viewport__scroll {
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--orange-rgb), 0.46) transparent;
+}
+.drawing-viewport--scrolling > .drawing-viewport__scroll > svg {
+  flex: none;
+  margin: auto;
+}
+.drawing-viewport__pinned {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: 0;
+  right: var(--bar-y, 0px);
+  visibility: hidden;
+  pointer-events: none;
+  background: #000;
+}
+.drawing-viewport__pinned--shown {
+  visibility: visible;
+}
+.drawing-viewport__pinned-drawing {
+  height: 100%;
+  overflow: hidden;
+}
+.drawing-viewport__pinned-drawing > svg {
   display: block;
   width: 100%;
   height: 100%;
   overflow: visible;
+}
+.drawing-viewport__pinned::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: clamp(12px, 3%, 24px);
+  background: linear-gradient(to bottom, #000, transparent);
+}
+.drawing-viewport__more {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+}
+/* The fades keep off the scroll bars (--bar-x, --bar-y: their thickness,
+   set by DrawingViewport), so a bar's track is never dimmed. */
+.drawing-viewport__more--left,
+.drawing-viewport__more--right {
+  top: 0;
+  bottom: var(--bar-x, 0px);
+  width: clamp(24px, 6%, 56px);
+}
+.drawing-viewport__more--top,
+.drawing-viewport__more--bottom {
+  left: 0;
+  right: var(--bar-y, 0px);
+  height: clamp(24px, 8%, 56px);
+}
+.drawing-viewport__more--left {
+  left: 0;
+  background: linear-gradient(to right, #000, transparent);
+}
+.drawing-viewport__more--right {
+  right: var(--bar-y, 0px);
+  background: linear-gradient(to left, #000, transparent);
+}
+.drawing-viewport__more--top {
+  top: 0;
+  background: linear-gradient(to bottom, #000, transparent);
+}
+.drawing-viewport__more--bottom {
+  bottom: var(--bar-x, 0px);
+  background: linear-gradient(to top, #000, transparent);
 }
 /* Entry motion stays in CSS on elements that carry no SVG positioning
    transform: a CSS transform on a translated node group replaces its
@@ -1708,22 +1820,10 @@ button {
 
 /* A diagram in sequence mode shares the diagram slot and its motion; its
    own classes keep the two drawings' rules apart. */
-/* A tall exchange is height-bound and fills the slot; the inset keeps its
-   headers and lifeline ends clear of the stepped rails the diagram slot
-   draws at its top and bottom (TechFrame "rails"). */
 .sequence-primitive {
-  box-sizing: border-box;
   width: 100%;
   height: 100%;
   min-height: 0;
-  padding: clamp(24px, 5cqh, 48px) 0;
-}
-
-.sequence-primitive svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
 }
 
 .sequence-actor__body {
@@ -2651,7 +2751,7 @@ button {
   }
 
   .diagram-object .focusable-content {
-    padding: 14px;
+    --slot-pad: 14px;
   }
   .document-viewport__inner {
     inset: 22px 20px 20px;

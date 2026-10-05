@@ -78,7 +78,17 @@ Direct fixture URLs are also supported:
 /?scene=figure
 /?scene=plan
 /?scene=composed
+/?scene=topology
+/?scene=pipeline
+/?scene=trace
 ```
+
+`topology`, `pipeline` and `trace` are the hard diagrams: the switchboard's
+own twenty-two parts as a graph, a forty-step CI pipeline in layers up to
+twelve wide, and a transfer traced as a sequence of eight actors and
+thirty-two messages. They are what agents really send, and where a drawing
+scaled to fit stops being read (`docs/visual-channel.md`). They have no number
+key either: reach them by URL or by swiping.
 
 ## Runtime API
 

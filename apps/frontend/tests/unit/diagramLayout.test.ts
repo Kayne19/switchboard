@@ -1,6 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import type { DiagramData } from '../../src/controller/types';
-import { ARROW_LENGTH, breakCycles, layoutDiagram, measureNode, wrapEdgeLabel, type Box, type DiagramOrientation, type Point } from '../../src/primitives/diagramLayout';
+import { pipelineDiagram, topologyDiagram } from '../../src/fixtures/scenes';
+import {
+  ARROW_LENGTH,
+  breakCycles,
+  cornerTagBoxes,
+  frameFor,
+  layoutDiagram,
+  measureNode,
+  nodeFramePath,
+  wrapEdgeLabel,
+  type Box,
+  type DiagramLayout,
+  type DiagramOrientation,
+  type Point,
+} from '../../src/primitives/diagramLayout';
+
+const NO_TAGS = { glyph: false, marker: false };
 
 const graph = (nodes: string[], edges: Array<[string, string, string]>): DiagramData => ({
   mode: 'graph',
@@ -110,6 +126,10 @@ const graphs: Record<string, DiagramData> = {
     edges: Array.from({ length: 9 }, (_, index) => ({ from: 'root', to: `w${index}`, label: index % 3 === 0 ? 'high' : undefined })),
   },
 };
+// The hard canonical diagrams (fixtures `topology` and `pipeline`): the
+// switchboard's twenty-two parts, and a forty-step CI pipeline.
+graphs.topology = topologyDiagram;
+graphs.ciPipeline = pipelineDiagram;
 // The fan-out with every edge labelled, and with one edge coming back.
 graphs.wideLabelled = { ...graphs.wide, edges: graphs.wide.edges.map((edge) => ({ ...edge, label: 'go' })) };
 graphs.wideBack = { ...graphs.wide, edges: [...graphs.wide.edges, { from: 'w6', to: 'root', label: 'retry' }] };
@@ -143,6 +163,11 @@ const onRoute = (point: Point, points: Point[]) =>
     return point.x >= box.x - 1e-6 && point.x <= box.x + box.width + 1e-6 && point.y >= box.y - 1e-6 && point.y <= box.y + box.height + 1e-6;
   });
 
+// A line of the route passes under the label, at least 9 units inside
+// each edge of its backing.
+const underLabel = (box: Box, points: Point[]) =>
+  points.slice(1).some((end, index) => overlaps(segmentBox(points[index], end), inset(box, 9)));
+
 // The arrowhead at a route's end: the last ARROW_LENGTH of its final
 // segment, as wide as it is long.
 const arrowhead = (points: Point[]): Box => {
@@ -162,10 +187,33 @@ const onOutline = (point: Point, box: Box) => {
   return onVertical || onHorizontal;
 };
 
+// The frames a drawing is laid out for once it is too large to read whole:
+// a phone-width slot (330 x 374 CSS pixels), the landscape slot at
+// 1440 x 900 (914 x 526), and the focus layer on a phone (366 x 700), read
+// at the readable minimum, with and without room for a scroll bar.
+const frames = (orientation: DiagramOrientation) =>
+  [
+    { width: 330, height: 374, scrollbar: 0 },
+    { width: 914, height: 526, scrollbar: 11 },
+    { width: 366, height: 700, scrollbar: 0 },
+  ].map((viewport) => ({ label: `${viewport.width}x${viewport.height}`, frame: frameFor(orientation, viewport) }));
+
 for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
+  // Every graph on the approved canvas, and the hard ones, plus the crowded
+  // fan-out and the lifecycle, laid out again for each frame.
+  const cases: Array<[string, DiagramData, DiagramLayout, boolean]> = [
+    ...Object.entries(graphs).map(([name, data]): [string, DiagramData, DiagramLayout, boolean] => [name, data, layoutDiagram(data, orientation), false]),
+    ...(['topology', 'ciPipeline', 'wide', 'states', 'deps'] as const).flatMap((name) =>
+      frames(orientation).map(({ label, frame }): [string, DiagramData, DiagramLayout, boolean] => [
+        `${name} in ${label}`,
+        graphs[name],
+        layoutDiagram(graphs[name], orientation, undefined, frame),
+        true,
+      ]),
+    ),
+  ];
   describe(`diagram layout / ${orientation}`, () => {
-    for (const [name, data] of Object.entries(graphs)) {
-      const layout = layoutDiagram(data, orientation);
+    for (const [name, data, layout, framed] of cases) {
       const labels = layout.edges.flatMap((edge) => (edge.label ? [edge.label] : []));
       const nodeBox = (id: string) => layout.nodes.find((node) => node.node.id === id)?.box;
 
@@ -208,7 +256,12 @@ for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
 
       it(`${name}: every label sits on its own route and clears every arrowhead`, () => {
         for (const edge of layout.edges) {
-          if (edge.label) expect(onRoute(edge.label, edge.points), `${edge.label.text} on ${edge.edge.from}->${edge.edge.to}`).toBe(true);
+          if (!edge.label) continue;
+          // Laid out for a frame, a label at the band's edge may slide off
+          // the middle of its line, as long as the line still passes under
+          // it, well inside its backing.
+          const sits = framed ? underLabel(edge.label.box, edge.points) : onRoute(edge.label, edge.points);
+          expect(sits, `${edge.label.text} on ${edge.edge.from}->${edge.edge.to}`).toBe(true);
         }
         for (const edge of layout.edges) {
           const head = arrowhead(edge.points);
@@ -396,8 +449,8 @@ describe('a label on a shared trunk', () => {
 
 describe('node measurement', () => {
   it('sizes a box to its wrapped text', () => {
-    const short = measureNode({ id: 'a', label: 'PBX' }, 0);
-    const long = measureNode({ id: 'b', label: 'Worker 1 with a fairly long label', sub: 'review round 1', detail: 'apps/backend/src/ws.rs' }, 0);
+    const short = measureNode({ id: 'a', label: 'PBX' }, NO_TAGS);
+    const long = measureNode({ id: 'b', label: 'Worker 1 with a fairly long label', sub: 'review round 1', detail: 'apps/backend/src/ws.rs' }, NO_TAGS);
     expect(short.width).toBe(140);
     expect(short.lines.map((line) => line.kind)).toEqual(['label']);
     expect(long.lines.filter((line) => line.kind === 'label').map((line) => line.text)).toEqual(['Worker 1 with a', 'fairly long label']);
@@ -409,7 +462,7 @@ describe('node measurement', () => {
 
   it('wraps text too long for its lines wider and balanced, not piled onto the last line', () => {
     const label = 'Speech-to-text transcription sidecar for the operator leg';
-    const lines = measureNode({ id: 'a', label }, 0).lines.map((line) => line.text);
+    const lines = measureNode({ id: 'a', label }, NO_TAGS).lines.map((line) => line.text);
     expect(lines).toHaveLength(2);
     expect(lines.join(' ')).toBe(label);
     // Greedy at the usual width would leave 'Speech-to-text' and 42 characters.
@@ -420,11 +473,17 @@ describe('node measurement', () => {
   });
 
   it('reserves room for its corner tags beside the label', () => {
-    const plain = measureNode({ id: 'a', label: 'Operator agent' }, 0);
-    const tagged = measureNode({ id: 'a', label: 'Operator agent' }, 1);
-    const both = measureNode({ id: 'a', label: 'Operator agent' }, 2);
-    expect(tagged.width - plain.width).toBe(30);
-    expect(both.width - plain.width).toBe(46);
+    const label = 'Operator agent';
+    const plain = measureNode({ id: 'a', label }, NO_TAGS);
+    for (const tags of [{ glyph: true, marker: false }, { glyph: false, marker: true }, { glyph: true, marker: true }]) {
+      const tagged = measureNode({ id: 'a', label }, tags);
+      expect(tagged.width).toBeGreaterThan(plain.width);
+      // The label's first line (18 units in, 10.8 a character) ends a gap
+      // short of the leftmost tag.
+      const boxes = cornerTagBoxes(tagged.width, tags);
+      const left = Math.min(...[boxes.glyph, boxes.marker].flatMap((box) => (box ? [box.x] : [])));
+      expect(18 + label.length * 10.8 + 6).toBeLessThanOrEqual(left + 1e-9);
+    }
   });
 });
 
@@ -481,4 +540,84 @@ describe('diagram callout placement', () => {
     const layout = layoutDiagram(graphs.chain, 'landscape', 'unknown-node');
     expect(layout.callout).toBeNull();
   });
+});
+
+
+// A node's frame outline as a polygon, read from the path the renderer draws.
+function framePolygon(width: number, height: number): Point[] {
+  const points: Point[] = [];
+  const tokens = nodeFramePath(width, height).split(/\s+/);
+  let at: Point = { x: 0, y: 0 };
+  for (let index = 0; index < tokens.length; index += 1) {
+    const command = tokens[index];
+    if (command === 'M' || command === 'L') at = { x: Number(tokens[++index]), y: Number(tokens[++index]) };
+    else if (command === 'H') at = { x: Number(tokens[++index]), y: at.y };
+    else if (command === 'V') at = { x: at.x, y: Number(tokens[++index]) };
+    else continue;
+    points.push(at);
+  }
+  return points;
+}
+
+// How far a point lies inside a convex polygon traced clockwise on screen
+// (y down): the least distance to any of its edges, negative outside.
+function depthInside(point: Point, polygon: Point[]): number {
+  let depth = Infinity;
+  polygon.forEach((a, index) => {
+    const b = polygon[(index + 1) % polygon.length];
+    const length = Math.hypot(b.x - a.x, b.y - a.y);
+    if (length === 0) return;
+    depth = Math.min(depth, ((b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x)) / length);
+  });
+  return depth;
+}
+
+describe('corner tags', () => {
+  const labelled = (label: string, sub?: string): DiagramData['nodes'][number] => ({ id: label, label, ...(sub ? { sub } : {}) });
+  const sizes: DiagramData['nodes'] = [
+    labelled('PBX'),
+    labelled('Operator agent'),
+    labelled('switchboard skill module', 'speak / display / view / listen'),
+    labelled('Speech-to-text transcription sidecar for the operator leg'),
+    labelled('supercalifragilisticexpialidocious'),
+    labelled('x', 'prime-agent session in ~/projects/llm-wiki, a sub far longer than its label'),
+    ...graphs.topology.nodes,
+    ...graphs.ciPipeline.nodes,
+  ];
+  const textBoxes = (lines: Array<{ kind: string; text: string; y: number }>): Box[] =>
+    lines.filter((line) => line.kind === 'label').map((line) => ({ x: 18, y: line.y - 12, width: line.text.length * 10.8, height: 15 }));
+
+  it('sit inside every frame, clear of its cut corners and of the label, at every node size', () => {
+    for (const node of sizes) {
+      for (const tags of [{ glyph: true, marker: false }, { glyph: false, marker: true }, { glyph: true, marker: true }]) {
+        const measured = measureNode(node, tags);
+        const frame = framePolygon(measured.width, measured.height);
+        const boxes = [cornerTagBoxes(measured.width, tags).glyph, cornerTagBoxes(measured.width, tags).marker].filter((box): box is Box => box !== null);
+        expect(boxes).toHaveLength(Number(tags.glyph) + Number(tags.marker));
+        for (const box of boxes) {
+          for (const corner of [{ x: box.x, y: box.y }, { x: box.x + box.width, y: box.y }, { x: box.x, y: box.y + box.height }, { x: box.x + box.width, y: box.y + box.height }]) {
+            expect(depthInside(corner, frame), `${node.label}: a tag corner inside the frame`).toBeGreaterThanOrEqual(4);
+          }
+          for (const text of textBoxes(measured.lines)) expect(overlaps(inset(box, -2), text), `${node.label}: tag clear of its label`).toBe(false);
+        }
+        if (boxes.length === 2) expect(overlaps(inset(boxes[0], -2), boxes[1]), `${node.label}: the tags apart`).toBe(false);
+      }
+    }
+  });
+
+  for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
+    it(`${orientation}: an anchored node of the hard diagrams leaves its marker room beside the label`, () => {
+      for (const data of [graphs.topology, graphs.ciPipeline]) {
+        for (const node of data.nodes.filter((_, index) => index % 5 === 0)) {
+          const layout = layoutDiagram(data, orientation, node.id);
+          const laidOut = layout.nodes.find((entry) => entry.node.id === node.id)!;
+          const tags = { glyph: node.state === 'done' || node.state === 'blocked', marker: true };
+          const marker = cornerTagBoxes(laidOut.box.width, tags).marker!;
+          const frame = framePolygon(laidOut.box.width, laidOut.box.height);
+          expect(depthInside({ x: marker.x + marker.width, y: marker.y }, frame), `${node.id}: marker clear of the cut`).toBeGreaterThanOrEqual(4);
+          for (const text of textBoxes(laidOut.lines)) expect(overlaps(inset(marker, -2), text), `${node.id}: marker clear of the label`).toBe(false);
+        }
+      }
+    });
+  }
 });
