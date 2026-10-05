@@ -2638,6 +2638,88 @@ button {
   padding: clamp(4px, 0.6cqh, 7px) clamp(6px, 0.7cqw, 10px);
 }
 
+/* TEMPORARY (pa-contract): the stand-in for calendar, tasks, timer, weather
+   and inbox (primitives/TemporaryAssistantList.tsx), a plain list of the
+   fields as sent until the render slice draws each type with a primitive of
+   its own. Replaced by the render slice; delete this block with the file. */
+.temporary-assistant-object {
+  background: #000;
+}
+.temporary-assistant-object .focusable-content {
+  position: relative;
+  z-index: 1;
+  padding: clamp(22px, 3.6cqh, 42px) clamp(22px, 2.6cqw, 42px) clamp(16px, 2.6cqh, 30px);
+}
+.temporary-assistant {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  color: #d9d7d1;
+  font-family: var(--font-prose);
+  font-size: clamp(13px, 1.05cqw, 17px);
+  line-height: 1.45;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--orange-rgb), 0.46) transparent;
+}
+.focus-layer__content .temporary-assistant {
+  padding: clamp(18px, 3vh, 36px) clamp(18px, 3vw, 40px);
+}
+.temporary-assistant__head {
+  margin-bottom: 10px;
+  color: rgba(var(--orange-rgb), 0.8);
+}
+.temporary-assistant__fields {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 3px 16px;
+  margin: 0 0 6px;
+}
+.temporary-assistant__field {
+  display: contents;
+}
+.temporary-assistant__field dt {
+  color: rgba(232, 230, 223, 0.45);
+}
+.temporary-assistant__field dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.temporary-assistant__list {
+  margin-top: 12px;
+}
+.temporary-assistant__list-head {
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(var(--orange-rgb), 0.48);
+  color: rgba(232, 230, 223, 0.55);
+}
+.temporary-assistant__list ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.temporary-assistant__item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px 14px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(232, 230, 223, 0.1);
+}
+.temporary-assistant__name {
+  flex-basis: 100%;
+  color: var(--paper);
+  font-weight: 600;
+}
+.temporary-assistant__pair {
+  min-width: 0;
+  color: rgba(232, 230, 223, 0.7);
+  overflow-wrap: anywhere;
+}
+.temporary-assistant__key {
+  color: rgba(232, 230, 223, 0.4);
+}
+
 /* Focus layer */
 .focus-layer {
   position: fixed;

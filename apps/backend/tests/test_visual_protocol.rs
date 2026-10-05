@@ -1,116 +1,6 @@
 use super::*;
 use serde_json::{json, Value};
 
-#[test]
-fn normalizes_note_anchor_and_caption() {
-    let action = json!({
-        "op": "show",
-        "id": "spike-note",
-        "type": "note",
-        "role": "secondary",
-        "data": {
-            "tag": "LOOK HERE",
-            "caption": "ANNOTATION / VALIDATION SPIKE",
-            "segments": [{"text": "Validation turns upward here."}],
-            "anchor": {"target": "loss-chart", "x": 32, "series": "VAL LOSS"}
-        }
-    });
-
-    assert_eq!(validate_action(&action), Ok(action));
-}
-
-#[test]
-fn rejects_note_anchor_without_a_target() {
-    let action = json!({
-        "op": "show",
-        "id": "spike-note",
-        "type": "note",
-        "data": {
-            "segments": [{"text": "No target."}],
-            "anchor": {"x": 32}
-        }
-    });
-
-    assert_eq!(
-        validate_action(&action),
-        Err("note.anchor.target must be a non-empty identifier".into())
-    );
-}
-
-fn labelled_chart(data: Value) -> Value {
-    let mut data = data;
-    let base = json!({
-        "kind": "bar",
-        "labels": ["backend", "frontend", "skill"],
-        "series": [{"name": "SECONDS", "values": [41.2, 18.7, 3.1]}]
-    });
-    for (key, value) in base.as_object().unwrap() {
-        data.as_object_mut()
-            .unwrap()
-            .entry(key.clone())
-            .or_insert(value.clone());
-    }
-    json!({"op": "show", "id": "durations", "type": "chart", "data": data})
-}
-
-// The browser's validateChartData holds the same rules; the fixtures in
-// apps/frontend/tests/fixtures/display-actions.json pin both to them.
-#[test]
-fn normalizes_chart_kind_and_labels() {
-    let action = labelled_chart(json!({"title": "SUITE DURATIONS"}));
-    assert_eq!(validate_action(&action), Ok(action));
-    for kind in CHART_KINDS {
-        let action = labelled_chart(json!({"kind": kind}));
-        assert_eq!(validate_action(&action), Ok(action), "{kind}");
-    }
-    // A series may carry fewer values than there are labels.
-    let short = labelled_chart(json!({"series": [{"name": "SECONDS", "values": [41.2]}]}));
-    assert_eq!(validate_action(&short), Ok(short));
-}
-
-#[test]
-fn rejects_a_chart_kind_it_does_not_draw() {
-    let action = labelled_chart(json!({"kind": "pie"}));
-    assert_eq!(validate_action(&action), Err("invalid chart.kind".into()));
-}
-
-#[test]
-fn rejects_chart_labels_outside_their_bounds() {
-    let too_many: Vec<String> = (0..=MAX_CHART_LABELS).map(|i| format!("L{i}")).collect();
-    let action = labelled_chart(json!({"labels": too_many}));
-    assert_eq!(
-        validate_action(&action),
-        Err("chart.labels must be an array of 1 to 100 strings".into())
-    );
-    let action = labelled_chart(json!({"labels": [], "series": []}));
-    assert_eq!(
-        validate_action(&action),
-        Err("chart.labels must be an array of 1 to 100 strings".into())
-    );
-    let action = labelled_chart(json!({"labels": ["a", 2, "c"]}));
-    assert_eq!(
-        validate_action(&action),
-        Err("chart label must be a string".into())
-    );
-    let action = labelled_chart(json!({"labels": ["x".repeat(65), "b", "c"]}));
-    assert_eq!(
-        validate_action(&action),
-        Err("chart label exceeds maximum length of 64 UTF-16 code units".into())
-    );
-    // An astral character is two UTF-16 units, as in the browser.
-    let action = labelled_chart(json!({"labels": ["\u{1F600}".repeat(33), "b", "c"]}));
-    assert!(validate_action(&action).is_err());
-}
-
-#[test]
-fn rejects_a_series_longer_than_the_chart_labels() {
-    let action = labelled_chart(json!({"series": [{"name": "SECONDS", "values": [1, 2, 3, 4]}]}));
-    assert_eq!(
-        validate_action(&action),
-        Err("series.values is longer than chart.labels".into())
-    );
-}
-
 fn progress_value(value: Value) -> Value {
     let action = json!({
         "op": "show",
@@ -124,6 +14,9 @@ fn progress_value(value: Value) -> Value {
     }
 }
 
+// Clamping and rounding are corpus cases (`progress_value_clamps_*`,
+// `progress_value_rounds*`). These values come back as sent: a value of 1
+// or less is a percent, not a fraction.
 #[test]
 fn normalizes_progress_percentage_values() {
     assert_eq!(progress_value(json!(0)), json!(0));
@@ -131,16 +24,6 @@ fn normalizes_progress_percentage_values() {
     assert_eq!(progress_value(json!(1.02)), json!(1.02));
     assert_eq!(progress_value(json!(65)), json!(65));
     assert_eq!(progress_value(json!(100)), json!(100));
-    assert_eq!(progress_value(json!(-5)), json!(0));
-    assert_eq!(progress_value(json!(150)), json!(100));
-}
-
-// The browser's normalizeProgressValue rounds the same way; its test
-// pins the same cases.
-#[test]
-fn rounds_progress_values_to_two_decimal_places() {
-    assert_eq!(progress_value(json!(33.333)), json!(33.33));
-    assert_eq!(progress_value(json!(66.666)), json!(66.67));
 }
 
 fn progress_steps(data: Value) -> Result<Value, String> {
@@ -153,260 +36,17 @@ fn progress_steps(data: Value) -> Result<Value, String> {
     .map(|normalized| normalized["data"].clone())
 }
 
-// The browser's progressValueOfSteps fills the bar the same way; the
-// `show_progress_steps_without_value` fixture pins both to one output.
+// The browser's progressValueOfSteps fills the bar the same way. A third
+// done (`progress_steps_thirds`) and a step without a state kept as sent
+// (`progress_steps_fill_the_value`) are corpus cases; all done is a full bar.
 #[test]
 fn fills_in_the_value_from_the_steps_when_the_agent_gives_none() {
-    let data = progress_steps(json!({
-        "label": "BUILD",
-        "steps": [
-            {"label": "Fetch", "state": "done"},
-            {"label": "Compile", "state": "active"},
-            {"label": "Link"}
-        ]
-    }))
-    .unwrap();
-    assert_eq!(data["value"], json!(33.33));
-    assert_eq!(data["steps"].as_array().unwrap().len(), 3);
-    // A step without a state stays as sent: the browser reads it as todo.
-    assert_eq!(data["steps"][2], json!({"label": "Link"}));
-
     let all_done = progress_steps(json!({
         "label": "BUILD",
         "steps": [{"label": "Fetch", "state": "done"}, {"label": "Link", "state": "done"}]
     }))
     .unwrap();
     assert_eq!(all_done["value"], json!(100));
-}
-
-#[test]
-fn keeps_the_agents_value_over_the_steps_when_both_are_given() {
-    let data = progress_steps(json!({
-        "label": "BUILD",
-        "value": 10,
-        "steps": [{"label": "Fetch", "state": "done"}]
-    }))
-    .unwrap();
-    assert_eq!(data["value"], json!(10));
-}
-
-#[test]
-fn refuses_a_progress_with_neither_value_nor_steps() {
-    assert_eq!(
-        progress_steps(json!({"label": "BUILD", "text": "working"})),
-        Err("progress requires value or steps".into())
-    );
-}
-
-#[test]
-fn bounds_and_shapes_the_steps() {
-    let many: Vec<Value> = (0..31).map(|i| json!({"label": format!("s{i}")})).collect();
-    assert_eq!(
-        progress_steps(json!({"label": "L", "steps": many})),
-        Err("progress.steps must be an array of 1 to 30 items".into())
-    );
-    assert_eq!(
-        progress_steps(json!({"label": "L", "value": 1, "steps": []})),
-        Err("progress.steps must be an array of 1 to 30 items".into())
-    );
-    assert_eq!(
-        progress_steps(json!({"label": "L", "steps": [{"label": "S", "state": "paused"}]})),
-        Err("invalid progress step.state".into())
-    );
-    assert_eq!(
-        progress_steps(json!({"label": "L", "steps": [{"label": "S", "percent": 5}]})),
-        Err("unknown field in progress step: percent".into())
-    );
-    assert_eq!(
-        progress_steps(json!({"label": "L", "steps": [{"label": "x".repeat(129)}]})),
-        Err("progress step.label exceeds maximum length of 128 UTF-16 code units".into())
-    );
-    assert_eq!(
-        progress_steps(json!({"label": "L", "steps": [{"label": "S", "detail": "d".repeat(257)}]})),
-        Err("progress step.detail exceeds maximum length of 256 UTF-16 code units".into())
-    );
-    assert_eq!(
-        progress_steps(json!({"label": "L", "steps": ["Fetch"]})),
-        Err("progress step must be an object".into())
-    );
-}
-
-fn metric(data: Value) -> Result<Value, String> {
-    validate_action(&json!({"op": "show", "id": "m", "type": "metric", "data": data}))
-        .map(|normalized| normalized["data"].clone())
-}
-
-#[test]
-fn carries_a_metric_trend_and_delta_and_bounds_them() {
-    let data = metric(json!({
-        "label": "P95", "value": "182 ms", "trend": "down", "delta": "-12 ms"
-    }))
-    .unwrap();
-    assert_eq!(data["trend"], json!("down"));
-    assert_eq!(data["delta"], json!("-12 ms"));
-    for trend in ["up", "down", "flat"] {
-        assert!(metric(json!({"label": "P95", "value": "1", "trend": trend})).is_ok());
-    }
-    assert_eq!(
-        metric(json!({"label": "P95", "value": "1", "trend": "sideways"})),
-        Err("invalid metric.trend".into())
-    );
-    assert_eq!(
-        metric(json!({"label": "P95", "value": "1", "trend": 1})),
-        Err("invalid metric.trend".into())
-    );
-    assert!(metric(json!({"label": "P95", "value": "1", "delta": "x".repeat(32)})).is_ok());
-    assert_eq!(
-        metric(json!({"label": "P95", "value": "1", "delta": "x".repeat(33)})),
-        Err("metric.delta exceeds maximum length of 32 UTF-16 code units".into())
-    );
-    assert_eq!(
-        metric(json!({"label": "P95", "value": "1", "delta": 3})),
-        Err("metric.delta must be a string".into())
-    );
-}
-
-#[test]
-fn rejects_non_finite_progress_values() {
-    for non_finite in [json!("NaN"), json!("Infinity"), json!("-Infinity")] {
-        let action = json!({
-            "op": "show",
-            "id": "deploy",
-            "type": "progress",
-            "data": { "label": "DEPLOY", "value": non_finite }
-        });
-        assert!(validate_action(&action).is_err());
-    }
-}
-
-fn table_action(data: Value) -> Value {
-    json!({"op": "show", "id": "results", "type": "table", "data": data})
-}
-
-// The table rules the schema cannot state (docs/display-tool.md, "Table v1
-// rules"): a row has exactly one cell per column, a highlight names a row,
-// and a cell is a string, a number or `{text, semantic?, bold?}`. The
-// browser's validation.test.ts pins the same cases.
-#[test]
-fn table_rows_fit_their_columns() {
-    let two = json!([{"label": "a"}, {"label": "b"}]);
-    assert!(validate_action(&table_action(json!({"columns": two, "rows": [["x", 1]]}))).is_ok());
-    assert_eq!(
-        validate_action(&table_action(
-            json!({"columns": two, "rows": [["x", 1], ["y"]]})
-        )),
-        Err("table row 1 has 1 cells; the table has 2 columns".into())
-    );
-    assert_eq!(
-        validate_action(&table_action(json!({"columns": two, "rows": ["x"]}))),
-        Err("table row 0 must be an array".into())
-    );
-}
-
-#[test]
-fn table_rows_are_at_most_two_hundred() {
-    let one = json!([{"label": "a"}]);
-    let rows = |n: usize| Value::Array((0..n).map(|_| json!(["x"])).collect());
-    assert!(validate_action(&table_action(json!({"columns": one, "rows": rows(200)}))).is_ok());
-    for data in [
-        json!({"columns": one, "rows": rows(201)}),
-        json!({"columns": one}),
-    ] {
-        assert_eq!(
-            validate_action(&table_action(data)),
-            Err("table.rows must be an array of at most 200 items".into())
-        );
-    }
-}
-
-#[test]
-fn table_highlight_names_rows() {
-    let one = json!([{"label": "a"}]);
-    let rows = json!([["x"], ["y"]]);
-    for index in [json!(0), json!(1), json!(1.0)] {
-        let data = json!({"columns": one, "rows": rows, "highlight": [index]});
-        assert!(validate_action(&table_action(data)).is_ok());
-    }
-    for index in [json!(2), json!(-1), json!(0.5), json!("0")] {
-        let data = json!({"columns": one, "rows": rows, "highlight": [index]});
-        assert_eq!(
-            validate_action(&table_action(data)),
-            Err("table.highlight must contain row indices".into())
-        );
-    }
-}
-
-#[test]
-fn table_cells_are_text_numbers_or_styled_text() {
-    let one = json!([{"label": "a"}]);
-    let ok = json!({"columns": one, "rows": [["x"], [1.5], [{"text": "y", "semantic": "red", "bold": true}]]});
-    assert_eq!(
-        validate_action(&table_action(ok.clone())),
-        Ok(table_action(ok))
-    );
-    for (cell, error) in [
-        (
-            json!(true),
-            "table cell must be a string, a number or an object",
-        ),
-        (
-            json!(null),
-            "table cell must be a string, a number or an object",
-        ),
-        (
-            json!({"semantic": "red"}),
-            "table cell.text must be a string",
-        ),
-        (
-            json!({"text": "y", "semantic": "pink"}),
-            "invalid table cell.semantic",
-        ),
-        (
-            json!({"text": "y", "bold": "yes"}),
-            "table cell.bold must be boolean",
-        ),
-        (
-            json!({"text": "y", "align": "right"}),
-            "unknown field in table cell: align",
-        ),
-        (
-            json!("x".repeat(257)),
-            "table cell exceeds maximum length of 256 UTF-16 code units",
-        ),
-        (
-            json!({"text": "x".repeat(257)}),
-            "table cell.text exceeds maximum length of 256 UTF-16 code units",
-        ),
-    ] {
-        let data = json!({"columns": one, "rows": [[cell]]});
-        assert_eq!(validate_action(&table_action(data)), Err(error.into()));
-    }
-}
-
-#[test]
-fn table_columns_are_one_to_twelve_labelled() {
-    let columns = |n: usize| -> Value {
-        Value::Array((0..n).map(|i| json!({"label": format!("c{i}")})).collect())
-    };
-    assert!(validate_action(&table_action(json!({"columns": columns(12), "rows": []}))).is_ok());
-    for n in [0, 13] {
-        assert_eq!(
-            validate_action(&table_action(json!({"columns": columns(n), "rows": []}))),
-            Err("table.columns must be an array of 1 to 12 items".into())
-        );
-    }
-    assert_eq!(
-        validate_action(&table_action(
-            json!({"columns": [{"label": "a", "align": "right"}], "rows": []})
-        )),
-        Err("unknown field in table column: align".into())
-    );
-    assert_eq!(
-        validate_action(&table_action(
-            json!({"columns": [{"label": "x".repeat(65)}], "rows": []})
-        )),
-        Err("table column.label exceeds maximum length of 64 UTF-16 code units".into())
-    );
 }
 
 /// The validator is held to `docs/display-action-v1.schema.json`, the one
@@ -500,6 +140,17 @@ fn show_types_and_their_required_data_follow_the_schema() {
             ("table", None) => json!({"columns": [{"label": "c"}], "rows": []}),
             ("note", None) => json!({"segments": [{"text": "t"}]}),
             ("image", None) => json!({"format": "png", "bytes": PNG_1X1, "alt": "a"}),
+            ("calendar", None) => json!({"view": "week", "start": "2026-10-05", "events": []}),
+            ("tasks", None) => json!({"items": [{"id": "t", "text": "T"}]}),
+            ("timer", None) => {
+                json!({"timers": [{"id": "t", "label": "T", "endsAt": "2026-10-05T18:42:00Z"}]})
+            }
+            ("weather", None) => {
+                json!({"location": "L", "units": "C", "current": {"temp": 1, "condition": "clear"}})
+            }
+            ("inbox", None) => {
+                json!({"messages": [{"id": "m", "from": "F", "time": "2026-10-05"}]})
+            }
             other => panic!("no sample for {other:?}; the schema grew a type or a mode"),
         }
     };
@@ -536,81 +187,6 @@ fn show_types_and_their_required_data_follow_the_schema() {
                 "{shape} without {key} must be refused"
             );
         }
-    }
-}
-
-/// Sequence mode is held to the same rules as the browser validator: actor
-/// ids unique, every message between known actors with a label, a known
-/// kind, a boolean `active`; a self-message allowed; the graph arrays
-/// refused by name, and the sequence arrays refused in graph mode.
-#[test]
-fn sequence_diagrams_follow_the_browser_rules() {
-    let sequence = |actors: Value, messages: Value| {
-        json!({
-            "op": "show", "id": "seq", "type": "diagram",
-            "data": {"mode": "sequence", "actors": actors, "messages": messages}
-        })
-    };
-    let actors = json!([{"id": "a", "label": "A"}, {"id": "b", "label": "B", "sub": "S", "semantic": "cyan"}]);
-
-    let accepted = sequence(
-        actors.clone(),
-        json!([
-            {"from": "a", "to": "b", "label": "call"},
-            {"from": "b", "to": "b", "label": "self"},
-            {"from": "b", "to": "a", "label": "back", "kind": "return", "active": true}
-        ]),
-    );
-    assert_eq!(validate_action(&accepted), Ok(accepted.clone()));
-
-    let refused = [
-        (
-            sequence(
-                json!([{"id": "a", "label": "A"}, {"id": "a", "label": "B"}]),
-                json!([]),
-            ),
-            "duplicate diagram actor id: a",
-        ),
-        (
-            sequence(
-                actors.clone(),
-                json!([{"from": "a", "to": "c", "label": "x"}]),
-            ),
-            "diagram message to endpoint \"c\" not found in actors",
-        ),
-        (
-            sequence(actors.clone(), json!([{"from": "a", "to": "b"}])),
-            "diagram message.label must be a string",
-        ),
-        (
-            sequence(
-                actors.clone(),
-                json!([{"from": "a", "to": "b", "label": "x", "kind": "reply"}]),
-            ),
-            "invalid diagram message.kind",
-        ),
-        (
-            sequence(
-                actors.clone(),
-                json!([{"from": "a", "to": "b", "label": "x", "active": "yes"}]),
-            ),
-            "diagram message.active must be boolean",
-        ),
-        (
-            json!({"op": "show", "id": "seq", "type": "diagram", "data": {"mode": "sequence", "actors": actors, "messages": [], "nodes": []}}),
-            "diagram.nodes and diagram.edges belong to mode \"graph\"",
-        ),
-        (
-            json!({"op": "show", "id": "seq", "type": "diagram", "data": {"mode": "graph", "nodes": [{"id": "n", "label": "N"}], "edges": [], "messages": []}}),
-            "diagram.actors and diagram.messages belong to mode \"sequence\"",
-        ),
-        (
-            json!({"op": "show", "id": "seq", "type": "diagram", "data": {"mode": "timeline", "actors": [], "messages": []}}),
-            "diagram.mode must be \"graph\" or \"sequence\"",
-        ),
-    ];
-    for (action, reason) in refused {
-        assert_eq!(validate_action(&action), Err(reason.into()), "{action}");
     }
 }
 
@@ -726,79 +302,6 @@ fn image_signatures_are_sniffed_per_format() {
         b"<svg xmlns=\"http://www.w3.org/2000/svg\">"
     ));
     assert!(!image_signature_matches("png", &[0x89, 0x50]));
-}
-
-#[test]
-fn accepts_a_real_png_and_keeps_its_fields() {
-    let action = json!({"op": "show", "id": "fig", "type": "image", "role": "primary", "data": {
-        "format": "png", "bytes": PNG_1X1, "alt": "One paper pixel",
-        "title": "FIGURE / PIXEL", "subtitle": "TEST", "context": "FIGURE", "caption": "IMAGE / PNG"}});
-    assert_eq!(validate_action(&action), Ok(action));
-    for format in ["jpeg", "webp"] {
-        assert!(
-            validate_action(&image_show("fig", format, 64)).is_ok(),
-            "{format}"
-        );
-    }
-}
-
-#[test]
-fn refuses_images_that_are_not_raster_bytes_of_their_format() {
-    let show = |data: Value| json!({"op": "show", "id": "fig", "type": "image", "data": data});
-    assert_eq!(
-        validate_action(&show(
-            json!({"format": "svg", "bytes": base64_of(b"<svg xmlns='x'></svg>"), "alt": "a"})
-        )),
-        Err("image.format svg is refused: an image is raster bytes, not markup".into())
-    );
-    assert_eq!(
-        validate_action(&show(
-            json!({"format": "gif", "bytes": PNG_1X1, "alt": "a"})
-        )),
-        Err("image.format must be one of png, jpeg, webp".into())
-    );
-    assert_eq!(
-        validate_action(&show(
-            json!({"format": "jpeg", "bytes": PNG_1X1, "alt": "a"})
-        )),
-        Err("image.bytes do not start with the jpeg signature".into())
-    );
-    assert_eq!(
-        validate_action(&show(json!({"format": "png", "bytes": format!("data:image/png;base64,{PNG_1X1}"), "alt": "a"}))),
-        Err("image.bytes must be standard base64: the A-Za-z0-9+/ alphabet, padded with =, no data: prefix".into())
-    );
-    assert_eq!(
-        validate_action(&show(
-            json!({"format": "png", "bytes": "iVBORw0K", "alt": "a"})
-        )),
-        Err("image.bytes are too short to be a png".into())
-    );
-    assert_eq!(
-        validate_action(&show(json!({"format": "png", "bytes": 7, "alt": "a"}))),
-        Err("image.bytes must be a base64 string".into())
-    );
-    assert_eq!(
-        validate_action(&show(json!({"format": "png", "bytes": PNG_1X1}))),
-        Err("image.alt must be a string".into())
-    );
-    assert_eq!(
-        validate_action(&show(
-            json!({"format": "png", "bytes": PNG_1X1, "alt": "  "})
-        )),
-        Err("image.alt must not be empty".into())
-    );
-    assert_eq!(
-        validate_action(&show(
-            json!({"format": "png", "bytes": PNG_1X1, "alt": "a", "width": 64})
-        )),
-        Err("model-controlled layout field is forbidden: width".into())
-    );
-    assert_eq!(
-        validate_action(&show(
-            json!({"format": "png", "bytes": PNG_1X1, "alt": "a", "zoom": 2})
-        )),
-        Err("unknown field in image data: zoom".into())
-    );
 }
 
 #[test]
@@ -926,6 +429,42 @@ fn numbers_parse_to_the_double_javascript_reads() {
         let parsed: Value = serde_json::from_str(text).unwrap();
         assert_eq!(parsed.as_f64(), Some(double), "{text}");
         assert_eq!(json_len(&parsed), javascript.len(), "{text}");
+    }
+}
+
+/// The service's one time parser (docs/display-tool.md, "Time values"). The
+/// shared corpus pins which texts both validators accept; this pins the day
+/// a time falls on and the order of two instants, which the browser's
+/// `timeValues.test.ts` pins for `parseTimeValue` too.
+#[test]
+fn time_values_count_days_from_1970_and_order_instants_by_the_moment() {
+    for (text, day_number) in [
+        ("1970-01-01", 0),
+        ("2000-02-29", 11_016),
+        ("2026-10-05", 20_731),
+        ("2100-03-01", 47_541),
+        ("2199-12-31", 84_005),
+        ("2026-10-05T23:59", 20_731),
+        ("2026-10-05T23:59:59-07:00", 20_731),
+    ] {
+        let time = parse_time_value(text).expect(text);
+        assert_eq!(time.day_number, day_number, "{text}");
+    }
+    let at = |text: &str| parse_time_value(text).expect(text).place;
+    assert_eq!(at("2026-10-05T18:42:00-07:00"), at("2026-10-06T01:42:00Z"));
+    assert_eq!(at("2026-10-05T18:42:00-00:00"), at("2026-10-05T18:42:00Z"));
+    assert!(at("2026-10-06T02:30:00+01:00") < at("2026-10-05T18:42:00-07:00"));
+    assert!(at("2026-10-05T18:42:00.000000001Z") > at("2026-10-05T18:42:00Z"));
+    assert!(at("2026-10-05T09:30") < at("2026-10-05T09:31"));
+    for text in [
+        "2026-02-29",
+        "2026-10-05T24:00",
+        "2026-10-05T09:00:00",
+        "2026-10-05t09:00",
+        "2026-10-05T18:42:00z",
+        "\u{ff12}026-10-05",
+    ] {
+        assert!(parse_time_value(text).is_none(), "{text}");
     }
 }
 

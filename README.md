@@ -95,9 +95,10 @@ keeps tool definitions out of every request, and can combine `speak` and
 ## Showing rather than saying
 
 Some answers are a shape, not a sentence. Project agents push structured
-display actions (`show`, `hide`, `say`, `focus`, `clear`) across nine content
+display actions (`show`, `hide`, `say`, `focus`, `clear`) across fourteen content
 types (`chart`, `metric`, `progress`, `diagram`, `document`, `code`, `table`,
-`note`, `image`)
+`note`, `image`, and the personal-assistant `calendar`, `tasks`, `timer`,
+`weather`, `inbox`)
 to the caller's page mid-turn. They arrive as module calls over the host link,
 just as `speak` does, and reach the page over the browser's existing
 WebSocket; display output does not change routing or speech synthesis.

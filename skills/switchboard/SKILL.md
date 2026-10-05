@@ -30,8 +30,9 @@ Every function prints one line saying what happened and returns a result with
 `status` (`delivered`, `accepted`, `refused` or `failed`), `reason`,
 `delivered`, `accepted` and `ok`. A refusal or a failure never raises. Only a
 wrong argument raises: a bad type, an unknown display type, op, role or view
-target, or a value JSON cannot carry. Values with `tolist()`, such as numpy
-arrays, are sent as lists.
+target, or a value JSON cannot carry (NaN, an infinity, or a string holding
+half of a surrogate pair). Values with `tolist()`, such as numpy arrays, are
+sent as lists.
 
 ## Functions
 
@@ -99,6 +100,70 @@ Types and their `data` shapes (each type takes only its own shape):
   sends it inline; the path is never sent and no URL is ever fetched. `alt`
   says what the picture shows; add `title` for the heading. Prefer a
   structured type when it can say the same thing.
+- calendar: `{view, start, events: [{id, title, start}]}`. `view` is `day`,
+  `week`, `month` or `agenda`; `start` is the day (week: the first column).
+  An event may add `end`, `location`, `detail`, `semantic`, `status`
+  (`confirmed`, `tentative`, `cancelled`) and `active: true`. A date `start`
+  is all day; a time with no `end` is a half-hour block. `days` (week 1-7,
+  agenda 1-31) and `today`/`now` are optional; up to 200 events.
+- tasks: `{items: [{id, text}]}` (1 to 100). A task may add `state` (`todo`,
+  `active`, `done`, `blocked`), `due`, `priority` (`high` or `low`),
+  `group` (a section heading), `detail` and up to 4 `tags`. Give `today`
+  so overdue tasks are marked.
+- timer: `{timers: [{id, label, endsAt}]}` (1 to 8). `endsAt` is an
+  instant; the screen counts down to it and shows it done at zero, with no
+  sound, so tell the caller yourself. Add `startedAt`, or
+  `state: "paused"` with `remaining` (seconds left).
+
+Until the screen has its own views for these five types, it shows each as
+a plain list of the fields you sent: no countdown, grid or marks yet. Send
+them as described; the views read the same fields.
+- weather: `{location, units: "C" or "F", current: {temp, condition}}`,
+  plus `hourly: [{time, temp, condition}]` (up to 48), `daily: [{date, high,
+  low, condition}]` (up to 14) and an `alert`. `condition` is one of
+  `clear`, `partly-cloudy`, `cloudy`, `fog`, `drizzle`, `rain`,
+  `heavy-rain`, `thunder`, `snow`, `sleet`, `hail`, `wind`, `haze`.
+- inbox: `{messages: [{id, from, time}]}` (1 to 50, shown in your order),
+  each with optional `subject`, `snippet`, `channel` (a short label such
+  as `email`, `slack` or `sms`), `unread`, `flagged`. Give `today` so today's messages show their
+  time. One message in full is a `document` with `kind: "email"`.
+
+Times are text in three forms: a date `"2026-10-07"`, a wall time on the
+caller's clock `"2026-10-07T14:30"` (no seconds, no offset), and an
+instant `"2026-10-07T14:30:00-07:00"` (or `...Z`), which only a timer
+takes. Write the caller's local times; the screen draws them as written and
+never converts zones or reads its own clock, so give `today` and `now`
+yourself. A Python `date` or `datetime` is converted for you: a date to a
+date, and a datetime to a wall time on its own clock, so give it in the
+caller's zone (`dt.astimezone(zone)`). A timer's `endsAt` and `startedAt`
+take an aware datetime (`datetime.now(timezone.utc) + timedelta(minutes=9)`)
+and become instants; a naive one raises.
+
+```python
+switchboard.display(op="show", id="week", type="calendar", role="primary", data={
+    "view": "week", "start": "2026-10-05", "today": "2026-10-07", "now": "2026-10-07T09:40",
+    "events": [
+        {"id": "standup", "title": "Standup", "start": "2026-10-07T09:30", "end": "2026-10-07T09:45"},
+        {"id": "dentist", "title": "Dentist", "start": "2026-10-07T10:30", "end": "2026-10-07T11:30",
+         "location": "14 Pine St"},
+        {"id": "birthday", "title": "Mom's birthday", "start": "2026-10-08"},
+    ]})
+switchboard.display(op="show", id="todo", type="tasks", data={"today": "2026-10-07", "items": [
+    {"id": "passport", "text": "Renew passport", "due": "2026-10-02", "priority": "high", "group": "Errands"},
+    {"id": "pr", "text": "Review the PR", "state": "active", "due": "2026-10-07T17:00", "group": "Work"},
+]})
+switchboard.display(op="show", id="kitchen", type="timer", data={"timers": [
+    {"id": "pasta", "label": "Pasta", "endsAt": "2026-10-07T18:42:00-07:00"},
+]})
+switchboard.display(op="show", id="weather", type="weather", data={
+    "location": "San Francisco", "units": "F",
+    "current": {"temp": 61, "condition": "fog", "summary": "Fog burning off by noon"},
+    "daily": [{"date": "2026-10-08", "high": 61, "low": 55, "condition": "rain", "precip": 80}]})
+switchboard.display(op="show", id="inbox", type="inbox", data={"today": "2026-10-07", "messages": [
+    {"id": "dentist", "from": "Dr. Okafor's office", "subject": "Appointment today",
+     "time": "2026-10-07T08:12", "channel": "sms", "unread": True, "flagged": True},
+]})
+```
 
 Every `data` shape also takes an optional `caption`, a short supporting label.
 Compose a scene with roles: `primary`, `compare`, `secondary`, `ambient`.
@@ -109,8 +174,9 @@ is drawn too: a chart beside a chart primary sits next to it, and any other
 visual goes in a row under the primary (compare first, then secondary, then
 ambient), such as a diagram with the table it summarises, or a chart with
 the image it came from. Metrics, notes and progress keep their own places,
-mostly the side rail. A note can carry `anchor: {target, x?, series?, node?}` to attach it to
-another object. The
+mostly the side rail. A note can carry `anchor: {target, x?, series?, node?, item?}` to attach it to
+another object; `item` names one thing inside it, such as a calendar event or
+a task by its `id`, or a forecast hour by its `time`. The
 live transcript belongs to the system; use a note for lasting on-screen
 annotations and `speak` for words.
 

@@ -122,9 +122,17 @@ export function clipDetail(value: unknown): unknown {
 	}
 	const bytes = Buffer.byteLength(json, "utf8");
 	if (bytes <= TOOL_DETAIL_LIMIT) return value;
-	// Cut on a character, not a byte, so the preview stays valid text.
-	let preview = json.slice(0, TOOL_DETAIL_LIMIT);
-	while (Buffer.byteLength(preview, "utf8") > TOOL_DETAIL_LIMIT) preview = preview.slice(0, -1);
+	// Cut between whole characters, never inside a surrogate pair: the
+	// service cannot read a frame with half a pair in it, and drops the whole
+	// event. (JSON.stringify already wrote any lone surrogate in the value as
+	// a `\uXXXX` escape, so the JSON itself holds none.)
+	let preview = "";
+	let kept = 0;
+	for (const character of json) {
+		kept += Buffer.byteLength(character, "utf8");
+		if (kept > TOOL_DETAIL_LIMIT) break;
+		preview += character;
+	}
 	return { clipped: true, bytes, preview };
 }
 

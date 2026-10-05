@@ -2,6 +2,7 @@
 
 import base64
 import contextlib
+import datetime
 import io
 import json
 import os
@@ -248,6 +249,18 @@ class CallsTest(ModuleTestCase):
         self.assertEqual(line, "switchboard.view: Showing a diff titled 'Code changes' on the caller's screen.")
         self.assertEqual(result.data, {"screen": screen})
 
+    def test_view_names_every_kind_as_a_noun(self):
+        screen = {"has_visual": True, "confirmed": True}
+        self.host(reply=lambda request: {"status": "delivered", "reason": None, "result": {"screen": screen}})
+        for kind, words in [
+            ("image", "an image"), ("inbox", "an inbox"), ("tasks", "a to-do list"),
+            ("weather", "a forecast"), ("calendar", "a calendar"), ("timer", "a timer"),
+        ]:
+            with self.subTest(kind=kind):
+                screen["visual_kind"] = kind
+                _, line = self.run_call(switchboard.view)
+                self.assertEqual(line, f"switchboard.view: Showing {words} on the caller's screen.")
+
     def test_display_describes_held_and_shown_results(self):
         mode = {"held": True}
         self.host(
@@ -299,6 +312,57 @@ class CallsTest(ModuleTestCase):
         self.run_call(switchboard.display, op="show", id="c", type="chart", data=data)
         self.assertEqual(host.calls()[-1]["args"]["action"]["data"]["series"][0]["values"], [1, 2, 3])
 
+    def test_dates_and_datetimes_are_sent_as_the_time_forms(self):
+        # docs/display-tool.md, "Time values": a date; a wall time on the
+        # datetime's own clock, to the minute; and for a timer's endsAt and
+        # startedAt only, an instant with its offset.
+        host = self.host()
+        pacific = datetime.timezone(datetime.timedelta(hours=-7))
+        week = {
+            "view": "week",
+            "start": datetime.date(2026, 10, 5),
+            "now": datetime.datetime(2026, 10, 7, 9, 40, 27),
+            "events": [
+                {"id": "dentist", "title": "Dentist", "start": datetime.datetime(2026, 10, 7, 10, 30)},
+                # A calendar API's aware datetime is drawn on its own clock.
+                {"id": "standup", "title": "Standup", "start": datetime.datetime(2026, 10, 7, 9, 30, tzinfo=pacific)},
+            ],
+        }
+        timers = {"timers": [
+            {"id": "pasta", "label": "Pasta", "endsAt": datetime.datetime(2026, 10, 5, 18, 42, tzinfo=pacific),
+             "startedAt": datetime.datetime(2026, 10, 5, 18, 33, tzinfo=pacific)},
+            {"id": "tea", "label": "Tea", "endsAt": datetime.datetime(2026, 10, 6, 1, 15, 0, 250000, tzinfo=datetime.timezone.utc)},
+            # No instant has an offset with seconds: it is written in UTC.
+            {"id": "odd", "label": "Odd zone", "endsAt": datetime.datetime(
+                2026, 10, 6, 1, 15, tzinfo=datetime.timezone(datetime.timedelta(hours=5, seconds=30)))},
+        ]}
+        self.run_call(switchboard.display, op="show", id="week", type="calendar", data=week)
+        self.run_call(switchboard.display, op="show", id="kitchen", type="timer", data=timers)
+        sent = [call["args"]["action"]["data"] for call in host.calls()]
+        self.assertEqual(sent[0], {
+            "view": "week", "start": "2026-10-05", "now": "2026-10-07T09:40",
+            "events": [
+                {"id": "dentist", "title": "Dentist", "start": "2026-10-07T10:30"},
+                {"id": "standup", "title": "Standup", "start": "2026-10-07T09:30"},
+            ],
+        })
+        self.assertEqual(
+            [(timer.get("startedAt"), timer["endsAt"]) for timer in sent[1]["timers"]],
+            [
+                ("2026-10-05T18:33:00-07:00", "2026-10-05T18:42:00-07:00"),
+                (None, "2026-10-06T01:15:00.250000+00:00"),
+                (None, "2026-10-05T20:14:30+00:00"),
+            ],
+        )
+
+    def test_a_naive_datetime_is_no_instant(self):
+        host = self.host()
+        timers = {"timers": [{"id": "pasta", "label": "Pasta", "endsAt": datetime.datetime(2026, 10, 5, 18, 42)}]}
+        with self.assertRaises(ValueError) as caught, contextlib.redirect_stdout(io.StringIO()):
+            switchboard.display(op="show", id="kitchen", type="timer", data=timers)
+        self.assertIn("endsAt is an instant: give an aware datetime", str(caught.exception))
+        self.assertEqual(host.connections, 0)
+
 
 class ProgrammingErrorTest(ModuleTestCase):
     def test_programming_errors_raise_before_anything_is_sent(self):
@@ -330,11 +394,40 @@ class ProgrammingErrorTest(ModuleTestCase):
                     fn(*args, **kwargs)
         self.assertEqual(host.connections, 0)
 
+    def test_values_json_cannot_carry_raise_before_anything_is_sent(self):
+        # A NaN used to go out as `NaN` and come back as a bad request; half a
+        # surrogate pair went out as an escape the service cannot read.
+        host = self.host()
+        chart = lambda value: {"op": "show", "id": "c", "type": "chart", "data": {"series": [{"name": "s", "values": [1, value]}]}}  # noqa: E731
+        cases = [
+            (switchboard.display, chart(float("nan")), "Out of range float values are not JSON compliant"),
+            (switchboard.display, chart(float("inf")), "Out of range float values are not JSON compliant"),
+            (switchboard.display, {"op": "say", "text": "cut \ud83d"}, "a string holds '\\ud83d', half of a UTF-16 surrogate pair"),
+            (switchboard.speak, "\ude00 alone", "a string holds '\\ude00', half of a UTF-16 surrogate pair"),
+        ]
+        for fn, value, message in cases:
+            with self.subTest(call=fn.__name__, value=repr(value)):
+                with self.assertRaises(ValueError) as caught, contextlib.redirect_stdout(io.StringIO()):
+                    fn(value)
+                self.assertTrue(str(caught.exception).startswith("cannot be sent to the switchboard: "), caught.exception)
+                self.assertIn(message, str(caught.exception))
+        self.assertEqual(host.connections, 0)
+        # Whole characters go out as they are, and so does a pair held as two
+        # code points, which is one character.
+        result, _ = self.run_call(switchboard.speak, "Ship it \U0001F680")
+        self.assertTrue(result.delivered)
+        self.assertEqual(host.calls()[-1]["args"], {"text": "Ship it \U0001F680"})
+        result, _ = self.run_call(switchboard.speak, "Ship it \ud83d\ude80")
+        self.assertTrue(result.delivered)
+        self.assertEqual(host.calls()[-1]["args"], {"text": "Ship it \U0001F680"})
+
     def test_unknown_display_type_names_the_shapes(self):
         with self.assertRaises(ValueError) as caught:
             switchboard.display(op="show", id="x", type="gauge", data={})
         self.assertIn("chart: {series:[{name, values:[n]}]}", str(caught.exception))
         self.assertIn("table: {columns:[{label}], rows:[[cell]]}", str(caught.exception))
+        self.assertIn('calendar: {view:"day"|"week"|"month"|"agenda", start:"YYYY-MM-DD"', str(caught.exception))
+        self.assertIn('timer: {timers:[{id, label, endsAt:"YYYY-MM-DDTHH:MM:SS-07:00"}]}', str(caught.exception))
 
     def test_a_diagram_outline_is_judged_by_its_mode(self):
         host = self.host()
@@ -565,6 +658,9 @@ class DisplayCorpusTests(unittest.TestCase):
         "table_columns_missing", "table_rows_missing", "image_format_svg_before_bytes",
         "image_format_missing", "image_bytes_missing", "image_alt_missing", "note_segments_missing",
         "data___proto___is_a_key", "null_diagram_mode",
+        "calendar_view_missing", "calendar_start_missing", "calendar_events_missing", "tasks_items_missing",
+        "timer_timers_missing", "weather_location_missing", "weather_units_missing", "weather_current_missing",
+        "inbox_messages_missing",
     )
 
     @classmethod

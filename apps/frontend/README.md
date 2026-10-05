@@ -64,7 +64,11 @@ plan as a module in the rail between the metric trends and the note) and
 `composed` (a diagram primary with a table and a figure in the aux row under
 it, a note and two metrics in the rail: the visuals an agent can compose
 beside a visual primary). Reach them with `/?scene=figure`, `/?scene=plan`
-and `/?scene=composed`, or by swiping past `comparison`.
+and `/?scene=composed`, or by swiping past `comparison`. The personal-assistant
+fixtures follow the hard diagrams: `calendar` (Kayne's week, with a note on the
+dentist appointment), `tasks`, `timer` (its instants set when the page loads,
+so it counts down), `weather`, `inbox`, and `today` (the day's agenda with the
+forecast, the to-do list and the inbox beside it).
 
 Direct fixture URLs are also supported:
 

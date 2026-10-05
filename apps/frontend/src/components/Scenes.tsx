@@ -32,6 +32,7 @@ import { ObjectMotion } from '../primitives/ObjectMotion';
 import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
 import { SceneFooter } from '../primitives/SceneFooter';
 import { TablePrimitive } from '../primitives/TablePrimitive';
+import { TemporaryAssistantList, temporaryAssistantFrame, type TemporaryAssistantType } from '../primitives/TemporaryAssistantList';
 import { FocusableSurface } from '../primitives/FocusableSurface';
 import { TechFrame } from '../primitives/TechFrame';
 import { ToolActivity } from '../primitives/ToolActivity';
@@ -286,6 +287,17 @@ function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux') {
       return <ProgressPrimitive data={(object as SceneObject<ProgressData>).data} variant={slot === 'aux' ? 'compact' : 'full'} />;
     case 'note':
       return <AnnotationCard data={(object as SceneObject<NoteData>).data} />;
+    // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
+    case 'calendar':
+      return <TemporaryAssistantList type="calendar" data={object.data} />;
+    case 'tasks':
+      return <TemporaryAssistantList type="tasks" data={object.data} />;
+    case 'timer':
+      return <TemporaryAssistantList type="timer" data={object.data} />;
+    case 'weather':
+      return <TemporaryAssistantList type="weather" data={object.data} />;
+    case 'inbox':
+      return <TemporaryAssistantList type="inbox" data={object.data} />;
     default:
       return null;
   }
@@ -565,6 +577,22 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         footer: 'DISPLAY / FIGURE',
         caption: sceneCaption(primary, `FIGURE / ${data.format.toUpperCase()}`),
         main: slot('image-object', <ImagePrimitive data={data} />, <TechFrame variant="panel" />),
+      };
+    }
+    // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
+    case 'calendar':
+    case 'tasks':
+    case 'timer':
+    case 'weather':
+    case 'inbox': {
+      const type = primary.type as TemporaryAssistantType;
+      const kind = type.toUpperCase();
+      return {
+        ...rail,
+        ...temporaryAssistantFrame(type, primary.data),
+        footer: `DISPLAY / ${kind}`,
+        caption: sceneCaption(primary, `${kind} / FIELDS AS SENT`),
+        main: slot('temporary-assistant-object', <TemporaryAssistantList type={type} data={primary.data} />, <TechFrame variant="panel" />),
       };
     }
     default:

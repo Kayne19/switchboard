@@ -24,8 +24,12 @@ export const MODULE_CALLS: readonly string[] = ["speak", "request_to_speak", "di
  * args in a module_call frame of its own, and the host link refuses frames
  * over 16 MiB (MAX_HOST_FRAME_BYTES in hosts.rs) by dropping the whole link,
  * so the cap stays well under that: a line this accepts always fits a frame.
+ * A longer line is answered `refused`, `too_large`, and ends the connection.
  */
 export const MAX_LINE_BYTES = 13 * 1024 * 1024;
+
+/** The answer to a request line longer than MAX_LINE_BYTES. */
+const TOO_LARGE = { status: "refused", reason: "too_large" } as const;
 
 export interface SkillSocketOptions {
 	socketPath: string;
@@ -85,9 +89,17 @@ export class SkillSocket {
 		const lines = createInterface({ input: conn, crlfDelay: Number.POSITIVE_INFINITY });
 		// Requests on one connection are answered in order.
 		let queue = Promise.resolve();
+		let ending = false;
 		lines.on("line", (line) => {
+			if (ending) return;
 			if (Buffer.byteLength(line) > MAX_LINE_BYTES) {
-				conn.destroy();
+				// Refused in its turn, and the connection ends after the answer.
+				// It used to close without one, and the module could only
+				// report that the host agent hung up.
+				ending = true;
+				queue = queue.then(() => {
+					if (!conn.destroyed) conn.end(`${JSON.stringify(TOO_LARGE)}\n`, () => conn.destroy());
+				});
 				return;
 			}
 			// A handler failure answers that one request and leaves the

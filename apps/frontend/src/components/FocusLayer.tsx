@@ -21,6 +21,7 @@ import { ImagePrimitive } from '../primitives/ImagePrimitive';
 import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
 import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
 import { TablePrimitive } from '../primitives/TablePrimitive';
+import { TemporaryAssistantList } from '../primitives/TemporaryAssistantList';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
 function FocusedObject({ object }: { object: SceneObject }) {
@@ -43,6 +44,13 @@ function FocusedObject({ object }: { object: SceneObject }) {
       return <MetricsPrimitive metrics={[object as SceneObject<MetricData>]} />;
     case 'progress':
       return <ProgressPrimitive data={object.data as ProgressData} />;
+    // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
+    case 'calendar':
+    case 'tasks':
+    case 'timer':
+    case 'weather':
+    case 'inbox':
+      return <TemporaryAssistantList type={object.type} data={object.data} />;
     default:
       return null;
   }

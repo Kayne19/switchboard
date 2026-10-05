@@ -1,4 +1,17 @@
-import type { ControllerAction, DiagramData, DiagramNode, FixtureName, Semantic, SequenceDiagramData } from '../controller/types';
+import type {
+  CalendarData,
+  ControllerAction,
+  DiagramData,
+  DiagramNode,
+  FixtureName,
+  InboxData,
+  Semantic,
+  SequenceDiagramData,
+  TasksData,
+  TimerData,
+  WeatherCondition,
+  WeatherData,
+} from '../controller/types';
 
 const trainingSeries = {
   xLabel: 'EPOCH',
@@ -233,6 +246,139 @@ export const traceDiagram: SequenceDiagramData = {
     { from: 'host', to: 'agent', label: 'On screen.', kind: 'return' },
     { from: 'agent', to: 'host', label: 'turn settled', kind: 'return' },
   ],
+};
+
+// ---- Personal-assistant scenes ------------------------------------------------
+//
+// Kayne's week of 2026-10-05, the way an assistant agent on a call would
+// show it: the calendar with standups, a dentist appointment, overlapping
+// meetings, all-day days and an overnight flight; the to-do list with
+// groups, overdue and done items; the kitchen timers and a reminder; the
+// forecast; the inbox. "Today" and "now" are data (Wednesday 2026-10-07,
+// 09:40), so these scenes draw the same on any day. A timer is the one
+// thing measured against the page clock, so its instants are set from the
+// moment this module loads: a preview counts down, and a test that pins
+// the page clock pins them too.
+
+const ASSISTANT_TODAY = '2026-10-07';
+const ASSISTANT_NOW = '2026-10-07T09:40';
+
+export const assistantWeek: CalendarData = {
+  title: 'WEEK / OCT 5-11', subtitle: 'KAYNE / WORK + HOME', context: 'CALENDAR', caption: 'PACIFIC TIME',
+  view: 'week', start: '2026-10-05', days: 7, today: ASSISTANT_TODAY, now: ASSISTANT_NOW,
+  events: [
+    { id: 'standup-mon', title: 'Standup', start: '2026-10-05T09:30', end: '2026-10-05T09:45', location: 'Meet' },
+    { id: 'review-mon', title: 'Switchboard review', start: '2026-10-05T11:00', end: '2026-10-05T12:00', semantic: 'orange' },
+    { id: 'gym-mon', title: 'Gym', start: '2026-10-05T18:00', end: '2026-10-05T19:00' },
+    { id: 'standup-tue', title: 'Standup', start: '2026-10-06T09:30', end: '2026-10-06T09:45', location: 'Meet' },
+    { id: 'lunch-ana', title: 'Lunch with Ana', start: '2026-10-06T12:30', end: '2026-10-06T13:30', location: 'Tartine, Guerrero St' },
+    { id: 'homelab', title: 'Homelab maintenance window', start: '2026-10-06T20:00', end: '2026-10-06T22:00', status: 'tentative' },
+    { id: 'ana-in-town', title: 'Ana in town', start: '2026-10-07', end: '2026-10-08', semantic: 'green' },
+    { id: 'standup-wed', title: 'Standup', start: '2026-10-07T09:30', end: '2026-10-07T09:45', location: 'Meet', active: true },
+    { id: 'dentist', title: 'Dentist', start: '2026-10-07T10:30', end: '2026-10-07T11:30', location: 'Dr. Okafor, 14 Pine St', detail: 'Cleaning and a check on the lower left molar', semantic: 'amber' },
+    { id: 'design-review', title: 'Design review: visual palette', start: '2026-10-07T13:00', end: '2026-10-07T14:00' },
+    { id: 'one-on-one', title: '1:1 with Priya', start: '2026-10-07T13:30', end: '2026-10-07T14:00', detail: 'Overlaps the design review; Priya can move it' },
+    { id: 'dry-cleaning', title: 'Pick up dry cleaning', start: '2026-10-07T17:30' },
+    { id: 'mom-birthday', title: "Mom's birthday", start: '2026-10-08', semantic: 'green' },
+    { id: 'standup-thu', title: 'Standup', start: '2026-10-08T09:30', end: '2026-10-08T09:45', location: 'Meet' },
+    { id: 'planning', title: 'Q4 planning', start: '2026-10-08T14:00', end: '2026-10-08T15:30', location: 'Room 4B' },
+    { id: 'gym-thu', title: 'Gym', start: '2026-10-08T18:00', end: '2026-10-08T19:00', status: 'cancelled' },
+    { id: 'standup-fri', title: 'Standup', start: '2026-10-09T09:30', end: '2026-10-09T09:45', location: 'Meet' },
+    { id: 'flight', title: 'Flight UA 1532 SFO to JFK', start: '2026-10-09T18:05', end: '2026-10-10T02:40', location: 'SFO Terminal 3, gate F12', detail: 'Lands 05:40 New York time. Seat 14C.', semantic: 'cyan' },
+    { id: 'brooklyn', title: 'Brooklyn weekend', start: '2026-10-10', end: '2026-10-11', status: 'confirmed' },
+    { id: 'wedding', title: "Sam and Lee's wedding", start: '2026-10-10T16:00', end: '2026-10-10T23:00', location: 'Brooklyn Botanic Garden' },
+  ],
+};
+
+// Today, as an agenda: what the composed `today` scene leads with.
+export const assistantAgenda: CalendarData = {
+  title: 'TODAY / WED OCT 7', subtitle: 'AGENDA', context: 'CALENDAR', caption: 'PACIFIC TIME',
+  view: 'agenda', start: ASSISTANT_TODAY, days: 1, today: ASSISTANT_TODAY, now: ASSISTANT_NOW,
+  events: assistantWeek.events.filter((event) => event.start.startsWith(ASSISTANT_TODAY)),
+};
+
+export const assistantTasks: TasksData = {
+  title: 'TO DO / THIS WEEK', subtitle: '9 OPEN / 3 DONE', context: 'TASKS', caption: 'TODOIST / PERSONAL + WORK',
+  today: ASSISTANT_TODAY,
+  items: [
+    { id: 'pr', text: 'Review the switchboard PR', state: 'active', due: '2026-10-07T17:00', priority: 'high', group: 'Work', tags: ['switchboard', 'review'] },
+    { id: 'report', text: 'Write the round 4 report', due: '2026-10-08', group: 'Work' },
+    { id: 'offsite', text: 'Reply to Priya about the offsite', state: 'done', group: 'Work' },
+    { id: 'passport', text: 'Renew passport', due: '2026-10-02', priority: 'high', group: 'Errands', detail: 'Photos are in the desk drawer', tags: ['travel'] },
+    { id: 'dry-cleaning', text: 'Pick up dry cleaning', due: '2026-10-07T17:30', group: 'Errands' },
+    { id: 'gift', text: 'Buy a gift for Mom', state: 'done', due: '2026-10-06', group: 'Errands' },
+    { id: 'pge', text: 'Pay the PG&E bill', due: '2026-10-05', priority: 'high', group: 'Home', tags: ['bills'] },
+    { id: 'smoke', text: 'Replace the smoke detector battery', priority: 'low', group: 'Home' },
+    { id: 'plumber', text: 'Book the plumber', state: 'blocked', group: 'Home', detail: "Waiting on the landlord's OK" },
+    { id: 'pack', text: 'Pack for New York', due: '2026-10-09', group: 'Trip', tags: ['travel'] },
+    { id: 'check-in', text: 'Check in for UA 1532', due: '2026-10-08T18:05', group: 'Trip', tags: ['travel'] },
+    { id: 'card', text: 'Print the wedding card', state: 'done', group: 'Trip' },
+  ],
+};
+
+const FIXTURE_LOADED_AT = Math.floor(Date.now() / 1000) * 1000;
+
+/** An instant `minutes` from when this module loaded, in the form a timer takes. */
+function minutesFromLoad(minutes: number): string {
+  return new Date(FIXTURE_LOADED_AT + minutes * 60_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+export const assistantTimers: TimerData = {
+  title: 'KITCHEN / TIMERS', subtitle: '2 RUNNING / 1 PAUSED', context: 'TIMERS', caption: 'SET BY VOICE',
+  timers: [
+    { id: 'pasta', label: 'Pasta', startedAt: minutesFromLoad(-1.5), endsAt: minutesFromLoad(7.5) },
+    { id: 'bread', label: 'Bread in the oven', startedAt: minutesFromLoad(-24), endsAt: minutesFromLoad(21), state: 'paused', remaining: 1260 },
+    { id: 'leave', label: 'Leave for the dentist', endsAt: minutesFromLoad(50) },
+  ],
+};
+
+const FORECAST_HOURS: Array<[number, WeatherCondition, number]> = [
+  [61, 'fog', 10], [62, 'fog', 10], [64, 'partly-cloudy', 5], [66, 'partly-cloudy', 0], [67, 'clear', 0], [68, 'clear', 0],
+  [68, 'clear', 0], [67, 'clear', 0], [65, 'partly-cloudy', 0], [63, 'partly-cloudy', 5], [61, 'cloudy', 10], [60, 'cloudy', 15],
+  [59, 'cloudy', 20], [58, 'drizzle', 35], [57, 'drizzle', 40], [57, 'rain', 55], [56, 'rain', 60], [56, 'rain', 65],
+  [55, 'rain', 70], [55, 'heavy-rain', 80], [55, 'heavy-rain', 85], [55, 'rain', 75], [56, 'rain', 60], [56, 'drizzle', 45],
+];
+
+export const assistantWeather: WeatherData = {
+  title: 'WEATHER / SAN FRANCISCO', subtitle: 'NOW + 24 H + 5 DAYS', context: 'FORECAST', caption: 'NWS / ISSUED 09:30',
+  location: 'San Francisco, CA', units: 'F',
+  current: { temp: 61, condition: 'fog', summary: 'Fog burning off by noon; rain moves in overnight', high: 68, low: 54, feelsLike: 59, humidity: 84, precip: 10, wind: 'W 12 mph' },
+  hourly: FORECAST_HOURS.map(([temp, condition, precip], hour) => ({
+    time: `2026-10-${String(7 + Math.floor((10 + hour) / 24)).padStart(2, '0')}T${String((10 + hour) % 24).padStart(2, '0')}:00`,
+    temp, condition, precip,
+  })),
+  daily: [
+    { date: '2026-10-07', high: 68, low: 54, condition: 'partly-cloudy', precip: 20 },
+    { date: '2026-10-08', high: 61, low: 55, condition: 'rain', precip: 80 },
+    { date: '2026-10-09', high: 63, low: 53, condition: 'cloudy', precip: 30 },
+    { date: '2026-10-10', high: 66, low: 52, condition: 'clear', precip: 0 },
+    { date: '2026-10-11', high: 64, low: 53, condition: 'wind', precip: 5 },
+  ],
+  alert: 'Small craft advisory on the bay until 21:00',
+};
+
+export const assistantInbox: InboxData = {
+  title: 'INBOX / UNREAD FIRST', subtitle: '5 UNREAD / 3 FLAGGED', context: 'MAIL + CHAT', caption: 'GMAIL / SLACK / SMS',
+  today: ASSISTANT_TODAY,
+  messages: [
+    { id: 'dentist', from: "Dr. Okafor's office", subject: 'Appointment today', snippet: 'Reminder: today at 10:30. Reply C to confirm or call to reschedule.', time: '2026-10-07T08:12', channel: 'sms', unread: true, flagged: true, semantic: 'amber' },
+    { id: 'united', from: 'United Airlines', subject: 'Check-in for UA 1532 opens tomorrow', snippet: 'SFO to JFK, Friday Oct 9, 18:05. Seat 14C.', time: '2026-10-07T07:55', channel: 'email', unread: true },
+    { id: 'ci', from: 'GitHub', subject: '[switchboard] CI failed on visual-palette', snippet: 'test (ubuntu-latest) failed in 4m 12s', time: '2026-10-07T07:41', channel: 'email', unread: true, semantic: 'red' },
+    { id: 'priya', from: 'Priya', snippet: 'offsite agenda draft is in the doc, can you look before Thursday?', time: '2026-10-06T21:14', channel: 'slack', unread: true },
+    { id: 'mom', from: 'Mom', snippet: 'Are you still coming for dinner Thursday?', time: '2026-10-06T19:02', channel: 'sms', flagged: true },
+    { id: 'pge', from: 'PG&E', subject: 'Your bill is past due', snippet: 'Pay $84.12 by Oct 12 to avoid a late fee.', time: '2026-10-05T06:00', channel: 'email', unread: true, flagged: true },
+    { id: 'ana', from: 'Ana', snippet: 'lunch was great, same time next week?', time: '2026-10-06T14:20', channel: 'slack' },
+    { id: 'wedding', from: 'Sam and Lee', subject: 'Wedding weekend: shuttle times', snippet: 'Shuttles leave the hotel at 15:15 and 15:45.', time: '2026-10-04', channel: 'email' },
+  ],
+};
+
+// A note on the dentist event, by its id: the item the page marks.
+const dentistNote: ControllerAction = {
+  op: 'show', id: 'dentist-note', type: 'note', data: { tag: 'DAMOCLES / LEAVE BY 10:05', anchor: { target: 'week', item: 'dentist' }, segments: [
+    { text: 'Traffic on 101 is slow this morning. ' },
+    { text: 'Leave right after standup', accent: true, bold: true },
+    { text: ' to make the 10:30 at Dr. Okafor.' },
+  ] },
 };
 
 export const fixtures: Record<FixtureName, ControllerAction[]> = {
@@ -525,6 +671,26 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
       { text: 'waits for the page to confirm', accent: true, bold: true },
       { text: ' what it drew before the agent hears "On screen."' },
     ] } },
+  ],
+  // The personal-assistant types, one scene each (docs/display-tool.md,
+  // "Personal-assistant types"), then the day they compose.
+  calendar: [
+    { op: 'show', id: 'week', type: 'calendar', role: 'primary', data: assistantWeek },
+    dentistNote,
+  ],
+  tasks: [{ op: 'show', id: 'todo', type: 'tasks', role: 'primary', data: assistantTasks }],
+  timer: [{ op: 'show', id: 'kitchen', type: 'timer', role: 'primary', data: assistantTimers }],
+  weather: [{ op: 'show', id: 'weather', type: 'weather', role: 'primary', data: assistantWeather }],
+  inbox: [{ op: 'show', id: 'inbox', type: 'inbox', role: 'primary', data: assistantInbox }],
+  // The morning briefing: today's agenda leads, and the forecast, the
+  // to-do list and the inbox stand beside it; the note names the dentist
+  // appointment in the agenda.
+  today: [
+    { op: 'show', id: 'week', type: 'calendar', role: 'primary', data: assistantAgenda },
+    { op: 'show', id: 'weather', type: 'weather', role: 'secondary', data: assistantWeather },
+    { op: 'show', id: 'todo', type: 'tasks', role: 'secondary', data: assistantTasks },
+    { op: 'show', id: 'inbox', type: 'inbox', role: 'secondary', data: assistantInbox },
+    dentistNote,
   ],
 };
 

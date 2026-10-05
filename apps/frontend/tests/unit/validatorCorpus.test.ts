@@ -14,6 +14,7 @@ import { corpusCases, expandCorpusValue as expand } from '../fixtures/validatorC
 const OPS: Record<DisplayAction['op'], true> = { show: true, hide: true, focus: true, say: true, clear: true };
 const TYPES: Record<AgentObjectType, true> = {
   chart: true, metric: true, progress: true, diagram: true, document: true, code: true, table: true, note: true, image: true,
+  calendar: true, tasks: true, timer: true, weather: true, inbox: true,
 };
 
 describe('the shared validator corpus', () => {
