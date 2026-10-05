@@ -29,9 +29,16 @@ const samples = {
   metric: { type: 'metric', testId: 'metrics', data: { label: 'P95', value: '182 ms' } },
   progress: { type: 'progress', testId: 'progress', data: { label: 'DEPLOY', value: 40 } },
   note: { type: 'note', testId: null, data: { segments: [{ text: 'A note.' }] } },
+  calendar: { type: 'calendar', testId: 'calendar', data: { view: 'day', start: '2026-10-05', events: [{ id: 'standup', title: 'Standup', start: '2026-10-05T09:30' }] } },
+  tasks: { type: 'tasks', testId: 'tasks', data: { items: [{ id: 'passport', text: 'Renew passport' }] } },
+  timer: { type: 'timer', testId: 'timer', data: { timers: [{ id: 'pasta', label: 'Pasta', endsAt: '2026-10-05T18:42:00-07:00' }] } },
+  weather: { type: 'weather', testId: 'weather', data: { location: 'San Francisco', units: 'F', current: { temp: 61, condition: 'fog' } } },
+  inbox: { type: 'inbox', testId: 'inbox', data: { messages: [{ id: 'm1', from: 'Ana', time: '2026-10-05T08:12' }] } },
 } as const;
 type Sample = keyof typeof samples;
-const visuals = ['chart', 'graph', 'sequence', 'document', 'code', 'table', 'image'] as const satisfies readonly Sample[];
+const visuals = [
+  'chart', 'graph', 'sequence', 'document', 'code', 'table', 'image', 'calendar', 'tasks', 'timer', 'weather', 'inbox',
+] as const satisfies readonly Sample[];
 const primaries: Sample[] = [...visuals, 'metric', 'progress', 'note'];
 
 function show(id: string, sample: Sample, role?: SceneObjectRole): ControllerAction {
