@@ -1,10 +1,10 @@
-import { AnimatePresence, LayoutGroup } from "motion/react";
+import { AnimatePresence, LayoutGroup, MotionConfig } from "motion/react";
 import { anchoredItem } from "../app/noteItems";
 import { buildCompositionModel, sceneKind } from "../app/sceneModel";
 import type { ControllerState } from "../controller/types";
 import { useController } from "../controller/context";
 import { DamoclesPresence } from "../primitives/DamoclesPresence";
-import { FocusLayer } from "./FocusLayer";
+import { FocusLayer, focusNote } from "./FocusLayer";
 import { SurfaceBoundary } from "./SurfaceBoundary";
 import { TranscriptDrawer } from "./TranscriptDrawer";
 import { SceneShell } from "./Scenes";
@@ -57,6 +57,7 @@ function SceneContent({
         <FocusLayer
           object={focusedObject}
           marked={focusedObject ? anchoredItem(state, focusedObject.id) : undefined}
+          note={focusNote(state, focusedObject)}
           onClose={() => dispatch({ op: "focus", id: null })}
         />
       </main>
@@ -93,25 +94,34 @@ export function SceneRenderer() {
       ? voiceRuntime.toggleTurn()
       : dispatch({ op: "listen", on: !state.listening });
 
+  // Under prefers-reduced-motion, motion's transform and layout animations
+  // are skipped: the presence no longer slides in from the centre and an
+  // object no longer moves to its new slot, they are drawn where they end.
+  // Opacity still fades. Without it every layout animation ignored the
+  // setting (DESIGN_SYSTEM.md, "Respect prefers-reduced-motion"), and the
+  // visual goldens, taken under reduced motion, were compared with a frame
+  // from the middle of the move or with the settled page, by chance.
   return (
-    <SurfaceBoundary
-      surfaceId="display"
-      resetKey={state.objects}
-      fallback={
-        <UnavailableStage
+    <MotionConfig reducedMotion="user">
+      <SurfaceBoundary
+        surfaceId="display"
+        resetKey={state.objects}
+        fallback={
+          <UnavailableStage
+            state={state}
+            onToggleListening={onToggleListening}
+          />
+        }
+      >
+        <SceneContent
           state={state}
+          dispatch={dispatch}
+          transcriptOpen={transcriptOpen}
+          setTranscriptOpen={setTranscriptOpen}
+          voiceRuntime={voiceRuntime}
           onToggleListening={onToggleListening}
         />
-      }
-    >
-      <SceneContent
-        state={state}
-        dispatch={dispatch}
-        transcriptOpen={transcriptOpen}
-        setTranscriptOpen={setTranscriptOpen}
-        voiceRuntime={voiceRuntime}
-        onToggleListening={onToggleListening}
-      />
-    </SurfaceBoundary>
+      </SurfaceBoundary>
+    </MotionConfig>
   );
 }

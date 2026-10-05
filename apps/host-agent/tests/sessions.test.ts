@@ -232,6 +232,27 @@ test("clipDetail cuts multi-byte text on a character boundary", () => {
 	assert.equal(clipDetail(undefined), undefined);
 });
 
+// The service cannot read a frame with half a surrogate pair in it, and
+// drops the whole tool event. A cut at the byte limit used to land inside an
+// emoji for about half of all offsets.
+test("clipDetail never leaves half a surrogate pair in the preview", () => {
+	const isWellFormed = (text: string) => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text);
+	for (const pad of ["", "a", "é", "€", "a€"]) {
+		for (let n = 0; n < 8; n++) {
+			const clipped = clipDetail({ text: pad.repeat(n) + "😀".repeat(1200) }) as { preview: string };
+			assert.ok(isWellFormed(clipped.preview), `${JSON.stringify(pad)} x ${n}`);
+			assert.ok(Buffer.byteLength(clipped.preview, "utf8") <= TOOL_DETAIL_LIMIT);
+			// Whole characters up to the limit: no more than one emoji short of it.
+			assert.ok(Buffer.byteLength(clipped.preview, "utf8") > TOOL_DETAIL_LIMIT - 4);
+		}
+	}
+	// A lone surrogate the value already held reaches the preview as the
+	// escape JSON.stringify wrote for it.
+	const lone = clipDetail({ text: `${"x".repeat(10)}\ud83d${"y".repeat(TOOL_DETAIL_LIMIT)}` }) as { preview: string };
+	assert.ok(isWellFormed(lone.preview));
+	assert.ok(lone.preview.includes("x\\ud83dy"));
+});
+
 test("an agent_start nobody caused opens a turn that settles the same way", async () => {
 	const { daemon, manager, events, kinds } = setup();
 	const s = String(((await manager.createSession("homelab", CONFIG)) as Message).session);

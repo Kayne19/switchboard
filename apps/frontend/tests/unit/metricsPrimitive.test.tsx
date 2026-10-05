@@ -102,6 +102,30 @@ describe('MetricsPrimitive', () => {
     expect(host.querySelector('[data-testid="metric-trend"]')).toBeNull();
   });
 
+  it('expands a metric in a cluster on a tap the page still hears', () => {
+    const focused: string[] = [];
+    const host = document.createElement('div');
+    document.body.append(host);
+    const root = createRoot(host);
+    const heard: string[] = [];
+    const listen = () => heard.push('click');
+    document.addEventListener('click', listen);
+    try {
+      act(() => {
+        root.render(<MetricsPrimitive metrics={[metric1, metric2]} variant="primary" onFocus={(id) => focused.push(id)} />);
+      });
+      act(() => host.querySelectorAll<HTMLElement>('.metric-row')[1].click());
+      expect(focused).toEqual(['eta']);
+      // Before: the row stopped its click, so the document-level listener
+      // that unlocks audio never heard the tap.
+      expect(heard).toEqual(['click']);
+    } finally {
+      document.removeEventListener('click', listen);
+      act(() => root.unmount());
+      host.remove();
+    }
+  });
+
   it('returns null when variant is rail and metrics list is empty', () => {
     const host = renderMetrics([], 'rail');
     expect(host.querySelector('.metrics')).toBeNull();

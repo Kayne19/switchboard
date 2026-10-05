@@ -2,11 +2,14 @@
 // what it is about (AnnotationCard, `NoteBadge`), drawn on that part, so
 // the reader can match the two: a graph's node, in its corner
 // (diagramLayout `cornerTagBoxes`); a sequence's actor, in its header
-// (sequenceLayout `MARKER`); an item of a list (`note.anchor.item`: a task,
+// (sequenceLayout `markerIn`); an item of a list (`note.anchor.item`: a task,
 // a message, an event, a timer, a forecast hour or day), beside it. In a
 // drawing it is SVG (`NoteMarker`), its text 9 user units, the size a
 // drawing's readable minimum holds at the page's micro floor; on the card
 // and in a list it is the same badge in HTML (`NoteBadge`).
+
+/** The marker's size in user units: the one both layouts make room for. */
+export const NOTE_MARKER = { width: 30, height: 15 } as const;
 
 export interface MarkerBox {
   x: number;
