@@ -61,6 +61,12 @@ export interface NoteToPlace {
   from?: Side;
   /** The bar the point is past the end of: a leader never runs along its side. */
   bar?: Rect;
+  /**
+   * Narrower sizes the card may take, widest first, each with the height
+   * its text needs there: tried, in turn, only where the card's own size
+   * has no clear place.
+   */
+  sizes?: Array<{ width: number; height: number }>;
 }
 
 /** The side of a point a leader comes from. */
@@ -79,6 +85,11 @@ export interface NoteField {
   fills?: Point[][];
   /** Legend and axis labels: kept clear like the data, but given up before it. */
   labels?: Rect[];
+  /**
+   * Every card lies wholly inside the plot or wholly outside it, never
+   * across its border: a bar chart's, whose bars rise to that border.
+   */
+  wholly?: boolean;
 }
 
 /** Space kept between two cards, and between a card and the point it must not cover. */
@@ -91,7 +102,9 @@ const COST = {
   ownPoint: 1e9,
   otherPoint: 1e8,
   cardOverlap: 1e7,
+  straddle: 3e6,
   skirtingPoint: 2e6,
+  noLeader: 1.5e6,
   levelWithPoint: 1e6,
   data: 5e5,
   far: 2e5,
@@ -109,6 +122,7 @@ const COST = {
   plotArea: 0.01,
   shift: 2.5,
   leader: 0.25,
+  barLeader: 1,
   hug: 20,
   bottomRow: 60,
   rightCorner: 20,
@@ -327,6 +341,30 @@ interface Placement {
   falls: number;
   /** Over the data, or too far along from its point for its leader to read as its own. */
   astray: boolean;
+  /** The leader from the card to its point; empty for a note that names none. */
+  leader: Point[];
+}
+
+/** Where `layoutNotes` puts a note: its card, the leader it runs, and whether a narrower card could do better. */
+export interface NotePlace {
+  rect: Rect;
+  leader: Point[];
+  /**
+   * Nothing the placement keeps a card off is under it, and a leader to a
+   * bar is short: no narrower size of the card is worth trying.
+   */
+  settled: boolean;
+}
+
+// A leader to a bar longer than this has a narrower card try for a nearer
+// place, and takes it if it saves this much more.
+const BAR_LEADER_SHORT = 100;
+const BAR_LEADER_SAVING = 60;
+// The narrowest share of its own width a card takes only to run a shorter leader.
+const BAR_LEADER_NARROWEST = 0.6;
+
+function isSettled(note: NoteToPlace, placement: Placement): boolean {
+  return placement.falls === SHORT.clear && (note.from === undefined || polylineLength(placement.leader) <= BAR_LEADER_SHORT);
 }
 
 /**
@@ -337,6 +375,11 @@ interface Placement {
  * `spill`, the one note it leaves out has none.
  */
 export function placeNotes(notes: NoteToPlace[], field: NoteField, options: PlaceOptions = {}): Map<string, Rect> {
+  return new Map([...layoutNotes(notes, field, options)].map(([id, place]) => [id, place.rect]));
+}
+
+/** `placeNotes`, with the leader each card runs and whether its place is clear. */
+export function layoutNotes(notes: NoteToPlace[], field: NoteField, options: PlaceOptions = {}): Map<string, NotePlace> {
   const gap = options.gap ?? NOTE_GAP;
   const prepared = prepare(field);
   const all = placeInOrder(notes, prepared, gap);
@@ -364,7 +407,9 @@ export function placeNotes(notes: NoteToPlace[], field: NoteField, options: Plac
     }
     if (best) chosen = best.placements;
   }
-  return new Map([...chosen].map(([id, placement]) => [id, placement.rect]));
+  return new Map(
+    [...chosen].map(([id, placement]) => [id, { rect: placement.rect, leader: placement.leader, settled: isSettled(notes.find((note) => note.id === id)!, placement) }]),
+  );
 }
 
 // The cells of a grid over `area` that the marks touch, a run of them
@@ -465,6 +510,7 @@ function bucketed<T>(items: T[], boxOf: (item: T) => Rect, area: Rect): (near: R
 interface Prepared {
   area: Rect;
   plot?: Rect;
+  wholly: boolean;
   marks: Rect[];
   fills: Point[][];
   labels: Rect[];
@@ -492,6 +538,7 @@ function prepare(field: NoteField): Prepared {
   return {
     area,
     plot,
+    wholly: field.wholly === true,
     marks,
     fills: field.fills ?? [],
     labels: field.labels ?? [],
@@ -510,7 +557,7 @@ function placeInOrder(
   leftOut?: string,
   before?: Map<string, Placement>,
 ): Map<string, Placement> {
-  const { area, plot, marks, fills, labels, segmentsNear, marksNear } = field;
+  const { area, plot, marks, fills, labels, segmentsNear, marksNear, wholly } = field;
   const everyNote = [...notes.filter((note) => !note.point), ...notes.filter((note) => note.point)];
   const order = everyNote.filter((note) => note.id !== leftOut);
   const settled = before ? everyNote.slice(0, Math.max(0, everyNote.findIndex((note) => note.id === leftOut))) : [];
@@ -529,13 +576,35 @@ function placeInOrder(
   };
 
   for (const note of order) {
-    const { width, height, point } = note;
     const earlier = settled.includes(note) ? before?.get(note.id) : undefined;
     if (earlier) {
       placed.set(note.id, earlier);
-      if (point) leaders.push(routeLeader(earlier.rect, point));
+      if (earlier.leader.length > 0) leaders.push(earlier.leader);
       continue;
     }
+    // The card at its own size; where that has no clear place, or runs a
+    // long leader to its bar, each narrower size it may take, kept only
+    // where it falls short by less -- or, as clear, runs a leader much
+    // shorter.
+    let chosen = placeSized(note, note.width, note.height);
+    for (const size of note.sizes ?? []) {
+      if (isSettled(note, chosen)) break;
+      const trial = placeSized(note, size.width, size.height);
+      // Shorter by enough to be worth the lines it costs, and never for a
+      // card cut to a column.
+      const shorter =
+        note.from !== undefined &&
+        size.width >= note.width * BAR_LEADER_NARROWEST &&
+        polylineLength(trial.leader) < Math.min(polylineLength(chosen.leader) - BAR_LEADER_SAVING, polylineLength(chosen.leader) * 0.6);
+      if (trial.falls < chosen.falls || (trial.falls === chosen.falls && shorter)) chosen = trial;
+    }
+    placed.set(note.id, chosen);
+    if (chosen.leader.length > 0) leaders.push(chosen.leader);
+  }
+  return placed;
+
+  function placeSized(note: NoteToPlace, width: number, height: number): Placement {
+    const { point, from } = note;
     const others = [...placed.values()].map((placement) => placement.rect);
     const minLeft = area.left;
     const maxLeft = area.right - width;
@@ -560,7 +629,7 @@ function placeInOrder(
       let cost = 0;
       let falls: number = SHORT.clear;
       if (point && covers(rect, point)) cost += COST.ownPoint;
-      else if (point) {
+      else if (point && !from) {
         const stands = standing(rect, point);
         if (stands === 'skirting') cost += COST.skirtingPoint;
         else if (stands === 'level') cost += COST.levelWithPoint;
@@ -572,13 +641,23 @@ function placeInOrder(
         const area = overlapArea(rect, other);
         if (area > 0) cost += COST.cardOverlap + area * COST.cardOverlapArea;
       }
+      if (wholly && plot && straddles(rect, plot, gap)) cost += COST.straddle;
+      // A bar's leader comes from past the bar's end, clear of every other
+      // bar; a place with no such route has no leader that reads.
+      const route = point && from && !covers(rect, point) ? barLeader(rect, point, from, marksNear, { bar: note.bar }) : undefined;
+      if (route && !route.clear) cost += COST.noLeader;
       if (cost > 0) falls = SHORT.more;
       // Places rank by what they fall short by, then by cost. Neither ever
       // falls as more is added up, so a place already behind the best so
       // far cannot win.
       const beaten = () => best !== undefined && (falls > best.falls || (falls === best.falls && cost >= best.cost - 1e-6));
-      // Its point further along than the leader should run beside the card.
-      const along = point ? Math.max(0, left + LEADER_INSET - point.x, point.x - (left + width - LEADER_INSET)) - width * SEARCH_REACH : 0;
+      // Its point further along than the leader should run beside the card;
+      // a bar's leader, longer than it should run at all.
+      const along = route
+        ? polylineLength(route.path) - farRun(width)
+        : point
+          ? Math.max(0, left + LEADER_INSET - point.x, point.x - (left + width - LEADER_INSET)) - width * SEARCH_REACH
+          : 0;
       if (along > 0) {
         cost += COST.far + along * COST.farAlong;
         falls = Math.max(falls, SHORT.far);
@@ -611,8 +690,8 @@ function placeInOrder(
       }
       cost += hiddenTraceLength(rect, leaders) * COST.leaderLength;
       if (beaten()) return;
+      const leader = route ? route.path : point ? routeLeader(rect, point) : [];
       if (point) {
-        const leader = routeLeader(rect, point);
         for (const other of others) cost += hiddenTraceLength(other, [leader]) * COST.leaderLength;
         // A leader that runs over the data reads as part of it: across a
         // line, or through a bar, short of the point where it must meet it.
@@ -631,7 +710,10 @@ function placeInOrder(
       }
       if (plot) cost += overlapArea(rect, plot) * COST.plotArea;
       const nearTop = top - minTop <= maxTop - top;
-      if (point) {
+      if (route) {
+        // A bar's leader is as short as it can be: beside the bar or over it.
+        cost += polylineLength(route.path) * COST.barLeader;
+      } else if (point) {
         cost += Math.abs(left + width / 2 - point.x) * COST.shift;
         const leaderLength = point.y >= rect.bottom ? point.y - rect.bottom : point.y <= rect.top ? rect.top - point.y : 0;
         cost += leaderLength * COST.leader;
@@ -641,7 +723,9 @@ function placeInOrder(
         cost += COST.rightCorner;
       }
       if (!nearTop) cost += COST.bottomRow;
-      if (!best || falls < best.falls || (falls === best.falls && cost < best.cost - 1e-6)) best = { rect, cost, falls, astray: data || along > 0 };
+      if (!best || falls < best.falls || (falls === best.falls && cost < best.cost - 1e-6)) {
+        best = { rect, cost, falls, astray: data || along > 0 || (from !== undefined && falls === SHORT.more), leader };
+      }
     };
 
     // Every place a card spanning `left` can sit clear of what stands in
@@ -651,9 +735,10 @@ function placeInOrder(
     // its point, so its leader never runs far along to it.
     const search = (through: number) => {
       const blocks = (rect: Rect, left: number, right: number) => rect.left < right && rect.right > left;
-      const reach = width * SEARCH_REACH;
-      const low = point ? Math.max(minLeft, point.x - width + LEADER_INSET - reach) : minLeft;
-      const high = point ? Math.min(maxLeft, point.x - LEADER_INSET + reach) : maxLeft;
+      // A bar's leader may run beside the card to it, as far as reads.
+      const reach = from ? farRun(width) : width * SEARCH_REACH;
+      const low = point ? Math.max(minLeft, point.x - width + (from ? 0 : LEADER_INSET) - reach) : minLeft;
+      const high = point ? Math.min(maxLeft, point.x - (from ? 0 : LEADER_INSET) + reach) : maxLeft;
       if (high < low) return;
       const markEdges = marks.length <= SEARCH_MARK_EDGES ? marks.map((mark) => inflate(mark, DATA_CLEARANCE)) : [];
       const step = Math.max(1, (high - low) / SEARCH_STEPS);
@@ -666,6 +751,9 @@ function placeInOrder(
           rect.left - width,
           rect.right,
         ]),
+        // Wholly inside the plot or wholly beside it.
+        ...(wholly && plot ? [plot.left + PLOT_INSET, plot.right - PLOT_INSET - width, plot.left - gap - width, plot.right + gap] : []),
+        ...(from && point ? [point.x - BAR_NEAR - width, point.x + BAR_NEAR] : []),
       ];
       for (const left of unique(candidates.filter((left) => left >= low && left <= high))) {
         const right = left + width;
@@ -673,7 +761,16 @@ function placeInOrder(
         // Its own point's band: a place clear of the point's height by the
         // clearance `standing` asks for, so its leader leaves by the top or
         // bottom border.
-        if (point) blocked.push([point.y - POINT_CLEARANCE, point.y + POINT_CLEARANCE]);
+        if (point && !from) blocked.push([point.y - POINT_CLEARANCE, point.y + POINT_CLEARANCE]);
+        if (wholly && plot && !(right <= plot.left - gap || left >= plot.right + gap)) {
+          // Across the plot's span a card keeps to one side of its border:
+          // inside it, or above or below it.
+          if (left >= plot.left + PLOT_INSET && right <= plot.right - PLOT_INSET) {
+            blocked.push([plot.top - gap, plot.top + PLOT_INSET], [plot.bottom - PLOT_INSET, plot.bottom + gap]);
+          } else {
+            blocked.push([plot.top - gap, plot.bottom + gap]);
+          }
+        }
         for (const other of points) {
           if (other.id !== note.id && other.point.x > left - POINT_CLEARANCE && other.point.x < right + POINT_CLEARANCE) {
             blocked.push([other.point.y - POINT_CLEARANCE, other.point.y + POINT_CLEARANCE]);
@@ -706,13 +803,13 @@ function placeInOrder(
         // The free runs between what stands in the way, each tried at its
         // ends and wherever the cost turns: a gap from the point, where the
         // leader stops hugging the border, and at the plot's edges.
-        let from = minTop;
+        let free = minTop;
         const runs: Array<[number, number]> = [];
         for (const [start, end] of blocked) {
-          if (start > from) runs.push([from, Math.min(start, area.bottom)]);
-          from = Math.max(from, end);
+          if (start > free) runs.push([free, Math.min(start, area.bottom)]);
+          free = Math.max(free, end);
         }
-        if (area.bottom > from) runs.push([from, area.bottom]);
+        if (area.bottom > free) runs.push([free, area.bottom]);
         for (const [start, end] of runs) {
           // Half a pixel clear of what bounds the run, where something does.
           const first = start > minTop ? start + 0.5 : start;
@@ -723,6 +820,9 @@ function placeInOrder(
             last,
             ...(point ? [point.y + gap, point.y - gap - height] : []),
             ...(plot ? [plot.top - height, plot.top, plot.bottom - height, plot.bottom] : []),
+            ...(wholly && plot ? [plot.top - gap - height, plot.top + PLOT_INSET, plot.bottom - PLOT_INSET - height, plot.bottom + gap] : []),
+            // Near enough a bar's point for its leader's last run onto it.
+            ...(from && point ? [point.y - BAR_NEAR - height, point.y + BAR_NEAR] : []),
           ];
           for (const top of unique(turns.filter((top) => top >= first && top <= last))) consider(left, top);
         }
@@ -746,14 +846,234 @@ function placeInOrder(
     // over the data. A place
     // that falls short only as far as a search lets one still has the
     // search look for a nearer one.
+    // A clear place a long way from its bar still has the search look for a
+    // nearer one.
     for (const through of [SHORT.clear, SHORT.fill, SHORT.label]) {
-      if (best!.falls === SHORT.clear || best!.falls < through) break;
+      if (isSettled(note, best!) || (best!.falls < through && best!.falls !== SHORT.clear)) break;
       search(through);
+      if (best!.falls === SHORT.clear) break;
     }
-    placed.set(note.id, best!);
-    if (point) leaders.push(routeLeader(best!.rect, point));
+    return best!;
   }
-  return placed;
+}
+
+// How far inside the plot's border a card that lies inside it keeps, so it
+// never reads as hung from the border.
+const PLOT_INSET = 8;
+
+// Neither wholly inside the plot (a clearance in from its border) nor
+// wholly outside it (a gap away): across its border.
+function straddles(rect: Rect, plot: Rect, gap: number): boolean {
+  const inside =
+    rect.left >= plot.left + PLOT_INSET && rect.right <= plot.right - PLOT_INSET && rect.top >= plot.top + PLOT_INSET && rect.bottom <= plot.bottom - PLOT_INSET;
+  const outside = rect.right <= plot.left - gap || rect.left >= plot.right + gap || rect.bottom <= plot.top - gap || rect.top >= plot.bottom + gap;
+  return !inside && !outside;
+}
+
+function polylineLength(line: Point[]): number {
+  let length = 0;
+  for (let index = 1; index < line.length; index += 1) length += Math.hypot(line[index].x - line[index - 1].x, line[index].y - line[index - 1].y);
+  return length;
+}
+
+// The longest a bar's leader runs before its card reads as far from the bar.
+function farRun(width: number): number {
+  return Math.max(BAR_LEADER_FAR, width * 0.6);
+}
+const BAR_LEADER_FAR = 140;
+
+/** The share of a note card cut from its top-right corner: along its top edge, and down its right side (the stylesheet's clip-path). */
+export const NOTE_CARD_CUT = { top: 0.08, side: 0.23 } as const;
+
+// A bar's leader: its last straight run onto the point at least this long,
+// its run along at least this long, and the 45-degree corner it turns by.
+const BAR_DROP = 14;
+// How near a card past a bar's point sits to it: room for that last run.
+const BAR_NEAR = BAR_DROP + 4;
+const BAR_RUN = 12;
+const BAR_JOG = 10;
+// How far a bar's leader keeps from the bars it passes.
+const LEADER_CLEARANCE = 4;
+// What coming onto a bar's point across its end, rather than from past
+// it, costs, as pixels of leader.
+const BAR_ACROSS = 60;
+
+type MarksNear = (near: Rect, visit: (mark: Rect) => void) => void;
+
+/** A leader to a bar, and whether it keeps clear of every other mark on its way. */
+export interface BarRoute {
+  path: Point[];
+  clear: boolean;
+}
+
+export interface BarLeaderOptions {
+  /** How far inside the card's edge the leader begins, so it grows out of the border. */
+  overlap?: number;
+  /** How close to one of the card's corners the leader may leave it. */
+  inset?: number;
+  /** The bar the point names: a leader never runs alongside it, short of its end. */
+  bar?: Rect;
+}
+
+// How far from the side of the bar it names a leader keeps, short of the
+// bar's end: closer, it reads as running along the bar.
+const BAR_SIDE = 16;
+
+// Each side of a point, turned into the frame where the leader comes from
+// above: down onto the point.
+function upright(from: Side) {
+  const to = (p: Point): Point =>
+    from === 'above' ? p : from === 'below' ? { x: p.x, y: -p.y } : from === 'left' ? { x: p.y, y: p.x } : { x: p.y, y: -p.x };
+  const back = (p: Point): Point =>
+    from === 'above' ? p : from === 'below' ? { x: p.x, y: -p.y } : from === 'left' ? { x: p.y, y: p.x } : { x: -p.y, y: p.x };
+  const rect = (r: Rect): Rect => {
+    const a = to({ x: r.left, y: r.top });
+    const b = to({ x: r.right, y: r.bottom });
+    return { left: Math.min(a.x, b.x), right: Math.max(a.x, b.x), top: Math.min(a.y, b.y), bottom: Math.max(a.y, b.y) };
+  };
+  // Which of the card's own edges each turned edge is, and whether its run
+  // is turned end for end.
+  const edges: Record<'bottom' | 'left' | 'right', Side> =
+    from === 'above' ? { bottom: 'below', left: 'left', right: 'right' }
+      : from === 'below' ? { bottom: 'above', left: 'left', right: 'right' }
+        : from === 'left' ? { bottom: 'right', left: 'above', right: 'below' }
+          : { bottom: 'left', left: 'above', right: 'below' };
+  const reversed = from === 'below' || from === 'right';
+  return { to, back, rect, edges, reversed };
+}
+
+// The stretch of one of the card's edges a leader may leave it by: clear of
+// its corners by `inset`, and of the corner its outline cuts.
+function exitRange(card: Rect, edge: Side, inset: number): [number, number] {
+  const width = card.right - card.left;
+  const height = card.bottom - card.top;
+  if (edge === 'above') return [card.left + inset, card.right - width * NOTE_CARD_CUT.top - inset];
+  if (edge === 'below') return [card.left + inset, card.right - inset];
+  if (edge === 'left') return [card.top + inset, card.bottom - inset];
+  return [card.top + height * NOTE_CARD_CUT.side + inset, card.bottom - inset];
+}
+
+/**
+ * The leader from a card to the bar it names, as the frames draw lines:
+ * straight runs and 45-degree turns. It comes onto the point from `from`,
+ * the side past the bar's end, so it never runs along or through the bar
+ * it means: from a card past that end, out of the card's facing edge and
+ * on to the point (as `routeLeader`); from a card beside it, out of the
+ * card's side, along over the bars between, and a turn onto the point.
+ * Of the routes that keep clear of every other mark, the shortest; where
+ * none does, the shortest of them all, not clear.
+ */
+export function barLeader(card: Rect, point: Point, from: Side, marksNear: MarksNear, options: BarLeaderOptions = {}): BarRoute {
+  const inset = options.inset ?? LEADER_INSET;
+  const overlap = options.overlap ?? 0;
+  // The bar's own printed value, beside the point, is what the leader
+  // lands by, not in its way.
+  const own = (mark: Rect) => covers(mark, point, LEADER_CLEARANCE + 2);
+  // The band along the named bar's sides, from its base to its end.
+  const bar = options.bar;
+  const alongside = bar
+    ? from === 'above' || from === 'below'
+      ? { ...bar, left: bar.left - BAR_SIDE, right: bar.right + BAR_SIDE }
+      : { ...bar, top: bar.top - BAR_SIDE, bottom: bar.bottom + BAR_SIDE }
+    : undefined;
+  const clearOf = (path: Point[]) => {
+    if (alongside && path.slice(1).some((b, index) => clipSegment(path[index], b, alongside))) return false;
+    const line = shortOfEnd(path, LEADER_CLEARANCE + 2);
+    for (let index = 1; index < line.length; index += 1) {
+      const a = line[index - 1];
+      const b = line[index];
+      const span = inflate({ left: Math.min(a.x, b.x), top: Math.min(a.y, b.y), right: Math.max(a.x, b.x), bottom: Math.max(a.y, b.y) }, LEADER_CLEARANCE);
+      let hit = false;
+      marksNear(span, (mark) => {
+        if (!hit && !own(mark) && clipSegment(a, b, inflate(mark, LEADER_CLEARANCE))) hit = true;
+      });
+      if (hit) return false;
+    }
+    return true;
+  };
+  // Past the bar's end first; across the bar's end, from either side, at
+  // a price; never from the bar's own side, which the bar itself blocks.
+  const across: Side[] = from === 'above' || from === 'below' ? ['left', 'right'] : ['above', 'below'];
+  const routes: Array<{ path: Point[]; clear: boolean; length: number }> = [];
+  for (const side of [from, ...across]) {
+    const penalty = side === from ? 0 : BAR_ACROSS;
+    for (const path of barRoutes(card, point, side, marksNear, inset, overlap)) {
+      routes.push({ path, clear: clearOf(path), length: polylineLength(path) + penalty });
+    }
+  }
+  if (routes.length === 0) return { path: routeLeader(card, point, { inset, overlap }), clear: false };
+  const clear = routes.filter((route) => route.clear);
+  const pool = clear.length > 0 ? clear : routes;
+  const shortest = pool.reduce((best, route) => (route.length < best.length ? route : best));
+  return { path: shortest.path, clear: clear.length > 0 };
+}
+
+// The routes onto the point from one side of it: from a card past the
+// point on that side, out of its facing edge; from a card beside, out of
+// its side, along, and a turn onto the point -- each worked out in the
+// frame where that side is above.
+function barRoutes(card: Rect, point: Point, from: Side, marksNear: MarksNear, inset: number, overlap: number): Point[][] {
+  const turn = upright(from);
+  const c = turn.rect(card);
+  const q = turn.to(point);
+  const along = (edge: Side): [number, number] => {
+    const [lo, hi] = exitRange(card, edge, inset);
+    return turn.reversed && edge !== turn.edges.bottom ? [-hi, -lo] : [lo, hi];
+  };
+  const routes: Point[][] = [];
+  if (c.bottom <= q.y - BAR_DROP) {
+    const [lo, hi] = along(turn.edges.bottom);
+    if (hi >= lo) {
+      const narrowed = { ...c, left: lo - inset, right: hi + inset };
+      const path = routeLeader(narrowed, q, { inset, overlap });
+      if (path.length > 1) routes.push(path.map(turn.back));
+    }
+  }
+  for (const side of ['right', 'left'] as const) {
+    const sideX = side === 'right' ? c.right : c.left;
+    const direction = side === 'right' ? 1 : -1;
+    if ((q.x - sideX) * direction < BAR_RUN) continue;
+    const [lo, hi] = along(turn.edges[side]);
+    const highest = Math.min(hi, q.y - BAR_DROP);
+    if (highest < lo) continue;
+    // The run as near the point as it can be, and just over each mark it
+    // would cross there.
+    const heights = [highest];
+    const reach = { left: Math.min(sideX, q.x), right: Math.max(sideX, q.x), top: lo, bottom: highest };
+    marksNear(turnBackRect(reach, turn.back), (mark) => {
+      const y = turn.rect(mark).top - LEADER_CLEARANCE - 1;
+      if (y >= lo && y < highest) heights.push(y);
+    });
+    for (const y of [...new Set(heights)].sort((a, b) => b - a)) {
+      const jog = Math.max(0, Math.min(BAR_JOG, (q.y - y) / 2, Math.abs(q.x - sideX) / 2));
+      const start = { x: sideX - direction * overlap, y };
+      const path = jog >= 1 ? [start, { x: q.x - direction * jog, y }, { x: q.x, y: y + jog }, q] : [start, { x: q.x, y }, q];
+      routes.push(path.map(turn.back));
+    }
+  }
+  return routes;
+}
+
+// A rect given in the turned frame, back in the card's own.
+function turnBackRect(rect: Rect, back: (p: Point) => Point): Rect {
+  const a = back({ x: rect.left, y: rect.top });
+  const b = back({ x: rect.right, y: rect.bottom });
+  return { left: Math.min(a.x, b.x), right: Math.max(a.x, b.x), top: Math.min(a.y, b.y), bottom: Math.max(a.y, b.y) };
+}
+
+/**
+ * The leader a placed card runs to the point its note names, as
+ * `layoutNotes` routes it: to a bar from past its end (`barLeader`), to
+ * any other point out of the facing edge (`routeLeader`). Empty for a note
+ * that names no point.
+ */
+export function noteLeader(card: Rect, note: NoteToPlace, field: NoteField, options: LeaderOptions = {}): Point[] {
+  if (!note.point) return [];
+  if (note.from) {
+    const marks = field.marks ?? [];
+    return barLeader(card, note.point, note.from, (_near, visit) => marks.forEach((mark) => visit(mark)), { overlap: options.overlap, inset: options.inset, bar: note.bar }).path;
+  }
+  return routeLeader(card, note.point, options);
 }
 
 export interface LeaderOptions {

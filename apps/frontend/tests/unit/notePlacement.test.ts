@@ -1,13 +1,17 @@
 // Where the notes over a chart sit, and how their leaders run (#26, #49).
 import { describe, expect, it } from 'vitest';
 import type { ChartData } from '../../src/controller/types';
-import { chartObstacles, chartScales, chartSeriesPoint } from '../../src/primitives/chartGeometry';
+import { chartBarCallout, chartNoteTarget, chartObstacles, chartScales, chartSeriesPoint } from '../../src/primitives/chartGeometry';
 import {
   DATA_CLEARANCE,
+  barLeader,
   hiddenFillArea,
   hiddenTraceLength,
+  layoutNotes,
+  noteLeader,
   placeNotes,
   routeLeader,
+  type NoteField,
   type NoteToPlace,
   type Point,
   type Rect,
@@ -413,6 +417,160 @@ describe('note placement over the data', () => {
     // Clear of every bar, the one it names and its ring included.
     expect(clearOf(placed, marks)).toBe(true);
     expect(leavesTopOrBottom(placed, point)).toBe(true);
+  });
+});
+
+// Kayne, round 3: the note on a bar chart still read oddly -- its card
+// across the plot's border or jammed under the frame's rail, its leader
+// ending by the grey bar beside the one it named. On a bar chart a card lies
+// wholly inside the plot or wholly outside it, and its leader comes onto
+// the bar from past its end, clear of every other bar.
+describe('a note on a bar chart', () => {
+  const suite: ChartData = {
+    kind: 'bar',
+    labels: ['backend', 'frontend unit', 'frontend visual', 'host agent', 'skill', 'hygiene'],
+    series: [
+      { name: 'THIS RUN', values: [41.8, 3.3, 96.4, 6.1, 0.3, 0.4] },
+      { name: 'PREVIOUS RUN', values: [44.0, 3.1, 102.9, 6.4, 0.3, 0.4] },
+    ],
+    marker: { x: 2, series: 'THIS RUN' },
+  };
+  // The chart as a page draws it: its frame at `scale`, `top` down a layer.
+  function drawn(data: ChartData, frame: { width: number; height: number }, scale: number, top: number, layer: { width: number; height: number }) {
+    const at = (p: Point): Point => ({ x: p.x * scale, y: top + p.y * scale });
+    const rect = (r: Rect): Rect => ({ left: r.left * scale, top: top + r.top * scale, right: r.right * scale, bottom: top + r.bottom * scale });
+    const scales = chartScales(data, frame);
+    const anchor = { x: 2, series: 'THIS RUN' };
+    const obstacles = chartObstacles(data, scales, [anchor]);
+    const target = chartNoteTarget(data, anchor, scales)!;
+    const field: NoteField = {
+      area: box(0, 0, layer.width, layer.height),
+      plot: rect(scales.plot),
+      marks: obstacles.marks.map(rect),
+      labels: obstacles.labels.map(rect),
+      wholly: true,
+    };
+    const callout = chartBarCallout(data, anchor, scales)!;
+    return { field, point: at(target.point), from: target.from!, value: rect(callout.label), bar: rect(callout.bar.rect) };
+  }
+  const straddles = (card: Rect, plot: Rect) => {
+    const inside = card.left >= plot.left && card.right <= plot.right && card.top >= plot.top && card.bottom <= plot.bottom;
+    const outside = card.right <= plot.left || card.left >= plot.right || card.bottom <= plot.top || card.top >= plot.bottom;
+    return !inside && !outside;
+  };
+  // Whether a leader runs through any mark but its own bar's printed value, a few pixels clear.
+  const same = (a: Rect, b: Rect) => Math.abs(a.left - b.left) < 1e-6 && Math.abs(a.top - b.top) < 1e-6 && Math.abs(a.right - b.right) < 1e-6;
+  const runsThrough = (leader: Point[], marks: Rect[], own: Rect) =>
+    marks.some((mark) => !same(mark, own) && leader.slice(1).some((b, index) => {
+      const a = leader[index];
+      const steps = Math.ceil(Math.hypot(b.x - a.x, b.y - a.y));
+      for (let step = 0; step <= steps; step += 1) {
+        const x = a.x + ((b.x - a.x) * step) / Math.max(1, steps);
+        const y = a.y + ((b.y - a.y) * step) / Math.max(1, steps);
+        if (x > mark.left - 2 && x < mark.right + 2 && y > mark.top - 2 && y < mark.bottom + 2) return true;
+      }
+      return false;
+    }));
+
+  for (const view of [
+    // The landscape slots: 1440x900 (the band above the plot is shorter than the card), 2560x1080.
+    { name: 'at 1440x900', frame: { width: 1000, height: 500 }, scale: 0.937, top: 47, layer: { width: 937, height: 562 }, card: { width: 394, height: 118 } },
+    { name: 'at 2560x1080', frame: { width: 1000, height: 500 }, scale: 1.294, top: 9, layer: { width: 2008, height: 665 }, card: { width: 680, height: 86, sizes: [{ width: 544, height: 112 }, { width: 435, height: 112 }, { width: 340, height: 131 }] } },
+    // A phone's recomposed frame, its bars on their side.
+    { name: "in a phone's frame", frame: { width: 538, height: 618 }, scale: 0.636, top: 2, layer: { width: 331, height: 435 }, card: { width: 200, height: 95 } },
+  ]) {
+    it(`lies wholly in or out of the plot, its leader onto the bar from past its end, ${view.name}`, () => {
+      const { field, point, from, value } = drawn(suite, view.frame, view.scale, view.top, view.layer);
+      const note = { id: 'note', ...view.card, point, from };
+      const place = layoutNotes([note], field).get('note')!;
+      expect(straddles(place.rect, field.plot!)).toBe(false);
+      expect(field.marks!.every((mark) => !overlaps(inflate(place.rect, 4), mark))).toBe(true);
+      const leader = noteLeader(place.rect, note, field);
+      expect(leader).toEqual(place.leader);
+      expect(leader.at(-1)).toEqual(point);
+      expect(runsThrough(leader, field.marks!, value)).toBe(false);
+      // Short: the card is near the bar it names.
+      const length = leader.slice(1).reduce((sum, p, index) => sum + Math.hypot(p.x - leader[index].x, p.y - leader[index].y), 0);
+      expect(length).toBeLessThan(160);
+    });
+  }
+
+  it('comes down onto an upright bar, over the taller bar beside it', () => {
+    const { field, point, from } = drawn(suite, { width: 1000, height: 500 }, 0.937, 47, { width: 937, height: 562 });
+    expect(from).toBe('above');
+    const place = layoutNotes([{ id: 'note', width: 394, height: 118, point, from }], field).get('note')!;
+    const [a, b] = place.leader.slice(-2);
+    // Its last run is straight down onto the point.
+    expect(b.x - a.x).toBeCloseTo(0, 6);
+    expect(b.y - a.y).toBeGreaterThan(0);
+  });
+
+  it('routes beside the card, along over the bars and down, where the card sits level with the bar', () => {
+    // A card right of a tall bar, its top above the bar's printed value.
+    const bars = [box(100, 200, 40, 300), box(142, 150, 40, 350)];
+    const value = box(105, 180, 30, 13);
+    const point = { x: 120, y: 175 };
+    const marks = [...bars, value];
+    const near = (_near: Rect, visit: (mark: Rect) => void) => marks.forEach(visit);
+    const route = barLeader(box(200, 100, 300, 120), point, 'above', near);
+    expect(route.clear).toBe(true);
+    expect(route.path[0].x).toBe(200);
+    // Along at a height over the taller bar, and down onto the point.
+    expect(route.path[0].y).toBeLessThan(150);
+    expect(route.path.at(-1)).toEqual(point);
+    const [a, b] = route.path.slice(-2);
+    expect(b.x).toBeCloseTo(a.x, 6);
+    expect(b.y).toBeGreaterThan(a.y);
+  });
+
+  it('has no clear route from a card under the bar it names, nor one along its side', () => {
+    // The bar, its printed value over it, and the point over that.
+    const bar = box(100, 200, 40, 300);
+    const marks = [bar, box(108, 184, 24, 13)];
+    const near = (_near: Rect, visit: (mark: Rect) => void) => marks.forEach(visit);
+    const route = barLeader(box(80, 520, 200, 60), { x: 120, y: 181 }, 'above', near, { bar });
+    expect(route.clear).toBe(false);
+  });
+
+  it('keeps a card that names no point on a bar chart off the plot border too', () => {
+    const { field } = drawn(suite, { width: 1000, height: 500 }, 0.937, 47, { width: 937, height: 562 });
+    const place = layoutNotes([{ id: 'general', width: 394, height: 118 }], field).get('general')!;
+    expect(straddles(place.rect, field.plot!)).toBe(false);
+  });
+
+});
+
+// A card whose own width has no clear place on the chart takes a narrower
+// one where that has (each measured, with the height its text needs there).
+describe('a card narrower than its own width', () => {
+  it('takes the widest narrower size that is clear, only where its own is not', () => {
+    // A clear column 300 wide beside what the chart draws.
+    const marks = [box(0, 0, 600, 600)];
+    const area = box(0, 0, 900, 600);
+    const note = { id: 'a', width: 400, height: 80, point: { x: 750, y: 590 }, sizes: [{ width: 320, height: 100 }, { width: 250, height: 120 }, { width: 200, height: 150 }] };
+    const placed = layoutNotes([note], { area, marks }).get('a')!;
+    expect(placed.rect.right - placed.rect.left).toBe(250);
+    expect(placed.settled).toBe(true);
+    expect(overlaps(inflate(placed.rect, 4), marks[0])).toBe(false);
+    // With room at its own width it keeps it.
+    const roomy = layoutNotes([note], { area, marks: [box(0, 0, 300, 600)] }).get('a')!;
+    expect(roomy.rect.right - roomy.rect.left).toBe(400);
+  });
+
+  it('takes a narrower size for a bar whose leader would otherwise run a long way', () => {
+    // Short bars left of the named one, a tall block right of it: only a
+    // card narrower than its own width sits beside the bar; at its own it
+    // must go over the block, a long way up.
+    const marks = [box(0, 500, 290, 100), box(300, 400, 40, 200), box(350, 100, 650, 500)];
+    const point = { x: 320, y: 395 };
+    const field: NoteField = { area: box(0, 0, 1000, 600), marks, plot: box(0, 0, 1000, 600), wholly: true };
+    const own = { id: 'a', width: 420, height: 80, point, from: 'above' as const };
+    const length = (line: Point[]) => line.slice(1).reduce((sum, p, index) => sum + Math.hypot(p.x - line[index].x, p.y - line[index].y), 0);
+    const wide = layoutNotes([own], field).get('a')!;
+    expect(length(wide.leader)).toBeGreaterThan(100);
+    const narrow = layoutNotes([{ ...own, sizes: [{ width: 280, height: 100 }] }], field).get('a')!;
+    expect(narrow.rect.right - narrow.rect.left).toBe(280);
+    expect(length(narrow.leader)).toBeLessThan(length(wide.leader) * 0.6);
   });
 });
 

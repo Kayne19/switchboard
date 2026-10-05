@@ -16,7 +16,7 @@ import {
   type ViewPoint,
   type ViewRect,
 } from '../primitives/chartGeometry';
-import { placeNotes, routeLeader, type NoteField, type NoteToPlace, type Point, type Rect } from '../primitives/notePlacement';
+import { layoutNotes, NOTE_CARD_CUT, noteLeader, type NoteField, type NoteToPlace, type Point, type Rect } from '../primitives/notePlacement';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
 /** One note on a chart: a note object, or the spoken explanation standing in for one. */
@@ -28,6 +28,8 @@ export interface ChartNote {
 
 interface NotesLayout {
   cards: Record<string, Rect>;
+  /** The width a card is drawn at where it is placed narrower than the stylesheet has it. */
+  widths: Record<string, number>;
   leaders: Record<string, Point[]>;
   /** The note left out so the others have places clear of the data; the rail carries it instead. */
   away: string | null;
@@ -35,9 +37,14 @@ interface NotesLayout {
   ring: { x: number; y: number; r: number; stroke: number } | null;
 }
 
-// The share of a card's width its outline cuts from the top-right corner;
-// the clip-path in the stylesheet cuts the same.
-const CARD_CUT = 0.08;
+// The narrower widths a card with no clear place tries, as shares of its
+// own, down to the least: a card narrower reads as a column of words.
+const NARROWER = [0.8, 0.64, 0.5];
+const MIN_CARD_WIDTH = 180;
+// The wider widths a card whose text would scroll tries, and the most of
+// the layer it may take.
+const WIDER = [1.25, 1.5, 1.75];
+const MAX_CARD_SHARE = 0.8;
 
 /**
  * Where on the chart a note names a point, if it names one there, and the
@@ -78,6 +85,7 @@ function sameLayout(a: NotesLayout | null, b: NotesLayout): boolean {
   const bKeys = Object.keys(b.cards);
   if (aKeys.length !== bKeys.length) return false;
   for (const key of bKeys) {
+    if (Math.abs((a.widths[key] ?? 0) - (b.widths[key] ?? 0)) > 0.25) return false;
     const x = a.cards[key];
     const y = b.cards[key];
     if (!x || Math.abs(x.left - y.left) > 0.25 || Math.abs(x.top - y.top) > 0.25) return false;
@@ -186,14 +194,38 @@ export function ChartNotes({
         field.marks = obstacles.marks.map(rectToLayer);
         field.fills = obstacles.fills.map((piece) => piece.map(toLayer!));
         field.labels = obstacles.labels.map(rectToLayer);
+        // Bars rise to the plot's border: a card lies wholly inside the plot or wholly outside it.
+        field.wholly = scales.kind === 'bar';
       }
 
+      // A card is measured at the width the stylesheet gives it, whatever
+      // width the last layout set on it, and -- only where that has no clear
+      // place, or a long way to run to its bar -- at narrower widths its
+      // text still fits at. Widths are the
+      // layer's own pixels, which a panel in flight scales on screen.
+      const sizeAt = (element: HTMLDivElement, width?: number) => {
+        const set = element.style.width;
+        element.style.width = width === undefined ? '' : `${width}px`;
+        const rect = element.getBoundingClientRect();
+        const text = element.querySelector<HTMLElement>('.annotation-card__text');
+        const fits = !text || text.scrollHeight <= text.clientHeight + 1;
+        element.style.width = set;
+        return { width: rect.width / kx, height: rect.height / ky, fits };
+      };
       const toPlace: NoteToPlace[] = [];
+      const cssWidths = new Map<string, number>();
       for (const note of current) {
         const element = cardRefs.current.get(note.key);
         if (!element) continue;
-        const rect = element.getBoundingClientRect();
-        const size = { width: rect.width / kx, height: rect.height / ky };
+        let size = sizeAt(element);
+        cssWidths.set(note.key, size.width);
+        // A card whose text would scroll at its width -- a short chart's --
+        // takes the least wider width it reads whole at, as the layer allows.
+        for (const share of WIDER) {
+          if (size.fits || size.width * share > (field.area.right - field.area.left) * MAX_CARD_SHARE) break;
+          const wider = sizeAt(element, cssWidths.get(note.key)! * share);
+          if (wider.fits) size = wider;
+        }
         const target = toLayer ? chartNotePoint(note.data, chartRef.current, scales) : undefined;
         toPlace.push({
           id: note.key,
@@ -204,10 +236,22 @@ export function ChartNotes({
           bar: target?.bar && rectToLayer(target.bar),
         });
       }
-      const placed = placeNotes(toPlace, field, { spill });
-      const next: NotesLayout = { cards: {}, leaders: {}, away: null, ring: null };
+      let placed = layoutNotes(toPlace, field, { spill });
+      if (toPlace.some((note) => !placed.get(note.id)?.settled)) {
+        for (const note of toPlace) {
+          const element = cardRefs.current.get(note.id)!;
+          const widths = [...NARROWER.map((share) => note.width * share), MIN_CARD_WIDTH];
+          note.sizes = [...new Set(widths.filter((width) => width >= MIN_CARD_WIDTH && width < note.width - 0.5).map(Math.round))]
+            .sort((a, b) => b - a)
+            .map((width) => sizeAt(element, width))
+            .filter((size) => size.fits)
+            .map(({ width, height }) => ({ width, height }));
+        }
+        placed = layoutNotes(toPlace, field, { spill });
+      }
+      const next: NotesLayout = { cards: {}, widths: {}, leaders: {}, away: null, ring: null };
       for (const note of toPlace) {
-        const card = placed.get(note.id);
+        const card = placed.get(note.id)?.rect;
         if (!card) {
           // Left out so the others have clear places: the rail carries it,
           // and the point it names stays ringed as the chart rings a marker.
@@ -218,17 +262,20 @@ export function ChartNotes({
           }
           continue;
         }
+        const width = card.right - card.left;
         const rounded = {
           left: Math.round(card.left),
           top: Math.round(card.top),
-          right: Math.round(card.left) + note.width,
-          bottom: Math.round(card.top) + note.height,
+          right: Math.round(card.left) + width,
+          bottom: Math.round(card.top) + (card.bottom - card.top),
         };
         next.cards[note.id] = rounded;
+        // A card placed narrower than the stylesheet has it is drawn so.
+        if (Math.abs(width - (cssWidths.get(note.id) ?? width)) > 0.5) next.widths[note.id] = width;
         if (note.point) {
           // The leader begins on the card's one-pixel border, so the two
           // read as one line.
-          const leader = routeLeader(rounded, note.point, { cutTop: CARD_CUT, overlap: 1 });
+          const leader = noteLeader(rounded, note, field, { cutTop: NOTE_CARD_CUT.top, overlap: 1 });
           if (leader.length > 1) next.leaders[note.id] = leader.map((point) => ({ x: snap(point.x), y: snap(point.y) }));
         }
       }
@@ -264,6 +311,9 @@ export function ChartNotes({
           {notes.map((note) => {
             const leader = layout?.leaders[note.key];
             if (!leader) return null;
+            // A leader to a bar keeps its full colour to the end: it lands
+            // by the bar's printed value, over bars it must not fade into.
+            const toBar = chartNotePoint(note.data, chart)?.from !== undefined;
             const start = leader[0];
             const end = leader[leader.length - 1];
             // Named for its note, so a leader fading out keeps its own.
@@ -271,7 +321,7 @@ export function ChartNotes({
             return (
               <motion.g
                 key={note.key}
-                className="chart-note-leader"
+                className={`chart-note-leader${toBar ? ' chart-note-leader--bar' : ''}`}
                 data-note={note.key}
                 initial={reduced ? false : { opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -328,7 +378,7 @@ export function ChartNotes({
               className={`chart-note${anchored ? ' chart-note--anchored' : ''}${away ? ' chart-note--away' : ''}`}
               data-note={note.key}
               aria-hidden={away ? true : undefined}
-              style={card ? { left: card.left, top: card.top } : undefined}
+              style={card ? { left: card.left, top: card.top, ...(layout?.widths[note.key] !== undefined ? { width: layout.widths[note.key] } : {}) } : undefined}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}

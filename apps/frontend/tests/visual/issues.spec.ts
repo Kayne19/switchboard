@@ -331,6 +331,110 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 720
   });
 }
 
+// Kayne, round 3: the note on a bar chart still read oddly. Its card sat
+// across the plot's border (half in the plot, half above it) or jammed in
+// the band under the frame's rail, its leader ended by the grey bar beside
+// the one it named, and that bar was marked only by a ring on its edge. A
+// card on a bar chart lies wholly inside the plot or wholly outside it, its
+// leader runs clear of every other bar to the value the named bar prints,
+// and the bar itself is marked.
+const barNoteCases = [
+  { width: 1440, height: 900 }, { width: 2560, height: 1080 }, { width: 1280, height: 720 },
+  { width: 820, height: 1180 }, { width: 390, height: 844 },
+].flatMap((viewport) => [{ viewport, two: false }, { viewport, two: true }]);
+for (const { viewport, two } of barNoteCases) {
+  test(`a note on a bar chart lies wholly in or out of the plot, its leader joining it to its bar${two ? ', two notes' : ''} at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.goto('/?scene=comparison&chrome=0');
+    if (two) {
+      await page.evaluate(() => {
+        window.SwitchboardController!.dispatch({
+          op: 'show', id: 'backend-note', type: 'note',
+          data: { tag: 'OBSERVATION / BACKEND', anchor: { target: 'durations', x: 0, series: 'PREVIOUS RUN' }, segments: [{ text: 'The backend suite is the other long pole, and it grew by two seconds.' }] },
+        });
+      });
+    }
+    await expect(page.locator('.chart-note')).toHaveCount(two ? 2 : 1);
+    await page.waitForTimeout(500);
+    const geometry = await page.evaluate(() => {
+      const box = (element: Element) => {
+        const rect = element.getBoundingClientRect();
+        return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+      };
+      // The plot is the box the grid closes.
+      const grid = [...document.querySelectorAll('.chart-grid line')].map(box);
+      const plot = {
+        left: Math.min(...grid.map((line) => line.left)), right: Math.max(...grid.map((line) => line.right)),
+        top: Math.min(...grid.map((line) => line.top)), bottom: Math.max(...grid.map((line) => line.bottom)),
+      };
+      const layer = document.querySelector('.chart-notes')!.getBoundingClientRect();
+      const callouts = [...document.querySelectorAll('.chart-callout')].map((callout) => ({
+        series: callout.getAttribute('data-series'), index: callout.getAttribute('data-index'),
+        value: box(callout.querySelector('.chart-callout__value')!),
+      }));
+      const bars = [...document.querySelectorAll('.chart-series-group')].flatMap((group) =>
+        [...group.querySelectorAll('.chart-bar')].map((bar, index) => ({ series: group.getAttribute('data-series'), index: String(index), ...box(bar) })));
+      const notes = [...document.querySelectorAll<HTMLElement>('.chart-note')].map((card) => {
+        const polyline = document.querySelector(`.chart-note-leader[data-note="${card.dataset.note}"] polyline`);
+        return {
+          id: card.dataset.note!,
+          away: card.classList.contains('chart-note--away'),
+          card: box(card),
+          anchor: card.querySelector('.annotation-card__anchor')?.textContent ?? '',
+          leader: polyline ? polyline.getAttribute('points')!.split(' ').map((pair) => {
+            const [x, y] = pair.split(',').map(Number);
+            return { x: layer.left + x, y: layer.top + y };
+          }) : null,
+        };
+      });
+      return { plot, callouts, bars, notes };
+    });
+    const named: Record<string, { series: string; index: string; tag: string }> = {
+      'durations-note': { series: 'THIS RUN', index: '2', tag: 'TARGET / frontend visual / THIS RUN' },
+      'backend-note': { series: 'PREVIOUS RUN', index: '0', tag: 'TARGET / backend / PREVIOUS RUN' },
+    };
+    const { plot } = geometry;
+    for (const note of geometry.notes) {
+      const target = named[note.id];
+      // The card names the category, and the chart marks the bar.
+      expect(note.anchor).toBe(target.tag);
+      const callout = geometry.callouts.find((each) => each.series === target.series && each.index === target.index);
+      expect(callout, `${note.id}'s bar is marked`).toBeDefined();
+      if (note.away) continue;
+      const { card } = note;
+      const inside = card.left >= plot.left + 4 && card.right <= plot.right - 4 && card.top >= plot.top + 4 && card.bottom <= plot.bottom - 4;
+      const outside = card.right <= plot.left - 6 || card.left >= plot.right + 6 || card.bottom <= plot.top - 6 || card.top >= plot.bottom + 6;
+      expect(inside || outside, `${note.id} lies across the plot's border`).toBe(true);
+      // The leader leaves the card's border and ends by the bar's printed value.
+      expect(note.leader, `${note.id} has a leader`).not.toBeNull();
+      const leader = note.leader!;
+      const start = leader[0];
+      const onBorder = (Math.abs(start.x - card.left) <= 1.5 || Math.abs(start.x - card.right) <= 1.5) && start.y >= card.top && start.y <= card.bottom
+        || (Math.abs(start.y - card.top) <= 1.5 || Math.abs(start.y - card.bottom) <= 1.5) && start.x >= card.left && start.x <= card.right;
+      expect(onBorder, `${note.id}'s leader starts on its card's border`).toBe(true);
+      const end = leader[leader.length - 1];
+      const value = callout!.value;
+      const gap = Math.max(value.left - end.x, end.x - value.right, value.top - end.y, end.y - value.bottom, 0);
+      expect(gap, `${note.id}'s leader ends by its bar's value`).toBeLessThanOrEqual(6);
+      // It crosses no bar on its way.
+      for (const bar of geometry.bars) {
+        if (bar.bottom - bar.top < 0.5 || bar.right - bar.left < 0.5) continue;
+        for (let index = 1; index < leader.length; index += 1) {
+          const a = leader[index - 1];
+          const b = leader[index];
+          const steps = Math.ceil(Math.hypot(b.x - a.x, b.y - a.y));
+          for (let step = 0; step <= steps; step += 1) {
+            const x = a.x + ((b.x - a.x) * step) / Math.max(1, steps);
+            const y = a.y + ((b.y - a.y) * step) / Math.max(1, steps);
+            const through = x > bar.left + 1 && x < bar.right - 1 && y > bar.top + 1 && y < bar.bottom - 1;
+            expect(through, `${note.id}'s leader runs through the ${bar.series} bar ${bar.index}`).toBe(false);
+          }
+        }
+      }
+    }
+  });
+}
+
 // Where every bar stands to the top of the domain the chart gives and the
 // band above the plot is shorter than the card, no place on the chart is
 // clear of the data: the note goes to the rail, still naming its target,

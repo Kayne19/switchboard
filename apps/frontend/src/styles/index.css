@@ -961,6 +961,13 @@ button {
 .chart-note-leader__stop--point {
   stop-opacity: 0.2;
 }
+
+/* A leader to a bar lands by its printed value, among bars it would fade
+   into: it keeps the card's edge colour, a shade firmer, the whole way. */
+.chart-note-leader--bar .chart-note-leader__stop {
+  stop-color: rgba(var(--orange-rgb), 0.8);
+  stop-opacity: 1;
+}
 .chart-note {
   position: absolute;
   left: 0;
@@ -972,6 +979,13 @@ button {
   background: #000;
   pointer-events: auto;
 }
+/* A narrow card puts what it names on a line of its own rather than cut
+   it to an ellipsis beside the tag. */
+.chart-note .annotation-card__header {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
 .chart-note .annotation-card {
   height: auto;
   min-height: 0;
