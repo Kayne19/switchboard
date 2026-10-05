@@ -458,10 +458,23 @@ for a list row (a phone's cell in the today scene) holds the conditions
 with the days to come beside them as a row of columns (a first day whose
 high and low the figure shows is left out), each its name, glyph, high
 and low, as many as whole columns fit beside the figure, a day the note
-names taking the last column when it lies past them; one too short even
-for those columns holds the conditions alone, the condition beside the
+names taking the last column when it lies past them. The layout counts
+the figure's width itself -- its glyph and temperature row (in ems of
+the temperature), or its glyph and condition line (read from the page,
+whose face follows the stage), whichever is wider -- and stands the
+columns only where a whole one fits beside it, the figure drawn at that
+width. A slot too short for those columns, or too narrow for one beside
+the figure, holds the conditions alone, the condition beside the
 temperature where stacked they would run past its foot (on one line, the
-high and low giving way first). The hours are a strip, a column each:
+high and low giving way first). The hour or day a note names that no
+list or column there draws stands on a line under the conditions, its
+badge, its name, its glyph and its readings, and the layout keeps room
+for that line. Where the line is narrow its readings give way in an
+order: the chance of rain goes whole first, then the temperatures end in
+an ellipsis. Where a slot is too short for the head, the alert's line,
+the figure and that item's line (the today scene's cell at 844x390), the
+alert's line gives way to the item's, which the card on screen names:
+the alert's tag stays in the head, and focus draws its line whole. The hours are a strip, a column each:
 the temperature traced over the chance of rain, labelled every 1, 2, 3,
 4, 6, 8, 12 or 24 hours so the labels stand at least 34px apart, which
 keeps 48 hours readable on a phone without scrolling sideways; the hour
