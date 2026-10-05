@@ -591,9 +591,16 @@ function prepare(field: NoteField, leaderOverlap = 0): Prepared {
   };
 }
 
-// Places the notes one by one, all of them but `leftOut`. Those placed
-// before `leftOut` would take the same places as in `before`, the run with
-// every note, so they are taken from it.
+// Places the notes one by one, all of them but `leftOut`. Placed again
+// without the note the rail takes, the cards placed before it in `before`,
+// the run with every note, would take the same places, and every card
+// after it that was not astray there keeps its place: the note left out
+// only frees room, so that place is still clear, and a card that has a
+// place does not move for a note that leaves. The cards after it that were
+// astray are placed again, in order, around them: the first of them tries
+// its sizes afresh, since the room the note left is its to take first (a
+// general note's corner, say, may be what kept it from a clear place); the
+// rest keep the size they took, so a crowded chart's reruns stay cheap.
 function placeInOrder(
   notes: NoteToPlace[],
   field: Prepared,
@@ -604,7 +611,7 @@ function placeInOrder(
   const { area, plot, marks, fills, labels, segmentsNear, marksNear, wholly, leaderOverlap } = field;
   const everyNote = [...notes.filter((note) => !note.point), ...notes.filter((note) => note.point)];
   const order = everyNote.filter((note) => note.id !== leftOut);
-  const settled = before ? everyNote.slice(0, Math.max(0, everyNote.findIndex((note) => note.id === leftOut))) : [];
+  const earlier = new Set(before ? everyNote.slice(0, Math.max(0, everyNote.findIndex((note) => note.id === leftOut))).map((note) => note.id) : []);
   const points = notes.flatMap((note) => (note.point ? [{ id: note.id, point: note.point }] : []));
   const placed = new Map<string, Placement>();
   const leaders: Point[][] = [];
@@ -620,22 +627,21 @@ function placeInOrder(
   };
 
   for (const note of order) {
-    const earlier = settled.includes(note) ? before?.get(note.id) : undefined;
-    if (earlier) {
-      placed.set(note.id, earlier);
-      if (earlier.leader.length > 0) leaders.push(earlier.leader);
-      continue;
+    const kept = before?.get(note.id);
+    if (kept && (earlier.has(note.id) || !kept.astray)) {
+      placed.set(note.id, kept);
+      if (kept.leader.length > 0) leaders.push(kept.leader);
     }
+  }
+  let first = true;
+  for (const note of order) {
+    if (placed.has(note.id)) continue;
     // The card at its own size; where that has no clear place, or runs a
     // long leader to its callout, each narrower size it may take, kept only
     // where it falls short by less -- or, as clear, runs a leader much
     // shorter.
-    // Placed again without the note the rail takes, a card that was
-    // settled keeps the size it took with every note on the chart; one that
-    // was not tries its sizes again, since the note left out may have been
-    // what kept it from a clear place.
-    const kept = before?.get(note.id);
-    const sized = kept && isSettled(note, kept) ? kept.rect : undefined;
+    const sized = before && !first ? before.get(note.id)?.rect : undefined;
+    first = false;
     let chosen = sized ? placeSized(note, sized.right - sized.left, sized.bottom - sized.top) : placeSized(note, note.width, note.height);
     for (const size of sized ? [] : (note.sizes ?? [])) {
       if (isSettled(note, chosen)) break;
