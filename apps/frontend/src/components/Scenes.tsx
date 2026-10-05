@@ -135,11 +135,11 @@ interface ExplanationProps {
 // it resolves in and out only when an explanation appears or goes away. Its
 // layout animates position only: animating its size on a text change scales
 // the text while it reflows, which reads as a twitch.
-function RailNote({ note, noteObject, onFocus, onOpenHistory, target }: ExplanationProps & { target?: string }) {
+function RailNote({ note, noteObject, onFocus, onOpenHistory, target, leads = false }: ExplanationProps & { target?: string; leads?: boolean }) {
   return (
     <AnimatePresence initial={false}>
       {note ? (
-        <ObjectMotion key="rail-note" objectId={noteObject?.id ?? 'speech-note'} className="rail-note" layout="position">
+        <ObjectMotion key="rail-note" objectId={noteObject?.id ?? 'speech-note'} className={`rail-note${leads ? ' rail-note--leads' : ''}`} layout="position">
           <SurfaceBoundary surfaceId={noteObject?.id ?? 'speech-note'} resetKey={noteObject ?? note}>
             <AnnotationCard
               data={note}
@@ -182,6 +182,37 @@ interface RailDetailsProps {
   onOpenHistory?: () => void;
   /** The rail is folded to a strip under a primary that takes the stage's height: it shows the note, or the live response when there is no note, and nothing else. */
   folded?: boolean;
+  /** The note is one the charts could not hold: where the column is too short for all it carries, the note leads it, whole, rather than fall under the fold of the metrics. */
+  noteLeads?: boolean;
+}
+
+// Whether the rail's column holds more than it shows, measured only while
+// a note may lead it.
+function useCrowded(ref: RefObject<HTMLDivElement | null>, watching: boolean): boolean {
+  const [crowded, setCrowded] = useState(false);
+  useLayoutEffect(() => {
+    const column = ref.current;
+    if (!watching || !column) {
+      setCrowded(false);
+      return undefined;
+    }
+    const measure = () => setCrowded(column.scrollHeight > column.clientHeight + 1);
+    const observer = new ResizeObserver(measure);
+    const watch = () => {
+      observer.disconnect();
+      observer.observe(column);
+      for (const child of Array.from(column.children)) observer.observe(child);
+      measure();
+    };
+    const changed = new MutationObserver(watch);
+    changed.observe(column, { childList: true });
+    watch();
+    return () => {
+      observer.disconnect();
+      changed.disconnect();
+    };
+  }, [ref, watching]);
+  return watching && crowded;
 }
 
 // A rail note about a chart on stage names the category it points at, as
@@ -197,8 +228,10 @@ function railNoteTarget(state: ControllerState, note: NoteData | null): string |
 // a permanent slot; an empty one renders nothing, and
 // the activity panel can linger after its end without the wrapper
 // unmounting it first.
-function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, onOpenHistory, folded = false }: RailDetailsProps) {
+function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, onOpenHistory, folded = false, noteLeads = false }: RailDetailsProps) {
   const liveMessage = liveChatMessage(state);
+  const columnRef = useRef<HTMLDivElement>(null);
+  const leads = useCrowded(columnRef, !folded && noteLeads && note !== null);
   if (folded) {
     // The strip: the note, linked to what it names by its target line and
     // the marker on the item, or else the live response; the presence
@@ -215,12 +248,16 @@ function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, 
   // clearing never resizes them. Metrics and progress keep their own size at
   // the top and are not moved by a panel below them.
   const reserveActivity = liveMessage !== null || note !== null;
+  const railNote = (
+    <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} target={railNoteTarget(state, note)} leads={leads} />
+  );
   return (
-    <div className="content-rail__details">
+    <div ref={columnRef} className="content-rail__details">
+      {leads ? railNote : null}
       {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} variant="rail" /> : null}
       <RailProgress progressList={progressList} onFocus={onFocus} />
       {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
-      <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} target={railNoteTarget(state, note)} />
+      {leads ? null : railNote}
       <ToolActivity activity={state.activity} reserveSpace={reserveActivity} />
     </div>
   );
@@ -313,6 +350,8 @@ interface SceneContent {
   metrics: Array<SceneObject<MetricData>>;
   note: NoteData | null;
   noteObject?: SceneObject<NoteData>;
+  /** The rail's note is one the charts could not hold: in a rail too short for all it carries, it leads. */
+  noteLeads?: boolean;
   progressList: Array<SceneObject<ProgressData>>;
 }
 
@@ -356,6 +395,7 @@ function trainingContent(
     // primary leaves out, or one about a visual that is not a chart.
     note: inRail?.data ?? null,
     noteObject: inRail?.object,
+    noteLeads: inRail !== undefined,
     progressList: railProgress,
     aux: firstProgress && !progress ? [...besideCharts, firstProgress] : besideCharts,
     main: (
@@ -907,6 +947,7 @@ export function SceneShell(props: SceneProps) {
                 onFocus={onFocus}
                 onOpenHistory={onOpenHistory}
                 folded={staged}
+                noteLeads={content.noteLeads}
               />
             </motion.aside>
           </div>

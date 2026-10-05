@@ -1032,7 +1032,11 @@ button {
   display: flex;
   flex-direction: column;
   width: var(--note-width);
-  max-height: 36%;
+  /* A third of the layer, but on a short one (a phone on its side) room
+     for its header and a few lines, up to three fifths of it: at a third
+     of a layer 150 px tall the card had room for its header alone, and
+     its text scrolled out of sight. */
+  max-height: max(36%, min(104px, 62%));
   background: #000;
   pointer-events: auto;
 }
@@ -1496,6 +1500,14 @@ button {
 .content-rail__details > .rail-note {
   flex: 1 1 auto;
   min-height: clamp(64px, 10cqh, 110px);
+}
+/* A note the charts could not hold, leading a column too short for all of
+   it: whole, the metrics after it in the column's scroll. */
+.content-rail__details > .rail-note--leads {
+  flex: none;
+}
+.rail-note--leads .annotation-card {
+  height: auto;
 }
 .content-rail__details > .rail-progress {
   flex: none;
