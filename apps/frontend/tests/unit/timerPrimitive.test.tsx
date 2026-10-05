@@ -5,6 +5,7 @@
 // countdown must get right -- exactly zero, past zero, paused, a start
 // still to come -- are pinned as the page draws them.
 import { act } from 'react';
+import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TimerData } from '../../src/controller/types';
@@ -77,6 +78,19 @@ describe('the page clock', () => {
     const host = render({ timers: [kitchen.timers[1]] });
     expect(vi.getTimerCount()).toBe(0);
     tick(10_000);
+    expect(digits(host, 'bread')).toBe('21:00');
+  });
+
+  it('a timer resumed draws the time now on its first frame, not the time it mounted', () => {
+    const paused: TimerData = { timers: [{ id: 'bread', label: 'Bread', startedAt: at(-24), endsAt: at(21), state: 'paused', remaining: 1260 }] };
+    const host = render(paused);
+    // A minute passes with nothing running, then the agent resumes it.
+    vi.setSystemTime(NOW + 60_000);
+    const resumed: TimerData = { timers: [{ id: 'bread', label: 'Bread', startedAt: at(-24), endsAt: at(22) }] };
+    // The commit the browser paints: layout effects run, passive ones wait.
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false;
+    flushSync(() => roots[0].render(<TimerPrimitive data={resumed} />));
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     expect(digits(host, 'bread')).toBe('21:00');
   });
 

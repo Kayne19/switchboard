@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 
 // The page's one clock (docs/visual-channel.md, "The page clock"). Only a
 // timer reads the time: a calendar, a to-do list, a forecast and an inbox
@@ -42,7 +42,7 @@ function subscribe(listener: Listener): () => void {
 }
 
 /** The page clock's time, in epoch milliseconds: the last tick while it runs. */
-export function pageNow(): number {
+function pageNow(): number {
   return listeners.size > 0 ? current : Date.now();
 }
 
@@ -53,7 +53,10 @@ export function pageNow(): number {
  */
 export function usePageClock(running: boolean): number {
   const [now, setNow] = useState(pageNow);
-  useEffect(() => {
+  // Before paint: a timer that starts running (a paused one resumed) is
+  // drawn at the time now on its first frame, not at the time it mounted,
+  // and its bar never sweeps from a stale share.
+  useLayoutEffect(() => {
     if (!running) return undefined;
     setNow(pageNow());
     return subscribe(setNow);
