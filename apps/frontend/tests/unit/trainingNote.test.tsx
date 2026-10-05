@@ -265,14 +265,17 @@ describe('chart notes', () => {
     expect(callout?.getAttribute('data-series')).toBe('UPTIME');
   });
 
-  it('rings the point a note it hands the rail names on a line chart', () => {
+  it('keeps the point a note it hands the rail names ringed, its value printed, on a line chart', () => {
     CARD.height = 560;
     mount([chart, note('loss-note', { target: 'loss', x: 20 })]);
     expect(card('loss-note')!.element.classList.contains('chart-note--away')).toBe(true);
-    const ring = host.querySelector('.chart-note-ring[data-note="loss-note"]');
+    expect(leader('loss-note')).toBeNull();
+    const marked = host.querySelector('.chart-object[data-chart-id="loss"] .chart-marker[data-x="20"]');
     const point = chartSeriesPoint(chartData, 20)!;
+    const ring = marked?.querySelector('.chart-marker__point');
     expect(Number(ring?.getAttribute('cx'))).toBeCloseTo(point.x, 3);
-    expect(Number(ring?.getAttribute('cy'))).toBeCloseTo(SVG_TOP + point.y, 3);
+    expect(Number(ring?.getAttribute('cy'))).toBeCloseTo(point.y, 3);
+    expect(marked?.querySelector('.chart-marker__value')?.textContent).toBe('0.2');
   });
 
   it('keeps the note in the rail when a new primary chart leaves out the same note the old one did', () => {

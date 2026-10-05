@@ -908,6 +908,21 @@ button {
 .chart-callout__value--inside {
   fill: var(--black);
 }
+
+/* A point a marker or a note names on a line, area or scatter chart: its
+   ring, and its value printed beside it in the tick text's face, where a
+   note's leader lands. The value is edged in black, so a line or a point
+   behind it never breaks its figures. */
+.chart-marker__value {
+  fill: var(--orange);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  stroke: var(--black);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  paint-order: stroke;
+}
 .compare-label {
   position: absolute;
   z-index: 3;
@@ -997,16 +1012,11 @@ button {
   clip-path: polygon(0 0, 92% 0, 100% 23%, 100% 100%, 0 100%);
 }
 /* The note a chart leaves out so the others are clear of its data is shown
-   in the rail; its card stays here out of view only to be measured, and
-   the point it names keeps a ring, drawn as the chart draws its marker but
-   hollow, so the data under it still shows. */
+   in the rail; its card stays here out of view only to be measured. The
+   chart still marks the point it names. */
 .chart-note--away {
   visibility: hidden;
   pointer-events: none;
-}
-.chart-note-ring {
-  fill: none;
-  stroke: var(--orange);
 }
 .training-progress {
   min-height: 64px;

@@ -3,8 +3,6 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 're
 import type { ChartData, NoteData, SceneObject } from '../controller/types';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import {
-  CHART_MARKER_RADIUS,
-  CHART_MARKER_STROKE,
   chartFrame,
   chartObstacles,
   chartScales,
@@ -33,8 +31,6 @@ interface NotesLayout {
   leaders: Record<string, Point[]>;
   /** The note left out so the others have places clear of the data; the rail carries it instead. */
   away: string | null;
-  /** The ring on that note's point, so the point it names stays marked. */
-  ring: { x: number; y: number; r: number; stroke: number } | null;
 }
 
 // The narrower widths a card with no clear place tries, as shares of its
@@ -80,7 +76,6 @@ function screenScale(element: HTMLElement, rect: DOMRect): { kx: number; ky: num
 
 function sameLayout(a: NotesLayout | null, b: NotesLayout): boolean {
   if (!a || a.away !== b.away) return false;
-  if (a.ring?.x !== b.ring?.x || a.ring?.y !== b.ring?.y || a.ring?.r !== b.ring?.r) return false;
   const aKeys = Object.keys(a.cards);
   const bKeys = Object.keys(b.cards);
   if (aKeys.length !== bKeys.length) return false;
@@ -116,8 +111,8 @@ const snap = (value: number) => Math.round(value - 0.5) + 0.5;
  * wherever its absence leaves no more cards astray, else the one whose
  * absence leaves the fewest). The layer names it through `onRailNote`,
  * keeps its card out of view (still measured, so it comes back the moment
- * the chart has room), and rings the point it names on a line; a bar the
- * chart marks itself.
+ * the chart has room); the chart keeps the point it names marked, as it
+ * marks every point a note names.
  */
 export function ChartNotes({
   chart,
@@ -164,7 +159,6 @@ export function ChartNotes({
       const field: NoteField = { area: { left: 0, top: 0, right: layerRect.width / kx, bottom: layerRect.height / ky } };
 
       let toLayer: ((point: ViewPoint) => Point) | undefined;
-      let viewScale = 1;
       const svg = svgOf();
       const svgRect = svg?.getBoundingClientRect();
       // The frame the chart draws in, decided from its slot as the chart
@@ -181,7 +175,6 @@ export function ChartNotes({
         const left = (svgRect.left - layerRect.left) / kx + (width - frame.width * scale) / 2;
         const top = (svgRect.top - layerRect.top) / ky + (height - frame.height * scale) / 2;
         toLayer = (point) => ({ x: left + point.x * scale, y: top + point.y * scale });
-        viewScale = scale;
       }
       const rectToLayer = (rect: ViewRect): Rect => {
         const a = toLayer!({ x: rect.left, y: rect.top });
@@ -254,18 +247,14 @@ export function ChartNotes({
         }
         placed = layoutNotes(toPlace, field, options);
       }
-      const next: NotesLayout = { cards: {}, widths: {}, leaders: {}, away: null, ring: null };
+      const next: NotesLayout = { cards: {}, widths: {}, leaders: {}, away: null };
       for (const note of toPlace) {
         const place = placed.get(note.id);
         const card = place?.rect;
         if (!card) {
-          // Left out so the others have clear places: the rail carries it,
-          // and the point it names stays ringed as the chart rings a marker.
+          // Left out so the others have clear places: the rail carries it.
+          // The point it names stays marked, the chart's callout drawn for every note.
           next.away = note.id;
-          // A bar is marked by the chart itself, its callout drawn for every note.
-          if (note.point && !note.from) {
-            next.ring = { x: note.point.x, y: note.point.y, r: CHART_MARKER_RADIUS * viewScale, stroke: CHART_MARKER_STROKE * viewScale };
-          }
           continue;
         }
         const width = card.right - card.left;
@@ -358,21 +347,6 @@ export function ChartNotes({
               </motion.g>
             );
           })}
-          {layout?.ring && layout.away ? (
-            <motion.circle
-              key={`ring-${layout.away}`}
-              className="chart-note-ring"
-              data-note={layout.away}
-              cx={layout.ring.x}
-              cy={layout.ring.y}
-              r={layout.ring.r}
-              strokeWidth={layout.ring.stroke}
-              initial={reduced ? false : { opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.2 }}
-            />
-          ) : null}
         </AnimatePresence>
       </svg>
       <AnimatePresence initial={false}>
