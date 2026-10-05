@@ -2666,6 +2666,12 @@ button {
 .calendar__meta-title {
   color: rgba(var(--orange-rgb), 0.8);
 }
+.calendar__meta-range {
+  margin-left: auto;
+}
+.calendar-more__note {
+  margin-left: 4px;
+}
 .calendar__body {
   position: relative;
   flex: 1 1 auto;
@@ -2840,7 +2846,7 @@ button {
    faint one across the other days. */
 .calendar-grid__now {
   position: absolute;
-  z-index: 3;
+  z-index: 8;
   left: 0;
   right: 0;
   height: 0;
@@ -2982,9 +2988,7 @@ button {
   /* The badge's own tint, made opaque so the box edge under it does not show through. */
   background: color-mix(in srgb, var(--orange) 25%, #000);
 }
-.calendar-event-slot--marked {
-  z-index: 4;
-}
+
 .calendar-event--past,
 .calendar-bar--past,
 .calendar-line--past,

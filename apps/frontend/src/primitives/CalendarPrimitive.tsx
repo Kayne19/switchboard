@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
 import type { CalendarData } from '../controller/types';
 import { parseTimeValue } from '../controller/validation';
 import { useElementSize, type ElementSize } from '../hooks/useElementSize';
@@ -16,6 +16,7 @@ import {
   eventsOutside,
   eventTense,
   eventTimeText,
+  isBar,
   laneCount,
   MINUTES_PER_DAY,
   monthRowPlan,
@@ -72,6 +73,8 @@ const MIN_EVENT_PX = 18;
 /** How far a later event must start below an earlier one it overlaps for
  * the earlier's title to show above it: the cluster is then stepped. */
 const STEP_GAP_PX = 13;
+/** The least a box covers on a time grid's axis, in minutes: a box a line tall at the least hour. */
+const MIN_BOX_MINUTES = (MIN_EVENT_PX / AXIS.minHourPx) * 60;
 /** The least width a side-by-side event is drawn at: the start of its title. */
 const MIN_PART_PX = 34;
 /** How far each step of a stepped cluster is set in. */
@@ -96,7 +99,8 @@ interface LayoutChoice {
 /** The height of a time grid's pinned head: its day row and the all-day lanes it draws. */
 function gridHeadPx(lanes: number): number {
   const rows = lanes > MAX_WEEK_LANES ? MAX_WEEK_LANES : lanes;
-  return DAY_ROW_PX + rows * LANE_PX + (rows > 0 ? 6 : 0);
+  // The head's rule under it, and with a strip its rule and its padding.
+  return DAY_ROW_PX + 1 + (rows > 0 ? rows * LANE_PX + 6 + 1 : 0);
 }
 
 /** The layout a view takes in a body of `size` (its grid's head `headPx` tall); an unmeasured body draws the view whole. */
@@ -133,12 +137,11 @@ function calendarModel(data: CalendarData): CalendarModel {
   return { placed, days, today: todayNumber(data), now: nowMinutes(data), outside: eventsOutside(placed, days) };
 }
 
-const SEMANTICS = new Set(['red', 'orange', 'green', 'cyan', 'amber', 'paper', 'muted']);
-
 /** The classes every drawing of an event shares: its colour, status, tense, and whether it is lit. */
 function eventClasses(base: string, placed: PlacedEvent, model: CalendarModel): string {
   const { event } = placed;
-  const semantic = event.semantic && SEMANTICS.has(event.semantic) ? event.semantic : 'none';
+  // The validator admits only the Semantic set and the three statuses.
+  const semantic = event.semantic ?? 'none';
   return [
     base,
     `calendar-tone--${semantic}`,
@@ -173,8 +176,11 @@ interface GridProps {
 
 /** The column the grid opens on: the day of the marked event, else today, else the active event's, else the first. */
 function leadDay(model: CalendarModel, marked: string | undefined): number | undefined {
-  const named = marked === undefined ? undefined : model.placed.find((item) => item.event.id === marked);
-  if (named) return named.firstDay;
+  const first = model.days[0];
+  const last = model.days[model.days.length - 1];
+  const named = marked === undefined ? undefined : model.placed.find((item) => item.event.id === marked && item.lastDay >= first && item.firstDay <= last);
+  // An event that began before the view leads from the view's first day.
+  if (named) return Math.max(named.firstDay, first);
   if (model.today !== undefined) return model.today;
   return model.placed.find((item) => item.event.active)?.firstDay;
 }
@@ -212,21 +218,29 @@ function TimeGrid({ data, model, marked, size, columns }: GridProps) {
   const nowColumn = nowDay === undefined ? -1 : days.indexOf(nowDay);
   const nowMinute = nowColumn >= 0 && model.now !== undefined ? model.now - (nowDay as number) * MINUTES_PER_DAY : undefined;
   const room = size.height > 0 ? size.height - headHeight : 520;
-  const axis = timeAxis(segments, nowMinute, room);
+  const axis = timeAxis(segments, nowMinute, room, MIN_BOX_MINUTES);
   const minDuration = (MIN_EVENT_PX / axis.hourPx) * 60;
-  for (const list of segments) packColumns(list, minDuration, (STEP_GAP_PX / axis.hourPx) * 60);
   const rail = pages ? PAGE_RAIL_PX : 0;
   const columnWidth = size.width > 0 ? (size.width - GUTTER_PX - 2 * rail) / columns : 160;
+  const maxSteps = Math.max(0, Math.floor((columnWidth - MIN_PART_PX) / STEP_INSET_PX));
+  for (const list of segments) packColumns(list, minDuration, (STEP_GAP_PX / axis.hourPx) * 60, maxSteps);
+  // A cluster wider than a column holds at a readable part width draws what
+  // fits and counts the rest in a chip in the last place.
+  const places = Math.max(1, Math.floor(columnWidth / MIN_PART_PX));
+  const laidOut = segments.map((list) => crowdedColumns(list, places, minDuration));
 
   // Every box carries its event's id (a viewport counts each box past an
-  // edge where it lies); the NOTE badge goes on the event's first box only.
+  // edge where it lies). The NOTE badge goes on the first place the marked
+  // event is drawn, or on the count that holds it where it is not drawn.
   const named = new Set<string>();
   const firstBox = (id: string) => {
     if (named.has(id)) return false;
     named.add(id);
     return true;
   };
-  const markedShown = marked !== undefined && model.placed.some((item) => item.event.id === marked && item.lastDay >= days[0] && item.firstDay <= days[days.length - 1]);
+  // The hours open on the marked event when one of its boxes is in them;
+  // else on the now line.
+  const markedInHours = marked !== undefined && laidOut.some(({ drawn }) => drawn.some((segment) => segment.placed.event.id === marked));
 
   // A paged grid keeps a rail's width clear on each side of its days, so
   // the rails that name the hidden days never lie over the shown ones.
@@ -259,9 +273,12 @@ function TimeGrid({ data, model, marked, size, columns }: GridProps) {
           ))}
           {lanes > shownLanes
             ? days.map((day, index) => {
-                const hidden = bars.filter((bar) => bar.lane >= shownLanes && bar.from <= index && bar.to >= index).length;
-                return hidden > 0 ? (
-                  <span key={day} className="calendar-more tech micro" style={{ gridColumn: at(index), gridRow: stripRows }}>+{hidden} MORE</span>
+                const hidden = bars.filter((bar) => bar.lane >= shownLanes && bar.from <= index && bar.to >= index);
+                const holds = marked !== undefined && hidden.some((bar) => bar.placed.event.id === marked) && firstBox(marked);
+                return hidden.length > 0 ? (
+                  <span key={day} className="calendar-more tech micro" style={{ gridColumn: at(index), gridRow: stripRows }} data-item={holds ? marked : undefined}>
+                    +{hidden.length} MORE{holds ? <NoteBadge className="calendar-more__note" /> : null}
+                  </span>
                 ) : null;
               })
             : null}
@@ -273,18 +290,17 @@ function TimeGrid({ data, model, marked, size, columns }: GridProps) {
   const grid = (
     <ListViewport
       noun={['EVENT', 'EVENTS']}
-      lead={markedShown ? marked : undefined}
+      lead={markedInHours ? marked : undefined}
       head={head}
       className="calendar-grid__viewport"
       scrollClassName="calendar-grid__scroll"
       label="Calendar hours"
     >
-      <div className="calendar-grid__body" style={{ ...template, height: `${Math.ceil(axis.height)}px` }}>
+      {/* Whole pixels: a body a fraction taller than its view would scroll for nothing. */}
+      <div className="calendar-grid__body" style={{ ...template, height: `${Math.floor(axis.height)}px` }}>
         <AxisRules axis={axis} />
         {days.map((day, index) => {
-          // A cluster wider than the column holds at a readable part width
-          // draws what fits and counts the rest in a chip in the last place.
-          const { drawn, hidden } = crowdedColumns(segments[index], Math.floor(columnWidth / MIN_PART_PX), minDuration);
+          const { drawn, hidden } = laidOut[index];
           return (
             <div key={day} className={`calendar-grid__column${day === model.today ? ' calendar-grid__column--today' : ''}`} style={{ gridColumn: at(index) }}>
               {drawn.map((segment) => (
@@ -301,14 +317,16 @@ function TimeGrid({ data, model, marked, size, columns }: GridProps) {
               ))}
               {hidden.map((run) => {
                 const top = axisY(axis, run.start);
-                const places = Math.max(1, Math.floor(columnWidth / MIN_PART_PX));
+                const holds = marked !== undefined && run.ids.includes(marked) && firstBox(marked);
                 return (
                   <div
                     key={`more-${run.cluster}`}
                     className="calendar-grid__more tech micro"
+                    data-item={holds ? marked : undefined}
                     style={{ top: `${top}px`, height: `${Math.max(MIN_EVENT_PX, axisY(axis, run.end) - top) - 1}px`, left: `calc(${((places - 1) / places) * 100}% + 1px)`, width: `calc(${100 / places}% - 3px)` }}
                   >
                     +{run.count}
+                    {holds ? <NoteBadge className="calendar-event__note" /> : null}
                   </div>
                 );
               })}
@@ -326,6 +344,7 @@ function TimeGrid({ data, model, marked, size, columns }: GridProps) {
     <PagedDays
       before={first > 0 ? runText(model.days.slice(0, first), model.placed) : null}
       after={first + columns < model.days.length ? runText(model.days.slice(first + columns), model.placed) : null}
+      shown={runText(days, model.placed)}
       onTurn={(direction) => turn(first + direction * columns)}
     >
       {grid}
@@ -378,8 +397,9 @@ function EventBox({ segment, axis, model, day, width, marked, first }: {
   first: boolean;
 }) {
   const { placed } = segment;
-  const top = axisY(axis, segment.start);
-  const height = Math.max(MIN_EVENT_PX, axisY(axis, segment.end) - top) - 1;
+  const height = Math.max(MIN_EVENT_PX, axisY(axis, segment.end) - axisY(axis, segment.start)) - 1;
+  // A short event at the day's end is drawn up from it, never past the grid's foot.
+  const top = Math.max(0, Math.min(axisY(axis, segment.start), axis.height - height - 1));
   // The box's lines, given out in order: the title (a narrow box gives it
   // every line it can use, as the grid already says the time), then the
   // time, where, and the detail.
@@ -399,17 +419,21 @@ function EventBox({ segment, axis, model, day, width, marked, first }: {
   const sizeClass = lines <= 1 ? 'calendar-event--line' : 'calendar-event--lines';
   // The box sits in a slot of its place and size; the NOTE badge rides the
   // slot's top edge, outside the box's clip, so it never takes a title's room.
+  // One stacking order, set here: a later step over an earlier one, the
+  // active event over its neighbours, the marked one over all; the now line
+  // (z 8 in styles/index.css) over every event.
+  const zIndex = isMarked ? 7 : Math.min(6, (segment.stepped ? 1 + segment.column : 1) + (placed.event.active ? 1 : 0));
   const place: CSSProperties = segment.stepped
-    ? { top: `${top}px`, height: `${height}px`, left: `${1 + segment.column * STEP_INSET_PX}px`, right: '2px', zIndex: (placed.event.active ? 3 : 1) + segment.column }
+    ? { top: `${top}px`, height: `${height}px`, left: `${1 + segment.column * STEP_INSET_PX}px`, right: '2px', zIndex }
     : {
         top: `${top}px`,
         height: `${height}px`,
         left: `calc(${(segment.column / segment.columns) * 100}% + 1px)`,
         width: `calc(${(segment.span / segment.columns) * 100}% - 3px)`,
-        zIndex: placed.event.active ? 3 : undefined,
+        zIndex,
       };
   return (
-    <div className={`calendar-event-slot${isMarked ? ' calendar-event-slot--marked' : ''}`} data-item={placed.event.id} style={place}>
+    <div className="calendar-event-slot" data-item={placed.event.id} style={place}>
       <div
         className={[
           eventClasses('calendar-event', placed, model),
@@ -441,7 +465,6 @@ function DayBarBox({ bar, model, marked, first, column }: { bar: DayBar; model: 
         eventClasses('calendar-bar', placed, model),
         bar.fromBefore ? 'calendar-bar--from-before' : '',
         bar.toAfter ? 'calendar-bar--to-after' : '',
-        isMarked ? 'calendar-bar--marked' : '',
       ].filter(Boolean).join(' ')}
       data-item={placed.event.id}
       style={{ gridColumn: `${bar.from + column} / ${bar.to + column + 1}`, gridRow: bar.lane + 1 }}
@@ -461,7 +484,7 @@ function DayBarBox({ bar, model, marked, first, column }: { bar: DayBar; model: 
  * scrolled drawing's rail counts its parts (the same cut line and tag). A
  * tap on the tag, or a swipe across the days, turns to the next of them.
  */
-function PagedDays({ before, after, onTurn, children }: { before: string | null; after: string | null; onTurn: (direction: -1 | 1) => void; children: ReactNode }) {
+function PagedDays({ before, after, shown, onTurn, children }: { before: string | null; after: string | null; shown: string; onTurn: (direction: -1 | 1) => void; children: ReactNode }) {
   const start = useRef<{ x: number; y: number } | null>(null);
   const swiped = useRef(false);
   const tag = (side: 'left' | 'right', text: string) => (
@@ -486,6 +509,18 @@ function PagedDays({ before, after, onTurn, children }: { before: string | null;
   return (
     <div
       className="calendar-grid calendar-pages"
+      // The arrow keys turn the days too, for a reader without a pointer;
+      // handled, so they reach nothing else (FocusableSurface's rule).
+      tabIndex={0}
+      role="group"
+      aria-label={`Days shown: ${shown}. ${[before ? `Earlier: ${before}` : '', after ? `Later: ${after}` : ''].filter(Boolean).join('. ')}. Left and right arrow keys turn the days.`}
+      onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
+        if (event.altKey || event.ctrlKey || event.metaKey) return;
+        const direction = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0;
+        if (direction === 0 || (direction < 0 && !before) || (direction > 0 && !after)) return;
+        event.preventDefault();
+        onTurn(direction);
+      }}
       onPointerDown={(event: PointerEvent<HTMLDivElement>) => {
         start.current = { x: event.clientX, y: event.clientY };
         swiped.current = false;
@@ -527,15 +562,16 @@ interface WeekPlan {
   week: number[];
   bars: DayBar[];
   lanes: number;
-  cells: Array<{ day: number; timed: PlacedEvent[]; shown: number; more: number; touching: PlacedEvent[] }>;
+  cells: Array<{ day: number; timed: PlacedEvent[]; shown: number; more: number; hiddenBars: PlacedEvent[]; touching: PlacedEvent[] }>;
 }
 
 const MAX_MARKS = 4;
 
-/** A day's events as a month too small for titles marks them: all-day first, then by start. */
+/** A day's events as a month too small for titles marks them: its bars
+ * (all-day, and timed a day long or more), then its timed events by start.
+ * An event past midnight is marked on the day it starts, as a month line is. */
 function markedOrder(cell: WeekPlan['cells'][number]): PlacedEvent[] {
-  const continuing = cell.touching.filter((item) => !item.allDay && item.firstDay !== cell.day);
-  return [...cell.touching.filter((item) => item.allDay), ...continuing, ...cell.timed];
+  return [...cell.touching.filter(isBar), ...cell.timed];
 }
 
 function planMonth(weeks: number[][], model: CalendarModel, capacity: number): WeekPlan[] {
@@ -552,13 +588,21 @@ function planMonth(weeks: number[][], model: CalendarModel, capacity: number): W
         timed: timedByDay[index],
         shown: row.cells[index].timed,
         more: row.cells[index].more,
+        hiddenBars: bars.filter((bar) => bar.lane >= row.lanes && bar.from <= index && bar.to >= index).map((bar) => bar.placed),
         touching: model.placed.filter((item) => item.firstDay <= day && item.lastDay >= day),
       })),
     };
   });
 }
 
-/** Where each event is first drawn in a month, by a key of its place: the one its id and a note's badge go on. */
+/** The events a cell's "+N MORE" line counts. */
+function countedInMore(cell: WeekPlan['cells'][number]): PlacedEvent[] {
+  return [...cell.timed.slice(cell.shown), ...cell.hiddenBars];
+}
+
+/** Where each event is first drawn in a month, by a key of its place: the
+ * one its NOTE badge goes on. An event a row has no room for is "drawn" by
+ * the count that holds it, so the badge goes there. */
 function firstPlaces(plans: WeekPlan[], marks: boolean): Map<string, string> {
   const first = new Map<string, string>();
   const see = (id: string, place: string) => {
@@ -568,12 +612,15 @@ function firstPlaces(plans: WeekPlan[], marks: boolean): Map<string, string> {
     if (marks) {
       for (const cell of plan.cells) {
         const order = markedOrder(cell);
-        order.slice(0, order.length > MAX_MARKS ? MAX_MARKS - 1 : MAX_MARKS).forEach((item) => see(item.event.id, `mark-${cell.day}-${item.order}`));
+        const shown = order.length > MAX_MARKS ? MAX_MARKS - 1 : MAX_MARKS;
+        order.slice(0, shown).forEach((item) => see(item.event.id, `mark-${cell.day}-${item.order}`));
+        order.slice(shown).forEach((item) => see(item.event.id, `marks-more-${cell.day}`));
       }
       return;
     }
     for (const bar of plan.bars) if (bar.lane < plan.lanes) see(bar.placed.event.id, `bar-${row}-${bar.placed.order}`);
     for (const cell of plan.cells) for (const item of cell.timed.slice(0, cell.shown)) see(item.event.id, `line-${cell.day}-${item.order}`);
+    for (const cell of plan.cells) if (cell.more > 0) for (const item of countedInMore(cell)) see(item.event.id, `more-${cell.day}`);
   });
   return first;
 }
@@ -688,7 +735,7 @@ function MonthLines({ cell, column, firstRow, model, marked, isFirst }: {
         return (
           <div
             key={placed.order}
-            className={`${eventClasses('calendar-line', placed, model)}${isMarked ? ' calendar-line--marked' : ''}`}
+            className={eventClasses('calendar-line', placed, model)}
             data-item={placed.event.id}
             style={{ gridColumn: column, gridRow: firstRow + index }}
           >
@@ -699,9 +746,19 @@ function MonthLines({ cell, column, firstRow, model, marked, isFirst }: {
         );
       })}
       {cell.more > 0 ? (
-        <span className="calendar-more tech micro" style={{ gridColumn: column, gridRow: firstRow + cell.shown }}>+{cell.more} MORE</span>
+        <MoreLine cell={cell} column={column} row={firstRow + cell.shown} marked={marked} isFirst={isFirst} />
       ) : null}
     </>
+  );
+}
+
+/** A cell's "+N MORE": it carries the NOTE badge when the marked event is one it counts. */
+function MoreLine({ cell, column, row, marked, isFirst }: { cell: WeekPlan['cells'][number]; column: number; row: number; marked?: string; isFirst: (id: string, place: string) => boolean }) {
+  const holds = marked !== undefined && isFirst(marked, `more-${cell.day}`);
+  return (
+    <span className="calendar-more tech micro" style={{ gridColumn: column, gridRow: row }} data-item={holds ? marked : undefined}>
+      +{cell.more} MORE{holds ? <NoteBadge className="calendar-more__note" /> : null}
+    </span>
   );
 }
 
@@ -719,7 +776,12 @@ function DayMarks({ cell, model, marked, isFirst }: { cell: WeekPlan['cells'][nu
           </span>
         );
       })}
-      {ordered.length > shown.length ? <span className="calendar-marks__more tech micro">+{ordered.length - shown.length}</span> : null}
+      {ordered.length > shown.length ? (
+        <span className="calendar-marks__more tech micro" data-item={marked !== undefined && isFirst(marked, `marks-more-${cell.day}`) ? marked : undefined}>
+          +{ordered.length - shown.length}
+          {marked !== undefined && isFirst(marked, `marks-more-${cell.day}`) ? <NoteBadge className="calendar-mark__note" /> : null}
+        </span>
+      ) : null}
     </span>
   );
 }
@@ -789,7 +851,7 @@ function AgendaRow({ item, day, model, marked, overlaps = false }: { item: Agend
   const where = [placed.event.location, placed.event.detail].filter(Boolean);
   return (
     <li
-      className={`${eventClasses('calendar-agenda__item', placed, model)}${isMarked ? ' calendar-agenda__item--marked' : ''}${item.first ? '' : ' calendar-agenda__item--again'}`}
+      className={`${eventClasses('calendar-agenda__item', placed, model)}${item.first ? '' : ' calendar-agenda__item--again'}`}
       data-item={placed.event.id}
     >
       <span className="calendar-agenda__time">
@@ -826,18 +888,25 @@ export function calendarFrame(data: CalendarData): { title: string; subtitle: st
   };
 }
 
-export function CalendarPrimitive({ data, marked, focused = false }: { data: CalendarData; marked?: string; focused?: boolean }) {
+/**
+ * `framed`: the scene frame above names the calendar (the main slot), so the
+ * meta line says only what the view shows; in an aux cell or focus, where
+ * no frame names it, the meta line leads with its title.
+ */
+export function CalendarPrimitive({ data, marked, focused = false, framed = false }: { data: CalendarData; marked?: string; focused?: boolean; framed?: boolean }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const size = useElementSize(bodyRef);
   const model = useMemo(() => calendarModel(data), [data]);
   const choice = chooseLayout(data, size, model.days.length, gridHeadPx(laneCount(dayBars(model.placed, model.days))));
   const count = data.events.length;
-  // The meta line: what is shown and how much; an aux cell and focus have no scene frame to say it.
+  // The meta line: what is shown and how much. The title leads it only
+  // where no scene frame shows it already (an aux cell, focus).
+  const titled = !framed;
   const meta = (
     <div className="calendar__meta tech micro">
-      <span className="calendar__meta-title">{data.title ?? `${VIEW_NAMES[data.view]} / ${rangeText(data)}`}</span>
+      {titled ? <span className="calendar__meta-title">{data.title ?? `${VIEW_NAMES[data.view]} / ${rangeText(data)}`}</span> : null}
       <span className="calendar__meta-range">
-        {data.title && model.days.length > 1 ? `${rangeText(data)} / ` : ''}
+        {(!titled || data.title) && model.days.length > 1 ? `${rangeText(data)} / ` : ''}
         {count} {count === 1 ? 'EVENT' : 'EVENTS'}
         {model.outside > 0 ? ` / ${model.outside} OUT OF VIEW` : ''}
       </span>

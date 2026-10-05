@@ -510,7 +510,7 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         ...calendarFrame(data),
         footer: 'DISPLAY / CALENDAR',
         caption: sceneCaption(primary, `CALENDAR / ${data.view.toUpperCase()}`),
-        main: slot('calendar-object', <CalendarPrimitive data={data} marked={markedItem(note, primary.id)} />, <TechFrame variant="panel" />),
+        main: slot('calendar-object', <CalendarPrimitive data={data} marked={markedItem(note, primary.id)} framed />, <TechFrame variant="panel" />),
       };
     }
     // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.

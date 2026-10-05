@@ -95,7 +95,11 @@ export function placeEvents(events: CalendarEvent[]): PlacedEvent[] {
       return;
     }
     const from = start.dayNumber * MINUTES_PER_DAY + start.hour * 60 + start.minute;
-    const to = end && end.form === 'wall' ? Math.max(from, end.dayNumber * MINUTES_PER_DAY + end.hour * 60 + end.minute) : from + UNTIMED_BLOCK_MINUTES;
+    // An event sent with no end is a half-hour block, held to its own day:
+    // the page draws no time the agent did not send past midnight.
+    const to = end && end.form === 'wall'
+      ? Math.max(from, end.dayNumber * MINUTES_PER_DAY + end.hour * 60 + end.minute)
+      : Math.min(from + UNTIMED_BLOCK_MINUTES, (start.dayNumber + 1) * MINUTES_PER_DAY);
     const lastDay = to > from ? Math.floor((to - 1) / MINUTES_PER_DAY) : start.dayNumber;
     placed.push({ event, order, allDay: false, firstDay: start.dayNumber, lastDay, start: from, end: to, openEnd: end === null });
   });
@@ -130,7 +134,7 @@ export type EventTense = 'past' | 'current' | 'future';
 export function eventTense(placed: PlacedEvent, today: number | undefined, now: number | undefined): EventTense {
   if (now !== undefined && !placed.allDay) {
     if (placed.end <= now && placed.end > placed.start) return 'past';
-    if (placed.end === placed.start && placed.start < now) return 'past';
+    if (placed.end === placed.start) return placed.start < now ? 'past' : placed.start === now ? 'current' : 'future';
     if (placed.start <= now && now < placed.end) return 'current';
     return 'future';
   }
@@ -240,13 +244,14 @@ export function daySegments(placed: PlacedEvent[], days: number[]): GridSegment[
  * takes the first column free at its start.
  *
  * Where every part of a cluster starts at least `stepGap` minutes after
- * each earlier one it overlaps (a title line on screen), the cluster is
+ * each earlier one it overlaps (a title line on screen), in a column further
+ * in, and the cluster's columns fit `maxSteps` set-ins, the cluster is
  * stepped: each part is drawn over the ones before it, set in by its
  * column, so every title shows at the full width the day has. Otherwise
  * (two start together) the parts stand side by side, each widened over the
  * columns to its right that nothing in its time holds.
  */
-export function packColumns(segments: GridSegment[], minDuration: number, stepGap = Infinity): void {
+export function packColumns(segments: GridSegment[], minDuration: number, stepGap = Infinity, maxSteps = Infinity): void {
   const drawnEnd = (segment: GridSegment) => Math.max(segment.end, segment.start + minDuration);
   const overlaps = (a: GridSegment, b: GridSegment) => a.start < drawnEnd(b) && b.start < drawnEnd(a);
   let cluster: GridSegment[] = [];
@@ -254,7 +259,15 @@ export function packColumns(segments: GridSegment[], minDuration: number, stepGa
   let clusterIndex = 0;
   const settle = () => {
     const columns = cluster.reduce((most, segment) => Math.max(most, segment.column + 1), 0);
-    const stepped = columns > 1 && cluster.every((segment, at) => cluster.slice(0, at).every((earlier) => !overlaps(earlier, segment) || segment.start - earlier.start >= stepGap));
+    // Stepped only where each later part lies over every earlier one it
+    // overlaps (a column further in, a title line further down), and the
+    // steps fit the column (`maxSteps` set-ins).
+    const stepped =
+      columns > 1 &&
+      columns - 1 <= maxSteps &&
+      cluster.every((segment, at) =>
+        cluster.slice(0, at).every((earlier) => !overlaps(earlier, segment) || (segment.start - earlier.start >= stepGap && earlier.column < segment.column)),
+      );
     for (const segment of cluster) {
       segment.columns = columns;
       segment.stepped = stepped;
@@ -286,6 +299,8 @@ export function packColumns(segments: GridSegment[], minDuration: number, stepGa
 /** The parts of a side-by-side cluster a column too narrow for all of them leaves out, counted in one chip. */
 export interface HiddenRun {
   cluster: number;
+  /** The events it counts. */
+  ids: string[];
   /** Minutes into the day: from the first hidden part's start to the last one's drawn end. */
   start: number;
   end: number;
@@ -318,8 +333,9 @@ export function crowdedColumns(segments: GridSegment[], fit: number, minDuration
       run.start = Math.min(run.start, segment.start);
       run.end = Math.max(run.end, end);
       run.count += 1;
+      run.ids.push(segment.placed.event.id);
     } else {
-      runs.set(segment.cluster, { cluster: segment.cluster, start: segment.start, end, count: 1 });
+      runs.set(segment.cluster, { cluster: segment.cluster, ids: [segment.placed.event.id], start: segment.start, end, count: 1 });
     }
   }
   return { drawn, hidden: [...runs.values()] };
@@ -368,12 +384,13 @@ export const AXIS = {
  * day is not drawn as two giant blocks. Shorter than `minHourPx` an hour
  * never gets: the grid is then taller than the room and scrolls.
  */
-export function timeAxis(segments: GridSegment[][], nowMinute: number | undefined, room: number): TimeAxis {
+export function timeAxis(segments: GridSegment[][], nowMinute: number | undefined, room: number, minBox = 0): TimeAxis {
   const covered = new Array<boolean>(24).fill(false);
   const cover = (from: number, to: number) => {
     for (let hour = Math.floor(from / 60); hour < Math.min(24, Math.ceil(to / 60)); hour += 1) covered[hour] = true;
   };
-  for (const list of segments) for (const segment of list) cover(segment.start, Math.max(segment.end, segment.start + 1));
+  // A part covers the hours its drawn box reaches: at least `minBox` minutes.
+  for (const list of segments) for (const segment of list) cover(segment.start, Math.max(segment.end, segment.start + Math.max(1, minBox)));
   if (nowMinute !== undefined) cover(nowMinute, nowMinute + 1);
   const anything = covered.includes(true);
   let first = anything ? covered.indexOf(true) : AXIS.emptyFrom;
@@ -392,7 +409,12 @@ export function timeAxis(segments: GridSegment[][], nowMinute: number | undefine
   }
   const span = last + 1 - first;
   const folded = gaps.reduce((sum, [from, to]) => sum + (to - from), 0);
-  const fold = folded > 0 && span * AXIS.roomyHourPx > room;
+  // Fold where every hour would not fit at a roomy size; but where the
+  // folded hours would leave room to spare and every hour fits at the
+  // least, draw them all rather than pad the edges with empty ones.
+  const roomyFits = span * AXIS.roomyHourPx <= room;
+  const foldedSpare = (span - folded) * AXIS.maxHourPx + gaps.length * AXIS.foldPx < room;
+  const fold = folded > 0 && !roomyFits && !(foldedSpare && span * AXIS.minHourPx <= room);
   const folds = fold ? gaps : [];
   let hours = span - (fold ? folded : 0);
   const foldHeight = folds.length * AXIS.foldPx;
@@ -613,8 +635,10 @@ export function agendaLead(entries: AgendaEntry[], marked: string | undefined): 
   return nowAt >= 0 && nowAt < markedAt && markedAt - nowAt <= NEAR_NOW_ROWS ? undefined : marked;
 }
 
-/** Overlaps: the timed events on a day that share some of their time with another. */
-export function overlapping(items: AgendaItem[]): Set<PlacedEvent> {
+/** Overlaps: the timed events on a day that share some of their time with
+ * another. A cancelled event takes no time, so it overlaps nothing. */
+export function overlapping(all: AgendaItem[]): Set<PlacedEvent> {
+  const items = all.filter((item) => item.placed.event.status !== 'cancelled');
   const out = new Set<PlacedEvent>();
   for (let a = 0; a < items.length; a += 1) {
     for (let b = a + 1; b < items.length; b += 1) {
@@ -639,7 +663,7 @@ export function eventTimeText(placed: PlacedEvent, day: number): { from: string;
   const from = placed.start < dayStart ? (placed.end > dayStart + MINUTES_PER_DAY ? 'ALL DAY' : 'UNTIL') : clockText(placed.start - dayStart);
   if (placed.start < dayStart && placed.end > dayStart + MINUTES_PER_DAY) return { from, to: 'CONTINUES' };
   if (placed.start < dayStart) return { from, to: clockText(placed.end - dayStart) };
-  if (placed.openEnd) return { from };
+  if (placed.openEnd || placed.end === placed.start) return { from };
   const endDay = placed.end > placed.start ? Math.floor((placed.end - 1) / MINUTES_PER_DAY) : day;
   const to = clockText(placed.end - endDay * MINUTES_PER_DAY);
   return { from, to: endDay > day ? `${to} +${endDay - day}` : to };
@@ -659,11 +683,11 @@ export function rangeText(data: CalendarData): string {
   return a.month === b.month ? `${monthName(a.month)} ${a.day} - ${b.day}` : `${monthName(a.month)} ${a.day} - ${monthName(b.month)} ${b.day}`;
 }
 
-/** An event as a note's TARGET line names it: its title and when it starts (`Dentist / WED 10:30`), or undefined when the calendar holds no such event. */
+/** An event as a note's TARGET line names it: its title and when it starts (`Dentist / WED OCT 7 10:30`), or undefined when the calendar holds no such event. */
 export function eventTargetText(data: CalendarData, id: string): string | undefined {
   const placed = placeEvents(data.events).find((item) => item.event.id === id);
   if (!placed) return undefined;
   const day = Math.floor(placed.start / MINUTES_PER_DAY);
-  const when = placed.allDay ? dayLabel(placed.firstDay) : `${weekdayName(day)} ${clockText(placed.start - day * MINUTES_PER_DAY)}`;
+  const when = placed.allDay ? dayLabel(placed.firstDay) : `${dayLabel(day)} ${clockText(placed.start - day * MINUTES_PER_DAY)}`;
   return `${placed.event.title} / ${when}`;
 }

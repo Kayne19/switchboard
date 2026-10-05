@@ -21,6 +21,7 @@ import {
   eventTimeText,
   monthGrid,
   monthRowPlan,
+  overlapping,
   packColumns,
   placeEvents,
   rangeText,
@@ -93,6 +94,14 @@ describe('events in time', () => {
     expect(eventTimeText(placed[0], day('2026-10-10'))).toEqual({ from: 'UNTIL', to: '02:40' });
   });
 
+  it('holds a block sent with no end to its own day, and writes a zero-length event as its start', () => {
+    const [late, zero] = placeEvents([event('late', '2026-10-10T23:45'), event('zero', '2026-10-09T12:00', '2026-10-09T12:00')]);
+    expect(late.end - late.start).toBe(15);
+    expect(late.lastDay).toBe(day('2026-10-10'));
+    expect(eventTimeText(zero, day('2026-10-09'))).toEqual({ from: '12:00' });
+    expect(eventTense(zero, day('2026-10-09'), day('2026-10-09') * 1440 + 12 * 60)).toBe('current');
+  });
+
   it('is over, under way or to come by the agent\u2019s now, and with no today nothing is over', () => {
     const [standup, dentist, yesterday, trip] = placeEvents([
       event('standup', '2026-10-07T09:30', '2026-10-07T09:45'),
@@ -111,7 +120,7 @@ describe('events in time', () => {
 
   it('names an event for a note by its title and when it starts, and nothing it does not hold', () => {
     const data = calendar({ events: [event('dentist', '2026-10-07T10:30', '2026-10-07T11:30', { title: 'Dentist' }), event('ana', '2026-10-07', undefined, { title: 'Ana in town' })] });
-    expect(eventTargetText(data, 'dentist')).toBe('Dentist / WED 10:30');
+    expect(eventTargetText(data, 'dentist')).toBe('Dentist / WED OCT 7 10:30');
     expect(eventTargetText(data, 'ana')).toBe('Ana in town / WED OCT 7');
     expect(eventTargetText(data, 'nope')).toBeUndefined();
   });
@@ -162,9 +171,24 @@ describe('overlapping events', () => {
     expect(segments[0].columns).toBe(6);
     const { drawn, hidden } = crowdedColumns(segments, 3, 20);
     expect(drawn.map((segment) => [segment.placed.event.id, segment.column, segment.columns])).toEqual([['m0', 0, 3], ['m1', 1, 3]]);
-    expect(hidden).toEqual([{ cluster: 0, start: 600, end: 660, count: 4 }]);
+    expect(hidden).toEqual([{ cluster: 0, ids: ['m2', 'm3', 'm4', 'm5'], start: 600, end: 660, count: 4 }]);
     // Room for all: nothing is left out.
     expect(crowdedColumns(segments, 6, 20).hidden).toEqual([]);
+  });
+
+  it('stands a cluster side by side where a later part would fall in a column under an earlier one', () => {
+    // C starts as A ends and takes A's column, under B: stepped, B would lie over C's title.
+    const segments = segmentsOf([event('a', '2026-10-07T09:00', '2026-10-07T10:00'), event('b', '2026-10-07T09:30', '2026-10-07T11:00'), event('c', '2026-10-07T10:00', '2026-10-07T10:30')]);
+    packColumns(segments, 20, 30);
+    expect(segments.map((segment) => [segment.placed.event.id, segment.column, segment.stepped])).toEqual([['a', 0, false], ['b', 1, false], ['c', 0, false]]);
+  });
+
+  it('steps no deeper than the column holds its set-ins', () => {
+    const segments = segmentsOf(Array.from({ length: 8 }, (_, at) => event(`s${at}`, `2026-10-07T${String(9 + Math.floor(at / 2)).padStart(2, '0')}:${at % 2 ? '30' : '00'}`, '2026-10-07T14:00')));
+    packColumns(segments, 20, 30);
+    expect(segments.every((segment) => segment.stepped)).toBe(true);
+    packColumns(segments, 20, 30, 3);
+    expect(segments.every((segment) => !segment.stepped)).toBe(true);
   });
 
   it('sets apart two short events back to back whose drawn boxes would touch', () => {
@@ -185,6 +209,21 @@ describe('the time axis', () => {
     expect(axis.bands[1].height).toBe(AXIS.foldPx);
     expect(axisY(axis, 9 * 60)).toBe(axis.bands[2].top);
     expect(axisY(axis, 10 * 60)).toBeCloseTo(axis.bands[2].top + axis.hourPx);
+  });
+
+  it('unfolds rather than pad the edges where folding would leave room to spare and every hour fits', () => {
+    const axis = timeAxis(segmentsOf([event('early', '2026-10-07T06:00', '2026-10-07T07:00'), event('late', '2026-10-07T20:00', '2026-10-07T21:00')]), undefined, 400);
+    expect(axis.bands.map(({ kind, from, to }) => [kind, from, to])).toEqual([['hours', 6, 21]]);
+  });
+
+  it('covers the hours a short event\u2019s box reaches, so no box runs into a fold', () => {
+    const segments = segmentsOf([event('late-ish', '2026-10-07T08:50', '2026-10-07T09:00'), event('evening', '2026-10-07T20:00', '2026-10-07T21:00')]);
+    const bands = timeAxis(segments, undefined, 300, 42).bands;
+    // 08:50 drawn 42 minutes tall reaches into 09:00: that hour is drawn, the fold starts after it.
+    expect(bands.some((band) => band.kind === 'hours' && band.from <= 9 && band.to > 9)).toBe(true);
+    expect(bands.find((band) => band.kind === 'fold')).toMatchObject({ from: 10, to: 20 });
+    // Without the box's least height, 09:00 is folded and the box runs into the fold.
+    expect(timeAxis(segments, undefined, 300).bands.find((band) => band.kind === 'fold')).toMatchObject({ from: 9 });
   });
 
   it('leaves the empty hours unfolded when every hour fits at a roomy size', () => {
@@ -296,6 +335,12 @@ describe('the agenda', () => {
   it('keeps today a day of its own even with nothing on it', () => {
     const entries = agendaEntries([], [day('2026-10-06'), day('2026-10-07'), day('2026-10-08')], day('2026-10-07'), undefined);
     expect(entries.map((entry) => entry.kind)).toEqual(['empty', 'day', 'empty']);
+  });
+
+  it('tags no overlap with a cancelled event', () => {
+    const items = agendaEntries(placeEvents([event('gym', '2026-10-08T18:00', '2026-10-08T19:00', { status: 'cancelled' }), event('call', '2026-10-08T18:30', '2026-10-08T19:00')]), [day('2026-10-08')], undefined, undefined);
+    const entry = items[0];
+    expect(entry.kind === 'day' && overlapping(entry.timed).size).toBe(0);
   });
 
   it('writes an all-day event over days as which day of how many', () => {

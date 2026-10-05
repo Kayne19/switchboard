@@ -44,13 +44,13 @@ afterEach(() => {
   bodySize = { width: 0, height: 0 };
 });
 
-function render(data: CalendarData, marked?: string, size = { width: 0, height: 0 }): HTMLElement {
+function render(data: CalendarData, marked?: string, size = { width: 0, height: 0 }, framed = false): HTMLElement {
   bodySize = size;
   host = document.createElement('div');
   document.body.append(host);
   const pageRoot = createRoot(host);
   root = pageRoot;
-  act(() => pageRoot.render(<CalendarPrimitive data={data} marked={marked} />));
+  act(() => pageRoot.render(<CalendarPrimitive data={data} marked={marked} framed={framed} />));
   return host.querySelector('[data-testid="calendar"]') as HTMLElement;
 }
 
@@ -124,6 +124,41 @@ describe('the week', () => {
     expect(rims()).toHaveLength(2);
   });
 
+  it('turns the days with the arrow keys, handled so nothing else hears them', () => {
+    const calendar = render(assistantWeek, undefined, { width: 330, height: 480 });
+    const heads = () => [...calendar.querySelectorAll('.calendar-grid__weekday')].map((cell) => cell.textContent);
+    expect(heads()).toEqual(['WED', 'THU', 'FRI']);
+    const pages = calendar.querySelector('.calendar-pages') as HTMLElement;
+    expect(pages.getAttribute('aria-label')).toContain('Days shown: WED-FRI');
+    const key = new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true });
+    act(() => {
+      pages.dispatchEvent(key);
+    });
+    expect(key.defaultPrevented).toBe(true);
+    expect(heads()).toEqual(['FRI', 'SAT', 'SUN']);
+    // No later days: the key is left alone.
+    const again = new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true });
+    act(() => {
+      pages.dispatchEvent(again);
+    });
+    expect(again.defaultPrevented).toBe(false);
+  });
+
+  it('opens on today when the marked event is outside the week', () => {
+    const calendar = render({ ...assistantWeek, events: [...assistantWeek.events, { id: 'later', title: 'Later', start: '2026-10-20T10:00' }] }, 'later', { width: 330, height: 480 });
+    expect([...calendar.querySelectorAll('.calendar-grid__weekday')].map((cell) => cell.textContent)).toEqual(['WED', 'THU', 'FRI']);
+    expect(calendar.querySelectorAll('.note-badge')).toHaveLength(0);
+  });
+
+  it('puts the badge on the count that holds a marked bar the strip has no lane for', () => {
+    const many = Array.from({ length: 5 }, (_, at) => ({ id: `a${at}`, title: `All day ${at}`, start: '2026-10-08' }));
+    const calendar = render({ ...assistantWeek, events: many }, 'a4');
+    const more = calendar.querySelector('.calendar-grid__strip .calendar-more') as HTMLElement;
+    expect(more.textContent).toContain('+3 MORE');
+    expect(more.getAttribute('data-item')).toBe('a4');
+    expect(calendar.querySelectorAll('.note-badge')).toHaveLength(1);
+  });
+
   it('becomes the agenda of its days in a box too short for a time grid', () => {
     const calendar = render(assistantWeek, undefined, { width: 900, height: 120 });
     expect(calendar.getAttribute('data-layout')).toBe('agenda');
@@ -154,6 +189,20 @@ describe('the month', () => {
     expect(boxes(calendar, 'standup-wed')[0].querySelector('.calendar-line__time')?.textContent).toBe('09:30');
   });
 
+  it('puts the badge on a busy day\u2019s +N MORE when the marked event is one it counts', () => {
+    const calendar = render(assistantMonth, 'book-club', { width: 900, height: 520 });
+    const more = [...calendar.querySelectorAll<HTMLElement>('.calendar-more')].find((line) => line.getAttribute('data-item') === 'book-club');
+    expect(more?.textContent).toContain('MORE');
+    expect(calendar.querySelectorAll('.note-badge')).toHaveLength(1);
+  });
+
+  it('marks a timed event a day long on the days it covers, in a month too small for titles', () => {
+    const data: CalendarData = { view: 'month', start: '2026-10-01', events: [{ id: 'conference', title: 'Conference', start: '2026-10-05T09:00', end: '2026-10-07T17:00' }] };
+    const calendar = render(data, 'conference', { width: 330, height: 200 });
+    expect(calendar.querySelectorAll('.calendar-mark[data-item="conference"]')).toHaveLength(3);
+    expect(calendar.querySelectorAll('.note-badge')).toHaveLength(1);
+  });
+
   it('marks each day\u2019s events in a box too small for titles, and lists them from today under the grid', () => {
     const calendar = render(assistantMonth, 'dentist', { width: 330, height: 440 });
     expect(calendar.getAttribute('data-layout')).toBe('month-marks');
@@ -164,6 +213,13 @@ describe('the month', () => {
     // With no room for the list, the mark carries it.
     const small = render(assistantMonth, 'dentist', { width: 330, height: 200 });
     expect([...small.querySelectorAll('.note-badge')].map((badge) => badge.closest('.calendar-mark') !== null)).toEqual([true]);
+  });
+});
+
+describe('the meta line', () => {
+  it('names the calendar where no frame does, and only says what it shows under a scene frame that names it', () => {
+    expect(render(assistantWeek).querySelector('.calendar__meta')?.textContent).toBe('WEEK / OCT 5-11OCT 5 - 11 / 23 EVENTS');
+    expect(render(assistantWeek, undefined, { width: 0, height: 0 }, true).querySelector('.calendar__meta')?.textContent).toBe('OCT 5 - 11 / 23 EVENTS');
   });
 });
 
