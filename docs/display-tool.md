@@ -35,7 +35,7 @@ type DisplayAction =
 - **content types** (for `show`): `chart | metric | progress | diagram | document | code | table | note | image`. `message` is a runtime-owned transcript, **not** an agent display type.
 - **roles** (composition slot): `primary | compare | secondary | ambient`.
 - **`id`**: agent-owned and stable across updates (re-sending the same `id` replaces the object in place). Agent IDs must not begin with the reserved `__runtime/` namespace.
-- **`target`**: the object id to anchor a `say` action (must not begin with `__runtime/`).
+- **`target`**: the object id to anchor a `say` action (must not begin with `__runtime/`); `null` is the same as no target and is dropped.
 - **`at`**: speech anchor object containing at least one of `x` (finite number) and `series` (string <= 128 UTF-16 code units), or explicit `null`; omitted `at` normalizes to `null`.
 - **`caption`**: optional content-owned supporting text (<= 128 UTF-16 code units) rendered in the scene's small corner label. It is available on every `show` data shape.
 - **`note.anchor`**: optional persistent annotation target `{ target, x?, series?, node? }`. `target` is another display object id; the remaining fields identify a semantic location inside a chart or diagram without prescribing pixels.
@@ -122,7 +122,7 @@ Notes have their own display lifecycle. A chat or spoken response does not updat
 ### Image v1 rules
 - `format` is `png`, `jpeg` or `webp`. `svg` is refused: SVG is markup and can carry script, and an image here is raster bytes only.
 - `bytes` is strict standard base64 (`A-Za-z0-9+/`, `=` padding, length a multiple of 4, no whitespace, no `data:` prefix) and decodes to at most **8 MiB**. Both validators decode its first 12 bytes and check that they carry `format`'s file signature (PNG `89 50 4E 47 0D 0A 1A 0A`, JPEG `FF D8 FF`, WebP `RIFF....WEBP`).
-- `alt` is required (non-blank, <= 256). It is the image's alt text and its title when `title` is absent (in the scene heading and in `/view`).
+- `alt` is required (non-blank, <= 256). It is the image's alt text and its title when `title` is absent (in the scene heading and in `view`'s report).
 - No `width`, `height`, zoom or crop: the page reads the intrinsic size when the bytes decode and fits the figure to its slot.
 - The page builds `data:image/<format>;base64,<bytes>` itself from the validated fields; no other `img` source exists, and nothing is fetched.
 - The skill module takes a file or raw bytes: `display(op="show", id="fig", type="image", data={"path": "/tmp/fig.png", "alt": "..."})` (or `data={"bytes": <bytes>, "alt": ...}`) sniffs the format, base64-encodes the bytes and sends `format`/`bytes`; the path is never sent.
@@ -131,7 +131,7 @@ The page lays a graph out in layers along the reading axis (left to right in lan
 
 ## Canonical schema & validation rules
 
-The canonical contract is defined in `docs/display-action-v1.schema.json` and exercised by `apps/frontend/tests/fixtures/display-actions.json`. Both the TypeScript frontend validator (`apps/frontend/src/controller/validation.ts`) and the Rust backend validator (`apps/backend/src/visual_protocol.rs`) enforce identical rules:
+The canonical contract is defined in `docs/display-action-v1.schema.json` and exercised by `apps/frontend/tests/fixtures/display-actions.json`. Both the TypeScript frontend validator (`apps/frontend/src/controller/validation.ts`) and the Rust backend validator (`apps/backend/src/visual_protocol.rs`) enforce identical rules, down to the text of each error; `apps/frontend/tests/fixtures/validator-corpus.json` pins that (see "How the two validators agree" below):
 
 - **Action size**: Serialized action JSON must not exceed **48,000 UTF-8 bytes**, except a `show` of type `image`, whose cap is **12 MiB** (`MAX_IMAGE_ACTION_BYTES`; its raw bytes are capped at 8 MiB). The bytes are counted as `JSON.stringify` writes the action, so a number counts as JavaScript spells it (`1.0` counts as `1`, `1e16` as `10000000000000000`), and the cap holds for the normalized action too: a `say` sent within a few bytes of the cap can be refused because normalizing adds `"at":null`. A display action reaches the service as a module call over the host link, whose frames are at most 16 MiB; the host agent's skill socket accepts request lines up to 13 MiB, so the relayed frame always fits.
 - **String caps (UTF-16 code units)**: `id` <= 128; `text` <= 50,000; short labels/tags <= 128; titles/details <= 256. Astral Unicode characters (such as emojis) count as 2 UTF-16 code units.
@@ -143,4 +143,20 @@ The canonical contract is defined in `docs/display-action-v1.schema.json` and ex
 
 `docs/display-action-v1.schema.json` encodes as much of this as declarative JSON Schema can express (the progress rule "one of `value`/`steps`" is its `anyOf`), and `apps/frontend/tests/unit/schema.test.ts` holds it to `display-actions.json` fixture-by-fixture so it cannot drift from the two validators unnoticed. Five things it cannot express, so it does not attempt to: invariants that span sibling array items (duplicate node or actor IDs, an edge or message endpoint naming no node or actor, a self-loop, a duplicate edge pair, a table row with other than `columns.length` cells, a table highlight naming no row — each a relationship between items, not one item's shape); a chart series' value count against its `labels` count, a relationship between two sibling fields; the action-size caps (48,000 bytes, 12 MiB for an image), which bound the serialized envelope on the wire rather than the parsed instance; the UTF-16-code-unit string caps above for content containing astral characters, since JSON Schema's `maxLength` counts Unicode code points; and an image's format/signature match, a cross-field check over decoded bytes (the schema pins the base64 alphabet, padding and length only). Those stay enforced only by `validation.ts` and `visual_protocol.rs`; the test names each as a documented, asserted exception (`KNOWN_SCHEMA_GAPS`) rather than silently passing.
 
-Rejections return `{"delivered":false,"detail":"<reason>"}` and are neither stored in display state nor broadcast.
+The schema cannot state the blank rule, the key order or the text of an error either; the corpus pins those, and `schema.test.ts` also holds the schema to accept every action the corpus accepts, so the schema is never the stricter of the three.
+
+A refused action comes back to the agent as a `refused` result whose reason is the validator's error, word for word (the service answers `{"delivered":false,"detail":"<reason>"}`). It is neither stored in display state nor broadcast.
+
+### How the two validators agree
+
+Every action is checked twice: by the service (`visual_protocol.rs`) when it arrives, and by the page (`validation.ts`) when the normalized action reaches it. If the two disagreed, the agent would be told "accepted" for an action the page then refuses, or the reverse. So both give the same answer, and the same error text, for every action.
+
+`apps/frontend/tests/fixtures/validator-corpus.json` is the record. Each case is an action and its exact error, or its acceptance and its normalized form. Both suites run every case (`apps/frontend/tests/unit/validatorCorpus.test.ts`, and `agrees_with_the_shared_validator_corpus` in `apps/backend/tests/test_visual_protocol.rs`), and an accepted action must pass a second time unchanged. The skill module's outline check runs the same cases (`skills/switchboard/tests/test_switchboard.py`): it never refuses an action the validators accept. A rule change lands with the corpus cases that show it, so both sides change together.
+
+These rules decide which error an action gets:
+
+1. **Order of the checks.** The action is an object; it is within its size cap; its `op` is known. Then, anywhere in the action: no layout key, no unsafe string, no non-finite number. Then the op's own fields: for a `show`, its unknown keys, `id`, `type`, `role` and `data`, and inside `data` the unknown keys first and then each field in a fixed order (the corpus's `*_order_*` cases pin it). Last, the normalized action is held to the same size cap.
+2. **Order of the keys.** Where two keys could each give the error (two unknown fields, two layout keys, two unsafe strings), both sides walk an object's keys in code point order, depth first, and name the first one met: `{"zeta": 1, "alpha": 2}` is `unknown field in ...: alpha`, wherever the agent put it. Arrays go in index order. The service sorts the keys itself rather than rely on its JSON map's order, and the page compares code points, not UTF-16 units.
+3. **Blank.** An `id`, a `target`, a node or actor id, an anchor target and an image `alt` must not be blank: empty, or made only of Unicode White_Space. That is these 25 code points and no others: U+0009 to U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F and U+3000. U+FEFF, U+200B, U+180E and U+001C to U+001F are not whitespace here. (JavaScript's `trim` strips U+FEFF and keeps U+0085, so neither side uses it.) A `say` text need only be non-empty.
+4. **A wrong type is refused, never dropped.** An optional field of the wrong type, such as a number for a node's `sub` or `null` for a `semantic`, is refused on both sides. Neither side drops the field and accepts the rest.
+5. **Size and URLs.** Both count the size as `JSON.stringify` writes the action ("Action size" above), and both apply one URL rule ("Safety" above).
