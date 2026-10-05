@@ -386,7 +386,8 @@ go out because the link's socket is already closing gets `failed` at once.
 The service reads frames with serde_json, which refuses three things that
 are valid JSON: a string with half of a UTF-16 surrogate pair (`"\ud83d"`,
 an emoji cut in two), a number beyond a double (`1e400`), and arrays or
-objects nested deeper than 128 levels. This host agent writes only the last
+objects nested deeper than 127 levels (serde_json's recursion limit refuses
+the 128th; `MAX_FRAME_DEPTH` in `hosts.rs`). This host agent writes only the last
 of them: its `JSON.stringify` writes no number beyond a double, and it writes
 every lone surrogate as U+FFFD (below). When the whole frame cannot be read,
 the service still reads its `type`, `id`, `epoch`, `session` and `call`
