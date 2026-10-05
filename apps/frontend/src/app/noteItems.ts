@@ -102,20 +102,37 @@ function nodeLabel(data: DiagramObjectData, id: string): string | undefined {
 // image's alt text, a forecast's place.
 const NAME_FIELDS = ['title', 'subject', 'label', 'alt', 'location'] as const;
 
+/** What the page shows of an object that carries none of NAME_FIELDS, in their stead: code's file (its frame's subtitle), a note's tag, a sequence's kind. */
+function shownName(object: SceneObject): string | undefined {
+  switch (object.type) {
+    case 'code':
+      return cast.code(object).data.file;
+    case 'note':
+      return cast.note(object).data.tag;
+    case 'diagram':
+      return cast.diagram(object).data.mode === 'sequence' ? 'SEQUENCE' : undefined;
+    default:
+      return undefined;
+  }
+}
+
+const said = (value: unknown): string | undefined => (typeof value === 'string' && value.trim() ? value.trim() : undefined);
+
 /**
  * An object in its own words, where a card's TARGET line names the object
  * itself: the first of its title, subject, label, alt text or place it
- * carries that is not blank, or, where it carries none, its type's name
+ * carries that is not blank; where it carries none, what the page shows of
+ * it instead (code's file, a note's tag, `SEQUENCE`); else its type's name
  * (`TABLE`, `CHART`). Never its id: an id is the agent's handle, and a
  * caller does not read it.
  */
 export function objectName(object: SceneObject): string {
   const data = object.data as Partial<Record<(typeof NAME_FIELDS)[number], unknown>> | null;
   for (const field of NAME_FIELDS) {
-    const value = data?.[field];
-    if (typeof value === 'string' && value.trim()) return value.trim();
+    const value = said(data?.[field]);
+    if (value) return value;
   }
-  return object.type.toUpperCase();
+  return said(shownName(object)) ?? object.type.toUpperCase();
 }
 
 /**

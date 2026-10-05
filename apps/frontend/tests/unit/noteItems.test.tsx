@@ -237,12 +237,17 @@ describe('noteTarget names what a note is about in its object\'s words, never an
     { type: 'chart', data: chart, name: 'CI / DURATIONS', untitled: { ...chart, title: undefined }, fallback: 'CHART' },
     { type: 'diagram', data: graph, name: 'CI / PIPELINE', untitled: { ...graph, title: undefined }, fallback: 'DIAGRAM' },
     { type: 'table', data: { title: 'TESTS / MATRIX', columns: [{ label: 'A' }], rows: [['1']] }, name: 'TESTS / MATRIX', untitled: { columns: [{ label: 'A' }], rows: [['1']] }, fallback: 'TABLE' },
-    { type: 'code', data: { title: 'SOURCE / ROUTER', file: 'router.ts', source: { text: 'x' } }, name: 'SOURCE / ROUTER', untitled: { file: 'router.ts', source: { text: 'x' } }, fallback: 'CODE' },
+    // Untitled code is named by its file, as its frame shows it; with neither, by its type.
+    { type: 'code', data: { title: 'SOURCE / ROUTER', file: 'router.ts', source: { text: 'x' } }, name: 'SOURCE / ROUTER', untitled: { file: 'router.ts', source: { text: 'x' } }, fallback: 'router.ts' },
+    { type: 'code', data: { title: 'SOURCE / ROUTER', source: { text: 'x' } }, name: 'SOURCE / ROUTER', untitled: { source: { text: 'x' } }, fallback: 'CODE' },
     { type: 'document', data: { subject: 'Re: revised results', paragraphs: ['Hi'] }, name: 'Re: revised results', untitled: { subject: ' ', paragraphs: ['Hi'] }, fallback: 'DOCUMENT' },
     { type: 'image', data: image, name: 'FIGURE / TEST CARD', untitled: { ...image, title: undefined }, fallback: 'Test card: seven palette bars' },
     { type: 'metric', data: { label: 'TESTS PASSED', value: '870' }, name: 'TESTS PASSED', untitled: { label: '', value: '870' }, fallback: 'METRIC' },
     { type: 'progress', data: { label: 'VISUAL-PALETTE', value: 57 }, name: 'VISUAL-PALETTE', untitled: { label: ' ', value: 57 }, fallback: 'PROGRESS' },
-    { type: 'note', data: { tag: 'DAMOCLES / PLAN', segments: [] }, name: 'NOTE', untitled: { segments: [] }, fallback: 'NOTE' },
+    // A note about a note: the other's tag, as it shows it.
+    { type: 'note', data: { tag: 'DAMOCLES / PLAN', segments: [] }, name: 'DAMOCLES / PLAN', untitled: { segments: [] }, fallback: 'NOTE' },
+    // An untitled sequence by its kind, as its frame names it.
+    { type: 'diagram', data: sequence, name: 'CALL / HANDOFF', untitled: { ...sequence, title: undefined }, fallback: 'SEQUENCE' },
     ...types.map((type) => ({
       type: type as SceneObjectType,
       data: { ...lists[type].data, title: `MY ${type.toUpperCase()}` },
