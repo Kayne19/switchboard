@@ -45,15 +45,18 @@ export function hourLong(time: string): string {
 }
 
 /**
- * Whether a forecast's title already names its place: the place's first
- * part (`San Francisco` of `San Francisco, CA`) stands in the title as
- * words, whatever their case. A head that leads with such a title does not
- * name the place again beside it.
+ * What a head that leads with the forecast's title says of its place
+ * beside it: the place, or where the title names its first part as words
+ * (`San Francisco` of `San Francisco, CA`, whatever their case) the rest of
+ * it (`CA`), or nothing when the title names all of it. The place is said
+ * once, and none of it is lost.
  */
-export function titleNamesPlace(title: string | undefined, location: string): boolean {
+export function placeBesideTitle(title: string | undefined, location: string): string {
   const words = (text: string) => ` ${text.toUpperCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()} `;
-  const place = words(location.split(',')[0]);
-  return title !== undefined && place.trim() !== '' && words(title).includes(place);
+  const comma = location.indexOf(',');
+  const first = comma < 0 ? location : location.slice(0, comma);
+  if (title === undefined || words(first).trim() === '' || !words(title).includes(words(first))) return location;
+  return comma < 0 ? '' : location.slice(comma + 1).trim();
 }
 
 /** A forecast hour or day a note names, in the forecast's own words; undefined when it holds none of that name. */
@@ -121,7 +124,9 @@ const clamp = (value: number, low: number, high: number) => Math.min(high, Math.
 export function weatherLayout(
   width: number,
   height: number,
-  has: { hourly: boolean; daily: boolean; markedHour?: boolean; alert?: boolean },
+  // `ahead`: the days an outlook would show (outlookOffer), where they are
+  // not all of `daily`; `markedDay`/`markedHour`: a note names one.
+  has: { hourly: boolean; daily: boolean; ahead?: boolean; markedHour?: boolean; markedDay?: boolean; alert?: boolean },
 ): WeatherLayout {
   const none = { outlook: false, inline: false };
   if (width < COMPACT_WIDTH || height < COMPACT_HEIGHT) {
@@ -129,10 +134,12 @@ export function weatherLayout(
     // Before the box is measured (0) it is drawn whole, as it is in a test.
     if (height > 0 && height < COMPACT_LIST_HEIGHT) {
       // What stands above and under the figure: an alert's line, and the
-      // spot line of an hour a note names (no list here draws it).
-      const around = (has.alert ? ALERT_LINE : 0) + (has.markedHour ? SPOT_LINE : 0);
-      const outlook = has.daily && height >= OUTLOOK_HEIGHT + around;
-      return { arrangement: 'compact', temp, hourly: false, daily: false, outlook, inline: height < STACKED_HERO_HEIGHT + around };
+      // spot line of an hour a note names (no list here draws it), or of a
+      // day where the outlook does not stand.
+      const above = has.alert ? ALERT_LINE : 0;
+      const outlook = (has.ahead ?? has.daily) && height >= OUTLOOK_HEIGHT + above + (has.markedHour ? SPOT_LINE : 0);
+      const spot = has.markedHour === true || (has.markedDay === true && !outlook);
+      return { arrangement: 'compact', temp, hourly: false, daily: false, outlook, inline: height < STACKED_HERO_HEIGHT + above + (spot ? SPOT_LINE : 0) };
     }
     const hourly = has.hourly && (!has.daily || has.markedHour === true) && (height === 0 || height >= COMPACT_STRIP_HEIGHT);
     if (!hourly && !has.daily) return { arrangement: 'compact', temp, hourly: false, daily: false, ...none };
@@ -150,10 +157,13 @@ export function weatherLayout(
 
 // ---- the outlook: the days beside the conditions in a short slot ------------
 
-/** An outlook column's width and the gap between two, CSS pixels: room for
- * `THU 8`, the glyph, and a high or low as long as `-12.5°`. */
+/** An outlook column's width and the gap between two, and the space
+ * between the figure and the first, CSS pixels: room for `THU 8`, the
+ * glyph, and a high or low as long as `-12.5°`. The stylesheet takes them
+ * from the body's style, so the count and the drawing agree. */
 export const OUTLOOK_COLUMN = 46;
 export const OUTLOOK_GAP = 6;
+export const OUTLOOK_SPACE = 16;
 
 /** How many days an outlook `width` px wide shows: whole columns, none cut at its edge. */
 export function outlookCount(width: number, days: number): number {

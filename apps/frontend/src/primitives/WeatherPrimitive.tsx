@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useRef, type CSSProperties } from 'react';
 import type { WeatherData, WeatherDay, WeatherHour } from '../controller/types';
 import { useElementSize } from '../hooks/useElementSize';
 import { ListViewport } from './ListViewport';
@@ -17,13 +17,16 @@ import {
   hourLong,
   labelledHours,
   LEAST_TEMP_SPAN,
+  OUTLOOK_COLUMN,
+  OUTLOOK_GAP,
+  OUTLOOK_SPACE,
   outlookCount,
   outlookDays,
   outlookOffer,
+  placeBesideTitle,
   rangeOnScale,
   STRIP_PAD,
   tempScale,
-  titleNamesPlace,
   weatherLayout,
   type WeatherArrangement,
 } from './weatherLayout';
@@ -65,20 +68,22 @@ function AlertLine({ text }: { text: string }) {
   );
 }
 
-function Now({ data, compact, temp, framed, spot, outlook, inline }: { data: WeatherData; compact: boolean; temp: number; framed: boolean; spot?: string; outlook: boolean; inline: boolean }) {
+function Now({ data, compact, temp, framed, spot, outlook, inline }: { data: WeatherData; compact: boolean; temp: number; framed: boolean; spot?: string; outlook: WeatherDay[] | null; inline: boolean }) {
   const { current, units } = data;
-  // The day a note names stands in the outlook where there is one (it
-  // takes the last column if it lies past them); the spot line under the
-  // conditions is for an item nothing here draws. Until the outlook has
-  // measured its columns (null) the day is taken to be among them.
-  const [outlookShown, setOutlookShown] = useState<string[] | null>(null);
-  const inOutlook = outlook && (data.daily ?? []).some((day) => day.date === spot) && (outlookShown === null || outlookShown.includes(spot!));
   // The temperature is as large as the layout gives it, and no larger than
   // its row (glyph, digits, unit) fits the column the figure stands in:
   // `-12.5°C` needs more room than `61°F`.
   const mainRef = useRef<HTMLDivElement>(null);
   const { width } = useElementSize(mainRef);
-  const fitted = heroTempFit(width, `${formatTemp(current.temp)}`, temp);
+  // Beside the outlook the figure's column is as wide as the figure, so it
+  // is fitted to the body less the room of one day's column, never to its
+  // own width; the days then take the room the figure leaves, as many as
+  // whole columns fit there.
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const body = useElementSize(bodyRef).width;
+  const tempText = formatTemp(current.temp);
+  const fitted = heroTempFit(outlook ? body - OUTLOOK_SPACE - OUTLOOK_COLUMN : width, tempText, temp);
+  const shown = outlook ? outlookDays(outlook, outlookCount(body - width - OUTLOOK_SPACE, outlook.length), spot) : [];
   const degree = (value: number) => `${formatTemp(value)}°`;
   const highLow = current.high !== undefined || current.low !== undefined
     ? [current.high !== undefined ? `H ${degree(current.high)}` : null, current.low !== undefined ? `L ${degree(current.low)}` : null].filter(Boolean).join(' ')
@@ -88,27 +93,31 @@ function Now({ data, compact, temp, framed, spot, outlook, inline }: { data: Wea
     const text = key === 'feelsLike' ? degree(value as number) : key === 'wind' ? (value as string) : `${formatTemp(value as number)}%`;
     return <Reading key={key} label={label} value={text} />;
   });
+  const place = framed ? data.location : placeBesideTitle(data.title, data.location);
   return (
     <section className={`weather-now${inline ? ' weather-now--inline' : ''}`} aria-label={`Weather now in ${data.location}`}>
       {/* Where no frame names the forecast (an aux cell, focus), its title
           leads the head (MetaTitle), and the place it is for takes the
-          place of NOW. */}
+          place of NOW: what of the place the title does not name already. */}
       <div className="weather-now__head tech micro">
         <MetaTitle title={data.title ?? 'WEATHER'} framed={framed} className="weather-now__title" />
-        {/* The place, unless the title leading the head names it already. */}
-        {framed || !titleNamesPlace(data.title, data.location) ? <span className="weather-now__location">{data.location}</span> : null}
+        {place ? <span className="weather-now__location">{place}</span> : null}
         {framed ? <span>NOW</span> : null}
       </div>
       {data.alert ? <AlertLine text={data.alert} /> : null}
       {/* The figure and the words beside it where the box is wide enough
           for both, under it where it is not (an intrinsic wrap, no
           breakpoint). */}
-      <div className={`weather-now__body${outlook ? ' weather-now__body--outlook' : ''}`}>
+      <div
+        ref={bodyRef}
+        className={`weather-now__body${outlook ? ' weather-now__body--outlook' : ''}`}
+        style={outlook ? ({ '--outlook-column': `${OUTLOOK_COLUMN}px`, '--outlook-gap': `${OUTLOOK_GAP}px`, '--outlook-space': `${OUTLOOK_SPACE}px` } as CSSProperties) : undefined}
+      >
         <div ref={mainRef} className="weather-now__main" style={{ '--weather-temp': `${fitted}px` } as CSSProperties}>
           <WeatherGlyph condition={current.condition} className="weather-now__glyph" />
           <div className="weather-now__figure">
             <div className="weather-now__temp">
-              {formatTemp(current.temp)}
+              {tempText}
               <span className="weather-now__unit">°{units}</span>
             </div>
             <div className="weather-now__condition tech">
@@ -117,7 +126,11 @@ function Now({ data, compact, temp, framed, spot, outlook, inline }: { data: Wea
             </div>
           </div>
         </div>
-        {outlook ? <Outlook days={outlookOffer(data.daily ?? [], current, spot)} marked={spot} onShown={setOutlookShown} /> : null}
+        {shown.length > 0 ? (
+          <ol className="weather-outlook" aria-label="Daily forecast">
+            {shown.map((day) => <OutlookDay key={day.date} day={day} marked={day.date === spot} />)}
+          </ol>
+        ) : null}
         {!compact && (current.summary || readings.length > 0) ? (
           <div className="weather-now__detail">
             {current.summary ? <p className="weather-now__summary">{current.summary}</p> : null}
@@ -125,26 +138,11 @@ function Now({ data, compact, temp, framed, spot, outlook, inline }: { data: Wea
           </div>
         ) : null}
       </div>
-      {spot !== undefined && !inOutlook ? <Spot data={data} marked={spot} /> : null}
+      {/* The day a note names stands in the outlook where it has a column
+          (the last, if it lies past the first days); this line is for an
+          item nothing here draws. */}
+      {spot !== undefined && !shown.some((day) => day.date === spot) ? <Spot data={data} marked={spot} /> : null}
     </section>
-  );
-}
-
-// The days beside the conditions in a slot too short for a list under them:
-// as many as whole columns fit in the room beside the figure.
-function Outlook({ days, marked, onShown }: { days: WeatherDay[]; marked?: string; onShown: (dates: string[]) => void }) {
-  const ref = useRef<HTMLOListElement>(null);
-  const { width } = useElementSize(ref);
-  const shown = outlookDays(days, outlookCount(width, days.length), marked);
-  const dates = shown.map((day) => day.date).join(' ');
-  // Said once the room is measured: before that no day is known to be out.
-  useLayoutEffect(() => {
-    if (width > 0) onShown(dates ? dates.split(' ') : []);
-  }, [width, dates, onShown]);
-  return (
-    <ol ref={ref} className="weather-outlook" aria-label="Daily forecast" data-days={shown.length}>
-      {shown.map((day) => <OutlookDay key={day.date} day={day} marked={day.date === marked} />)}
-    </ol>
   );
 }
 
@@ -315,10 +313,14 @@ export function WeatherPrimitive({ data, marked, framed = false }: { data: Weath
   const size = useElementSize(boxRef);
   const hours = data.hourly ?? [];
   const days = data.daily ?? [];
+  // The days an outlook would stand beside the conditions: the days to come.
+  const offered = outlookOffer(days, data.current, marked);
   const layout = weatherLayout(size.width, size.height, {
     hourly: hours.length > 0,
     daily: days.length > 0,
+    ahead: offered.length > 0,
     markedHour: hours.some((hour) => hour.time === marked),
+    markedDay: days.some((day) => day.date === marked),
     alert: Boolean(data.alert),
   });
   const arrangement: WeatherArrangement = layout.arrangement;
@@ -333,7 +335,7 @@ export function WeatherPrimitive({ data, marked, framed = false }: { data: Weath
     (hours.some((hour) => hour.time === marked) && !layout.hourly) || (days.some((day) => day.date === marked) && !layout.daily) ? marked : undefined;
   const field = (
     <div className="weather__field" data-parts={parts} style={{ '--weather-temp': `${layout.temp}px` } as CSSProperties}>
-      <Now data={data} compact={arrangement === 'compact'} temp={layout.temp} framed={framed} spot={unshown} outlook={layout.outlook} inline={layout.inline} />
+      <Now data={data} compact={arrangement === 'compact'} temp={layout.temp} framed={framed} spot={unshown} outlook={layout.outlook ? offered : null} inline={layout.inline} />
       {layout.hourly ? <Hours hours={hours} units={data.units} marked={marked} /> : null}
       {layout.daily ? <Days days={days} marked={marked} scroll={!tall} /> : null}
     </div>

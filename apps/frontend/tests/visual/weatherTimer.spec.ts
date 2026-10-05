@@ -241,6 +241,52 @@ test('a forecast cell too short for the outlook\'s columns keeps the conditions 
   expect(await readingFaults(page, '.composed-aux [data-testid="weather"]')).toEqual([]);
 });
 
+// The today scene's forecast, sent again cold, in tenths, with a long
+// condition: what a short cell has to hold at its widest.
+async function coldToday(page: Page, note?: string, alert = 'Gale warning on the coast until 21:00', current: Record<string, unknown> = { temp: -12.5, condition: 'partly-cloudy', high: -8.5, low: -17.5 }) {
+  await page.goto('/?scene=today&chrome=0');
+  const daily = Array.from({ length: 6 }, (_, index) => ({ date: `2026-10-${String(7 + index).padStart(2, '0')}`, high: -8.5 - index, low: -17.5 - index, condition: 'partly-cloudy', precip: 20 }));
+  await page.evaluate(([days, item, warning, now]) => window.SwitchboardController!.run([
+    { op: 'show', id: 'weather', type: 'weather', role: 'secondary', data: { location: 'Tromsø', units: 'C', current: now, daily: days, ...(warning ? { alert: warning } : {}) } },
+    ...(item ? [{ op: 'show', id: 'dentist-note', type: 'note', data: { tag: 'COLD', anchor: { target: 'weather', item }, segments: [{ text: 'Coldest on Thursday.' }] } }] : []),
+  ]), [daily, note, note ? undefined : alert, current] as const);
+}
+
+test('beside the outlook the figure keeps its size: it is fitted to the cell, not to itself', async ({ page }) => {
+  // Fitted to its own column's width, a figure beside the outlook shrank
+  // a step each time it was measured, where its temperature's row is wider
+  // than its condition's (-12.5°C, clear, no high or low: to about 19px).
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.clock.setFixedTime(T0);
+  await coldToday(page, undefined, undefined, { temp: -12.5, condition: 'clear' });
+  const weather = page.locator('.composed-aux [data-testid="weather"]');
+  await expect(weather.locator('.weather-outlook__day').first()).toBeVisible();
+  const size = () => weather.locator('.weather-now__temp').evaluate((element) => parseFloat(getComputedStyle(element).fontSize));
+  const first = await size();
+  await page.waitForTimeout(500);
+  expect(await size()).toBe(first);
+  expect(first).toBeGreaterThanOrEqual(26);
+  expect(await readingFaults(page, '.composed-aux [data-testid="weather"]')).toEqual([]);
+});
+
+// With a note on a day the forecast is sent without its alert: in an 88px
+// cell an alert, the figure and the day's line do not all fit (the head
+// and the three need some 112px; REPORT-polish.md, open items).
+for (const note of [undefined, '2026-10-08']) {
+  test(`at 844x390 a cold forecast with a long condition${note ? ' and a note on a day' : ''} reads whole in its short cell`, async ({ page }) => {
+    // The inline figure wrapped back under the temperature for a long
+    // condition, and a day's spot line had no room kept for it.
+    await page.setViewportSize({ width: 844, height: 390 });
+    await page.clock.setFixedTime(T0);
+    await coldToday(page, note);
+    const weather = page.locator('.composed-aux [data-testid="weather"]');
+    await expect(weather).toHaveAttribute('data-layout', 'compact');
+    await page.waitForTimeout(300);
+    if (note) await expect(weather.locator(`[data-item="${note}"] .note-badge`)).toHaveCount(1);
+    expect(await readingFaults(page, '.composed-aux [data-testid="weather"]')).toEqual([]);
+  });
+}
+
 test('a forecast longer than a phone frame scrolls inside it and says so', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.clock.setFixedTime(T0);

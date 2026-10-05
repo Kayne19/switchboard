@@ -27,8 +27,8 @@ import {
   outlookDays,
   outlookOffer,
   rangeOnScale,
+  placeBesideTitle,
   tempScale,
-  titleNamesPlace,
   weatherItemName,
   weatherLayout,
 } from '../../src/primitives/weatherLayout';
@@ -74,13 +74,18 @@ describe('words', () => {
 });
 
 describe('the place in the head', () => {
-  it('is named by a title holding its first part as words, whatever their case', () => {
-    expect(titleNamesPlace('WEATHER / SAN FRANCISCO', 'San Francisco, CA')).toBe(true);
-    expect(titleNamesPlace('Tromsø / this week', 'Tromsø')).toBe(true);
-    expect(titleNamesPlace('WEATHER', 'San Francisco, CA')).toBe(false);
-    expect(titleNamesPlace('FRANCISCAN COAST', 'San Francisco')).toBe(false);
-    expect(titleNamesPlace(undefined, 'San Francisco, CA')).toBe(false);
-    expect(titleNamesPlace('WEATHER', ', CA')).toBe(false);
+  it('beside a title naming its first part as words, whatever their case, is the rest of it', () => {
+    expect(placeBesideTitle('WEATHER / SAN FRANCISCO', 'San Francisco, CA')).toBe('CA');
+    expect(placeBesideTitle('WEATHER / PORTLAND', 'Portland, ME')).toBe('ME');
+    expect(placeBesideTitle('Tromsø / this week', 'Tromsø')).toBe('');
+  });
+
+  it('beside any other title, or none, is the whole place', () => {
+    expect(placeBesideTitle('WEATHER', 'San Francisco, CA')).toBe('San Francisco, CA');
+    expect(placeBesideTitle('FRANCISCAN COAST', 'San Francisco')).toBe('San Francisco');
+    expect(placeBesideTitle('WASHINGTON STATE', 'Washington, D.C.')).toBe('D.C.');
+    expect(placeBesideTitle(undefined, 'San Francisco, CA')).toBe('San Francisco, CA');
+    expect(placeBesideTitle('WEATHER', ', CA')).toBe(', CA');
   });
 });
 
@@ -125,6 +130,18 @@ describe('weatherLayout', () => {
     expect(weatherLayout(340, 150, { hourly: true, daily: false }).outlook).toBe(false);
     expect(weatherLayout(250, COMPACT_LIST_HEIGHT, all)).toMatchObject({ daily: true, outlook: false });
     expect(weatherLayout(1000, 620, all).outlook).toBe(false);
+  });
+
+  it('keeps the room for the spot line of a day a note names where no outlook stands to hold it', () => {
+    // 340x110 with an alert: no outlook; stacked, the figure and the day's line ran past the foot.
+    expect(weatherLayout(340, 110, { ...all, alert: true, markedDay: true })).toMatchObject({ outlook: false, inline: true });
+    expect(weatherLayout(340, 110, { ...all, alert: true })).toMatchObject({ outlook: false, inline: false });
+    // The outlook holds the day: no line to keep room for.
+    expect(weatherLayout(334, 128, { ...all, alert: true, markedDay: true })).toMatchObject({ outlook: true, inline: false });
+  });
+
+  it('stands no outlook where it has no day to come to show', () => {
+    expect(weatherLayout(334, 128, { ...all, ahead: false }).outlook).toBe(false);
   });
 
   it('keeps the room for the spot line of an hour a note names, which no list there draws', () => {
