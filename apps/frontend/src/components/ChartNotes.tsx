@@ -1,8 +1,10 @@
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { useId, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { ChartData, NoteData, SceneObject } from '../controller/types';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import {
+  CHART_MARKER_RADIUS,
+  CHART_MARKER_STROKE,
   CHART_VIEW_HEIGHT,
   CHART_VIEW_WIDTH,
   chartObstacles,
@@ -24,6 +26,10 @@ export interface ChartNote {
 interface NotesLayout {
   cards: Record<string, Rect>;
   leaders: Record<string, Point[]>;
+  /** The note with no place on the chart clear of its data, which the rail carries instead. */
+  away: string | null;
+  /** The ring on that note's point, so the point it names stays marked. */
+  ring: { x: number; y: number; r: number; stroke: number } | null;
 }
 
 // The share of a card's width its outline cuts from the top-right corner;
@@ -47,7 +53,8 @@ function screenScale(element: HTMLElement, rect: DOMRect): { kx: number; ky: num
 }
 
 function sameLayout(a: NotesLayout | null, b: NotesLayout): boolean {
-  if (!a) return false;
+  if (!a || a.away !== b.away) return false;
+  if (a.ring?.x !== b.ring?.x || a.ring?.y !== b.ring?.y || a.ring?.r !== b.ring?.r) return false;
   const aKeys = Object.keys(a.cards);
   const bKeys = Object.keys(b.cards);
   if (aKeys.length !== bKeys.length) return false;
@@ -75,17 +82,25 @@ const snap = (value: number) => Math.round(value - 0.5) + 0.5;
  * chart's drawn geometry and itself, and `placeNotes` decides where each
  * card goes, so no card covers another, its own point, or the data the
  * chart draws where a clear place exists.
+ *
+ * Where the scene gives it `onRailNote`, one note with no place on the
+ * chart clear of the data -- every bar standing to the top, say -- is
+ * handed to the rail instead: the layer names it through `onRailNote`,
+ * keeps its card out of view (still measured, so it comes back the moment
+ * the chart has room), and rings the point it names.
  */
 export function ChartNotes({
   chart,
   notes,
   onFocus,
   onOpenHistory,
+  onRailNote,
 }: {
   chart: SceneObject<ChartData>;
   notes: ChartNote[];
   onFocus: (id: string | null) => void;
   onOpenHistory?: () => void;
+  onRailNote?: (key: string, away: boolean) => void;
 }) {
   const reduced = useReducedMotion();
   const gradientBase = useId().replace(/:/g, '');
@@ -96,6 +111,7 @@ export function ChartNotes({
   notesRef.current = notes;
   const chartRef = useRef(chart);
   chartRef.current = chart;
+  const spill = onRailNote !== undefined;
 
   // What moves a card without resizing anything: which notes there are and
   // what each one names. A size change reaches the observer instead.
@@ -118,6 +134,7 @@ export function ChartNotes({
       const field: NoteField = { area: { left: 0, top: 0, right: layerRect.width / kx, bottom: layerRect.height / ky } };
 
       let toLayer: ((point: ViewPoint) => Point) | undefined;
+      let viewScale = 1;
       const svg = svgOf();
       const svgRect = svg?.getBoundingClientRect();
       if (svgRect && svgRect.width > 0 && svgRect.height > 0) {
@@ -129,6 +146,7 @@ export function ChartNotes({
         const left = (svgRect.left - layerRect.left) / kx + (width - CHART_VIEW_WIDTH * scale) / 2;
         const top = (svgRect.top - layerRect.top) / ky + (height - CHART_VIEW_HEIGHT * scale) / 2;
         toLayer = (point) => ({ x: left + point.x * scale, y: top + point.y * scale });
+        viewScale = scale;
       }
       const rectToLayer = (rect: ViewRect): Rect => {
         const a = toLayer!({ x: rect.left, y: rect.top });
@@ -154,10 +172,19 @@ export function ChartNotes({
         const viewPoint = toLayer ? chartNotePoint(note.data, chartRef.current) : undefined;
         toPlace.push({ id: note.key, width: size.width, height: size.height, point: viewPoint && toLayer!(viewPoint) });
       }
-      const placed = placeNotes(toPlace, field);
-      const next: NotesLayout = { cards: {}, leaders: {} };
+      const placed = placeNotes(toPlace, field, { spill });
+      const next: NotesLayout = { cards: {}, leaders: {}, away: null, ring: null };
       for (const note of toPlace) {
-        const card = placed.get(note.id)!;
+        const card = placed.get(note.id);
+        if (!card) {
+          // No place on the chart clear of its data: the rail carries it,
+          // and the point it names stays ringed as the chart rings a marker.
+          next.away = note.id;
+          if (note.point) {
+            next.ring = { x: note.point.x, y: note.point.y, r: CHART_MARKER_RADIUS * viewScale, stroke: CHART_MARKER_STROKE * viewScale };
+          }
+          continue;
+        }
         const rounded = {
           left: Math.round(card.left),
           top: Math.round(card.top),
@@ -182,7 +209,16 @@ export function ChartNotes({
     if (svg) observer.observe(svg);
     for (const element of cardRefs.current.values()) observer.observe(element);
     return () => observer.disconnect();
-  }, [signature, chart.data]);
+  }, [signature, chart.data, spill]);
+
+  // The rail shows the note this chart has no place for, for as long as it
+  // has none: the layer says when the note leaves and when it is back.
+  const away = layout?.away ?? null;
+  useEffect(() => {
+    if (!onRailNote || !away) return undefined;
+    onRailNote(away, true);
+    return () => onRailNote(away, false);
+  }, [away, onRailNote]);
 
   return (
     <div className="chart-notes" ref={layerRef} data-note-count={notes.length}>
@@ -221,12 +257,30 @@ export function ChartNotes({
               </motion.g>
             );
           })}
+          {layout?.ring && layout.away ? (
+            <motion.circle
+              key={`ring-${layout.away}`}
+              className="chart-note-ring"
+              data-note={layout.away}
+              cx={layout.ring.x}
+              cy={layout.ring.y}
+              r={layout.ring.r}
+              strokeWidth={layout.ring.stroke}
+              initial={reduced ? false : { opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+            />
+          ) : null}
         </AnimatePresence>
       </svg>
       <AnimatePresence initial={false}>
         {notes.map((note) => {
           const card = layout?.cards[note.key];
           const anchored = chartNotePoint(note.data, chart) !== undefined;
+          // The note the rail carries keeps its card here out of view, so
+          // the layer still measures it and can take it back.
+          const away = layout?.away === note.key;
           return (
             <motion.div
               key={note.key}
@@ -234,8 +288,9 @@ export function ChartNotes({
                 if (element) cardRefs.current.set(note.key, element);
                 else cardRefs.current.delete(note.key);
               }}
-              className={`chart-note${anchored ? ' chart-note--anchored' : ''}`}
+              className={`chart-note${anchored ? ' chart-note--anchored' : ''}${away ? ' chart-note--away' : ''}`}
               data-note={note.key}
+              aria-hidden={away ? true : undefined}
               style={card ? { left: card.left, top: card.top } : undefined}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
