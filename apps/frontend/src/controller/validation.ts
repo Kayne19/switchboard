@@ -152,6 +152,34 @@ function checkIdentifier(val: unknown, fieldName: string): { ok: true; id: strin
   return { ok: true, id: val };
 }
 
+/**
+ * Code point order. The default sort compares UTF-16 units, which puts an
+ * astral key before one in U+E000-U+FFFF; the backend's byte order of UTF-8
+ * does not, and code point order is what both agree on.
+ */
+function compareCodePoints(a: string, b: string): number {
+  let i = 0;
+  while (i < a.length && i < b.length) {
+    const x = a.codePointAt(i) as number;
+    const y = b.codePointAt(i) as number;
+    if (x !== y) return x - y;
+    i += x > 0xffff ? 2 : 1;
+  }
+  return a.length - b.length;
+}
+
+/**
+ * An object's keys in code point order, the one order both validators walk
+ * an object in (docs/display-tool.md, "How the two validators agree"): with
+ * two unknown or forbidden keys, or two unsafe strings, the error is about
+ * the first in this order, wherever the agent put it. The backend's
+ * `entries_in_order` sorts the same way.
+ */
+function keysInOrder(record: Record<string, unknown>): string[] {
+  return Object.keys(record).sort(compareCodePoints);
+}
+
+/** The first forbidden key met walking depth first, keys in code point order. */
 function findForbiddenLayoutKey(val: unknown): string | null {
   if (Array.isArray(val)) {
     for (const item of val) {
@@ -161,9 +189,9 @@ function findForbiddenLayoutKey(val: unknown): string | null {
     return null;
   }
   if (isRecord(val)) {
-    for (const [key, nested] of Object.entries(val)) {
+    for (const key of keysInOrder(val)) {
       if (FORBIDDEN_LAYOUT_KEYS.has(key)) return key;
-      const found = findForbiddenLayoutKey(nested);
+      const found = findForbiddenLayoutKey(val[key]);
       if (found) return found;
     }
   }
@@ -188,8 +216,8 @@ function findUnsafeString(val: unknown): string | null {
     return null;
   }
   if (isRecord(val)) {
-    for (const nested of Object.values(val)) {
-      const found = findUnsafeString(nested);
+    for (const key of keysInOrder(val)) {
+      const found = findUnsafeString(val[key]);
       if (found) return found;
     }
   }
@@ -210,7 +238,7 @@ function hasNonFiniteNumber(val: unknown): boolean {
 }
 
 function checkUnknownKeys(obj: Record<string, unknown>, allowed: Set<string>, context: string): string | null {
-  for (const key of Object.keys(obj)) {
+  for (const key of keysInOrder(obj)) {
     if (!allowed.has(key)) {
       return `unknown field in ${context}: ${key}`;
     }

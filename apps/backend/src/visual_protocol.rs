@@ -66,6 +66,22 @@ fn check_identifier(s: &str, field_name: &str) -> Result<String, String> {
     Ok(s.to_string())
 }
 
+/// An object's entries with their keys in code point order, the one order
+/// both validators walk an object in (docs/display-tool.md, "How the two
+/// validators agree"): with two unknown or forbidden keys, or two unsafe
+/// strings, the error is about the first in this order, wherever the agent
+/// put it. serde_json's map iterates in this order today, but a dependency
+/// that turned on its `preserve_order` feature would change that for the
+/// whole build, so the order is made here. The browser's `keysInOrder`
+/// sorts the same way.
+fn entries_in_order(m: &Map<String, Value>) -> Vec<(&String, &Value)> {
+    let mut entries: Vec<(&String, &Value)> = m.iter().collect();
+    // `str`'s order is byte order of UTF-8, which is code point order.
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+    entries
+}
+
+/// The first forbidden key met walking depth first, keys in code point order.
 fn forbidden_layout(v: &Value) -> Option<&'static str> {
     const KEYS: &[&str] = &[
         "layout",
@@ -80,14 +96,12 @@ fn forbidden_layout(v: &Value) -> Option<&'static str> {
         "bottom",
     ];
     match v {
-        Value::Object(m) => {
-            for k in KEYS {
-                if m.contains_key(*k) {
-                    return Some(k);
-                }
-            }
-            m.values().find_map(forbidden_layout)
-        }
+        Value::Object(m) => entries_in_order(m).into_iter().find_map(|(key, value)| {
+            KEYS.iter()
+                .find(|forbidden| **forbidden == key.as_str())
+                .copied()
+                .or_else(|| forbidden_layout(value))
+        }),
         Value::Array(a) => a.iter().find_map(forbidden_layout),
         _ => None,
     }
@@ -120,7 +134,7 @@ fn check_unsafe_string(v: &Value) -> Result<(), String> {
             Ok(())
         }
         Value::Object(m) => {
-            for val in m.values() {
+            for (_, val) in entries_in_order(m) {
                 check_unsafe_string(val)?;
             }
             Ok(())
@@ -149,7 +163,7 @@ fn check_unknown_keys(
     allowed: &[&str],
     context: &str,
 ) -> Result<(), String> {
-    for k in m.keys() {
+    for (k, _) in entries_in_order(m) {
         if !allowed.contains(&k.as_str()) {
             return Err(format!("unknown field in {context}: {k}"));
         }
