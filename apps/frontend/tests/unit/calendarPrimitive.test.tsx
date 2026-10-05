@@ -155,10 +155,15 @@ describe('the month', () => {
   });
 
   it('marks each day\u2019s events in a box too small for titles, and lists them from today under the grid', () => {
-    const calendar = render(assistantMonth, undefined, { width: 330, height: 440 });
+    const calendar = render(assistantMonth, 'dentist', { width: 330, height: 440 });
     expect(calendar.getAttribute('data-layout')).toBe('month-marks');
     expect(calendar.querySelector('.calendar-month__cell--today .calendar-marks')).not.toBeNull();
     expect(calendar.querySelector('.calendar-month__list .calendar-agenda__day--today')).not.toBeNull();
+    // One badge: on the event's row in the list, which names it, not also on its mark.
+    expect([...calendar.querySelectorAll('.note-badge')].map((badge) => badge.closest('.calendar-month__list') !== null)).toEqual([true]);
+    // With no room for the list, the mark carries it.
+    const small = render(assistantMonth, 'dentist', { width: 330, height: 200 });
+    expect([...small.querySelectorAll('.note-badge')].map((badge) => badge.closest('.calendar-mark') !== null)).toEqual([true]);
   });
 });
 

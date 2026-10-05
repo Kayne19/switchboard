@@ -569,6 +569,12 @@ function MonthView({ data, model, marked, size, marks }: { data: CalendarData; m
   const isFirst = (id: string, place: string) => first.get(id) === place;
   const monthDays = grid.weeks.flat().filter((day) => calendarDay(day).month === grid.month);
   const listFrom = model.today !== undefined && monthDays.includes(model.today) ? model.today : monthDays[0];
+  const listDays = monthDays.filter((day) => day >= listFrom);
+  const listed = marks && listRoom >= 96;
+  // The NOTE badge goes on one drawing of the event: its row in the list
+  // under the grid, which names it, when the list holds it; else its mark.
+  const inList = listed && marked !== undefined && model.placed.some((item) => item.event.id === marked && item.lastDay >= listDays[0] && item.firstDay <= listDays[listDays.length - 1]);
+  const gridMarked = inList ? undefined : marked;
   return (
     <div className={`calendar-month${marks ? ' calendar-month--marks' : ''}`}>
       <div className="calendar-month__grid" style={marks ? { height: `${gridHeight}px`, flex: 'none' } : undefined}>
@@ -577,13 +583,13 @@ function MonthView({ data, model, marked, size, marks }: { data: CalendarData; m
         </div>
         <div className="calendar-month__weeks" style={{ gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))` }}>
           {plans.map((plan, row) => (
-            <MonthWeek key={plan.week[0]} plan={plan} row={row} month={grid.month} model={model} marked={marked} capacity={capacity} marks={marks} isFirst={isFirst} />
+            <MonthWeek key={plan.week[0]} plan={plan} row={row} month={grid.month} model={model} marked={gridMarked} capacity={capacity} marks={marks} isFirst={isFirst} />
           ))}
         </div>
       </div>
-      {marks && listRoom >= 96 ? (
+      {listed ? (
         <div className="calendar-month__list" style={{ height: `${listRoom}px` }}>
-          <AgendaList model={model} days={monthDays.filter((day) => day >= listFrom)} marked={marked} compact />
+          <AgendaList model={model} days={listDays} marked={inList ? marked : undefined} compact />
         </div>
       ) : null}
     </div>
