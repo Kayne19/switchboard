@@ -988,6 +988,12 @@ button {
   row-gap: 4px;
 }
 
+/* The item's name and its badge share their line: the name gives the
+   badge its room before it is cut. */
+.annotation-card--item .annotation-card__anchor {
+  max-width: calc(100% - 56px);
+}
+
 .chart-note .annotation-card {
   height: auto;
   min-height: 0;
