@@ -46,23 +46,27 @@ function TimerItem({ timer, reading, marked, as }: { timer: Timer; reading: Time
   const digits = formatCountdown(reading.phase === 'done' ? 0 : reading.seconds);
   return (
     <li className={`timer-${as} timer-${as}--${reading.phase}${marked ? ` timer-${as}--marked` : ''}`} data-item={timer.id} data-phase={reading.phase}>
-      <div className="timer__head">
-        <span className="timer__label">{timer.label}</span>
-        {marked ? <NoteBadge /> : null}
-        <span className={`timer__phase timer__phase--${reading.phase} tech micro`}>
-          <PhaseGlyph phase={reading.phase} />
-          {PHASE_TEXT[reading.phase]}
-        </span>
-      </div>
-      <div className="timer__digits" role="timer" aria-label={`${timer.label}: ${digits} ${PHASE_TEXT[reading.phase].toLowerCase()}`}>
-        {digits}
-      </div>
-      {reading.gone !== null ? (
-        <div className="timer__track" aria-hidden="true">
-          <div className="timer__fill" style={{ width: `${(reading.gone * 100).toFixed(3)}%` }} />
+      {/* The body carries the rule and its tab, so in a tall cell they stand
+          over the countdown rather than at the cell's far top. */}
+      <div className="timer__body">
+        <div className="timer__head">
+          <span className="timer__label">{timer.label}</span>
+          {marked ? <NoteBadge /> : null}
+          <span className={`timer__phase timer__phase--${reading.phase} tech micro`}>
+            <PhaseGlyph phase={reading.phase} />
+            {PHASE_TEXT[reading.phase]}
+          </span>
         </div>
-      ) : null}
-      <div className="timer__meta tech micro">{timerMeta(timer, reading)}</div>
+        <div className="timer__digits" role="timer" aria-label={`${timer.label}: ${digits} ${PHASE_TEXT[reading.phase].toLowerCase()}`}>
+          {digits}
+        </div>
+        {reading.gone !== null ? (
+          <div className="timer__track" aria-hidden="true">
+            <div className="timer__fill" style={{ width: `${(reading.gone * 100).toFixed(3)}%` }} />
+          </div>
+        ) : null}
+        <div className="timer__meta tech micro">{timerMeta(timer, reading)}</div>
+      </div>
     </li>
   );
 }

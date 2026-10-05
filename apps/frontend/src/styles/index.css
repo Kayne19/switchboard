@@ -2131,7 +2131,6 @@ button {
   position: relative;
   min-width: 0;
   min-height: 0;
-  border-top: 1px solid rgba(232, 230, 223, 0.16);
 }
 .timer-cell--paused,
 .timer-row--paused {
@@ -2141,10 +2140,14 @@ button {
 .timer-row--done {
   --phase: var(--amber);
 }
+.timer__body {
+  position: relative;
+  min-width: 0;
+  border-top: 1px solid rgba(232, 230, 223, 0.16);
+}
 /* The tab on the rule, in the phase's colour; a marked timer's whole rule
    is orange, as the note that names it. */
-.timer-cell::before,
-.timer-row::before {
+.timer__body::before {
   content: "";
   position: absolute;
   top: -2px;
@@ -2154,14 +2157,17 @@ button {
   background: var(--phase);
   clip-path: polygon(0 0, 100% 0, calc(100% - 3px) 100%, 0 100%);
 }
-.timer-cell--marked,
-.timer-row--marked {
+.timer-cell--marked > .timer__body,
+.timer-row--marked > .timer__body {
   border-top-color: rgba(var(--orange-rgb), 0.7);
 }
+/* A cell stands its timer in its middle, rule and all. */
 .timer-cell {
   display: flex;
   flex-direction: column;
   justify-content: center;
+}
+.timer-cell > .timer__body {
   padding-top: 12px;
 }
 .timer__head {
@@ -2248,7 +2254,7 @@ button {
 .timer-list {
   padding-right: 4px;
 }
-.timer-row {
+.timer-row > .timer__body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas:
