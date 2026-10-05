@@ -6,7 +6,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { FocusableSurface } from '../../src/primitives/FocusableSurface';
-import { countPast, keyScrollTop, leadScrollTop, ListViewport } from '../../src/primitives/ListViewport';
+import { countPast, drawnScale, keyScrollTop, leadScrollTop, ListViewport } from '../../src/primitives/ListViewport';
 
 let host: HTMLDivElement | undefined;
 let root: Root | undefined;
@@ -29,18 +29,26 @@ afterEach(() => {
 
 const ROW = 30;
 
-// A scroll 100px tall over `rows` rows of 30px, scrolled to `scrollTop`.
-function layOut(scroll: HTMLElement, scrollTop: number) {
+// A scroll 100px tall over `rows` rows of 30px, scrolled to `scrollTop`,
+// drawn at `scale` on screen (a focus opening scales the box it moves:
+// its rects shrink, its layout sizes do not).
+function layOut(scroll: HTMLElement, scrollTop: number, scale = 1) {
   const rows = Array.from(scroll.querySelectorAll<HTMLElement>('[data-item], [data-lead], h3'));
   Object.defineProperty(scroll, 'clientHeight', { configurable: true, value: 100 });
+  Object.defineProperty(scroll, 'offsetHeight', { configurable: true, value: 100 });
   Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: rows.length * ROW });
   scroll.scrollTop = scrollTop;
-  scroll.getBoundingClientRect = () => ({ top: 0, bottom: 100, left: 0, right: 200, width: 200, height: 100, x: 0, y: 0, toJSON() {} }) as DOMRect;
+  const at = (top: number, height: number, width = 200) => ({ top: 40 + top * scale, bottom: 40 + (top + height) * scale, left: 0, right: width * scale, width: width * scale, height: height * scale, x: 0, y: 40 + top * scale, toJSON() {} }) as DOMRect;
+  scroll.getBoundingClientRect = () => at(0, 100);
   rows.forEach((row, index) => {
-    row.getBoundingClientRect = () => {
-      const top = index * ROW - scroll.scrollTop;
-      return { top, bottom: top + ROW, left: 0, right: 200, width: 200, height: ROW, x: 0, y: top, toJSON() {} } as DOMRect;
-    };
+    row.getBoundingClientRect = () => at(index * ROW - scroll.scrollTop, ROW);
+  });
+}
+
+async function measured(scroll: HTMLElement) {
+  await act(async () => {
+    scroll.dispatchEvent(new Event('scroll'));
+    await new Promise((resolve) => requestAnimationFrame(resolve));
   });
 }
 
@@ -79,6 +87,15 @@ describe('countPast', () => {
   });
 });
 
+describe('drawnScale', () => {
+  it('is the drawn height over the laid-out one, and 1 before there is a box', () => {
+    expect(drawnScale(50, 100)).toBe(0.5);
+    expect(drawnScale(100, 100)).toBe(1);
+    expect(drawnScale(0, 100)).toBe(1);
+    expect(drawnScale(80, 0)).toBe(1);
+  });
+});
+
 describe('leadScrollTop', () => {
   it('stays put when the lead is in view', () => {
     expect(leadScrollTop({ top: 40, bottom: 70 }, 20, 100, 400)).toBe(20);
@@ -86,6 +103,16 @@ describe('leadScrollTop', () => {
   it('brings a lead below the view a quarter of the way down', () => {
     expect(leadScrollTop({ top: 300, bottom: 330 }, 0, 100, 400)).toBe(275);
   });
+  it('a lead under the fade at an edge the list continues past is not in view', () => {
+    // In the box (60-90 of 0-100) but under the bottom band of 20.
+    expect(leadScrollTop({ top: 75, bottom: 95 }, 0, 100, 400, 20)).toBe(50);
+    // At the list's end there is no band: the last row is in view.
+    expect(leadScrollTop({ top: 375, bottom: 395 }, 300, 100, 400, 20)).toBe(300);
+    // Nor at the top when the list stands at its start.
+    expect(leadScrollTop({ top: 0, bottom: 20 }, 0, 100, 400, 20)).toBe(0);
+    expect(leadScrollTop({ top: 105, bottom: 115 }, 100, 100, 400, 20)).toBe(80);
+  });
+
   it('never scrolls past either end', () => {
     expect(leadScrollTop({ top: 390, bottom: 400 }, 0, 100, 400)).toBe(300);
     expect(leadScrollTop({ top: -40, bottom: -10 }, 50, 100, 400)).toBe(0);
@@ -115,6 +142,30 @@ describe('ListViewport', () => {
     ]);
     expect(page().querySelectorAll('.drawing-viewport__rail')).toHaveLength(2);
     expect(scroll.tabIndex).toBe(0);
+  });
+
+  it('counts the same while a focus opening draws it scaled', async () => {
+    const scroll = render(rows(10));
+    layOut(scroll, 90, 0.5);
+    await measured(scroll);
+    expect(Array.from(page().querySelectorAll('.list-viewport__rim')).map((rim) => rim.textContent)).toEqual(['3 TASKS', '3 TASKS']);
+  });
+
+  it('counts only what countSelector picks', async () => {
+    const element = document.createElement('div');
+    document.body.append(element);
+    host = element;
+    root = createRoot(element);
+    act(() => root!.render(
+      <ListViewport noun={['DAY', 'DAYS']} countSelector=".day">
+        {Array.from({ length: 10 }, (_, index) => <div key={index} data-item={`i${index}`} className={index % 2 ? 'day' : 'hour'}>x</div>)}
+      </ListViewport>,
+    ));
+    const scroll = element.querySelector<HTMLElement>('.list-viewport__scroll')!;
+    layOut(scroll, 0);
+    await measured(scroll);
+    // Rows 4-9 lie below (row 3 is cut); the days among them are 5, 7, 9.
+    expect(element.querySelector('.list-viewport__rim')!.textContent).toBe('3 DAYS');
   });
 
   it('names one item in the singular', async () => {
