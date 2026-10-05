@@ -249,7 +249,7 @@ async function coldToday(page: Page, note?: string, alert = 'Gale warning on the
   await page.evaluate(([days, item, warning, now]) => window.SwitchboardController!.run([
     { op: 'show', id: 'weather', type: 'weather', role: 'secondary', data: { location: 'Tromsø', units: 'C', current: now, daily: days, ...(warning ? { alert: warning } : {}) } },
     ...(item ? [{ op: 'show', id: 'dentist-note', type: 'note', data: { tag: 'COLD', anchor: { target: 'weather', item }, segments: [{ text: 'Coldest on Thursday.' }] } }] : []),
-  ]), [daily, note, note ? undefined : alert, current] as const);
+  ]), [daily, note, alert, current] as const);
 }
 
 test('beside the outlook the figure keeps its size: it is fitted to the cell, not to itself', async ({ page }) => {
@@ -269,9 +269,9 @@ test('beside the outlook the figure keeps its size: it is fitted to the cell, no
   expect(await readingFaults(page, '.composed-aux [data-testid="weather"]')).toEqual([]);
 });
 
-// With a note on a day the forecast is sent without its alert: in an 88px
-// cell an alert, the figure and the day's line do not all fit (the head
-// and the three need some 112px; REPORT-polish.md, open items).
+// In an 88px cell the head, an alert, the figure and the day's line do not
+// all fit (some 114px): the alert's line gives way to the day's, its tag
+// kept in the head.
 for (const note of [undefined, '2026-10-08']) {
   test(`at 844x390 a cold forecast with a long condition${note ? ' and a note on a day' : ''} reads whole in its short cell`, async ({ page }) => {
     // The inline figure wrapped back under the temperature for a long
@@ -286,6 +286,27 @@ for (const note of [undefined, '2026-10-08']) {
     expect(await readingFaults(page, '.composed-aux [data-testid="weather"]')).toEqual([]);
   });
 }
+
+test('at 844x390 the forecast cell gives the alert\'s line to the hour a note names, and keeps the alert\'s tag in its head', async ({ page }) => {
+  // The head, the alert, the figure and the hour's line need some 114px of
+  // the 88px cell: the hour's line was cut at the foot, named only by the
+  // rail's card.
+  await page.setViewportSize({ width: 844, height: 390 });
+  await page.clock.setFixedTime(T0);
+  await page.goto('/?scene=today&chrome=0');
+  await page.evaluate(() => window.SwitchboardController!.run([
+    { op: 'show', id: 'dentist-note', type: 'note', data: { tag: 'RAIN', anchor: { target: 'weather', item: '2026-10-08T03:00' }, segments: [{ text: 'Heaviest at 3 am.' }] } },
+  ]));
+  const weather = page.locator('.composed-aux [data-testid="weather"]');
+  await expect(weather.locator('[data-item="2026-10-08T03:00"] .note-badge')).toBeVisible();
+  await expect(weather.locator('.weather-alert')).toHaveCount(0);
+  await expect(weather.locator('.weather-now__head .weather-now__alert-tag')).toHaveText('ALERT: Small craft advisory on the bay until 21:00');
+  await expect(weather.locator('.weather-now__head .weather-now__alert-tag')).toBeVisible();
+  expect(await readingFaults(page, '.composed-aux [data-testid="weather"]')).toEqual([]);
+  // In focus the forecast has the room: the alert stands on its line there.
+  await page.evaluate(() => window.SwitchboardController!.run([{ op: 'focus', id: 'weather' }]));
+  await expect(page.locator('.focus-layer [data-testid="weather"] .weather-alert')).toBeVisible();
+});
 
 test('a narrow forecast cell\'s spot line drops the chance of rain whole before its temperatures lose their end', async ({ page }) => {
   // A fourth object beside the today scene's agenda narrows the forecast's

@@ -72,7 +72,22 @@ function AlertLine({ text }: { text: string }) {
   );
 }
 
-function Now({ data, compact, temp, framed, spot, outlook, figure, inline }: {
+// The alert, where its line has given way to the item a note names (a slot
+// too short for both): its tag in the head, its words for a screen reader;
+// focus shows it whole.
+function AlertTag({ text }: { text: string }) {
+  return (
+    <span className="weather-now__alert-tag">
+      <svg className="weather-alert__glyph" viewBox="0 0 12 12" aria-hidden="true">
+        <path d="M6 0.8 L11.4 11 H0.6 Z M6 4.2 V7.6 M6 8.8 V10" />
+      </svg>
+      ALERT
+      <span className="weather-now__alert-words">: {text}</span>
+    </span>
+  );
+}
+
+function Now({ data, compact, temp, framed, spot, outlook, figure, inline, alertLine }: {
   data: WeatherData;
   compact: boolean;
   temp: number;
@@ -82,6 +97,7 @@ function Now({ data, compact, temp, framed, spot, outlook, figure, inline }: {
   /** Beside an outlook, the figure's width (weatherLayout). */
   figure: number;
   inline: boolean;
+  alertLine: boolean;
 }) {
   const { current, units } = data;
   // The temperature is as large as the layout gives it, and no larger than
@@ -114,10 +130,11 @@ function Now({ data, compact, temp, framed, spot, outlook, figure, inline }: {
           place of NOW: what of the place the title does not name already. */}
       <div className="weather-now__head tech micro">
         <MetaTitle title={data.title ?? 'WEATHER'} framed={framed} className="weather-now__title" />
+        {data.alert && !alertLine ? <AlertTag text={data.alert} /> : null}
         {place ? <span className="weather-now__location">{place}</span> : null}
         {framed ? <span>NOW</span> : null}
       </div>
-      {data.alert ? <AlertLine text={data.alert} /> : null}
+      {data.alert && alertLine ? <AlertLine text={data.alert} /> : null}
       {/* The figure and the words beside it where the box is wide enough
           for both, under it where it is not (an intrinsic wrap, no
           breakpoint). */}
@@ -416,7 +433,7 @@ export function WeatherPrimitive({ data, marked, framed = false }: { data: Weath
   }, [tall]);
   const field = (
     <div ref={fieldRef} className="weather__field" data-parts={parts} style={{ '--weather-temp': `${layout.temp}px`, '--weather-strip-least': `${STRIP_LEAST}px` } as CSSProperties}>
-      <Now data={data} compact={arrangement === 'compact'} temp={layout.temp} framed={framed} spot={unshown} outlook={layout.outlook ? offered : null} figure={layout.figure} inline={layout.inline} />
+      <Now data={data} compact={arrangement === 'compact'} temp={layout.temp} framed={framed} spot={unshown} outlook={layout.outlook ? offered : null} figure={layout.figure} inline={layout.inline} alertLine={layout.alertLine} />
       {layout.hourly ? <Hours hours={hours} units={data.units} marked={marked} /> : null}
       {layout.daily ? <Days days={days} marked={marked} scroll={!tall} /> : null}
     </div>

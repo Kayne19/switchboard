@@ -240,9 +240,10 @@ describe('a note on one hour or day', () => {
     expect(hourPage.querySelector('.weather-spot')!.textContent).toBe('NOTETHU 03:00' + '65°' + '68%');
     act(() => root!.unmount());
     host!.remove();
-    // Too short for any list or for the outlook's columns under the alert:
-    // the day the note names, the same way.
-    const dayPage = render(forecast, '2026-10-08', { width: 340, height: 110 });
+    // Too short for any list or for the outlook's columns under the alert,
+    // its figure too wide for a column beside it: the day the note names,
+    // the same way.
+    const dayPage = render(forecast, '2026-10-08', { width: 340, height: 128, condition: [24, 200] });
     expect(dayPage.querySelector('.weather-outlook')).toBeNull();
     expect(marks(dayPage)).toEqual(['2026-10-08']);
     expect(dayPage.querySelector('.weather-spot')!.textContent).toBe('NOTETHU OCT 8' + '55° / 61°' + '80%');
@@ -269,6 +270,21 @@ describe('a note on one hour or day', () => {
     expect(page.querySelector('.weather-spot')!.textContent).toBe('NOTEFRI OCT 9' + '52° / 66°');
     // The layout kept the line's room: the figure stands on one line.
     expect(page.querySelector('.weather-now--inline')).not.toBeNull();
+  });
+
+  it('a slot too short for the alert and the item a note names gives the alert\'s line to the item, and keeps its tag', () => {
+    // The today scene's forecast cell at 844x390: 252x88, an alert, a note on an hour.
+    const page = render(forecast, '2026-10-08T03:00', { width: 252, height: 88, condition: [24, 66] });
+    expect(page.querySelector('.weather-alert')).toBeNull();
+    expect(marks(page)).toEqual(['2026-10-08T03:00']);
+    const tag = page.querySelector('.weather-now__head .weather-now__alert-tag')!;
+    expect(tag.textContent).toBe('ALERT: Small craft advisory on the bay until 21:00');
+    // With no note, or room for both, the alert keeps its line.
+    act(() => root!.unmount());
+    host!.remove();
+    const quiet = render(forecast, undefined, { width: 252, height: 88, condition: [24, 66] });
+    expect(quiet.querySelector('.weather-alert')).not.toBeNull();
+    expect(quiet.querySelector('.weather-now__alert-tag')).toBeNull();
   });
 
   it('marks nothing for a time the forecast does not hold', () => {

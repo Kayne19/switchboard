@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { WeatherData, WeatherHour } from '../../src/controller/types';
 import {
   ALERT_LINE,
+  INLINE_HERO_HEIGHT,
   SPOT_LINE,
   STACKED_HERO_HEIGHT,
   COMPACT_HEIGHT,
@@ -136,11 +137,28 @@ describe('weatherLayout', () => {
   });
 
   it('keeps the room for the spot line of a day a note names where no outlook stands to hold it', () => {
-    // 340x110 with an alert: no outlook; stacked, the figure and the day's line ran past the foot.
-    expect(weatherLayout(340, 110, { ...all, alert: true, markedDay: true })).toMatchObject({ outlook: false, inline: true });
-    expect(weatherLayout(340, 110, { ...all, alert: true })).toMatchObject({ outlook: false, inline: false });
+    // 340x120 with an alert: no outlook; stacked, the figure and the day's line ran past the foot.
+    expect(weatherLayout(340, 120, { ...all, alert: true, markedDay: true })).toMatchObject({ outlook: false, inline: true, alertLine: true });
+    expect(weatherLayout(340, 120, { ...all, alert: true })).toMatchObject({ outlook: false, inline: false, alertLine: true });
     // The outlook holds the day: no line to keep room for.
     expect(weatherLayout(334, 128, { ...all, alert: true, markedDay: true })).toMatchObject({ outlook: true, inline: false });
+  });
+
+  it('gives the alert\'s line to the item a note names where the slot is too short for both', () => {
+    // The today scene's forecast cell at 844x390 (252x88): the head, the
+    // alert's line and the figure on one line filled it, and the hour's
+    // line under them was cut.
+    const short = INLINE_HERO_HEIGHT + ALERT_LINE + SPOT_LINE;
+    expect(weatherLayout(252, 88, { ...all, alert: true, markedHour: true })).toMatchObject({ alertLine: false, inline: true, outlook: false });
+    expect(weatherLayout(252, short - 1, { ...all, alert: true, markedDay: true, ahead: false })).toMatchObject({ alertLine: false, inline: false });
+    // Tall enough for both, or with no item to show, the alert keeps its line.
+    expect(weatherLayout(252, short, { ...all, alert: true, markedHour: true })).toMatchObject({ alertLine: true, inline: true });
+    expect(weatherLayout(252, 88, { ...all, alert: true })).toMatchObject({ alertLine: true, inline: true });
+    // Given up, its room may let the outlook stand and hold the day there.
+    expect(weatherLayout(340, 110, { ...all, alert: true, markedDay: true })).toMatchObject({ alertLine: false, outlook: true });
+    // No alert, nothing to give.
+    expect(weatherLayout(252, 88, { ...all, markedHour: true }).alertLine).toBe(false);
+    expect(weatherLayout(1000, 620, { ...all, alert: true }).alertLine).toBe(true);
   });
 
   it('stands an outlook only where a whole column fits beside the figure, counted from its temperature row and its condition line', () => {

@@ -2591,6 +2591,28 @@ button {
   color: rgba(var(--orange-rgb), 0.9);
   text-overflow: ellipsis;
 }
+/* The alert's tag, where its line has given way (weatherLayout alertLine):
+   after the title, the place kept at the head's end. */
+.weather-now__alert-tag {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  margin-right: auto;
+  color: var(--amber);
+  font-weight: 700;
+}
+
+/* Its words, for a screen reader; out of sight. */
+.weather-now__alert-words {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .weather-now__title + .weather-now__location {
   flex: 0 10 auto;
   color: rgba(232, 230, 223, 0.5);
