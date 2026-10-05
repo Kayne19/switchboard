@@ -447,6 +447,15 @@ describe('chart kinds', () => {
     expect(Number(value.getAttribute('x'))).toBeGreaterThan(named.rect.right);
   });
 
+  // A horizontal bar near the plot's end, too short to hold its value,
+  // printed it past the plot inside the plot's clip: cut away (review).
+  it("draws a marked bar's value outside the plot's clip, its outline inside it", () => {
+    renderWith({ kind: 'bar', labels: ['a', 'b'], series: [{ name: 'S', values: [3, 1] }], marker: { x: 1 } });
+    const callout = host.querySelector('.chart-callout')!;
+    expect(callout.closest('[clip-path]')).toBeNull();
+    expect(callout.querySelector('.chart-callout__outline')!.getAttribute('clip-path')).toMatch(/^url\(#/);
+  });
+
   it('marks each bar a note names, as it marks its marker', () => {
     const chart: ChartData = { kind: 'bar', labels: ['a', 'b', 'c'], series: [{ name: 'S', values: [3, 1, 2] }] };
     host = document.createElement('div');

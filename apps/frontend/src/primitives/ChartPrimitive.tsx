@@ -224,19 +224,22 @@ export function ChartPrimitive({
             {kind==='bar' ? series.bars.map((bar)=><rect key={bar.index} className="chart-bar" x={bar.rect.left} y={bar.rect.top} width={Math.max(0.5,bar.rect.right-bar.rect.left)} height={Math.max(0.5,bar.rect.bottom-bar.rect.top)} fill={color}/>) : null}
           </motion.g>;
         })}
-        {callouts.map((callout)=>{
-          const {rect}=callout.bar;
-          return <motion.g key={`${callout.bar.series}-${callout.bar.index}`} className="chart-callout" data-series={data.series[callout.bar.series]?.name} data-index={callout.bar.index} initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}>
-            <rect className="chart-callout__outline" x={rect.left} y={rect.top} width={Math.max(0.5,rect.right-rect.left)} height={Math.max(0.5,rect.bottom-rect.top)}/>
-            <text className={`chart-callout__value${callout.value.inside?' chart-callout__value--inside':''}`} x={callout.value.x} y={callout.value.y} textAnchor={callout.value.anchor}>{callout.value.text}</text>
-          </motion.g>;
-        })}
+
         {markerPoint ? (
           <motion.g className="chart-marker" initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}>
             <circle className="chart-marker__point" cx={markerPoint.x} cy={markerPoint.y} r={focused?CHART_MARKER_RADIUS+2:CHART_MARKER_RADIUS} fill="#000" stroke="var(--orange)" strokeWidth={CHART_MARKER_STROKE}/>
           </motion.g>
         ) : null}
       </g>
+      {/* A marked bar's printed value may stand past the plot's edge, so
+          only its outline is cut to the plot, as the bar is. */}
+      {callouts.map((callout)=>{
+        const {rect}=callout.bar;
+        return <motion.g key={`${callout.bar.series}-${callout.bar.index}`} className="chart-callout" data-series={data.series[callout.bar.series]?.name} data-index={callout.bar.index} initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}>
+          <rect className="chart-callout__outline" clipPath={`url(#${clipId})`} x={rect.left} y={rect.top} width={Math.max(0.5,rect.right-rect.left)} height={Math.max(0.5,rect.bottom-rect.top)}/>
+          <text className={`chart-callout__value${callout.value.inside?' chart-callout__value--inside':''}`} x={callout.value.x} y={callout.value.y} textAnchor={callout.value.anchor}>{callout.value.text}</text>
+        </motion.g>;
+      })}
       {/* The axis names follow their axes: a horizontal bar chart's
           categories run down the left and its values along the bottom. */}
       <text className="chart-axis-label" x={width/2} y={height-2} textAnchor="middle">{(horizontal ? data.yLabel : data.xLabel) ?? (horizontal ? 'Y' : 'X')}</text>
