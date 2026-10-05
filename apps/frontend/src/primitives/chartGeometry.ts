@@ -1,6 +1,6 @@
 import type { ChartData, ChartKind, ChartSeries } from '../controller/types';
 import { readableScale, type DrawingText } from './drawingFit';
-import { hiddenTraceLength } from './segments';
+import { LEADER_CLEARANCE, hiddenTraceLength } from './segments';
 
 // The chart draws in a viewBox -- its frame -- and the notes laid over a
 // chart map their points and the drawn marks through the same frame, so both
@@ -561,6 +561,8 @@ export function chartValueAxis(data: ChartData): ChartValueAxis {
 export interface ChartScales {
   /** The frame the chart is drawn in. */
   frame: ChartFrame;
+  /** The CSS pixels a unit of the frame is drawn at: its slot's (`chartFit`), 1 where no slot is given. */
+  scale: number;
   kind: ChartKind;
   categories: ChartCategoryLayout;
   /** Bars run across the chart: the value axis is x and the category axis y. */
@@ -588,7 +590,7 @@ export interface ChartScales {
   plot: ViewRect;
 }
 
-export function chartScales(data: ChartData, frame: ChartFrame = CHART_FRAME): ChartScales {
+export function chartScales(data: ChartData, frame: ChartFrame & { scale?: number } = CHART_FRAME): ChartScales {
   const pad = chartPad(data, frame);
   const plot = { left: pad.left, top: pad.top, right: frame.width - pad.right, bottom: frame.height - pad.bottom };
   const plotWidth = plot.right - plot.left;
@@ -617,6 +619,7 @@ export function chartScales(data: ChartData, frame: ChartFrame = CHART_FRAME): C
     horizontal ? plot.left + share(value) * plotWidth : plot.top + (1 - share(value)) * plotHeight;
   return {
     frame,
+    scale: frame.scale ?? 1,
     kind,
     categories,
     horizontal,
@@ -935,20 +938,19 @@ function pointLabel(at: ViewPoint, spot: PointSpot, width: number): Pick<ChartPo
 
 // How far from `start`, away from the point on `side`, the room past a
 // point's value stays clear of the lines and the marks and inside the
-// frame, up to `POINT_ROOM`: a run a few units across that widens at 45
-// degrees to one side or the other -- the way a leader comes on, straight
-// or after a 45-degree turn, from a card beyond it that is wider still --
-// whichever side has more. A peak's value printed into the narrow wedge
-// under its apex has little room; one printed over a gently rising line
-// has all of it.
-function roomPast(side: ChartSide, start: ViewPoint, lines: ViewPoint[][], marks: ViewRect[], frame: ChartFrame): number {
-  return Math.max(roomToward(side, start, lines, marks, frame, 1), roomToward(side, start, lines, marks, frame, -1));
+// frame, up to `POINT_ROOM`: a run `half` units either side of its line
+// (the leader's clearance, in the frame's units) that widens at 45 degrees
+// to one side or the other -- the way a leader comes on, straight or after
+// a 45-degree turn, from a card beyond it that is wider still -- whichever
+// side has more. A peak's value printed into the narrow wedge under its
+// apex has little room; one printed over a gently rising line has all of it.
+function roomPast(side: ChartSide, start: ViewPoint, lines: ViewPoint[][], marks: ViewRect[], frame: ChartFrame, half: number): number {
+  return Math.max(roomToward(side, start, lines, marks, frame, half, 1), roomToward(side, start, lines, marks, frame, half, -1));
 }
 
 // `roomPast` with the run widening to one side: `flare` 1 towards larger x
 // (or y, on a side to the left or right), -1 towards smaller.
-function roomToward(side: ChartSide, start: ViewPoint, lines: ViewPoint[][], marks: ViewRect[], frame: ChartFrame, flare: 1 | -1): number {
-  const half = 4;
+function roomToward(side: ChartSide, start: ViewPoint, lines: ViewPoint[][], marks: ViewRect[], frame: ChartFrame, half: number, flare: 1 | -1): number {
   // A point in the wedge's own terms: how far along from `start`, and how far across.
   const along = (p: ViewPoint) => (side === 'above' ? start.y - p.y : side === 'below' ? p.y - start.y : side === 'left' ? start.x - p.x : p.x - start.x);
   const across = (p: ViewPoint) => flare * (side === 'above' || side === 'below' ? p.x - start.x : p.y - start.y);
@@ -1035,6 +1037,8 @@ export function chartPointCallouts(data: ChartData, named: ChartAnchor[] = [], s
     { ...ticksBelow, top: plot.bottom + CALLOUT_TICK_GAP * 2 },
   ];
   const reach = CHART_MARKER_RADIUS + CHART_MARKER_STROKE / 2;
+  // The clearance a note's leader keeps, in pixels, in the frame's units.
+  const clearance = LEADER_CLEARANCE / scales.scale;
   // Every point marked, once each, its ring first: a value keeps off every
   // ring, a later one's too.
   const marked: Array<{ sample: SeriesSample; at: ViewPoint; ring: ViewRect }> = [];
@@ -1076,7 +1080,7 @@ export function chartPointCallouts(data: ChartData, named: ChartAnchor[] = [], s
       for (const box of labels) cost += overlap(near, box) * 4;
       for (const box of taken) if (overlap(near, box) > 0) cost += 1e5;
       if (label.left < 0 || label.top < 0 || label.right > frame.width || label.bottom > frame.height) cost += 1e6;
-      cost += POINT_ROOM - roomPast(side, point, lines, inTheWay, frame);
+      cost += POINT_ROOM - roomPast(side, point, lines, inTheWay, frame, clearance);
       if (!best || cost < best.cost) {
         best = { cost, callout: { series: sample.series, x: sample.x, at, ring, value: { ...value, text }, label, point, from: side } };
       }

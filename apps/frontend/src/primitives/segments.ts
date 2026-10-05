@@ -4,6 +4,15 @@
 // the notes keep their cards and leaders off those lines (notePlacement).
 // Neither depends on the other: both read this.
 
+/**
+ * How far, in CSS pixels, a note's leader keeps from the marks and lines it
+ * passes on its way to a callout (notePlacement's `calloutLeader`). A
+ * chart prints a point's value on the side with the most room past it
+ * clear by this much, in its own units at the scale it is drawn
+ * (chartGeometry's `roomPast`), so the leader that lands there can keep it.
+ */
+export const LEADER_CLEARANCE = 4;
+
 export interface Point {
   x: number;
   y: number;

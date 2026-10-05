@@ -714,6 +714,23 @@ describe('a marked point', () => {
     expect(overlaps(callouts[1].ring, callouts[0].label)).toBe(false);
   });
 
+  // The room past a value was measured with a run 4 units across, the
+  // leader's clearance, which is 4 CSS pixels: at a phone's scale (0.65 px
+  // a unit) a point of another series 5 units beside the run -- 3.3 px --
+  // left the spot above clear, and the leader the note then ran there
+  // could not keep its clearance (line-notes review L3).
+  it("measures the room past its value with the leader's clearance in pixels, at the scale the chart is drawn", () => {
+    // One unit per x: the named point at x 449, and another series' point
+    // 9 units right of it and 30 units above its value's landing point
+    // (its edge 5 units off the run); the rest of that series lies on the
+    // plot's floor.
+    const values = Array.from({ length: 899 }, (_, x) => (x === 458 ? 64 : 0));
+    const scatter: ChartData = { kind: 'scatter', xMax: 898, yMin: 0, yMax: 100, series: [{ name: 'A', values: [50, 50, 50] }, { name: 'B', values }] };
+    const at = (scale: number) => chartPointCallouts(scatter, [{ x: 449, series: 'A' }], chartScales(scatter, { width: 1000, height: 500, scale }))[0];
+    expect(at(1).from).toBe('above');
+    expect(at(0.65).from).not.toBe('above');
+  });
+
   it("is what a note's leader lands by, as a bar's printed end is", () => {
     const line: ChartData = { xMax: 4, yMin: 0, yMax: 10, series: [{ name: 'A', values: [1, 1.5, 4, 1.5, 1] }] };
     const [callout] = chartPointCallouts(line, [{ x: 2 }]);

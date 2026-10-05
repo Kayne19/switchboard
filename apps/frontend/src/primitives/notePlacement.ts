@@ -56,7 +56,7 @@
 // Without `spill`, or where no note's absence helps, each card takes the
 // place that hides the least.
 
-import { clipSegment, hiddenTraceLength, segmentDistance, segmentsMeet, type Point, type Rect } from './segments';
+import { LEADER_CLEARANCE, clipSegment, hiddenTraceLength, segmentDistance, segmentsMeet, type Point, type Rect } from './segments';
 
 interface NoteCard {
   id: string;
@@ -878,8 +878,6 @@ const CALLOUT_RUN = 12;
 const CALLOUT_JOG = 10;
 // How many heights a run beside the card tries: the nearest to the point first.
 const CALLOUT_RUN_HEIGHTS = 4;
-// How far a callout's leader keeps from the marks and lines it passes.
-const LEADER_CLEARANCE = 4;
 // What coming onto a callout's point across its value, rather than from
 // past it, costs, as pixels of leader.
 const CALLOUT_ACROSS = 60;

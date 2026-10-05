@@ -168,7 +168,10 @@ export function ChartPrimitive({
   useLeastHeight(hostRef, useCallback((box: { width: number }) => chartLeastHeight(data, box.width), [data]));
   const fit = chartFrame(slot);
   const width = fit.width, height = fit.height;
-  const scales=useMemo(()=>chartScales(data,{width,height}),[data,width,height]);
+  // At the scale the slot draws it, which the room past a marked point's
+  // value is measured at (a note's leader keeps its clearance in pixels).
+  const scale = fit.scale;
+  const scales=useMemo(()=>chartScales(data,{width,height,scale}),[data,width,height,scale]);
   const {plot,kind,horizontal,baseline,valueAt}=scales;
   // The plot's own padding grows to clear a legend that wraps, a second
   // row of category labels, and a horizontal bar chart's labels down the
