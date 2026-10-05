@@ -267,12 +267,13 @@ export const assistantWeek: CalendarData = {
   title: 'WEEK / OCT 5-11', subtitle: 'KAYNE / WORK + HOME', context: 'CALENDAR', caption: 'PACIFIC TIME',
   view: 'week', start: '2026-10-05', days: 7, today: ASSISTANT_TODAY, now: ASSISTANT_NOW,
   events: [
+    { id: 'priya-leave', title: 'Priya on leave', start: '2026-10-01', end: '2026-10-06', semantic: 'muted' },
     { id: 'standup-mon', title: 'Standup', start: '2026-10-05T09:30', end: '2026-10-05T09:45', location: 'Meet' },
     { id: 'review-mon', title: 'Switchboard review', start: '2026-10-05T11:00', end: '2026-10-05T12:00', semantic: 'orange' },
     { id: 'gym-mon', title: 'Gym', start: '2026-10-05T18:00', end: '2026-10-05T19:00' },
     { id: 'standup-tue', title: 'Standup', start: '2026-10-06T09:30', end: '2026-10-06T09:45', location: 'Meet' },
     { id: 'lunch-ana', title: 'Lunch with Ana', start: '2026-10-06T12:30', end: '2026-10-06T13:30', location: 'Tartine, Guerrero St' },
-    { id: 'homelab', title: 'Homelab maintenance window', start: '2026-10-06T20:00', end: '2026-10-06T22:00', status: 'tentative' },
+    { id: 'homelab', title: 'Homelab maintenance window: Proxmox upgrade and the backup restore drill', start: '2026-10-06T20:00', end: '2026-10-06T22:00', status: 'tentative' },
     { id: 'ana-in-town', title: 'Ana in town', start: '2026-10-07', end: '2026-10-08', semantic: 'green' },
     { id: 'standup-wed', title: 'Standup', start: '2026-10-07T09:30', end: '2026-10-07T09:45', location: 'Meet', active: true },
     { id: 'dentist', title: 'Dentist', start: '2026-10-07T10:30', end: '2026-10-07T11:30', location: 'Dr. Okafor, 14 Pine St', detail: 'Cleaning and a check on the lower left molar', semantic: 'amber' },
@@ -282,10 +283,12 @@ export const assistantWeek: CalendarData = {
     { id: 'mom-birthday', title: "Mom's birthday", start: '2026-10-08', semantic: 'green' },
     { id: 'standup-thu', title: 'Standup', start: '2026-10-08T09:30', end: '2026-10-08T09:45', location: 'Meet' },
     { id: 'planning', title: 'Q4 planning', start: '2026-10-08T14:00', end: '2026-10-08T15:30', location: 'Room 4B' },
+    { id: 'interview', title: 'Interview: staff engineer', start: '2026-10-08T14:00', end: '2026-10-08T15:00', status: 'tentative', semantic: 'cyan' },
+    { id: 'landlord', title: 'Call the landlord', start: '2026-10-08T15:00', end: '2026-10-08T15:20' },
     { id: 'gym-thu', title: 'Gym', start: '2026-10-08T18:00', end: '2026-10-08T19:00', status: 'cancelled' },
     { id: 'standup-fri', title: 'Standup', start: '2026-10-09T09:30', end: '2026-10-09T09:45', location: 'Meet' },
     { id: 'flight', title: 'Flight UA 1532 SFO to JFK', start: '2026-10-09T18:05', end: '2026-10-10T02:40', location: 'SFO Terminal 3, gate F12', detail: 'Lands 05:40 New York time. Seat 14C.', semantic: 'cyan' },
-    { id: 'brooklyn', title: 'Brooklyn weekend', start: '2026-10-10', end: '2026-10-11', status: 'confirmed' },
+    { id: 'brooklyn', title: 'Brooklyn trip', start: '2026-10-10', end: '2026-10-12', status: 'confirmed' },
     { id: 'wedding', title: "Sam and Lee's wedding", start: '2026-10-10T16:00', end: '2026-10-10T23:00', location: 'Brooklyn Botanic Garden' },
   ],
 };
@@ -295,6 +298,59 @@ export const assistantAgenda: CalendarData = {
   title: 'TODAY / WED OCT 7', subtitle: 'AGENDA', context: 'CALENDAR', caption: 'PACIFIC TIME',
   view: 'agenda', start: ASSISTANT_TODAY, days: 1, today: ASSISTANT_TODAY, now: ASSISTANT_NOW,
   events: assistantWeek.events.filter((event) => event.start.startsWith(ASSISTANT_TODAY)),
+};
+
+// Today in a day view: the whole day with room for every line, an
+// on-call shift run over from last night, a release freeze that runs on
+// past midnight, a cancelled class, and three events in one hour.
+export const assistantDay: CalendarData = {
+  title: 'WED OCT 7 / DAY', subtitle: 'KAYNE / WORK + HOME', context: 'CALENDAR', caption: 'PACIFIC TIME',
+  view: 'day', start: ASSISTANT_TODAY, today: ASSISTANT_TODAY, now: ASSISTANT_NOW,
+  events: [
+    { id: 'on-call', title: 'On call: switchboard pager', start: '2026-10-06T22:00', end: '2026-10-07T08:00', semantic: 'red', detail: 'Hand over to Priya at 08:00' },
+    { id: 'yoga', title: 'Yoga', start: '2026-10-07T07:00', end: '2026-10-07T08:00', status: 'cancelled', location: 'Mission Yoga' },
+    ...assistantWeek.events.filter((event) => event.start.startsWith(ASSISTANT_TODAY)),
+    { id: 'focus', title: 'Focus block: write the round 4 report', start: '2026-10-07T13:00', end: '2026-10-07T15:00', status: 'tentative' },
+    { id: 'coffee', title: 'Coffee with Sam', start: '2026-10-07T15:30', end: '2026-10-07T16:00', location: 'Ritual, Valencia St' },
+    { id: 'freeze', title: 'Release freeze', start: '2026-10-07T22:00', end: '2026-10-08T06:00', semantic: 'orange', detail: 'No deploys until the 06:00 check' },
+  ],
+};
+
+// October as a month: the week above in its row, a conference over three
+// days, a visit that runs over a weekend into the next row, a busy
+// Wednesday, and the days of September and November the rows reach.
+export const assistantMonth: CalendarData = {
+  title: 'OCTOBER 2026', subtitle: 'KAYNE / WORK + HOME', context: 'CALENDAR', caption: 'PACIFIC TIME',
+  view: 'month', start: '2026-10-01', today: ASSISTANT_TODAY, now: ASSISTANT_NOW,
+  events: [
+    { id: 'rent', title: 'Rent due', start: '2026-10-01', semantic: 'amber' },
+    { id: 'sept-retro', title: 'September retro', start: '2026-09-30T15:00', end: '2026-09-30T16:00' },
+    ...assistantWeek.events,
+    { id: 'standup-14', title: 'Standup', start: '2026-10-14T09:30', end: '2026-10-14T09:45' },
+    { id: 'arch', title: 'Architecture review', start: '2026-10-14T10:00', end: '2026-10-14T11:00', semantic: 'orange' },
+    { id: 'lunch-14', title: 'Team lunch', start: '2026-10-14T12:00', end: '2026-10-14T13:00' },
+    { id: 'vendor', title: 'Vendor call: ElevenLabs', start: '2026-10-14T13:30', end: '2026-10-14T14:00' },
+    { id: 'pairing', title: 'Pairing with Ana', start: '2026-10-14T14:00', end: '2026-10-14T16:00', status: 'tentative' },
+    { id: 'haircut', title: 'Haircut', start: '2026-10-14T17:00', end: '2026-10-14T17:30' },
+    { id: 'book-club', title: 'Book club', start: '2026-10-14T19:00', end: '2026-10-14T21:00', location: "Priya's place" },
+    { id: 'strange-loop', title: 'Strange Loop', start: '2026-10-15', end: '2026-10-17', semantic: 'cyan', location: 'St. Louis' },
+    { id: 'talk', title: 'My talk: one voice, many agents', start: '2026-10-16T11:00', end: '2026-10-16T11:45', semantic: 'orange' },
+    { id: 'parents', title: 'Parents visiting', start: '2026-10-24', end: '2026-10-27', semantic: 'green' },
+    { id: 'dinner-24', title: 'Dinner at Nopa', start: '2026-10-24T19:30', end: '2026-10-24T21:30' },
+    { id: 'standup-21', title: 'Standup', start: '2026-10-21T09:30', end: '2026-10-21T09:45' },
+    { id: 'dentist-follow', title: 'Dentist follow-up', start: '2026-10-28T08:30', end: '2026-10-28T09:00', semantic: 'amber', status: 'tentative' },
+    { id: 'halloween', title: 'Halloween party', start: '2026-10-31T20:00', end: '2026-11-01T01:00' },
+    { id: 'nov-planning', title: 'November planning', start: '2026-11-02T10:00', end: '2026-11-02T11:00' },
+  ],
+};
+
+// The rest of the week as an agenda: each day's events in order, the
+// flight past midnight, the trip over three days, and the two days with
+// nothing on them as one line.
+export const assistantAgendaWeek: CalendarData = {
+  title: 'NEXT 7 DAYS', subtitle: 'AGENDA / FROM TODAY', context: 'CALENDAR', caption: 'PACIFIC TIME',
+  view: 'agenda', start: ASSISTANT_TODAY, days: 7, today: ASSISTANT_TODAY, now: ASSISTANT_NOW,
+  events: assistantWeek.events,
 };
 
 export const assistantTasks: TasksData = {
@@ -676,6 +732,20 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
   // "Personal-assistant types"), then the day they compose.
   calendar: [
     { op: 'show', id: 'week', type: 'calendar', role: 'primary', data: assistantWeek },
+    dentistNote,
+  ],
+  // The other three views of the same calendar, each with the note on the
+  // dentist appointment.
+  'calendar-day': [
+    { op: 'show', id: 'week', type: 'calendar', role: 'primary', data: assistantDay },
+    dentistNote,
+  ],
+  'calendar-month': [
+    { op: 'show', id: 'week', type: 'calendar', role: 'primary', data: assistantMonth },
+    dentistNote,
+  ],
+  'calendar-agenda': [
+    { op: 'show', id: 'week', type: 'calendar', role: 'primary', data: assistantAgendaWeek },
     dentistNote,
   ],
   tasks: [{ op: 'show', id: 'todo', type: 'tasks', role: 'primary', data: assistantTasks }],
