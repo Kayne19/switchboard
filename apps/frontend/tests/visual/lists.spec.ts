@@ -164,3 +164,17 @@ for (const viewport of [geometries[0], geometries[2]]) {
     expect(box.rowBottom).toBeLessThanOrEqual(box.bottom + 1);
   });
 }
+
+test('a tinted message a note names carries the marked edge as well as its tint', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?scene=inbox&chrome=0');
+  await expect(page.locator('[data-testid="inbox"]')).toBeVisible();
+  const inbox = await page.evaluate(() => window.SwitchboardController!.state().agentObjects.inbox.data);
+  await show(page, [{ op: 'show', id: 'inbox', type: 'inbox', role: 'primary', data: inbox }, noteOn('inbox', 'ci')]);
+  const row = page.locator('[data-item="ci"]');
+  await expect(row.locator('.note-badge')).toBeVisible();
+  const shadow = await row.evaluate((element) => getComputedStyle(element).boxShadow);
+  // The orange of the marked edge (241, 90, 36) and the red tint (198, 21, 34).
+  expect(shadow).toContain('241, 90, 36');
+  expect(shadow).toContain('198, 21, 34');
+});

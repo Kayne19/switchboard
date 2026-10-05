@@ -3181,6 +3181,13 @@ button {
   --tint: var(--muted);
 }
 
+/* A tinted message a note names keeps both: the marked row's orange on
+   its edge and accent, its own tint just inside the edge. */
+.inbox-row--marked.inbox-row--tint {
+  background: linear-gradient(90deg, rgba(var(--orange-rgb), 0.1), rgba(var(--orange-rgb), 0.02) 76%, transparent);
+  box-shadow: inset 2px 0 0 rgba(var(--orange-rgb), 0.7), inset 4px 0 0 var(--tint);
+}
+
 /* TEMPORARY (pa-contract): the stand-in for calendar, tasks, timer, weather
    and inbox (primitives/TemporaryAssistantList.tsx), a plain list of the
    fields as sent until the render slice draws each type with a primitive of
