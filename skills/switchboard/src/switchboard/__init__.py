@@ -191,12 +191,23 @@ def _refused(result, what):
     return f"The switchboard refused that {what}{reason}."
 
 
-def _require_str(name, value, optional=False):
+# Unicode White_Space, the one whitespace set the service and the page judge a
+# blank id by (docs/display-tool.md, "How the two validators agree"). Not
+# str.strip, which also strips U+001C to U+001F.
+_WHITE_SPACE = frozenset(
+    "\t\n\x0b\x0c\r \x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007"
+    "\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
+)
+
+
+def _require_str(name, value, optional=False, blank_ok=False):
+    """A string, and unless `blank_ok` one with something besides White_Space;
+    with `blank_ok` it need only be non-empty, as a display `say` text is."""
     if value is None and optional:
         return
     if not isinstance(value, str):
         raise TypeError(f"{name} must be a string, not {type(value).__name__}")
-    if not optional and not value.strip():
+    if not optional and (not value if blank_ok else all(ch in _WHITE_SPACE for ch in value)):
         raise ValueError(f"{name} must not be empty")
 
 
@@ -292,16 +303,18 @@ def _check_display_action(action):
     if op in ("show", "hide", "focus"):
         _require_str("id", action.get("id"))
     if op == "say":
-        _require_str("text", action.get("text"))
+        # The service takes any non-empty text here, spaces included.
+        _require_str("text", action.get("text"), blank_ok=True)
     if op != "show":
         return
     kind = action.get("type")
     if kind not in _SHAPES:
         shapes = " | ".join(f"{name}: {hint}" for name, (_, hint) in _SHAPES.items())
         raise ValueError(f"unknown display type {kind!r}; each type takes only its own shape: {shapes}")
-    role = action.get("role")
-    if role is not None and role not in _ROLES:
-        raise ValueError(f"unknown display role {role!r}; use one of: {', '.join(_ROLES)}")
+    # A role, when the action has one, is a known name: `role=None` is sent as
+    # null, which the service refuses, so it is caught here like any other.
+    if "role" in action and action["role"] not in _ROLES:
+        raise ValueError(f"unknown display role {action['role']!r}; use one of: {', '.join(_ROLES)}")
     data = action.get("data")
     if not isinstance(data, dict):
         raise TypeError(f"data must be a dict, not {type(data).__name__}")
@@ -319,6 +332,15 @@ def _check_display_action(action):
         raise ValueError(f"{kind} data needs {' or '.join(one_of)}; its shape is {hint}")
 
 
+def _display_wire_action(action):
+    """The action as it is sent: an image's path or raw bytes become its wire
+    fields, then its outline is checked (a malformed one raises)."""
+    if isinstance(action, dict) and action.get("op") == "show" and action.get("type") == "image" and isinstance(action.get("data"), dict):
+        action = {**action, "data": _image_data(action["data"])}
+    _check_display_action(action)
+    return action
+
+
 def display(action=None, **fields):
     """Show, update, hide, focus, anchor speech to, or clear something on the caller's screen.
 
@@ -331,9 +353,7 @@ def display(action=None, **fields):
         action = fields
     elif fields:
         raise TypeError("pass the display action as a dict or as keywords, not both")
-    if isinstance(action, dict) and action.get("op") == "show" and action.get("type") == "image" and isinstance(action.get("data"), dict):
-        action = {**action, "data": _image_data(action["data"])}
-    _check_display_action(action)
+    action = _display_wire_action(action)
 
     def describe(result):
         data = result.data if isinstance(result.data, dict) else {}

@@ -108,7 +108,13 @@ const HTML_JS_PATTERNS = [
   /data:text\/html/i,
 ];
 
-const EXTERNAL_URL_REGEX = /(?:https?:\/\/|ftp:\/\/|^\/\/|\/\/[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i;
+/**
+ * An external resource, in any string: a `scheme://` of any scheme, a
+ * leading `//`, or a `//` followed by a host name with a dot and a top-level
+ * part of two letters or more (`see //cdn.example.com`). The backend's
+ * `names_external_resource` is the same rule, written out by hand.
+ */
+const EXTERNAL_URL_REGEX = /:\/\/|^\/\/|\/\/[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
 
 export type ActionValidationResult =
   | { ok: true; action: DisplayAction }
@@ -126,8 +132,21 @@ function serializedSize(value: unknown): number {
   }
 }
 
+/**
+ * Anything but Unicode White_Space, the one whitespace set both validators
+ * use (docs/display-tool.md, "How the two validators agree"): the 25 code
+ * points listed here, which the backend's `WHITE_SPACE` lists too. Not
+ * `String.prototype.trim`, which also strips U+FEFF and keeps U+0085.
+ */
+const NOT_WHITE_SPACE = /[^\t\n\u000b\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/u;
+
+/** Whether `text` is empty or White_Space only: a blank identifier or alt. */
+export function isBlank(text: string): boolean {
+  return !NOT_WHITE_SPACE.test(text);
+}
+
 function checkIdentifier(val: unknown, fieldName: string): { ok: true; id: string } | { ok: false; error: string } {
-  if (typeof val !== 'string' || val.trim().length === 0) {
+  if (typeof val !== 'string' || isBlank(val)) {
     return { ok: false, error: `${fieldName} must be a non-empty identifier` };
   }
   if (val.length > MAX_ID_UTF16) {
@@ -139,6 +158,34 @@ function checkIdentifier(val: unknown, fieldName: string): { ok: true; id: strin
   return { ok: true, id: val };
 }
 
+/**
+ * Code point order. The default sort compares UTF-16 units, which puts an
+ * astral key before one in U+E000-U+FFFF; the backend's byte order of UTF-8
+ * does not, and code point order is what both agree on.
+ */
+function compareCodePoints(a: string, b: string): number {
+  let i = 0;
+  while (i < a.length && i < b.length) {
+    const x = a.codePointAt(i) as number;
+    const y = b.codePointAt(i) as number;
+    if (x !== y) return x - y;
+    i += x > 0xffff ? 2 : 1;
+  }
+  return a.length - b.length;
+}
+
+/**
+ * An object's keys in code point order, the one order both validators walk
+ * an object in (docs/display-tool.md, "How the two validators agree"): with
+ * two unknown or forbidden keys, or two unsafe strings, the error is about
+ * the first in this order, wherever the agent put it. The backend's
+ * `entries_in_order` sorts the same way.
+ */
+function keysInOrder(record: Record<string, unknown>): string[] {
+  return Object.keys(record).sort(compareCodePoints);
+}
+
+/** The first forbidden key met walking depth first, keys in code point order. */
 function findForbiddenLayoutKey(val: unknown): string | null {
   if (Array.isArray(val)) {
     for (const item of val) {
@@ -148,9 +195,9 @@ function findForbiddenLayoutKey(val: unknown): string | null {
     return null;
   }
   if (isRecord(val)) {
-    for (const [key, nested] of Object.entries(val)) {
+    for (const key of keysInOrder(val)) {
       if (FORBIDDEN_LAYOUT_KEYS.has(key)) return key;
-      const found = findForbiddenLayoutKey(nested);
+      const found = findForbiddenLayoutKey(val[key]);
       if (found) return found;
     }
   }
@@ -175,8 +222,8 @@ function findUnsafeString(val: unknown): string | null {
     return null;
   }
   if (isRecord(val)) {
-    for (const nested of Object.values(val)) {
-      const found = findUnsafeString(nested);
+    for (const key of keysInOrder(val)) {
+      const found = findUnsafeString(val[key]);
       if (found) return found;
     }
   }
@@ -197,7 +244,7 @@ function hasNonFiniteNumber(val: unknown): boolean {
 }
 
 function checkUnknownKeys(obj: Record<string, unknown>, allowed: Set<string>, context: string): string | null {
-  for (const key of Object.keys(obj)) {
+  for (const key of keysInOrder(obj)) {
     if (!allowed.has(key)) {
       return `unknown field in ${context}: ${key}`;
     }
@@ -479,7 +526,7 @@ function validateGraphDiagramData(data: Record<string, unknown>): { ok: true; da
     const nUnknown = checkUnknownKeys(n, nodeAllowed, 'diagram node');
     if (nUnknown) return { ok: false, error: nUnknown };
 
-    if (typeof n.id !== 'string' || n.id.trim().length === 0 || n.id.length > 128) {
+    if (typeof n.id !== 'string' || isBlank(n.id) || n.id.length > 128) {
       return { ok: false, error: 'diagram node id must be non-empty and <= 128 UTF-16 code units' };
     }
     if (nodeIds.has(n.id)) {
@@ -533,7 +580,9 @@ function validateGraphDiagramData(data: Record<string, unknown>): { ok: true; da
     if (e.from === e.to) {
       return { ok: false, error: `diagram edge self-loop is forbidden: ${e.from}` };
     }
-    const pairKey = `${e.from}-->${e.to}`;
+    // JSON keeps the two ids apart whatever they contain: `a-->b` to `c`
+    // and `a` to `b-->c` are two pairs, as the backend's tuple keeps them.
+    const pairKey = JSON.stringify([e.from, e.to]);
     if (edgePairs.has(pairKey)) {
       return { ok: false, error: `duplicate diagram edge pair: ${e.from} -> ${e.to}` };
     }
@@ -601,7 +650,7 @@ function validateSequenceDiagramData(data: Record<string, unknown>): { ok: true;
     const aUnknown = checkUnknownKeys(a, actorAllowed, 'diagram actor');
     if (aUnknown) return { ok: false, error: aUnknown };
 
-    if (typeof a.id !== 'string' || a.id.trim().length === 0 || a.id.length > 128) {
+    if (typeof a.id !== 'string' || isBlank(a.id) || a.id.length > 128) {
       return { ok: false, error: 'diagram actor id must be non-empty and <= 128 UTF-16 code units' };
     }
     if (actorIds.has(a.id)) {
@@ -946,17 +995,6 @@ export function imageSignatureMatches(format: ImageFormat, bytes: Uint8Array): b
   }
 }
 
-/**
- * Unicode White_Space, the set Rust's `char::is_whitespace` uses. Not
- * `String.prototype.trim`: that also strips U+FEFF and keeps U+0085, so the
- * two validators would disagree on what a blank alt is.
- */
-const NOT_WHITE_SPACE = /[^\t\n\u000b\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/u;
-
-function isBlank(text: string): boolean {
-  return !NOT_WHITE_SPACE.test(text);
-}
-
 // Raster only: the format names the bytes' encoding, and the bytes must
 // carry that encoding's signature, so `format` can never label markup (an
 // SVG) or anything else as an image. The page builds the only `img` source
@@ -1081,12 +1119,34 @@ function validateNoteData(data: Record<string, unknown>): { ok: true; data: Note
   return { ok: true, data: result };
 }
 
+/**
+ * The byte cap an action is held to. An image action is the one kind allowed
+ * past the general cap; its own fields are capped in validateImageData, so
+ * nothing else can ride in under its limit.
+ */
+function actionSizeCap(value: Record<string, unknown>): number {
+  return value.op === 'show' && value.type === 'image' ? MAX_IMAGE_ACTION_BYTES : MAX_ACTION_BYTES;
+}
+
+/**
+ * Checks one display action and returns it normalized. The order of the
+ * checks is the backend's too (docs/display-tool.md, "How the two
+ * validators agree"): an object, within its size cap, with a known `op`;
+ * then no layout key, no unsafe string and no non-finite number anywhere in
+ * it; then the op's own rules; and last the normalized action, which may
+ * have gained a field (a say's `at: null`), is held to the same cap.
+ */
 export function validateControllerAction(value: unknown): ActionValidationResult {
+  const result = validateActionFields(value);
+  if (result.ok && isRecord(value) && serializedSize(result.action) > actionSizeCap(value)) {
+    return { ok: false, error: 'action exceeds size limit' };
+  }
+  return result;
+}
+
+function validateActionFields(value: unknown): ActionValidationResult {
   if (!isRecord(value)) return { ok: false, error: 'action must be an object' };
-  // An image action is the one kind allowed past the general cap; its own
-  // fields are capped below, so nothing else can ride in under its limit.
-  const sizeCap = value.op === 'show' && value.type === 'image' ? MAX_IMAGE_ACTION_BYTES : MAX_ACTION_BYTES;
-  if (serializedSize(value) > sizeCap) return { ok: false, error: 'action exceeds size limit' };
+  if (serializedSize(value) > actionSizeCap(value)) return { ok: false, error: 'action exceeds size limit' };
   if (typeof value.op !== 'string' || !ALLOWED_OPERATIONS.has(value.op)) {
     return { ok: false, error: 'unknown operation' };
   }

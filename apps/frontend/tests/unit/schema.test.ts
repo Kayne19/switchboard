@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import Ajv, { type ValidateFunction } from 'ajv';
 import schema from '../../../../docs/display-action-v1.schema.json';
 import fixtures from '../fixtures/display-actions.json';
+import { corpusCases, expandCorpusValue } from '../fixtures/validatorCorpus';
 import { validateControllerAction } from '../../src/controller/validation';
 
 // docs/display-action-v1.schema.json is described (docs/display-tool.md) as
@@ -212,5 +213,20 @@ describe('validateControllerAction follows display-action-v1.schema.json', () =>
     const action = { op: 'show', id: 'x', type: 'progress', data: { label: 'L', steps: [{ label: 'S' }] } };
     expect(validate(action), errorSummary()).toBe(true);
     expect(validateControllerAction(action).ok).toBe(true);
+  });
+});
+
+// The schema describes what the validators accept, so it must never be the
+// stricter of the two: every action the shared validator corpus says both
+// validators accept passes it. Where JSON Schema cannot state a rule
+// (KNOWN_SCHEMA_GAPS above), or for a blank id and the text of an error, it
+// is the weaker one, and the corpus pins the rule instead.
+describe('display-action-v1.schema.json and the validator corpus', () => {
+  it('accepts every action both validators accept', () => {
+    const refused = corpusCases
+      .filter((testCase) => testCase.accepted)
+      .filter((testCase) => !validate(expandCorpusValue(testCase.action)))
+      .map((testCase) => testCase.name);
+    expect(refused).toEqual([]);
   });
 });

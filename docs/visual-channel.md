@@ -258,9 +258,13 @@ resets the scene and sends the `epoch`. The second restates the status and
 leaves the new agent's first drawing, and its confirmation, alone. See
 `LegAnnouncer` in `apps/backend/src/leg_announcer.rs`.
 
-**`POST /display`'s result.** After publishing the action and stamping its
-`seq`, the handler waits up to ~2.5s (`DISPLAY_CONFIRM_DEADLINE_MS`) for that
-`seq` to clear the watermark, then returns one of:
+**The display call's result.** A display reaches the service as a module
+call (the path is under "Explicitly Refused Patterns" below). After
+publishing the action and stamping its `seq`, the service's `display`
+handler (`apps/backend/src/module_calls.rs`) waits up to ~2.5s
+(`DISPLAY_CONFIRM_DEADLINE_MS`) for that `seq` to clear the watermark, then
+answers with one of these, which the agent's skill module receives as the
+call's `result` and turns into the line it prints:
 - `{"delivered": true, "rendered": true}` — the browser confirmed this `seq`.
 - `{"delivered": true, "rendered": false, "rejected": true, "reason": "..."}`
   — the browser nacked this exact `seq`.
@@ -274,8 +278,8 @@ leaves the new agent's first drawing, and its confirmation, alone. See
   on; the action is still recorded in the projection and greets the next
   connection.
 
-**`POST /view` with no `target`.** Rather than ask the browser what is on
-screen right now, `/view` reports the backend's *own* record of what it
+**`view` with no `target`.** Rather than ask the browser what is on
+screen right now, the `view` call reports the backend's *own* record of what it
 believes it told the browser to show — the same projection that seeds a
 reconnect — plus whether that intent is confirmed:
 
@@ -322,7 +326,7 @@ Focus always overrides the composition primary, for both `visual_kind` and
 `title` — an agent that calls `focus` on an ambient or secondary object
 still gets that object reported back. Absent a focus, `role: "primary"`
 wins regardless of show order, and a later `show` without that role never
-displaces an earlier non-ambient object just by being more recent. The backend's `/view`
+displaces an earlier non-ambient object just by being more recent. The backend's `view`
 intent and the browser's own `screen_state` report are computed by the same
 rule, so they agree on every composed scene, not just the common single-object
 or single-`role:"primary"` case.
@@ -381,10 +385,16 @@ rules"); the reasons are these.
   controlled by client code, written via `textContent`.
 - **Layout / style fields from the agent**: refused. Any `layout`, `style`, `css`,
   `className`, or geometry field in an action is rejected — the page owns pixels.
-- **Ad-hoc or unversioned transport sprawl**: refused. The display channel is
-  exposed cleanly via dedicated `POST /display` and `SWITCHBOARD_DISPLAY_URL`,
-  validating every action at the boundary and reusing the existing browser
-  WebSocket for live delivery.
+- **Ad-hoc or unversioned transport sprawl**: refused. A display travels one
+  path. The agent calls `switchboard.display` in the skill module, which sends
+  a `display` call to the host agent on the host's skill socket; the host
+  agent relays it, with the call token, as a module call over the host link
+  (`docs/host-link.md`, "Module calls"); the service's `display` handler
+  (`apps/backend/src/module_calls.rs`) validates it (`visual_protocol.rs`) and
+  applies it under the display gate (`apps/backend/src/display.rs`); and the
+  existing browser WebSocket delivers it, where the page validates it again.
+  There is no HTTP route for it and no URL setting: the agent callback routes
+  and `DISPLAY_URL` are retired (`docs/environment.md`).
 
 ## Resolved: the display extension hardships log
 
@@ -400,10 +410,10 @@ documented above:
    diagram field is wrong — not a chart's. See `docs/display-tool.md`'s per-type
    `data` table and the per-type `data` shapes in the `switchboard` skill
    module's `skills/switchboard/SKILL.md`.
-2. **Silent failure: "On screen" when nothing rendered.** `/display` used to
-   report success the moment the action was handed to the delivery layer,
-   with no signal that the browser ever actually painted it. That is exactly
-   the gap the confirm/reject round trip above closes: `/display` now waits
+2. **Silent failure: "On screen" when nothing rendered.** The display call
+   used to report success the moment the action was handed to the delivery
+   layer, with no signal that the browser ever actually painted it. That is
+   exactly the gap the confirm/reject round trip above closes: it now waits
    for the browser's own `applied_seq` to reach the action's `seq` before
    calling it rendered, and the `display` tool's result text distinguishes
    "On screen." from "Sent, but the caller's screen has not confirmed it" and
@@ -412,8 +422,8 @@ documented above:
    used to report whatever the agent had last requested, independent of
    whether the browser ever confirmed it — so "Screen is in auto view with
    chart" could be true of the agent's intent and false of the caller's
-   screen at the same moment. `/view` with no target now reports that intent
-   *and* a `confirmed` flag computed from the same watermark `/display`
+   screen at the same moment. `view` with no target now reports that intent
+   *and* a `confirmed` flag computed from the same watermark the display call
    waits on, and the tool text says "has not confirmed it yet" instead of
    asserting success.
 

@@ -831,3 +831,216 @@ fn an_image_is_capped_at_eight_mebibytes_and_its_action_at_twelve() {
         Err("action exceeds size limit".into())
     );
 }
+
+/// `WHITE_SPACE` is Unicode White_Space exactly, which `char::is_whitespace`
+/// is defined as; the browser's list is held to `\p{White_Space}` the same
+/// way (validation.test.ts).
+#[test]
+fn the_whitespace_set_is_unicode_white_space() {
+    let differ: Vec<String> = (char::MIN..=char::MAX)
+        .filter(|c| WHITE_SPACE.contains(c) != c.is_whitespace())
+        .map(|c| format!("U+{:04X}", c as u32))
+        .collect();
+    assert!(differ.is_empty(), "{differ:?}");
+    assert!(is_blank("") && is_blank(" \u{85}\u{3000}"));
+    assert!(!is_blank("\u{feff}") && !is_blank("\u{200b}") && !is_blank("\u{1c}"));
+}
+
+/// The size cap counts the action as the browser's JSON.stringify writes it
+/// (validation.ts `serializedSize`), numbers included: each pair is the JSON
+/// an agent may send and what JSON.stringify writes once the browser has
+/// parsed it, both taken from node.
+#[test]
+fn the_size_is_counted_as_json_stringify_writes_the_action() {
+    for (sent, javascript) in [
+        ("0", "0"),
+        ("-0", "0"),
+        ("-0.0", "0"),
+        ("0.0", "0"),
+        ("1", "1"),
+        ("1.0", "1"),
+        ("-1.5", "-1.5"),
+        ("100", "100"),
+        ("1e2", "100"),
+        ("0.1", "0.1"),
+        ("0.000001", "0.000001"),
+        ("0.0000001", "1e-7"),
+        ("1e-7", "1e-7"),
+        ("1.5e-7", "1.5e-7"),
+        ("123.456", "123.456"),
+        ("1e16", "10000000000000000"),
+        ("1e+16", "10000000000000000"),
+        ("12345678901234567890", "12345678901234567000"),
+        ("18446744073709551615", "18446744073709552000"),
+        ("-9223372036854775808", "-9223372036854776000"),
+        ("1e21", "1e+21"),
+        ("1e20", "100000000000000000000"),
+        ("123456789012345680000", "123456789012345680000"),
+        ("1.7976931348623157e308", "1.7976931348623157e+308"),
+        ("5e-324", "5e-324"),
+        ("0.30000000000000004", "0.30000000000000004"),
+        ("4.35", "4.35"),
+        ("1e-6", "0.000001"),
+        ("999999999999999999999", "1e+21"),
+        ("2.5e+25", "2.5e+25"),
+        ("-1e-10", "-1e-10"),
+    ] {
+        let number: Value = serde_json::from_str(sent).unwrap();
+        assert_eq!(
+            json_len(&number),
+            javascript.len(),
+            "{sent} is {javascript}"
+        );
+    }
+    for (text, bytes) in [
+        ("", 2),
+        ("plain", 7),
+        ("a\"b\\c", 9),
+        ("\u{8}\u{c}\n\r\t", 12),
+        ("\u{1}\u{1f}", 14),
+        ("\u{7f}\u{2028}", 6),
+        ("\u{e9}\u{1f600}", 8),
+        ("<\u{0}>", 10),
+    ] {
+        assert_eq!(json_len(&json!(text)), bytes, "{text:?}");
+    }
+    let action: Value = serde_json::from_str(r#"{"op": "show", "id": "t", "type": "table", "data": {"columns": [{"label": "a\"\n"}], "rows": [[1.0], [-0.0], [1e+16], [{"text": "\u00e9", "bold": false}]], "highlight": [0]}}"#).unwrap();
+    assert_eq!(json_len(&action), 158);
+}
+
+/// A number is read as the double JavaScript reads it from the same text
+/// (serde_json's `float_roundtrip`): the default parse reads these one step
+/// off, and the size and the normalized action would follow the wrong value.
+#[test]
+fn numbers_parse_to_the_double_javascript_reads() {
+    for (text, double, javascript) in [
+        ("6e23", 6e23_f64, "6e+23"),
+        ("6e+23", 6e23, "6e+23"),
+        ("3e27", 3e27, "3e+27"),
+        (
+            "970034019735371.5",
+            970_034_019_735_371.5,
+            "970034019735371.5",
+        ),
+    ] {
+        let parsed: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(parsed.as_f64(), Some(double), "{text}");
+        assert_eq!(json_len(&parsed), javascript.len(), "{text}");
+    }
+}
+
+// ---- the shared corpus -------------------------------------------------------
+
+/// `{"$repeat": s, "times": n}` in the corpus stands for `s` repeated `n`
+/// times, so a case at a length cap stays one readable line. The browser's
+/// `validatorCorpus.test.ts` expands it the same way.
+fn expand_corpus_value(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            if map.len() == 2 {
+                if let (Some(Value::String(text)), Some(times)) =
+                    (map.get("$repeat"), map.get("times").and_then(Value::as_u64))
+                {
+                    return Value::String(text.repeat(times as usize));
+                }
+            }
+            Value::Object(
+                map.iter()
+                    .map(|(key, value)| (key.clone(), expand_corpus_value(value)))
+                    .collect(),
+            )
+        }
+        Value::Array(items) => Value::Array(items.iter().map(expand_corpus_value).collect()),
+        other => other.clone(),
+    }
+}
+
+/// JSON equality with numbers compared by value, as the browser compares
+/// them: the corpus's `1.0` and the validator's `1` are one number.
+fn same_json(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x.as_f64() == y.as_f64(),
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(x, y)| same_json(x, y))
+        }
+        (Value::Object(x), Value::Object(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .all(|(key, value)| y.get(key).is_some_and(|other| same_json(value, other)))
+        }
+        _ => a == b,
+    }
+}
+
+/// The two validators agree rule for rule (AGENTS.md): each case in
+/// `apps/frontend/tests/fixtures/validator-corpus.json` is an action and
+/// what both must make of it, either the exact error or acceptance (with
+/// the normalized action, when it is not the action as sent). The browser's
+/// `validatorCorpus.test.ts` runs the same file. An accepted action is
+/// accepted again, unchanged, when it is validated a second time: the
+/// browser validates what this side normalized.
+#[test]
+fn agrees_with_the_shared_validator_corpus() {
+    let corpus: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/apps/frontend/tests/fixtures/validator-corpus.json"
+    )))
+    .unwrap();
+    let cases = corpus["cases"].as_array().unwrap();
+    let mut failures = Vec::new();
+    for case in cases {
+        let name = case["name"].as_str().unwrap();
+        let action = expand_corpus_value(&case["action"]);
+        let got = validate_action(&action);
+        match (case.get("error"), case.get("accepted")) {
+            (Some(Value::String(error)), None) => {
+                if got.as_ref() != Err(error) {
+                    failures.push(format!("{name}: wanted the error {error:?}, got {got:?}"));
+                }
+            }
+            (None, Some(Value::Bool(true))) => {
+                let wanted = expand_corpus_value(case.get("normalized").unwrap_or(&case["action"]));
+                match got {
+                    Ok(normalized) if same_json(&normalized, &wanted) => {
+                        let again = validate_action(&normalized);
+                        if again.as_ref() != Ok(&normalized) {
+                            failures.push(format!(
+                                "{name}: its normalized action validates to {again:?}"
+                            ));
+                        }
+                    }
+                    Ok(normalized) => failures.push(format!("{name}: normalized to {normalized}")),
+                    Err(error) => failures.push(format!("{name}: refused with {error:?}")),
+                }
+            }
+            _ => panic!("{name}: a case is either accepted or names its error"),
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {} corpus cases disagree:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
+    // Every op and every show type is both accepted and refused somewhere.
+    for outcome in ["accepted", "error"] {
+        let mut wanted: Vec<String> = ["hide", "focus", "say", "clear"]
+            .iter()
+            .map(|op| op.to_string())
+            .chain(CONTENT_TYPES.iter().map(|kind| format!("show {kind}")))
+            .collect();
+        wanted.retain(|kind| {
+            !cases.iter().any(|case| {
+                let action = &case["action"];
+                let named = match (action["op"].as_str(), action["type"].as_str()) {
+                    (Some("show"), Some(kind)) => format!("show {kind}"),
+                    (Some(op), _) => op.to_owned(),
+                    _ => return false,
+                };
+                case.get(outcome).is_some() && named == *kind
+            })
+        });
+        assert!(wanted.is_empty(), "no {outcome} case for {wanted:?}");
+    }
+}
