@@ -42,14 +42,15 @@ export interface LaidOutActor {
   box: Box;
   /** The label, as the lines it is drawn on: one, unless the drawing is recomposed to a width too narrow for it. */
   labelLines: string[];
-  /** Where the label's first line and the sub's first line are centred, down from the box's top. */
+  /** Where the label's lines are centred across, and its first line and the sub's first line down, from the box's top-left corner. */
+  labelX: number;
   labelY: number;
   subY: number;
   /** The sub, as the lines it is drawn on: one in landscape, wrapped in portrait. */
   subLines: string[];
   /** The lifeline runs from the header's bottom to here. */
   lifelineEnd: number;
-  /** The NOTE marker, relative to the header box's top-left corner, on the actor a rail note names: under its text, clear of the frame. */
+  /** The NOTE marker, relative to the header box's top-left corner, on the actor a rail note names: under its text, clear of the frame (beside its label, on a compact header with the room). */
   marker: Box | null;
 }
 
@@ -92,6 +93,8 @@ export interface SequenceLayout {
   /** The pitch between the lines of a wrapped actor label. */
   actorLabelLineHeight: number;
   actorSubSize: number;
+  /** How its headers are set (`HeaderStyle`), and in how many rows: one, or two staggered. */
+  headers: { style: HeaderStyle; rows: number };
   actors: LaidOutActor[];
   messages: LaidOutMessage[];
 }
@@ -126,13 +129,11 @@ const GEOMETRY = {
   },
 } as const;
 
-const PAD_TOP = 24;
 const PAD_BOTTOM = 28;
 // Actor labels are set in the monospace face with 0.1em tracking
 // (.sequence-actor-label), subs with 0.09em: 0.6em advance plus the tracking.
 const actorAdvance = (size: number) => size * 0.7;
 const actorSubAdvance = (size: number) => size * 0.69;
-const HEADER_HEIGHT = 40;
 // A header with a sub: the label sits higher and each sub line adds a row.
 const HEADER_HEIGHT_WITH_SUB = 52;
 export const SUB_LINE_HEIGHT = 11;
@@ -157,13 +158,34 @@ const LOOP_WIDTH = 34;
 const LOOP_HEIGHT = 28;
 const LOOP_LABEL_GAP = 8;
 // A header recomposed to a narrow column: the pitch of its label's lines,
-// its padding, the gap from label to sub, and the gap between two
-// staggered rows of headers.
+// and the gap from label to sub.
 const LABEL_LINE_PITCH = 1.3;
-const HEADER_PAD_TOP = 10;
-const HEADER_PAD_BOTTOM = 9;
 const HEADER_SUB_GAP = 6;
-const HEADER_ROW_GAP = 8;
+
+/**
+ * How the headers are set. In full, each header carries its actor's label
+ * and sub (the details). Compact, for a view whose full headers would take
+ * too much of its height (`viewSequence`), each carries its label alone, in
+ * tighter boxes: the reader keeps the names of the lifelines in the pinned
+ * band and gets back the rows the details took.
+ */
+export type HeaderStyle = 'full' | 'compact';
+const HEADERS = {
+  // `top`: the room above the headers; `height`: a one-row header with no
+  // sub, laid out naturally; `padTop`, `padBottom`: a recomposed header's
+  // padding above and below its words; `rowGap`: between two staggered rows.
+  // `pad`: the room either side of a header's words (null: the
+  // orientation's own); `cut`: the frame's stepped corners (top left, top
+  // right, bottom left), smaller on a compact header's shallower box.
+  full: { top: 24, height: 40, padTop: 10, padBottom: 9, rowGap: 8, pad: null, cut: { topLeft: 10, topRight: 14, bottomLeft: 12 } },
+  compact: { top: 10, height: 26, padTop: 6, padBottom: 6, rowGap: 4, pad: 6, cut: { topLeft: 6, topRight: 8, bottomLeft: 7 } },
+} as const;
+
+/** The outline of an actor's header, `width` by `height`, its corners stepped for its style. */
+export function actorFramePath(width: number, height: number, style: HeaderStyle): string {
+  const { topLeft, topRight, bottomLeft } = HEADERS[style].cut;
+  return `M 0 ${topLeft} L ${topLeft} 0 H ${width - topRight} L ${width} ${topRight} V ${height} H ${bottomLeft} L 0 ${height - bottomLeft} Z`;
+}
 // Recomposed narrow, the drawing keeps this little room at its sides, and
 // two staggered headers this much between them.
 const NARROW_PAD_X = 4;
@@ -241,9 +263,11 @@ function breakLine(line: string, chars: number): string[] {
  * a frame narrower than that, it is recomposed to the frame's width instead
  * (`layoutToWidth`).
  */
-export function layoutSequence(data: SequenceDiagramData, orientation: SequenceOrientation, frame?: SequenceFrame, anchor?: string): SequenceLayout {
-  const natural = layoutNatural(data, orientation, anchor);
-  return frame && natural.width > frame.width ? layoutToWidth(data, orientation, frame.width, anchor) : natural;
+export function layoutSequence(data: SequenceDiagramData, orientation: SequenceOrientation, frame?: SequenceFrame, anchor?: string, headers: HeaderStyle = 'full'): SequenceLayout {
+  // Compact headers leave the details out: each actor is laid out by its label alone.
+  const shown = headers === 'compact' ? { ...data, actors: data.actors.map(({ sub: _sub, ...actor }) => actor) } : data;
+  const natural = layoutNatural(shown, orientation, anchor, headers);
+  return frame && natural.width > frame.width ? layoutToWidth(shown, orientation, frame.width, anchor, headers) : natural;
 }
 
 // The marker under the text of a header `width` wide and `height` deep.
@@ -256,34 +280,47 @@ const markerIn = (width: number, height: number): Box => ({
 // How deep the headers must be for the anchored one's marker to stand under its text.
 const markerDepth = (textBottom: number) => textBottom + MARKER_GAP + MARKER.height + MARKER_FOOT;
 const MARKER_ROOM = MARKER.width + 2 * MARKER_SIDE;
+// On a compact header the marker stands beside the label, where the header
+// has the room, so it costs the row no depth: the label (`words` wide) and
+// the marker, this far apart, centred in the box together.
+const MARKER_BESIDE = 6;
+const besideRoom = (words: number, pad: number) => words + MARKER_BESIDE + MARKER.width + 2 * pad;
+const besideIn = (width: number, words: number, labelY: number) => {
+  const left = (width - words - MARKER_BESIDE - MARKER.width) / 2;
+  return { labelX: left + words / 2, marker: { x: left + words + MARKER_BESIDE, y: labelY - MARKER.height / 2, width: MARKER.width, height: MARKER.height } };
+};
 
-function layoutNatural(data: SequenceDiagramData, orientation: SequenceOrientation, anchor?: string): SequenceLayout {
+function layoutNatural(data: SequenceDiagramData, orientation: SequenceOrientation, anchor: string | undefined, style: HeaderStyle): SequenceLayout {
   const geometry = GEOMETRY[orientation];
+  const set = HEADERS[style];
   const { actors } = data;
   const indexOf = new Map(actors.map((actor, index) => [actor.id, index]));
   const anchored = anchor === undefined ? -1 : actors.findIndex((actor) => actor.id === anchor);
 
   // --- Headers sized to their text ------------------------------------------
   const subAdvance = actorSubAdvance(geometry.actorSubSize);
+  const pad = set.pad ?? geometry.headerPad;
+  const wordsOf = (actor: SequenceActor) => actor.label.length * actorAdvance(geometry.actorLabelSize);
   const headers = actors.map((actor) => {
-    const labelWidth = Math.max(
-      geometry.minHeaderWidth,
-      actor.label.length * actorAdvance(geometry.actorLabelSize) + 2 * geometry.headerPad,
-    );
+    const labelWidth = Math.max(geometry.minHeaderWidth, wordsOf(actor) + 2 * pad);
     if (!actor.sub) return { width: labelWidth, subLines: [] as string[] };
     if (!geometry.wrapSub) {
       return {
-        width: Math.max(labelWidth, actor.sub.length * subAdvance + 2 * geometry.headerPad),
+        width: Math.max(labelWidth, actor.sub.length * subAdvance + 2 * pad),
         subLines: [actor.sub],
       };
     }
-    const subLines = wrapWords(actor.sub, Math.floor((labelWidth - 2 * geometry.headerPad) / subAdvance));
+    const subLines = wrapWords(actor.sub, Math.floor((labelWidth - 2 * pad) / subAdvance));
     const longest = Math.max(...subLines.map((line) => line.length));
-    return { width: Math.max(labelWidth, longest * subAdvance + 2 * geometry.headerPad), subLines };
+    return { width: Math.max(labelWidth, longest * subAdvance + 2 * pad), subLines };
   });
-  const headerWidths = headers.map((header, index) => (index === anchored ? Math.max(header.width, MARKER_ROOM) : header.width));
+  // A compact header holds the marker beside its label; a full one, under its words.
+  const beside = style === 'compact' && anchored >= 0;
+  const headerWidths = headers.map((header, index) =>
+    index !== anchored ? header.width : Math.max(header.width, beside ? besideRoom(wordsOf(actors[index]), pad) : MARKER_ROOM),
+  );
   const subLineCount = Math.max(0, ...headers.map((header) => header.subLines.length));
-  const textHeight = subLineCount > 0 ? HEADER_HEIGHT_WITH_SUB + (subLineCount - 1) * SUB_LINE_HEIGHT : HEADER_HEIGHT;
+  const textHeight = subLineCount > 0 ? HEADER_HEIGHT_WITH_SUB + (subLineCount - 1) * SUB_LINE_HEIGHT : set.height;
   const labelYOf = (actor: SequenceActor) => (actor.sub ? 22 : textHeight / 2);
   const anchoredBottom =
     anchored < 0
@@ -291,7 +328,7 @@ function layoutNatural(data: SequenceDiagramData, orientation: SequenceOrientati
       : actors[anchored].sub
         ? 39 + (headers[anchored].subLines.length - 1) * SUB_LINE_HEIGHT + SUB_LINE_HEIGHT / 2
         : labelYOf(actors[anchored]) + (geometry.actorLabelSize * LABEL_LINE_PITCH) / 2;
-  const headerHeight = anchored < 0 ? textHeight : Math.max(textHeight, markerDepth(anchoredBottom));
+  const headerHeight = anchored < 0 || beside ? textHeight : Math.max(textHeight, markerDepth(anchoredBottom));
 
   // --- Column pitch ---------------------------------------------------------
   // Adjacent headers keep a gap between them; then every message's span is
@@ -353,7 +390,7 @@ function layoutNatural(data: SequenceDiagramData, orientation: SequenceOrientati
     xs.push(cursorX);
   });
 
-  const headerTop = PAD_TOP;
+  const headerTop = set.top;
   const headerBottom = headerTop + headerHeight;
   const { messages, lifelineEnd } = layRows(
     resolved.map((entry) => ({ ...entry, over: false })),
@@ -362,17 +399,21 @@ function layoutNatural(data: SequenceDiagramData, orientation: SequenceOrientati
     width,
     geometry.padX,
   );
-  const laidOutActors: LaidOutActor[] = actors.map((actor, index) => ({
-    actor,
-    x: xs[index],
-    box: { x: xs[index] - headerWidths[index] / 2, y: headerTop, width: headerWidths[index], height: headerHeight },
-    labelLines: [actor.label],
-    labelY: labelYOf(actor),
-    subY: 39,
-    subLines: headers[index].subLines,
-    lifelineEnd,
-    marker: index === anchored ? markerIn(headerWidths[index], headerHeight) : null,
-  }));
+  const laidOutActors: LaidOutActor[] = actors.map((actor, index) => {
+    const marked = index !== anchored ? null : beside ? besideIn(headerWidths[index], wordsOf(actor), labelYOf(actor)) : { labelX: headerWidths[index] / 2, marker: markerIn(headerWidths[index], headerHeight) };
+    return {
+      actor,
+      x: xs[index],
+      box: { x: xs[index] - headerWidths[index] / 2, y: headerTop, width: headerWidths[index], height: headerHeight },
+      labelLines: [actor.label],
+      labelX: marked?.labelX ?? headerWidths[index] / 2,
+      labelY: labelYOf(actor),
+      subY: 39,
+      subLines: headers[index].subLines,
+      lifelineEnd,
+      marker: marked?.marker ?? null,
+    };
+  });
 
   return {
     width,
@@ -380,6 +421,7 @@ function layoutNatural(data: SequenceDiagramData, orientation: SequenceOrientati
     actorLabelSize: geometry.actorLabelSize,
     actorLabelLineHeight: geometry.actorLabelSize * LABEL_LINE_PITCH,
     actorSubSize: geometry.actorSubSize,
+    headers: { style, rows: 1 },
     actors: laidOutActors,
     messages,
   };
@@ -483,8 +525,9 @@ function layRows(entries: RowEntry[], xs: number[], headerBottom: number, width:
  * between its lifelines in three lines stays there; one that does not takes
  * its own line over its arrow, so a narrow drawing grows down, not across.
  */
-function layoutToWidth(data: SequenceDiagramData, orientation: SequenceOrientation, frameWidth: number, anchor?: string): SequenceLayout {
+function layoutToWidth(data: SequenceDiagramData, orientation: SequenceOrientation, frameWidth: number, anchor: string | undefined, style: HeaderStyle): SequenceLayout {
   const geometry = GEOMETRY[orientation];
+  const set = HEADERS[style];
   const { actors } = data;
   const anchored = anchor === undefined ? -1 : actors.findIndex((actor) => actor.id === anchor);
   const count = Math.max(1, actors.length);
@@ -495,11 +538,12 @@ function layoutToWidth(data: SequenceDiagramData, orientation: SequenceOrientati
   // The columns share the width; never so narrow that a word of an actor's
   // label misses two columns of room. (A word of a sub may break.)
   const padX = Math.min(geometry.padX, NARROW_PAD_X);
-  const leastPitch = (widestLabelWord + 2 * geometry.headerPad + STAGGER_GAP) / 2;
+  const pad = set.pad ?? geometry.headerPad;
+  const leastPitch = (widestLabelWord + 2 * pad + STAGGER_GAP) / 2;
   // An end column reaches out to the drawing's edge: half a pitch, or more
   // when its actor's longest word needs more than a staggered header beside
   // the edge has (the room from the edge to a pitch past its lifeline).
-  const wordRoom = (actor: SequenceActor | undefined) => (actor ? longestWord(actor.label) * labelAdvance + 2 * geometry.headerPad : 0);
+  const wordRoom = (actor: SequenceActor | undefined) => (actor ? longestWord(actor.label) * labelAdvance + 2 * pad : 0);
   const reachFor = (at: number, actor: SequenceActor | undefined) => Math.max(at / 2, wordRoom(actor) - at + STAGGER_GAP / 2);
   let pitch = Math.max((frameWidth - 2 * padX) / count, leastPitch);
   for (let attempt = 0; attempt < 4 && count > 1; attempt += 1) {
@@ -526,18 +570,27 @@ function layoutToWidth(data: SequenceDiagramData, orientation: SequenceOrientati
   };
   const headerFor = (actor: SequenceActor, index: number, columns: number) => {
     const { low, high } = roomOf(index, columns);
-    const text = high - low - 2 * geometry.headerPad;
+    const text = high - low - 2 * pad;
     // A word too long even for this room (only an end header's, cut by the
     // drawing's edge, can be) breaks, as a sub's long word does.
-    const labelChars = Math.max(1, Math.floor(text / labelAdvance + 1e-6));
+    // (The pitch search settles within half a unit of the frame, which can
+    // leave a hair less room than a whole character: that hair still holds it.)
+    const labelChars = Math.max(1, Math.floor(text / labelAdvance + 0.05));
     const wrapped = wrapWords(actor.label, labelChars).flatMap((line) => breakLine(line, labelChars));
     const labelLines = wrapped.length > 0 ? wrapped : [actor.label];
     const subChars = Math.max(1, Math.floor(text / subAdvance + 1e-6));
     const subLines = actor.sub ? wrapWords(actor.sub, subChars).flatMap((line) => breakLine(line, subChars)) : [];
     const widest = Math.max(0, ...labelLines.map((line) => line.length * labelAdvance), ...subLines.map((line) => line.length * subAdvance));
-    const boxWidth = Math.min(high - low, Math.max(widest + 2 * geometry.headerPad, index === anchored ? MARKER_ROOM : 0));
+    // The anchored header holds the marker: beside its label when compact
+    // and its room allows, else under its words, at least MARKER_ROOM wide.
+    const beside = index === anchored && style === 'compact' && besideRoom(widest, pad) <= high - low + 0.5;
+    const least = index !== anchored ? 0 : beside ? besideRoom(widest, pad) : MARKER_ROOM;
+    const boxWidth = Math.min(high - low, Math.max(widest + 2 * pad, least));
     const x = Math.min(Math.max(xs[index] - boxWidth / 2, low), high - boxWidth);
-    return { labelLines, subLines, x, width: boxWidth, fits: widest <= text + 0.5 && labelLines.length <= 2 };
+    // A header fits its room when its label takes at most two lines there
+    // and no word of it breaks: a name cut mid-word ("WEBSOCK / ET") reads
+    // as two names, so a row that would break one staggers instead.
+    return { labelLines, subLines, x, width: boxWidth, widest, beside, fits: widest <= text + 0.5 && labelLines.length <= 2 && longestWord(actor.label) <= labelChars };
   };
   const single = actors.map((actor, index) => headerFor(actor, index, 1));
   const rows = single.every((header) => header.fits) ? 1 : 2;
@@ -545,11 +598,11 @@ function layoutToWidth(data: SequenceDiagramData, orientation: SequenceOrientati
   const lineHeight = geometry.actorLabelSize * LABEL_LINE_PITCH;
   const labelRows = Math.max(1, ...headers.map((header) => header.labelLines.length));
   const subRows = Math.max(0, ...headers.map((header) => header.subLines.length));
-  const labelY = HEADER_PAD_TOP + lineHeight / 2;
-  const subY = HEADER_PAD_TOP + labelRows * lineHeight + HEADER_SUB_GAP + SUB_LINE_HEIGHT / 2;
-  const textHeight = subRows > 0 ? subY - SUB_LINE_HEIGHT / 2 + subRows * SUB_LINE_HEIGHT + HEADER_PAD_BOTTOM : labelY + lineHeight / 2 + HEADER_PAD_BOTTOM;
+  const labelY = set.padTop + lineHeight / 2;
+  const subY = set.padTop + labelRows * lineHeight + HEADER_SUB_GAP + SUB_LINE_HEIGHT / 2;
+  const textHeight = subRows > 0 ? subY - SUB_LINE_HEIGHT / 2 + subRows * SUB_LINE_HEIGHT + set.padBottom : set.padTop + labelRows * lineHeight + set.padBottom;
   const anchoredHeader = anchored < 0 ? null : headers[anchored];
-  const headerHeight = !anchoredHeader
+  const headerHeight = !anchoredHeader || anchoredHeader.beside
     ? textHeight
     : Math.max(
         textHeight,
@@ -559,7 +612,7 @@ function layoutToWidth(data: SequenceDiagramData, orientation: SequenceOrientati
             : labelY + (anchoredHeader.labelLines.length - 0.5) * lineHeight,
         ),
       );
-  const rowTop = (row: number) => PAD_TOP + row * (headerHeight + HEADER_ROW_GAP);
+  const rowTop = (row: number) => set.top + row * (headerHeight + set.rowGap);
   const headerBottom = rowTop(rows - 1) + headerHeight;
 
   // Labels: between the lifelines when they fit there in three lines, else
@@ -587,16 +640,18 @@ function layoutToWidth(data: SequenceDiagramData, orientation: SequenceOrientati
   const laidOutActors: LaidOutActor[] = actors.map((actor, index) => {
     const header = headers[index];
     const top = rowTop(rows === 2 ? index % 2 : 0);
+    const marked = index !== anchored ? null : header.beside ? besideIn(header.width, header.widest, labelY) : { labelX: header.width / 2, marker: markerIn(header.width, headerHeight) };
     return {
       actor,
       x: xs[index],
       box: { x: header.x, y: top, width: header.width, height: headerHeight },
       labelLines: header.labelLines,
+      labelX: marked?.labelX ?? header.width / 2,
       labelY,
       subY,
       subLines: header.subLines,
       lifelineEnd,
-      marker: index === anchored ? markerIn(header.width, headerHeight) : null,
+      marker: marked?.marker ?? null,
     };
   });
   return {
@@ -605,6 +660,7 @@ function layoutToWidth(data: SequenceDiagramData, orientation: SequenceOrientati
     actorLabelSize: geometry.actorLabelSize,
     actorLabelLineHeight: lineHeight,
     actorSubSize: geometry.actorSubSize,
+    headers: { style, rows },
     actors: laidOutActors,
     messages,
   };
@@ -626,18 +682,42 @@ export interface SequenceView {
   fit: DrawingFit;
 }
 
+// The headers pinned over a scrolled exchange keep this much of the drawing
+// under them.
+const PINNED_MARGIN = 6;
+/** How deep the band of headers pinned over a scrolled exchange is, in user units. */
+export function pinnedDepth(layout: SequenceLayout): number {
+  return Math.max(0, ...layout.actors.map((actor) => actor.box.y + actor.box.height)) + PINNED_MARGIN;
+}
+/** How a sequence's headers read: their style and their rows (a map's strip may not change them: drawingScroll `viewWithMap`). */
+export const headerReading = ({ layout }: SequenceView) => `${layout.headers.style}/${layout.headers.rows}`;
+
+// Pinned, the headers may take up to this share of the view's height in
+// full; past it they are compact.
+const HEADER_SHARE = 0.3;
+
 /**
  * How a sequence is shown in a viewport (CSS pixels): the geometry for its
  * shape, fitted (drawingFit.ts). One too wide to read at the readable
  * minimum is recomposed to the viewport's width, so that it scrolls down,
- * in the order its messages run, and never across.
+ * in the order its messages run, and never across. One that scrolls down
+ * under headers that would take more than HEADER_SHARE of the view (a
+ * phone's slot: two staggered rows with their details) has compact
+ * headers, its actors' labels alone, so the view shows more messages; a
+ * view with the room for them (focus, a taller slot) keeps the details.
  */
 export function viewSequence(data: SequenceDiagramData, viewport: Viewport, anchor?: string): SequenceView {
+  const full = viewWith(data, viewport, anchor, 'full');
+  if (!full.fit.scrollY || pinnedDepth(full.layout) * full.fit.scale <= HEADER_SHARE * viewport.height) return full;
+  return viewWith(data, viewport, anchor, 'compact');
+}
+
+function viewWith(data: SequenceDiagramData, viewport: Viewport, anchor: string | undefined, headers: HeaderStyle): SequenceView {
   const orientation: SequenceOrientation = viewport.height > viewport.width * 1.05 ? 'portrait' : 'landscape';
-  const natural = layoutSequence(data, orientation, undefined, anchor);
+  const natural = layoutSequence(data, orientation, undefined, anchor, headers);
   const minScale = sequenceMinScale(natural);
   const fit = fitDrawing(natural, viewport, minScale);
   if (!fit.scrollX) return { layout: natural, fit };
-  const layout = layoutSequence(data, orientation, { width: (viewport.width - viewport.scrollbar) / minScale }, anchor);
+  const layout = layoutSequence(data, orientation, { width: (viewport.width - viewport.scrollbar) / minScale }, anchor, headers);
   return { layout, fit: fitDrawing(layout, viewport, minScale) };
 }
