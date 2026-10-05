@@ -1,9 +1,20 @@
 // Where the notes over a chart sit, and how their leaders run (#26, #49).
 import { describe, expect, it } from 'vitest';
-import { hiddenTraceLength, placeNotes, routeLeader, type NoteToPlace, type Point, type Rect } from '../../src/primitives/notePlacement';
+import {
+  DATA_CLEARANCE,
+  hiddenFillArea,
+  hiddenTraceLength,
+  placeNotes,
+  routeLeader,
+  type NoteToPlace,
+  type Point,
+  type Rect,
+} from '../../src/primitives/notePlacement';
 
 const area: Rect = { left: 0, top: 0, right: 1000, bottom: 600 };
 const box = (left: number, top: number, width: number, height: number): Rect => ({ left, top, right: left + width, bottom: top + height });
+
+const inflate = (rect: Rect, by: number): Rect => ({ left: rect.left - by, top: rect.top - by, right: rect.right + by, bottom: rect.bottom + by });
 
 function overlaps(a: Rect, b: Rect): boolean {
   return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
@@ -207,12 +218,27 @@ describe('note placement', () => {
     expect([card.left, card.right]).toContain(leader[0].x);
   });
 
-  it('centres over its point in a row that clears it, rather than taking a place beside it', () => {
-    // The trace falls across the top-right corner, so a card a little left
-    // of the point would hide less of it; the places beside the point are
-    // only for a card no place above or below can clear.
+  it('centres over its point clear of the trace, rather than in a row that hides some of it, or beside it', () => {
+    // The trace falls across the top-right corner, so the top row would
+    // hide some of it; straight above the point is clear of it. The places
+    // beside the point are only for a card no place above or below can clear.
     const point = { x: 790, y: 220 };
     const traces = [[{ x: 0, y: 180 }, { x: 1000, y: 50 }]];
+    const card = placeNotes([{ id: 'a', width: 250, height: 70, point }], { area: box(0, 0, 1000, 260), traces }).get('a')!;
+    expect(card.left).toBe(665);
+    expect(hiddenTraceLength(inflate(card, DATA_CLEARANCE), traces)).toBe(0);
+    const leader = routeLeader(card, point);
+    expect(leader[0].y).toBe(card.bottom);
+  });
+
+  it('centres over its point in a row that hides a trace, rather than beside it where none is', () => {
+    // Every place above the point hides one of the two traces; beside it,
+    // level with it, hides neither. Beside the point is still the last place.
+    const point = { x: 790, y: 220 };
+    const traces = [
+      [{ x: 0, y: 60 }, { x: 1000, y: 60 }],
+      [{ x: 0, y: 140 }, { x: 1000, y: 140 }],
+    ];
     const card = placeNotes([{ id: 'a', width: 250, height: 70, point }], { area: box(0, 0, 1000, 260), traces }).get('a')!;
     expect(card).toEqual(box(665, 0, 250, 70));
   });
@@ -223,6 +249,110 @@ describe('note placement', () => {
     const card = placed.get('a')!;
     expect(overlaps(card, label)).toBe(false);
     expect(card.left).toBeLessThan(120);
+  });
+});
+
+// What a chart draws is in the way of its notes, as it is drawn: a bar or a
+// scatter point is an area, a line is a line, an area's fill is softer, and
+// a card that rests against the data hides it too.
+describe('note placement over the data', () => {
+  const card = (width = 300, height = 80) => ({ width, height });
+  // A few pixels between a card and any mark, whatever the clearance placement keeps.
+  const clearOf = (rect: Rect, marks: Rect[]) => marks.every((mark) => !overlaps(inflate(rect, 4), mark));
+  const leavesTopOrBottom = (rect: Rect, point: Point) => {
+    const leader = routeLeader(rect, point);
+    return leader.length > 1 && (leader[0].y === rect.top || leader[0].y === rect.bottom);
+  };
+
+  it('keeps a card off the whole of a bar, not just its outline, where a clear place exists', () => {
+    // A tall bar under the point; the rows above it are level with the
+    // point, and the bottom row lies inside the bar.
+    const point = { x: 300, y: 60 };
+    const marks = [box(250, 60, 100, 340)];
+    const placed = placeNotes([{ id: 'a', ...card(), point }], { area: box(0, 0, 1000, 400), marks }).get('a')!;
+    expect(clearOf(placed, marks)).toBe(true);
+    expect(leavesTopOrBottom(placed, point)).toBe(true);
+  });
+
+  it('keeps a clearance from the bars, so a card never reads as resting on one', () => {
+    // The top row centred over the point would end 2px above the taller
+    // neighbour's top.
+    const point = { x: 440, y: 150 };
+    const marks = [box(400, 150, 80, 450), box(485, 82, 80, 518)];
+    const placed = placeNotes([{ id: 'a', ...card(), point }], { area: box(0, 0, 1000, 600), marks }).get('a')!;
+    expect(clearOf(placed, marks)).toBe(true);
+    expect(leavesTopOrBottom(placed, point)).toBe(true);
+  });
+
+  it('keeps off the points of a dense scatter, near the one it names', () => {
+    const marks: Rect[] = [];
+    for (let x = 300; x <= 700; x += 25) for (let y = 10; y <= 160; y += 25) marks.push(box(x - 4, y - 4, 8, 8));
+    const point = { x: 500, y: 160 };
+    const placed = placeNotes([{ id: 'a', ...card(), point }], { area: box(0, 0, 1000, 500), marks }).get('a')!;
+    expect(clearOf(placed, marks.filter((mark) => mark.left !== 496 || mark.top !== 156))).toBe(true);
+    expect(placed.top).toBeGreaterThanOrEqual(point.y + 6);
+    expect((placed.left + placed.right) / 2).toBeCloseTo(point.x, 0);
+  });
+
+  it("keeps off an area chart's fill where a clear place exists", () => {
+    // The legend runs along the top row and the bottom row is in the fill;
+    // between the legend and the line there is room.
+    const point = { x: 500, y: 150 };
+    const area = box(0, 0, 1000, 400);
+    const field = {
+      area,
+      plot: area,
+      traces: [[{ x: 0, y: 150 }, { x: 1000, y: 150 }]],
+      fills: [[{ x: 0, y: 150 }, { x: 1000, y: 150 }, { x: 1000, y: 400 }, { x: 0, y: 400 }]],
+      labels: [box(0, 0, 1000, 20)],
+    };
+    const placed = placeNotes([{ id: 'a', ...card(), point }], field).get('a')!;
+    expect(hiddenFillArea(placed, field.fills)).toBe(0);
+    expect(overlaps(placed, field.labels[0])).toBe(false);
+    expect(hiddenTraceLength(inflate(placed, DATA_CLEARANCE), field.traces)).toBe(0);
+    expect(leavesTopOrBottom(placed, point)).toBe(true);
+  });
+
+  it('takes the fill, near its point, rather than the line, where nothing else is free', () => {
+    const point = { x: 500, y: 60 };
+    const area = box(0, 0, 1000, 400);
+    const traces = [[{ x: 0, y: 60 }, { x: 1000, y: 60 }]];
+    const fills = [[{ x: 0, y: 60 }, { x: 1000, y: 60 }, { x: 1000, y: 400 }, { x: 0, y: 400 }]];
+    const placed = placeNotes([{ id: 'a', ...card(), point }], { area, plot: area, traces, fills }).get('a')!;
+    expect(hiddenTraceLength(inflate(placed, DATA_CLEARANCE), traces)).toBe(0);
+    expect(hiddenFillArea(placed, fills)).toBeGreaterThan(0);
+    expect(placed.top - point.y).toBeLessThanOrEqual(20);
+    expect(leavesTopOrBottom(placed, point)).toBe(true);
+  });
+
+  it('leaves a note out when it may, where no place is clear of the data, and places it when it may not', () => {
+    // Bars stand to within 60px of the top, the card is 80 tall.
+    const point = { x: 500, y: 60 };
+    const field = { area: box(0, 0, 1000, 300), marks: [box(0, 60, 1000, 240)] };
+    const notes = [{ id: 'a', ...card(), point }];
+    expect(placeNotes(notes, field, { spill: true }).has('a')).toBe(false);
+    expect(placeNotes(notes, field).has('a')).toBe(true);
+  });
+
+  it('keeps every note on the chart that has a clear place, when one may leave', () => {
+    const point = { x: 500, y: 200 };
+    const placed = placeNotes([{ id: 'a', ...card(), point }], { area: box(0, 0, 1000, 300), marks: [box(480, 200, 40, 100)] }, { spill: true });
+    expect(placed.has('a')).toBe(true);
+  });
+
+  it('leaves out the note that names no point sooner than the one that does, when either clears the other', () => {
+    // A band above the bars with room for one card.
+    const field = { area: box(0, 0, 500, 300), marks: [box(0, 110, 500, 190)] };
+    const placed = placeNotes(
+      [
+        { id: 'general', ...card() },
+        { id: 'pointed', ...card(), point: { x: 250, y: 110 } },
+      ],
+      field,
+      { spill: true },
+    );
+    expect(placed.has('general')).toBe(false);
+    expect(clearOf(placed.get('pointed')!, field.marks)).toBe(true);
   });
 });
 
