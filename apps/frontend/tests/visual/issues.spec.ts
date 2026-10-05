@@ -243,10 +243,18 @@ for (const { chart, viewport } of chartNoteCases) {
     const geometry = await page.evaluate(() => {
       const panel = document.querySelector<HTMLElement>('.chart-object[data-chart-id="loss"]')!.getBoundingClientRect();
       const layer = document.querySelector<HTMLElement>('.chart-notes')!.getBoundingClientRect();
-      const cards = [...document.querySelectorAll<HTMLElement>('.chart-note')].map((element) => {
+      // A note with no place on the chart clear of its data is shown in
+      // the rail; its card stays in the layer out of view, to be measured.
+      const cards = [...document.querySelectorAll<HTMLElement>('.chart-note:not(.chart-note--away)')].map((element) => {
         const box = element.getBoundingClientRect();
         return { id: element.dataset.note!, left: box.left, top: box.top, right: box.right, bottom: box.bottom };
       });
+      const away = [...document.querySelectorAll<HTMLElement>('.chart-note--away')].map((element) => ({
+        id: element.dataset.note!,
+        hidden: getComputedStyle(element).visibility === 'hidden',
+        text: element.querySelector('.annotation-card__text')?.textContent ?? '',
+      }));
+      const rail = document.querySelector<HTMLElement>('.content-rail .rail-note')?.textContent ?? '';
       const leaders = [...document.querySelectorAll<SVGGElement>('.chart-note-leader')].map((group) => ({
         id: group.dataset.note!,
         points: group.querySelector('polyline')!.getAttribute('points')!.split(' ').map((pair) => {
@@ -254,8 +262,17 @@ for (const { chart, viewport } of chartNoteCases) {
           return { x: layer.left + x, y: layer.top + y };
         }),
       }));
-      return { panel: { left: panel.left, top: panel.top, right: panel.right, bottom: panel.bottom }, cards, leaders };
+      return { panel: { left: panel.left, top: panel.top, right: panel.right, bottom: panel.bottom }, cards, leaders, away, rail };
     });
+
+    // Every note is on screen: on the chart, or -- one at most, where the
+    // chart has no place for it clear of its data -- in the rail.
+    expect(geometry.cards.length + geometry.away.length).toBe(3);
+    expect(geometry.away.length).toBeLessThanOrEqual(1);
+    for (const note of geometry.away) {
+      expect(note.hidden, `${note.id} is out of view on the chart`).toBe(true);
+      expect(geometry.rail, `${note.id} is in the rail`).toContain(note.text);
+    }
 
     for (const [index, card] of geometry.cards.entries()) {
       expect(card.left).toBeGreaterThanOrEqual(geometry.panel.left - 1);
@@ -279,6 +296,85 @@ for (const { chart, viewport } of chartNoteCases) {
     }
   });
 }
+
+// A bar is an area, not a line: a note on a bar chart keeps clear of every
+// bar it does not name, a few pixels away, so it never reads as resting on
+// them (Kayne saw the comparison note sit over the tallest bars).
+for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 720 }, { width: 390, height: 844 }]) {
+  test(`a note on a bar chart covers no bar at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.goto('/?scene=comparison&chrome=0');
+    await expect(page.locator('.chart-note')).toHaveCount(1);
+    await page.waitForTimeout(400);
+    const geometry = await page.evaluate(() => {
+      const box = (element: Element) => {
+        const rect = element.getBoundingClientRect();
+        return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+      };
+      const card = document.querySelector('.chart-note')!;
+      return {
+        away: card.classList.contains('chart-note--away'),
+        card: box(card),
+        bars: [...document.querySelectorAll('.chart-bar')].map(box).filter((bar) => bar.bottom - bar.top > 0.5),
+        leader: document.querySelector('.chart-note-leader polyline')?.getAttribute('points') ?? null,
+      };
+    });
+    expect(geometry.away).toBe(false);
+    // Twelve bars; the two smallest pairs are under a pixel tall on a phone.
+    expect(geometry.bars.length).toBeGreaterThanOrEqual(8);
+    for (const bar of geometry.bars) {
+      const apart = geometry.card.right + 4 <= bar.left || bar.right + 4 <= geometry.card.left
+        || geometry.card.bottom + 4 <= bar.top || bar.bottom + 4 <= geometry.card.top;
+      expect(apart, `the card keeps clear of the bar at ${Math.round(bar.left)},${Math.round(bar.top)}`).toBe(true);
+    }
+    expect(geometry.leader).not.toBeNull();
+  });
+}
+
+// Where every bar stands to the top and the band above the plot is shorter
+// than the card, no place on the chart is clear of the data: the note goes
+// to the rail, still naming its target, and the point it names stays ringed.
+test('a note with no clear place on its bar chart is shown in the rail, its point ringed', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('/?scene=comparison&chrome=0');
+  await page.evaluate(() => {
+    const run = window.SwitchboardController?.run;
+    if (!run) throw new Error('controller unavailable');
+    run([
+      { op: 'clear' },
+      {
+        op: 'show', id: 'uptime', type: 'chart', role: 'primary',
+        data: {
+          kind: 'bar', title: 'FLEET / NODE UPTIME', labels: ['us-east', 'us-west', 'eu-west', 'eu-north', 'ap-south', 'ap-east'],
+          series: [
+            { name: 'THIS MONTH', semantic: 'green', values: [99.9, 99.7, 100, 99.8, 99.95, 99.6] },
+            { name: 'LAST MONTH', semantic: 'muted', values: [99.8, 99.9, 99.9, 99.95, 100, 99.7] },
+          ],
+        },
+      },
+      {
+        op: 'show', id: 'uptime-note', type: 'note',
+        data: { tag: 'OBSERVATION / EU-WEST', anchor: { target: 'uptime', x: 2, series: 'THIS MONTH' }, segments: [{ text: 'eu-west held a full month without an outage, the first since the move to the new provider. Every other region lost a node for a few minutes.' }] },
+      },
+    ]);
+  });
+  const rail = page.locator('.content-rail .rail-note');
+  await expect(rail).toContainText('eu-west held a full month without an outage, the first since the move to the new provider.');
+  await expect(rail.locator('.annotation-card')).toHaveAttribute('data-anchor-target', 'uptime');
+  await expect(page.locator('.chart-note[data-note="uptime-note"]')).toHaveClass(/chart-note--away/);
+  await expect(page.locator('.chart-note[data-note="uptime-note"]')).toBeHidden();
+  await expect(page.locator('.chart-note-leader')).toHaveCount(0);
+  const ring = page.locator('.chart-note-ring[data-note="uptime-note"]');
+  await expect(ring).toHaveCount(1);
+  // The ring sits on the bar it names: the top of eu-west's first bar.
+  const geometry = await page.evaluate(() => {
+    const ring = document.querySelector('.chart-note-ring')!.getBoundingClientRect();
+    const bar = document.querySelectorAll('.chart-series-group')[0].querySelectorAll('.chart-bar')[2].getBoundingClientRect();
+    return { x: ring.left + ring.width / 2, y: ring.top + ring.height / 2, barX: bar.left + bar.width / 2, barTop: bar.top };
+  });
+  expect(Math.abs(geometry.x - geometry.barX)).toBeLessThanOrEqual(1);
+  expect(Math.abs(geometry.y - geometry.barTop)).toBeLessThanOrEqual(1);
+});
 
 test('long current response scrolls above the lower-right caption', async ({ page }) => {
   const fixtureServer = new DisplayFixtureServer({ initialGeneration: 6 });

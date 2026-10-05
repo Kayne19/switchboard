@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useIsPresent } from 'motion/react';
-import { useState, type ReactNode } from 'react';
+import { useCallback, useState, type ReactNode } from 'react';
 import type {
   ChartData,
   CodeData,
@@ -235,24 +235,33 @@ function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux') {
 // chart's included, and otherwise the primary. Every note is shown -- a
 // second note on the chart is annotated beside the first, not dropped --
 // and with no note object on stage, a spoken explanation stands in on the
-// primary.
+// primary. The first note that names a visual on stage that is not a chart
+// (one in the aux row, say) is about that visual, not a chart: it is left
+// for the rail.
 function chartNotesByPanel(
   state: ControllerState,
   charts: Array<SceneObject<ChartData>>,
   primary: SceneObject<ChartData>,
-): Map<string, ChartNote[]> {
+): { byPanel: Map<string, ChartNote[]>; offCharts?: ChartNote } {
   const byPanel = new Map<string, ChartNote[]>();
   const add = (chartId: string, note: ChartNote) => byPanel.set(chartId, [...(byPanel.get(chartId) ?? []), note]);
+  let offCharts: ChartNote | undefined;
   const noteObjects = objectsOfType<NoteData>(state, 'note');
   for (const object of noteObjects) {
-    const target = charts.find((chart) => chart.id === object.data.anchor?.target) ?? primary;
+    const targetId = object.data.anchor?.target;
+    const named = targetId ? state.agentObjects[targetId] : undefined;
+    if (!offCharts && named && named.type !== 'chart' && named.id !== object.id) {
+      offCharts = { key: object.id, data: object.data, object };
+      continue;
+    }
+    const target = charts.find((chart) => chart.id === targetId) ?? primary;
     add(target.id, { key: object.id, data: object.data, object });
   }
   if (noteObjects.length === 0) {
     const spoken = annotationForScene(state, undefined, liveChatMessage(state));
     if (spoken) add(primary.id, { key: 'speech-note', data: spoken });
   }
-  return byPanel;
+  return { byPanel, offCharts };
 }
 
 // What a content scene fills the shell with: the text of its frame, its main
@@ -278,7 +287,13 @@ interface SceneContent {
   progressList: Array<SceneObject<ProgressData>>;
 }
 
-function trainingContent({ state, onFocus, onOpenHistory }: SceneProps): SceneContent | null {
+// `railNote` is the note the primary chart has said it has no place for
+// clear of its data, through `onRailNote`; the rail shows it instead.
+function trainingContent(
+  { state, onFocus, onOpenHistory }: SceneProps,
+  railNote: string | null,
+  onRailNote: (key: string, away: boolean) => void,
+): SceneContent | null {
   const charts = objectsOfType<ChartData>(state, 'chart');
   const [firstProgress, ...railProgress] = objectsOfType<ProgressData>(state, 'progress');
   const primary = charts.find((chart) => chart.role === 'primary') ?? charts[0];
@@ -292,8 +307,11 @@ function trainingContent({ state, onFocus, onOpenHistory }: SceneProps): SceneCo
   const progress = besideCharts.length > 0 ? undefined : firstProgress;
   // The notes lie over the panel of the chart they annotate rather than in a
   // band that shrinks it; the layer keeps them clear of one another, of the
-  // points they name, and of the traces wherever the panel has the room.
-  const notesByPanel = chartNotesByPanel(state, charts, primary);
+  // points they name, and of the data the chart draws.
+  const { byPanel: notesByPanel, offCharts } = chartNotesByPanel(state, charts, primary);
+  // The rail's one note slot: a note about a visual off the charts, else
+  // the note the primary chart has no place for clear of its data.
+  const inRail = offCharts ?? (notesByPanel.get(primary.id) ?? []).find((note) => note.key === railNote);
   // Frame text the chart leaves out names what it is -- its kind -- and
   // nothing more: a bar chart of test durations is not a training run.
   const kind = chartKind(primary.data).toUpperCase();
@@ -304,8 +322,10 @@ function trainingContent({ state, onFocus, onOpenHistory }: SceneProps): SceneCo
     footer: 'DISPLAY / COMPOSED',
     caption: sceneCaption(primary, `PRIMARY / ${kind} CHART`),
     metrics: objectsOfType<MetricData>(state, 'metric'),
-    // The notes sit on the charts here, so the rail carries none.
-    note: null,
+    // The notes sit on the charts here; the rail carries only the one that
+    // has no place on them.
+    note: inRail?.data ?? null,
+    noteObject: inRail?.object,
     progressList: railProgress,
     aux: firstProgress && !progress ? [...besideCharts, firstProgress] : besideCharts,
     main: (
@@ -323,7 +343,13 @@ function trainingContent({ state, onFocus, onOpenHistory }: SceneProps): SceneCo
                     </FocusableSurface>
                   </ObjectSurface>
                   {notes.length > 0 ? (
-                    <ChartNotes chart={chart} notes={notes} onFocus={onFocus} onOpenHistory={onOpenHistory} />
+                    <ChartNotes
+                      chart={chart}
+                      notes={notes}
+                      onFocus={onFocus}
+                      onOpenHistory={onOpenHistory}
+                      onRailNote={chart.id === primary.id && !offCharts ? onRailNote : undefined}
+                    />
                   ) : null}
                   {chart.role === 'compare' ? <div className="compare-label tech micro">COMPARE / {chart.data.compareLabel ?? 'RUN'}</div> : null}
                 </ObjectMotion>
@@ -611,13 +637,18 @@ function ConversationAnswer({ state }: { state: ControllerState }) {
   );
 }
 
-function sceneContent(props: SceneProps, onCalloutChange: (placed: boolean) => void): SceneContent | null {
+function sceneContent(
+  props: SceneProps,
+  onCalloutChange: (placed: boolean) => void,
+  chartRailNote: string | null,
+  onChartRailNote: (key: string, away: boolean) => void,
+): SceneContent | null {
   switch (props.kind) {
     case 'idle':
     case 'conversation':
       return null;
     case 'training':
-      return trainingContent(props);
+      return trainingContent(props, chartRailNote, onChartRailNote);
     case 'composed':
       return composedContent(props);
     default:
@@ -636,9 +667,17 @@ export function SceneShell(props: SceneProps) {
   const { kind, state, onToggleListening, onFocus, onOpenHistory, setTranscriptOpen } = props;
   const isPresent = useIsPresent();
   // A diagram can place its note as a callout beside the node it names; the
-  // rail then leaves it out.
+  // rail then leaves it out. A chart hands the rail the one note it has no
+  // place for clear of its data.
   const [calloutPlaced, setCalloutPlaced] = useState(false);
-  const content = sceneContent(props, setCalloutPlaced);
+  const [chartRailNote, setChartRailNote] = useState<string | null>(null);
+  // A chart says when a note leaves it and when it no longer does; a chart
+  // on its way out says so after the one that replaced it has spoken.
+  const onChartRailNote = useCallback(
+    (key: string, away: boolean) => setChartRailNote((current) => (away ? key : current === key ? null : current)),
+    [],
+  );
+  const content = sceneContent(props, setCalloutPlaced, chartRailNote, onChartRailNote);
   const layout = content ? 'content' : kind === 'conversation' ? 'conversation' : 'idle';
   const presence = (
     <DamoclesPresence

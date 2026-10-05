@@ -72,6 +72,7 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   svgWidth = 1000;
+  CARD.height = 80;
 });
 
 function render(state: ControllerState) {
@@ -230,6 +231,54 @@ describe('chart notes', () => {
     expect(panel.querySelector('.chart-note[data-note="loss-note"]')).not.toBeNull();
     expect(panel.querySelector('.chart-note-leader[data-note="loss-note"]')).not.toBeNull();
     expect(host.querySelector('.chart-object[data-chart-id="loss"] .chart-notes')).toBeNull();
+  });
+
+  it('hands the rail a note the chart has no place for clear of its bars, and rings the point it names', () => {
+    // Every bar stands to the top of the plot, the gaps between them are
+    // narrower than a card, and the card is taller than the band above the
+    // plot: no place on the chart is clear of the data.
+    CARD.height = 120;
+    const bars = {
+      kind: 'bar' as const,
+      labels: ['us-east', 'us-west', 'eu-west', 'eu-north'],
+      series: [{ name: 'UPTIME', values: [100, 100, 100, 100] }],
+    };
+    mount([
+      { op: 'show', id: 'uptime', type: 'chart', role: 'primary', data: bars },
+      note('uptime-note', { target: 'uptime', x: 2, series: 'UPTIME' }, 'eu-west held a full month.'),
+    ]);
+
+    const rail = host.querySelector('.content-rail .rail-note');
+    expect(rail?.textContent).toContain('eu-west held a full month.');
+    // The rail card still names what it is about.
+    expect(rail?.querySelector('.annotation-card')?.getAttribute('data-anchor-target')).toBe('uptime');
+    // On the chart its card is out of view, with no leader, and its point ringed.
+    expect(card('uptime-note')!.element.classList.contains('chart-note--away')).toBe(true);
+    expect(leader('uptime-note')).toBeNull();
+    const ring = host.querySelector('.chart-note-ring[data-note="uptime-note"]');
+    const point = chartSeriesPoint(bars, 2, 'UPTIME')!;
+    expect(Number(ring?.getAttribute('cx'))).toBeCloseTo(point.x, 3);
+    expect(Number(ring?.getAttribute('cy'))).toBeCloseTo(SVG_TOP + point.y, 3);
+  });
+
+  it('keeps a note on its chart, and the rail empty, while the chart has a clear place for it', () => {
+    CARD.height = 120;
+    mount([chart, note('loss-note', { target: 'loss', x: 30 })]);
+    expect(card('loss-note')!.element.classList.contains('chart-note--away')).toBe(false);
+    expect(host.querySelector('.content-rail .rail-note')).toBeNull();
+    expect(host.querySelector('.chart-note-ring')).toBeNull();
+  });
+
+  it('puts a note about a visual that is not a chart in the rail, not on a chart', () => {
+    const table: ControllerAction = {
+      op: 'show',
+      id: 'results',
+      type: 'table',
+      data: { columns: [{ label: 'SUITE' }, { label: 'SECONDS' }], rows: [['backend', 41.8]] },
+    };
+    mount([chart, table, note('table-note', { target: 'results' }, 'The backend suite is the long pole.')]);
+    expect(host.querySelector('.chart-note[data-note="table-note"]')).toBeNull();
+    expect(host.querySelector('.content-rail .rail-note')?.textContent).toContain('The backend suite is the long pole.');
   });
 
   it('puts a note aimed at nothing on the chart on the primary', () => {
