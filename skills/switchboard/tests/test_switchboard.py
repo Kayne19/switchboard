@@ -330,6 +330,29 @@ class ProgrammingErrorTest(ModuleTestCase):
                     fn(*args, **kwargs)
         self.assertEqual(host.connections, 0)
 
+    def test_values_json_cannot_carry_raise_before_anything_is_sent(self):
+        # A NaN used to go out as `NaN` and come back as a bad request; half a
+        # surrogate pair went out as an escape the service cannot read.
+        host = self.host()
+        chart = lambda value: {"op": "show", "id": "c", "type": "chart", "data": {"series": [{"name": "s", "values": [1, value]}]}}  # noqa: E731
+        cases = [
+            (switchboard.display, chart(float("nan")), "Out of range float values are not JSON compliant"),
+            (switchboard.display, chart(float("inf")), "Out of range float values are not JSON compliant"),
+            (switchboard.display, {"op": "say", "text": "cut \ud83d"}, "a string holds '\\ud83d', half of a UTF-16 surrogate pair"),
+            (switchboard.speak, "\ude00 alone", "a string holds '\\ude00', half of a UTF-16 surrogate pair"),
+        ]
+        for fn, value, message in cases:
+            with self.subTest(call=fn.__name__, value=repr(value)):
+                with self.assertRaises(ValueError) as caught, contextlib.redirect_stdout(io.StringIO()):
+                    fn(value)
+                self.assertTrue(str(caught.exception).startswith("cannot be sent to the switchboard: "), caught.exception)
+                self.assertIn(message, str(caught.exception))
+        self.assertEqual(host.connections, 0)
+        # Whole characters go out as they are.
+        result, _ = self.run_call(switchboard.speak, "Ship it \U0001F680")
+        self.assertTrue(result.delivered)
+        self.assertEqual(host.calls()[-1]["args"], {"text": "Ship it \U0001F680"})
+
     def test_unknown_display_type_names_the_shapes(self):
         with self.assertRaises(ValueError) as caught:
             switchboard.display(op="show", id="x", type="gauge", data={})
