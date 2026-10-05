@@ -216,3 +216,14 @@ describe('the composed fixture', () => {
     }
   });
 });
+
+describe('the plan fixture', () => {
+  it('is a diagram of the work, with the plan as a module in the rail between the metrics and the note', () => {
+    const page = render(fixtures.plan);
+    expect(page.getAttribute('data-scene')).toBe('architecture');
+    expect(page.querySelector('.content-grid > .content-main [data-testid="progress"]')).toBeNull();
+    const rail = [...page.querySelectorAll('.content-rail__details > *')].map((node) => node.className.split(' ')[0]);
+    expect(rail.slice(0, 3)).toEqual(['metrics', 'rail-progress', 'rail-note']);
+    expect(page.querySelector('.rail-progress .progress-primitive--rail')).not.toBeNull();
+  });
+});
