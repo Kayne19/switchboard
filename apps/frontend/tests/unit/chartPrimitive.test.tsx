@@ -575,8 +575,8 @@ describe('chart frame', () => {
 
   it("recomposes for a phone's slot, its plot filling the slot and its bars turned on their side", () => {
     const svg = renderInSlot(suite, { width: 342, height: 393 });
-    const width = Math.round(342 / CHART_READABLE_SCALE);
-    const height = Math.round(393 / CHART_READABLE_SCALE);
+    const width = Math.floor(342 / CHART_READABLE_SCALE);
+    const height = Math.floor(393 / CHART_READABLE_SCALE);
     expect(svg.getAttribute('viewBox')).toBe(`0 0 ${width} ${height}`);
     // The labels no longer fit a row under bars this narrow, so the bars run across.
     expect(host.querySelector('.chart-primitive')!.getAttribute('data-orientation')).toBe('horizontal');

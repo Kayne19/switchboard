@@ -496,8 +496,10 @@ describe('chart frame for a slot', () => {
     // The training chart's slot at 390x844: the canvas would draw at 0.34.
     const phone = chartFrame({ width: 342, height: 393 });
     expect(phone.scale).toBeCloseTo(CHART_READABLE_SCALE);
-    expect(phone.width).toBe(Math.round(342 / CHART_READABLE_SCALE));
-    expect(phone.height).toBe(Math.round(393 / CHART_READABLE_SCALE));
+    expect(phone.width).toBe(Math.floor(342 / CHART_READABLE_SCALE));
+    expect(phone.height).toBe(Math.floor(393 / CHART_READABLE_SCALE));
+    // Whole units, never drawn under the readable scale.
+    expect(Math.min(342 / phone.width, 393 / phone.height)).toBeGreaterThanOrEqual(CHART_READABLE_SCALE);
     // At 820x1180 the canvas reads, but leaves a third of the slot black.
     expect(chartFrame({ width: 738, height: 581 })).toEqual({ width: 1000, height: 787, scale: 0.738 });
   });
@@ -512,7 +514,7 @@ describe('chart frame for a slot', () => {
     const frame = chartFrame({ width: 300, height: 100 });
     expect(frame.height).toBe(CHART_MIN_FRAME.height);
     expect(frame.scale).toBeCloseTo(100 / CHART_MIN_FRAME.height);
-    expect(frame.width).toBe(Math.round(300 / frame.scale));
+    expect(frame.width).toBe(Math.floor(300 / frame.scale));
   });
 
   it('lays a recomposed plot out in the frame it is given', () => {

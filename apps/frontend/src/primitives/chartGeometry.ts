@@ -66,7 +66,8 @@ export function chartFrame(slot: { width: number; height: number }): ChartFit {
     slot.width / CHART_MIN_FRAME.width,
     slot.height / CHART_MIN_FRAME.height,
   );
-  return { width: Math.round(slot.width / scale), height: Math.round(slot.height / scale), scale };
+  // Whole units, rounded down so the slot draws them at the scale or more.
+  return { width: Math.floor(slot.width / scale), height: Math.floor(slot.height / scale), scale };
 }
 
 // The padding for a chart whose legend fits on one row. A legend that wraps
