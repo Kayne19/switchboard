@@ -3,7 +3,7 @@ import { buildCompositionModel, sceneKind } from "../app/sceneModel";
 import type { ControllerState } from "../controller/types";
 import { useController } from "../controller/context";
 import { DamoclesPresence } from "../primitives/DamoclesPresence";
-import { FocusLayer } from "./FocusLayer";
+import { FocusLayer, focusNote } from "./FocusLayer";
 import { SurfaceBoundary } from "./SurfaceBoundary";
 import { TranscriptDrawer } from "./TranscriptDrawer";
 import { SceneShell } from "./Scenes";
@@ -55,6 +55,7 @@ function SceneContent({
         />
         <FocusLayer
           object={focusedObject}
+          note={focusNote(state, focusedObject)}
           onClose={() => dispatch({ op: "focus", id: null })}
         />
       </main>

@@ -1,9 +1,9 @@
 import { useMemo } from 'react';
 import type { NoteData, Semantic, SequenceDiagramData } from '../controller/types';
 import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
-import type { DrawingMap } from './drawingScroll';
+import { viewWithMap, type DrawingMap } from './drawingScroll';
 import { NoteMarker } from './NoteMarker';
-import { LABEL_HEIGHT, SUB_LINE_HEIGHT, viewSequence, type LaidOutMessage, type Point } from './sequenceLayout';
+import { LABEL_HEIGHT, SUB_LINE_HEIGHT, actorFramePath, headerReading, pinnedDepth, viewSequence, type LaidOutMessage, type Point } from './sequenceLayout';
 
 const colors: Record<Semantic, string> = {
   red: 'var(--red)',
@@ -19,8 +19,6 @@ const pathThrough = (points: Point[]) =>
   points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
 
 const ARROW_LENGTH = 10;
-// The pinned headers keep this much of the drawing under them.
-const PINNED_MARGIN = 6;
 const ARROW_HALF = 4.5;
 
 // The arrowhead at a message's tip. A call's is a filled triangle; an
@@ -70,9 +68,9 @@ export function SequencePrimitive({
   const anchoredActorId = note?.anchor && note.anchor.target === id ? note.anchor.node : undefined;
   // The geometry follows the viewport's shape, and the drawing is fitted to
   // it, or scrolled in it once fitting would make it too small to read.
-  const { layout, fit } = useMemo(
-    () => viewSequence(data, { width, height, scrollbar }, anchoredActorId),
-    [data, width, height, scrollbar, anchoredActorId],
+  const { layout, fit, strip } = useMemo(
+    () => viewWithMap({ width, height, scrollbar }, (viewport) => viewSequence(data, viewport, anchoredActorId, focused), headerReading),
+    [data, width, height, scrollbar, anchoredActorId, focused],
   );
   // What the viewport tells a reader of an exchange that scrolls: its
   // messages, counted past each edge and kept whole at rest, and the
@@ -107,7 +105,7 @@ export function SequencePrimitive({
   // pinned over the viewport's top once the drawing scrolls under them.
   const actors = (
     <g className="sequence-actors">
-      {layout.actors.map(({ actor, box, labelLines, labelY, subY, subLines, marker }, index) => {
+      {layout.actors.map(({ actor, box, labelLines, labelX, labelY, subY, subLines, marker }, index) => {
         const isAnchored = anchoredActorId !== undefined && actor.id === anchoredActorId;
         const color = isAnchored ? 'var(--orange)' : colors[actor.semantic ?? 'paper'];
         const { width, height } = box;
@@ -116,7 +114,7 @@ export function SequencePrimitive({
             <g className={`sequence-actor__body${isAnchored ? ' sequence-actor__body--anchored' : ''}`} style={{ animationDelay: `${index * 50}ms` }}>
               <path
                 className="sequence-actor__frame"
-                d={`M 0 10 L 10 0 H ${width - 14} L ${width} 14 V ${height} H 12 L 0 ${height - 12} Z`}
+                d={actorFramePath(width, height, layout.headers.style)}
                 fill="var(--black, #000000)"
                 stroke={color}
                 strokeOpacity={isAnchored ? '1' : '.64'}
@@ -125,7 +123,7 @@ export function SequencePrimitive({
                 filter={isAnchored ? 'url(#sequence-anchor-glow)' : undefined}
               />
               <text
-                x={width / 2}
+                x={labelX}
                 y={labelY}
                 textAnchor="middle"
                 dominantBaseline="central"
@@ -136,7 +134,7 @@ export function SequencePrimitive({
                 {labelLines.length === 1
                   ? labelLines[0]
                   : labelLines.map((line, lineIndex) => (
-                      <tspan key={lineIndex} x={width / 2} dy={lineIndex === 0 ? 0 : layout.actorLabelLineHeight}>
+                      <tspan key={lineIndex} x={labelX} dy={lineIndex === 0 ? 0 : layout.actorLabelLineHeight}>
                         {line}
                       </tspan>
                     ))}
@@ -164,11 +162,10 @@ export function SequencePrimitive({
       })}
     </g>
   );
-  const headerBottom = Math.max(0, ...layout.actors.map((actor) => actor.box.y + actor.box.height));
 
   return (
     <div ref={hostRef} className={`sequence-primitive${focused ? ' sequence-primitive--focused' : ''}`} data-testid="sequence">
-      <DrawingViewport drawing={layout} fit={fit} pinned={{ height: headerBottom + PINNED_MARGIN, content: actors }} map={map} ariaLabel={data.title ?? 'Sequence diagram'}>
+      <DrawingViewport drawing={layout} fit={fit} pinned={{ height: pinnedDepth(layout), content: actors }} map={map} strip={strip} ariaLabel={data.title ?? 'Sequence diagram'}>
         <defs>
           {/* The region is the whole drawing, not each message's bounding box:
               a straight message has a zero-height box, and a filter region

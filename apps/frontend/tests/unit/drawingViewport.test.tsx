@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { DrawingViewport } from '../../src/primitives/DrawingViewport';
+import { FocusableSurface } from '../../src/primitives/FocusableSurface';
 import type { DrawingFit } from '../../src/primitives/drawingFit';
 import { RAIL, type DrawingMap } from '../../src/primitives/drawingScroll';
 
@@ -89,25 +90,109 @@ describe('a drawing viewport', () => {
     expect(scroller.scrollTop).toBe(864);
   });
 
-  it('keeps the keys that scroll it from the surface around it', () => {
+  it('takes the keys that scroll it, from stop to stop, and leaves the surface around it the rest', () => {
     host = undefined as unknown as HTMLDivElement;
+    const expanded: string[] = [];
+    // Keys still reach the page: the scroller marks the ones it takes
+    // rather than stopping them.
     const reached: string[] = [];
+    const listen = (event: KeyboardEvent) => reached.push(event.key);
+    window.addEventListener('keydown', listen);
+    const scrollTo = HTMLElement.prototype.scrollTo;
+    HTMLElement.prototype.scrollTo = function go(this: HTMLElement, options?: ScrollToOptions | number) {
+      if (typeof options === 'object' && options.top !== undefined) this.scrollTop = options.top;
+    } as typeof HTMLElement.prototype.scrollTo;
+    try {
+      render(
+        <FocusableSurface onActivate={() => expanded.push('expand')} ariaLabel="Expand">
+          <DrawingViewport drawing={drawing} fit={scrollsDown} map={rows} ariaLabel="d">
+            <rect width="10" height="10" />
+          </DrawingViewport>
+        </FocusableSurface>,
+      );
+      const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
+      expect(scroller.getAttribute('tabindex')).toBe('0');
+      const stops = [...host.querySelectorAll<HTMLElement>('.drawing-viewport__stop')].map((stop) => parseFloat(stop.style.top));
+      const press = (key: string, shiftKey = false) =>
+        act(() => {
+          scroller.dispatchEvent(new KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true }));
+        });
+      press('ArrowDown');
+      expect(scroller.scrollTop).toBe(stops[1]);
+      press(' ');
+      const paged = scroller.scrollTop;
+      expect(stops).toContain(paged);
+      expect(paged).toBeGreaterThan(stops[1]);
+      expect(paged - stops[1]).toBeLessThanOrEqual(300);
+      press(' ', true);
+      expect(scroller.scrollTop).toBeLessThan(paged);
+      press('End');
+      expect(scroller.scrollTop).toBe(stops[stops.length - 1]);
+      press('Home');
+      expect(scroller.scrollTop).toBe(0);
+      press('ArrowLeft');
+      expect(scroller.scrollTop).toBe(0);
+      // Space scrolled; it did not expand. Enter is not a scrolling key: it
+      // still expands the object.
+      expect(expanded).toEqual([]);
+      press('Enter');
+      expect(expanded).toEqual(['expand']);
+      expect(reached).toEqual(['ArrowDown', ' ', ' ', 'End', 'Home', 'ArrowLeft', 'Enter']);
+    } finally {
+      window.removeEventListener('keydown', listen);
+      HTMLElement.prototype.scrollTo = scrollTo;
+    }
+  });
+
+  it('moves on from where a key or a count is taking it, not from where the scroll has got to', () => {
+    host = undefined as unknown as HTMLDivElement;
+    // A smooth scroll still on its way: the scroller has not moved yet.
+    const asked: number[] = [];
+    const scrollTo = HTMLElement.prototype.scrollTo;
+    HTMLElement.prototype.scrollTo = function inFlight(this: HTMLElement, options?: ScrollToOptions | number) {
+      if (typeof options === 'object' && options.top !== undefined) asked.push(options.top);
+    } as typeof HTMLElement.prototype.scrollTo;
+    try {
+      render(
+        <DrawingViewport drawing={drawing} fit={scrollsDown} map={rows} ariaLabel="d">
+          <rect width="10" height="10" />
+        </DrawingViewport>,
+      );
+      const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
+      const stops = [...host.querySelectorAll<HTMLElement>('.drawing-viewport__stop')].map((stop) => parseFloat(stop.style.top));
+      const press = (key: string) =>
+        act(() => {
+          scroller.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+        });
+      press('ArrowDown');
+      press('ArrowDown');
+      // Before: the second press read the scroller, still at 0, and asked for the same stop.
+      expect(asked).toEqual([stops[1], stops[2]]);
+      act(() => host.querySelector<HTMLElement>('.drawing-viewport__rim--bottom')!.click());
+      expect(asked[2]).toBeGreaterThan(stops[2]);
+      expect(stops).toContain(asked[2]);
+    } finally {
+      HTMLElement.prototype.scrollTo = scrollTo;
+    }
+  });
+
+  it('leaves a key with Ctrl, Alt or Meta held to the browser and the surface alike', () => {
+    host = undefined as unknown as HTMLDivElement;
+    const expanded: string[] = [];
     render(
-      <div onKeyDown={(event) => reached.push(event.key)}>
+      <FocusableSurface onActivate={() => expanded.push('expand')} ariaLabel="Expand">
         <DrawingViewport drawing={drawing} fit={scrollsDown} map={rows} ariaLabel="d">
           <rect width="10" height="10" />
         </DrawingViewport>
-      </div>,
+      </FocusableSurface>,
     );
     const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
-    expect(scroller.getAttribute('tabindex')).toBe('0');
-    for (const key of [' ', 'PageDown', 'ArrowDown', 'Enter']) {
+    for (const modifier of ['ctrlKey', 'altKey', 'metaKey']) {
       act(() => {
-        scroller.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+        scroller.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', [modifier]: true, bubbles: true, cancelable: true }));
       });
     }
-    // Enter is not a scrolling key: it still expands the object.
-    expect(reached).toEqual(['Enter']);
+    expect(expanded).toEqual([]);
   });
 
   it('pins its header band only when it scrolls down, and is contained otherwise', () => {

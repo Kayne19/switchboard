@@ -15,7 +15,7 @@ import type {
   TableData,
 } from '../controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
-import { besideVisuals, buildCompositionModel, cast, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
+import { anchoredNote, besideVisuals, buildCompositionModel, cast, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
 import { columnNeed, wantsStage, type StageGeometry, type StageNeed } from '../app/stageFold';
 import { StageDemandContext, type StageDemandListener } from '../hooks/useStageDemand';
 import { AnnotationCard } from '../primitives/AnnotationCard';
@@ -96,7 +96,7 @@ function noteForTarget(
   notes: Array<SceneObject<NoteData>>,
   targetId: string,
 ): SceneObject<NoteData> | undefined {
-  return notes.find((note) => note.data.anchor?.target === targetId)
+  return anchoredNote(notes, targetId)
     ?? notes.find((note) => !note.data.anchor)
     ?? notes[0];
 }
