@@ -158,7 +158,7 @@ test("background mode refuses speak, but accepts request_to_speak and display", 
 	});
 });
 
-test("a 12 MiB image display line is relayed whole; a line over the cap closes the connection", async () => {
+test("a 12 MiB image display line is relayed whole; a line over the cap is refused and ends the connection", async () => {
 	await withSocket(async ({ ask, manager, handle, sessionId, relayed, socketPath }) => {
 		await manager.handle("join_call", { session: handle, ...CALL, mode: "foreground" });
 		// 12 MiB of base64: the largest image action the service accepts.
@@ -172,10 +172,19 @@ test("a 12 MiB image display line is relayed whole; a line over the cap closes t
 		assert.ok(MAX_LINE_BYTES + 1024 * 1024 <= 16 * 1024 * 1024);
 		const before = relayed.length;
 		const long = net.createConnection(socketPath);
+		let answer = "";
+		long.on("data", (chunk) => {
+			answer += String(chunk);
+		});
 		const closed = new Promise<void>((resolve) => long.once("close", () => resolve()));
 		long.on("error", () => {});
 		long.write(`${JSON.stringify({ op: "call", session_id: sessionId, depth: 0, token: CALL.token, call: "display", args: { pad: "A".repeat(MAX_LINE_BYTES) } })}\n`);
+		// A request after it on the same connection is not answered.
+		long.write(`${JSON.stringify({ op: "hello", session_id: sessionId, depth: 0 })}\n`);
 		await closed;
+		// It used to close without a word, and the module could only report
+		// that the host agent hung up.
+		assert.equal(answer, '{"status":"refused","reason":"too_large"}\n');
 		assert.equal(relayed.length, before, "an over-long line is never relayed");
 	});
 });
