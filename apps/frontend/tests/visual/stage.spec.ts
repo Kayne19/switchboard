@@ -158,8 +158,10 @@ for (const { name, scene, actions, sizes } of outgrowing) {
   }
 }
 
-// Folded, the frame's subtitle had a line of its own over the primary,
-// which earns nothing while the primary has the stage.
+// Folded, a diagram's frame gave some 150px of the phone to what earns
+// nothing while the primary has the stage: the subtitle's own line over
+// the frame, and rail bands of a tenth of the slot each, above and below
+// the drawing.
 const box = async (page: Page, selector: string) => (await page.locator(selector).first().boundingBox())!;
 
 test('folded, the frame\'s subtitle runs after its title and the primary starts a line higher', async ({ page }) => {
@@ -179,6 +181,25 @@ test('folded, the frame\'s subtitle runs after its title and the primary starts 
   await page.waitForTimeout(500);
   const openTitle = await box(page, '.scene-heading__title');
   expect((await box(page, '.scene-heading__sub')).y).toBeGreaterThanOrEqual(openTitle.y + openTitle.height - 1);
+});
+
+test('folded, a diagram\'s rails keep the depth they have in a slot of some 400px, the drawing taking the rest', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, 'topology');
+  await expect(page.locator('.content-rail--folded')).toBeVisible();
+  const object = await box(page, '.content-grid > .content-main .diagram-object');
+  const view = await box(page, '.content-grid > .content-main .drawing-viewport');
+  expect(view.y - object.y).toBeLessThanOrEqual(51);
+  expect(object.y + object.height - (view.y + view.height)).toBeLessThanOrEqual(51);
+  // 458px of the 844 before; some 518 now.
+  expect(view.height).toBeGreaterThan(844 * 0.6);
+  // Opened, the bands are a tenth of the slot, as they were.
+  await page.locator('button.rail-handle').click();
+  await expect(page.locator('.content-rail--open')).toBeVisible();
+  await page.waitForTimeout(500);
+  const shared = await box(page, '.content-grid > .content-main .diagram-object');
+  const sharedView = await box(page, '.content-grid > .content-main .drawing-viewport');
+  expect(Math.abs(sharedView.y - shared.y - (shared.height * 0.1 + 10))).toBeLessThan(1.5);
 });
 
 test('a note on a folded rail stays matched to the node it names', async ({ page }) => {
