@@ -74,11 +74,23 @@ const page = () => host!;
 const rows = (count: number) => Array.from({ length: count }, (_, index) => <div key={index} data-item={`t${index}`}>task {index}</div>);
 
 describe('countPast', () => {
-  it('counts only items wholly past an edge; one the edge cuts is in view', () => {
+  it('counts items past an edge; one the edge cuts is in view when more than a sliver of it shows', () => {
     const items = [0, 30, 60, 90, 120].map((top) => ({ top, bottom: top + 30 }));
-    expect(countPast(items, { top: 35, bottom: 95 })).toEqual({ above: 1, below: 1 });
+    // 0-30 is past the top; 90-120 shows 5px (under its 12px sliver) and
+    // counts as below with 120-150.
+    expect(countPast(items, { top: 35, bottom: 95 })).toEqual({ above: 1, below: 2 });
+    // 0-30 shows 15px at the top and 60-90 15px at the bottom: more than
+    // their slivers, in view.
+    expect(countPast(items, { top: 15, bottom: 75 })).toEqual({ above: 0, below: 2 });
     expect(countPast(items, { top: 30, bottom: 120 })).toEqual({ above: 1, below: 1 });
     expect(countPast(items, { top: 0, bottom: 150 })).toEqual({ above: 0, below: 0 });
+  });
+
+  it('a tall row showing only its padding is past the edge (16px at most)', () => {
+    // A 36px row 7px into view: its top padding, not its words.
+    expect(countPast([{ top: 469, bottom: 505 }], { top: 173, bottom: 476 })).toEqual({ above: 0, below: 1 });
+    // A 200px card 17px into view is in view.
+    expect(countPast([{ top: 459, bottom: 659 }], { top: 173, bottom: 476 })).toEqual({ above: 0, below: 0 });
   });
 
   it('counts items laid several to a row by their boxes', () => {
@@ -138,7 +150,8 @@ describe('ListViewport', () => {
     const rims = Array.from(page().querySelectorAll<HTMLElement>('.list-viewport__rim'));
     expect(rims.map((rim) => [rim.className.includes('--top') ? 'top' : 'bottom', rim.textContent])).toEqual([
       ['top', '3 TASKS'],
-      ['bottom', '3 TASKS'],
+      // Rows 7-9, and row 6 of which 10px of 30 show.
+      ['bottom', '4 TASKS'],
     ]);
     expect(page().querySelectorAll('.drawing-viewport__rail')).toHaveLength(2);
     expect(scroll.tabIndex).toBe(0);
@@ -148,7 +161,7 @@ describe('ListViewport', () => {
     const scroll = render(rows(10));
     layOut(scroll, 90, 0.5);
     await measured(scroll);
-    expect(Array.from(page().querySelectorAll('.list-viewport__rim')).map((rim) => rim.textContent)).toEqual(['3 TASKS', '3 TASKS']);
+    expect(Array.from(page().querySelectorAll('.list-viewport__rim')).map((rim) => rim.textContent)).toEqual(['3 TASKS', '4 TASKS']);
   });
 
   it('counts only what countSelector picks', async () => {
@@ -164,12 +177,12 @@ describe('ListViewport', () => {
     const scroll = element.querySelector<HTMLElement>('.list-viewport__scroll')!;
     layOut(scroll, 0);
     await measured(scroll);
-    // Rows 4-9 lie below (row 3 is cut); the days among them are 5, 7, 9.
-    expect(element.querySelector('.list-viewport__rim')!.textContent).toBe('3 DAYS');
+    // Rows 3-9 lie below (10px of row 3 shows); the days among them are 3, 5, 7, 9.
+    expect(element.querySelector('.list-viewport__rim')!.textContent).toBe('4 DAYS');
   });
 
   it('names one item in the singular', async () => {
-    const scroll = render(rows(5));
+    const scroll = render(rows(4));
     layOut(scroll, 0);
     await act(async () => {
       scroll.dispatchEvent(new Event('scroll'));
@@ -185,8 +198,8 @@ describe('ListViewport', () => {
       scroll.dispatchEvent(new Event('scroll'));
       await new Promise((resolve) => requestAnimationFrame(resolve));
     });
-    // Rows 0-3 (one cut at the edge), the heading at 4, rows 5-8 below.
-    expect(page().querySelector('.drawing-viewport__rim--bottom')!.textContent).toBe('4 TASKS');
+    // Row 3 shows 10px, the heading is 4, rows 5-8 below: five tasks, the heading not one.
+    expect(page().querySelector('.drawing-viewport__rim--bottom')!.textContent).toBe('5 TASKS');
   });
 
   it("opens on its lead once per shape, and keeps the reader's place after", () => {
