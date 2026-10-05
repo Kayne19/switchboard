@@ -1,7 +1,6 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { InboxData, InboxMessage } from '../controller/types';
 import { parseTimeValue, type TimeValue } from '../controller/validation';
-import { useElementSize } from '../hooks/useElementSize';
 import { ListViewport } from './ListViewport';
 import { NoteBadge } from './NoteMarker';
 import { clockText, dayText, daysFrom, readToday } from './timeLabels';
@@ -81,7 +80,7 @@ function MessageRow({ message, today, marked, layout }: { message: InboxMessage;
   // senders, of channels and of times lines up down the list; a part a
   // message lacks keeps its cell, empty.
   return (
-    <li className={className} data-item={message.id} data-unread={message.unread ? 'true' : undefined}>
+    <li className={className} data-item={message.id}>
       <span className="inbox-row__unread" role={message.unread ? 'img' : undefined} aria-label={message.unread ? 'unread' : undefined} />
       <span className="inbox-row__from">
         {marked ? <NoteBadge className="inbox-row__note" /> : null}
@@ -99,6 +98,31 @@ function MessageRow({ message, today, marked, layout }: { message: InboxMessage;
 }
 
 /**
+ * The width a list's rows have and the size of their text, measured before
+ * the page paints (a layout effect), so the first frame is already laid out
+ * for the list's width rather than stacked and then redrawn. The box is
+ * watched for its size; the rows' scroll is read each time, as a new layout
+ * draws a new one.
+ */
+function useListMeasure(boxRef: RefObject<HTMLDivElement | null>, scrollRef: RefObject<HTMLDivElement | null>): { width: number; em: number } {
+  const [measure, setMeasure] = useState({ width: 0, em: 16 });
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    if (!box) return undefined;
+    const read = () => {
+      const list = scrollRef.current ?? box;
+      const next = { width: list.clientWidth, em: parseFloat(getComputedStyle(list).fontSize) || 16 };
+      setMeasure((current) => (current.width === next.width && current.em === next.em ? current : next));
+    };
+    read();
+    const observer = new ResizeObserver(read);
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [boxRef, scrollRef]);
+  return measure;
+}
+
+/**
  * An inbox: messages in the order the agent sent them, each a row with its
  * sender, subject and a one-line snippet cut cleanly, its channel as a tag
  * and its time (the time of day on `today`, else the day). An unread
@@ -110,13 +134,9 @@ function MessageRow({ message, today, marked, layout }: { message: InboxMessage;
 export function InboxPrimitive({ data, variant = 'full', marked }: { data: InboxData; variant?: InboxVariant; marked?: string }) {
   const today = readToday(data.today);
   const counts = inboxCounts(data);
+  const boxRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const { width } = useElementSize(scrollRef);
-  const [em, setEm] = useState(16);
-  useLayoutEffect(() => {
-    const element = scrollRef.current;
-    if (element) setEm(parseFloat(getComputedStyle(element).fontSize) || 16);
-  }, [width]);
+  const { width, em } = useListMeasure(boxRef, scrollRef);
   const layout = inboxLayout(variant, width, em);
   const head = (
     <div className="inbox-primitive__meta tech micro">
@@ -129,8 +149,11 @@ export function InboxPrimitive({ data, variant = 'full', marked }: { data: Inbox
     </div>
   );
   return (
-    <div className={`inbox-primitive inbox-primitive--${variant}`} data-testid="inbox" data-layout={layout}>
+    <div ref={boxRef} className={`inbox-primitive inbox-primitive--${variant}`} data-testid="inbox">
+      {/* A new layout is a new list to open: the viewport leads again on the
+          message a note names, at its place in the rows now drawn. */}
       <ListViewport
+        key={layout}
         noun={['MESSAGE', 'MESSAGES']}
         lead={marked}
         head={head}
