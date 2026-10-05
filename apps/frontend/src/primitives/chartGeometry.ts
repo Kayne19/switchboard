@@ -1291,6 +1291,28 @@ export function chartAxisBoxes(plot: ViewRect, frame: ChartFrame = CHART_FRAME):
 }
 
 /**
+ * The height, in CSS pixels, a bar chart is drawn at to be scrolled inside
+ * its slot, or `null` where it is drawn in the slot. A bar chart is read by
+ * its category names: one whose labels do not fit under its bars lies on
+ * its side with a row per category, and where the slot is too short for
+ * the rows (the stage was asked for its height, and it was not enough) it
+ * still lies on its side, at its least height (`chartLeastHeight`), and
+ * scrolls -- in a slot taller than it is wide, where its bars standing
+ * upright would be too many for the width and their labels thinned to a
+ * few. A wide slot stands them upright, thinned, the whole chart in view;
+ * a chart whose labels all show upright (staggered, say) is drawn as it is.
+ */
+export function chartScrollHeight(data: ChartData, slot: { width: number; height: number }): number | null {
+  if (!(slot.width > 0) || !(slot.height > 0)) return null;
+  const least = chartLeastHeight(data, slot.width);
+  if (least === null || least <= slot.height) return null;
+  const frame = chartFrame(slot);
+  if (frame.height < frame.width) return null;
+  const layout = chartCategoryLayout(data, frame);
+  return layout.horizontal || layout.step === 1 ? null : Math.ceil(least);
+}
+
+/**
  * The least height, in CSS pixels, of a slot `width` wide in which a bar
  * chart gives every category a labelled row of its own -- on its side, as
  * it is drawn when its labels do not fit under its bars -- at the readable

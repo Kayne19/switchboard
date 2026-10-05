@@ -241,6 +241,41 @@ test('a bar chart of forty-five categories takes the stage and gives each a labe
   for (const index of [0, 22, 44]) expect(labels).toContain(`service-${String(index).padStart(2, '0')}`);
 });
 
+// Past what even the stage holds a row each for, the bars stood upright
+// again on a phone, a few of sixty names under bars a few pixels wide.
+const sixtyBars = [
+  { op: 'clear' },
+  {
+    op: 'show', id: 'minutes', type: 'chart', role: 'primary',
+    data: { kind: 'bar', title: 'CI / 60 SERVICES', labels: Array.from({ length: 60 }, (_, index) => `service-${String(index).padStart(2, '0')}`), series: [{ name: 'THIS WEEK', values: Array.from({ length: 60 }, (_, index) => 10 + ((index * 37) % 80)) }] },
+  },
+];
+
+test('a bar chart of sixty categories on a phone lies on its side and scrolls in its frame, every row named', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, 'idle', sixtyBars);
+  const chart = page.locator('.chart-primitive');
+  await expect(chart).toHaveAttribute('data-orientation', 'horizontal');
+  await expect(chart).toHaveClass(/chart-primitive--scrolls/);
+  // Every category has its row, its name at a readable size.
+  const labels = chart.locator('.chart-grid__category');
+  await expect(labels).toHaveCount(60);
+  const sizes = await labels.evaluateAll((texts) => texts.map((text) => text.getBoundingClientRect().height));
+  expect(Math.min(...sizes)).toBeGreaterThanOrEqual(8);
+  // The rows past the foot are counted there, and a tap turns a page.
+  const rim = chart.locator('.drawing-viewport__rim--bottom');
+  await expect(rim).toHaveText(/\d+ BARS/);
+  // The last row is reached inside the frame, the value axis still over it.
+  await chart.locator('.list-viewport__scroll').evaluate((scroll) => scroll.scrollTo({ top: scroll.scrollHeight }));
+  await page.waitForTimeout(300);
+  const view = (await chart.locator('.list-viewport__port').boundingBox())!;
+  const last = (await labels.last().boundingBox())!;
+  expect(last.y).toBeGreaterThanOrEqual(view.y - 1);
+  expect(last.y + last.height).toBeLessThanOrEqual(view.y + view.height + 1);
+  await expect(chart.locator('.chart-primitive__axis text').first()).toBeVisible();
+  await expect(chart.locator('.drawing-viewport__rim--top')).toHaveText(/\d+ BARS/);
+});
+
 for (const { name, scene, actions } of [
   { name: 'a stepped plan under a chart', scene: 'training', actions: chartOverPlan },
   { name: 'a long table beside a diagram that fits', scene: 'idle', actions: tableBeside },
