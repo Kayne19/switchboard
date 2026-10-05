@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const skipped = new Set(["node_modules", "dist", "target", ".git", "static", "static-debug"]);
+const skipped = new Set(["node_modules", "dist", "target", ".git", "static", "static-debug", "test-results"]);
 const findings = [];
 
 function* files(entry, exts) {
@@ -86,9 +86,57 @@ for (const start of ["AGENTS.md", "README.md", "docs"]) {
 	}
 }
 
+// The markdown the checks below read: the docs and every README and
+// AGENTS.md in the tree.
+const markdown = () => ["AGENTS.md", "README.md", "docs", "apps", "skills", "extensions"].flatMap((start) => [...files(path.join(root, start), new Set([".md"]))]);
+
+// 8. Every HTTP route a doc names in a code span, with its method
+//    (`POST /connect`), is one the service routes. Agents' display, view
+//    and speak calls once had routes; they come over the host link now, and
+//    a doc that still names `POST /display` sends a reader to a 404. A route
+//    in prose or in a fenced block is not read.
+{
+	const routes = new Set();
+	const methods = /\b(get|post|put|patch|delete)\(/g;
+	for (const file of files(path.join(root, "apps/backend/src"), new Set([".rs"]))) {
+		// Each `.route("/path", ...)` up to the next route or the end of the
+		// chain, so `get(a).post(b)` gives both methods.
+		const source = readFileSync(file, "utf8");
+		for (const m of source.matchAll(/\.route\(\s*"([^"]+)",([\s\S]*?)(?=\.route\(|\.with_state\(|\.fallback|;)/g)) {
+			for (const method of m[2].matchAll(methods)) routes.add(`${method[1].toUpperCase()} ${m[1]}`);
+		}
+	}
+	if (routes.size === 0) findings.push("routes: found none in apps/backend/src (the check needs updating)");
+	for (const file of markdown()) {
+		lines(file).forEach((line, index) => {
+			for (const m of line.matchAll(/`(GET|POST|PUT|PATCH|DELETE) (\/[^`\s?#]*)/g)) {
+				const route = `${m[1]} ${m[2]}`;
+				if (!routes.has(route)) findings.push(`${rel(file)}:${index + 1}: names ${route}, which the service does not route`);
+			}
+		});
+	}
+}
+
+// 9. Every SWITCHBOARD_ name a doc names is one docs/environment.md names,
+//    exactly: it writes the live ones in full and the retired ones without
+//    the prefix. A doc that names a retired setting in full
+//    (`SWITCHBOARD_DISPLAY_URL`) tells a reader to set something nothing
+//    reads.
+{
+	const name = /\bSWITCHBOARD_[A-Z0-9][A-Z0-9_]*/g;
+	const documented = new Set(readFileSync(path.join(root, "docs/environment.md"), "utf8").match(name) ?? []);
+	for (const file of markdown()) {
+		lines(file).forEach((line, index) => {
+			for (const m of line.matchAll(name)) {
+				if (!documented.has(m[0])) findings.push(`${rel(file)}:${index + 1}: names ${m[0]}, which docs/environment.md does not list`);
+			}
+		});
+	}
+}
+
 if (findings.length > 0) {
 	console.error(`check_hygiene: ${findings.length} finding(s):`);
 	for (const finding of findings) console.error(`  ${finding}`);
 	process.exit(1);
 }
-console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths");
+console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings");
