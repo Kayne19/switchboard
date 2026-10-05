@@ -8,13 +8,19 @@ interface AnnotationCardProps {
   onFocus?: () => void;
   /** Opens the conversation history drawer. Given only when there is a conversation to open. */
   onOpenHistory?: () => void;
+  /**
+   * What the anchor names, in its target's own words (a chart's category
+   * and series), where the target can say: it stands in for the anchor's
+   * id, x and series on the TARGET line.
+   */
+  target?: string;
 }
 
 // The card is not itself a control: its text is a scroll region, and a scroll
 // region cannot live inside a button. The body activates through
 // FocusableSurface instead, and the history control sits beside it in the
 // header rather than inside it.
-export function AnnotationCard({ data, onFocus, onOpenHistory }: AnnotationCardProps) {
+export function AnnotationCard({ data, onFocus, onOpenHistory, target }: AnnotationCardProps) {
   const text = <div className="annotation-card__text"><RichText segments={data.segments} /></div>;
   // A note object on stage expands; a spoken explanation has no object to
   // expand, so its body opens the conversation it came from.
@@ -25,10 +31,16 @@ export function AnnotationCard({ data, onFocus, onOpenHistory }: AnnotationCardP
         <span className="annotation-card__tag tech micro">{data.tag ?? 'DAMOCLES / EXPLANATION'}</span>
         {data.anchor ? (
           <span className="annotation-card__anchor tech micro">
-            TARGET / {data.anchor.target}
-            {data.anchor.node ? ` / NODE ${data.anchor.node}` : ''}
-            {data.anchor.x !== undefined ? ` / X ${data.anchor.x}` : ''}
-            {data.anchor.series ? ` / ${data.anchor.series}` : ''}
+            {target !== undefined ? (
+              `TARGET / ${target}`
+            ) : (
+              <>
+                TARGET / {data.anchor.target}
+                {data.anchor.node ? ` / NODE ${data.anchor.node}` : ''}
+                {data.anchor.x !== undefined ? ` / X ${data.anchor.x}` : ''}
+                {data.anchor.series ? ` / ${data.anchor.series}` : ''}
+              </>
+            )}
           </span>
         ) : null}
         {/* The badge that matches the node's own marker sits beside the

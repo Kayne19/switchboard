@@ -9,6 +9,7 @@ import {
   chartObstacles,
   chartScales,
   chartSeriesPoint,
+  chartTargetText,
   type ChartScales,
   type ViewPoint,
   type ViewRect,
@@ -312,6 +313,7 @@ export function ChartNotes({
                   data={note.data}
                   onFocus={note.object ? () => onFocus(note.object!.id) : undefined}
                   onOpenHistory={note.object ? undefined : onOpenHistory}
+                  target={note.data.anchor?.target === chart.id ? chartTargetText(note.data.anchor, chart.data) : undefined}
                 />
               </SurfaceBoundary>
             </motion.div>

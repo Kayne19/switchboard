@@ -28,6 +28,7 @@ import {
   chartPad,
   chartScales,
   chartSeriesPoint,
+  chartTargetText,
   chartValueAxis,
   wrapLabel,
 } from '../../src/primitives/chartGeometry';
@@ -504,5 +505,20 @@ describe('chart frame for a slot', () => {
     expect(scales.frame).toEqual(frame);
     expect(scales.plot).toEqual({ left: CHART_PAD.left, top: CHART_PAD.top + CHART_LEGEND_ROW_HEIGHT, right: 538 - CHART_PAD.right, bottom: 618 - CHART_PAD.bottom });
     expect(chartAxisBoxes(scales.plot, frame)[1]).toMatchObject({ right: 538, bottom: 618 });
+  });
+});
+
+describe('what a note names on a chart', () => {
+  it("is the category at the note's x, and its series, on a labelled chart", () => {
+    const chart: ChartData = { kind: 'bar', labels: ['backend', 'frontend visual'], series: [{ name: 'THIS RUN', values: [1, 2] }] };
+    expect(chartTargetText({ x: 1, series: 'THIS RUN' }, chart)).toBe('frontend visual / THIS RUN');
+    expect(chartTargetText({ x: 0.4 }, chart)).toBe('backend');
+    expect(chartTargetText({ x: 9 }, chart)).toBe('frontend visual');
+  });
+
+  it('is left to the anchor as sent where the chart has no labels or the note no x', () => {
+    expect(chartTargetText({ x: 2 }, { xMax: 10, series: [{ name: 'S', values: [1, 2] }] })).toBeUndefined();
+    expect(chartTargetText({ x: 2 }, { kind: 'bar', series: [{ name: 'S', values: [1, 2, 3] }] })).toBeUndefined();
+    expect(chartTargetText({ series: 'S' }, { labels: ['a'], series: [{ name: 'S', values: [1] }] })).toBeUndefined();
   });
 });

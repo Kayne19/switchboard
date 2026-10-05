@@ -211,6 +211,19 @@ export function chartCategories(data: ChartData): string[] | undefined {
   return count > 0 ? Array.from({ length: count }, (_, index) => String(index)) : undefined;
 }
 
+/**
+ * What a note's anchor names on a labelled chart, in the chart's own words:
+ * the category at its x and the series, as `FRONTEND VISUAL / THIS RUN`
+ * reads -- not the index the agent sent. Undefined where the chart has no
+ * labels, or the anchor no x; a card then names the anchor as sent.
+ */
+export function chartTargetText(anchor: { x?: number; series?: string }, data: ChartData): string | undefined {
+  const labels = data.labels;
+  if (!labels || labels.length === 0 || anchor.x === undefined || !Number.isFinite(anchor.x)) return undefined;
+  const label = labels[Math.round(Math.min(labels.length - 1, Math.max(0, anchor.x)))];
+  return anchor.series ? `${label} / ${anchor.series}` : label;
+}
+
 /** One category label drawn on the axis. */
 export interface ChartTick {
   index: number;

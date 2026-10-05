@@ -252,8 +252,9 @@ describe('chart notes', () => {
 
     const rail = host.querySelector('.content-rail .rail-note');
     expect(rail?.textContent).toContain('eu-west held a full month.');
-    // The rail card still names what it is about.
+    // The rail card still names what it is about, in the chart's own words.
     expect(rail?.querySelector('.annotation-card')?.getAttribute('data-anchor-target')).toBe('uptime');
+    expect(rail?.querySelector('.annotation-card__anchor')?.textContent).toBe('TARGET / eu-west / UPTIME');
     // On the chart its card is out of view, with no leader, and its point ringed.
     expect(card('uptime-note')!.element.classList.contains('chart-note--away')).toBe(true);
     expect(leader('uptime-note')).toBeNull();
@@ -273,6 +274,22 @@ describe('chart notes', () => {
     render(reduceActions(createInitialState(), [show('april', [100, 100, 100, 100]), note('uptime-note', { target: 'april', x: 2 }, 'Held a full month.')]));
     expect(host.querySelector('.content-rail .rail-note')?.textContent).toContain('Held a full month.');
     expect(host.querySelector('.chart-object[data-chart-id="april"] .chart-note--away[data-note="uptime-note"]')).not.toBeNull();
+  });
+
+  // The tag read "TARGET / DURATIONS / X 2 / THIS RUN": an object id and an
+  // index the caller never sees.
+  it('names the category a note points at on a labelled chart, not its index', () => {
+    const suite: ControllerAction = {
+      op: 'show', id: 'durations', type: 'chart', role: 'primary',
+      data: { kind: 'bar', labels: ['backend', 'frontend unit', 'frontend visual'], series: [{ name: 'THIS RUN', values: [41.8, 3.3, 96.4] }] },
+    };
+    mount([suite, note('suite-note', { target: 'durations', x: 2, series: 'THIS RUN' })]);
+    expect(card('suite-note')!.element.querySelector('.annotation-card__anchor')!.textContent).toBe('TARGET / frontend visual / THIS RUN');
+  });
+
+  it('names the anchor as sent on a chart with a numeric x', () => {
+    mount([chart, note('loss-note', { target: 'loss', x: 30, series: 'VAL LOSS' })]);
+    expect(card('loss-note')!.element.querySelector('.annotation-card__anchor')!.textContent).toBe('TARGET / loss / X 30 / VAL LOSS');
   });
 
   it('keeps a note on its chart, and the rail empty, while the chart has a clear place for it', () => {

@@ -18,7 +18,7 @@ import { RUNTIME_CONVERSATION_ID } from '../controller/types';
 import { besideVisuals, buildCompositionModel, cast, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
-import { chartKind } from '../primitives/chartGeometry';
+import { chartKind, chartTargetText } from '../primitives/chartGeometry';
 import { CodeViewport } from '../primitives/CodeViewport';
 import { DamoclesPresence } from '../primitives/DamoclesPresence';
 import { DocumentViewport } from '../primitives/DocumentViewport';
@@ -133,7 +133,7 @@ interface ExplanationProps {
 // it resolves in and out only when an explanation appears or goes away. Its
 // layout animates position only: animating its size on a text change scales
 // the text while it reflows, which reads as a twitch.
-function RailNote({ note, noteObject, onFocus, onOpenHistory }: ExplanationProps) {
+function RailNote({ note, noteObject, onFocus, onOpenHistory, target }: ExplanationProps & { target?: string }) {
   return (
     <AnimatePresence initial={false}>
       {note ? (
@@ -143,6 +143,7 @@ function RailNote({ note, noteObject, onFocus, onOpenHistory }: ExplanationProps
               data={note}
               onFocus={noteObject ? () => onFocus(noteObject.id) : undefined}
               onOpenHistory={noteObject ? undefined : onOpenHistory}
+              target={target}
             />
           </SurfaceBoundary>
         </ObjectMotion>
@@ -179,6 +180,13 @@ interface RailDetailsProps {
   onOpenHistory?: () => void;
 }
 
+// A rail note about a chart on stage names the category it points at, as
+// the same note on the chart does.
+function railNoteTarget(state: ControllerState, note: NoteData | null): string | undefined {
+  const named = note?.anchor ? state.agentObjects[note.anchor.target] : undefined;
+  return named?.type === 'chart' && note?.anchor ? chartTargetText(note.anchor, (named as SceneObject<ChartData>).data) : undefined;
+}
+
 // The details column beside every content visual: the metrics and any
 // progress the main column has no slot for, one stack of instruments read
 // the same way, then the live response, the note, and tool activity. It is
@@ -197,7 +205,7 @@ function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, 
       {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} variant="rail" /> : null}
       <RailProgress progressList={progressList} onFocus={onFocus} />
       {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
-      <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} />
+      <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} target={railNoteTarget(state, note)} />
       <ToolActivity activity={state.activity} reserveSpace={reserveActivity} />
     </div>
   );
