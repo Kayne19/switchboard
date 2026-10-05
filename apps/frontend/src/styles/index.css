@@ -961,10 +961,10 @@ button {
      edge it may leave by. */
   clip-path: polygon(0 0, 92% 0, 100% 23%, 100% 100%, 0 100%);
 }
-/* A note with no place on the chart clear of its data is shown in the rail;
-   its card stays here out of view only to be measured, and the point it
-   names keeps a ring, drawn as the chart draws its marker but hollow, so
-   the data under it still shows. */
+/* The note a chart leaves out so the others are clear of its data is shown
+   in the rail; its card stays here out of view only to be measured, and
+   the point it names keeps a ring, drawn as the chart draws its marker but
+   hollow, so the data under it still shows. */
 .chart-note--away {
   visibility: hidden;
   pointer-events: none;

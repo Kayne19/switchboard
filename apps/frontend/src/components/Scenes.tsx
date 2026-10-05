@@ -264,6 +264,12 @@ function chartNotesByPanel(
   return { byPanel, offCharts };
 }
 
+/** The note a chart leaves out for the rail, and the chart that said so. */
+interface ChartRailNote {
+  chart: string;
+  note: string;
+}
+
 // What a content scene fills the shell with: the text of its frame, its main
 // slot, the visuals that slot leaves out, and the objects the rail carries
 // for it. The shell draws the rest.
@@ -287,12 +293,12 @@ interface SceneContent {
   progressList: Array<SceneObject<ProgressData>>;
 }
 
-// `railNote` is the note the primary chart has said it has no place for
-// clear of its data, through `onRailNote`; the rail shows it instead.
+// `railNote` is the note a chart has said, through `onRailNote`, it leaves
+// out for the rail; the rail shows it while that chart is the primary.
 function trainingContent(
   { state, onFocus, onOpenHistory }: SceneProps,
-  railNote: string | null,
-  onRailNote: (key: string, away: boolean) => void,
+  railNote: ChartRailNote | null,
+  onRailNote: (chartId: string, key: string, away: boolean) => void,
 ): SceneContent | null {
   const charts = objectsOfType<ChartData>(state, 'chart');
   const [firstProgress, ...railProgress] = objectsOfType<ProgressData>(state, 'progress');
@@ -310,8 +316,9 @@ function trainingContent(
   // points they name, and of the data the chart draws.
   const { byPanel: notesByPanel, offCharts } = chartNotesByPanel(state, charts, primary);
   // The rail's one note slot: a note about a visual off the charts, else
-  // the note the primary chart has no place for clear of its data.
-  const inRail = offCharts ?? (notesByPanel.get(primary.id) ?? []).find((note) => note.key === railNote);
+  // the note the primary chart leaves out so the rest have clear places.
+  const inRail =
+    offCharts ?? (railNote?.chart === primary.id ? (notesByPanel.get(primary.id) ?? []).find((note) => note.key === railNote.note) : undefined);
   // Frame text the chart leaves out names what it is -- its kind -- and
   // nothing more: a bar chart of test durations is not a training run.
   const kind = chartKind(primary.data).toUpperCase();
@@ -322,8 +329,8 @@ function trainingContent(
     footer: 'DISPLAY / COMPOSED',
     caption: sceneCaption(primary, `PRIMARY / ${kind} CHART`),
     metrics: objectsOfType<MetricData>(state, 'metric'),
-    // The notes sit on the charts here; the rail carries only the one that
-    // has no place on them.
+    // The notes sit on the charts here; the rail carries only the one the
+    // primary leaves out, or one about a visual that is not a chart.
     note: inRail?.data ?? null,
     noteObject: inRail?.object,
     progressList: railProgress,
@@ -640,8 +647,8 @@ function ConversationAnswer({ state }: { state: ControllerState }) {
 function sceneContent(
   props: SceneProps,
   onCalloutChange: (placed: boolean) => void,
-  chartRailNote: string | null,
-  onChartRailNote: (key: string, away: boolean) => void,
+  chartRailNote: ChartRailNote | null,
+  onChartRailNote: (chartId: string, key: string, away: boolean) => void,
 ): SceneContent | null {
   switch (props.kind) {
     case 'idle':
@@ -667,14 +674,20 @@ export function SceneShell(props: SceneProps) {
   const { kind, state, onToggleListening, onFocus, onOpenHistory, setTranscriptOpen } = props;
   const isPresent = useIsPresent();
   // A diagram can place its note as a callout beside the node it names; the
-  // rail then leaves it out. A chart hands the rail the one note it has no
-  // place for clear of its data.
+  // rail then leaves it out. A chart hands the rail the one note it leaves
+  // out so the others have places clear of its data.
   const [calloutPlaced, setCalloutPlaced] = useState(false);
-  const [chartRailNote, setChartRailNote] = useState<string | null>(null);
-  // A chart says when a note leaves it and when it no longer does; a chart
-  // on its way out says so after the one that replaced it has spoken.
+  const [chartRailNote, setChartRailNote] = useState<ChartRailNote | null>(null);
+  // A chart says when a note leaves it and when it is back, and takes back
+  // only its own: a chart on its way out may speak after the one that
+  // replaced it, about the same note.
   const onChartRailNote = useCallback(
-    (key: string, away: boolean) => setChartRailNote((current) => (away ? key : current === key ? null : current)),
+    (chart: string, note: string, away: boolean) =>
+      setChartRailNote((current) => {
+        const own = current?.chart === chart && current.note === note;
+        if (away) return own ? current : { chart, note };
+        return own ? null : current;
+      }),
     [],
   );
   const content = sceneContent(props, setCalloutPlaced, chartRailNote, onChartRailNote);

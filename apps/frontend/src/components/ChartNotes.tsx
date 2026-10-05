@@ -1,4 +1,4 @@
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'motion/react';
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { ChartData, NoteData, SceneObject } from '../controller/types';
 import { AnnotationCard } from '../primitives/AnnotationCard';
@@ -26,7 +26,7 @@ export interface ChartNote {
 interface NotesLayout {
   cards: Record<string, Rect>;
   leaders: Record<string, Point[]>;
-  /** The note with no place on the chart clear of its data, which the rail carries instead. */
+  /** The note left out so the others have places clear of the data; the rail carries it instead. */
   away: string | null;
   /** The ring on that note's point, so the point it names stays marked. */
   ring: { x: number; y: number; r: number; stroke: number } | null;
@@ -83,11 +83,12 @@ const snap = (value: number) => Math.round(value - 0.5) + 0.5;
  * card goes, so no card covers another, its own point, or the data the
  * chart draws where a clear place exists.
  *
- * Where the scene gives it `onRailNote`, one note with no place on the
- * chart clear of the data -- every bar standing to the top, say -- is
- * handed to the rail instead: the layer names it through `onRailNote`,
- * keeps its card out of view (still measured, so it comes back the moment
- * the chart has room), and rings the point it names.
+ * Where the scene gives it `onRailNote` and some card has no place clear
+ * of the data -- every bar standing to the top, say -- one note is handed
+ * to the rail instead (`placeNotes`' `spill`: the one whose absence leaves
+ * the others clear, sooner a note naming no point). The layer names it
+ * through `onRailNote`, keeps its card out of view (still measured, so it
+ * comes back the moment the chart has room), and rings the point it names.
  */
 export function ChartNotes({
   chart,
@@ -100,7 +101,7 @@ export function ChartNotes({
   notes: ChartNote[];
   onFocus: (id: string | null) => void;
   onOpenHistory?: () => void;
-  onRailNote?: (key: string, away: boolean) => void;
+  onRailNote?: (chartId: string, key: string, away: boolean) => void;
 }) {
   const reduced = useReducedMotion();
   const gradientBase = useId().replace(/:/g, '');
@@ -177,7 +178,7 @@ export function ChartNotes({
       for (const note of toPlace) {
         const card = placed.get(note.id);
         if (!card) {
-          // No place on the chart clear of its data: the rail carries it,
+          // Left out so the others have clear places: the rail carries it,
           // and the point it names stays ringed as the chart rings a marker.
           next.away = note.id;
           if (note.point) {
@@ -211,14 +212,17 @@ export function ChartNotes({
     return () => observer.disconnect();
   }, [signature, chart.data, spill]);
 
-  // The rail shows the note this chart has no place for, for as long as it
-  // has none: the layer says when the note leaves and when it is back.
+  // The rail shows the note this chart leaves out, for as long as it does:
+  // the layer says, for its own chart, when the note leaves and when it is
+  // back. A chart on its way out of the stage says no more.
   const away = layout?.away ?? null;
+  const chartId = chart.id;
+  const present = useIsPresent();
   useEffect(() => {
-    if (!onRailNote || !away) return undefined;
-    onRailNote(away, true);
-    return () => onRailNote(away, false);
-  }, [away, onRailNote]);
+    if (!onRailNote || !away || !present) return undefined;
+    onRailNote(chartId, away, true);
+    return () => onRailNote(chartId, away, false);
+  }, [away, chartId, onRailNote, present]);
 
   return (
     <div className="chart-notes" ref={layerRef} data-note-count={notes.length}>

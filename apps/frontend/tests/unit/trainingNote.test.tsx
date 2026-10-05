@@ -261,6 +261,18 @@ describe('chart notes', () => {
     expect(Number(ring?.getAttribute('cy'))).toBeCloseTo(SVG_TOP + point.y, 3);
   });
 
+  it('keeps the note in the rail when a new primary chart leaves out the same note the old one did', () => {
+    CARD.height = 120;
+    const bars = (values: number[]) => ({ kind: 'bar' as const, labels: ['a', 'b', 'c', 'd'], series: [{ name: 'UPTIME', values }] });
+    const show = (id: string, values: number[]): ControllerAction => ({ op: 'show', id, type: 'chart', role: 'primary', data: bars(values) });
+    mount([show('march', [100, 100, 100, 100]), note('uptime-note', { target: 'march', x: 2 }, 'Held a full month.')]);
+    expect(host.querySelector('.content-rail .rail-note')?.textContent).toContain('Held a full month.');
+    // The chart is replaced, and the note now names the new one.
+    render(reduceActions(createInitialState(), [show('april', [100, 100, 100, 100]), note('uptime-note', { target: 'april', x: 2 }, 'Held a full month.')]));
+    expect(host.querySelector('.content-rail .rail-note')?.textContent).toContain('Held a full month.');
+    expect(host.querySelector('.chart-object[data-chart-id="april"] .chart-note--away[data-note="uptime-note"]')).not.toBeNull();
+  });
+
   it('keeps a note on its chart, and the rail empty, while the chart has a clear place for it', () => {
     CARD.height = 120;
     mount([chart, note('loss-note', { target: 'loss', x: 30 })]);
