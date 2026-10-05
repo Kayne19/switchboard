@@ -6,6 +6,7 @@ import { NoteBadge } from './NoteMarker';
 import { conditionText, WeatherGlyph } from './WeatherGlyph';
 import {
   dayLabel,
+  dayLong,
   dayRange,
   dayScale,
   formatTemp,
@@ -59,7 +60,7 @@ function AlertLine({ text }: { text: string }) {
   );
 }
 
-function Now({ data, compact, temp, title }: { data: WeatherData; compact: boolean; temp: number; title?: string }) {
+function Now({ data, compact, temp, title, spot }: { data: WeatherData; compact: boolean; temp: number; title?: string; spot?: string }) {
   const { current, units } = data;
   // The temperature is as large as the layout gives it, and no larger than
   // its row (glyph, digits, unit) fits the column the figure stands in:
@@ -118,7 +119,29 @@ function Now({ data, compact, temp, title }: { data: WeatherData; compact: boole
           </div>
         ) : null}
       </div>
+      {spot !== undefined ? <Spot data={data} marked={spot} /> : null}
     </section>
+  );
+}
+
+// The hour or day a note names, where the slot has no room for the list
+// that holds it (a small slot shows the conditions and, at most, one
+// list): one line under the conditions, so the item the card names is on
+// screen with its badge.
+function Spot({ data, marked }: { data: WeatherData; marked: string }) {
+  const hour = (data.hourly ?? []).find((candidate) => candidate.time === marked);
+  const day = hour ? undefined : (data.daily ?? []).find((candidate) => candidate.date === marked);
+  if (!hour && !day) return null;
+  const condition = (hour ?? day)!.condition;
+  const precip = (hour ?? day)!.precip;
+  return (
+    <div className="weather-spot" data-item={marked}>
+      <NoteBadge />
+      <span className="weather-spot__when tech micro">{hour ? hourLong(hour.time) : dayLong(day!.date)}</span>
+      <WeatherGlyph condition={condition} className="weather-spot__glyph" />
+      <span className="weather-spot__temp">{hour ? `${formatTemp(hour.temp)}°` : `${formatTemp(day!.low)}° / ${formatTemp(day!.high)}°`}</span>
+      {precip ? <span className="weather-spot__precip">{formatTemp(precip)}%</span> : null}
+    </div>
   );
 }
 
@@ -266,9 +289,12 @@ export function WeatherPrimitive({ data, marked, framed = false }: { data: Weath
   // scroll in their own.
   const tall = arrangement === 'tall';
   const parts = ['now', layout.hourly ? 'hourly' : null, layout.daily ? 'daily' : null].filter(Boolean).join(' ');
+  // The item a note names that no list here draws (a small slot).
+  const unshown =
+    (hours.some((hour) => hour.time === marked) && !layout.hourly) || (days.some((day) => day.date === marked) && !layout.daily) ? marked : undefined;
   const field = (
     <div className="weather__field" data-parts={parts} style={{ '--weather-temp': `${layout.temp}px` } as CSSProperties}>
-      <Now data={data} compact={arrangement === 'compact'} temp={layout.temp} title={framed ? undefined : data.title} />
+      <Now data={data} compact={arrangement === 'compact'} temp={layout.temp} title={framed ? undefined : data.title} spot={unshown} />
       {layout.hourly ? <Hours hours={hours} units={data.units} marked={marked} /> : null}
       {layout.daily ? <Days days={days} marked={marked} scroll={!tall} /> : null}
     </div>

@@ -2592,6 +2592,32 @@ button {
   line-height: 1.25;
   overflow-wrap: break-word;
 }
+/* The item a note names, where the slot has no list to show it in: one
+   line on the orange rule, its badge first. */
+.weather-spot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 8px 4px 0;
+  border-top: 1px solid rgba(var(--orange-rgb), 0.55);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.weather-spot__when {
+  color: var(--orange);
+}
+.weather-spot__glyph {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+.weather-spot__precip {
+  color: var(--cyan);
+}
 /* The alert: an amber rule, its sign and its words, the warning colour. */
 .weather-alert {
   display: flex;

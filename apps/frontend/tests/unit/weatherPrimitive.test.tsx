@@ -168,6 +168,21 @@ describe('a note on one hour or day', () => {
     expect(marks(page)).toEqual(['2026-10-07T13:00']);
   });
 
+  it('a slot with no room for the list that holds the item still draws the item, with its badge', () => {
+    // An aux cell 220px tall: no room for the strip, so the days show; the
+    // hour the note names stands on one line under the conditions.
+    const hourPage = render(forecast, '2026-10-08T03:00', { width: 250, height: 220 });
+    expect(hourPage.querySelector('.weather__field')!.getAttribute('data-parts')).toBe('now daily');
+    expect(marks(hourPage)).toEqual(['2026-10-08T03:00']);
+    expect(hourPage.querySelector('.weather-spot')!.textContent).toBe('NOTETHU 03:00' + '65°' + '68%');
+    act(() => root!.unmount());
+    host!.remove();
+    // Too short for any list: the day the note names, the same way.
+    const dayPage = render(forecast, '2026-10-08', { width: 340, height: 150 });
+    expect(marks(dayPage)).toEqual(['2026-10-08']);
+    expect(dayPage.querySelector('.weather-spot')!.textContent).toBe('NOTETHU OCT 8' + '55° / 61°' + '80%');
+  });
+
   it('marks nothing for a time the forecast does not hold', () => {
     expect(marks(render(forecast, '2026-10-20', { width: 1000, height: 620 }))).toEqual([]);
   });
