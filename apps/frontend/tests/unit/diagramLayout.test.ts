@@ -3,6 +3,7 @@ import type { DiagramData } from '../../src/controller/types';
 import { pipelineDiagram, topologyDiagram } from '../../src/fixtures/scenes';
 import {
   ARROW_LENGTH,
+  ARROW_PORT_PITCH,
   breakCycles,
   cornerTagBoxes,
   frameFor,
@@ -313,6 +314,22 @@ for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
           expect(onOutline(edge.points[edge.points.length - 1], to), `${edge.edge.from}->${edge.edge.to} ends at ${edge.edge.to}`).toBe(true);
         }
       });
+
+      it(`${name}: every end has a port of its own, and no two arrowheads stack`, () => {
+        // Ends at one point would read as one line; arrowheads closer than
+        // their own width and a gap read as one blot.
+        const ends = layout.edges.flatMap((edge) => [
+          { point: edge.points[0], head: false },
+          { point: edge.points[edge.points.length - 1], head: true },
+        ]);
+        ends.forEach((end, index) => {
+          for (const other of ends.slice(index + 1)) {
+            const apart = Math.hypot(end.point.x - other.point.x, end.point.y - other.point.y);
+            expect(apart).toBeGreaterThan(1e-6);
+            if (end.head && other.head) expect(apart).toBeGreaterThanOrEqual(ARROW_PORT_PITCH - 1e-6);
+          }
+        });
+      });
     }
 
     it('keeps the approved geometry when the drawing already fits', () => {
@@ -334,12 +351,17 @@ for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
       expect(front.length).toBeGreaterThanOrEqual(4);
     });
 
-    it('sends a fan-out too crowded for its side out as one trunk whose branches never cross', () => {
+    it('gives every end of a crowded fan-out its own port, the box grown to hold them, and its branches never cross', () => {
       const layout = layoutDiagram(graphs.wide, orientation);
-      const starts = new Set(layout.edges.map((edge) => `${edge.points[0].x},${edge.points[0].y}`));
-      // Nine ports on a landscape box's short side would be a striped band;
-      // a portrait box's long side has room to spread them.
-      expect(starts.size).toBe(orientation === 'landscape' ? 1 : 9);
+      const starts = layout.edges.map((edge) => (orientation === 'landscape' ? edge.points[0].y : edge.points[0].x)).sort((a, b) => a - b);
+      // Nine lines leaving one point read as one; each leaves at its own
+      // port, a line's width and a gap from the next. A landscape box's
+      // short side grows to hold them.
+      expect(new Set(starts).size).toBe(9);
+      starts.slice(1).forEach((start, index) => expect(start - starts[index]).toBeGreaterThanOrEqual(10 - 1e-6));
+      const root = layout.nodes.find((node) => node.node.id === 'root')!;
+      const side = orientation === 'landscape' ? root.box.height : root.box.width;
+      expect(side).toBeGreaterThan(starts[8] - starts[0]);
       const crossings = layout.edges.flatMap((edge, index) =>
         layout.edges.slice(index + 1).flatMap((other) =>
           edge.points.slice(1).flatMap((end, k) =>
@@ -360,13 +382,13 @@ for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
       expect(crossings).toHaveLength(0);
     });
 
-    it('brings a back edge into a crowded side at its own port, not where the trunk leaves', () => {
+    it('brings a back edge into a crowded side at its own port, an arrowhead\'s room from the lines leaving it', () => {
       const layout = layoutDiagram(graphs.wideBack, orientation);
       const back = layout.edges.find((edge) => edge.edge.to === 'root')!;
       const arrival = back.points[back.points.length - 1];
       for (const edge of layout.edges.filter((other) => other.edge.from === 'root')) {
         const start = edge.points[0];
-        expect(Math.hypot(start.x - arrival.x, start.y - arrival.y), `root->${edge.edge.to}`).toBeGreaterThanOrEqual(4);
+        expect(Math.hypot(start.x - arrival.x, start.y - arrival.y), `root->${edge.edge.to}`).toBeGreaterThanOrEqual(ARROW_PORT_PITCH - 1e-6);
       }
     });
 

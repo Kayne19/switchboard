@@ -15,7 +15,8 @@
 // 4. Barycenter sweeps, adjacent swaps and sifting order each layer to
 //    reduce crossings, from several starting orders (`orderLayers`).
 // 5. Each node's box is sized from its text (a monospace estimate, the same
-//    way edge labels are measured); a layer stacks its boxes along the cross
+//    way edge labels are measured) and grows along a side too short for a
+//    port of its own per edge end; a layer stacks its boxes along the cross
 //    axis, grows with them, and each node then settles toward its
 //    neighbours as far as the ones beside it allow.
 // 6. Routes are axis-aligned and bend in the gap between layers; bends that
@@ -228,10 +229,14 @@ const FRAME_PACKING: Packing = { dummy: 12, padCross: 16, padMain: 12, minGap: 4
 const STAGGER_FROM = 4;
 const STAGGER_CLEARANCE = 12;
 const ROW_GAP = 24;
-// Where edges leave and enter a box: ports spread along its side.
+// Where edges leave and enter a box: each end has a port of its own on its
+// side, PORT_PITCH apart where the side has room. Packed closer, two lines
+// keep LINE_PORT_PITCH apart and an arrowhead keeps ARROW_PORT_PITCH from
+// its neighbours (its own width and a gap), so heads never stack; a box
+// whose side is too short for its ports grows along that side.
 const PORT_PITCH = 16;
-const MIN_PORT_PITCH = 4;
-const DIRECTION_SPLIT = 8;
+const LINE_PORT_PITCH = 10;
+export const ARROW_PORT_PITCH = ARROW_LENGTH + 3;
 const PORT_INSET = 14;
 const SELF_LOOP = 18;
 // Layers are ordered from this many shuffled starts as well as the given
@@ -553,10 +558,15 @@ interface Item {
   text: NodeText | null;
   mainExtent: number;
   crossExtent: number;
+  /** In a staggered layer, half the spread of the ports on the side whose lines pass through the other row. */
+  facingHalf: number;
   main: number;
   cross: number;
   preds: Item[];
   succs: Item[];
+  /** The segments leaving it and entering it. */
+  outs: Segment[];
+  ins: Segment[];
 }
 
 interface Segment {
@@ -763,9 +773,9 @@ function orderLayers(layers: Item[][]) {
 function separation(a: Item, b: Item, stretch: number, packing: Packing) {
   if (a.node && b.node && a.staggered && a.row !== b.row) {
     // Boxes in different rows may overlap along the cross axis; what must
-    // stay clear is each box's centre line, where its edges run through
-    // the other row.
-    return Math.max(a.crossExtent, b.crossExtent) / 2 + STAGGER_CLEARANCE;
+    // stay clear is the spread of ports about each box's centre line,
+    // where its edges run through the other row.
+    return Math.max(a.crossExtent / 2 + b.facingHalf, b.crossExtent / 2 + a.facingHalf) + STAGGER_CLEARANCE;
   }
   const spacing = a.node && b.node ? NODE_SPACING + stretch : packing.dummy;
   return a.crossExtent / 2 + spacing + b.crossExtent / 2;
@@ -855,6 +865,9 @@ function assignCross(layers: Item[][], usableCross: number, packing: Packing, ba
     if (real.length >= STAGGER_FROM && natural > usableCross) {
       real.forEach((item, index) => {
         item.row = index % 2 === 0 ? 0 : 1;
+        // Row 0's out side and row 1's in side face the other row: their
+        // lines run through it, packed as close as their ports allow.
+        item.facingHalf = item.row === 0 ? endsSpan(item.outs, 'out') / 2 : endsSpan(item.ins, 'in') / 2;
       });
       for (const item of layer) item.staggered = true;
       return 0;
@@ -905,44 +918,62 @@ function assignCross(layers: Item[][], usableCross: number, packing: Packing, ba
 
 // --- Ports and tracks ------------------------------------------------------
 
-/** Spreads the segments leaving (or entering) each node along its side, in the order of their far ends. */
-function assignPorts(layers: Item[][], segments: Segment[]) {
+/** Whether an end of a segment at a node carries the edge's arrowhead: it does where the edge truly ends. */
+const arrowAt = (segment: Segment, side: 'out' | 'in') => (side === 'in' ? !segment.reversed : segment.reversed);
+
+/** The least room ports need between neighbours, by whether either carries an arrowhead. */
+const portGap = (a: boolean, b: boolean) => (a || b ? ARROW_PORT_PITCH : LINE_PORT_PITCH);
+
+/**
+ * The least span the ports of these ends need along their side, in any
+ * order: each arrowhead holds ARROW_PORT_PITCH from both its neighbours.
+ */
+function portSpan(count: number, arrows: number): number {
+  if (count < 2) return 0;
+  const pairs = count - 1;
+  const crowded = Math.min(pairs, 2 * arrows);
+  return crowded * ARROW_PORT_PITCH + (pairs - crowded) * LINE_PORT_PITCH;
+}
+const endsSpan = (ends: Segment[], side: 'out' | 'in') => portSpan(ends.length, ends.filter((segment) => arrowAt(segment, side)).length);
+
+/**
+ * Gives every end on each node's side a port of its own, in the order of
+ * the ends' far ends so no two cross at the box. Ports sit PORT_PITCH apart
+ * where the side has room, and never closer than portGap; a side short of
+ * room for that grew to hold it (`portRoom` in `layoutDiagram`). A staggered
+ * box's lines through the other row pack as close as portGap allows.
+ */
+function assignPorts(layers: Item[][]) {
   for (const layer of layers) {
     for (const item of layer) {
       if (!item.node) continue;
       for (const side of ['out', 'in'] as const) {
-        const ends = segments.filter((segment) => (side === 'out' ? segment.from : segment.to) === item);
-        ends.sort((a, b) => {
-          const farA = side === 'out' ? a.to.cross : a.from.cross;
-          const farB = side === 'out' ? b.to.cross : b.from.cross;
-          return farA - farB || a.edge - b.edge;
-        });
-        const count = ends.length;
-        // A staggered box's edges run through the other row at its centre
-        // line, so they share one port. So do ends too many for their side:
-        // ports packed closer than a few units read as one striped band, so
-        // they leave as one trunk and part where they bend.
-        const spread = count > 1 && !item.staggered ? Math.min(PORT_PITCH, (item.crossExtent - 2 * PORT_INSET) / (count - 1)) : 0;
-        const portOf = new Map<Segment, number>();
-        if (spread >= MIN_PORT_PITCH) {
-          ends.forEach((segment, index) => portOf.set(segment, item.cross + (index - (count - 1) / 2) * spread));
-        } else {
-          // Only ends drawn the same way share a port: an arrowhead arriving
-          // where other edges leave would read as one more of them. Each
-          // way takes its own port, the two a few units apart.
-          const far = (segment: Segment) => (side === 'out' ? segment.to.cross : segment.from.cross);
-          const ways = [ends.filter((segment) => !segment.reversed), ends.filter((segment) => segment.reversed)]
-            .filter((way) => way.length)
-            .sort((a, b) => meanOf(a.map(far), 0) - meanOf(b.map(far), 0));
-          ways.forEach((way, index) => {
-            for (const segment of way) portOf.set(segment, item.cross + (index - (ways.length - 1) / 2) * DIRECTION_SPLIT);
-          });
+        const ends = [...(side === 'out' ? item.outs : item.ins)];
+        if (!ends.length) continue;
+        const far = (segment: Segment) => (side === 'out' ? segment.to.cross : segment.from.cross);
+        ends.sort((a, b) => far(a) - far(b) || a.edge - b.edge);
+        const least = ends.slice(1).map((segment, index) => portGap(arrowAt(ends[index], side), arrowAt(segment, side)));
+        const leastSpan = least.reduce((sum, gap) => sum + gap, 0);
+        const room = item.crossExtent - 2 * PORT_INSET;
+        const facing = item.staggered && (side === 'out' ? item.row === 0 : item.row === 1);
+        let gaps = least;
+        if (!facing) {
+          if (least.length * PORT_PITCH <= room) {
+            gaps = least.map(() => PORT_PITCH);
+          } else if (room > leastSpan) {
+            // Share what room there is, each gap moving toward PORT_PITCH
+            // in step.
+            const slack = least.reduce((sum, gap) => sum + (PORT_PITCH - gap), 0);
+            gaps = least.map((gap) => gap + ((room - leastSpan) * (PORT_PITCH - gap)) / slack);
+          }
         }
-        for (const segment of ends) {
-          const cross = portOf.get(segment) ?? item.cross;
+        const span = gaps.reduce((sum, gap) => sum + gap, 0);
+        let cross = item.cross - span / 2;
+        ends.forEach((segment, index) => {
+          if (index > 0) cross += gaps[index - 1];
           if (side === 'out') segment.fromCross = cross;
           else segment.toCross = cross;
-        }
+        });
       }
     }
   }
@@ -1048,14 +1079,29 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
   );
   const directed = breakCycles(data.nodes, data.edges);
   const layerOf = assignLayers(data.nodes, directed);
-  // Laid out for a frame, a layer too wide for it wraps into several.
-  if (frame) {
-    const crossOf = (id: string) => {
-      const text = textOf.get(id);
-      return text ? (landscape ? text.height : text.width) : 0;
-    };
-    wrapLayers(data.nodes, directed, layerOf, crossOf, canvas.cross - 2 * packing.padCross, packing);
+  // A box whose side is too short for a port of its own per end grows
+  // along that side; every edge has one end at each of its nodes, and an
+  // arrowhead at its true target.
+  const portRoom = new Map<string, number>();
+  {
+    const ends = new Map<string, { out: number; outArrows: number; in: number; inArrows: number }>();
+    const of = (id: string) => ends.get(id) ?? ends.set(id, { out: 0, outArrows: 0, in: 0, inArrows: 0 }).get(id)!;
+    for (const entry of directed) {
+      const from = of(entry.from);
+      const to = of(entry.to);
+      from.out += 1;
+      to.in += 1;
+      if (entry.reversed) from.outArrows += 1;
+      else to.inArrows += 1;
+    }
+    for (const [id, count] of ends) portRoom.set(id, Math.max(portSpan(count.out, count.outArrows), portSpan(count.in, count.inArrows)) + 2 * PORT_INSET);
   }
+  const crossOf = (id: string) => {
+    const text = textOf.get(id);
+    return text ? Math.max(landscape ? text.height : text.width, portRoom.get(id) ?? 0) : 0;
+  };
+  // Laid out for a frame, a layer too wide for it wraps into several.
+  if (frame) wrapLayers(data.nodes, directed, layerOf, crossOf, canvas.cross - 2 * packing.padCross, packing);
   const layerCount = data.nodes.length ? Math.max(...layerOf.values()) + 1 : 0;
   const layers: Item[][] = Array.from({ length: layerCount }, () => []);
   const itemOf = new Map<string, Item>();
@@ -1069,11 +1115,14 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
       node,
       text,
       mainExtent: text ? (landscape ? text.width : text.height) : 0,
-      crossExtent: text ? (landscape ? text.height : text.width) : 0,
+      crossExtent: node ? crossOf(node.id) : 0,
+      facingHalf: 0,
       main: 0,
       cross: 0,
       preds: [],
       succs: [],
+      outs: [],
+      ins: [],
     };
     layers[layer].push(item);
     return item;
@@ -1098,6 +1147,8 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
       const segment: Segment = { edge: routeIndex, from: previous, to: next, fromCross: 0, toCross: 0, track: null, reversed: entry.reversed };
       previous.succs.push(next);
       next.preds.push(previous);
+      previous.outs.push(segment);
+      next.ins.push(segment);
       route.segments.push(segment);
       segments.push(segment);
       previous = next;
@@ -1119,7 +1170,7 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
     segment.fromCross = segment.from.cross;
     segment.toCross = segment.to.cross;
   }
-  assignPorts(layers, segments);
+  assignPorts(layers);
 
   // --- Gaps: tracks and labels, relative to each gap's centre -------------
   const gapIndexOf = (route: Route) => route.segments[0].from.layer + Math.floor((route.segments.length - 1) / 2);
@@ -1446,16 +1497,12 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
   const nodes: LaidOutNode[] = data.nodes.flatMap((node) => {
     const item = itemOf.get(node.id);
     if (!item?.text) return [];
+    // The box is as long as its text and, across, as wide as its text or
+    // its ports need.
     const centre = place(item.main, item.cross);
-    return [
-      {
-        node,
-        layer: item.layer,
-        box: { x: centre.x - item.text.width / 2, y: centre.y - item.text.height / 2, width: item.text.width, height: item.text.height },
-        lines: item.text.lines,
-        ruleY: item.text.ruleY,
-      },
-    ];
+    const width = landscape ? item.mainExtent : item.crossExtent;
+    const height = landscape ? item.crossExtent : item.mainExtent;
+    return [{ node, layer: item.layer, box: { x: centre.x - width / 2, y: centre.y - height / 2, width, height }, lines: item.text.lines, ruleY: item.text.ruleY }];
   });
 
   const laidOutByEdge = new Map<DiagramEdge, LaidOutEdge>();
